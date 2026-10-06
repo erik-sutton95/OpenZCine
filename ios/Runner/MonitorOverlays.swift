@@ -452,9 +452,10 @@ struct FeedLevelView: View {
             ? CGFloat(MonitorPortraitLayout.captureBarHeight) : 0
         Group {
             if style == .gauge {
-                LevelGaugeView(
-                    roll: roll, pitch: pitch, feed: feed, visibleBounds: visibleBounds,
-                    isPortrait: model.monitorIsPortrait, bottomChrome: bottomChrome)
+                MonitorLevelOverlay(
+                    display: .gauges(rollDeg: roll, tiltDeg: pitch), feed: feed,
+                    viewport: Self.gaugeViewport(visibleBounds, bottomChrome: bottomChrome),
+                    portrait: model.monitorIsPortrait)
             } else {
                 LevelHorizonView(roll: roll)
                     .position(x: feed.midX, y: feed.midY)
@@ -472,6 +473,15 @@ struct FeedLevelView: View {
             device.isPortrait = portrait
         }
         .onDisappear { device.stop() }
+    }
+
+    /// Where the shared gauge seats: the on-screen feed area less any strip overlaying its
+    /// bottom edge (portrait fill's capture bar). The gauge is a HUD instrument, so unlike the
+    /// framing aids it never lands in content clipped off screen.
+    static func gaugeViewport(_ visibleBounds: CGRect, bottomChrome: CGFloat) -> CGRect {
+        CGRect(
+            x: visibleBounds.minX, y: visibleBounds.minY, width: visibleBounds.width,
+            height: max(0, visibleBounds.height - bottomChrome))
     }
 }
 
@@ -539,10 +549,6 @@ struct LevelHorizonView: View {
     }
 }
 
-/// Two-axis level: a horizontal track (roll) near the bottom and a vertical track (pitch) on the
-/// right. Each track carries 2° tick graduations so you can feel how far off you are, a correction
-/// chevron pointing the way back to centre (more chevrons = further off), and a live degree readout.
-/// A track snaps green within ±0.6° on its own axis.
 /// The body's exposure indicator as a compact glass strip: a ±3 EV tick bar (taller ticks
 /// on whole stops), the camera's 1/6-EV needle, and a signed numeric readout that keeps the
 /// truth when the needle clamps at the rail. Read-only — the value comes straight from the
@@ -601,184 +607,6 @@ struct EVMeterView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .liquidGlass(in: Capsule())
-    }
-}
-
-struct LevelGaugeView: View {
-    let roll: Double
-    let pitch: Double
-    let feed: CGRect
-    /// On-screen portion of the overlay's coordinate space (see `FeedAlignedAssists.visibleBounds`).
-    let visibleBounds: CGRect
-    let isPortrait: Bool
-    /// Height of chrome overlaying the visible feed's bottom edge (portrait fill capture strip).
-    let bottomChrome: CGFloat
-
-    /// Seats for the two tracks. The gauge is a HUD instrument, not a framing aid: unlike
-    /// grid/crosshair/guides (which stay pixel-exact with the image content, even when portrait
-    /// fill or de-squeeze widen it past the screen), the gauge seats against the VISIBLE feed —
-    /// the content rect intersected with the on-screen bounds — so neither track can land in the
-    /// clipped-away overhang.
-    ///
-    /// Roll (horizontal track): centred, lifted off the visible bottom edge — landscape by the
-    /// bottom capture/assist bars that overlay the feed (chrome bottom inset 12 + control height
-    /// 58, plus the gauge's readout half-height and a small gap), portrait by a bottom-edge hug
-    /// plus `bottomChrome` for any strip overlaying the visible feed (fill's capture bar).
-    /// Pitch (vertical track): hugs the visible trailing edge, readout on the feed side.
-    static func seats(
-        feed: CGRect, visibleBounds: CGRect, isPortrait: Bool, bottomChrome: CGFloat
-    ) -> (roll: CGPoint, pitch: CGPoint) {
-        var visible = feed.intersection(visibleBounds)
-        if visible.isNull || visible.isEmpty { visible = feed }
-        let rollLift = (isPortrait ? 30 : 104) + bottomChrome
-        return (
-            roll: CGPoint(x: visible.midX, y: visible.maxY - rollLift),
-            pitch: CGPoint(x: visible.maxX - 44, y: visible.midY)
-        )
-    }
-
-    var body: some View {
-        let seats = Self.seats(
-            feed: feed, visibleBounds: visibleBounds, isPortrait: isPortrait,
-            bottomChrome: bottomChrome)
-        ZStack {
-            LevelAxisGauge(orientation: .horizontal, value: roll)
-                .position(seats.roll)
-            LevelAxisGauge(orientation: .vertical, value: pitch)
-                .position(seats.pitch)
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-/// One axis of the level gauge — a graduated track with a bead, a correction chevron, and a degree
-/// readout. `value` is signed degrees (0 = level); a positive value drives the bead toward the + end.
-private struct LevelAxisGauge: View {
-    enum Orientation { case horizontal, vertical }
-    let orientation: Orientation
-    let value: Double
-
-    private let span = 84.0  // px from centre to the ±maxAngle end of the track
-    private let maxAngle = 8.0  // degrees mapped to the end of the track
-    private let tickStep = 2.0  // graduation spacing in degrees
-    private let threshold = 0.6  // |value| below this reads "level"
-
-    private var isHorizontal: Bool { orientation == .horizontal }
-    private var isLevel: Bool { abs(value) < threshold }
-    private var tint: Color { isLevel ? LiveDesign.good : LiveDesign.accent }
-    private var beadOffset: CGFloat { CGFloat(max(-1, min(1, value / maxAngle)) * span) }
-
-    /// 1–3, larger the further off level — drives how many correction chevrons show.
-    private var urgency: Int {
-        switch abs(value) {
-        case ..<(maxAngle / 3): return 1
-        case ..<(2 * maxAngle / 3): return 2
-        default: return 3
-        }
-    }
-
-    var body: some View {
-        let trackLen = CGFloat(span * 2 + 28)
-        ZStack {
-            graduations
-                .frame(
-                    width: isHorizontal ? trackLen : 26,
-                    height: isHorizontal ? 26 : trackLen)
-            if !isLevel { chevrons }
-            bead
-            readout
-        }
-        .animation(.easeOut(duration: 0.12), value: isLevel)
-        .animation(.easeOut(duration: 0.09), value: value)
-    }
-
-    /// Baseline + 2° tick graduations, the centre tick emphasised.
-    private var graduations: some View {
-        Canvas { ctx, size in
-            let mid = CGPoint(x: size.width / 2, y: size.height / 2)
-            var base = Path()
-            if isHorizontal {
-                base.move(to: CGPoint(x: mid.x - CGFloat(span), y: mid.y))
-                base.addLine(to: CGPoint(x: mid.x + CGFloat(span), y: mid.y))
-            } else {
-                base.move(to: CGPoint(x: mid.x, y: mid.y - CGFloat(span)))
-                base.addLine(to: CGPoint(x: mid.x, y: mid.y + CGFloat(span)))
-            }
-            ctx.stroke(base, with: .color(.white.opacity(0.22)), lineWidth: 2)
-
-            var deg = -maxAngle
-            while deg <= maxAngle + 0.001 {
-                let t = CGFloat(deg / maxAngle * span)
-                let centre = abs(deg) < 0.001
-                let half: CGFloat = centre ? 9 : 5
-                var tick = Path()
-                if isHorizontal {
-                    tick.move(to: CGPoint(x: mid.x + t, y: mid.y - half))
-                    tick.addLine(to: CGPoint(x: mid.x + t, y: mid.y + half))
-                } else {
-                    tick.move(to: CGPoint(x: mid.x - half, y: mid.y - t))
-                    tick.addLine(to: CGPoint(x: mid.x + half, y: mid.y - t))
-                }
-                ctx.stroke(
-                    tick, with: .color(.white.opacity(centre ? 0.75 : 0.34)),
-                    lineWidth: centre ? 2 : 1)
-                deg += tickStep
-            }
-        }
-    }
-
-    private var bead: some View {
-        Circle()
-            .fill(tint)
-            .frame(width: 13, height: 13)
-            .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 2))
-            .shadow(color: .black.opacity(0.5), radius: 3)
-            .offset(
-                x: isHorizontal ? beadOffset : 0,
-                y: isHorizontal ? 0 : -beadOffset)
-    }
-
-    /// Chevrons just centre-ward of the bead, pointing toward centre — the way to re-level.
-    private var chevrons: some View {
-        let toNegative = value > 0  // need to move toward the − end to re-centre
-        let symbol =
-            isHorizontal
-            ? (toNegative ? "chevron.left" : "chevron.right")
-            : (toNegative ? "chevron.down" : "chevron.up")
-        let gap: CGFloat = 16
-        let sign = CGFloat(value > 0 ? 1 : -1)
-        return Group {
-            if isHorizontal {
-                HStack(spacing: -2) {
-                    ForEach(Array(0..<urgency), id: \.self) { i in chevronGlyph(symbol, index: i) }
-                }
-            } else {
-                VStack(spacing: -2) {
-                    ForEach(Array(0..<urgency), id: \.self) { i in chevronGlyph(symbol, index: i) }
-                }
-            }
-        }
-        .offset(
-            x: isHorizontal ? beadOffset - sign * gap : 0,
-            y: isHorizontal ? 0 : -beadOffset + sign * gap)
-    }
-
-    private func chevronGlyph(_ symbol: String, index: Int) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 10, weight: .heavy))
-            .foregroundStyle(LiveDesign.accent)
-            .opacity(1.0 - Double(index) * 0.22)
-    }
-
-    private var readout: some View {
-        let shown = abs(value) < 0.05 ? 0 : value
-        return Text(String(format: "%+.1f°", shown))
-            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            .foregroundStyle(isLevel ? LiveDesign.good : LiveDesign.text.opacity(0.85))
-            .fixedSize()
-            .offset(
-                x: isHorizontal ? 0 : -42,
-                y: isHorizontal ? -24 : 0)
     }
 }
 
