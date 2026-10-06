@@ -595,17 +595,6 @@ final class RunnerTests: XCTestCase {
         return RGB(red: bytes[2], green: bytes[1], blue: bytes[0])
     }
 
-    @MainActor
-    func testGlassChoiceKeepsCinemaRatioOnOneLineAtCompactProWidth() {
-        let choice = GlassChoice(title: "2.76:1")
-            .frame(width: 48)
-        let host = UIHostingController(rootView: choice)
-
-        let fittingSize = host.sizeThatFits(in: CGSize(width: 48, height: 1_000))
-
-        XCTAssertLessThanOrEqual(fittingSize.height, 52)
-    }
-
     func testDemoSettingsTabSelection() {
         XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("assist"), .assist)
         XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("storage"), .storage)
@@ -764,7 +753,7 @@ final class RunnerTests: XCTestCase {
         let custom = root.appendingPathComponent("custom", isDirectory: true)
         try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let lut = StoredLUT(fileName: "Operator Look.cube")
+        let lut = StoredCustomLUT(fileName: "Operator Look.cube")
         let lutURL = custom.appendingPathComponent(lut.fileName)
         try Data("stored".utf8).write(to: lutURL)
         let store = LUTFileStore(root: root)
@@ -787,7 +776,7 @@ final class RunnerTests: XCTestCase {
         let store = LUTFileStore(root: root)
 
         XCTAssertThrowsError(
-            try store.remove(StoredLUT(fileName: "../outside.cube"), from: .custom)
+            try store.remove(StoredCustomLUT(fileName: "../outside.cube"), from: .custom)
         ) { error in
             XCTAssertEqual(error as? LUTDeletionError, .invalidFileName)
         }
@@ -826,14 +815,14 @@ final class RunnerTests: XCTestCase {
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
-        try model.deleteStoredLUT(StoredLUT(fileName: "B.cube"), from: .custom)
+        try model.deleteStoredLUT(StoredCustomLUT(fileName: "B.cube"), from: .custom)
 
         XCTAssertEqual(model.customLUTs.map(\.fileName), ["A.cube"])
         XCTAssertEqual(
             model.assistConfiguration.selectedLUT,
             .stored(category: .custom, fileName: "A.cube"))
 
-        try model.deleteStoredLUT(StoredLUT(fileName: "A.cube"), from: .custom)
+        try model.deleteStoredLUT(StoredCustomLUT(fileName: "A.cube"), from: .custom)
 
         XCTAssertTrue(model.customLUTs.isEmpty)
         XCTAssertEqual(
@@ -855,7 +844,7 @@ final class RunnerTests: XCTestCase {
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
-        try model.deleteStoredLUT(StoredLUT(fileName: "A.cube"), from: .custom)
+        try model.deleteStoredLUT(StoredCustomLUT(fileName: "A.cube"), from: .custom)
 
         XCTAssertEqual(
             model.assistConfiguration.selectedLUT,
@@ -2226,14 +2215,14 @@ extension RunnerTests {
     /// device can — the simulator, which has neither MetalFX nor VideoToolbox super resolution,
     /// lists that alone.
     func testOfferedUpscalersAreAllRunnableAndAlwaysIncludeTheFloor() {
-        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.off))
-        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.lanczos))
-        for upscaler in FeedUpscaler.supportedOnThisDevice {
+        XCTAssertTrue(MonitorUpscaler.supportedOnThisDevice.contains(.off))
+        XCTAssertTrue(MonitorUpscaler.supportedOnThisDevice.contains(.lanczos))
+        for upscaler in MonitorUpscaler.supportedOnThisDevice {
             XCTAssertTrue(
                 upscaler.isSupportedOnThisDevice, "\(upscaler) is offered but not runnable")
         }
         #if targetEnvironment(simulator)
-            XCTAssertEqual(FeedUpscaler.supportedOnThisDevice, [.off, .lanczos])
+            XCTAssertEqual(MonitorUpscaler.supportedOnThisDevice, [.off, .lanczos])
         #endif
     }
 
@@ -2241,22 +2230,22 @@ extension RunnerTests {
     /// something this device actually runs — never a setting that reads as active while the
     /// renderer quietly does something else.
     func testAStoredChoiceThisDeviceCannotRunResolvesToOneItCan() {
-        XCTAssertTrue(FeedUpscaler.supported(or: nil).isSupportedOnThisDevice)
-        for upscaler in FeedUpscaler.allCases {
-            XCTAssertTrue(FeedUpscaler.supported(or: upscaler).isSupportedOnThisDevice)
+        XCTAssertTrue(MonitorUpscaler.supported(or: nil).isSupportedOnThisDevice)
+        for upscaler in MonitorUpscaler.allCases {
+            XCTAssertTrue(MonitorUpscaler.supported(or: upscaler).isSupportedOnThisDevice)
         }
-        XCTAssertEqual(FeedUpscaler.supported(or: .lanczos), .lanczos)
+        XCTAssertEqual(MonitorUpscaler.supported(or: .lanczos), .lanczos)
     }
 
     /// An untouched install starts at the floor, on every device — the picker is how an operator
     /// spends GPU on the feed, not something they have to find to stop spending it.
     func testTheDefaultUpscalerIsTheFastFloorEvenWhereBetterOnesExist() {
-        XCTAssertEqual(FeedUpscaler.supported(or: nil), .lanczos)
-        XCTAssertEqual(FeedUpscaler.lanczos.rawValue, "Fast")
+        XCTAssertEqual(MonitorUpscaler.supported(or: nil), .lanczos)
+        XCTAssertEqual(MonitorUpscaler.lanczos.rawValue, "Fast")
         // A stored choice still wins wherever the device can run it — the default is a starting
         // point, not a cap.
-        for upscaler in FeedUpscaler.supportedOnThisDevice {
-            XCTAssertEqual(FeedUpscaler.supported(or: upscaler), upscaler)
+        for upscaler in MonitorUpscaler.supportedOnThisDevice {
+            XCTAssertEqual(MonitorUpscaler.supported(or: upscaler), upscaler)
         }
     }
 
@@ -3150,7 +3139,7 @@ private final class NativeDefaultFilterFixture {
 @MainActor
 @Suite("SIMULATED native media selection ownership")
 struct NikonMediaSelectionNativeOwnerTests {
-    @Test("Actual grid/list scroll owners mount native policy and retire old recognizers")
+    @Test("The shared catalog's gallery mounts the native policy once and retires it")
     func nativeOwnerMountsAndRetires() async throws {
         let state = NikonSelectionNativeFixtureState()
         let scene = try #require(
@@ -3169,23 +3158,24 @@ struct NikonMediaSelectionNativeOwnerTests {
             originalKeyWindow?.makeKeyAndVisible()
         }
         try await settle(host) { scroll(host.view).map { recognizers($0).count == 2 } ?? false }
-        let grid = try #require(scroll(host.view))
+        let gallery = try #require(scroll(host.view))
         let hold = try #require(
-            recognizers(grid).compactMap { $0 as? UILongPressGestureRecognizer }.first)
-        #expect(hold.minimumPressDuration == 0.18)
-        #expect(hold.allowableMovement == 40)
-        #expect(grid.contentSize.height > grid.bounds.height)
+            recognizers(gallery).compactMap { $0 as? UILongPressGestureRecognizer }.first)
+        let standard = MonitorMediaSelectionConfiguration.standard
+        #expect(hold.minimumPressDuration == Double(standard.holdMilliseconds) / 1_000)
+        #expect(Double(hold.allowableMovement) == standard.movementTolerance)
+        #expect(gallery.contentSize.height > gallery.bounds.height)
+        let gridHeight = gallery.contentSize.height
         state.list = true
         try await settle(host) {
-            guard let current = scroll(host.view), current !== grid else { return false }
-            return recognizers(current).count == 2 && recognizers(grid).isEmpty
+            scroll(host.view).map { $0.contentSize.height != gridHeight } ?? false
         }
         let list = try #require(scroll(host.view))
-        #expect(list !== grid)
+        #expect(mountedRecognizers(host.view) == 2)
         #expect(list.contentSize.height > list.bounds.height)
         state.present = false
         try await settle(host) { scroll(host.view) == nil && recognizers(list).isEmpty }
-        #expect(recognizers(grid).isEmpty && recognizers(list).isEmpty)
+        #expect(recognizers(gallery).isEmpty && recognizers(list).isEmpty)
     }
 
     private func recognizers(_ scroll: UIScrollView) -> [UIGestureRecognizer] {
@@ -3196,9 +3186,15 @@ struct NikonMediaSelectionNativeOwnerTests {
         }
     }
 
+    /// The catalog page has several scroll views; the gallery is the one carrying the policy.
     private func scroll(_ view: UIView) -> UIScrollView? {
-        if let scroll = view as? UIScrollView, scroll.bounds.height > 100 { return scroll }
+        if let scroll = view as? UIScrollView, !recognizers(scroll).isEmpty { return scroll }
         return view.subviews.compactMap { scroll($0) }.first
+    }
+
+    private func mountedRecognizers(_ view: UIView) -> Int {
+        ((view as? UIScrollView).map { recognizers($0).count } ?? 0)
+            + view.subviews.map(mountedRecognizers).reduce(0, +)
     }
 
     private func settle(_ host: UIViewController, until predicate: () -> Bool) async throws {
@@ -3217,45 +3213,38 @@ struct NikonMediaSelectionNativeOwnerTests {
 @MainActor
 @Observable
 private final class NikonSelectionNativeFixtureState {
-    let owner = MonitorMediaSelectionState()
     var list = false
     var present = true
 }
 
+/// Nikon's browser on the shared catalog, with forty Nikon cell items.
 @MainActor
 private struct NikonSelectionNativeFixture: View {
     let state: NikonSelectionNativeFixtureState
-    private let ids = (0..<40).map { "SIMULATED-selection-\($0)" }
+    private let items = (0..<40).map { index in
+        MediaClipCellPresentation.item(
+            clip: MediaClip(
+                cameraID: "SIMULATED-selection", filename: "SIMULATED-\(index).MOV", handle: 1,
+                storageID: 65_537, sizeBytes: 1_000_000, captureDate: ""),
+            detail: "", isDownloaded: false, cacheProgress: nil, isStreaming: false,
+            hasRawSibling: false, duration: nil, list: false, selecting: false)
+    }
     var body: some View {
         if state.present {
-            ScrollView {
-                Group {
-                    if state.list {
-                        LazyVStack { cells }
-                    } else {
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())]) { cells }
-                    }
-                }
-                .background(
-                    MonitorMediaSelectionHost(
-                        state: state.owner, ids: ids, selected: [], selecting: false,
-                        context: state.list ? "SIMULATED-list" : "SIMULATED-grid",
-                        configuration: MonitorMediaSelectionConfiguration(
-                            holdMilliseconds: 180, movementTolerance: 40,
-                            allowsSelectionEntry: false,
-                            sweepsSideways: false, edgeBand: 90, maximumEdgeSpeed: 620,
-                            edgeCurve: .linear, viewportEdgeLimitRatio: nil, roundsScrollSteps: true
-                        ),
-                        publish: { _ in }
-                    ))
+            MonitorMediaCatalog(
+                brand: "OpenZCine", safeArea: EdgeInsets(), items: items,
+                categories: [MonitorMediaCategory(id: "All", title: "All", count: items.count)],
+                category: "All", layout: state.list ? .list : .grid, thumbnailSize: .medium,
+                sortTitle: "Newest", status: "", selectedIDs: [], selecting: false,
+                refreshing: false, canRefresh: false, tablet: false
+            ) { _ in
+            } thumbnail: { _ in
+                Color.gray
+            } empty: {
+                EmptyView()
+            } filters: {
+                EmptyView()
             }
-            .id(state.list)
-        }
-    }
-    private var cells: some View {
-        ForEach(ids, id: \.self) { id in
-            Text(id).frame(height: 50)
-                .background(MonitorMediaSelectionAnchor(id: id, state: state.owner))
         }
     }
 }
@@ -3290,52 +3279,75 @@ private struct NativeDefaultFilterFixtureView: View {
 struct MediaClipCellPresentationTests {
     @Test func remotePhotoCarriesKnownPairAndBurstFactsWithoutInventingLocalSource() {
         let clip = sample("01.JPG")
-        let value = MediaClipCellPresentation.value(
+        let item = MediaClipCellPresentation.item(
             clip: clip, detail: "", isDownloaded: false, cacheProgress: nil,
             isStreaming: false, hasRawSibling: true, burstCount: 4, duration: nil,
             list: false, selecting: false)
-        #expect(value.id == clip.id && value.title == clip.filename)
-        #expect(value.source == "On camera" && value.duration == nil)
-        #expect(value.mediaBadge == "RAW+J" && value.burstCount == 4)
-        #expect(value.progress == nil && value.completionBadge == nil)
-        #expect(value.favoriteLabel == "Add to favorites")
+        #expect(item.id == clip.id && item.filename == clip.filename)
+        #expect(item.availability == .camera && item.stateLabel == "ON CAMERA")
+        #expect(item.duration.isEmpty && item.photo)
+        #expect(item.mediaBadge == "RAW+J" && item.burstCount == 4)
+        #expect(item.progress == nil && item.completionBadge == nil)
+        #expect(!item.favorite)
     }
 
     @Test func realZeroProgressAndStreamingCaptionRemainKnown() {
-        let value = MediaClipCellPresentation.value(
+        let item = MediaClipCellPresentation.item(
             clip: sample("01.MOV"), detail: "", isDownloaded: false, cacheProgress: 0,
             isStreaming: true, hasRawSibling: false, duration: "00:08",
             list: false, selecting: false)
-        #expect(value.progress == 0 && value.transferCaption == "CACHING 0%")
-        #expect(value.source == nil && value.duration == nil && value.completionBadge == nil)
+        #expect(item.progress == 0 && item.transferCaption == "CACHING 0%")
+        #expect(item.stateLabel == "CACHING" && item.duration.isEmpty)
+        #expect(item.completionBadge == nil)
     }
 
     @Test func completedExportAndLocalFavoriteStaySourceFacts() {
         var clip = sample("01.MOV")
         clip.exportStatus = .exported
         clip.isFavorite = true
-        let value = MediaClipCellPresentation.value(
+        let item = MediaClipCellPresentation.item(
             clip: clip, detail: "", isDownloaded: true, cacheProgress: nil,
             isStreaming: false, hasRawSibling: false, duration: "00:08",
             list: false, selecting: false)
-        #expect(value.duration == "00:08" && value.completionBadge == "EXPORTED")
-        #expect(value.favorite && value.favoriteLabel == "Remove from favorites")
-        #expect(value.source == nil)
+        #expect(item.duration == "00:08" && item.completionBadge == "EXPORTED")
+        #expect(item.favorite)
+        #expect(item.availability == .original && item.stateLabel == "ON PHONE")
     }
 
     @Test func selectionAndListProjectionPreserveExistingBadgePolicies() {
         let clip = sample("01.JPG")
-        let selecting = MediaClipCellPresentation.value(
+        let selecting = MediaClipCellPresentation.item(
             clip: clip, detail: "", isDownloaded: false, cacheProgress: nil,
             isStreaming: false, hasRawSibling: true, burstCount: 4, duration: nil,
             list: false, selecting: true)
         #expect(selecting.burstCount == nil && selecting.mediaBadge == nil)
-        let list = MediaClipCellPresentation.value(
+        let list = MediaClipCellPresentation.item(
             clip: clip, detail: "RAW+J · 1MB", isDownloaded: true, cacheProgress: 0.5,
             isStreaming: true, hasRawSibling: true, burstCount: 4, duration: nil,
             list: true, selecting: false)
-        #expect(list.detail == "RAW+J · 1MB" && list.transferCaption == "50%")
-        #expect(list.source == nil && list.burstCount == nil && list.mediaBadge == nil)
+        #expect(list.metadata == "RAW+J · 1MB" && list.transferCaption == "50%")
+        #expect(list.burstCount == nil && list.mediaBadge == nil)
+    }
+
+    @Test func listDetailNamesResolutionPairSizeAndDurationOrWhereItLives() {
+        let video = sample("01.MOV")
+        #expect(
+            MediaClipCellPresentation.metadataLine(
+                video, hasRawSibling: false, duration: "0:08", isDownloaded: true)
+                == "\(MediaClipFormatting.byteLabel(1_000_000)) · 0:08")
+        let photo = sample("01.JPG")
+        #expect(
+            MediaClipCellPresentation.metadataLine(
+                photo, hasRawSibling: true, duration: "0:08", isDownloaded: false)
+                == "RAW+J · \(MediaClipFormatting.byteLabel(1_000_000))")
+        var empty = sample("02.MOV")
+        empty.sizeBytes = 0
+        #expect(
+            MediaClipCellPresentation.metadataLine(
+                empty, hasRawSibling: false, duration: nil, isDownloaded: false) == "On camera")
+        #expect(
+            MediaClipCellPresentation.metadataLine(
+                empty, hasRawSibling: false, duration: nil, isDownloaded: true) == "Cached")
     }
 
     private func sample(_ filename: String) -> MediaClip {
@@ -3402,20 +3414,31 @@ extension RunnerTests {
     }
 
     @MainActor
-    func testNikonMediaCellUsesCommonBadgeAndFavoriteComposition() async throws {
+    func testNikonMediaBadgesAndFavoriteRenderInTheSharedCatalog() async throws {
         let clip = MediaClip(
             cameraID: "SIMULATED-cell", filename: "01.JPG", handle: 1, storageID: 65_537,
             sizeBytes: 1_000_000, captureDate: "")
-        let value = MediaClipCellPresentation.value(
+        let item = MediaClipCellPresentation.item(
             clip: clip, detail: "", isDownloaded: false, cacheProgress: nil,
             isStreaming: false, hasRawSibling: true, burstCount: 4, duration: nil,
-            list: false, selecting: false)
+            list: false, selecting: false, permissions: [.favorite])
         var favorites = 0
         let host = UIHostingController(
-            rootView: MonitorMediaCell(
-                clip: value, layout: .grid, selecting: false, selected: false,
-                favoriteBesideTitle: true, onOpen: {}, onSelect: {}, onFavorite: { favorites += 1 }
-            ) { Color.gray })
+            rootView: MonitorMediaCatalog(
+                brand: "OpenZCine", safeArea: EdgeInsets(), items: [item],
+                categories: [MonitorMediaCategory(id: "All", title: "All", count: 1)],
+                category: "All", layout: .grid, thumbnailSize: .medium, sortTitle: "Newest",
+                status: "", selectedIDs: [], selecting: false, refreshing: false,
+                canRefresh: false, tablet: false
+            ) { action in
+                if case .favorite = action { favorites += 1 }
+            } thumbnail: { _ in
+                Color.gray
+            } empty: {
+                EmptyView()
+            } filters: {
+                EmptyView()
+            })
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
         host.view.backgroundColor = UIColor(MonitorTheme.background)
         window.rootViewController = host
@@ -3424,20 +3447,21 @@ extension RunnerTests {
             window.isHidden = true
             window.rootViewController = nil
         }
-        let favorite = try await nativeFilterElement("Add to favorites", host: host)
+        let favorite = try await nativeFilterElement("Add favorite", host: host)
         let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
-        XCTAssertTrue(labels.contains("On camera"))
+        XCTAssertTrue(labels.contains("ON CAMERA"))
         XCTAssertTrue(labels.contains("RAW+J"))
         XCTAssertTrue(labels.contains("4 frames"))
-        XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.width, 44)
-        XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.height, 44)
+        // Screen-space frames of a cell at a fractional grid offset carry float rounding.
+        XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.width, 44 - 1e-6)
+        XCTAssertGreaterThanOrEqual(favorite.accessibilityFrame.height, 44 - 1e-6)
         XCTAssertTrue(favorite.accessibilityActivate())
         XCTAssertEqual(favorites, 1)
         let attachment = XCTAttachment(
             image: UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
                 host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
             })
-        attachment.name = "SIMULATED-Nikon-common-media-cell"
+        attachment.name = "SIMULATED-Nikon-media-catalog-badges"
         attachment.lifetime = .keepAlways
         add(attachment)
     }

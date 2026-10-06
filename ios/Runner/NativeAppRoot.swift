@@ -12,7 +12,9 @@ import UIKit
 import ZIPFoundation
 import os
 import struct MonitorPresentation.MonitorEdgeInsets
+import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
+import enum MonitorPresentation.MonitorThumbnailSize
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -248,25 +250,25 @@ enum PreferencesStore {
         UserDefaults.standard.set(enabled, forKey: mfScrubEnabledKey)
     }
 
-    static func loadMediaThumbnailSize() -> MediaThumbnailSize {
+    static func loadMediaThumbnailSize() -> MonitorThumbnailSize {
         guard let raw = UserDefaults.standard.string(forKey: mediaThumbnailSizeKey),
-            let size = MediaThumbnailSize(rawValue: raw)
+            let size = MonitorThumbnailSize(rawValue: raw)
         else { return .medium }
         return size
     }
 
-    static func saveMediaThumbnailSize(_ size: MediaThumbnailSize) {
+    static func saveMediaThumbnailSize(_ size: MonitorThumbnailSize) {
         UserDefaults.standard.set(size.rawValue, forKey: mediaThumbnailSizeKey)
     }
 
-    static func loadMediaBrowserLayout() -> MediaBrowserLayout {
+    static func loadMediaBrowserLayout() -> MonitorMediaLayout {
         guard let raw = UserDefaults.standard.string(forKey: mediaBrowserLayoutKey),
-            let layout = MediaBrowserLayout(rawValue: raw)
+            let layout = MonitorMediaLayout(rawValue: raw)
         else { return .grid }
         return layout
     }
 
-    static func saveMediaBrowserLayout(_ layout: MediaBrowserLayout) {
+    static func saveMediaBrowserLayout(_ layout: MonitorMediaLayout) {
         UserDefaults.standard.set(layout.rawValue, forKey: mediaBrowserLayoutKey)
     }
 
@@ -367,10 +369,10 @@ struct LUTFileStore {
     }
 
     /// The stored LUTs in `category`, sorted (empty until the directory exists).
-    func list(_ category: LUTCategory) -> [StoredLUT] {
+    func list(_ category: LUTCategory) -> [StoredCustomLUT] {
         let path = directory(for: category).path
         let names = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-        return LUTLibraryIndex.stored(fromFileNames: names)
+        return CustomLUTIndex.stored(fromFileNames: names)
     }
 
     /// Copies an external `.cube` into `category`, replacing a same-named file.
@@ -378,7 +380,7 @@ struct LUTFileStore {
     /// The file is parsed first so a cube the renderer cannot apply (wrong size, truncated table,
     /// non-default domain) never appears in the library as a silent no-op.
     @discardableResult
-    func importFile(from source: URL, into category: LUTCategory) throws -> StoredLUT {
+    func importFile(from source: URL, into category: LUTCategory) throws -> StoredCustomLUT {
         let data = try Data(contentsOf: source)
         guard let text = String(data: data, encoding: .utf8) else {
             throw LUTImportError.unreadableFile
@@ -389,13 +391,13 @@ struct LUTFileStore {
         let destination = directory.appendingPathComponent(source.lastPathComponent)
         try? FileManager.default.removeItem(at: destination)
         try data.write(to: destination, options: .atomic)
-        return StoredLUT(fileName: source.lastPathComponent)
+        return StoredCustomLUT(fileName: source.lastPathComponent)
     }
 
     /// Extracts every `.cube` from a zip's bytes into `category`, flattening nested folders to the
     /// file name and skipping non-`.cube` entries. Returns the stored list (sorted).
     @discardableResult
-    func importZip(at zipURL: URL, into category: LUTCategory) throws -> [StoredLUT] {
+    func importZip(at zipURL: URL, into category: LUTCategory) throws -> [StoredCustomLUT] {
         // Stream each entry straight to its destination file — never load the whole zip, or any
         // extracted file, into memory (a large RED pack would otherwise sit fully resident).
         let archive: Archive
@@ -438,7 +440,7 @@ struct LUTFileStore {
     }
 
     /// Deletes one app-owned stored LUT. Built-ins have no file and are always protected.
-    func remove(_ lut: StoredLUT, from category: LUTCategory) throws {
+    func remove(_ lut: StoredCustomLUT, from category: LUTCategory) throws {
         guard category != .builtIn else { throw LUTDeletionError.builtInProtected }
         let directory = directory(for: category).standardizedFileURL
         let candidate = directory.appendingPathComponent(lut.fileName).standardizedFileURL
@@ -2459,8 +2461,8 @@ final class NativeAppModel {
     }
     /// File store for custom-imported LUTs, and the current list (refreshed when the picker opens).
     let lutFileStore: LUTFileStore
-    var customLUTs: [StoredLUT] = []
-    var redLUTs: [StoredLUT] = []
+    var customLUTs: [StoredCustomLUT] = []
+    var redLUTs: [StoredCustomLUT] = []
     /// On-disk cache + index for camera clips (Media page), and the current library list.
     let mediaClipStore: MediaClipStore
     private var unopenedMediaRows: [MediaClip] = []
@@ -2579,10 +2581,10 @@ final class NativeAppModel {
     var mediaSortOrder: MediaSortOrder = PreferencesStore.loadMediaSortOrder() {
         didSet { PreferencesStore.saveMediaSortOrder(mediaSortOrder) }
     }
-    var mediaThumbnailSize: MediaThumbnailSize = PreferencesStore.loadMediaThumbnailSize() {
+    var mediaThumbnailSize: MonitorThumbnailSize = PreferencesStore.loadMediaThumbnailSize() {
         didSet { PreferencesStore.saveMediaThumbnailSize(mediaThumbnailSize) }
     }
-    var mediaBrowserLayout: MediaBrowserLayout = PreferencesStore.loadMediaBrowserLayout() {
+    var mediaBrowserLayout: MonitorMediaLayout = PreferencesStore.loadMediaBrowserLayout() {
         didSet { PreferencesStore.saveMediaBrowserLayout(mediaBrowserLayout) }
     }
     /// Per-slot card capacity from the last `refreshMediaStorageSlots` pass.
@@ -12143,7 +12145,7 @@ final class NativeAppModel {
 
     /// Removes a downloaded/imported LUT and reconciles an active selection without changing the
     /// LUT tool's on/off state. Built-in selections are rejected by the file store.
-    func deleteStoredLUT(_ lut: StoredLUT, from category: LUTCategory) throws {
+    func deleteStoredLUT(_ lut: StoredCustomLUT, from category: LUTCategory) throws {
         try lutFileStore.remove(lut, from: category)
         LUTCubeCache.invalidate(
             forKey: LUTSelection.stored(category: category, fileName: lut.fileName).cacheKey)
@@ -13525,6 +13527,14 @@ extension NativeAppModel {
     /// Unfiltered source pairing remains separate from visible grid representatives.
     func rawSibling(of clip: MediaClip) -> MediaClip? {
         NikonAppGalleryProjection.rawSibling(of: clip, in: mediaClips)
+    }
+    /// `rawSibling(of:)` for a whole grid in one pass: the ids that have a RAW companion.
+    func rawPairedClipIDs(_ clips: [MediaClip]) -> Set<String> {
+        NikonAppGalleryProjection.rawPairedIDs(clips, in: mediaClips)
+    }
+    /// Grid count per category under the current filters, from the last grid projection.
+    func mediaCategoryCount(_ category: MediaCategoryTab) -> Int {
+        mediaProjectionSnapshot?.count(in: category) ?? 0
     }
 
     /// Active chip filters (format, resolution, size, date, storage slot) — not category tabs.

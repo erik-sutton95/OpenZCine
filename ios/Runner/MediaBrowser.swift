@@ -109,33 +109,6 @@ enum MediaCellThumbnailCache {
 
 // MARK: - Browser
 
-/// Grid density for the Media browser — smaller cells show more clips per row.
-enum MediaThumbnailSize: String, CaseIterable, Codable, Sendable, Identifiable {
-    case small
-    case medium
-    case large
-
-    var id: String { rawValue }
-
-    /// Adaptive `GridItem` minimum cell width for this preset.
-    var gridMinimum: CGFloat {
-        switch self {
-        case .small: 148
-        case .medium: 210
-        case .large: 280
-        }
-    }
-
-    /// Adaptive `GridItem` maximum cell width for this preset.
-    var gridMaximum: CGFloat {
-        switch self {
-        case .small: 200
-        case .medium: 300
-        case .large: 380
-        }
-    }
-}
-
 /// Geometry for a media popup panel anchored to its trigger button.
 ///
 /// The preferred width is a *preference, not a promise*: a 400pt panel cannot fit a 393pt phone,
@@ -200,8 +173,8 @@ struct MediaPopupPlacement: Equatable {
     }
 }
 
-/// Full-screen Media page: sidebar navigation, filter popup, and a clip grid with progressive
-/// on-camera playback when a clip is opened.
+/// Full-screen Media page on the shared `MonitorMediaCatalog`. Nikon supplies the clip facts,
+/// thumbnails, card-slot cards and caching bar; opening, sharing, caching and deleting stay here.
 struct MediaBrowserView: View {
     var safeArea: MonitorEdgeInsets = .zero
     @Environment(NativeAppModel.self) private var model
@@ -223,71 +196,89 @@ struct MediaBrowserView: View {
         nonmutating set { model.mediaSelectedClipIDs = newValue }
     }
     @State private var isBatchDeleteConfirmPresented = false
-    @State private var selectionState = MonitorMediaSelectionState()
     /// Set by the post-hop share resume: the player opens with its share popup already on this
     /// destination. Cleared when the player dismisses.
     @State private var resumeShareDestination: MediaDeliveryDestination?
     @State private var deliveryRequest: MediaDeliveryRequest?
-    @State private var deliveryAnchorFrame: CGRect = .zero
     @State private var isFilterPopupPresented = false
     @State private var filterButtonFrame: CGRect = .zero
-
-    private var gridColumns: [GridItem] {
-        [
-            GridItem(
-                .adaptive(
-                    minimum: model.mediaThumbnailSize.gridMinimum,
-                    maximum: model.mediaThumbnailSize.gridMaximum
-                ),
-                spacing: 16
-            )
-        ]
-    }
+    /// Durations read from cached files; each thumbnail reports its clip's once the asset loads.
+    @State private var resolvedDurations: [String: String] = [:]
 
     private var displayedClips: [MediaClip] { model.filteredMediaClips }
 
     private var selectedClips: [MediaClip] {
-        // A selected burst cell stands for its whole series — expand so delete/share act on
+        // A selected burst cell stands for its whole series, so delete, share and cache act on
         // every frame, not just the representative (Erik: "delete only removed 1 of the burst").
         model.burstExpanded(displayedClips.filter { selectedClipIDs.contains($0.id) })
     }
 
-    private var headerTitle: String {
-        switch model.mediaCategoryTab {
-        case .all: return "All clips"
-        case .videos: return "Videos"
-        case .photos: return "Photos"
-        case .favorites: return "Favorites"
-        }
-    }
-
-    private var headerItemCountLabel: String {
+    private var libraryStatus: String {
         if model.mediaFetchInProgress {
             return model.mediaFetchListedCount == 0
                 ? "Scanning…"
                 : "Listing… \(model.mediaFetchListedCount) found"
         }
-        let count = displayedClips.count
-        return "\(count) item\(count == 1 ? "" : "s")"
+        return model.isConnected && model.mediaBrowserSource == .camera
+            ? "Camera + local cache" : "Available on this phone"
     }
 
     var body: some View {
+        // Read first: the projection pass it runs also feeds the category counts and bursts.
+        let clips = displayedClips
+        let clipsByID = Dictionary(
+            clips.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         ZStack(alignment: .topLeading) {
             LiveDesign.background
 
-            MonitorPage(
-                safeArea: resolvedSafeArea, navigationWidth: 206,
-                heading: MonitorPageHeading(brand: "OpenZCine", title: "Media"),
-                backLabel: "Back", back: { model.dismissMediaLibrary() }
-            ) { portrait in
-                mediaNavigation(portrait: portrait)
-            } detail: { portrait in
-                VStack(alignment: .leading, spacing: 8) {
-                    mainHeader(portrait: portrait)
-                    gridContent
-                        .safeAreaInset(edge: .bottom, spacing: 0) {
-                            if portrait, showsThumbnailSizeControl { portraitGridControlsBand }
-                        }
+            MonitorMediaCatalog(
+                brand: "OpenZCine", safeArea: resolvedSafeArea, items: catalogItems(clips),
+                categories: MediaCategoryTab.allCases.map {
+                    MonitorMediaCategory(
+                        id: $0.id, title: $0.rawValue, count: model.mediaCategoryCount($0))
+                },
+                category: model.mediaCategoryTab.id, layout: model.mediaBrowserLayout,
+                thumbnailSize: model.mediaThumbnailSize,
+                sortTitle: model.mediaSortOrder.rawValue.capitalized, status: libraryStatus,
+                selectedIDs: selectedClipIDs, selecting: isSelecting,
+                refreshing: model.mediaFetchInProgress,
+                canRefresh: model.mediaBrowserSource == .camera,
+                tablet: UIDevice.current.userInterfaceIdiom == .pad,
+                action: { handle($0, clips: clipsByID) }
+            ) { item in
+                if let clip = clipsByID[item.id] {
+                    MediaClipThumbnail(
+                        clip: clip, list: model.mediaBrowserLayout == .list,
+                        isDownloaded: model.isClipDownloaded(clip),
+                        localURL: model.clipLocalURL(clip),
+                        thumbnailURL: model.clipThumbnailURL(clip),
+                        needsDuration: resolvedDurations[clip.id] == nil,
+                        onDuration: { resolvedDurations[clip.id] = $0 })
+                }
+            } empty: {
+                if model.mediaFetchInProgress { listingState } else { emptyState }
+            } filters: {
+                MonitorCatalogFilterButton(
+                    activeCount: model.mediaActiveFilterCount, open: isFilterPopupPresented
+                ) { isFilterPopupPresented.toggle() }
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { filterButtonFrame = proxy.frame(in: .global) }
+                            .onChange(of: proxy.frame(in: .global)) { _, frame in
+                                filterButtonFrame = frame
+                            }
+                    }
+                }
+            } sidebar: {
+                if model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
+                    storageCards
+                }
+            } accessory: {
+                if !isSelecting, let streaming = clips.first(where: { model.isClipStreaming($0) }),
+                    let progress = model.mediaDownloadProgress[streaming.id]
+                {
+                    clipCacheHeaderBar(filename: streaming.filename, progress: progress)
                 }
             }
 
@@ -351,6 +342,21 @@ struct MediaBrowserView: View {
                     .transition(.opacity)
             }
         }
+        .confirmationDialog(
+            // Context-aware: pair/master/backup notes appear only when this selection
+            // actually pulls those companions in (videos never see stills wording).
+            isBatchDeleteConfirmPresented ? model.deletionConfirmMessage(for: selectedClips) : "",
+            isPresented: $isBatchDeleteConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                let clips = selectedClips
+                Task {
+                    _ = await model.deleteMediaClips(clips)
+                    exitSelectionMode()
+                }
+            }
+        }
         .onAppear {
             model.refreshMediaClips()
             if let resumeClips = model.pendingHopShareResumeClips {
@@ -399,13 +405,81 @@ struct MediaBrowserView: View {
         .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
         .animation(.easeInOut(duration: 0.2), value: model.mediaThumbnailSize)
         .animation(.easeInOut(duration: 0.2), value: model.mediaBrowserLayout)
-        .animation(.easeInOut(duration: 0.2), value: showsThumbnailSizeControl)
         .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
         .onDisappear { deliveryCoordinator.exitLocalOverlayContext() }
         .mediaDeliveryShareSheet(enabled: playingClip == nil)
     }
 
-    /// Preferred, not guaranteed — see ``MediaPopupPlacement``.
+    private func catalogItems(_ clips: [MediaClip]) -> [MonitorMediaItem] {
+        let list = model.mediaBrowserLayout == .list
+        let paired = model.rawPairedClipIDs(clips)
+        // ponytail: two cache stats per clip per render; memoize per clip if large cards stutter.
+        return clips.map { clip in
+            let downloaded = model.isClipDownloaded(clip)
+            let hasRaw = paired.contains(clip.id)
+            let duration = resolvedDurations[clip.id]
+            var permissions: MonitorMediaPermissions = [.favorite, .share, .delete]
+            if canCache(clip, downloaded: downloaded) { permissions.insert(.cache) }
+            return MediaClipCellPresentation.item(
+                clip: clip,
+                detail: list
+                    ? MediaClipCellPresentation.metadataLine(
+                        clip, hasRawSibling: hasRaw, duration: duration, isDownloaded: downloaded)
+                    : "",
+                isDownloaded: downloaded,
+                cacheProgress: model.mediaDownloadProgress[clip.id]
+                    ?? model.clipBufferedFraction(clip),
+                isStreaming: model.isClipStreaming(clip), hasRawSibling: hasRaw,
+                burstCount: model.burstSeries(for: clip)?.count, duration: duration,
+                list: list, selecting: isSelecting, permissions: permissions)
+        }
+    }
+
+    private func canCache(_ clip: MediaClip, downloaded: Bool) -> Bool {
+        model.isConnected && clip.handle != nil && !downloaded
+    }
+
+    private func handle(_ action: MonitorMediaAction, clips: [String: MediaClip]) {
+        switch action {
+        case .back: model.dismissMediaLibrary()
+        // Authoritative re-enumeration on demand (#296): the camera's inventory is the truth.
+        case .refresh: model.refreshCameraMediaInventory()
+        case .cycleSort: model.cycleMediaSortOrder()
+        case .category(let id):
+            if let tab = MediaCategoryTab(rawValue: id) { model.mediaCategoryTab = tab }
+        case .layout(let layout): model.mediaBrowserLayout = layout
+        case .thumbnailSize(let size): model.mediaThumbnailSize = size
+        case .open(let id):
+            if let clip = clips[id] { open(clip) }
+        case .select(let id):
+            guard let clip = clips[id] else { return }
+            if isSelecting { toggleSelection(clip) } else { beginSelection(with: clip) }
+        case .selection(let ids):
+            if !isSelecting { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+            isSelecting = true
+            selectedClipIDs = ids
+        case .favorite(let id):
+            if let clip = clips[id] { model.toggleClipFavorite(clip) }
+        case .selectAll: selectedClipIDs = Set(clips.keys)
+        case .clearSelection: exitSelectionMode()
+        case .shareSelection:
+            let selected = selectedClips
+            if !selected.isEmpty { deliveryRequest = MediaDeliveryRequest(clips: selected) }
+        case .cacheSelection:
+            let selected = selectedClips.filter {
+                canCache($0, downloaded: model.isClipDownloaded($0))
+            }
+            Task { for clip in selected { _ = await model.cacheClipFromCamera(clip) } }
+        case .favoriteSelection:
+            for clip in clips.values where selectedClipIDs.contains(clip.id) && !clip.isFavorite {
+                model.toggleClipFavorite(clip)
+            }
+        case .deleteSelection:
+            if !selectedClipIDs.isEmpty { isBatchDeleteConfirmPresented = true }
+        }
+    }
+
+    /// Preferred, not guaranteed; see ``MediaPopupPlacement``.
     private let filterPopupWidth: CGFloat = 400
 
     private var filterPopupOverlay: some View {
@@ -437,16 +511,17 @@ struct MediaBrowserView: View {
         .ignoresSafeArea()
     }
 
+    /// The share chip lives in the shared selection tray, so the popup hangs above the tray.
     private func deliveryPopupOverlay(clips: [MediaClip]) -> some View {
         MediaDeliveryPopupOverlay(
             clips: clips,
-            anchorFrame: deliveryAnchorFrame,
-            placement: .belowAnchor,
+            anchorFrame: .zero,
+            placement: .aboveAnchor,
             preferredDestination: deliveryRequest?.preferredDestination,
             safeArea: safeArea,
             onBeginDelivery: { request in
                 deliveryRequest = nil
-                startDelivery(request)
+                deliveryCoordinator.begin(request, model: model)
             }
         ) {
             deliveryRequest = nil
@@ -454,88 +529,11 @@ struct MediaBrowserView: View {
         .environment(model)
     }
 
-    private func startDelivery(_ request: MediaDeliveryBeginRequest) {
-        deliveryCoordinator.begin(request, model: model)
-    }
-
-    private var showsThumbnailSizeControl: Bool {
-        !deliveryCoordinator.isActive && deliveryRequest == nil && !isSelecting
-    }
-
     private var resolvedSafeArea: EdgeInsets {
         if windowGeometry.validSize != nil { return windowGeometry.safeArea }
         return EdgeInsets(
             top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
             bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing))
-    }
-
-    private var commonThumbnailSize: MonitorThumbnailSize {
-        switch model.mediaThumbnailSize {
-        case .small: .small
-        case .medium: .medium
-        case .large: .large
-        }
-    }
-
-    private var displayControls: some View {
-        MonitorCatalogDisplayControls(
-            layout: model.mediaBrowserLayout == .grid ? .grid : .list,
-            thumbnailSize: commonThumbnailSize,
-            onLayout: { model.mediaBrowserLayout = $0 == .grid ? .grid : .list },
-            onThumbnailSize: { size in
-                switch size {
-                case .small: model.mediaThumbnailSize = .small
-                case .medium: model.mediaThumbnailSize = .medium
-                case .large: model.mediaThumbnailSize = .large
-                }
-            })
-    }
-
-    /// The inset keeps the last row clear of the existing floating density controls.
-    private var portraitGridControlsBand: some View {
-        ZStack(alignment: .bottom) {
-            LinearGradient(
-                colors: [LiveDesign.background.opacity(0), LiveDesign.background.opacity(0.94)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .allowsHitTesting(false)
-            displayControls.padding(.bottom, 4)
-        }
-        .frame(height: 84)
-        .frame(maxWidth: .infinity)
-    }
-
-    private func mediaNavigation(portrait: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ScrollView(portrait ? .horizontal : .vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    MonitorMediaNavigation(
-                        categories: MediaCategoryTab.allCases.map {
-                            MonitorMediaNavigationCategory(id: $0.id, title: $0.rawValue)
-                        }, selectedID: model.mediaCategoryTab.id, vertical: !portrait
-                    ) { id in
-                        guard let category = MediaCategoryTab.allCases.first(where: { $0.id == id })
-                        else { return }
-                        model.mediaCategoryTab = category
-                    }
-                    if !portrait, model.mediaBrowserSource == .camera,
-                        !model.mediaStorageSlots.isEmpty
-                    {
-                        storageCards
-                    }
-                }
-            }
-            .monitorScrollFade(portrait ? .horizontal : .vertical)
-            .frame(height: portrait ? 44 : nil)
-            if !portrait, showsThumbnailSizeControl {
-                displayControls
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if !portrait, isSelecting { exitSelectionMode() }
-        }
     }
 
     private var storageCards: some View {
@@ -554,214 +552,6 @@ struct MediaBrowserView: View {
                 .buttonStyle(.monitorTapTarget)
             }
         }
-    }
-
-    // MARK: - Main column
-
-    private func mainHeader(portrait: Bool) -> some View {
-        Group {
-            if isSelecting {
-                selectionHeader
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 8) {
-                        MonitorCatalogHeader(
-                            title: headerTitle, subtitle: headerItemCountLabel,
-                            compact: portrait, sort: model.mediaSortOrder.pillLabel,
-                            filterCount: model.mediaActiveFilterCount,
-                            onSort: { model.cycleMediaSortOrder() },
-                            onFilter: { isFilterPopupPresented.toggle() },
-                            onFilterFrameChange: { filterButtonFrame = $0 })
-                        if model.mediaBrowserSource == .camera { refreshButton }
-                        if model.mediaFetchInProgress { ProgressView().controlSize(.small) }
-                    }
-                    if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }
-                    ),
-                        let progress = model.mediaDownloadProgress[streamingClip.id]
-                    {
-                        clipCacheHeaderBar(filename: streamingClip.filename, progress: progress)
-                    }
-                }
-            }
-        }
-    }
-
-    private var selectionHeader: some View {
-        HStack(spacing: 12) {
-            CloseButton(action: { exitSelectionMode() }, size: 37)
-            Text("\(selectedClipIDs.count) selected")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-            Spacer(minLength: 8)
-            Button {
-                isBatchDeleteConfirmPresented = true
-            } label: {
-                Label("Delete", systemImage: "trash")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(selectedClipIDs.isEmpty ? LiveDesign.faint : Color.red)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-            }
-            .buttonStyle(.monitorTapTarget)
-            .disabled(selectedClipIDs.isEmpty)
-            .confirmationDialog(
-                // Context-aware: pair/master/backup notes appear only when this selection
-                // actually pulls those companions in (videos never see stills wording).
-                model.deletionConfirmMessage(for: selectedClips),
-                isPresented: $isBatchDeleteConfirmPresented,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    let clips = selectedClips
-                    Task {
-                        _ = await model.deleteMediaClips(clips)
-                        exitSelectionMode()
-                    }
-                }
-            }
-            Button {
-                deliveryRequest = MediaDeliveryRequest(clips: selectedClips)
-            } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(
-                        selectedClipIDs.isEmpty ? LiveDesign.faint : LiveDesign.accent
-                    )
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(
-                        selectedClipIDs.isEmpty ? Color.clear : LiveDesign.accentDim,
-                        in: Capsule()
-                    )
-                    .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-            }
-            .buttonStyle(.monitorTapTarget)
-            .disabled(selectedClipIDs.isEmpty)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { deliveryAnchorFrame = proxy.frame(in: .global) }
-                        .onChange(of: proxy.frame(in: .global)) { _, frame in
-                            deliveryAnchorFrame = frame
-                        }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var gridContent: some View {
-        if displayedClips.isEmpty {
-            if model.mediaFetchInProgress {
-                listingState
-            } else {
-                emptyState
-            }
-        } else if model.mediaBrowserLayout == .list {
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(displayedClips) { clip in
-                        MediaClipArtworkAdapter(
-                            clip: clip, layout: .list,
-                            isDownloaded: model.isClipDownloaded(clip),
-                            localURL: model.clipLocalURL(clip),
-                            thumbnailURL: model.clipThumbnailURL(clip),
-                            cacheProgress: model.mediaDownloadProgress[clip.id]
-                                ?? model.clipBufferedFraction(clip),
-                            isStreaming: model.isClipStreaming(clip),
-                            hasRawSibling: model.rawSibling(of: clip) != nil,
-                            isSelecting: isSelecting,
-                            isSelected: selectedClipIDs.contains(clip.id),
-                            onOpen: { open(clip) },
-                            onBeginSelection: { beginSelection(with: clip) },
-                            onToggleSelection: { toggleSelection(clip) },
-                            onToggleFavorite: { model.toggleClipFavorite(clip) }
-                        )
-                        .environment(model)
-                        .background(MonitorMediaSelectionAnchor(id: clip.id, state: selectionState))
-                    }
-                }
-                .padding(.bottom, 24)
-                .background(selectionHost)
-            }
-        } else {
-            ScrollView { gridCells }
-        }
-    }
-
-    private var gridCells: some View {
-        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 4) {
-            ForEach(displayedClips) { clip in
-                MediaClipArtworkAdapter(
-                    clip: clip, layout: .grid,
-                    isDownloaded: model.isClipDownloaded(clip),
-                    localURL: model.clipLocalURL(clip),
-                    thumbnailURL: model.clipThumbnailURL(clip),
-                    cacheProgress: model.mediaDownloadProgress[clip.id]
-                        ?? model.clipBufferedFraction(clip),
-                    isStreaming: model.isClipStreaming(clip),
-                    hasRawSibling: model.rawSibling(of: clip) != nil,
-                    burstCount: model.burstSeries(for: clip)?.count,
-                    isSelecting: isSelecting,
-                    isSelected: selectedClipIDs.contains(clip.id),
-                    onOpen: { open(clip) },
-                    onBeginSelection: { beginSelection(with: clip) },
-                    onToggleSelection: { toggleSelection(clip) },
-                    onToggleFavorite: { model.toggleClipFavorite(clip) }
-                )
-                .background(MonitorMediaSelectionAnchor(id: clip.id, state: selectionState))
-            }
-        }
-        .padding(.bottom, 24)
-        .background(selectionHost)
-    }
-
-    private var selectionHost: some View {
-        MonitorMediaSelectionHost(
-            state: selectionState,
-            ids: displayedClips.map(\.id), selected: selectedClipIDs,
-            selecting: isSelecting,
-            context: [
-                model.mediaBrowserSource.rawValue, model.mediaBrowserLayout.rawValue,
-                model.mediaCategoryTab.rawValue,
-                model.shell.control.session?.id.description ?? "no-active-session",
-            ].joined(separator: "/"),
-            configuration: MonitorMediaSelectionConfiguration(
-                holdMilliseconds: 180, movementTolerance: 40,
-                allowsSelectionEntry: false, sweepsSideways: false,
-                edgeBand: 90, maximumEdgeSpeed: 620, edgeCurve: .linear,
-                viewportEdgeLimitRatio: nil, roundsScrollSteps: true),
-            feedback: { event in
-                if event == .began { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
-                UISelectionFeedbackGenerator().selectionChanged()
-            },
-            publish: { selectedClipIDs = $0 }
-        )
-    }
-
-    /// Authoritative re-enumeration on demand (#296): the camera's inventory is the truth, and
-    /// after a card format the operator wants a way to say "ask it again" without reconnecting.
-    /// Refresh probes reused PTP handles so a recycled generation cannot keep stale filenames.
-    private var refreshButton: some View {
-        Button {
-            model.refreshCameraMediaInventory()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("REFRESH")
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-            }
-            .foregroundStyle(LiveDesign.muted)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-            .opacity(model.mediaFetchInProgress ? 0.5 : 1)
-        }
-        .buttonStyle(.monitorTapTarget)
-        .disabled(model.mediaFetchInProgress)
-        .accessibilityLabel("Refresh camera media")
     }
 
     private func clipCacheHeaderBar(filename: String, progress: Double) -> some View {
@@ -1036,66 +826,35 @@ private struct MediaStorageCard: View {
     }
 }
 
-/// Source-derived cell facts. The shared renderer never inspects camera handles or cache URLs.
+/// Source-derived catalog facts. The shared catalog never inspects camera handles or cache URLs.
 enum MediaClipCellPresentation {
-    static func value(
+    static func item(
         clip: MediaClip, detail: String, isDownloaded: Bool, cacheProgress: Double?,
         isStreaming: Bool, hasRawSibling: Bool, burstCount: Int? = nil, duration: String?,
-        list: Bool, selecting: Bool
-    ) -> MonitorClipValue {
+        list: Bool, selecting: Bool, permissions: MonitorMediaPermissions = []
+    ) -> MonitorMediaItem {
         let photo = clip.mediaKind == .photo
         let caption = cacheProgress.map { progress in
             let percent = "\(Int(progress * 100))%"
             return !list && isStreaming ? "CACHING \(percent)" : percent
         }
-        return MonitorClipValue(
-            id: clip.id, title: clip.filename, detail: detail,
-            duration: list || photo || selecting || cacheProgress != nil ? nil : duration,
-            source: list || isDownloaded || cacheProgress != nil ? nil : "On camera",
-            favorite: clip.isFavorite, progress: cacheProgress,
+        let shownDuration = list || photo || selecting || cacheProgress != nil ? nil : duration
+        return MonitorMediaItem(
+            id: clip.id, filename: clip.filename, metadata: detail, duration: shownDuration ?? "",
+            availability: isDownloaded ? .original : .camera, progress: cacheProgress,
+            favorite: clip.isFavorite, photo: photo, permissions: permissions,
             burstCount: list || selecting ? nil : burstCount,
             mediaBadge: !list && photo && hasRawSibling && !selecting && cacheProgress == nil
                 ? "RAW+J" : nil,
             completionBadge: !list && !photo && isDownloaded && cacheProgress == nil
                 && clip.exportStatus == .exported ? "EXPORTED" : nil,
-            transferCaption: caption,
-            favoriteLabel: clip.isFavorite ? "Remove from favorites" : "Add to favorites",
-            selectionEntryLabel: selecting ? nil : "Select \(clip.filename)")
+            transferCaption: caption)
     }
-}
 
-// MARK: - Source artwork adapters
-
-/// One Media browser cell over the shared `MonitorMediaCell`: a list row adds the metadata line, a
-/// grid cell the burst count and the favorite beside the title. Thumbnail loading stays app-owned.
-private struct MediaClipArtworkAdapter: View {
-    let clip: MediaClip
-    let layout: MonitorMediaLayout
-    let isDownloaded: Bool
-    let localURL: URL?
-    let thumbnailURL: URL?
-    /// Live stream or partial on-disk cache fraction (0…1); primary download progress display.
-    let cacheProgress: Double?
-    let isStreaming: Bool
-    /// A same-stem RAW rides behind this JPEG — the cell shows one item for the pair.
-    var hasRawSibling: Bool = false
-    /// Frame count when a grid cell represents a burst series (nil for an ordinary clip).
-    var burstCount: Int?
-    var isSelecting: Bool = false
-    var isSelected: Bool = false
-    let onOpen: () -> Void
-    var onBeginSelection: (() -> Void)?
-    var onToggleSelection: (() -> Void)?
-    let onToggleFavorite: () -> Void
-
-    @Environment(NativeAppModel.self) private var model
-    @State private var thumbnail: UIImage?
-    @State private var durationLabel: String?
-
-    private var isPhoto: Bool { clip.mediaKind == .photo }
-    private var isList: Bool { layout == .list }
-
-    private var metadataLine: String {
+    /// The list row's detail: resolution, RAW pairing, size and duration, or where it lives.
+    static func metadataLine(
+        _ clip: MediaClip, hasRawSibling: Bool, duration: String?, isDownloaded: Bool
+    ) -> String {
         var parts: [String] = []
         if let bucket = clip.resolutionBucket {
             parts.append(bucket.rawValue)
@@ -1106,53 +865,56 @@ private struct MediaClipArtworkAdapter: View {
         if clip.sizeBytes > 0 {
             parts.append(MediaClipFormatting.byteLabel(clip.sizeBytes))
         }
-        if let durationLabel, !isPhoto {
-            parts.append(durationLabel)
+        if let duration, clip.mediaKind != .photo {
+            parts.append(duration)
         }
         if parts.isEmpty {
             return isDownloaded ? "Cached" : "On camera"
         }
         return parts.joined(separator: " · ")
     }
+}
+
+// MARK: - Source artwork
+
+/// A catalog cell's artwork. Thumbnail and duration loading stay app-owned; the duration goes
+/// back to the browser, which hands it to the shared cell.
+private struct MediaClipThumbnail: View {
+    let clip: MediaClip
+    let list: Bool
+    let isDownloaded: Bool
+    let localURL: URL?
+    let thumbnailURL: URL?
+    let needsDuration: Bool
+    let onDuration: (String) -> Void
+
+    @Environment(NativeAppModel.self) private var model
+    @State private var thumbnail: UIImage?
+
+    private var isPhoto: Bool { clip.mediaKind == .photo }
 
     var body: some View {
-        MonitorMediaCell(
-            clip: MediaClipCellPresentation.value(
-                clip: clip, detail: isList ? metadataLine : "", isDownloaded: isDownloaded,
-                cacheProgress: cacheProgress, isStreaming: isStreaming,
-                hasRawSibling: hasRawSibling, burstCount: burstCount, duration: durationLabel,
-                list: isList, selecting: isSelecting),
-            layout: layout, selecting: isSelecting, selected: isSelected,
-            favoriteBesideTitle: !isList,
-            onOpen: onOpen, onSelect: { onToggleSelection?() },
-            onFavorite: isList && isSelecting ? nil : onToggleFavorite,
-            onBeginSelection: onBeginSelection
-        ) { artwork }
-        // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
-        .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
-            await loadThumbnail()
-            await loadDuration()
-        }
-        // Source task cancellation and bounded cached image lifetime remain app-owned.
-        .onDisappear { durationLabel = nil }
-    }
-
-    private var artwork: some View {
         ZStack {
             LiveDesign.surface
             if let thumbnail {
                 Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
             } else {
                 Image(systemName: isPhoto ? "photo" : "film")
-                    .font(.system(size: isList ? 20 : 28, weight: .light))
+                    .font(.system(size: list ? 20 : 28, weight: .light))
                     .foregroundStyle(LiveDesign.faint)
             }
+        }
+        // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
+        .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
+            await loadThumbnail()
+            await loadDuration()
         }
     }
 
     private func loadThumbnail() async {
         // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
-        let cacheKey = "\(clip.id)#\(layout.rawValue)#o\(clip.exifOrientation ?? 0)" as NSString
+        let variant = list ? "list" : "grid"
+        let cacheKey = "\(clip.id)#\(variant)#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
             thumbnail = cached
             return
@@ -1161,7 +923,7 @@ private struct MediaClipArtworkAdapter: View {
             MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
             thumbnail = image
         }
-        let thumbPixels = isList ? 480 : 640
+        let thumbPixels = list ? 480 : 640
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
             // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
             // stands in so portrait shots render upright.
@@ -1198,7 +960,7 @@ private struct MediaClipArtworkAdapter: View {
         let asset = AVURLAsset(url: localURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        let framePixels: CGFloat = isList ? 320 : 600
+        let framePixels: CGFloat = list ? 320 : 600
         generator.maximumSize = CGSize(width: framePixels, height: framePixels)
         let time = CMTime(seconds: 0.2, preferredTimescale: 600)
         if let cgImage = try? await generator.image(at: time).image {
@@ -1207,12 +969,10 @@ private struct MediaClipArtworkAdapter: View {
     }
 
     private func loadDuration() async {
-        guard !isPhoto else { return }
-        guard durationLabel == nil else { return }
-        guard isDownloaded, let localURL else { return }
+        guard !isPhoto, needsDuration, isDownloaded, let localURL else { return }
         let asset = AVURLAsset(url: localURL)
         if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
-            durationLabel = MediaClipFormatting.durationLabel(seconds: duration.seconds)
+            onDuration(MediaClipFormatting.durationLabel(seconds: duration.seconds))
         }
     }
 }

@@ -123,14 +123,6 @@ enum MediaCategoryTab: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
-/// Primary layout for the Media browser main column.
-enum MediaBrowserLayout: String, CaseIterable, Codable, Sendable, Identifiable {
-    case grid
-    case list
-
-    var id: String { rawValue }
-}
-
 /// Persisted clip ordering for the Media browser grid.
 enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
     case newest
@@ -138,8 +130,6 @@ enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
     case name
     /// Highest camera star first — clusters favorited/rated shots at the top for culling.
     case rating
-
-    var pillLabel: String { "SORT" }
 
     var next: MediaSortOrder {
         switch self {
