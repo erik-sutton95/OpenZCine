@@ -42,6 +42,10 @@ import com.opencapture.monitorui.MonitorMediaFilterChipLayout
 import com.opencapture.monitorui.MonitorMediaFilterChoice
 import com.opencapture.monitorui.MonitorMediaFilterForm
 import com.opencapture.monitorui.MonitorMediaStorageChoices
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.OpenZCineTheme
 import java.io.File
 import java.time.LocalDate
@@ -302,28 +306,28 @@ class NikonMediaFilterFormComposeTest {
         composeRule.waitForIdle()
     }
 
-    private fun assertResults(clips: List<MediaClipRecord>, filters: MediaLibraryFilters, expected: Set<String>) {
+    private fun assertResults(clips: List<NikonMediaClipRecord>, filters: MediaLibraryFilters, expected: Set<String>) {
         composeRule.runOnIdle {
             val result = MediaLibraryFiltering.displayed(
                 clips, MediaLibraryCategory.ALL, emptySet(), "SIMULATED-filter",
                 MediaLibrarySortOrder.NAME, filters, TODAY,
             )
-            assertEquals(expected, result.mapTo(linkedSetOf(), MediaClipRecord::filename))
+            assertEquals(expected, result.mapTo(linkedSetOf(), NikonMediaClipRecord::filename))
         }
     }
 
     /** The chips the production gallery projection offers for [clips]. */
-    private fun offered(clips: List<MediaClipRecord>): MediaFilterOptions =
+    private fun offered(clips: List<NikonMediaClipRecord>): MediaFilterOptions =
         NikonAppGalleryProjection(
             clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MediaLibrarySortOrder.NEWEST, today = TODAY,
         ).filterOptions
 
     private fun clip(handle: Long, name: String, width: Int, date: String, storage: Long, format: String? = null) =
-        MediaClipRecord(
+        NikonMediaClipRecord(
             handle = handle, storageId = storage, sizeBytes = 1, captureDate = date,
             pixelWidth = width, pixelHeight = 1, filename = name,
-            contentKind = if (format != null) MediaContentKind.STILL_PHOTO else MediaContentKind.PLAYABLE_PROXY,
-            stillPhoto = format?.let { StillPhotoClassification(it, StillPreviewStrategy.PROGRESSIVE) },
+            contentKind = if (format != null) NikonMediaContentKind.STILL_PHOTO else NikonMediaContentKind.PLAYABLE_PROXY,
+            stillPhoto = format?.let { NikonStillPhotoClassification(it, NikonStillPreviewStrategy.PROGRESSIVE) },
         )
 
     private companion object {

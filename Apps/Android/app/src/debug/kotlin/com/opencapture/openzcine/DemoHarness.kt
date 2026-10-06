@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.opencine.nikon.CameraConnectionPhase
@@ -23,7 +24,6 @@ import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.MonitorDisplayMode
-import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -254,14 +254,14 @@ object DemoHarness {
         intent.getStringExtra(EXTRA_CHROME_EDIT)?.let { MonitorDisplayMode.fromStoredName(it) }
 
     /** Debug-only standalone settings selector; release builds always return null. */
-    internal fun settingsTab(intent: Intent): OperatorSettingsTab? =
+    internal fun settingsTab(intent: Intent): MonitorSettingsTab? =
         when (intent.getStringExtra(EXTRA_SETTINGS_TAB)) {
-            "link" -> OperatorSettingsTab.LINK
-            "assist" -> OperatorSettingsTab.ASSIST
-            "controls" -> OperatorSettingsTab.CONTROLS
-            "display" -> OperatorSettingsTab.DISPLAY
-            "storage" -> OperatorSettingsTab.STORAGE
-            "system" -> OperatorSettingsTab.SYSTEM
+            "link" -> MonitorSettingsTab.LINK
+            "assist" -> MonitorSettingsTab.ASSIST
+            "controls" -> MonitorSettingsTab.CONTROLS
+            "display" -> MonitorSettingsTab.DISPLAY
+            "storage" -> MonitorSettingsTab.STORAGE
+            "system" -> MonitorSettingsTab.SYSTEM
             else -> null
         }
 

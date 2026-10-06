@@ -1,6 +1,8 @@
 package com.opencapture.openzcine.media
 
 import android.content.Context
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
@@ -82,7 +84,7 @@ internal data class MediaDeliveryOverlayState(
 /** One complete-cache clip ready for external delivery. */
 internal data class MediaDeliveryWorkItem(
     val cameraID: String,
-    val clip: MediaClipRecord,
+    val clip: NikonMediaClipRecord,
     val entry: MediaCacheEntry,
 )
 
@@ -211,8 +213,8 @@ internal class MediaDeliveryCoordinator(
         if (selection.isEmpty()) return
         val savableSelection =
             selection.filter {
-                it.clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
-                    it.clip.contentKind == MediaContentKind.STILL_PHOTO
+                it.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY ||
+                    it.clip.contentKind == NikonMediaContentKind.STILL_PHOTO
             }
         if (savableSelection.isEmpty()) {
             presentation.showToast("No video or photo in the selection can be saved to Gallery.")
@@ -345,7 +347,7 @@ internal class MediaDeliveryCoordinator(
                                     captureDate = item.clip.captureDate,
                                     supportsLutBake =
                                         item.clip.contentKind ==
-                                            MediaContentKind.PLAYABLE_PROXY,
+                                            NikonMediaContentKind.PLAYABLE_PROXY,
                                     stableClipIdentity =
                                         item.clip.libraryKey(item.cameraID),
                                 ),

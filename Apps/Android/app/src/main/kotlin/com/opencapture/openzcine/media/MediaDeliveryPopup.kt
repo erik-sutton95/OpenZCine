@@ -28,7 +28,6 @@ import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.FrameioNetworkState
 import com.opencapture.openzcine.frameio.FrameioProjectState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
@@ -86,7 +85,7 @@ internal fun MediaDeliveryPopup(
     onDismiss: () -> Unit,
     onNativeShare: (MediaDeliveryConfiguration) -> Unit,
     onSaveToGallery: (MediaDeliveryConfiguration) -> Unit,
-    onFrameioDeliver: (FrameioDeliveryOptions) -> Unit,
+    onFrameioDeliver: (MediaDeliveryConfiguration) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var cachingForHop by remember { mutableStateOf(false) }

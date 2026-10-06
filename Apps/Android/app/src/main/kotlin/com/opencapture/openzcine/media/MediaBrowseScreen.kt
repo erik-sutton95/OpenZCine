@@ -19,6 +19,8 @@ import com.opencapture.monitorui.MonitorMediaSelectionConfiguration
 import com.opencapture.monitorui.MonitorMediaSelectionFeedback
 import com.opencapture.monitorui.MonitorMediaSelectionHost
 import com.opencapture.monitorui.MonitorMediaHitTarget
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.framing
 import com.opencapture.openzcine.performOperatorHaptic
@@ -117,7 +119,6 @@ import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioDeliveryOptions
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
@@ -150,7 +151,7 @@ internal sealed interface BrowseState {
     data object Loading : BrowseState
 
     data class Loaded(
-        val clips: List<MediaClipRecord>,
+        val clips: List<NikonMediaClipRecord>,
         val isLoadingMore: Boolean = false,
     ) : BrowseState
 
@@ -158,7 +159,7 @@ internal sealed interface BrowseState {
 }
 
 /** A truncated camera enumeration is a failed catalog, never a complete partial listing. */
-internal fun incompleteCameraBrowseState(partialClips: List<MediaClipRecord>): BrowseState.Failed {
+internal fun incompleteCameraBrowseState(partialClips: List<NikonMediaClipRecord>): BrowseState.Failed {
     if (partialClips.isEmpty()) {
         return BrowseState.Failed("Couldn't finish listing camera media.")
     }
@@ -171,7 +172,7 @@ internal fun incompleteCameraBrowseState(partialClips: List<MediaClipRecord>): B
 /** Outcome of staging the safe subset of a multi-selection for Android sharing. */
 private data class BatchShareResult(
     val staged: List<StagedMediaShare>,
-    val stagedClips: List<MediaClipRecord>,
+    val stagedClips: List<NikonMediaClipRecord>,
     val incompleteCount: Int,
     val failedCount: Int,
     val firstFailure: String?,
@@ -186,13 +187,13 @@ private fun stageSelectedMedia(
     context: Context,
     cacheStore: MediaCacheStore,
     cameraID: String,
-    selection: List<MediaClipRecord>,
-    cameraIDFor: (MediaClipRecord) -> String = { cameraID },
+    selection: List<NikonMediaClipRecord>,
+    cameraIDFor: (NikonMediaClipRecord) -> String = { cameraID },
     cancellationCheck: () -> Unit = {},
 ): BatchShareResult {
     val stager = MediaShareStager(context.cacheDir.toPath())
     val staged = mutableListOf<StagedMediaShare>()
-    val stagedClips = mutableListOf<MediaClipRecord>()
+    val stagedClips = mutableListOf<NikonMediaClipRecord>()
     var incomplete = 0
     var failed = 0
     var firstFailure: String? = null
@@ -224,7 +225,7 @@ private fun stageSelectedMedia(
 }
 
 /** Privacy-bounded details attached to Android's share intent only when requested. */
-internal fun mediaDeliveryMetadataSummary(clips: List<MediaClipRecord>): String {
+internal fun mediaDeliveryMetadataSummary(clips: List<NikonMediaClipRecord>): String {
     val lines =
         clips.take(MAXIMUM_SHARE_METADATA_ITEMS).map { clip ->
             val filename = clip.filename.take(MAXIMUM_SHARE_METADATA_FILENAME_CHARACTERS)
@@ -493,25 +494,25 @@ internal fun MediaBrowseScreen(
     // Offline multi-camera library: object key → owning cache bucket cameraID.
     var offlineClipOwners by
         remember(cameraID, offlineCameraIDs) { mutableStateOf(emptyMap<String, String>()) }
-    fun ownerCameraID(clip: MediaClipRecord): String =
+    fun ownerCameraID(clip: NikonMediaClipRecord): String =
         offlineClipOwners[clip.offlineObjectKey()] ?: cameraID
-    fun clipKey(clip: MediaClipRecord): String = clip.libraryKey(ownerCameraID(clip))
+    fun clipKey(clip: NikonMediaClipRecord): String = clip.libraryKey(ownerCameraID(clip))
     var state by remember(cameraID) { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var reloadKey by remember { mutableIntStateOf(0) }
     // Camera-card deletion in flight: the listing effect stays cancelled while
     // non-null so an already-enumerated page cannot re-add the deleted rows.
-    var pendingDeletion by remember(cameraID) { mutableStateOf<List<MediaClipRecord>?>(null) }
+    var pendingDeletion by remember(cameraID) { mutableStateOf<List<NikonMediaClipRecord>?>(null) }
     // Deletion progress (completed, total) while a batch delete runs — drives the progress bar
     // and keeps the grid steady until the run finishes (the listing restarts once, at the end).
     var deletionProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // Shots the operator selected (smaller than the file total when RAW+JPEG pairs / masters /
     // backups ride along) — kept so the progress bar can explain the inflated file count.
     var deletionSelectedCount by remember { mutableStateOf(0) }
-    var deleteConfirmTargets by remember { mutableStateOf<List<MediaClipRecord>?>(null) }
-    var playingClip by remember { mutableStateOf<MediaClipRecord?>(null) }
-    var viewingPhoto by remember { mutableStateOf<MediaClipRecord?>(null) }
+    var deleteConfirmTargets by remember { mutableStateOf<List<NikonMediaClipRecord>?>(null) }
+    var playingClip by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
+    var viewingPhoto by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
     // The representative of a burst series whose members are being browsed (Manage series).
-    var seriesRepresentative by remember { mutableStateOf<MediaClipRecord?>(null) }
+    var seriesRepresentative by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var autoPlayHandled by remember { mutableStateOf(false) }
     val selection = NikonMediaLibrarySelection(owner = { library }, observe = { libraryState })
@@ -666,7 +667,7 @@ internal fun MediaBrowseScreen(
                     else BrowseState.Loaded(clips, isLoadingMore = snapshot.fetching)
                 if (autoPlayFirstProxy && !autoPlayHandled && !snapshot.fetching) {
                     autoPlayHandled = true
-                    playingClip = clips.firstOrNull { it.contentKind == MediaContentKind.PLAYABLE_PROXY }
+                    playingClip = clips.firstOrNull { it.contentKind == NikonMediaContentKind.PLAYABLE_PROXY }
                 }
             }
         }
@@ -703,7 +704,7 @@ internal fun MediaBrowseScreen(
         pendingDeletion = null; deletionAction = null
     }
 
-    fun requestDeletion(selection: List<MediaClipRecord>) {
+    fun requestDeletion(selection: List<NikonMediaClipRecord>) {
         if (selection.isEmpty() || pendingDeletion != null) return
         val catalog = (state as? BrowseState.Loaded)?.clips.orEmpty()
         deleteConfirmTargets = null
@@ -756,11 +757,11 @@ internal fun MediaBrowseScreen(
     val gridClips = projection.gridClips
     val burstSeries = projection.legacyGroups
     val burstByRepresentative = remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
-    fun burstMembers(representative: MediaClipRecord): List<MediaClipRecord> =
+    fun burstMembers(representative: NikonMediaClipRecord): List<NikonMediaClipRecord> =
         projection.members(representative, ::clipKey)
-    fun burstExpanded(clips: List<MediaClipRecord>): List<MediaClipRecord> =
+    fun burstExpanded(clips: List<NikonMediaClipRecord>): List<NikonMediaClipRecord> =
         projection.expanded(clips, ::clipKey)
-    fun hasRawSibling(clip: MediaClipRecord): Boolean = projection.hasRawSibling(clip, ::clipKey)
+    fun hasRawSibling(clip: NikonMediaClipRecord): Boolean = projection.hasRawSibling(clip, ::clipKey)
     val selectedClips = projection.selected(selectedIDs)
     val selectedSeriesClips = projection.expanded(selectedClips, ::clipKey)
     val visibleIDs = projection.visibleKeys
@@ -814,7 +815,7 @@ internal fun MediaBrowseScreen(
             offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
         }
 
-    fun toggleFavorite(clip: MediaClipRecord) {
+    fun toggleFavorite(clip: NikonMediaClipRecord) {
         val owner = ownerCameraID(clip)
         val value = NikonLibraryClip(owner, clip)
         val action = libraryActions.capture(listOf(value))
@@ -842,29 +843,29 @@ internal fun MediaBrowseScreen(
 
     // Mirrors a camera star write (viewer/player, seed-read or set) into the local favorite set
     // so the Favorites tab surfaces rated shots. iOS `mirrorRatingIntoIndex`.
-    fun captureRatingCompletion(clip: MediaClipRecord): NikonMediaRatingCompletion {
+    fun captureRatingCompletion(clip: NikonMediaClipRecord): NikonMediaRatingCompletion {
         val value = NikonLibraryClip(ownerCameraID(clip), clip)
         return libraryActions.captureRatingCompletion(value) { favorites = mergedFavorites(it) }
     }
-    fun mirrorRating(clip: MediaClipRecord, stars: Int) { captureRatingCompletion(clip).mirror(stars) }
+    fun mirrorRating(clip: NikonMediaClipRecord, stars: Int) { captureRatingCompletion(clip).mirror(stars) }
 
-    fun open(clip: MediaClipRecord) {
+    fun open(clip: NikonMediaClipRecord) {
         // A burst representative opens the series view (its other frames are hidden in the grid).
         if (burstByRepresentative[clipKey(clip)] != null) {
             seriesRepresentative = clip
             return
         }
         when (clip.contentKind) {
-            MediaContentKind.PLAYABLE_PROXY -> playingClip = clip
-            MediaContentKind.STILL_PHOTO -> viewingPhoto = clip
-            MediaContentKind.R3D_MASTER ->
+            NikonMediaContentKind.PLAYABLE_PROXY -> playingClip = clip
+            NikonMediaContentKind.STILL_PHOTO -> viewingPhoto = clip
+            NikonMediaContentKind.R3D_MASTER ->
                 shareMessage = "${clip.filename} is a camera master; preview is unavailable."
-            MediaContentKind.UNSUPPORTED ->
+            NikonMediaContentKind.UNSUPPORTED ->
                 shareMessage = "${clip.filename} has no Android preview yet."
         }
     }
 
-    fun beginSelection(clip: MediaClipRecord) {
+    fun beginSelection(clip: NikonMediaClipRecord) {
         if (shareInProgress) return
         isSelecting = true
         selectedIDs = MediaLibrarySelection.begin(clipKey(clip))
@@ -903,8 +904,8 @@ internal fun MediaBrowseScreen(
         // and unsupported objects are omitted.
         val savableSelection =
             selectionSnapshot.filter { clip ->
-                clip.contentKind == MediaContentKind.PLAYABLE_PROXY ||
-                    clip.contentKind == MediaContentKind.STILL_PHOTO
+                clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY ||
+                    clip.contentKind == NikonMediaContentKind.STILL_PHOTO
             }
         val omittedCount = selectionSnapshot.size - savableSelection.size
         nativeDeliveryPresented = false
@@ -930,7 +931,7 @@ internal fun MediaBrowseScreen(
         frameioDeliveryPresented = true
     }
 
-    fun beginFrameioDelivery(options: FrameioDeliveryOptions) {
+    fun beginFrameioDelivery(options: MediaDeliveryConfiguration) {
         if (shareInProgress || selectedClips.isEmpty()) return
         val selectionSnapshot = selectedSeriesClips
         frameioDeliveryPresented = false
@@ -989,7 +990,7 @@ internal fun MediaBrowseScreen(
                                             cameraID = owner,
                                             captureDate = clip.captureDate,
                                             supportsLutBake =
-                                                clip.contentKind == MediaContentKind.PLAYABLE_PROXY,
+                                                clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY,
                                             stableClipIdentity = clip.libraryKey(owner),
                                         ),
                                 )
@@ -1999,28 +2000,28 @@ private fun <Value> Set<Value>.toggled(value: Value): Set<Value> =
 @Composable
 private fun MediaLibraryBody(
     state: BrowseState,
-    clips: List<MediaClipRecord>,
+    clips: List<NikonMediaClipRecord>,
     source: MediaLibrarySource,
     layout: MonitorMediaLayout,
     thumbnailSize: MonitorThumbnailSize,
     cameraID: String,
-    cameraIDFor: (MediaClipRecord) -> String = { cameraID },
-    clipIdentity: (MediaClipRecord) -> String = { it.libraryKey(cameraID) },
+    cameraIDFor: (NikonMediaClipRecord) -> String = { cameraID },
+    clipIdentity: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) },
     /** A same-stem RAW rides behind this JPEG — the cell shows one item for the pair. */
-    hasRawSibling: (MediaClipRecord) -> Boolean = { false },
+    hasRawSibling: (NikonMediaClipRecord) -> Boolean = { false },
     /** Frame count when a clip represents a burst series (null for an ordinary clip). */
-    burstCountOf: (MediaClipRecord) -> Int? = { null },
+    burstCountOf: (NikonMediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
     isSelecting: Boolean,
     selectedIDs: Set<String>,
-    onOpen: (MediaClipRecord) -> Unit,
-    onBeginSelection: (MediaClipRecord) -> Unit,
+    onOpen: (NikonMediaClipRecord) -> Unit,
+    onBeginSelection: (NikonMediaClipRecord) -> Unit,
     /** Full selection set after a Photos-style range paint (not a delta). */
     onSweepSelection: (Set<String>) -> Unit,
-    onToggleFavorite: (MediaClipRecord) -> Unit,
+    onToggleFavorite: (NikonMediaClipRecord) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -2084,24 +2085,24 @@ private fun rememberSelectionInputPolicy(): MonitorMediaSelectionConfiguration {
  */
 @Composable
 private fun MediaClipGallery(
-    clips: List<MediaClipRecord>,
+    clips: List<NikonMediaClipRecord>,
     list: Boolean,
     thumbnailSize: MonitorThumbnailSize,
     source: MediaLibrarySource,
-    cameraIDFor: (MediaClipRecord) -> String,
-    clipIdentity: (MediaClipRecord) -> String,
-    hasRawSibling: (MediaClipRecord) -> Boolean,
-    burstCountOf: (MediaClipRecord) -> Int? = { null },
+    cameraIDFor: (NikonMediaClipRecord) -> String,
+    clipIdentity: (NikonMediaClipRecord) -> String,
+    hasRawSibling: (NikonMediaClipRecord) -> Boolean,
+    burstCountOf: (NikonMediaClipRecord) -> Int? = { null },
     cameraConnected: Boolean,
     connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     favorites: Set<String>,
     isSelecting: Boolean,
     selectedIDs: Set<String>,
-    onOpen: (MediaClipRecord) -> Unit,
-    onBeginSelection: (MediaClipRecord) -> Unit,
+    onOpen: (NikonMediaClipRecord) -> Unit,
+    onBeginSelection: (NikonMediaClipRecord) -> Unit,
     onSweepSelection: (Set<String>) -> Unit,
-    onToggleFavorite: (MediaClipRecord) -> Unit,
+    onToggleFavorite: (NikonMediaClipRecord) -> Unit,
 ) {
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
@@ -2130,7 +2131,7 @@ private fun MediaClipGallery(
             )
         },
     ) { registry ->
-        val cell: @Composable (MediaClipRecord) -> Unit = { clip ->
+        val cell: @Composable (NikonMediaClipRecord) -> Unit = { clip ->
             val identity = clipIdentity(clip)
             MonitorMediaHitTarget(registry = registry, id = identity) {
                 MediaClipArtworkAdapter(
@@ -2171,7 +2172,7 @@ private fun MediaClipGallery(
 /** Source artwork and intents adapted to the exercised common grid/list owner. */
 @Composable
 private fun MediaClipArtworkAdapter(
-    clip: MediaClipRecord, source: MediaLibrarySource, cameraID: String,
+    clip: NikonMediaClipRecord, source: MediaLibrarySource, cameraID: String,
     hasRawSibling: Boolean, burstCount: Int? = null, cameraConnected: Boolean,
     connectionOwner: Long?, cacheStore: MediaCacheStore, favorite: Boolean, selected: Boolean,
     isSelecting: Boolean, list: Boolean, onClick: () -> Unit, onLongPress: () -> Unit,
@@ -2201,11 +2202,11 @@ private fun MediaClipArtworkAdapter(
  */
 @Composable
 private fun BurstFilmstrip(
-    members: List<MediaClipRecord>,
+    members: List<NikonMediaClipRecord>,
     selectedKey: String,
-    keyOf: (MediaClipRecord) -> String,
+    keyOf: (NikonMediaClipRecord) -> String,
     onSelect: (String) -> Unit,
-    thumb: @Composable (MediaClipRecord, Modifier) -> Unit,
+    thumb: @Composable (NikonMediaClipRecord, Modifier) -> Unit,
 ) {
     // Widest a thumb gets (selected). Half of it is subtracted from the side inset so the
     // first/last frame can sit dead-centre; the inset math and the item width must stay in sync.
@@ -2287,7 +2288,7 @@ private fun BurstFilmstrip(
 /** Thumbnail policy: camera thumbnails when connected, final cached stills only otherwise. */
 @Composable
 private fun ClipArtwork(
-    clip: MediaClipRecord,
+    clip: NikonMediaClipRecord,
     source: MediaLibrarySource,
     cameraID: String,
     cameraConnected: Boolean,
@@ -2341,9 +2342,9 @@ private fun ClipArtwork(
 private fun cachedStillThumbnail(
     cacheStore: MediaCacheStore,
     cameraID: String,
-    clip: MediaClipRecord,
+    clip: NikonMediaClipRecord,
 ): ImageBitmap? {
-    if (clip.contentKind != MediaContentKind.STILL_PHOTO) return null
+    if (clip.contentKind != NikonMediaContentKind.STILL_PHOTO) return null
     val entry =
         runCatching {
             cacheStore.completedEntryOrNull(

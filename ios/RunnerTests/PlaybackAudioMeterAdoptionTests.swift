@@ -22,7 +22,7 @@ final class PlaybackAudioMeterAdoptionTests: XCTestCase {
         let runtime = MonitorPlaybackAudioMeterRuntime()
         let player = AVPlayer()
         player.isMuted = true
-        var latest: AudioMeterLevels?
+        var latest: MonitorAudioMeterLevels?
         var sawAbsent = false
         runtime.startPolling { levels in
             latest = levels

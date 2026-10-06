@@ -134,14 +134,6 @@ enum MediaThumbnailSize: String, CaseIterable, Codable, Sendable, Identifiable {
         case .large: 380
         }
     }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .small: "Small thumbnails"
-        case .medium: "Medium thumbnails"
-        case .large: "Large thumbnails"
-        }
-    }
 }
 
 /// Geometry for a media popup panel anchored to its trigger button.
@@ -670,8 +662,8 @@ struct MediaBrowserView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(displayedClips) { clip in
-                        MediaClipListArtworkAdapter(
-                            clip: clip,
+                        MediaClipArtworkAdapter(
+                            clip: clip, layout: .list,
                             isDownloaded: model.isClipDownloaded(clip),
                             localURL: model.clipLocalURL(clip),
                             thumbnailURL: model.clipThumbnailURL(clip),
@@ -701,8 +693,8 @@ struct MediaBrowserView: View {
     private var gridCells: some View {
         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 4) {
             ForEach(displayedClips) { clip in
-                MediaClipGridArtworkAdapter(
-                    clip: clip,
+                MediaClipArtworkAdapter(
+                    clip: clip, layout: .grid,
                     isDownloaded: model.isClipDownloaded(clip),
                     localURL: model.clipLocalURL(clip),
                     thumbnailURL: model.clipThumbnailURL(clip),
@@ -1074,16 +1066,21 @@ enum MediaClipCellPresentation {
 
 // MARK: - Source artwork adapters
 
-/// Compact list row for the Media browser — thumbnail, filename, and metadata in one line.
-private struct MediaClipListArtworkAdapter: View {
+/// One Media browser cell over the shared `MonitorMediaCell`: a list row adds the metadata line, a
+/// grid cell the burst count and the favorite beside the title. Thumbnail loading stays app-owned.
+private struct MediaClipArtworkAdapter: View {
     let clip: MediaClip
+    let layout: MonitorMediaLayout
     let isDownloaded: Bool
     let localURL: URL?
     let thumbnailURL: URL?
+    /// Live stream or partial on-disk cache fraction (0…1); primary download progress display.
     let cacheProgress: Double?
     let isStreaming: Bool
-    /// A same-stem RAW rides behind this JPEG — the row shows one item for the pair.
+    /// A same-stem RAW rides behind this JPEG — the cell shows one item for the pair.
     var hasRawSibling: Bool = false
+    /// Frame count when a grid cell represents a burst series (nil for an ordinary clip).
+    var burstCount: Int?
     var isSelecting: Bool = false
     var isSelected: Bool = false
     let onOpen: () -> Void
@@ -1096,6 +1093,7 @@ private struct MediaClipListArtworkAdapter: View {
     @State private var durationLabel: String?
 
     private var isPhoto: Bool { clip.mediaKind == .photo }
+    private var isList: Bool { layout == .list }
 
     private var metadataLine: String {
         var parts: [String] = []
@@ -1120,13 +1118,14 @@ private struct MediaClipListArtworkAdapter: View {
     var body: some View {
         MonitorMediaCell(
             clip: MediaClipCellPresentation.value(
-                clip: clip, detail: metadataLine, isDownloaded: isDownloaded,
+                clip: clip, detail: isList ? metadataLine : "", isDownloaded: isDownloaded,
                 cacheProgress: cacheProgress, isStreaming: isStreaming,
-                hasRawSibling: hasRawSibling, duration: durationLabel,
-                list: true, selecting: isSelecting),
-            layout: .list, selecting: isSelecting, selected: isSelected,
+                hasRawSibling: hasRawSibling, burstCount: burstCount, duration: durationLabel,
+                list: isList, selecting: isSelecting),
+            layout: layout, selecting: isSelecting, selected: isSelected,
+            favoriteBesideTitle: !isList,
             onOpen: onOpen, onSelect: { onToggleSelection?() },
-            onFavorite: isSelecting ? nil : onToggleFavorite,
+            onFavorite: isList && isSelecting ? nil : onToggleFavorite,
             onBeginSelection: onBeginSelection
         ) { artwork }
         // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
@@ -1145,14 +1144,15 @@ private struct MediaClipListArtworkAdapter: View {
                 Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
             } else {
                 Image(systemName: isPhoto ? "photo" : "film")
-                    .font(.system(size: 20, weight: .light)).foregroundStyle(LiveDesign.faint)
+                    .font(.system(size: isList ? 20 : 28, weight: .light))
+                    .foregroundStyle(LiveDesign.faint)
             }
         }
     }
 
     private func loadThumbnail() async {
         // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
-        let cacheKey = "\(clip.id)#list#o\(clip.exifOrientation ?? 0)" as NSString
+        let cacheKey = "\(clip.id)#\(layout.rawValue)#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
             thumbnail = cached
             return
@@ -1161,11 +1161,12 @@ private struct MediaClipListArtworkAdapter: View {
             MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
             thumbnail = image
         }
+        let thumbPixels = isList ? 480 : 640
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
             // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
             // stands in so portrait shots render upright.
             if let image = await MediaCellImageLoader.shared.downsampled(
-                data: data, maxPixelSize: 480, fallbackOrientation: clip.exifOrientation)
+                data: data, maxPixelSize: thumbPixels, fallbackOrientation: clip.exifOrientation)
             {
                 present(image)
                 return
@@ -1186,16 +1187,19 @@ private struct MediaClipListArtworkAdapter: View {
             if let cachedURL = model.clipThumbnailURL(clip),
                 let data = try? Data(contentsOf: cachedURL),
                 let image = await MediaCellImageLoader.shared.downsampled(
-                    data: data, maxPixelSize: 480, fallbackOrientation: clip.exifOrientation)
+                    data: data, maxPixelSize: thumbPixels,
+                    fallbackOrientation: clip.exifOrientation)
             {
                 present(image)
+                return
             }
         }
         guard isDownloaded, !isPhoto, let localURL else { return }
         let asset = AVURLAsset(url: localURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 320, height: 320)
+        let framePixels: CGFloat = isList ? 320 : 600
+        generator.maximumSize = CGSize(width: framePixels, height: framePixels)
         let time = CMTime(seconds: 0.2, preferredTimescale: 600)
         if let cgImage = try? await generator.image(at: time).image {
             present(UIImage(cgImage: cgImage))
@@ -1213,9 +1217,6 @@ private struct MediaClipListArtworkAdapter: View {
     }
 }
 
-/// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
-/// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
-/// action. A series that loses frames until one remains degrades back to a normal grid cell.
 /// A centred, non-interactive progress card shown while a batch delete runs — the grid holds
 /// steady behind it and refreshes once when the deletion finishes.
 private struct MediaDeletionProgressOverlay: View {
@@ -1256,6 +1257,9 @@ private struct MediaDeletionProgressOverlay: View {
     }
 }
 
+/// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
+/// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
+/// action. A series that loses frames until one remains degrades back to a normal grid cell.
 private struct MediaBurstSeriesView: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -1464,128 +1468,6 @@ private struct FilmstripThumb: View {
         if let loaded {
             MediaCellThumbnailCache.shared.setObject(loaded, forKey: cacheKey)
             image = loaded
-        }
-    }
-}
-
-private struct MediaClipGridArtworkAdapter: View {
-    let clip: MediaClip
-    let isDownloaded: Bool
-    let localURL: URL?
-    let thumbnailURL: URL?
-    /// Live stream or partial on-disk cache fraction (0…1); primary download progress display.
-    let cacheProgress: Double?
-    let isStreaming: Bool
-    /// A same-stem RAW rides behind this JPEG — the cell shows one item for the pair.
-    var hasRawSibling: Bool = false
-    /// Frame count when this cell represents a burst series (nil for an ordinary clip).
-    var burstCount: Int?
-    var isSelecting: Bool = false
-    var isSelected: Bool = false
-    let onOpen: () -> Void
-    var onBeginSelection: (() -> Void)?
-    var onToggleSelection: (() -> Void)?
-    let onToggleFavorite: () -> Void
-
-    @Environment(NativeAppModel.self) private var model
-    @State private var thumbnail: UIImage?
-    @State private var durationLabel: String?
-
-    private var isPhoto: Bool { clip.mediaKind == .photo }
-
-    var body: some View {
-        MonitorMediaCell(
-            clip: MediaClipCellPresentation.value(
-                clip: clip, detail: "", isDownloaded: isDownloaded,
-                cacheProgress: cacheProgress, isStreaming: isStreaming,
-                hasRawSibling: hasRawSibling, burstCount: burstCount, duration: durationLabel,
-                list: false, selecting: isSelecting),
-            layout: .grid, selecting: isSelecting, selected: isSelected,
-            favoriteBesideTitle: true,
-            onOpen: onOpen, onSelect: { onToggleSelection?() },
-            onFavorite: onToggleFavorite, onBeginSelection: onBeginSelection
-        ) { artwork }
-        // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
-        .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
-            await loadThumbnail()
-            await loadDuration()
-        }
-        // Source task cancellation and bounded cached image lifetime remain app-owned.
-        .onDisappear { durationLabel = nil }
-    }
-
-    private var artwork: some View {
-        ZStack {
-            LiveDesign.surface
-            if let thumbnail {
-                Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                Image(systemName: isPhoto ? "photo" : "film")
-                    .font(.system(size: 28, weight: .light)).foregroundStyle(LiveDesign.faint)
-            }
-        }
-    }
-
-    private func loadThumbnail() async {
-        // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
-        let cacheKey = "\(clip.id)#grid#o\(clip.exifOrientation ?? 0)" as NSString
-        if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
-            thumbnail = cached
-            return
-        }
-        func present(_ image: UIImage) {
-            MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
-            thumbnail = image
-        }
-        if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
-            // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
-            // stands in so portrait shots render upright.
-            if let image = await MediaCellImageLoader.shared.downsampled(
-                data: data, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
-            {
-                present(image)
-                return
-            }
-            // Self-heal: a cached thumb that doesn't decode would re-fail (and spam ImageIO
-            // errors) on every cell realisation. Deletes only the cached thumb, never the media.
-            try? FileManager.default.removeItem(at: thumbnailURL)
-        }
-        if isPhoto, isDownloaded, let localURL,
-            let image = await MediaCellImageLoader.shared.downsampled(
-                at: localURL, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
-        {
-            present(image)
-            return
-        }
-        if !isDownloaded, clip.handle != nil {
-            await model.ensureThumbnail(for: clip)
-            if let cachedURL = model.clipThumbnailURL(clip),
-                let data = try? Data(contentsOf: cachedURL),
-                let image = await MediaCellImageLoader.shared.downsampled(
-                    data: data, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
-            {
-                present(image)
-                return
-            }
-        }
-        guard isDownloaded, !isPhoto, let localURL else { return }
-        let asset = AVURLAsset(url: localURL)
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 600, height: 600)
-        let time = CMTime(seconds: 0.2, preferredTimescale: 600)
-        if let cgImage = try? await generator.image(at: time).image {
-            present(UIImage(cgImage: cgImage))
-        }
-    }
-
-    private func loadDuration() async {
-        guard !isPhoto else { return }
-        guard durationLabel == nil else { return }
-        guard isDownloaded, let localURL else { return }
-        let asset = AVURLAsset(url: localURL)
-        if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
-            durationLabel = MediaClipFormatting.durationLabel(seconds: duration.seconds)
         }
     }
 }
@@ -1996,7 +1878,6 @@ private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
     }
 }
 
-/// Full-screen AVPlayer with LiveDesign controls: play/pause, ±15s, mute, view-assist, favorite,
 /// Five-star rating row on glass: tap a star to set the count, tap the active count to
 /// clear. Optimistic — the caller writes to the camera and rolls back on failure.
 struct StarRatingRow: View {
@@ -2022,6 +1903,7 @@ struct StarRatingRow: View {
     }
 }
 
+/// Full-screen AVPlayer with LiveDesign controls: play/pause, ±15s, mute, view-assist, favorite,
 /// share (native or Frame.io), side arrows for clip navigation, pinch-to-zoom on the video,
 /// single-tap on the frame to play/pause (with a transient transport flash), long-press drag to
 /// scrub, and restart at end-of-clip.
@@ -2079,7 +1961,7 @@ struct MediaPlayerView: View {
     }
     @State private var playbackScopeAssist: ScopeAssistBundle = .empty
     @State private var playbackScopeController = PlaybackScopeController()
-    @State private var playbackAudioLevels: AudioMeterLevels?
+    @State private var playbackAudioLevels: MonitorAudioMeterLevels?
     @State private var audioMeterController = MonitorPlaybackAudioMeterRuntime { status in
         Logger(subsystem: "OpenZCine", category: "media-playback-audio")
             .error("MTAudioProcessingTapCreate failed: \(status)")
@@ -2646,8 +2528,6 @@ struct MediaPlayerView: View {
 
 // MARK: - Supporting views
 
-/// Draggable playback timeline — drag to scrub in real time, release for a precise seek.
-
 /// Hosts an `AVPlayerLayer` with no native transport chrome, so the LiveDesign controls are the UI.
 private struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
@@ -2673,30 +2553,5 @@ private struct PlayerLayerView: UIViewRepresentable {
         override class var layerClass: AnyClass { AVPlayerLayer.self }
         // SAFETY: layerClass is AVPlayerLayer, so this cast always succeeds.
         var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    }
-}
-
-// MARK: - Supporting views
-
-/// What a tap on the playback frame means.
-///
-/// Lifted out of the view so the rule below is covered by a test. It cannot be checked by driving
-/// the simulator — synthetic input does not reach this app — so the alternative to a test is
-/// reading the gesture code and hoping.
-enum PlaybackFrameTap: Equatable {
-    case restartPlayback
-    case toggleTransport
-
-    /// The tap means the same thing whether the chrome is up or hidden — play, pause, or restart
-    /// at the end of a clip. Hiding the controls must not take transport away from the picture.
-    ///
-    /// Two earlier attempts got this wrong. The first spent the tap on restoring the chrome, to
-    /// guarantee the clean-view button could not strand anyone — built on a false premise, since
-    /// swipe-up already restored it. The second kept the tap but flashed a hint teaching the
-    /// gesture, which is still a transient answer to a question the operator may ask at any time.
-    /// A small restore control that stays on screen answers it permanently and costs one glyph, so
-    /// the tap is free to mean what it always meant.
-    static func action(chromeVisible: Bool, reachedEnd: Bool) -> PlaybackFrameTap {
-        reachedEnd ? .restartPlayback : .toggleTransport
     }
 }

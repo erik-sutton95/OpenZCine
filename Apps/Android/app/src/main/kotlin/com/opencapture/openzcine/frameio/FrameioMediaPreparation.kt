@@ -57,9 +57,6 @@ internal data class MediaDeliveryConfiguration(
     }
 }
 
-/** Compatibility name retained for existing Frame.io call sites and tests. */
-internal typealias FrameioDeliveryOptions = MediaDeliveryConfiguration
-
 /** Non-secret camera/media context retained while a network hop tears down the session. */
 internal data class FrameioArtifactContext(
     val cameraID: String,
@@ -82,7 +79,7 @@ internal class FrameioPreparedArtifact(
 internal interface FrameioArtifactPreparer {
     suspend fun prepare(
         artifact: FrameioDeliveryArtifact,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
         onProgress: suspend (Double) -> Unit,
     ): FrameioPreparedArtifact
 
@@ -93,7 +90,7 @@ internal interface FrameioArtifactPreparer {
 internal object PassthroughFrameioArtifactPreparer : FrameioArtifactPreparer {
     override suspend fun prepare(
         artifact: FrameioDeliveryArtifact,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
         onProgress: suspend (Double) -> Unit,
     ): FrameioPreparedArtifact {
         if (options.bakeLut) {
@@ -216,7 +213,7 @@ internal class AndroidFrameioArtifactPreparer(
 
     override suspend fun prepare(
         artifact: FrameioDeliveryArtifact,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
         onProgress: suspend (Double) -> Unit,
     ): FrameioPreparedArtifact {
         val prepared = owner.prepare(
@@ -258,7 +255,7 @@ internal interface FrameioMetadataSidecarWriter {
         artifact: FrameioDeliveryArtifact,
         prepared: FrameioPreparedArtifact,
         destination: FrameioDestination,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
     )
 }
 
@@ -267,7 +264,7 @@ internal object NoFrameioMetadataSidecarWriter : FrameioMetadataSidecarWriter {
         artifact: FrameioDeliveryArtifact,
         prepared: FrameioPreparedArtifact,
         destination: FrameioDestination,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
     ) = Unit
 }
 
@@ -350,7 +347,7 @@ internal class AndroidFrameioMetadataSidecarWriter(
         artifact: FrameioDeliveryArtifact,
         prepared: FrameioPreparedArtifact,
         destination: FrameioDestination,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
     ) {
         if (!options.includeMetadata) return
         withContext(Dispatchers.IO) {

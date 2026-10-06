@@ -30,7 +30,7 @@ struct PlaybackAudioMeterWireTests {
         #expect(
             abs(
                 wire.levels.right.levelDB
-                    - AudioMeterBallistics.decibels(fromLinear: 0.5)
+                    - MonitorAudioMeterBallistics.decibels(fromLinear: 0.5)
             ) < 1e-9
         )
         #expect(wire.levels.right.peakDB == wire.levels.right.levelDB)
@@ -50,7 +50,7 @@ struct PlaybackAudioMeterWireTests {
             deltaTimeSeconds: 0.5
         )
 
-        let expected = -AudioMeterBallistics.levelDecayPerSecond * 0.5
+        let expected = -MonitorAudioMeterBallistics.levelDecayPerSecond * 0.5
         #expect(abs(decayed.levels.left.levelDB - expected) < 1e-6)
         #expect(abs(decayed.levels.right.levelDB - expected) < 1e-6)
     }
@@ -93,7 +93,7 @@ struct PlaybackAudioMeterWireTests {
         #expect(
             abs(
                 wire.levels.left.levelDB
-                    - AudioMeterBallistics.decibels(fromLinear: 0.25)
+                    - MonitorAudioMeterBallistics.decibels(fromLinear: 0.25)
             ) < 1e-9
         )
         #expect(wire.levels.right == .silent)

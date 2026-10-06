@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.opengl.GLES20
 import androidx.media3.common.util.GlProgram
 import androidx.media3.common.util.GlUtil
+import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.feedEffectsCubeAtlas
 import java.nio.ByteBuffer
 
@@ -292,7 +293,7 @@ internal class FrozenNikonFeedEffectsGlProgram(
         program.setFloatsUniform("uZebraMidtoneColor", configuration.midtoneColor)
     }
 
-    private fun uploadCube(cube: FeedEffectsCube?): FrozenUploadedFeedEffectsCube {
+    private fun uploadCube(cube: MonitorLUTCube?): FrozenUploadedFeedEffectsCube {
         if (cube == null) {
             val stub = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
             return FrozenUploadedFeedEffectsCube(upload(stub), 0)

@@ -366,7 +366,6 @@ class MonitorCameraControlsTest {
                 viewport,
                 zones,
                 isPortrait = true,
-                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
             )
 
         assertEquals(12f, frame.x)
@@ -374,25 +373,6 @@ class MonitorCameraControlsTest {
         assertTrue(frame.y >= zones.status.y + zones.status.height + 8f)
         assertTrue(frame.y + frame.height <= zones.values.y - 10f)
         assertTrue(frame.y + frame.height < zones.system.y)
-    }
-
-    @Test
-    fun `portrait fit picker uses shared controls and system zones`() {
-        val viewport = MonitorRect(0f, 0f, 400f, 800f)
-        val zones = portraitZones()
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = true,
-                anchor = MonitorPickerAnchor.CONTROLS_GRID,
-            )
-
-        assertEquals(320f, frame.height)
-        assertEquals(zones.system.y - 10f, frame.y + frame.height)
-        assertTrue(frame.x >= viewport.x)
-        assertTrue(frame.x + frame.width <= viewport.x + viewport.width)
     }
 
     @Test
@@ -409,7 +389,6 @@ class MonitorCameraControlsTest {
                 viewport,
                 zones,
                 isPortrait = false,
-                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
             )
 
         // iOS trailing-aligns to the capture bar (not feed ± 8). Side rails stay
@@ -437,7 +416,6 @@ class MonitorCameraControlsTest {
                 viewport,
                 zones,
                 isPortrait = false,
-                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
             )
 
         // 16+16 padding + ~28 header + 14 gap + 180 pad + 14 gap + ~36 tabs ≈ 304.
@@ -464,7 +442,6 @@ class MonitorCameraControlsTest {
                 viewport,
                 zones,
                 isPortrait = false,
-                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
                 measuredCaptureBar = measured,
             )
 
@@ -674,7 +651,6 @@ class MonitorCameraControlsTest {
                 viewport,
                 zones,
                 isPortrait = false,
-                anchor = MonitorPickerAnchor.CAPTURE_STRIP,
                 measuredCaptureBar = measured,
             )
 

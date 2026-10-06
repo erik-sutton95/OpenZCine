@@ -6,6 +6,8 @@ import androidx.media3.common.Player
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.core.MonotonicInstant
 import com.opencapture.opencine.media.*
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import java.lang.reflect.Proxy
 import kotlin.io.path.createTempDirectory
 import kotlin.test.*
@@ -177,10 +179,10 @@ class NikonPlaybackOwnerAdoptionTest {
         private val cache = MediaCacheStore(root)
         private val codec = NikonMediaLibraryCodec("SIMULATED", null, cache, { emptySet() }, { false })
         val records = listOf("A.MOV", "B.MOV").mapIndexed { at, name ->
-            codec.record(NikonLibraryClip("SIMULATED", MediaClipRecord(
+            codec.record(NikonLibraryClip("SIMULATED", NikonMediaClipRecord(
                 handle = (at + 4).toLong(), storageId = 65_537, sizeBytes = 100,
                 captureDate = "20261004T120000", pixelWidth = 3840, pixelHeight = 2160,
-                filename = name, contentKind = MediaContentKind.PLAYABLE_PROXY, stillPhoto = null)))
+                filename = name, contentKind = NikonMediaContentKind.PLAYABLE_PROXY, stillPhoto = null)))
         }
         val library = MonitorMediaLibraryModel(
             cache = MonitorMediaCache(MonitorMediaCacheDirectory(root.toFile()), codec,

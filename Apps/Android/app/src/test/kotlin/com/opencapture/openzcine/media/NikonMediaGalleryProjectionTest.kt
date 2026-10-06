@@ -1,5 +1,9 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -9,9 +13,9 @@ import kotlin.test.assertTrue
 /** SIMULATED actual gallery adapter, with unchanged JNI/action ownership out of scope. */
 class NikonMediaGalleryProjectionTest {
     private fun clip(name: String, handle: Long = 1, width: Int = 6048, date: String = "20260727T120000") =
-        MediaClipRecord(handle, 11, 2, date, width, 4000, name, MediaContentKind.STILL_PHOTO,
-            StillPhotoClassification(name.substringAfterLast('.').let { if (it == "JPG") "JPEG" else if (it == "TIF") "TIFF" else it }, StillPreviewStrategy.THUMBNAIL_ONLY))
-    private fun project(clips: List<MediaClipRecord>, filters: MediaLibraryFilters = MediaLibraryFilters(),
+        NikonMediaClipRecord(handle, 11, 2, date, width, 4000, name, NikonMediaContentKind.STILL_PHOTO,
+            NikonStillPhotoClassification(name.substringAfterLast('.').let { if (it == "JPG") "JPEG" else if (it == "TIF") "TIFF" else it }, NikonStillPreviewStrategy.THUMBNAIL_ONLY))
+    private fun project(clips: List<NikonMediaClipRecord>, filters: MediaLibraryFilters = MediaLibraryFilters(),
         favorites: Set<String> = emptySet(), category: MediaLibraryCategory = MediaLibraryCategory.PHOTOS) =
         NikonAppGalleryProjection(clips, emptyMap(), category, favorites, "cam", MediaLibrarySortOrder.NEWEST,
             filters, LocalDate.of(2026, 7, 27))

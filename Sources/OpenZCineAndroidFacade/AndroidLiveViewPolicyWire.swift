@@ -21,8 +21,8 @@ extension AndroidLiveViewPolicyWire {
     ) -> AndroidLiveViewRequest? {
         _ = recordingFrameRate
         guard
-            let streamPreset = OperatorPreferences.StreamPreset.allCases[safe: streamPresetRaw],
-            let qualityBias = OperatorPreferences.QualityBias.allCases[safe: qualityBiasRaw],
+            let streamPreset = LiveViewStreamPreset.allCases[safe: streamPresetRaw],
+            let qualityBias = LiveViewQualityBias.allCases[safe: qualityBiasRaw],
             let thermalTier = ThermalTier(rawValue: thermalTierRaw)
         else { return nil }
 
@@ -44,11 +44,11 @@ extension AndroidLiveViewPolicyWire {
         return standardFrameIntervalNanoseconds
     }
 
-    private static func imageSize(for preset: OperatorPreferences.StreamPreset) -> UInt8 {
+    private static func imageSize(for preset: LiveViewStreamPreset) -> UInt8 {
         preset.liveViewImageSize
     }
 
-    private static func compression(for bias: OperatorPreferences.QualityBias) -> UInt8 {
+    private static func compression(for bias: LiveViewQualityBias) -> UInt8 {
         bias.liveViewImageCompression
     }
 }

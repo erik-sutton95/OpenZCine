@@ -20,7 +20,7 @@ import Testing
 /// operator who deliberately picked Quality for an access-point setup keeps it.
 @Test func aStoredBiasWinsOnEveryPathIncludingTheAccessPoint() {
     for kind in CameraPath.Kind.allCases {
-        for stored in OperatorPreferences.QualityBias.allCases {
+        for stored in LiveViewQualityBias.allCases {
             #expect(
                 SetupStreamSettings.qualityBias(stored: stored, pathKind: kind, seed: .balanced)
                     == stored)
@@ -31,11 +31,11 @@ import Testing
 /// The seed is what the settings rows edit while nothing is connected, so it has to be what an
 /// unconfigured setup inherits — otherwise changing the default would silently do nothing.
 @Test func anUnconfiguredSetupInheritsTheSeedRatherThanAShippedConstant() {
-    for seed in OperatorPreferences.QualityBias.allCases {
+    for seed in LiveViewQualityBias.allCases {
         #expect(
             SetupStreamSettings.qualityBias(stored: nil, pathKind: .usbC, seed: seed) == seed)
     }
-    for seed in OperatorPreferences.StreamPreset.allCases {
+    for seed in LiveViewStreamPreset.allCases {
         #expect(
             SetupStreamSettings.streamPreset(stored: nil, pathKind: .usbC, seed: seed) == seed)
     }

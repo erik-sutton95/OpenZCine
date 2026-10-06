@@ -18,9 +18,9 @@ private const val BUILT_IN_LUT_SIZE = 33
 internal class FeedEffectsRenderPlan(
     val effects: FeedEffects,
     val configuration: FeedEffectsRenderConfiguration,
-    val baseCube: FeedEffectsCube?,
-    val limitsPaintCube: FeedEffectsCube?,
-    val limitsWeightCube: FeedEffectsCube?,
+    val baseCube: MonitorLUTCube?,
+    val limitsPaintCube: MonitorLUTCube?,
+    val limitsWeightCube: MonitorLUTCube?,
 ) {
     internal val nativePlan: com.opencapture.opencine.media.FeedEffectsRenderPlan by lazy {
         com.opencapture.opencine.media.FeedEffectsRenderPlan(
@@ -69,9 +69,6 @@ internal class FeedEffectsRenderPlan(
                 null -> false
             }
 }
-
-/** Shared validated packed-2D RGBA8 cube; source bytes retain the legacy codec. */
-internal typealias FeedEffectsCube = MonitorLUTCube
 
 /** Builds the single shared plan used by every Android GPU backend. */
 internal object FeedEffectsRenderPlanFactory {
@@ -190,7 +187,7 @@ internal object FeedEffectsRenderPlanFactory {
         effects: FeedEffects,
         configuration: FeedEffectsRenderConfiguration,
         lutLibrary: AndroidLutLibrary?,
-    ): FeedEffectsCube? {
+    ): MonitorLUTCube? {
         val selection = effects.lut
         val cube =
             when {
@@ -216,7 +213,7 @@ internal object FeedEffectsRenderPlanFactory {
                     }
                 selection is FeedLutSelection.Stored ->
                     lutLibrary?.packedCube(selection.value)?.let { packed ->
-                        FeedEffectsCube(packed.cubeSize, packed.rgba)
+                        MonitorLUTCube(packed.cubeSize, packed.rgba)
                     }
                 else -> null
             }
@@ -226,8 +223,8 @@ internal object FeedEffectsRenderPlanFactory {
         return cube
     }
 
-    private fun cachedCube(key: String, size: Int, bake: () -> ByteArray?): FeedEffectsCube? =
-        FeedEffectsCubeCache.value(key, bake)?.let { FeedEffectsCube(size, it) }
+    private fun cachedCube(key: String, size: Int, bake: () -> ByteArray?): MonitorLUTCube? =
+        FeedEffectsCubeCache.value(key, bake)?.let { MonitorLUTCube(size, it) }
 }
 
 /** Bounded cache for immutable Swift-baked cube bytes. */

@@ -2934,7 +2934,6 @@ internal fun MonitorScreen(
                         viewport = physicalViewport,
                         layout = fieldLayout,
                         isPortrait = isPortrait,
-                        anchor = MonitorPickerAnchor.CAPTURE_STRIP,
                         measuredCaptureBar = measuredCaptureBar,
                     )
                 }

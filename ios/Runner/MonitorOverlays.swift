@@ -140,7 +140,7 @@ struct PlaybackAssistOverlayModule: View {
     /// Aspect-fit video rectangle in the overlay coordinate space.
     let videoRect: CGRect
     /// Metered playback audio; absent before a real sample or when the tool is off.
-    var audioLevels: AudioMeterLevels?
+    var audioLevels: MonitorAudioMeterLevels?
     let onOptions: (MonitorAssistTool) -> Void
 
     var body: some View {
@@ -1010,11 +1010,11 @@ enum FalseColorReference {
 /// The shared Pocket / Insta audio meter over this camera's levels. A source that has not
 /// reported yet draws at the floor, as on Pocket.
 struct NikonAudioMeter: View {
-    let levels: AudioMeterLevels?
+    let levels: MonitorAudioMeterLevels?
     let sensitivity: String?
 
     var body: some View {
-        let floor = AudioMeterBallistics.floorDB
+        let floor = MonitorAudioMeterBallistics.floorDB
         let label = sensitivity?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         MonitorAudioMeter(
             left: levels?.left.levelDB ?? floor, leftPeak: levels?.left.peakDB ?? floor,

@@ -121,15 +121,6 @@ enum MediaCategoryTab: String, CaseIterable, Identifiable, Sendable {
     case favorites = "Favorites"
 
     var id: String { rawValue }
-
-    var systemImage: String {
-        switch self {
-        case .all: "square.grid.2x2"
-        case .videos: "film.stack"
-        case .photos: "photo.on.rectangle.angled"
-        case .favorites: "star"
-        }
-    }
 }
 
 /// Primary layout for the Media browser main column.
@@ -138,13 +129,6 @@ enum MediaBrowserLayout: String, CaseIterable, Codable, Sendable, Identifiable {
     case list
 
     var id: String { rawValue }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .grid: "List view"
-        case .list: "Grid view"
-        }
-    }
 }
 
 /// Persisted clip ordering for the Media browser grid.
@@ -183,8 +167,8 @@ extension MediaClip {
     }
 
     /// Best-effort resolution bucket: R3D source dimensions when linked, else proxy pixels, then filename.
-    var resolutionBucket: MediaResolutionBucket? {
-        MediaResolutionBucket.classify(
+    var resolutionBucket: NikonMediaResolutionBucket? {
+        NikonMediaResolutionBucket.classify(
             filename: filename,
             pixelWidth: pixelWidth,
             sourcePixelWidth: sourcePixelWidth)
@@ -265,9 +249,9 @@ enum MediaClipFormatting {
 enum MediaBrowserFilterMetrics {
     static func activeCount(
         formatFilters: Set<MediaFormatChip>,
-        resolutionFilters: Set<MediaResolutionBucket>,
-        photoSizeFilters: Set<MediaPhotoSizeClass>,
-        dateWindow: MediaDateWindow?,
+        resolutionFilters: Set<NikonMediaResolutionBucket>,
+        photoSizeFilters: Set<NikonMediaPhotoSizeClass>,
+        dateWindow: NikonMediaDateWindow?,
         storageSlotFilter: UInt32?
     ) -> Int {
         formatFilters.count + resolutionFilters.count + photoSizeFilters.count

@@ -25,6 +25,8 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.Until
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
@@ -83,11 +85,11 @@ class NikonMediaSelectionMainActivityTest {
         savedCameraStore.replace(listOf(record))
         originalRotation = device.displayRotation
         val clips = (1..40).map { number ->
-            MediaClipRecord(
+            NikonMediaClipRecord(
                 handle = number.toLong(), storageId = 65_537, sizeBytes = 4,
                 captureDate = "20261003T10%02d00".format(number), pixelWidth = 1_920, pixelHeight = 1_080,
                 filename = "SIMULATED-SEL-%02d.R3D".format(number),
-                contentKind = MediaContentKind.R3D_MASTER, stillPhoto = null,
+                contentKind = NikonMediaContentKind.R3D_MASTER, stillPhoto = null,
             )
         }
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
