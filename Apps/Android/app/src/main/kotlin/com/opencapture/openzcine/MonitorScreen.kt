@@ -177,6 +177,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.runtime.nativeFeedContentRect
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
+import com.opencapture.opencine.nikon.ProductionSessionRetryScheduleBridge
 
 /** Gives the live quick-settings panel first refusal on the system Back action. */
 @Composable
@@ -318,7 +320,7 @@ internal fun MonitorScreen(
     /** Leaves the held frame for the saved-camera home after a session drop. */
     onBackToOperatorMenu: () -> Unit = {},
     /** Debug-only staged recovery state for screenshot verification (`DemoHarness`). */
-    recoveryStateOverride: MonitorRecoveryState? = null,
+    recoveryStateOverride: SessionRecoveryUi? = null,
     /** Closed diagnostics breadcrumbs for the MF drive failure surfaces. */
     onDriveDiagnostic: (AndroidDiagnosticEvent) -> Unit = {},
     /**
@@ -408,7 +410,7 @@ internal fun MonitorScreen(
     // Retry / Operator menu once the shared attempt budget is spent, instead of a static
     // "No camera" over a loop that never stops (#253/#254).
     var sessionRecoveryState by
-        remember(session) { mutableStateOf<MonitorRecoveryState>(MonitorRecoveryState.Idle) }
+        remember(session) { mutableStateOf<SessionRecoveryUi>(SessionRecoveryUi.Idle) }
     var sessionRecoveryRetryTicket by remember(session) { mutableIntStateOf(0) }
     // The session is Disconnected while recovering, so the affordance needs the name from before
     // the drop rather than the live identity.
@@ -2237,7 +2239,7 @@ internal fun MonitorScreen(
                 captureInteractive = activeMonitorPicker == null,
                 locked = locked, popupInteractive = !editingThisMode,
                 capturePresented = activeMonitorPicker != null || assists.shared.configureTool != null,
-                recovering = (recoveryStateOverride ?: sessionRecoveryState) != MonitorRecoveryState.Idle),
+                recovering = (recoveryStateOverride ?: sessionRecoveryState) != SessionRecoveryUi.Idle),
             modifier = Modifier.fillMaxSize().then(sceneLayer),
             picture = {
             Box(
@@ -3251,11 +3253,11 @@ internal fun MonitorDataAvailability.hasSource(
  * MainActivity's. Both need a signal plumbed in before this can name them.
  */
 internal fun monitorFeedState(
-    recovery: MonitorRecoveryState,
+    recovery: SessionRecoveryUi,
     previewRejected: Boolean,
 ): MonitorFeedState? =
     when {
-        recovery != MonitorRecoveryState.Idle -> MonitorFeedState.NO_LINK
+        recovery != SessionRecoveryUi.Idle -> MonitorFeedState.NO_LINK
         previewRejected -> MonitorFeedState.RECOV
         else -> null
     }

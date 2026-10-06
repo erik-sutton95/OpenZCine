@@ -9,6 +9,7 @@ import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
 /**
  * Release stub — the demo harness does not exist outside debug builds. The
@@ -76,7 +77,7 @@ object DemoHarness {
 
     /** Always null: release builds cannot stage a dropped-session affordance. */
     @Suppress("UNUSED_PARAMETER")
-    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? = null
+    internal fun sessionRecoveryOverride(intent: Intent): SessionRecoveryUi? = null
 
     /** Release builds never provide a debug image-assist override. */
     @Suppress("UNUSED_PARAMETER")
