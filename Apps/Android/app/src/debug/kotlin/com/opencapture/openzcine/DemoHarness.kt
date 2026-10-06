@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
 /**
  * Debug-only demo hooks, mirroring `ios/Runner/DemoHarness.swift`: this real
@@ -160,11 +161,11 @@ object DemoHarness {
     const val EXTRA_SESSION_LOST = "zc.demo.sessionLost"
 
     /** Debug-only recovery state for screenshot verification, or null. */
-    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? =
+    internal fun sessionRecoveryOverride(intent: Intent): SessionRecoveryUi? =
         when (intent.getStringExtra(EXTRA_SESSION_LOST)) {
             null -> null
-            "retrying" -> MonitorRecoveryState.Retrying(attempt = 2, maxAttempts = 8)
-            else -> MonitorRecoveryState.WaitingForOperator(attemptsMade = 8)
+            "retrying" -> SessionRecoveryUi.Retrying(attempt = 2, maxAttempts = 8)
+            else -> SessionRecoveryUi.WaitingForOperator(attemptsMade = 8)
         }
 
     /** String intent extra selecting scopes: `wave,parade,histo,vector,lights`. */
