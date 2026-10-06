@@ -12,9 +12,12 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -237,6 +240,20 @@ internal class FrameioDeliveryController(
             errorMessage = "$timeout Camera rejoin could not be verified."
         }
         return false
+    }
+
+    /**
+     * Rejoins the camera after a consented hop, from a scope that outlives the surface that
+     * started it: the operator has already dismissed it, so this is best effort.
+     */
+    fun endInternetHopAfterDismiss() {
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
+            try {
+                endInternetHop()
+            } catch (_: Exception) {
+                // Best-effort rejoin; the operator has already left the surface.
+            }
+        }
     }
 
     /** Rejoins through the exact saved profile and records only a protocol-connected result. */

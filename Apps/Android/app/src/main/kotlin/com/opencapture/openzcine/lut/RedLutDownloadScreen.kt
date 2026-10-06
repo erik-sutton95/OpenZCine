@@ -55,10 +55,7 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioHopAvailability
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import java.io.File
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -111,7 +108,7 @@ internal fun RedLutDownloadScreen(
         val controller = frameioController
         onDispose {
             if (controller != null && controller.isInternetHopActive) {
-                endInternetHopAfterDismiss(controller)
+                controller.endInternetHopAfterDismiss()
             }
         }
     }
@@ -270,22 +267,6 @@ internal fun RedLutDownloadScreen(
                     .statusBarsPadding()
                     .padding(start = 8.dp, top = 4.dp),
         )
-    }
-}
-
-/**
- * Ends a camera-AP internet hop after the RED cover is already gone.
- *
- * Uses a composition-independent scope so work survives [onClose] tearing down
- * [rememberCoroutineScope].
- */
-private fun endInternetHopAfterDismiss(controller: FrameioDeliveryController) {
-    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
-        try {
-            withContext(NonCancellable) { controller.endInternetHop() }
-        } catch (_: Exception) {
-            // Rejoin best-effort; operator already left the RED surface.
-        }
     }
 }
 

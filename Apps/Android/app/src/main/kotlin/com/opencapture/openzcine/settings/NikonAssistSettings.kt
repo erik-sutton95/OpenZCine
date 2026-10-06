@@ -11,8 +11,6 @@ import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
 import com.opencapture.monitorui.MonitorFalseColorReferenceValues
 import com.opencapture.monitorui.MonitorFalseColorSelection
 import com.opencapture.monitorui.MonitorParadeMode
-import com.opencapture.monitorui.MonitorScopeGuides
-import com.opencapture.monitorui.MonitorVectorscopeZoom
 import com.opencapture.monitorui.MonitorWaveformMode
 import com.opencapture.monitorui.MonitorZebraNumberEntry
 import com.opencapture.monitorui.MonitorZebraNumberZone
@@ -23,10 +21,6 @@ import android.os.Build
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.opencine.media.MonitorCrushClipCompensation
-import com.opencapture.opencine.media.MonitorPeakingColor
-import com.opencapture.opencine.media.MonitorPeakingSense
-import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.ExposureCurveOrdinals
 import com.opencapture.openzcine.FeedFalseColorScale
@@ -83,51 +77,32 @@ internal fun nikonAssistSection(
             "Higher sensitivity catches finer edges but can get noisy on detailed scenes.",
             "Choose the edge color that stays readable over your typical scene.",
             onSensitivity = { state.setPeaking(sense = it); onInteraction() }, onColor = { state.setPeaking(color = it); onInteraction() },
-            reset = { state.resetNikonAssist(tool); onInteraction() })
+            reset = { state.resetSettings(tool); onInteraction() })
         MonitorAssistTool.WAVE -> MonitorAssistSettingsSection.Trace.waveform(
             MonitorWaveformMode.entries, state.waveMode, { state.setWaveform(mode = it); onInteraction() }, { it.label },
             state.waveBrightness, { state.setWaveform(brightness = it); onInteraction() }, state.waveGuides,
             { state.setWaveform(guides = it); onInteraction() },
-            reset = { state.resetNikonAssist(tool); onInteraction() })
+            reset = { state.resetSettings(tool); onInteraction() })
         MonitorAssistTool.PARADE -> MonitorAssistSettingsSection.Trace.parade(
             MonitorParadeMode.entries, state.paradeMode, { state.setParade(mode = it); onInteraction() }, { it.label },
             state.paradeBrightness, { state.setParade(brightness = it); onInteraction() }, state.paradeGuides,
             { state.setParade(guides = it); onInteraction() },
-            reset = { state.resetNikonAssist(tool); onInteraction() })
+            reset = { state.resetSettings(tool); onInteraction() })
         MonitorAssistTool.HISTO -> MonitorAssistSettingsSection.Histogram(
             state.histoTrafficLights, { state.setHistogram(traffic = !state.histoTrafficLights); onInteraction() },
             state.crushClipCompensation, { state.setHistogram(compensation = it); onInteraction() },
             "Show small RGB edge blocks for crushed and clipped channels.",
             "Stops of crush/clip tolerance before a traffic light glows. Shared with the goal-post meter.",
-            reset = { state.resetNikonAssist(tool); onInteraction() })
+            reset = { state.resetSettings(tool); onInteraction() })
         MonitorAssistTool.VECTOR -> MonitorAssistSettingsSection.Vectorscope(
             state.vectorZoom, { state.setVectorscope(zoom = it); onInteraction() },
             state.vectorBrightness, { state.setVectorscope(brightness = it); onInteraction() },
-            reset = { state.resetNikonAssist(tool); onInteraction() })
+            reset = { state.resetSettings(tool); onInteraction() })
         MonitorAssistTool.LIGHTS -> MonitorAssistSettingsSection.TrafficLights(
             state.crushClipCompensation, { state.setCompensation(it); onInteraction() },
             "Stops of crush/clip tolerance before a channel indicator glows. Shared with histogram traffic lights.",
-            reset = { state.resetNikonAssist(tool); onInteraction() })
+            reset = { state.resetSettings(tool); onInteraction() })
         else -> null
-    }
-}
-
-/** A card's reset: the shared Pocket/Insta defaults, leaving panel sizes where the operator put them. */
-internal fun MonitorAssistState.resetNikonAssist(tool: MonitorAssistTool) {
-    when (tool) {
-        MonitorAssistTool.PEAK -> setPeaking(MonitorPeakingColor.RED, MonitorPeakingSense.MED)
-        MonitorAssistTool.FALSE -> setFalseColor(MonitorFalseColorSelection.SCENE_STOPS, true)
-        MonitorAssistTool.ZEBRA -> {
-            updateZebraUnit(MonitorZebraUnit.IRE)
-            setZebraHighlight(true, 99.0, MonitorZebraPaint.WHITE)
-            setZebraMidtone(true, 55.0, MonitorZebraPaint.AMBER)
-        }
-        MonitorAssistTool.WAVE -> setWaveform(MonitorWaveformMode.RGB, 100, MonitorScopeGuides())
-        MonitorAssistTool.PARADE -> setParade(MonitorParadeMode.RGB, 100, MonitorScopeGuides())
-        MonitorAssistTool.HISTO -> setHistogram(true, MonitorCrushClipCompensation.ZERO)
-        MonitorAssistTool.VECTOR -> setVectorscope(MonitorVectorscopeZoom.X1, 100)
-        MonitorAssistTool.LIGHTS -> setCompensation(MonitorCrushClipCompensation.ZERO)
-        else -> Unit
     }
 }
 
@@ -149,7 +124,7 @@ private fun falseColor(state: MonitorAssistState, cameraInput: ExposureAssistCam
         onReferenceEnabled = { state.setFalseColor(reference = it); onInteraction() },
         scaleHelp = "The camera signal supplies the curve and reference calibration.", readHelp = "",
         referenceHelp = "Show a compact color key over live view while False Color is active.",
-        reset = { state.resetNikonAssist(MonitorAssistTool.FALSE); onInteraction() })
+        reset = { state.resetSettings(MonitorAssistTool.FALSE); onInteraction() })
 }
 
 internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
@@ -188,7 +163,7 @@ private fun zebra(state: MonitorAssistState, cameraInput: ExposureAssistCameraIn
         midtoneHelp = "Midtone zebra marks the chosen monitoring level after curve compensation.",
         highlight = zebraZone(state, cameraInput, highlight = true, onInteraction),
         midtone = zebraZone(state, cameraInput, highlight = false, onInteraction),
-        reset = { state.resetNikonAssist(MonitorAssistTool.ZEBRA); onInteraction() })
+        reset = { state.resetSettings(MonitorAssistTool.ZEBRA); onInteraction() })
 
 /** Direct entry in this camera's codes: the Swift core converts against its curve and ISO. */
 @Composable
