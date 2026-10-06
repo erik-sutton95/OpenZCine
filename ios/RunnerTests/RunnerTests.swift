@@ -595,17 +595,6 @@ final class RunnerTests: XCTestCase {
         return RGB(red: bytes[2], green: bytes[1], blue: bytes[0])
     }
 
-    @MainActor
-    func testGlassChoiceKeepsCinemaRatioOnOneLineAtCompactProWidth() {
-        let choice = GlassChoice(title: "2.76:1")
-            .frame(width: 48)
-        let host = UIHostingController(rootView: choice)
-
-        let fittingSize = host.sizeThatFits(in: CGSize(width: 48, height: 1_000))
-
-        XCTAssertLessThanOrEqual(fittingSize.height, 52)
-    }
-
     func testDemoSettingsTabSelection() {
         XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("assist"), .assist)
         XCTAssertEqual(MonitorSettingsTab.demoLaunchTab("storage"), .storage)
@@ -764,7 +753,7 @@ final class RunnerTests: XCTestCase {
         let custom = root.appendingPathComponent("custom", isDirectory: true)
         try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let lut = StoredLUT(fileName: "Operator Look.cube")
+        let lut = StoredCustomLUT(fileName: "Operator Look.cube")
         let lutURL = custom.appendingPathComponent(lut.fileName)
         try Data("stored".utf8).write(to: lutURL)
         let store = LUTFileStore(root: root)
@@ -787,7 +776,7 @@ final class RunnerTests: XCTestCase {
         let store = LUTFileStore(root: root)
 
         XCTAssertThrowsError(
-            try store.remove(StoredLUT(fileName: "../outside.cube"), from: .custom)
+            try store.remove(StoredCustomLUT(fileName: "../outside.cube"), from: .custom)
         ) { error in
             XCTAssertEqual(error as? LUTDeletionError, .invalidFileName)
         }
@@ -826,14 +815,14 @@ final class RunnerTests: XCTestCase {
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
-        try model.deleteStoredLUT(StoredLUT(fileName: "B.cube"), from: .custom)
+        try model.deleteStoredLUT(StoredCustomLUT(fileName: "B.cube"), from: .custom)
 
         XCTAssertEqual(model.customLUTs.map(\.fileName), ["A.cube"])
         XCTAssertEqual(
             model.assistConfiguration.selectedLUT,
             .stored(category: .custom, fileName: "A.cube"))
 
-        try model.deleteStoredLUT(StoredLUT(fileName: "A.cube"), from: .custom)
+        try model.deleteStoredLUT(StoredCustomLUT(fileName: "A.cube"), from: .custom)
 
         XCTAssertTrue(model.customLUTs.isEmpty)
         XCTAssertEqual(
@@ -855,7 +844,7 @@ final class RunnerTests: XCTestCase {
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
-        try model.deleteStoredLUT(StoredLUT(fileName: "A.cube"), from: .custom)
+        try model.deleteStoredLUT(StoredCustomLUT(fileName: "A.cube"), from: .custom)
 
         XCTAssertEqual(
             model.assistConfiguration.selectedLUT,
@@ -2226,14 +2215,14 @@ extension RunnerTests {
     /// device can — the simulator, which has neither MetalFX nor VideoToolbox super resolution,
     /// lists that alone.
     func testOfferedUpscalersAreAllRunnableAndAlwaysIncludeTheFloor() {
-        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.off))
-        XCTAssertTrue(FeedUpscaler.supportedOnThisDevice.contains(.lanczos))
-        for upscaler in FeedUpscaler.supportedOnThisDevice {
+        XCTAssertTrue(MonitorUpscaler.supportedOnThisDevice.contains(.off))
+        XCTAssertTrue(MonitorUpscaler.supportedOnThisDevice.contains(.lanczos))
+        for upscaler in MonitorUpscaler.supportedOnThisDevice {
             XCTAssertTrue(
                 upscaler.isSupportedOnThisDevice, "\(upscaler) is offered but not runnable")
         }
         #if targetEnvironment(simulator)
-            XCTAssertEqual(FeedUpscaler.supportedOnThisDevice, [.off, .lanczos])
+            XCTAssertEqual(MonitorUpscaler.supportedOnThisDevice, [.off, .lanczos])
         #endif
     }
 
@@ -2241,22 +2230,22 @@ extension RunnerTests {
     /// something this device actually runs — never a setting that reads as active while the
     /// renderer quietly does something else.
     func testAStoredChoiceThisDeviceCannotRunResolvesToOneItCan() {
-        XCTAssertTrue(FeedUpscaler.supported(or: nil).isSupportedOnThisDevice)
-        for upscaler in FeedUpscaler.allCases {
-            XCTAssertTrue(FeedUpscaler.supported(or: upscaler).isSupportedOnThisDevice)
+        XCTAssertTrue(MonitorUpscaler.supported(or: nil).isSupportedOnThisDevice)
+        for upscaler in MonitorUpscaler.allCases {
+            XCTAssertTrue(MonitorUpscaler.supported(or: upscaler).isSupportedOnThisDevice)
         }
-        XCTAssertEqual(FeedUpscaler.supported(or: .lanczos), .lanczos)
+        XCTAssertEqual(MonitorUpscaler.supported(or: .lanczos), .lanczos)
     }
 
     /// An untouched install starts at the floor, on every device — the picker is how an operator
     /// spends GPU on the feed, not something they have to find to stop spending it.
     func testTheDefaultUpscalerIsTheFastFloorEvenWhereBetterOnesExist() {
-        XCTAssertEqual(FeedUpscaler.supported(or: nil), .lanczos)
-        XCTAssertEqual(FeedUpscaler.lanczos.rawValue, "Fast")
+        XCTAssertEqual(MonitorUpscaler.supported(or: nil), .lanczos)
+        XCTAssertEqual(MonitorUpscaler.lanczos.rawValue, "Fast")
         // A stored choice still wins wherever the device can run it — the default is a starting
         // point, not a cap.
-        for upscaler in FeedUpscaler.supportedOnThisDevice {
-            XCTAssertEqual(FeedUpscaler.supported(or: upscaler), upscaler)
+        for upscaler in MonitorUpscaler.supportedOnThisDevice {
+            XCTAssertEqual(MonitorUpscaler.supported(or: upscaler), upscaler)
         }
     }
 

@@ -2032,7 +2032,7 @@ struct DrumSideAdjustButton: View {
 struct LUTPickerContent: View {
     private struct PendingLUTDeletion: Identifiable {
         let category: LUTCategory
-        let lut: StoredLUT
+        let lut: StoredCustomLUT
         var id: String { "\(category.rawValue):\(lut.fileName)" }
     }
 
@@ -2324,7 +2324,7 @@ struct LUTPickerContent: View {
         }
     }
 
-    private var filteredRedLUTs: [StoredLUT] {
+    private var filteredRedLUTs: [StoredCustomLUT] {
         let base =
             redFilter.match.map { needle in
                 model.redLUTs.filter { $0.fileName.uppercased().contains(needle) }
@@ -2978,7 +2978,7 @@ struct OperatorSettingsPanel: View {
             // Only what this device can actually run is listed, and the row disappears entirely
             // when that is just the floor — an option that quietly does nothing is worse than no
             // option at all.
-            if FeedUpscaler.supportedOnThisDevice.count > 1 {
+            if MonitorUpscaler.supportedOnThisDevice.count > 1 {
                 MonitorSettingsInlineRow(
                     title: "Feed Upscaler",
                     help:
@@ -2986,11 +2986,11 @@ struct OperatorSettingsPanel: View {
                     showTopDivider: false
                 ) {
                     NikonSettingsChoices(
-                        options: FeedUpscaler.supportedOnThisDevice.map(\.rawValue),
+                        options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue),
                         selected: FeedUpscaleSwitch.shared.upscaler.rawValue,
                         compact: true
                     ) { value in
-                        guard let choice = FeedUpscaler(rawValue: value) else { return }
+                        guard let choice = MonitorUpscaler(rawValue: value) else { return }
                         FeedUpscaleSwitch.shared.upscaler = choice
                     }
                 }
@@ -3004,7 +3004,7 @@ struct OperatorSettingsPanel: View {
                     title: "Feed Noise Reduction",
                     help:
                         "The noise filter turned itself off after the camera sent something it could not take. Reconnecting the camera gives it another go.",
-                    showTopDivider: FeedUpscaler.supportedOnThisDevice.count > 1
+                    showTopDivider: MonitorUpscaler.supportedOnThisDevice.count > 1
                 ) {
                     MonitorSettingsValueText(value: reason)
                 }
@@ -3013,7 +3013,7 @@ struct OperatorSettingsPanel: View {
                     title: "Feed Noise Reduction",
                     help:
                         "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames — the blocky structure of a compressed stream stays put — and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
-                    showTopDivider: FeedUpscaler.supportedOnThisDevice.count > 1,
+                    showTopDivider: MonitorUpscaler.supportedOnThisDevice.count > 1,
                     isOn: LiveDenoiseSwitch.shared.enabled
                 ) {
                     LiveDenoiseSwitch.shared.enabled.toggle()

@@ -2,38 +2,33 @@ import Testing
 
 @testable import OpenZCineCore
 
-@Test func storedLUTDisplayNameDropsCubeExtension() {
-    #expect(StoredLUT(fileName: "MyLook.cube").displayName == "MyLook")
-    #expect(StoredLUT(fileName: "Bleach.CUBE").displayName == "Bleach")
-    #expect(StoredLUT(fileName: "weird").displayName == "weird")
-}
-
 @Test func defaultRedLUTPrefersRec709MediumContrastThenFallsBack() {
     let set = [
-        StoredLUT(fileName: "RED_FilmBias_N-Log_to_Rec709.cube"),
-        StoredLUT(fileName: "N-Log_REC709_HIGH_CONTRAST.cube"),
-        StoredLUT(fileName: "N-Log_REC709_MEDIUM_CONTRAST.cube"),
+        StoredCustomLUT(fileName: "RED_FilmBias_N-Log_to_Rec709.cube"),
+        StoredCustomLUT(fileName: "N-Log_REC709_HIGH_CONTRAST.cube"),
+        StoredCustomLUT(fileName: "N-Log_REC709_MEDIUM_CONTRAST.cube"),
     ]
     #expect(
         LUTLibraryIndex.defaultRedLUT(from: set)?.fileName == "N-Log_REC709_MEDIUM_CONTRAST.cube")
     #expect(
-        LUTLibraryIndex.defaultRedLUT(from: [StoredLUT(fileName: "A.cube")])?.fileName == "A.cube")
+        LUTLibraryIndex.defaultRedLUT(from: [StoredCustomLUT(fileName: "A.cube")])?.fileName
+            == "A.cube")
     #expect(LUTLibraryIndex.defaultRedLUT(from: []) == nil)
 }
 
 @Test func defaultRedLUTPrefersMediumContrastSoftRolloffRec709() {
     let set = [
-        StoredLUT(
+        StoredCustomLUT(
             fileName:
                 "RWG_Log3G10 to REC709_BT1886 with MEDIUM_CONTRAST and R_1_Hard size_33 v1.13.cube"),
-        StoredLUT(
+        StoredCustomLUT(
             fileName:
                 "RWG_Log3G10 to REC709_BT1886 with MEDIUM_CONTRAST and R_4_VerySoft size_33 v1.13.cube"
         ),
-        StoredLUT(
+        StoredCustomLUT(
             fileName:
                 "RWG_Log3G10 to REC709_BT1886 with MEDIUM_CONTRAST and R_3_Soft size_33 v1.13.cube"),
-        StoredLUT(
+        StoredCustomLUT(
             fileName:
                 "RWG_Log3G10 to REC2020_BT1886 with MEDIUM_CONTRAST and R_3_Soft size_33 v1.13.cube"
         ),
@@ -41,12 +36,6 @@ import Testing
     #expect(
         LUTLibraryIndex.defaultRedLUT(from: set)?.fileName
             == "RWG_Log3G10 to REC709_BT1886 with MEDIUM_CONTRAST and R_3_Soft size_33 v1.13.cube")
-}
-
-@Test func libraryIndexKeepsOnlyCubesSortedCaseInsensitively() {
-    let names = ["b.cube", "A.cube", "notes.txt", "C.CUBE", "sub/dir"]
-    let stored = LUTLibraryIndex.stored(fromFileNames: names)
-    #expect(stored.map(\.fileName) == ["A.cube", "b.cube", "C.CUBE"])
 }
 
 @Test func redPresetNameDropsSourceContrastWordsSizeAndVersion() {

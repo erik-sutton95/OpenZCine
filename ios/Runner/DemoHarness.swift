@@ -1,5 +1,6 @@
 import MonitorPresentation
 import Network
+import OpenCineApple
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -47,7 +48,7 @@ enum DemoHarness {
     /// Display settings row switches it live; this is for a launch that has to start there.
     /// See `FeedUpscaleSwitch`.
     static let forcedFeedUpscaler = value("ZC_DEMO_FEED_SCALER").flatMap { raw in
-        FeedUpscaler.allCases.first { $0.rawValue.lowercased().hasPrefix(raw.lowercased()) }
+        MonitorUpscaler.allCases.first { $0.rawValue.lowercased().hasPrefix(raw.lowercased()) }
     }
     /// `ZC_DEMO_SR_STAGE=input` presents the super-resolution model's INPUT buffer instead of its
     /// output, converted back the same way.

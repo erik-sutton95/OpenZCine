@@ -365,77 +365,6 @@ final class LiveDenoiseSwitch {
     private init() {}
 }
 
-/// Which upscaler carries the bake→drawable blow-up. Raw values are the segment titles.
-enum FeedUpscaler: String, CaseIterable, Sendable {
-    /// No upscaler: the plain bilinear sample, and the reference the rest are judged against.
-    /// Something must scale the bake to the panel, so "off" is the cheapest kernel, not no scale.
-    case off = "Off"
-    /// The floor every device can run: one MPS Lanczos pass over the drawable.
-    case lanczos = "Fast"
-    /// MetalFX Spatial, the FSR1-class edge-aware upscaler in the OS. A13+.
-    case spatial = "Quality"
-    /// VideoToolbox's low-latency super-resolution model, running in the renderer AFTER the
-    /// effects bake — assists measure the true source; the model enlarges the finished picture.
-    /// iOS 26+, hardware only. The end-before-start bug that kept this dead is documented on
-    /// `LiveFeedSuperResolution.prepare`.
-    ///
-    /// Named "AI" rather than by its mechanism because that is the property an operator has to
-    /// weigh: it INFERS detail that was never captured. See the settings help.
-    case superResolution = "AI"
-    /// Whether this device can actually run this upscaler.
-    ///
-    /// The picker offers nothing else. An option that quietly falls back to Lanczos is
-    /// indistinguishable from a setting that does not work, and both MetalFX and the
-    /// super-resolution models are absent on whole classes of device (and from the simulator
-    /// entirely) — so the answer belongs in what is shown, not in what happens after the tap.
-    var isSupportedOnThisDevice: Bool {
-        switch self {
-        case .off, .lanczos: true
-        case .spatial: Self.spatialSupported
-        case .superResolution: Self.superResolutionSupported
-        }
-    }
-
-    /// The upscalers worth offering on this device — always at least Off and the Lanczos floor,
-    /// which are plain MPS kernels every device has.
-    static var supportedOnThisDevice: [FeedUpscaler] { allCases.filter(\.isSupportedOnThisDevice) }
-
-    /// `candidate` when this device can run it, otherwise the floor. A stored choice outlives the
-    /// device it was made on: a restore onto older hardware, or a build run in the simulator, can
-    /// name an upscaler that is not there any more.
-    ///
-    /// The floor, not the best available, and that is the default an untouched install gets. Every
-    /// step above Lanczos costs GPU on a path that already shares the die with the decode and the
-    /// effects bake, and the operator who wants that spent has a picker to say so. Starting at the
-    /// cheapest real kernel also means the first thing anyone sees is the honest one — nothing on
-    /// screen is inferred until they ask for it.
-    static func supported(or candidate: FeedUpscaler?) -> FeedUpscaler {
-        if let candidate, candidate.isSupportedOnThisDevice { return candidate }
-        return .lanczos
-    }
-
-    /// A13+ and a device build. Asking the descriptor costs a `MTLDevice`, so it is asked once.
-    private static let spatialSupported: Bool = {
-        #if canImport(MetalFX)
-            guard let device = MTLCreateSystemDefaultDevice() else { return false }
-            return MTLFXSpatialScalerDescriptor.supportsDevice(device)
-        #else
-            return false
-        #endif
-    }()
-
-    /// iOS 26 and a device build — `VTLowLatencySuperResolutionScaler` is excluded from the
-    /// simulator SDK the same way MetalFX is.
-    private static let superResolutionSupported: Bool = {
-        #if targetEnvironment(simulator)
-            return false
-        #else
-            guard #available(iOS 26.0, *) else { return false }
-            return VTLowLatencySuperResolutionScalerConfiguration.isSupported
-        #endif
-    }()
-}
-
 /// Which upscaler the feed is using, set from the Link settings row.
 ///
 /// Neither MetalFX nor VideoToolbox super resolution exists in the simulator, so what they buy can
@@ -450,7 +379,7 @@ final class FeedUpscaleSwitch {
     private nonisolated static let storageKey = "OpenZCine.feedUpscaler"
 
     /// `.lanczos` drops the feed to the floor, the same path a pre-A13 device takes.
-    var upscaler: FeedUpscaler = FeedUpscaleSwitch.rendererReadsUpscaler {
+    var upscaler: MonitorUpscaler = FeedUpscaleSwitch.rendererReadsUpscaler {
         didSet {
             Self.rendererReadsUpscaler = upscaler
             UserDefaults.standard.set(upscaler.rawValue, forKey: Self.storageKey)
@@ -465,7 +394,7 @@ final class FeedUpscaleSwitch {
     /// It seeds itself rather than being seeded by ``shared``, because the renderer runs whether or
     /// not the settings panel was ever opened — reading the stored choice here is what keeps a
     /// default of "the best this device has" from collapsing to the floor on an untouched launch.
-    nonisolated(unsafe) static var rendererReadsUpscaler: FeedUpscaler = .supported(
+    nonisolated(unsafe) static var rendererReadsUpscaler: MonitorUpscaler = .supported(
         or: storedChoice)
 
     /// Debug: present the model's input rather than its output (`ZC_DEMO_SR_STAGE=input`).
@@ -476,9 +405,9 @@ final class FeedUpscaleSwitch {
     /// The raw values ARE the stored keys and they were renamed to operator-facing words, so the
     /// old ones are mapped rather than dropped — an operator who chose MetalFX keeps Quality
     /// instead of being silently reset to the default.
-    private nonisolated static var storedChoice: FeedUpscaler? {
+    private nonisolated static var storedChoice: MonitorUpscaler? {
         guard let stored = UserDefaults.standard.string(forKey: storageKey) else { return nil }
-        if let known = FeedUpscaler(rawValue: stored) { return known }
+        if let known = MonitorUpscaler(rawValue: stored) { return known }
         switch stored {
         case "Lanczos": return .lanczos
         case "MetalFX": return .spatial

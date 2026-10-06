@@ -98,31 +98,6 @@ struct SegmentedButtons: View {
     }
 }
 
-struct GlassChoice: View {
-    let title: String
-    var isSelected = false
-
-    var body: some View {
-        Text(title)
-            .font(.system(size: 14, weight: .medium, design: .monospaced))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .allowsTightening(true)
-            .foregroundStyle(isSelected ? LiveDesign.accent : LiveDesign.text)
-            .padding(.horizontal, 2)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(
-                isSelected ? LiveDesign.accentDim : LiveDesign.glassBright,
-                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                    .stroke(isSelected ? LiveDesign.accentDim : LiveDesign.hairline, lineWidth: 1)
-            )
-    }
-}
-
 /// Converts the existing source-owned selection callback into a common binding.
 struct NikonSettingsChoices: View {
     @Environment(NativeAppModel.self) private var model
