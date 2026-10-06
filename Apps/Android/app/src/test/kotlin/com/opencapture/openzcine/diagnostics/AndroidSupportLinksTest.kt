@@ -12,18 +12,10 @@ class AndroidSupportLinksTest {
             AndroidSupportLinks.FEATURE_REQUEST,
         )
         assertEquals(
-            "https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml",
-            AndroidSupportLinks.BUG_REPORT,
-        )
-        assertEquals(
             "https://github.com/erik-sutton95/OpenZCine",
             AndroidSupportLinks.SOURCE,
         )
         assertEquals("https://openzcine.app/privacy/", AndroidSupportLinks.PRIVACY)
         assertEquals("https://openzcine.app/terms/", AndroidSupportLinks.TERMS)
-        assertEquals(
-            "https://github.com/erik-sutton95/OpenZCine/security/advisories/new",
-            AndroidSupportLinks.SECURITY_ADVISORY,
-        )
     }
 }

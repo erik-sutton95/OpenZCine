@@ -7,13 +7,9 @@ Discovery, pairing and live view need a **physical** phone or tablet and the
 camera. The iOS Simulator can only run the demo session
 ([Setup](../setup/#run-without-a-camera)).
 
-If a step fails, open **Operator Setup → System → Report a Problem**. On iOS this
-sends a private report to OpenCapture with optional technical details, photos and
-a reply email; it goes once the phone has left camera Wi-Fi. On Android, choose an
-anonymous public issue (no GitHub account; optional privacy-filtered activity
-events and screenshots you pick) or a signed-in
-[GitHub bug report](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
-for richer details. Both paths are public. For a local diagnostic export, use
+If a step fails, open **Operator Setup → System → Report a Problem**. It sends a
+private report to OpenCapture with optional technical details, photos and a reply
+email; it goes once the phone has left camera Wi-Fi. For a local diagnostic export, use
 **Settings → Share Diagnostics**: it keeps a connect-attempt trace on the phone
 (body family, whether DeviceInfo was read, the pairing decision) until you send
 it. The same guide for operators is on the

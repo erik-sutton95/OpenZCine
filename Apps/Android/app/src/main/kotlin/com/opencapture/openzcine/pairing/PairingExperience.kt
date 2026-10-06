@@ -18,8 +18,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -31,9 +29,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -52,13 +48,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -66,6 +60,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.opencapture.monitorui.MonitorPairingInstruction
+import com.opencapture.monitorui.MonitorPairingInstructionIcon
 import com.opencapture.monitorui.MonitorPairingPresentation
 import com.opencapture.monitorui.MonitorPairingStep
 import com.opencapture.opencine.appkit.CamerasModel
@@ -106,7 +102,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.monitorui.MonitorIcon
 
 /** Saved camera-AP credential surface the wizard needs (real: [CameraWifiCredentialStore]). */
 public interface PairingCredentials {
@@ -203,7 +199,7 @@ public class PairingEnvironment(
  * Production [PairingEnvironment] over the real platform services.
  *
  * [phaseLogger] receives progress and failure phases. Callers must discard or
- * privately handle the detail value rather than placing it in an anonymous
+ * privately handle the detail value rather than placing it in a shared
  * report. Safe phases are also written to logcat.
  */
 public fun realPairingEnvironment(
@@ -426,16 +422,6 @@ internal object PairingCopy {
         }
 
     @StringRes
-    fun introFooter(step: PairingStep): Int =
-        when (step) {
-            PairingStep.PERMISSIONS -> R.string.pairing_footer_permissions
-            PairingStep.CHOOSE_PATH -> R.string.pairing_footer_choose_path
-            PairingStep.PREPARE -> R.string.pairing_footer_prepare
-            PairingStep.NETWORK -> R.string.pairing_footer_network
-            PairingStep.DISCOVER -> R.string.pairing_footer_discover
-        }
-
-    @StringRes
     fun cardTitle(card: PairingCard): Int =
         when (card) {
             PairingCard.WIRELESS -> R.string.pairing_card_wireless
@@ -483,40 +469,6 @@ internal object PairingCopy {
             PairingPath.WIFI_NETWORK -> R.string.pairing_path_router
             PairingPath.USB_C -> R.string.pairing_path_usb_c
             PairingPath.HDMI_CAPTURE -> R.string.pairing_path_hdmi
-        }
-
-    @StringRes
-    fun pathBadge(path: PairingPath): Int =
-        when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_badge_simplest
-            PairingPath.PHONE_HOTSPOT -> R.string.pairing_badge_best_wireless
-            PairingPath.WIFI_NETWORK -> R.string.pairing_badge_shared_network
-            PairingPath.USB_C -> R.string.pairing_badge_most_stable
-            PairingPath.HDMI_CAPTURE -> R.string.pairing_badge_picture_only
-        }
-
-    fun pathPros(path: PairingPath): List<Int> =
-        when (path) {
-            PairingPath.CAMERA_ACCESS_POINT ->
-                listOf(R.string.pairing_pro_light_battery, R.string.pairing_pro_no_phone_setup)
-            PairingPath.PHONE_HOTSPOT ->
-                listOf(R.string.pairing_pro_wireless_quality, R.string.pairing_pro_stable_high_settings)
-            PairingPath.WIFI_NETWORK ->
-                listOf(R.string.pairing_pro_router_range, R.string.pairing_pro_router_no_setup)
-            PairingPath.USB_C ->
-                listOf(R.string.pairing_pro_usb_stable, R.string.pairing_pro_usb_no_radio)
-            PairingPath.HDMI_CAPTURE ->
-                listOf(R.string.pairing_pro_hdmi_quality, R.string.pairing_pro_usb_no_radio)
-        }
-
-    @StringRes
-    fun pathCon(path: PairingPath): Int =
-        when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> R.string.pairing_con_softer_link
-            PairingPath.PHONE_HOTSPOT -> R.string.pairing_con_battery_drain
-            PairingPath.WIFI_NETWORK -> R.string.pairing_con_router_needed
-            PairingPath.USB_C -> R.string.pairing_con_usb_tethered
-            PairingPath.HDMI_CAPTURE -> R.string.pairing_con_hdmi_no_control
         }
 
     // [VERIFY-ON-HW] Confirm the ZR's exact menu wording for each path on hardware.
@@ -675,8 +627,6 @@ private fun PairingPhase.isBusy(): Boolean =
  * page through an `IntegrationPairingFlow`: the page's rail shows the wizard's steps, its pane
  * the current step, and a connect in flight takes over the pane (title, detail, live line,
  * actions). Ends by handing a connected [PairedCamera] to [onPaired].
- * [onOpenSettings] is available before a connection is in progress so local
- * preferences and media cache can be managed without a camera session.
  */
 @Composable
 public fun PairingExperience(
@@ -697,7 +647,6 @@ public fun PairingExperience(
      * no PTP session and no saved camera.
      */
     onStartHdmiMonitor: () -> Unit,
-    onOpenSettings: (() -> Unit)? = null,
     onShowSavedCameras: (() -> Unit)? = null,
     /**
      * The way out of the wizard for a device that will not pair a camera — the watcher-only
@@ -768,7 +717,6 @@ public fun PairingExperience(
                     camera.host == record.host ||
                         SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
                 }?.host
-                    ?: record.host.takeIf { CameraDiscovery.isDialableHost(it) }
                     ?: record.host
             SavedCameraTransport.USB_C -> record.host
         }
@@ -1425,7 +1373,9 @@ public fun PairingExperience(
                     steps = steps.map { MonitorPairingStep(stringResource(PairingCopy.stepTitle(it)), "") },
                     currentStep = flow.displayStepNumber - 1,
                     title = stringResource(PairingCopy.stepTitle(flow.step)),
-                    body = "", target = "Nikon Z", hint = "",
+                    body = if (flow.step == PairingStep.NETWORK) stringResource(PairingCopy.networkSubtitle(flow.path)) else "",
+                    target = "Nikon Z", hint = "",
+                    instructions = if (flow.step == PairingStep.NETWORK) networkInstructions(flow.path) else emptyList(),
                     primaryAction = primary,
                     primaryActionEnabled = !busy && (flow.step != PairingStep.PERMISSIONS ||
                         permissionGranted && isCameraPermissionSatisfied(cameraRequired, cameraPermissionGranted)),
@@ -1498,10 +1448,10 @@ public fun PairingExperience(
                                 onDiagnosticPhase(diagnosticPhaseForPairingPath(path))
                                 flow = flow.choose(path)
                             },
-                            compact = true, onOpenWatcherList = onOpenWatcherList,
+                            onOpenWatcherList = onOpenWatcherList,
                         )
                         PairingStep.PREPARE -> NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
-                        PairingStep.NETWORK -> NetworkBody(path = flow.path)
+                        PairingStep.NETWORK -> Unit
                         PairingStep.DISCOVER -> DiscoverBody(
                             path = flow.path, cameras = cameras, usbCameras = usbCameras,
                             onConnectCamera = { connect(it.host) }, onConnectUsbCamera = ::connectUsb,
@@ -1653,11 +1603,7 @@ private fun PermissionsBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                StartupGlyph(
-                    StartupGlyphKind.SHIELD,
-                    tint = StartupColors.accent,
-                    modifier = Modifier.size(13.dp),
-                )
+                MonitorIcon(MonitorIcon.LOCK, null, Modifier.size(13.dp), StartupColors.accent)
                 Text(
                     stringResource(R.string.pairing_permissions_group),
                     color = StartupColors.muted,
@@ -1667,7 +1613,7 @@ private fun PermissionsBody(
             }
             if (cameraRequired) {
                 PermissionRow(
-                    glyph = StartupGlyphKind.CAMERA,
+                    glyph = MonitorIcon.CAMERA,
                     title = stringResource(R.string.pairing_permission_camera),
                     detail = stringResource(R.string.pairing_permission_camera_detail),
                     granted = cameraGranted,
@@ -1682,7 +1628,7 @@ private fun PermissionsBody(
                 )
             }
             PermissionRow(
-                glyph = StartupGlyphKind.WIFI,
+                glyph = MonitorIcon.WIFI,
                 title = stringResource(PairingCopy.permissionTitle),
                 detail = stringResource(PairingCopy.permissionDetail),
                 granted = nearbyGranted,
@@ -1703,7 +1649,7 @@ private fun PermissionsBody(
 
 @Composable
 private fun PermissionRow(
-    glyph: StartupGlyphKind,
+    glyph: MonitorIcon,
     title: String,
     detail: String,
     granted: Boolean,
@@ -1722,7 +1668,7 @@ private fun PermissionRow(
                 .background(StartupColors.accent.copy(alpha = 0.14f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(15.dp))
+            MonitorIcon(glyph, null, Modifier.size(15.dp), StartupColors.accent)
         }
         Column(Modifier.weight(1f)) {
             Text(
@@ -1794,48 +1740,25 @@ private fun PermissionStatusPill(
 @Composable
 private fun ChoosePathBody(
     onChoose: (PairingPath) -> Unit,
-    compact: Boolean,
     onOpenWatcherList: (() -> Unit)?,
 ) {
-    // iOS `transportCards`: portrait stacks the cards inside the step body's
-    // scroll; landscape puts them side by side with wrapping copy. Cards group
+    // iOS `transportCards`, stacked inside the step body's scroll. Cards group
     // several paths, so the operator picks a kind of connection first and the
     // specific one second.
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (compact) {
-            for (card in PairingCard.entries) {
-                PathChoiceCard(card, onChoose, Modifier.fillMaxWidth())
-            }
-        } else {
-            Row(
-                Modifier.height(IntrinsicSize.Max),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                for (card in PairingCard.entries) {
-                    PathChoiceCard(
-                        card,
-                        onChoose,
-                        Modifier.weight(1f).fillMaxHeight(),
-                        tight = true,
-                    )
-                }
-            }
+        for (card in PairingCard.entries) {
+            PathChoiceCard(card, onChoose, Modifier.fillMaxWidth())
         }
         onOpenWatcherList?.let { PairingWatcherListLink(onClick = it) }
     }
 }
 
-/**
- * One transport option (iOS `StartupWizardTransportCard`, 14pt padding / 34pt
- * tile). [tight] trims the vertical chrome for the landscape band — Android
- * phones are ~30dp shorter there than the iPhone the fixed iOS metrics fit.
- */
+/** One transport option (iOS `StartupWizardTransportCard`, 14pt padding / 34pt tile). */
 @Composable
 private fun PathChoiceCard(
     card: PairingCard,
     onChoose: (PairingPath) -> Unit,
     modifier: Modifier,
-    tight: Boolean = false,
 ) {
     // A card with one option is a leaf — revealing a single choice would be a step for nothing.
     val single = card.options.singleOrNull()
@@ -1846,49 +1769,35 @@ private fun PathChoiceCard(
             .clickable {
                 if (single != null) onChoose(single) else showsOptions = !showsOptions
             }
-            .padding(horizontal = 14.dp, vertical = if (tight) 8.dp else 14.dp)
+            .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
         Box(
-            Modifier.size(if (tight) 26.dp else 34.dp)
+            Modifier.size(34.dp)
                 .clip(RoundedCornerShape(9.dp))
                 .background(StartupColors.accent.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
-            StartupGlyph(
-                kind =
+            MonitorIcon(
+                icon =
                     when (card) {
-                        PairingCard.WIRELESS -> StartupGlyphKind.ANTENNA
-                        PairingCard.CABLE_LINK -> StartupGlyphKind.CABLE
+                        PairingCard.WIRELESS -> MonitorIcon.RADIO
+                        PairingCard.CABLE_LINK -> MonitorIcon.CABLE
                     },
+                contentDescription = null,
+                modifier = Modifier.size(19.dp),
                 tint = StartupColors.accent,
-                modifier = Modifier.size(if (tight) 15.dp else 19.dp),
             )
         }
-        Spacer(Modifier.height(if (tight) 5.dp else 10.dp))
-        if (tight) {
-            // One auto-shrinking line in the landscape band (iOS shrinks via
-            // minimumScaleFactor; a wrapped title is what overflows here).
-            BasicText(
-                stringResource(PairingCopy.cardTitle(card)),
-                style =
-                    TextStyle(
-                        color = StartupColors.ink,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                maxLines = 1,
-                autoSize = TextAutoSize.StepBased(11.sp, 15.sp, 0.5.sp),
-            )
-        } else {
-            Text(
-                stringResource(PairingCopy.cardTitle(card)),
-                color = StartupColors.ink,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                lineHeight = 18.sp,
-                maxLines = 2,
-            )
-        }
-        Spacer(Modifier.height(if (tight) 4.dp else 8.dp))
+        Spacer(Modifier.height(10.dp))
+        Text(
+            stringResource(PairingCopy.cardTitle(card)),
+            color = StartupColors.ink,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            lineHeight = 18.sp,
+            maxLines = 2,
+        )
+        Spacer(Modifier.height(8.dp))
         Text(
             stringResource(PairingCopy.cardBadge(card)),
             color = StartupColors.accent,
@@ -1897,9 +1806,9 @@ private fun PathChoiceCard(
             modifier =
                 Modifier.clip(CircleShape)
                     .background(StartupColors.accent.copy(alpha = 0.15f))
-                    .padding(horizontal = 9.dp, vertical = if (tight) 2.dp else 4.dp),
+                    .padding(horizontal = 9.dp, vertical = 4.dp),
         )
-        Spacer(Modifier.height(if (tight) 4.dp else 10.dp))
+        Spacer(Modifier.height(10.dp))
         if (showsOptions && single == null) {
             Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 for (option in card.options) {
@@ -1925,16 +1834,11 @@ private fun PathChoiceCard(
                 }
             }
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(if (tight) 2.dp else 6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (pro in PairingCopy.cardPros(card)) {
-                    TradeoffRow("+", StartupColors.ready, stringResource(pro), tight = tight)
+                    TradeoffRow("+", StartupColors.ready, stringResource(pro))
                 }
-                TradeoffRow(
-                    "−",
-                    StartupColors.dim,
-                    stringResource(PairingCopy.cardCon(card)),
-                    tight = tight,
-                )
+                TradeoffRow("−", StartupColors.dim, stringResource(PairingCopy.cardCon(card)))
             }
         }
     }
@@ -1945,21 +1849,20 @@ private fun TradeoffRow(
     symbol: String,
     color: androidx.compose.ui.graphics.Color,
     text: String,
-    tight: Boolean = false,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
         Text(
             symbol,
             color = color,
-            fontSize = if (tight) 11.sp else 12.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.width(12.dp),
         )
         Text(
             text,
             color = StartupColors.muted,
-            fontSize = if (tight) 11.sp else 12.sp,
-            lineHeight = if (tight) 14.sp else 16.sp,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
             modifier = Modifier.weight(1f),
         )
     }
@@ -2009,117 +1912,38 @@ private fun NumberedCards(steps: List<String>) {
 }
 
 /**
- * The network step is instruction-only on every path (iOS
- * `StartupWizardNetworkStep`): the camera-AP flow is scanner-first — the
- * "Connect my camera" primary opens the scanner, never a typed credential form.
+ * The network step is instruction-only on every path (iOS `StartupWizardNetworkStep`): the
+ * camera-AP flow is scanner-first, so the "Connect my camera" primary opens the scanner, never a
+ * typed credential form. The shared page draws these as its camera and phone instruction cards.
  */
 @Composable
-private fun NetworkBody(path: PairingPath) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            stringResource(PairingCopy.networkSubtitle(path)),
-            color = StartupColors.muted,
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
+private fun networkInstructions(path: PairingPath): List<MonitorPairingInstruction> {
+    val camera = stringResource(R.string.pairing_on_camera)
+    val phone = stringResource(R.string.pairing_on_phone)
+    @Composable
+    fun card(title: String, icon: MonitorPairingInstructionIcon, vararg lines: Int) =
+        MonitorPairingInstruction(title, icon, lines.map { stringResource(it) })
+    return when (path) {
+        PairingPath.CAMERA_ACCESS_POINT -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA, R.string.pairing_network_ap_camera_1),
+            card(phone, MonitorPairingInstructionIcon.PHONE, R.string.pairing_network_ap_phone_1),
         )
-        when (path) {
-            PairingPath.CAMERA_ACCESS_POINT -> {
-                DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps = listOf(stringResource(R.string.pairing_network_ap_camera_1)),
-                )
-                DeviceInstructionCard(
-                    glyph = StartupGlyphKind.PHONE,
-                    label = stringResource(R.string.pairing_on_phone),
-                    steps = listOf(stringResource(R.string.pairing_network_ap_phone_1)),
-                )
-            }
-            PairingPath.PHONE_HOTSPOT ->
-                DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps = PairingCopy.hotspotCameraSteps.map { stringResource(it) },
-                )
-            PairingPath.USB_C -> {
-                DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps =
-                        listOf(
-                            stringResource(R.string.pairing_network_usb_camera_1),
-                            stringResource(R.string.pairing_network_usb_camera_2),
-                        ),
-                )
-                DeviceInstructionCard(
-                    glyph = StartupGlyphKind.PHONE,
-                    label = stringResource(R.string.pairing_on_phone),
-                    steps = listOf(stringResource(R.string.pairing_network_usb_phone_1)),
-                )
-            }
-            // Unreachable: the HDMI sequence carries no NETWORK step (PairingFlowState).
-            PairingPath.HDMI_CAPTURE -> Unit
-            PairingPath.WIFI_NETWORK -> {
-                // Nothing to join from here: both devices are already on someone else's network,
-                // so this step is a check rather than an action.
-                DeviceInstructionCard(
-                    glyph = StartupGlyphKind.APERTURE,
-                    label = stringResource(R.string.pairing_on_camera),
-                    steps = listOf(stringResource(R.string.pairing_network_router_camera_1)),
-                )
-                DeviceInstructionCard(
-                    glyph = StartupGlyphKind.PHONE,
-                    label = stringResource(R.string.pairing_on_phone),
-                    steps = listOf(stringResource(R.string.pairing_network_router_phone_1)),
-                )
-            }
-        }
-    }
-}
-
-/** Device-labelled numbered instruction card (iOS `StartupWizardDeviceInstructionCard`). */
-@Composable
-private fun DeviceInstructionCard(
-    glyph: StartupGlyphKind,
-    label: String,
-    steps: List<String>,
-) {
-    Column(
-        Modifier.fillMaxWidth()
-            .startupInstructionCard()
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(16.dp))
-            Text(
-                label,
-                color = StartupColors.ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-        steps.forEachIndexed { index, step ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(R.string.step_number, index + 1),
-                    color = StartupColors.muted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.width(14.dp),
-                )
-                Text(
-                    step,
-                    color = StartupColors.ink,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 17.sp,
-                )
-            }
-        }
+        PairingPath.PHONE_HOTSPOT -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA, *PairingCopy.hotspotCameraSteps.toIntArray()),
+        )
+        PairingPath.USB_C -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA,
+                R.string.pairing_network_usb_camera_1, R.string.pairing_network_usb_camera_2),
+            card(phone, MonitorPairingInstructionIcon.PHONE, R.string.pairing_network_usb_phone_1),
+        )
+        // Unreachable: the HDMI sequence carries no NETWORK step (PairingFlowState).
+        PairingPath.HDMI_CAPTURE -> emptyList()
+        // Nothing to join from here: both devices are already on someone else's network,
+        // so this step is a check rather than an action.
+        PairingPath.WIFI_NETWORK -> listOf(
+            card(camera, MonitorPairingInstructionIcon.CAMERA, R.string.pairing_network_router_camera_1),
+            card(phone, MonitorPairingInstructionIcon.PHONE, R.string.pairing_network_router_phone_1),
+        )
     }
 }
 
@@ -2194,7 +2018,7 @@ private fun DiscoverBody(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
             EmptyDiscoveryCard(
-                glyph = StartupGlyphKind.ANTENNA,
+                glyph = MonitorIcon.RADIO,
                 title = stringResource(R.string.pairing_looking_for_cameras),
                 // A diagnosis the moment the search has one. "Still looking" is honest only
                 // while nothing is known; once a sweep has proved the subnet silent, or proved
@@ -2224,11 +2048,7 @@ private fun DiscoverBody(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    StartupGlyph(
-                        StartupGlyphKind.CAMERA,
-                        tint = StartupColors.accent,
-                        modifier = Modifier.size(20.dp),
-                    )
+                    MonitorIcon(MonitorIcon.CAMERA, null, Modifier.size(20.dp), StartupColors.accent)
                     Column(Modifier.weight(1f)) {
                         Text(
                             camera.name,
@@ -2279,7 +2099,7 @@ private fun HdmiDiscoverBody(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!captureReady) {
             EmptyDiscoveryCard(
-                glyph = StartupGlyphKind.CABLE,
+                glyph = MonitorIcon.CABLE,
                 title = stringResource(R.string.pairing_waiting_hdmi),
                 detail = stringResource(R.string.pairing_waiting_hdmi_detail),
             )
@@ -2292,11 +2112,7 @@ private fun HdmiDiscoverBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                StartupGlyph(
-                    StartupGlyphKind.CABLE,
-                    tint = StartupColors.accent,
-                    modifier = Modifier.size(20.dp),
-                )
+                MonitorIcon(MonitorIcon.CABLE, null, Modifier.size(20.dp), StartupColors.accent)
                 Column(Modifier.weight(1f)) {
                     Text(
                         stringResource(R.string.pairing_hdmi_device_title),
@@ -2333,7 +2149,7 @@ private fun UsbDiscoverBody(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (cameras.isEmpty()) {
             EmptyDiscoveryCard(
-                glyph = StartupGlyphKind.CABLE,
+                glyph = MonitorIcon.CABLE,
                 title = stringResource(R.string.pairing_waiting_usb),
                 detail = stringResource(R.string.pairing_waiting_usb_detail),
             )
@@ -2400,7 +2216,7 @@ private fun UsbDiscoverBody(
 
 /** Centered icon + copy card while discovery waits (iOS `StartupEmptyDiscoveryCard`). */
 @Composable
-private fun EmptyDiscoveryCard(glyph: StartupGlyphKind, title: String, detail: String) {
+private fun EmptyDiscoveryCard(glyph: MonitorIcon, title: String, detail: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Column(
             Modifier.fillMaxWidth()
@@ -2409,7 +2225,7 @@ private fun EmptyDiscoveryCard(glyph: StartupGlyphKind, title: String, detail: S
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            StartupGlyph(glyph, tint = StartupColors.accent, modifier = Modifier.size(26.dp))
+            MonitorIcon(glyph, null, Modifier.size(26.dp), StartupColors.accent)
             Text(
                 title,
                 color = StartupColors.ink,
@@ -2456,5 +2272,3 @@ private fun usbCameraActionResource(access: UsbPtpCameraAccess): Int =
         UsbPtpCameraAccess.DENIED -> R.string.action_allow
         UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> R.string.status_unavailable
     }
-
-// MARK: - Controls

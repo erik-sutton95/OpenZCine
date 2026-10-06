@@ -164,6 +164,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Optional: without it this build cannot send problem or automatic error reports.
+          SENTRY_DSN_ANDROID: ${{ secrets.SENTRY_DSN_ANDROID }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
         run: ./gradlew :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact "-PversionCode=$VERSION_CODE"

@@ -11,13 +11,9 @@ internal object AndroidSupportLinks {
     const val SUPPORT: String = "https://openzcine.app/support/"
     const val FEATURE_REQUEST: String =
         "https://github.com/erik-sutton95/OpenZCine/discussions/new?category=ideas-feature-requests"
-    const val BUG_REPORT: String =
-        "https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml"
     const val SOURCE: String = "https://github.com/erik-sutton95/OpenZCine"
     const val PRIVACY: String = "https://openzcine.app/privacy/"
     const val TERMS: String = "https://openzcine.app/terms/"
-    const val SECURITY_ADVISORY: String =
-        "https://github.com/erik-sutton95/OpenZCine/security/advisories/new"
 }
 
 /** Actions exposed by the Android System settings tab. */
@@ -25,10 +21,6 @@ internal interface SystemSettingsActions {
     fun openSupport(): Boolean
 
     fun requestFeature(): Boolean
-
-    fun openGitHubBugReport(): Boolean
-
-    fun openSecurityAdvisory(): Boolean
 
     fun openSource(): Boolean
 
@@ -48,10 +40,6 @@ internal class AndroidSystemSettingsActions(
     override fun openSupport(): Boolean = openUri(AndroidSupportLinks.SUPPORT)
 
     override fun requestFeature(): Boolean = openUri(AndroidSupportLinks.FEATURE_REQUEST)
-
-    override fun openGitHubBugReport(): Boolean = openUri(AndroidSupportLinks.BUG_REPORT)
-
-    override fun openSecurityAdvisory(): Boolean = openUri(AndroidSupportLinks.SECURITY_ADVISORY)
 
     override fun openSource(): Boolean = openUri(AndroidSupportLinks.SOURCE)
 
