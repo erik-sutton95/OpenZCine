@@ -11,6 +11,7 @@ import SwiftUI
 import UIKit
 import ZIPFoundation
 import os
+
 import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
@@ -4446,6 +4447,8 @@ final class NativeAppModel {
             activePanel = nil
             liveFPS = SessionRecoveryCopy.heldFrameBadge
             sessionRecovery = state
+            // A painted state has no retry to wait out: its card shows at once.
+            sessionRecoveryCardGraceElapsed = true
         }
 
         /// Drives the entry point a physical detach reaches once the transport has closed and the
