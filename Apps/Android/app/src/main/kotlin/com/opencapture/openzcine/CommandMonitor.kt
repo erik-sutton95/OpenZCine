@@ -61,7 +61,12 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.opencapture.opencine.cameracontrols.LadderSheet
+import com.opencapture.opencine.cameracontrols.LadderSheetPresentation
+import com.opencapture.opencine.cameracontrols.LadderTab
 import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.vocabulary.CaptureLadder
+import com.opencapture.opencine.vocabulary.CaptureTint
 import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
 import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
@@ -70,7 +75,6 @@ import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import com.opencapture.opencine.nikon.CodecBitDepthOption
 import com.opencapture.opencine.nikon.LiveFrameTimecode
-import com.opencapture.openzcine.settings.PanelCloseButton
 import kotlin.math.floor
 import kotlin.math.roundToInt
 import com.opencapture.opencine.nikon.IsoPickerPolicy
@@ -1733,9 +1737,38 @@ private fun CommandSmallTile(
 }
 
 /**
- * Command-mode control surface — same glass drum / tint pad as live pickers
- * (iOS `PickerPanel` dead-centred when `displayMode == .command`), not a
- * Material dialog.
+ * One command tile as a single-tab ladder. Tint uses the shared pad.
+ * The tab does not apply its value when the dialog opens.
+ */
+internal fun commandLadderPresentation(
+    request: CommandControlRequest,
+    subtitle: String = request.currentValue,
+): LadderSheetPresentation<CameraControl> {
+    val tint = if (request.control == CameraControl.WHITE_BALANCE_TINT) {
+        val (amber, green) = WhiteBalanceTintGrid.cellsFromLabel(request.currentValue.ifBlank { "Neutral" })
+        CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTintGrid.cellRange)
+    } else {
+        null
+    }
+    return LadderSheetPresentation(
+        title = request.title,
+        subtitle = subtitle,
+        tabs = listOf(
+            LadderTab(
+                label = request.title,
+                key = request.control,
+                ladder = CaptureLadder(current = request.currentValue, values = request.options),
+                applyOnActivate = false,
+                tint = tint,
+            ),
+        ),
+    )
+}
+
+/**
+ * Command-mode control surface. Same glass drum and tint pad as the live pickers
+ * (iOS PickerPanel, dead-centred when displayMode is command), not a Material dialog.
+ * The host keeps the backdrop, the reveal, and the card bounds.
  */
 @Composable
 internal fun CommandControlDialog(
@@ -1746,9 +1779,10 @@ internal fun CommandControlDialog(
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val options = commandControlOptions(request, pendingControl, controlsEnabled)
-    val isTintPad = request.control == CameraControl.WHITE_BALANCE_TINT
-    // Allow dismiss while a write drains — iOS never traps the operator in the panel.
+    // An in-flight write stays interactive. pendingControl names that write, and it is not a lock.
+    val interactive = controlsEnabled &&
+        commandControlOptions(request, pendingControl, controlsEnabled).all { it.enabled }
+    // Dismiss stays available while a write drains. The sheet does not trap the operator.
     BackHandler(onBack = onDismiss)
 
     var revealed by remember(request.control, request.title) { mutableStateOf(false) }
@@ -1760,118 +1794,31 @@ internal fun CommandControlDialog(
             animationSpec = IosPanelRevealSpec,
             label = "commandPickerReveal",
         )
+    val subtitle = stringResource(R.string.command_current_value, request.currentValue)
 
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier.fillMaxSize()
                 .chromeClickable(onClick = onDismiss),
         )
-        Column(
-            modifier =
-                Modifier
-                    .align(Alignment.Center)
-                    .offset(y = revealOffset)
-                    .alpha(if (revealed) 1f else 0f)
-                    .width(420.dp)
-                    .heightIn(max = 360.dp)
-                    // Scene overlay glass (blurs chrome + feed); shape from drawBackdrop.
-                    .overlayGlass(ChromeShape)
-                    .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
-                    .pointerInput(Unit) { detectTapGestures(onTap = {}) }
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    Text(
-                        request.title,
-                        style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
-                        color = LiveDesign.text,
-                        maxLines = 1,
-                    )
-                    Text(
-                        stringResource(R.string.command_current_value, request.currentValue)
-                            .uppercase(),
-                        style =
-                            chromeStyle(11f, FontWeight.SemiBold, mono = true)
-                                .copy(letterSpacing = 1.5.sp),
-                        color = LiveDesign.faint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                        modifier = Modifier.padding(bottom = 2.dp),
-                    )
-                }
-                PanelCloseButton(onClick = onDismiss)
-            }
-            // Errors only — success toasts steal height and iOS stays silent on snap.
-            if (feedback?.isError == true) {
-                Text(
-                    feedback.message,
-                    style = chromeStyle(11f, FontWeight.Medium),
-                    color = LiveDesign.rec,
-                    maxLines = 2,
-                    overflow = TextOverflow.Clip,
-                )
-            }
-            if (!controlsEnabled) {
-                Text(
-                    stringResource(R.string.camera_controls_unavailable),
-                    style = chromeStyle(11f, FontWeight.Medium),
-                    color = LiveDesign.muted,
-                    maxLines = 2,
-                )
-            }
-            // iOS PickerPanel: local selection + lastApplied, seeded once on open.
-            // Never gate settles on request.currentValue — that blocks re-selecting the
-            // value the popup opened on (25→30 works, 30→25 silent until reopen).
-            val openKey = request.control to request.title
-            val labels = options.map { it.label }
-            val seed =
-                labels.firstOrNull { it == request.currentValue }
-                    ?: labels.firstOrNull()
-                    ?: request.currentValue
-            var lastApplied by remember(openKey) { mutableStateOf(seed) }
-            var selection by remember(openKey) { mutableStateOf(seed) }
-            if (isTintPad) {
-                val tintAvailable = options.isNotEmpty()
-                WhiteBalanceTintPad(
-                    currentLabel = lastApplied.ifBlank { "Neutral" },
-                    available = tintAvailable,
-                    interactive = controlsEnabled && tintAvailable,
-                    onCommit = { label ->
-                        if (label != lastApplied) {
-                            lastApplied = label
-                            selection = label
-                            onSelect(label)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            } else {
-                AccentDrumWheel(
-                    options = labels,
-                    selection = selection,
-                    // Stay interactive during in-flight applies (coalesced queue).
-                    interactive = controlsEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                    onSettle = { settled ->
-                        if (settled.isEmpty()) return@AccentDrumWheel
-                        selection = settled
-                        if (settled != lastApplied) {
-                            lastApplied = settled
-                            onSelect(settled)
-                        }
-                    },
-                )
-            }
-        }
+        LadderSheet(
+            presentation = commandLadderPresentation(request, subtitle),
+            enabled = interactive,
+            onWrite = { write ->
+                if (write.value.isNotBlank()) onSelect(write.value)
+            },
+            onClose = onDismiss,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(y = revealOffset)
+                .alpha(if (revealed) 1f else 0f)
+                .width(420.dp)
+                .height(360.dp),
+            error = feedback?.takeIf { it.isError }?.message,
+            unavailable = if (interactive) null else stringResource(R.string.camera_controls_unavailable),
+            tintLabel = { tint -> WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta) },
+            tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
+                stringResource(R.string.camera_wb_tint_double_tap_help),
+        )
     }
 }
