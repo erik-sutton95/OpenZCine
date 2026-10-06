@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorLevelGeometry
+import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusBox
 import com.opencapture.opencine.nikon.LiveFocusInfo
@@ -33,61 +35,51 @@ class LiveFrameMetadataOverlaysTest {
     }
 
     @Test
-    fun `landscape gauge seats within the visible feed and above bottom chrome`() {
-        val feed = LiveOverlayRect(left = 40f, top = 0f, width = 800f, height = 390f)
-        val visible = LiveOverlayRect(left = 0f, top = 0f, width = 874f, height = 402f)
-
-        val seats =
-            liveGaugeSeats(
-                feed = feed,
-                visibleBounds = visible,
-                isPortrait = false,
-                bottomChromeInset = 0f,
-                metrics = gaugeMetrics(),
-            )
-
-        assertEquals(440f, seats.roll.x)
-        assertEquals(286f, seats.roll.y)
-        assertEquals(796f, seats.pitch.x)
-        assertEquals(195f, seats.pitch.y)
-    }
-
-    @Test
-    fun `portrait fill gauge clamps seats to the on screen portion of desqueezed feed`() {
-        val feed = LiveOverlayRect(left = 125f, top = 0f, width = 750f, height = 560f)
-        val visible = LiveOverlayRect(left = 299f, top = 0f, width = 402f, height = 560f)
-
-        val seats =
-            liveGaugeSeats(
-                feed = feed,
-                visibleBounds = visible,
-                isPortrait = true,
-                bottomChromeInset = 64f,
-                metrics = gaugeMetrics(),
-            )
-
-        assertEquals(500f, seats.roll.x)
-        assertEquals(466f, seats.roll.y)
-        assertEquals(657f, seats.pitch.x)
-        assertEquals(280f, seats.pitch.y)
-    }
-
-    @Test
-    fun `landscape gauge uses the measured capture strip inset when it exceeds default clearance`() {
-        val metrics = gaugeMetrics()
-        val feed = LiveOverlayRect(left = 0f, top = 0f, width = 1_280f, height = 720f)
+    fun `landscape gauge sits within the visible feed and above bottom chrome`() {
+        val feed = MonitorScopeRect(0f, 0f, 1_280f, 720f)
         val chromeTop = 586f
-
-        val seats =
-            liveGaugeSeats(
-                feed = feed,
-                visibleBounds = feed,
-                isPortrait = false,
-                bottomChromeInset = feed.bottom - chromeTop,
-                metrics = metrics,
+        val bounds =
+            levelGaugeBounds(
+                visibleBounds = LiveOverlayRect(left = 0f, top = 0f, width = 1_280f, height = 720f),
+                bottomChromeInset = 720f - chromeTop,
+                density = 1f,
             )
 
-        assertTrue(seats.roll.y + metrics.centerTickHalfLength < chromeTop)
+        val frames = MonitorLevelGeometry.frames(feed, bounds, portrait = false)
+
+        assertEquals(MonitorScopeRect(0f, 0f, 1_280f, chromeTop), bounds)
+        assertTrue(frames.roll.maxY < chromeTop)
+        assertTrue(frames.tilt.minY >= 0f && frames.tilt.maxY <= chromeTop)
+    }
+
+    @Test
+    fun `portrait fill gauge stays on the on screen part of the desqueezed feed`() {
+        val density = 2f
+        val feed = MonitorScopeRect(125f / density, 0f, 750f / density, 560f / density)
+        val bounds =
+            levelGaugeBounds(
+                visibleBounds = LiveOverlayRect(left = 299f, top = 0f, width = 402f, height = 560f),
+                bottomChromeInset = 64f,
+                density = density,
+            )
+
+        val frames = MonitorLevelGeometry.frames(feed, bounds, portrait = true)
+
+        assertEquals(MonitorScopeRect(149.5f, 0f, 201f, 248f), bounds)
+        assertTrue(frames.roll.minX >= bounds.minX && frames.roll.maxX <= bounds.maxX)
+        assertTrue(frames.roll.maxY <= bounds.maxY)
+        assertTrue(frames.tilt.maxX <= bounds.maxX)
+    }
+
+    @Test
+    fun `gauge bounds never go negative when chrome covers the whole feed`() {
+        val bounds =
+            levelGaugeBounds(
+                visibleBounds = LiveOverlayRect(left = 0f, top = 0f, width = 100f, height = 50f),
+                bottomChromeInset = 80f,
+                density = 1f,
+            )
+        assertEquals(0f, bounds.height)
     }
 
     @Test
@@ -290,31 +282,6 @@ class LiveFrameMetadataOverlaysTest {
         assertTrue(kotlin.math.abs(landscape.rollDegrees) < 0.000_001)
         assertTrue(kotlin.math.abs(landscape.pitchDegrees) < 0.000_001)
     }
-
-    private fun gaugeMetrics(): LiveGaugeMetrics =
-        LiveGaugeMetrics(
-            landscapeRollLift = 104f,
-            portraitRollLift = 30f,
-            trailingInset = 44f,
-            chromeClearance = 8f,
-            axisSpan = 84f,
-            maxAngleDegrees = 8.0,
-            tickStepDegrees = 2.0,
-            levelThresholdDegrees = 0.6,
-            baselineStrokeWidth = 2f,
-            centerTickHalfLength = 9f,
-            tickHalfLength = 5f,
-            tickStrokeWidth = 1f,
-            beadRadius = 6.5f,
-            beadStrokeWidth = 2f,
-            chevronGap = 16f,
-            chevronStep = 8f,
-            chevronHalfSize = 3f,
-            chevronStrokeWidth = 1.5f,
-            readoutOffset = 24f,
-            verticalReadoutOffset = 42f,
-            readoutTextSize = 11f,
-        )
 
     private fun vectorMagnitude(vector: DeviceTiltVector): Float =
         kotlin.math.sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
