@@ -12111,7 +12111,7 @@ final class NativeAppModel {
     func showAssist(_ tool: MonitorAssistTool) {
         guard !interfaceLocked else { return }
         if isScopeCapBlocked(tool) {
-            scopeCapNotice += 1
+            showMonitorNotice(scopeCapNoticeText)
             return
         }
         panelRevealed = false
@@ -12241,9 +12241,8 @@ final class NativeAppModel {
     /// Whether the monitor shell is currently rendering the portrait tree (set by `MonitorShell`);
     /// scopes the fit-mode 2-scope display cap to portrait so landscape stays uncapped.
     var monitorIsPortrait = false
-    /// Bumped each time a scope toggle is refused by the fit-mode cap; the shell's toast keys on it.
-    var scopeCapNotice = 0
-    /// The copy the scope-cap toast shows; names the escape hatch (close one, or pinch to fill).
+    /// The monitor notice a scope toggle refused by the fit-mode cap shows; names the escape hatch
+    /// (close one, or pinch to fill).
     let scopeCapNoticeText = "2 scopes max in fit view — close one or pinch to fill"
 
     /// A camera refusal the operator has to be told about while the monitor is up, and a counter
@@ -12300,7 +12299,7 @@ final class NativeAppModel {
     ) {
         guard !interfaceLocked else { return }
         if visible, context == .liveView, isScopeCapBlocked(tool) {
-            scopeCapNotice += 1
+            showMonitorNotice(scopeCapNoticeText)
             return
         }
         assist.set(tool, visible: visible, context: context)

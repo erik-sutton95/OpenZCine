@@ -54,38 +54,10 @@ enum MediaLUT {
         let metadataURL: URL?
     }
 
-    /// A live playback composition that bakes `cube` onto every frame. Captures only Sendable values
-    /// (cube dimension + data), rebuilding the filter inside the handler so it's concurrency-safe.
-    /// Reused for both playback preview and the export session below.
-    static func videoComposition(for asset: AVAsset, cube: CubeLUT) -> AVVideoComposition {
-        let prepared = cube.preparedForRenderer()
-        let dimension = prepared.size
-        let cubeData = prepared.rgbaComponents.withUnsafeBytes { Data($0) }
-        let composition = AVVideoComposition(asset: asset) { request in
-            let source = request.sourceImage
-            let extent = source.extent
-            guard
-                let filter = CIFilter(
-                    name: "CIColorCube",
-                    parameters: [
-                        "inputCubeDimension": dimension,
-                        "inputCubeData": cubeData,
-                    ])
-            else {
-                request.finish(with: source, context: renderContext)
-                return
-            }
-            filter.setValue(source.clampedToExtent(), forKey: kCIInputImageKey)
-            let output = (filter.outputImage ?? source).cropped(to: extent)
-            request.finish(with: output, context: renderContext)
-        }
-        return composition
-    }
-
     /// Mutable effects holder for a single stable `AVVideoComposition` during clip playback.
     ///
     /// Assist toggles update the locked payload in place so AVFoundation keeps decoding without a
-    /// compositor reset. Export still uses the one-shot `videoComposition(for:cube:)` above.
+    /// compositor reset.
     ///
     /// Scope overlays sample the compositor's *source* frame (pre-LUT / pre-false-colour), matching
     /// live view which reads the raw JPEG — not `AVPlayerItemVideoOutput`, which reflects the graded

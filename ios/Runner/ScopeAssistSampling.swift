@@ -93,7 +93,7 @@ enum ScopeAssistSampling {
         mapping: ExposureSignalMapping = ExposureSignalMapping(curve: .redLog3G10)
     ) -> ScopeTrafficLightsReading {
         let reading = TrafficLightsMeter.measure(
-            samples: OpenZCineCore.ScopeSampler.sourceSamples(samples),
+            samples: samples,
             noiseFloorCompensation: trafficLightsCrushClip,
             mapping: mapping)
         func light(_ channel: TrafficLightsChannelReading) -> ScopeChannelLight {

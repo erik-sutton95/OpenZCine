@@ -27,9 +27,9 @@ struct LinkExperience: View {
             NikonCoverPage(cover: cover)
         }
         .background {
-            if pages { StartupColors.backdrop.ignoresSafeArea() }
+            if pages { MonitorTheme.background.ignoresSafeArea() }
         }
-        .foregroundStyle(pages ? AnyShapeStyle(StartupColors.ink) : AnyShapeStyle(.primary))
+        .foregroundStyle(pages ? AnyShapeStyle(MonitorTheme.text) : AnyShapeStyle(.primary))
         // Scanner blur backdrop lives on the presenter (not inside the fullScreenCover) so it
         // fades in place via opacity while the card keeps the cover's slide — the backdrop must
         // not ride the vertical slide.

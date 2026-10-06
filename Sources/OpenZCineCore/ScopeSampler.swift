@@ -1,71 +1,6 @@
 import Foundation
 import OpenCineMedia
 
-/// One sampled pixel feeding the waveform and parade scopes: its horizontal position (0–1 across the
-/// frame) and its 8-bit channel values plus Rec.709 luma. Compact by design — a frame yields
-/// thousands of these.
-public struct ScopePoint: Equatable, Sendable {
-    public let xRatio: Double
-    /// Vertical position 0…1 across the sampled frame (0 when unknown / legacy points).
-    public let yRatio: Double
-    /// Sample-buffer column in pixels, or `-1` when unavailable.
-    public let sampleX: Int
-    /// Sample-buffer row in pixels, or `-1` when unavailable.
-    public let sampleY: Int
-    public let red: UInt8
-    public let green: UInt8
-    public let blue: UInt8
-    public let luma: UInt8
-
-    public init(
-        xRatio: Double,
-        yRatio: Double = 0,
-        sampleX: Int = -1,
-        sampleY: Int = -1,
-        red: UInt8,
-        green: UInt8,
-        blue: UInt8,
-        luma: UInt8
-    ) {
-        self.xRatio = xRatio
-        self.yRatio = yRatio
-        self.sampleX = sampleX
-        self.sampleY = sampleY
-        self.red = red
-        self.green = green
-        self.blue = blue
-        self.luma = luma
-    }
-}
-
-/// The product of sampling one frame for the scopes: per-channel 256-bin histograms (for the
-/// histogram scope) and the sampled points (for the waveform and parade traces).
-public struct ScopeSamples: Equatable, Sendable {
-    public let histogramLuma: [Int]
-    public let histogramRed: [Int]
-    public let histogramGreen: [Int]
-    public let histogramBlue: [Int]
-    public let points: [ScopePoint]
-
-    public init(
-        histogramLuma: [Int], histogramRed: [Int], histogramGreen: [Int], histogramBlue: [Int],
-        points: [ScopePoint]
-    ) {
-        self.histogramLuma = histogramLuma
-        self.histogramRed = histogramRed
-        self.histogramGreen = histogramGreen
-        self.histogramBlue = histogramBlue
-        self.points = points
-    }
-
-    public static let empty = ScopeSamples(
-        histogramLuma: Array(repeating: 0, count: 256),
-        histogramRed: Array(repeating: 0, count: 256),
-        histogramGreen: Array(repeating: 0, count: 256),
-        histogramBlue: Array(repeating: 0, count: 256),
-        points: [])
-}
-
 /// Samples an RGBA pixel buffer into scope data, mirroring the prototype's stride-3 sweep: walk the
 /// frame every `stride` pixels in both axes, accumulate per-channel histograms, and record each
 /// sampled pixel as a `ScopePoint`. Pure and portable — the shell supplies a (downsampled) buffer
@@ -79,25 +14,11 @@ public enum ScopeSampler {
         rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, stride: Int = 3,
         includePoints: Bool = true
     ) -> ScopeSamples {
-        let raw = OpenCineMedia.ScopeSampler.sampleRaw(
+        OpenCineMedia.ScopeSampler.sampleRaw(
             bytes: rgba, width: width, height: height,
             bytesPerRow: bytesPerRow, transfer: .rec709, includePoints: includePoints,
             layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true
         )
-        return sourceSamples(raw)
-    }
-
-    /// Exact legacy representation bridge. Only absent shared coordinates use the old -1 value.
-    public static func sourceSamples(_ raw: OpenCineMedia.ScopeSamples) -> ScopeSamples {
-        return ScopeSamples(
-            histogramLuma: raw.histogramLuma, histogramRed: raw.histogramRed,
-            histogramGreen: raw.histogramGreen, histogramBlue: raw.histogramBlue,
-            points: raw.points.map { point in
-                ScopePoint(
-                    xRatio: point.xRatio, yRatio: point.yRatio,
-                    sampleX: point.sampleX ?? -1, sampleY: point.sampleY ?? -1,
-                    red: point.red, green: point.green, blue: point.blue, luma: point.luma)
-            })
     }
 
     /// Traffic-light clip/crush flags from scope samples. Always computed from the per-channel
