@@ -216,6 +216,7 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineNikonAndroid/**",
                 "Sources/OpenCineJNISupport/**",
                 "Sources/OpenCineJNI/**",
+                "scripts/android-stage-swift-core.sh",
             )
         },
         stageSwiftCoreScript,
