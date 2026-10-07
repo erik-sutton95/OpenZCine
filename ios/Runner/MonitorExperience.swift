@@ -6,30 +6,37 @@ import OpenZCineCore
 import SwiftUI
 import UIKit
 
+/// Shared field-monitor chrome. Surfaces, type, and hairlines come from `MonitorTheme`, the same
+/// tokens Pocket and Insta use. The accent is the OpenZCine gold assigned at launch
+/// (`BrandColors.accentRGB`). Assist swatches that are not the brand accent stay on `amber`,
+/// `info`, `good`, and `rec`.
 enum LiveDesign {
-    static let background = Color(red: 0.072, green: 0.064, blue: 0.053)
-    static let surface = Color(red: 0.145, green: 0.128, blue: 0.102)
-    static let glass = Color(red: 0.105, green: 0.092, blue: 0.073).opacity(0.64)
-    /// Pre–Liquid Glass fallback: solid-looking chrome fill (no fake frost/blur).
-    static let glassOpaque = Color(red: 0.105, green: 0.092, blue: 0.073).opacity(0.90)
-    static let glassBright = Color(red: 0.178, green: 0.155, blue: 0.122).opacity(0.68)
-    static let hairline = Color(red: 0.968, green: 0.937, blue: 0.882).opacity(0.14)
-    static let hairlineStrong = Color(red: 0.968, green: 0.937, blue: 0.882).opacity(0.22)
-    static let text = Color(red: 0.958, green: 0.935, blue: 0.885)
-    static let muted = Color(red: 0.642, green: 0.600, blue: 0.535)
-    static let faint = Color(red: 0.455, green: 0.420, blue: 0.365)
-    static let accent = Color(red: 0.914, green: 0.674, blue: 0.208)
-    static let accentDim = Color(red: 0.914, green: 0.674, blue: 0.208).opacity(0.16)
-    static let good = Color(red: 0.18, green: 0.78, blue: 0.42)
-    static let rec = Color(red: 0.82, green: 0.20, blue: 0.23)
-    static let info = Color(red: 0.10, green: 0.58, blue: 0.98)
+    static let background = MonitorTheme.canvas
+    static let surface = MonitorTheme.surface
+    static let glass = MonitorTheme.surface
+    static let glassOpaque = MonitorTheme.surface
+    static let glassBright = MonitorTheme.raised
+    static let hairline = MonitorTheme.border
+    static let hairlineStrong = MonitorTheme.faint.opacity(0.5)
+    static var text: Color { MonitorTheme.text }
+    static var muted: Color { MonitorTheme.muted }
+    static var faint: Color { MonitorTheme.faint }
+    static var accent: Color { MonitorTheme.accent }
+    static var accentDim: Color { MonitorTheme.accent.opacity(0.16) }
+    static var good: Color {
+        MonitorTheme.edrSRGB(red: 0.18, green: 0.78, blue: 0.42, gain: MonitorTheme.hdrGain)
+    }
+    static var rec: Color { MonitorTheme.recording }
+    /// Cyan and blue assist previews. Not the brand accent.
+    static var info: Color {
+        MonitorTheme.edrSRGB(red: 0.10, green: 0.58, blue: 0.98, gain: MonitorTheme.hdrGain)
+    }
 
     /// Standard height for the bottom control bars (assist toolbar + value strip).
     static let controlHeight: CGFloat = 58
 
-    /// See `MonitorTheme.radius` — single source of truth for rounded chrome surfaces.
+    /// See `MonitorTheme.radius`, the single source of truth for rounded chrome surfaces.
     static let cornerRadius = MonitorTheme.radius
-
 }
 
 struct MonitorExperience: View {

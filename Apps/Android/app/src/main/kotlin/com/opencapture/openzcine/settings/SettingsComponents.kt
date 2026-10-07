@@ -34,12 +34,12 @@ public object SettingsPalette {
     public val highlight: List<MonitorSettingsColorDot> =
         listOf(
             MonitorSettingsColorDot("White", LiveDesign.text),
-            MonitorSettingsColorDot("Amber", LiveDesign.accent),
+            MonitorSettingsColorDot("Amber", LiveDesign.amber),
             MonitorSettingsColorDot("Red", LiveDesign.rec),
         )
     public val midtone: List<MonitorSettingsColorDot> =
         listOf(
-            MonitorSettingsColorDot("Amber", LiveDesign.accent),
+            MonitorSettingsColorDot("Amber", LiveDesign.amber),
             MonitorSettingsColorDot("Cyan", LiveDesign.info),
             MonitorSettingsColorDot("Green", LiveDesign.good),
         )

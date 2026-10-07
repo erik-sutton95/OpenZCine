@@ -2568,7 +2568,6 @@ internal fun MonitorScreen(
                             onConfirmingChange = { recordConfirmationOpen = it })
                     },
                     display = { enabled -> DispButton(displayModeOrder.indexOf(effectiveDisplayMode), displayModeOrder.size,
-                        effectiveDisplayMode == MonitorDisplayMode.LIVE,
                         Modifier.nikonChromeEditable(chromeEditHost, ChromeSection.RAIL_DISP, chromeEditorMode, chromeEditBoxes),
                         onClick = { if (enabled) cycleDisplayMode() }) })
             },

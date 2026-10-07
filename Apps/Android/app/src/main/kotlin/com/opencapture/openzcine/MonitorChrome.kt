@@ -287,15 +287,13 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
 fun DispButton(
     activeIndex: Int,
     modeCount: Int,
-    isLiveActive: Boolean = activeIndex == 0,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    // The operator can reorder modes, so live tint follows typed mode state
-    // rather than assuming indicator position zero is always Live.
-    val labelColor = if (isLiveActive) LiveDesign.info else LiveDesign.text
-    // "DISP" plus dashes says nothing out loud — iOS labels the same button "Change display mode"
-    // (MonitorUnified.swift:1170).
+    // Label ink matches iOS. The active dash carries the brand accent.
+    val labelColor = LiveDesign.text
+    // "DISP" plus dashes says nothing out loud. iOS labels the same button "Change display mode"
+    // (MonitorUnified.swift).
     val dispLabel = stringResource(R.string.a11y_monitor_disp)
     Column(
         modifier =
@@ -322,8 +320,8 @@ fun DispButton(
                 Box(
                     Modifier.size(width = 14.dp, height = 3.dp)
                         .background(
-                            if (index == activeIndex) LiveDesign.info
-                            else LiveDesign.hairlineStrong,
+                            if (index == activeIndex) LiveDesign.accent
+                            else LiveDesign.faint,
                             CircleShape,
                         ),
                 )

@@ -66,12 +66,20 @@ extension NativeAppModel: SessionRecoveryHost {
 
 /// The shared live chrome reads the monitor's palette.
 extension LiveDesign: LiveChromePalette {
-    static var onAccent: Color { .black }
+    static var onAccent: Color { MonitorTheme.onAccent }
     static var destructive: Color { rec }
-    static var amber: Color { accent }
-    static var aeLock: Color { accent }
+    /// Zebra and highlight amber. Stable, so a brand-gold accent does not recolor stored paint.
+    static var amber: Color {
+        MonitorTheme.edrSRGB(red: 0.914, green: 0.674, blue: 0.208, gain: MonitorTheme.hdrGain)
+    }
+    /// AE lock yellow: the focus box, its AE-L tag, and the unlock key.
+    static var aeLock: Color {
+        MonitorTheme.edrSRGB(
+            red: CGFloat(0xF5) / 255, green: CGFloat(0xD0) / 255, blue: CGFloat(0x52) / 255,
+            gain: MonitorTheme.hdrGain)
+    }
 
     static func chromeColor(red: CGFloat, green: CGFloat, blue: CGFloat) -> Color {
-        Color(red: red, green: green, blue: blue)
+        MonitorTheme.edrSRGB(red: red, green: green, blue: blue, gain: MonitorTheme.hdrGain)
     }
 }

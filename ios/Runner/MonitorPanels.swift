@@ -2404,11 +2404,11 @@ enum SettingsPalette {
 
     static let highlight: [SettingsPalette.Dot] = [
         .init(name: "White", color: LiveDesign.text),
-        .init(name: "Amber", color: LiveDesign.accent),
+        .init(name: "Amber", color: LiveDesign.amber),
         .init(name: "Red", color: LiveDesign.rec),
     ]
     static let midtone: [SettingsPalette.Dot] = [
-        .init(name: "Amber", color: LiveDesign.accent),
+        .init(name: "Amber", color: LiveDesign.amber),
         .init(name: "Cyan", color: LiveDesign.info),
         .init(name: "Green", color: LiveDesign.good),
     ]
@@ -3120,8 +3120,8 @@ struct OperatorSettingsPanel: View {
             terms: { requestInternetDestination(.termsOfUse) }
         )
         MonitorAppInformationSettings(
-            theme: "Warm Dark", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
-            themeHelp: "Dark earth interface tuned for low reflection on set.",
+            theme: "Charcoal", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
+            themeHelp: "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
             protocolHelp:
                 "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
             versionHelp: "Current OpenZCine build from the native project metadata."

@@ -844,10 +844,10 @@ internal fun SystemRows(
         terms = { runAction(actions::openTerms) },
     )
     MonitorAppInformationSettings(
-        theme = stringResource(R.string.system_theme_warm_dark),
+        theme = stringResource(R.string.system_theme_charcoal),
         protocolName = "PTP / PTP-IP",
         version = appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
-        themeHelp = "Dark earth interface tuned for low reflection on set.",
+        themeHelp = "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
         protocolHelp = "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
         versionHelp = "Current OpenZCine build from the native project metadata.",
     )
