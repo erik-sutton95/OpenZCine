@@ -34,13 +34,6 @@ object DemoHarness {
     /** Never matched in release: the extra is read only by the debug harness. */
     const val EXTRA_MEDIA = "zc.media"
 
-    /** Never matched in release: the extra is read only by the debug harness. */
-    const val EXTRA_LIVE_GUIDE_STEP = "zc.liveGuide"
-
-    /** Release builds cannot force a guide over synthetic content. */
-    @Suppress("UNUSED_PARAMETER")
-    internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? = null
-
     /** Release builds cannot force a standalone settings surface. */
     @Suppress("UNUSED_PARAMETER")
     internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? = null

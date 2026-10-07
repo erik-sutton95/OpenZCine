@@ -24,12 +24,10 @@ enum DemoHarness {
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
     static let panelTab = value("ZC_DEMO_PANEL_TAB")
-    /// `ZC_DEMO_WIZARD_EXPANDED=1` seeds the wizard transport card's nested options open —
-    /// expansion is a tap, unreachable headless, and the expanded overflow is what screenshots
+    /// `ZC_DEMO_WIZARD_EXPANDED=1` seeds the wizard transport card's nested options open.
+    /// Expansion is a tap, unreachable headless, and the expanded overflow is what screenshots
     /// must check.
     static let wizardExpanded = flag("ZC_DEMO_WIZARD_EXPANDED")
-    /// `ZC_DEMO_LIVE_GUIDE_STEP=camera|assist|system` opens a deterministic guide card.
-    static let liveGuideStep = value("ZC_DEMO_LIVE_GUIDE_STEP")
     /// `ZC_DEMO_RED_BLOCKED=ap|off` forces the RED download blocked state for screenshots.
     static let forcedRedAvailability = value("ZC_DEMO_RED_BLOCKED")
     /// `ZC_DEMO_OPEN_BUG_REPORT=1` opens the bug-report route chooser for screenshot checks.
@@ -709,9 +707,6 @@ enum DemoHarness {
                     model.operatorSettingsTab = MonitorSettingsTab.demoLaunchTab
                     model.activePanel = .settings
                 }
-                if let step = LiveViewGuideStep.demoValue(liveGuideStep) {
-                    model.forceLiveViewGuide(step)
-                }
                 if env["ZC_DEMO_FOCUSBOX"] == "1" {
                     // Synthetic face-tracking boxes so the overlay is visible without a live camera.
                     model.liveViewFocus = PTPLiveViewFocusInfo(
@@ -837,11 +832,11 @@ enum DemoHarness {
             if let raw = env["ZC_DEMO_WIZARD_STEP"], let value = Int(raw),
                 let step = NativeAppModel.FirstPairWizardStep(rawValue: value)
             {
-                // Demo/screenshot affordance: jump the first-pair wizard to a step (raw 0-4) —
-                // steps past permissions are otherwise unreachable headless (they need taps).
+                // Demo/screenshot affordance: jump the first-pair wizard to a step (raw 0-4).
+                // Steps past permissions are otherwise unreachable headless (they need taps).
                 // Pair with ZC_DEMO_WIZARD_TRANSPORT for steps whose content is per-transport.
                 // The pairing flag makes the wizard show even when saved cameras exist
-                // (`shouldShowFirstPairWizard` is pairing-or-empty).
+                // (`shouldShowFirstPairWizard` is the pairing flag only).
                 model.isPairingNewCamera = true
                 model.firstPairWizardStep = step
             }

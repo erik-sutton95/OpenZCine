@@ -434,7 +434,6 @@ class NikonOperatorSettingsComposeTest {
         actions: SystemSettingsActions = NoExternalActions, assists: NikonAssists = idleNikonAssists(),
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val guide = LiveViewGuideController(context.getSharedPreferences("z2-settings-guide", Context.MODE_PRIVATE))
         val cache = MediaCacheStore(Files.createTempDirectory(context.cacheDir.toPath(), "z2-settings"))
         composeRule.setContent {
             OpenZCineTheme {
@@ -443,7 +442,6 @@ class NikonOperatorSettingsComposeTest {
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,
                     onReportProblem = {},
-                    liveViewGuideController = guide, onShowGuideOnNextRealFrame = {},
                     initialTab = initial, onClose = {},
                 )
             }

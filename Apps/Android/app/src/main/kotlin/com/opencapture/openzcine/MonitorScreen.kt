@@ -168,7 +168,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicBoolean
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.runtime.nativeFeedContentRect
@@ -309,7 +308,6 @@ internal fun MonitorScreen(
      * retention preview seeds as if a camera reported them.
      */
     relayedState: MonitorRelayWire.State? = null,
-    liveViewGuideController: LiveViewGuideController? = null,
     onOpenSettings: () -> Unit = {},
     onOpenMedia: () -> Unit = {},
     /** Leaves the held frame for the saved-camera home after a session drop. */
@@ -525,11 +523,6 @@ internal fun MonitorScreen(
     val recording =
         recordingState == CameraRecordingState.STARTING ||
             recordingState == CameraRecordingState.RECORDING
-    val liveViewGuideVisible =
-        liveViewGuideController?.activeStep != null &&
-            isMonitorFront &&
-            effectiveDisplayMode == MonitorDisplayMode.LIVE &&
-            !recording
     val previewPolicyRecording = previewPolicyRecordingActive(recordingState)
     // The Android shell stores operator intent only. Swift resolves that
     // intent against the portable stream/thermal policy, then the active
@@ -580,7 +573,6 @@ internal fun MonitorScreen(
         availability.canDriveCamera &&
             sessionState is CameraSessionState.Connected &&
             !recordCommandPending &&
-            !liveViewGuideVisible &&
             // A watcher holding the control token owns the camera outright. Leaving the host's
             // record button live meant a lit disc that STILL wrote to the body behind the
             // watcher's back; iOS blocks its hit-testing alongside the 0.4 dim
@@ -590,9 +582,6 @@ internal fun MonitorScreen(
     // CORE-02: ISO, white balance and record go through the OpenCine camera-session seam. It
     // admits them against camera-reported state, keeps receipts, and drives [session] itself.
     SideEffect { commonSession.updateMonitorAuthority(availability, controlsSurrendered) }
-    val guideNeedsRealFrame = liveViewGuideController?.needsRealDecodedFrame == true
-    val latestGuideNeedsRealFrame = rememberUpdatedState(guideNeedsRealFrame)
-    val guideFrameDispatchPending = remember(session) { AtomicBoolean(false) }
     val commandTileOrderStore = remember(appContext) { CommandTileOrderStore(appContext) }
     var commandTileOrder by remember(commandTileOrderStore) {
         mutableStateOf(commandTileOrderStore.load())
@@ -603,13 +592,6 @@ internal fun MonitorScreen(
     var redDownloadPresented by remember { mutableStateOf(false) }
     // iOS pendingShutterLockState: optimistic lock UI until poll matches the write.
     var optimisticShutterLocked by remember { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(liveViewGuideVisible) {
-        if (liveViewGuideVisible) {
-            activeCommandControl = null
-            activeMonitorPickerKind = null
-            assists.shared.configureTool = null
-        }
-    }
     var commonEditor by remember { mutableStateOf<MonitorControlModel.Editor?>(null) }
     LaunchedEffect(activeMonitorPickerKind, activeCommandControl?.control) {
         val key = when {
@@ -777,7 +759,6 @@ internal fun MonitorScreen(
     val commandControlsEnabled =
         sessionState is CameraSessionState.Connected &&
             !locked &&
-            !liveViewGuideVisible &&
             !mediaOwnsCommandChannel &&
             !controlsSurrendered
     LaunchedEffect(sessionState, activeMonitorPickerKind, activeMonitorPicker) {
@@ -1215,7 +1196,7 @@ internal fun MonitorScreen(
             newValue = {
                 val safety =
                     WearRecordCommandSafety(
-                        monitorFront = isMonitorFront && !liveViewGuideVisible,
+                        monitorFront = isMonitorFront,
                         applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                         cameraConnected = sessionState is CameraSessionState.Connected,
                         recordCommandPending = recordCommandPending,
@@ -1257,7 +1238,7 @@ internal fun MonitorScreen(
     val mediaRemoteShutterShouldArm =
         shouldArmMediaRemoteShutter(
             enabled = operatorSettings.mediaRemoteShutterEnabled.value,
-            monitorIsFront = isMonitorFront && !liveViewGuideVisible,
+            monitorIsFront = isMonitorFront,
             cameraConnected = sessionState is CameraSessionState.Connected,
             recordCommandPending = recordCommandPending,
             applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
@@ -1726,7 +1707,6 @@ internal fun MonitorScreen(
                 cameraProperties,
                 recording,
                 isMonitorFront,
-                liveViewGuideVisible,
                 lifecycleState,
                 monitorFrameSource,
             ) {
@@ -1734,7 +1714,7 @@ internal fun MonitorScreen(
                     sessionState = sessionState,
                     cameraProperties = cameraProperties,
                     isRecording = recording,
-                    monitorFront = isMonitorFront && !liveViewGuideVisible,
+                    monitorFront = isMonitorFront,
                     applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                     liveFeedActive = monitorFrameSource != null && isMonitorFront,
                 )
@@ -2065,7 +2045,7 @@ internal fun MonitorScreen(
         val focusGestureContext =
             FocusFeedGestureContext(
                 geometry = feedGestureGeometry,
-                interfaceLocked = locked || liveViewGuideVisible || isCommand,
+                interfaceLocked = locked || isCommand,
                 focusPointLocked = focusPointLocked,
                 focusAvailable = focusMetadataAvailable,
                 commandPending = otherCameraCommandPending || focusResetPending,
@@ -2370,29 +2350,6 @@ internal fun MonitorScreen(
                             fpsSampler.accept(System.nanoTime())
                             hasPresentedFrame = true
                             wearRelay.ingestPresentedFrame(frame, bitmap, baker)
-                            val isRealCameraFrame =
-                                realDecodedFrameCanTriggerGuide(
-                                    isDemoSession = isDemoSession,
-                                    hasExplicitFrameSource = frameSource != null,
-                                    monitorUsesSwiftCameraSource =
-                                        monitorFrameSource === swiftLiveFrameSource,
-                                    cameraConnected =
-                                        sessionState is CameraSessionState.Connected,
-                                )
-                            if (isRealCameraFrame &&
-                                latestGuideNeedsRealFrame.value &&
-                                guideFrameDispatchPending.compareAndSet(false, true)
-                            ) {
-                                recordScope.launch {
-                                    try {
-                                        if (liveViewGuideController?.needsRealDecodedFrame == true) {
-                                            liveViewGuideController.onRealDecodedFrame()
-                                        }
-                                    } finally {
-                                        guideFrameDispatchPending.set(false)
-                                    }
-                                }
-                            }
                         },
                         presentationState = liveFeedPresentation,
                         collectFrames = monitorFrameSource != null,
@@ -3104,17 +3061,6 @@ internal fun MonitorScreen(
                 onImported = { count ->
                     if (count > 0) assists.shared.armLut()
                 },
-            )
-        }
-        if (liveViewGuideVisible) {
-            val guideController = requireNotNull(liveViewGuideController)
-            // The shared palette sits at the layout's assists slot in every orientation; its
-            // portrait form is the vertical slider, fit or fill.
-            LiveViewGuideOverlay(
-                controller = guideController,
-                layout = fieldLayout,
-                isPortrait = isPortrait,
-                usesVerticalAssistRail = isPortrait,
             )
         }
         if (chromeEditorMode != null) {

@@ -2389,9 +2389,6 @@ final class NativeAppModel {
             AppDiagnostics.shared.record(isRecording ? .recordingStarted : .recordingStopped)
         }
     }
-    /// Current first-live-view guide card. Nil after completion or while the guide is not visible.
-    var liveViewGuideStep: LiveViewGuideStep?
-    @ObservationIgnored private var liveViewGuideStore: LiveViewGuideStore
     /// When non-nil, the operator must confirm before the queued start (`true`) or stop (`false`) runs.
     var pendingRecordConfirmation: Bool?
     /// When the app last sent a record start/stop, so the camera-authoritative record state (from the
@@ -2410,13 +2407,11 @@ final class NativeAppModel {
     var cameraLevelPitch: Double?
 
     init(
-        liveViewGuideStore: LiveViewGuideStore = LiveViewGuideStore(),
         lutFileStore: LUTFileStore = LUTFileStore(),
         mediaClipStore: MediaClipStore = MediaClipStore(),
         assist: NikonAssistState? = nil,
         scopePanels: NikonScopePanels? = nil
     ) {
-        self.liveViewGuideStore = liveViewGuideStore
         self.lutFileStore = lutFileStore
         self.mediaClipStore = mediaClipStore
         self.assist = assist ?? .restore()
@@ -2897,13 +2892,11 @@ final class NativeAppModel {
         return candidates.first
     }
 
-    /// True while the first-pair wizard should own the screen: whenever the operator is explicitly
-    /// pairing a new camera, or there are no saved cameras yet (first run, or all cameras removed).
-    /// The wizard is the sole pairing surface, so this also covers what the old standalone discovery
-    /// page used to handle. A watcher-only device escapes the empty-cameras rule once it chooses
-    /// the camera list — nearby broadcasts are joined from there, and it may never pair anything.
+    /// The shared cameras page is home, the same as the other apps. The transport wizard opens
+    /// only when the operator chooses Pair a new camera. An empty list still discovers nearby
+    /// cameras; it does not cover the page with a first-run guide.
     var shouldShowFirstPairWizard: Bool {
-        isPairingNewCamera || (savedCameras.isEmpty && !showsCameraListWithoutSavedCameras)
+        isPairingNewCamera
     }
 
     /// Plain-language version of `connectionMessage` for startup screens.
@@ -4392,51 +4385,7 @@ final class NativeAppModel {
         }
     }
 
-    /// Presents the versioned guide after the first successfully decoded live-view frame.
-    func presentLiveViewGuideIfNeeded() {
-        guard liveViewGuideStep == nil, !isDemoSession, liveViewGuideStore.shouldPresent else {
-            return
-        }
-        liveViewGuideStep = .cameraControls
-        AppDiagnostics.shared.record(.guidePresented)
-    }
-
-    /// Advances the guide or records completion after the final card.
-    func advanceLiveViewGuide() {
-        guard let current = liveViewGuideStep else { return }
-        if let next = current.next {
-            liveViewGuideStep = next
-            return
-        }
-        liveViewGuideStore.markCompleted()
-        liveViewGuideStep = nil
-        AppDiagnostics.shared.record(.guideCompleted)
-    }
-
-    /// Dismisses the guide and prevents another automatic presentation for this guide version.
-    func skipLiveViewGuide() {
-        guard liveViewGuideStep != nil else { return }
-        liveViewGuideStore.markCompleted()
-        liveViewGuideStep = nil
-        AppDiagnostics.shared.record(.guideSkipped)
-    }
-
-    /// Resets the guide from System settings, showing it immediately when a monitor is active.
-    func replayLiveViewGuide() {
-        liveViewGuideStore.reset()
-        guard isMonitorPresented else { return }
-        activePanel = nil
-        liveViewGuideStep = .cameraControls
-        AppDiagnostics.shared.record(.guidePresented)
-    }
-
     #if DEBUG
-        /// Selects a deterministic guide card for simulator screenshot verification.
-        func forceLiveViewGuide(_ step: LiveViewGuideStep) {
-            activePanel = nil
-            liveViewGuideStep = step
-        }
-
         /// Stages the dropped-session recovery affordance for simulator screenshot verification.
         /// No retry loop is started — this only paints the state the loop would publish.
         func forceSessionRecoveryState(_ state: SessionRecoveryState) {
@@ -7754,7 +7703,6 @@ final class NativeAppModel {
             liveViewFocus = frame.focus
             isMonitorPresented = true
             AppDiagnostics.shared.record(.liveViewStarted)
-            presentLiveViewGuideIfNeeded()
             dismissConnectionProgress()
             isStreamRecovering = false
             cameraState = cameraState.updating(phoneBatteryPercent: currentPhoneBatteryPercent)

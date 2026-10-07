@@ -224,7 +224,6 @@ class MainActivity : ComponentActivity() {
         val debugAssistEffects = DemoHarness.assistEffects(intent)
         val debugScopes = DemoHarness.scopeKinds(intent)
         val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
-        val debugLiveGuideStep = DemoHarness.liveGuideStep(intent)
         val debugInitialSettingsTab = DemoHarness.settingsTab(intent)
         val debugSession: CameraSession? = demo?.first
         val pairingScript = DemoHarness.pairingScript(intent)
@@ -405,18 +404,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val deliveryDisplay by mediaDeliveryCoordinator.display.collectAsState()
-                val liveViewGuide =
-                    remember {
-                        LiveViewGuideController(applicationContext, diagnostics::record)
-                    }
                 val systemSettingsActions =
                     remember {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
                     }
                 var showProblemReport by remember { mutableStateOf(false) }
-                LaunchedEffect(debugLiveGuideStep) {
-                    debugLiveGuideStep?.let(liveViewGuide::forceForDebug)
-                }
+                // The transport wizard is an explicit Pair a new camera choice. An empty saved
+                // list stays on the shared cameras or pair page, the same home as the other apps.
+                var transportWizard by remember { mutableStateOf(pairingScript != null) }
                 val frameioRedirect by frameioRedirectCallback.collectAsState()
                 LaunchedEffect(frameioController, frameioRedirect) {
                     frameioRedirect?.let { callback ->
@@ -568,6 +563,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun acceptPairedCamera(paired: PairedCamera) {
+                    transportWizard = false
                     activeSavedCamera = persistPairedCameraProfile(paired.savedCamera)
                     // The pairing produced a working session, so its row has earned its place.
                     pairingCreatedSetup = null
@@ -849,9 +845,6 @@ class MainActivity : ComponentActivity() {
                                 relayWatchUi = watchUi,
                                 systemSettingsActions = systemSettingsActions,
                                 onReportProblem = { showProblemReport = true },
-                                liveViewGuideController = liveViewGuide,
-                                onShowGuideOnNextRealFrame =
-                                    liveViewGuide::replayOnNextRealFrame,
                                 onCompletedMediaCacheCleared = {
                                     mediaLibraryIndex.clearCameraCatalogs()
                                     mediaCacheRevision += 1
@@ -871,11 +864,9 @@ class MainActivity : ComponentActivity() {
                     // The relay watcher above stays outside, like Pocket's. The standalone media library
                     // replaces the pages: nothing discovers under it.
                     val standaloneMedia = monitored == null && shellState.cover == ShellModel.Cover.MEDIA
-                    // The shell's pair route: an empty list is not a home unless a watcher asked for it. Once
-                    // shown, the pair page stays until the operator leaves it: pairing saves its profile before
-                    // the connect, and that must not swap the page mid-pairing.
-                    val pairingPage = shellState.pairing || (camerasState.saved.isEmpty() && !shellState.camerasChosen)
-                    LaunchedEffect(pairingPage) { if (pairingPage) shell.beginPairing() }
+                    // The wizard stays up once the operator opens it. Saving a profile before the
+                    // connect must not swap the page mid-pairing.
+                    val showTransportWizard = transportWizard
                     // The relay's NEARBY rows, browsed and swept only while the pages show.
                     val (broadcasts, filtersDiscovery) =
                         if (monitored == null && !standaloneMedia) {
@@ -990,7 +981,6 @@ class MainActivity : ComponentActivity() {
                             AppDiagnostics.reporting.setCameraSessionActive(true)
                             onDispose {
                                 AppDiagnostics.reporting.setCameraSessionActive(false)
-                                liveViewGuide.onRealFrameUnavailable()
                                 diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED)
                             }
                         }
@@ -1137,7 +1127,6 @@ class MainActivity : ComponentActivity() {
                                 activeTransportIsUsb =
                                     activeSavedCamera?.transport == SavedCameraTransport.USB_C,
                                 isDemoSession = pairingScript != null || demo?.second != null,
-                                liveViewGuideController = liveViewGuide,
                                 onOpenSettings = {
                                     mediaRemoteShutter.disarm()
                                     shell.open(ShellModel.Cover.SETTINGS)
@@ -1298,15 +1287,6 @@ class MainActivity : ComponentActivity() {
                                             },
                                         systemSettingsActions = systemSettingsActions,
                                         onReportProblem = { showProblemReport = true },
-                                        liveViewGuideController = liveViewGuide,
-                                        onShowGuideNow = {
-                                            liveViewGuide.replayNow()
-                                            shell.dismissCover()
-                                        },
-                                        onShowGuideOnNextRealFrame = {
-                                            liveViewGuide.replayOnNextRealFrame()
-                                            shell.dismissCover()
-                                        },
                                         onCompletedMediaCacheCleared = {
                                             mediaLibraryIndex.clearCameraCatalogs()
                                             mediaCacheRevision += 1
@@ -1401,9 +1381,6 @@ class MainActivity : ComponentActivity() {
                             initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,
                             systemSettingsActions = systemSettingsActions,
                             onReportProblem = { showProblemReport = true },
-                            liveViewGuideController = liveViewGuide,
-                            onShowGuideOnNextRealFrame =
-                                liveViewGuide::replayOnNextRealFrame,
                             onCompletedMediaCacheCleared = {
                                 mediaLibraryIndex.clearCameraCatalogs()
                                 mediaCacheRevision += 1
@@ -1413,6 +1390,7 @@ class MainActivity : ComponentActivity() {
                     }
                     val pairPage: @Composable () -> Unit = {
                         BackHandler(enabled = camerasState.saved.isNotEmpty() || shellState.camerasChosen) {
+                            transportWizard = false
                             shell.endPairing()
                         }
                         PairingExperience(
@@ -1427,6 +1405,7 @@ class MainActivity : ComponentActivity() {
                                 // Picture only: no PTP session, no saved
                                 // camera, and no stale profile steering
                                 // link-health or reconnect heuristics.
+                                transportWizard = false
                                 activeSavedCamera = null
                                 adoptSetupStreamSettings(null)
                                 uvcSource = UvcFrameSource(applicationContext)
@@ -1435,13 +1414,14 @@ class MainActivity : ComponentActivity() {
                                         getString(R.string.pairing_hdmi_device_title)
                                     )
                             },
-                            onShowSavedCameras =
-                                if (savedCameras.isEmpty()) {
-                                    null
-                                } else {
-                                    shell::endPairing
-                                },
-                            onOpenWatcherList = shell::showCameras,
+                            onShowSavedCameras = {
+                                transportWizard = false
+                                shell.showCameras()
+                            },
+                            onOpenWatcherList = {
+                                transportWizard = false
+                                shell.showCameras()
+                            },
                             onShareDiagnostics = {
                                 if (!systemSettingsActions.shareDiagnostics()) {
                                     Toast.makeText(
@@ -1493,6 +1473,16 @@ class MainActivity : ComponentActivity() {
                                 },
                                 privacy = { systemSettingsActions.openPrivacy() },
                                 terms = { systemSettingsActions.openTerms() },
+                                // A selected nearby camera uses the shared pair page. Pair a new
+                                // camera, with nothing selected, opens the transport wizard.
+                                pair = {
+                                    if (camerasState.selection != null) {
+                                        shell.beginPairing()
+                                    } else {
+                                        transportWizard = true
+                                        shell.beginPairing()
+                                    }
+                                },
                                 extraNearby = extra@{ id ->
                                     val broadcast =
                                         broadcasts.firstOrNull { RELAY_ROW_PREFIX + it.name == id } ?: return@extra
@@ -1578,7 +1568,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         extraNearby = nearbyBroadcastItems(broadcasts, filtersDiscovery),
-                        prePage = if (pairingPage && !standaloneMedia) pairPage else null,
+                        prePage = if (showTransportWizard && !standaloneMedia) pairPage else null,
                     )
                     if (monitored == null && !standaloneMedia) {
                         if (multicam.presented) {

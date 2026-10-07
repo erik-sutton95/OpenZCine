@@ -237,15 +237,6 @@ object DemoHarness {
     const val EXTRA_MEDIA = "zc.media"
 
     /**
-     * Explicit screenshot-only guide card. Synthetic frames never trigger the
-     * automatic guide; this isolated debug override mirrors iOS's harness.
-     */
-    const val EXTRA_LIVE_GUIDE_STEP = "zc.liveGuide"
-
-    internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? =
-        LiveViewGuideStep.debugValue(intent.getStringExtra(EXTRA_LIVE_GUIDE_STEP))
-
-    /**
      * Opens the Edit view on one DISP mode (`live` / `clean` / `command`) so the eye badges can be
      * captured headlessly — the editor is only reachable by tapping through Operator Setup.
      */

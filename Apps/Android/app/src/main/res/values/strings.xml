@@ -239,29 +239,6 @@
     <string name="audio_channel_right">right</string>
     <string name="audio_state_summary">%1$s, %2$s, sensitivity %3$s</string>
 
-    <!-- Replayable live-view guide. -->
-    <string name="guide_title_camera_controls">Status &amp; camera controls</string>
-    <string name="guide_title_view_assist">View Assist</string>
-    <string name="guide_title_system_controls">System controls</string>
-    <string name="guide_camera_portrait">Status shows timecode, media, and camera health. Tap a camera tile or value to change it.</string>
-    <string name="guide_camera_landscape">Status shows recording, timecode, format, media, and feed health. Tap ISO, shutter, iris, focus, or WB below to change it.</string>
-    <string name="guide_assist_rail">Tap the slider to open View Assist. Tap a tool to turn it on, or press and hold a configurable tool for quick settings.</string>
-    <string name="guide_assist_toolbar">Tap a tool to turn it on. Press and hold a configurable tool for quick settings. Swipe for more.</string>
-    <string name="guide_system_controls">Lock prevents accidental changes. DISP changes the monitor layout. Red records. Media opens clips. Gear opens Operator Setup.</string>
-    <string name="guide_status_showing">Showing now</string>
-    <string name="guide_status_scheduled">Scheduled for next real frame</string>
-    <string name="guide_status_first_frame">Will show on the first real frame</string>
-    <string name="guide_status_completed">Completed</string>
-    <string name="guide_pane_title">Live View Guide</string>
-    <string name="guide_modal_background_description">Live View Guide modal background</string>
-    <string name="guide_card_description">Quick Guide. Step %1$d of %2$d. %3$s</string>
-    <string name="guide_heading">QUICK GUIDE</string>
-    <string name="guide_step_counter">%1$d OF %2$d</string>
-    <string name="guide_skip">Skip</string>
-    <string name="guide_skip_description">Skip Live View Guide</string>
-    <string name="guide_finish_description">Finish Live View Guide</string>
-    <string name="guide_next_description">Next Live View Guide step</string>
-
     <!-- Live-feed notices and false-color reference panel. -->
     <string name="feed_hdr_assists_off">HDR LIVE VIEW · IMAGE ASSISTS OFF</string>
     <string name="feed_color_assists_off">LIVE COLOR FORMAT · IMAGE ASSISTS OFF</string>
@@ -831,15 +808,6 @@
     <string name="action_request">Request</string>
     <string name="system_share_diagnostics">Share Diagnostics</string>
     <string name="action_share">Share</string>
-    <string name="system_live_view_guide">Live View Guide</string>
-    <string name="system_live_view_guide_caption">Replay the short camera-controls, View Assist, and system-controls introduction without enabling camera commands underneath it.</string>
-    <string name="system_guide_status">Guide Status</string>
-    <string name="action_show_again">Show Again</string>
-    <string name="system_replay">Replay</string>
-    <string name="action_now">Now</string>
-    <string name="system_show_guide_now">Show Live View Guide Now</string>
-    <string name="action_next_frame">Next frame</string>
-    <string name="system_show_guide_next_frame">Show Live View Guide on Next Real Frame</string>
     <string name="system_project_legal">Project &amp; Legal</string>
     <string name="system_project_legal_caption">OpenZCine is open source. These links leave the app only when you choose them.</string>
     <string name="system_source_code">Source Code</string>

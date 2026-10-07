@@ -80,7 +80,6 @@ struct NikonMonitorShell: View {
         } status: {
             NikonMonitorStatus(layout: layout)
                 .chromeEditable(.statusBar, editing: editing)
-                .liveViewGuideAnchor(.infoBar)
         } power: {
             NikonMonitorPower(horizontal: layout.portrait && !layout.tablet)
                 .chromeEditable(.batteryIndicators, editing: editing)
@@ -89,7 +88,6 @@ struct NikonMonitorShell: View {
                 columns: layout.portrait && !layout.tablet ? (model.isPhotographyMode ? 5 : 3) : 12
             )
             .chromeEditable(.cameraValues, editing: editing)
-            .liveViewGuideAnchor(.cameraControls)
         } system: {
             NikonMonitorSystem(layout: layout)
         } tools: {
@@ -165,7 +163,6 @@ struct NikonMonitorShell: View {
                     onOptions: { model.presentAssistOptions($0) }
                 )
                 .chromeEditable(.assistToolbar, editing: model.chromeEditorMode)
-                .liveViewGuideAnchor(.viewAssist)
                 .opacity(model.interfaceLocked ? 0.4 : 1)
                 .allowsHitTesting(!model.interfaceLocked)
                 .position(x: frame.midX, y: frame.midY)
@@ -446,7 +443,6 @@ private struct NikonMonitorSystem: View {
                         get: { model.interfaceLocked }, set: { _ in model.toggleInterfaceLock() }),
                     side: layout.lock.width
                 )
-                .liveViewGuideAnchor(.lock)
             }
         } settings: {
             MonitorChromeButton(
@@ -457,7 +453,7 @@ private struct NikonMonitorSystem: View {
             } label: {
                 MonitorIcon.settings
             }
-            .accessibilityIdentifier("monitor.system.settings").liveViewGuideAnchor(.settings)
+            .accessibilityIdentifier("monitor.system.settings")
             .chromeEditable(.railSettings, editing: editing)
         } media: {
             MonitorChromeButton(
@@ -466,11 +462,11 @@ private struct NikonMonitorSystem: View {
             ) {
                 // Nikon main: a photo glyph reads as "media" on the stills side; cinema keeps film.
                 if model.isPhotographyMode { MonitorIcon.image } else { MonitorIcon.film }
-            }.accessibilityIdentifier("monitor.system.media").liveViewGuideAnchor(.media)
+            }.accessibilityIdentifier("monitor.system.media")
                 .chromeEditable(.railMedia, editing: editing)
         } record: {
             NikonCaptureAction(diameter: layout.record.width)
-                .chromeEditable(.railRecord, editing: editing).liveViewGuideAnchor(.record)
+                .chromeEditable(.railRecord, editing: editing)
         } display: {
             MonitorChromeButton(
                 "Change display mode",
@@ -488,7 +484,7 @@ private struct NikonMonitorSystem: View {
                         }
                     }
                 }
-            }.accessibilityIdentifier("monitor.system.display").liveViewGuideAnchor(.display)
+            }.accessibilityIdentifier("monitor.system.display")
                 .chromeEditable(.railDisp, editing: editing)
         }
     }

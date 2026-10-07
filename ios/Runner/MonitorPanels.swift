@@ -3107,14 +3107,6 @@ struct OperatorSettingsPanel: View {
                 ) {
                     prepareDiagnosticsReport()
                 },
-                MonitorSupportAction(
-                    id: "support.guide", title: "Live View Guide",
-                    help:
-                        "Show the short control guide now when live view is open, or again on the next live view.",
-                    actionTitle: "Show Again", accessibilityLabel: "Show Live View Guide Again"
-                ) {
-                    model.replayLiveViewGuide()
-                },
             ],
             report: { presentBugReport() },
             privacy: { requestInternetDestination(.privacyPolicy) }

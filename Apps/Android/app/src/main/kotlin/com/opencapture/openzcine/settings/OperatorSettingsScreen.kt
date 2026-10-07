@@ -74,7 +74,6 @@ import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.LiveDesign
-import com.opencapture.openzcine.LiveViewGuideController
 import com.opencapture.openzcine.prefersPhotographyChrome
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
@@ -130,9 +129,6 @@ internal fun OperatorSettingsScreen(
     onDisconnect: (() -> Unit)? = null,
     systemSettingsActions: SystemSettingsActions,
     onReportProblem: () -> Unit,
-    liveViewGuideController: LiveViewGuideController,
-    onShowGuideNow: (() -> Unit)? = null,
-    onShowGuideOnNextRealFrame: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
     initialTab: MonitorSettingsTab = MonitorSettingsTab.LINK,
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
@@ -246,8 +242,7 @@ internal fun OperatorSettingsScreen(
                     mediaCacheStore, frameioController, onCompletedMediaCacheCleared,
                 )
                 MonitorSettingsTab.SYSTEM -> SystemRows(
-                    systemSettingsActions, onReportProblem, liveViewGuideController,
-                    onShowGuideNow, onShowGuideOnNextRealFrame, emitHaptic,
+                    systemSettingsActions, onReportProblem, emitHaptic,
                 )
             }
         }
@@ -790,14 +785,11 @@ private fun clearResultLabel(context: Context, result: MediaCacheClearResult): S
             )
     }
 
-/** System tab: native support/share intents, replayable guide, project links, and build data. */
+/** System tab: native support/share intents, project links, and build data. */
 @Composable
 internal fun SystemRows(
     actions: SystemSettingsActions,
     onReportProblem: () -> Unit,
-    guideController: LiveViewGuideController,
-    onShowGuideNow: (() -> Unit)?,
-    onShowGuideOnNextRealFrame: () -> Unit,
     feedback: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -841,13 +833,6 @@ internal fun SystemRows(
                 actionTitle = stringResource(R.string.action_share),
                 accessibilityLabel = stringResource(R.string.system_share_diagnostics),
                 action = { runAction(actions::shareDiagnostics) }),
-            MonitorSupportAction(id = "support.guide", title = stringResource(R.string.system_live_view_guide),
-                actionTitle = stringResource(R.string.action_show_again),
-                accessibilityLabel = "Show Live View Guide Again",
-                action = {
-                    if (onShowGuideNow != null) onShowGuideNow()
-                    else onShowGuideOnNextRealFrame()
-                }),
         ),
     )
 

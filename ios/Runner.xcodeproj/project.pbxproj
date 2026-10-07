@@ -96,7 +96,6 @@
 		CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */; };
 		DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DIAG00000000000000000001 /* AppDiagnostics.swift */; };
 		FE72B160881FCAA3A5BAE57C /* FrameioAuthCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58822FE5CB612396F3D33712 /* FrameioAuthCoordinator.swift */; };
-		FTUE00000000000000000002 /* LiveViewOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTUE00000000000000000001 /* LiveViewOnboarding.swift */; };
 		LVSP00000000000000000002 /* LiveViewSignposts.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVSP00000000000000000001 /* LiveViewSignposts.swift */; };
 		MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */; };
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
@@ -263,7 +262,6 @@
 		C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaBrowser.swift; sourceTree = "<group>"; };
 		DIAG00000000000000000001 /* AppDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiagnostics.swift; sourceTree = "<group>"; };
 		E7F2A1B03D4C5E6F7890ABCD /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
-		FTUE00000000000000000001 /* LiveViewOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveViewOnboarding.swift; sourceTree = "<group>"; };
 		LVSP00000000000000000001 /* LiveViewSignposts.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveViewSignposts.swift; sourceTree = "<group>"; };
 		MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalFeedFrameBaker.swift; sourceTree = "<group>"; };
 		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
@@ -423,7 +421,6 @@
 				C0DE00000000000000000069 /* StartupPermissions.swift */,
 				C0DE00000000000000000059 /* CameraWiFiCredentialStore.swift */,
 				C0DE00000000000000000029 /* MonitorExperience.swift */,
-				FTUE00000000000000000001 /* LiveViewOnboarding.swift */,
 				C0DE0000000000000000002B /* MonitorPanels.swift */,
 				LDDR0000000000000000001B /* LadderPicker.swift */,
 				C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */,
@@ -702,7 +699,6 @@
 				C0DE00000000000000000024 /* LinkExperience.swift in Sources */,
 				C0DE00000000000000000026 /* StartupDesign.swift in Sources */,
 				C0DE00000000000000000028 /* MonitorExperience.swift in Sources */,
-				FTUE00000000000000000002 /* LiveViewOnboarding.swift in Sources */,
 				C0DE0000000000000000002A /* MonitorPanels.swift in Sources */,
 				LDDR0000000000000000001A /* LadderPicker.swift in Sources */,
 				C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */,

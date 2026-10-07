@@ -98,30 +98,6 @@ private struct LiveViewShell: View {
                 // The landscape-to-landscape flip animates for the same reason the portrait one
                 // does — the modules glide to their mirrored frames under stable identity.
                 .animation(.easeInOut(duration: 0.3), value: context.horizontalDirection)
-                // Tally + full-screen panel overlay the already-extended (physical-screen) layer
-                // so both reach the bezel on every edge — mounted inside `MonitorShell` they pin
-                // to the safe-area frame (its `GeometryReader` reports its size before this
-                // `.ignoresSafeArea` runs). Constructed directly as its own `View` (never read as
-                // a property off a sibling `MonitorShell` instance) so `.environment` installs on
-                // ITS tree position before `@Environment` resolves — the sibling-property form
-                // crashed on `model` resolving to the missing default.
-                .overlayPreferenceValue(LiveViewGuideAnchorKey.self) { anchors in
-                    if let step = model.liveViewGuideStep,
-                        model.activePanel == nil,
-                        model.displayMode == .live,
-                        // The Edit view owns the screen while it is open; a coach mark on top of
-                        // it would both confuse and steal taps meant for a badge.
-                        model.chromeEditorMode == nil,
-                        !model.isRecording
-                    {
-                        LiveViewGuideOverlay(
-                            step: step,
-                            anchors: anchors,
-                            isPortrait: context.isPortrait
-                        )
-                        .environment(model)
-                    }
-                }
         }
         .ignoresSafeArea(.container, edges: .all)
         // Snappy panel insert/remove so dismissing a popup feels near-instant.
