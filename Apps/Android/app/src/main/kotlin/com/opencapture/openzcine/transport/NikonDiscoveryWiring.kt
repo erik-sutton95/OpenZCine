@@ -5,7 +5,7 @@ import com.opencapture.opencine.nikon.NikonDialer
 import com.opencapture.opencine.nikon.NikonDiscovery
 import com.opencapture.opencine.nikon.NikonLocalInterface
 import com.opencapture.opencine.nikon.NikonPresence
-import com.opencapture.openzcine.relay.MonitorRelayWire
+import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.openzcine.relay.RelayPresence
 import com.opencapture.openzcine.relay.parseRelayPresenceLine
 import java.io.IOException

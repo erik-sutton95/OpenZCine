@@ -88,61 +88,25 @@ struct NikonAssistInspector: View {
     var safeArea = EdgeInsets()
     let onSelect: (MonitorAssistTool) -> Void
     let onDismiss: () -> Void
-    @State private var helpVisible = false
 
-    private var portrait: Bool { viewport.height > viewport.width }
     private var tabs: [MonitorAssistTool] { tools.filter(\.hasConfiguration) }
+    private func descriptor(_ tool: MonitorAssistTool) -> MonitorInspectorTool<MonitorAssistTool> {
+        MonitorInspectorTool(value: tool, title: tool.title, label: tool.rawValue,
+            contentStyle: tool == .waveform || tool == .parade ? .fullWidth : .card)
+    }
 
     var body: some View {
-        MonitorInspector(
-            title: tool.title, viewport: viewport, safeArea: safeArea,
-            helpVisible: $helpVisible, onClose: dismiss
-        ) {
-            ScrollView(portrait ? .horizontal : .vertical, showsIndicators: false) {
-                MonitorTabStrip(vertical: !portrait) {
-                    MonitorSnapshotRows(tabs) { item in
-                        Button {
-                            onSelect(item)
-                        } label: {
-                            HStack(spacing: 7) {
-                                NikonAssistGlyph(tool: item, size: 17)
-                                Text(item.rawValue).font(MonitorTheme.font(9, weight: .semibold))
-                            }
-                            .foregroundStyle(
-                                item == tool ? MonitorTheme.accent : MonitorTheme.muted
-                            )
-                            .frame(width: portrait ? 88 : 96, height: 44)
-                            .monitorTabSurface(
-                                selected: item == tool, separator: item != tabs.first)
-                        }
-                        .buttonStyle(MonitorTabButtonStyle())
-                        .accessibilityLabel(item.title)
-                        .accessibilityAddTraits(item == tool ? .isSelected : [])
-                    }
-                }
-                .padding(.horizontal, 6)
-            }
-            .monitorScrollFade(portrait ? .horizontal : .vertical)
+        MonitorToolInspector(selection: descriptor(tool), tools: tabs.map(descriptor),
+            viewport: viewport, safeArea: safeArea, onSelect: onSelect, onDismiss: onDismiss
+        ) { selection in
+            NikonAssistGlyph(tool: selection, size: 17)
         } content: {
-            Group {
-                if tool == .waveform || tool == .parade {
-                    NikonAssistOptions(tool: tool)
-                } else {
-                    MonitorInspectorCard { NikonAssistOptions(tool: tool) }
-                }
-            }
-            .environment(\.monitorInspectorHelp, helpVisible)
+            NikonAssistOptions(tool: tool)
         } footer: {
             EmptyView()
         }
-        .environment(\.monitorSegmentedAppearance, .inspector)
     }
 
-    private func dismiss() {
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        onDismiss()
-    }
 }
 
 /// One tool's options: the shared menus over the shared state, or this camera's own.

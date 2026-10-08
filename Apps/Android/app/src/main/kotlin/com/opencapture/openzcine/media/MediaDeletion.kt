@@ -1,35 +1,17 @@
 package com.opencapture.openzcine.media
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
-import com.opencapture.openzcine.LiveDesign
-import com.opencapture.openzcine.glass
 import java.util.Locale
 import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
-import com.opencapture.monitorui.monitorChromeClickable
 import com.opencapture.monitorui.MonitorConfirmPopup
+import com.opencapture.monitorui.MonitorStarRating
 
 /**
  * Camera-card deletion policy and the star-rating chrome shared by the still
@@ -229,7 +211,7 @@ internal fun deleteConfirmationMessage(
 
 /**
  * Five-star rating row on glass (iOS `StarRatingRow`): tap a star to set the
- * count, tap the active count to clear. Optimistic — the caller writes to the
+ * count, tap the active count to clear. The caller writes to the
  * camera and rolls back on failure.
  */
 @Composable
@@ -239,37 +221,7 @@ internal fun StarRatingRow(
     onSelect: (Int) -> Unit,
 ) {
     val haptics = LocalOperatorHaptics.current
-    Row(
-        modifier
-            // CircleShape renders as a capsule on a wide row, like iOS's Capsule.
-            .glass(CircleShape)
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        (1..5).forEach { star ->
-            val filled = star <= stars
-            // The glyph stays 22 dp; the TOUCH box is 44 dp, matching iOS's `.zcTapTarget`.
-            // It used to be the bare 22 dp icon with 10 dp gaps and no press feedback, so a
-            // near-miss did nothing visible and the rating read as broken — the write path
-            // behind it was always fine.
-            Box(
-                Modifier.size(44.dp)
-                    .semantics { role = Role.Button }
-                    .monitorChromeClickable(onClickFeedback = haptics::selection) {
-                        onSelect(if (star == stars) 0 else star)
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    if (filled) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = "Rate $star star${if (star == 1) "" else "s"}",
-                    tint = if (filled) LiveDesign.accent else LiveDesign.muted,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
-    }
+    MonitorStarRating(stars, onSelect, modifier = modifier, selectionFeedback = haptics::selection)
 }
 
 /**

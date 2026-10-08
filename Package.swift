@@ -34,6 +34,8 @@ let package = Package(
             dependencies: [
                 .product(name: "OpenCineMedia", package: "OpenCine"),
                 .product(name: "OpenCineNikon", package: "OpenCine"),
+                // Deployed relay codecs compose the neutral framing and lifetime policies.
+                .product(name: "OpenCineRelay", package: "OpenCine"),
                 // Session recovery (re-exported in Sources/OpenZCineCore/OpenCineNikon.swift).
                 .product(name: "OpenCineCameraVocabulary", package: "OpenCine"),
                 // Shared live chrome layout policy (`MonitorEdgeInsets` and friends).

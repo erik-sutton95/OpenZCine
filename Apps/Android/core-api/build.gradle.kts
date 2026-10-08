@@ -19,6 +19,7 @@ kotlin {
 }
 
 dependencies {
+    api("com.opencapture.opencine:relay:0.1.0-SNAPSHOT")
     api(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.kotlin.test)

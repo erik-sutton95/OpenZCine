@@ -8,15 +8,17 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioPreparedArtifact
+import com.opencapture.openzcine.frameio.FrameioInternetLease
+import com.opencapture.openzcine.frameio.FrameioCapturedProjectListing
+import com.opencapture.openzcine.frameio.FrameioDestination
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
 import java.nio.file.Files
-import kotlin.coroutines.coroutineContext
+import com.opencapture.opencine.appkit.*
 import kotlin.math.min
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -88,309 +90,219 @@ internal data class MediaDeliveryWorkItem(
     val entry: MediaCacheEntry,
 )
 
-/**
- * Owns share / gallery-save / Frame.io prep progress independently of any
- * Compose media surface. [MainActivity] hosts the global overlay; media
- * screens can render a local copy while they are visible.
- */
+/** App-scoped native leaves and result projection; shared delivery owns every ordered run. */
 internal class MediaDeliveryCoordinator(
     private val appContext: Context,
     private val frameioController: FrameioDeliveryController,
+    private val cacheStore: MediaCacheStore,
     private val galleryGateway: MediaGalleryGateway = AndroidMediaGalleryGateway(appContext.contentResolver),
     scope: CoroutineScope,
 ) {
     private val presentation = NikonDeliveryPresentation(scope)
     val display get() = presentation.display
-
-    /** Cache pre-pass store; the same private root the media surfaces resolve artifacts from. */
-    private val cacheStore: MediaCacheStore by lazy {
-        MediaCacheStore(appContext.noBackupFilesDir.resolve("media-cache").toPath())
-    }
-
-    val overlayState: MediaDeliveryOverlayState? get() = presentation.overlayState
-    val completionToast: String? get() = presentation.completionToast
+    val overlayState get() = presentation.overlayState
+    val completionToast get() = presentation.completionToast
+    val nativeState get() = presentation.nativeState
     var isExpanded: Boolean
         get() = presentation.isExpanded
         set(value) { presentation.isExpanded = value }
-    val isActive: Boolean get() = overlayState != null
+    val isActive get() = overlayState != null
     fun dismissToast() = presentation.dismissToast()
     fun cancel() = presentation.cancel()
     fun close() = presentation.close()
-    fun trackExternalDelivery(job: Job?): NikonDeliveryPresentation.ExternalTicket =
-        presentation.trackExternalDelivery(job)
-    fun finishExternalDelivery(ticket: NikonDeliveryPresentation.ExternalTicket) =
-        presentation.finishExternalDelivery(ticket)
+    fun trackExternalDelivery(job: Job?) = presentation.trackExternalDelivery(job)
+    fun finishExternalDelivery(ticket: NikonDeliveryPresentation.ExternalTicket) = presentation.finishExternalDelivery(ticket)
+    fun bindFrameioDeliveryState(ticket: NikonDeliveryPresentation.ExternalTicket, state: FrameioDeliveryState) =
+        presentation.bindFrameioDeliveryState(ticket, state)
 
-    /**
-     * Caches the selection from the camera and reports it on the shared overlay, for the one
-     * destination whose upload the media surface still drives itself (Frame.io).
-     */
-    suspend fun cacheFromCamera(
-        destination: MediaDeliveryKind,
-        selection: List<MediaDeliverySelection>,
-        cameraConnectionOwner: Long?,
-        ticket: NikonDeliveryPresentation.ExternalTicket? = null,
-    ): MediaDeliveryCachePass {
-        // The popup pre-hop cache has no upload Job yet; it owns only captured preparation facts.
+    suspend fun cacheFromCamera(destination: MediaDeliveryKind, selection: List<MediaDeliverySelection>,
+        cameraConnectionOwner: Long?, ticket: NikonDeliveryPresentation.ExternalTicket? = null): MediaDeliveryCachePass {
         val captured = ticket ?: presentation.trackExternalDelivery(null)
-        return runCachePass(destination, selection, cameraConnectionOwner) { progress ->
-            presentation.publishCache(captured, progress)
+        return cacheSelectionForDelivery(selection, cacheStore, cameraConnectionOwner != null,
+            SwiftCoreMediaObjectTransferBridge(cameraConnectionOwner)) { index, count, item, fraction ->
+            presentation.publishCache(captured, MediaDeliveryOverlayState(destination, count, index,
+                fraction, item.clip.filename, isCaching = true))
         }
     }
 
-    /**
-     * Stages complete cache entries, optionally bakes a LUT, then opens the
-     * system share sheet. Progress is published for the full prep path.
-     */
-    fun beginNativeShare(
-        selection: List<MediaDeliverySelection>,
-        configuration: MediaDeliveryConfiguration,
-        cameraConnectionOwner: Long?,
-        onShareReady: (List<StagedMediaShare>, String?) -> Unit,
-    ) {
-        if (selection.isEmpty()) return
-        start(
-            destination = MediaDeliveryKind.NATIVE_SHARE,
-            selection = selection,
-            configuration = configuration,
-            cameraConnectionOwner = cameraConnectionOwner,
-        ) { prepared, items, uncachedCount, publish ->
-            coroutineContext.ensureActive()
-            publish(
-                MediaDeliveryOverlayState(
-                    destination = MediaDeliveryKind.NATIVE_SHARE,
-                    totalClips = items.size,
-                    clipIndex = items.size,
-                    clipFraction = 1.0,
-                    filename = items.last().clip.filename,
-                ),
-            )
-            // A clip the camera wouldn't hand over rides along in the share text rather than
-            // disappearing between selection and chooser (iOS `partialNote`).
-            val metadata =
-                listOfNotNull(
-                    uncachedClipsMessage(uncachedCount).takeIf { uncachedCount > 0 },
-                    mediaDeliveryMetadataSummary(items.map { it.clip })
-                        .takeIf { configuration.includeMetadata },
-                ).joinToString(separator = "\n").ifEmpty { null }
-            val shareCache = appContext.cacheDir.toPath()
-            val stager = MediaShareStager(shareCache)
+    fun beginNativeShare(selection: List<MediaDeliverySelection>, configuration: MediaDeliveryConfiguration,
+        cameraConnectionOwner: Long?, onShareReady: (List<StagedMediaShare>, String?) -> Unit) {
+        beginNativeShareCaptured(selection, configuration, cameraConnectionOwner, MonitorDeliveryAdmission { true }, onShareReady = onShareReady)
+    }
+    fun beginNativeShareCaptured(selection: List<MediaDeliverySelection>, configuration: MediaDeliveryConfiguration,
+        cameraConnectionOwner: Long?, admission: MonitorDeliveryAdmission, beforeIO: suspend () -> Unit = {},
+        route: FrameioInternetLease? = null, completion: MonitorDeliveryAdmission = admission,
+        onShareReady: (List<StagedMediaShare>, String?) -> Unit): MonitorDeliveryRunHandle? =
+        beginCaptured(MediaDeliveryKind.NATIVE_SHARE, selection, configuration, cameraConnectionOwner, admission, onShareReady, beforeIO, route, completion)
+
+    fun beginSaveToPhotos(selection: List<MediaDeliverySelection>, configuration: MediaDeliveryConfiguration,
+        cameraConnectionOwner: Long?) {
+        beginSaveToPhotosCaptured(selection, configuration, cameraConnectionOwner, MonitorDeliveryAdmission { true })
+    }
+    fun beginSaveToPhotosCaptured(selection: List<MediaDeliverySelection>, configuration: MediaDeliveryConfiguration,
+        cameraConnectionOwner: Long?, admission: MonitorDeliveryAdmission, beforeIO: suspend () -> Unit = {},
+        route: FrameioInternetLease? = null, completion: MonitorDeliveryAdmission = admission): MonitorDeliveryRunHandle? =
+        beginCaptured(MediaDeliveryKind.SAVE_TO_PHOTOS, selection, configuration, cameraConnectionOwner, admission, null, beforeIO, route, completion)
+
+    /** Same native progress context, used by the popup's pre-hop cache, never a separate cache Job. */
+    fun cacheCaptured(selection: List<MediaDeliverySelection>, cameraConnectionOwner: Long?,
+        admission: MonitorDeliveryAdmission, beforeIO: suspend () -> Unit = {}): MonitorDeliveryRunHandle? =
+        presentation.beginNativeCaptured { publish, run ->
+            beforeIO()
+            val admitted = MonitorDeliveryAdmission { run.isCurrent() && admission.isCurrent() && run.isCurrent() }
+            val originals = NikonDeliveryOriginals(selection, cacheStore, cameraConnectionOwner != null,
+                SwiftCoreMediaObjectTransferBridge(cameraConnectionOwner), admitted)
+            originals.loadCompleteEntries()
+            val result = MonitorDeliveryModel.cacheOriginals(selection, MonitorDeliveryDestination.REMOTE_UPLOAD,
+                admitted, originals.service, { it.clip.filename }, progress = {
+                    publish(it.nativeOverlay(MediaDeliveryKind.FRAMEIO))
+                })
+            if (result == null) "Cancelled." else null
+        }
+
+    /** Actual remote producer consumes the same shared run and exact outgoing cleanup barrier. */
+    fun beginFrameioCaptured(selection: List<MediaDeliverySelection>, configuration: MediaDeliveryConfiguration,
+        cameraConnectionOwner: Long?, source: MonitorDeliveryAdmission,
+        route: com.opencapture.openzcine.frameio.FrameioInternetLease?, beforeIO: suspend () -> Unit = {},
+        completion: MonitorDeliveryAdmission = source, capturedProjects: FrameioCapturedProjectListing? = null,
+        capturedDestination: FrameioDestination? = null): MonitorDeliveryRunHandle? {
+        if (selection.isEmpty() || !source.isCurrent()) {
+            route?.let(frameioController::restoreInternetHopAfterDismiss); return null
+        }
+        return presentation.beginNativeCaptured { publish, run ->
             try {
-                val published =
+            beforeIO()
+            fun accountCurrent(): Boolean = capturedProjects == null || frameioController.ownsProjects(capturedProjects)
+            val admitted = MonitorDeliveryAdmission { run.isCurrent() && accountCurrent() && source.isCurrent() &&
+                accountCurrent() && run.isCurrent() }
+            if (!admitted.isCurrent()) return@beginNativeCaptured null
+            val originals = NikonDeliveryOriginals(selection, cacheStore, cameraConnectionOwner != null,
+                SwiftCoreMediaObjectTransferBridge(cameraConnectionOwner), admitted)
+            originals.loadCompleteEntries()
+            val stager = MediaShareStager(appContext.cacheDir.toPath())
+            val result = frameioController.deliverCaptured(selection, configuration, admitted, route, originals.service,
+                filename = { it.clip.filename }, stage = { record ->
+                    val item = originals.workItem(record) ?: error("Cached clip is no longer available.")
                     withContext(Dispatchers.IO) {
-                        prepared.map { item ->
-                            if (item.prepared.transientExport == null) {
-                                item.share
-                            } else {
-                                stager.stagePreparedArtifact(
-                                    source = item.share.file,
-                                    expectedBytes = item.prepared.byteCount,
-                                    displayName = item.share.displayName,
-                                    mimeType = item.share.mimeType,
-                                ) {
-                                    coroutineContext.ensureActive()
-                                }
-                            }
-                        }
+                        val enteredContext = currentCoroutineContext()
+                        val staged = stager.stage(item.entry, item.clip) { enteredContext.ensureActive() }
+                        FrameioDeliveryArtifact(staged, Files.size(staged.file), FrameioArtifactContext(item.cameraID,
+                            item.clip.captureDate, item.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY,
+                            item.clip.libraryKey(item.cameraID)))
                     }
-                withContext(Dispatchers.Main.immediate) {
-                    coroutineContext.ensureActive()
-                    onShareReady(published, metadata)
-                }
-                null
+                }, onBatchProgress = { publish(it.nativeOverlay(MediaDeliveryKind.FRAMEIO)) },
+                completion = MonitorDeliveryAdmission { run.isCurrent() && accountCurrent() && completion.isCurrent() &&
+                    accountCurrent() && run.isCurrent() }, capturedProjects = capturedProjects, capturedDestination = capturedDestination)
+            if (!run.isCurrent() || !completion.isCurrent()) null else frameioDeliverySummary(result, frameioController.internetHopState,
+                frameioController.errorMessage, selection.count { !originals.service.available(it) })
             } finally {
-                cleanupPrepared(prepared)
+                route?.let { frameioController.endInternetHop(it) }
             }
         }
     }
 
-    /** Stages + optional LUT bake, then writes complete videos to Gallery. */
-    fun beginSaveToPhotos(
-        selection: List<MediaDeliverySelection>,
-        configuration: MediaDeliveryConfiguration,
-        cameraConnectionOwner: Long?,
-    ) {
-        if (selection.isEmpty()) return
-        val savableSelection =
-            selection.filter {
-                it.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY ||
-                    it.clip.contentKind == NikonMediaContentKind.STILL_PHOTO
-            }
-        if (savableSelection.isEmpty()) {
+    private fun beginCaptured(destination: MediaDeliveryKind, selection: List<MediaDeliverySelection>,
+        configuration: MediaDeliveryConfiguration, cameraConnectionOwner: Long?, source: MonitorDeliveryAdmission,
+        onShareReady: ((List<StagedMediaShare>, String?) -> Unit)?, beforeIO: suspend () -> Unit,
+        route: FrameioInternetLease?, completion: MonitorDeliveryAdmission): MonitorDeliveryRunHandle? {
+        if (selection.isEmpty() || !source.isCurrent()) {
+            route?.let(frameioController::restoreInternetHopAfterDismiss); return null
+        }
+        val selected = if (destination == MediaDeliveryKind.SAVE_TO_PHOTOS) selection.filter {
+            it.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY || it.clip.contentKind == NikonMediaContentKind.STILL_PHOTO
+        } else selection
+        if (selected.isEmpty()) {
             presentation.showToast("No video or photo in the selection can be saved to Gallery.")
-            return
+            route?.let(frameioController::restoreInternetHopAfterDismiss)
+            return null
         }
-        start(
-            destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
-            selection = savableSelection,
-            configuration = configuration,
-            cameraConnectionOwner = cameraConnectionOwner,
-        ) { prepared, items, uncachedCount, publish ->
-            coroutineContext.ensureActive()
-            publish(
-                MediaDeliveryOverlayState(
-                    destination = MediaDeliveryKind.SAVE_TO_PHOTOS,
-                    totalClips = items.size,
-                    clipIndex = items.size,
-                    clipFraction = 0.85,
-                    filename = items.last().clip.filename,
-                ),
-            )
-            val artifacts =
-                prepared.mapIndexed { index, preparedArtifact ->
-                    MediaGalleryArtifact.fromStagedShare(
-                        preparedArtifact.share,
-                        mediaCaptureTimestampMillis(items[index].clip.captureDate)
-                            .takeIf { configuration.includeMetadata },
-                    )
-                }
+        return presentation.beginNativeCaptured { publish, run ->
             try {
-                val result =
+            beforeIO()
+            val admitted = MonitorDeliveryAdmission { run.isCurrent() && source.isCurrent() && run.isCurrent() }
+            val originals = NikonDeliveryOriginals(selected, cacheStore, cameraConnectionOwner != null,
+                SwiftCoreMediaObjectTransferBridge(cameraConnectionOwner), admitted)
+            originals.loadCompleteEntries()
+            val stager = MediaShareStager(appContext.cacheDir.toPath())
+            val failures = mutableListOf<MediaGalleryFailure>()
+            val saver = MediaGallerySaver(galleryGateway)
+            val outcome = MonitorDeliveryModel.runBatch<MediaDeliverySelection, PreparedClip, FrameioInternetLease>(
+                records = selected, destination = MonitorDeliveryDestination.NATIVE_SHARE,
+                action = if (destination == MediaDeliveryKind.SAVE_TO_PHOTOS) MonitorDeliveryPostExportAction.SAVE_TO_PHOTOS
+                    else MonitorDeliveryPostExportAction.SYSTEM_SHARE,
+                admission = admitted, originals = originals.service,
+                exporter = MonitorDeliveryExportService(release = { frameioController.releaseExternalDelivery(it.prepared) },
+                    prepare = { record, progress ->
+                        val item = originals.workItem(record) ?: error("Cached clip is no longer available.")
+                        val staged = withContext(Dispatchers.IO) {
+                            val enteredContext = currentCoroutineContext()
+                            stager.stage(item.entry, item.clip) { enteredContext.ensureActive() }
+                        }
+                        val artifact = FrameioDeliveryArtifact(staged, withContext(Dispatchers.IO) { Files.size(staged.file) },
+                            FrameioArtifactContext(item.cameraID, item.clip.captureDate,
+                                item.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY, item.clip.libraryKey(item.cameraID)))
+                        val prepared = frameioController.prepareForExternalDelivery(artifact, configuration) { progress(it) }
+                        try {
+                            // The chooser owns its private copy before the shared run releases an entered transient export.
+                            val ready = if (prepared.transientExport == null || destination == MediaDeliveryKind.SAVE_TO_PHOTOS) prepared.share
+                                else withContext(Dispatchers.IO) {
+                                    val enteredContext = currentCoroutineContext()
+                                    stager.stagePreparedArtifact(prepared.share.file, prepared.byteCount,
+                                        prepared.share.displayName, prepared.share.mimeType) { enteredContext.ensureActive() }
+                                }
+                            PreparedClip(ready, prepared, item.clip)
+                        } catch (failure: Throwable) {
+                            withContext(kotlinx.coroutines.NonCancellable) { frameioController.releaseExternalDelivery(prepared) }
+                            throw failure
+                        }
+                    }),
+                share = { MonitorDeliveryShareFiles(it) },
+                photos = MonitorDeliveryPhotosService.PerItem { prepared ->
                     withContext(Dispatchers.IO) {
-                        MediaGallerySaver(galleryGateway).save(artifacts) {
-                            coroutineContext.ensureActive()
-                        }
+                        val enteredContext = currentCoroutineContext()
+                        val artifact = MediaGalleryArtifact.fromStagedShare(prepared.share,
+                            mediaCaptureTimestampMillis(prepared.clip.captureDate).takeIf { configuration.includeMetadata })
+                        val failure = saver.saveOne(artifact) { enteredContext.ensureActive() }
+                        if (failure != null) failures += failure
+                        failure == null
                     }
-                coroutineContext.ensureActive()
-                result.operatorMessage(
-                            MediaGalleryOmissions(
-                                nonVideoCount = selection.size - savableSelection.size,
-                                incompleteCount = uncachedCount,
-                            ),
-                        )
+                },
+                internet = route?.let { MonitorDeliveryInternetService(needsHop = { false },
+                    begin = { error("This native run already owns its preparation route.") },
+                    owns = frameioController::ownsInternetHop, wait = frameioController::waitInternetHop,
+                    restoreEntered = { frameioController.endInternetHop(it) },
+                    restore = frameioController::restoreInternetHopAfterDismiss) },
+                initialLease = route,
+                filename = { it.clip.filename }, artifactFilename = { it.share.displayName },
+                metadata = { records -> if (configuration.includeMetadata) mediaDeliveryMetadataSummary(records.map { it.clip }) else null },
+                policy = MonitorDeliveryBatchPolicy(
+                    cacheFailure = { "${uncachedClipsMessage(it)} Check the camera connection and try again." },
+                    emptySelection = "Nothing in the selection is ready to deliver.",
+                    nativeSummary = { counts -> uncachedClipsMessage(counts.uncached).takeIf { counts.uncached > 0 } },
+                    behavior = MonitorDeliveryBatchBehavior(photosFailures = MonitorDeliveryItemFailurePolicy.CONTINUE_ITEMS)),
+                progress = { publish(it.nativeOverlay(destination)) })
+            if (!run.isCurrent() || !completion.isCurrent()) return@beginNativeCaptured null
+            when (outcome) {
+                is MonitorDeliveryBatchOutcome.Share -> {
+                    if (run.isCurrent() && completion.isCurrent()) withContext(Dispatchers.Main.immediate) {
+                        if (run.isCurrent() && completion.isCurrent()) onShareReady?.invoke(outcome.urls.map { it.share }, outcome.metadataText)
+                    }
+                    null
+                }
+                is MonitorDeliveryBatchOutcome.SavedToPhotos -> MediaGalleryBatchResult(outcome.count, failures).operatorMessage(
+                    MediaGalleryOmissions(nonVideoCount = selection.size - selected.size,
+                        incompleteCount = selected.count { !originals.service.available(it) }))
+                is MonitorDeliveryBatchOutcome.Failed -> outcome.message
+                is MonitorDeliveryBatchOutcome.Uploaded -> outcome.summary
+            }
             } finally {
-                cleanupPrepared(prepared)
+                route?.let { frameioController.endInternetHop(it) }
             }
         }
     }
-
-    fun bindFrameioDeliveryState(
-        ticket: NikonDeliveryPresentation.ExternalTicket,
-        state: FrameioDeliveryState,
-    ) = presentation.bindFrameioDeliveryState(ticket, state)
-
-    /** Publishes the sequential camera-cache pre-pass on the shared overlay (iOS `isCaching`). */
-    private suspend fun runCachePass(
-        destination: MediaDeliveryKind,
-        selection: List<MediaDeliverySelection>,
-        cameraConnectionOwner: Long?,
-        publish: (MediaDeliveryOverlayState) -> Unit,
-    ): MediaDeliveryCachePass =
-        cacheSelectionForDelivery(
-            selection = selection,
-            cacheStore = cacheStore,
-            cameraTransferAvailable = cameraConnectionOwner != null,
-            bridge = SwiftCoreMediaObjectTransferBridge(cameraConnectionOwner),
-        ) { index, count, item, fraction ->
-            publish(
-                MediaDeliveryOverlayState(
-                    destination = destination,
-                    totalClips = count,
-                    clipIndex = index,
-                    clipFraction = fraction,
-                    filename = item.clip.filename,
-                    isCaching = true,
-                ),
-            )
-        }
-
-    private fun start(
-        destination: MediaDeliveryKind,
-        selection: List<MediaDeliverySelection>,
-        configuration: MediaDeliveryConfiguration,
-        cameraConnectionOwner: Long?,
-        afterPrepare: suspend (List<PreparedClip>, List<MediaDeliveryWorkItem>, Int,
-            (MediaDeliveryOverlayState) -> Unit) -> String?,
-    ) {
-        presentation.beginNative { publish ->
-            publish(MediaDeliveryOverlayState(destination, selection.size, 1, 0.0,
-                selection.first().clip.filename))
-            val shareCache = appContext.cacheDir.toPath()
-            val stager = MediaShareStager(shareCache)
-            val prepared = ArrayList<PreparedClip>(selection.size)
-            try {
-                val pass = runCachePass(destination, selection, cameraConnectionOwner, publish)
-                val items = pass.items
-                coroutineContext.ensureActive()
-                if (items.isEmpty()) {
-                    return@beginNative if (pass.uncachedCount > 0) {
-                        "${uncachedClipsMessage(pass.uncachedCount)} " +
-                            "Check the camera connection and try again."
-                    } else {
-                        "Nothing in the selection is ready to deliver."
-                    }
-                }
-                items.forEachIndexed { index, item ->
-                    coroutineContext.ensureActive()
-                    publish(
-                        MediaDeliveryOverlayState(
-                            destination = destination,
-                            totalClips = items.size,
-                            clipIndex = index + 1,
-                            clipFraction = 0.0,
-                            filename = item.clip.filename,
-                        ),
-                    )
-                    val staged =
-                        withContext(Dispatchers.IO) {
-                            stager.stage(item.entry, item.clip) {
-                                coroutineContext.ensureActive()
-                            }
-                        }
-                    val artifact =
-                        FrameioDeliveryArtifact(
-                            share = staged,
-                            byteCount = withContext(Dispatchers.IO) { Files.size(staged.file) },
-                            context =
-                                FrameioArtifactContext(
-                                    cameraID = item.cameraID,
-                                    captureDate = item.clip.captureDate,
-                                    supportsLutBake =
-                                        item.clip.contentKind ==
-                                            NikonMediaContentKind.PLAYABLE_PROXY,
-                                    stableClipIdentity =
-                                        item.clip.libraryKey(item.cameraID),
-                                ),
-                        )
-                    val baked =
-                        frameioController.prepareForExternalDelivery(
-                            artifact,
-                            configuration,
-                        ) { fraction ->
-                            coroutineContext.ensureActive()
-                            publish(
-                                MediaDeliveryOverlayState(
-                                    destination = destination,
-                                    totalClips = items.size,
-                                    clipIndex = index + 1,
-                                    clipFraction = fraction.coerceIn(0.0, 1.0),
-                                    filename = item.clip.filename,
-                                ),
-                            )
-                        }
-                    prepared += PreparedClip(share = baked.share, prepared = baked)
-                }
-                afterPrepare(prepared, items, pass.uncachedCount, publish)
-            } catch (error: CancellationException) {
-                cleanupPrepared(prepared)
-                throw error
-            } catch (error: Exception) {
-                cleanupPrepared(prepared)
-                error.message ?: "Couldn't prepare media for delivery."
-            }
-        }
-    }
-
-    private suspend fun cleanupPrepared(prepared: List<PreparedClip>) {
-        withContext(NonCancellable) {
-            prepared.forEach { item ->
-                runCatching { frameioController.releaseExternalDelivery(item.prepared) }
-            }
-        }
-    }
-
-    private data class PreparedClip(
-        val share: StagedMediaShare,
-        val prepared: FrameioPreparedArtifact,
-    )
+    private data class PreparedClip(val share: StagedMediaShare, val prepared: FrameioPreparedArtifact,
+        val clip: NikonMediaClipRecord)
 }
+
+internal fun MonitorDeliveryBatchProgress.nativeOverlay(destination: MediaDeliveryKind): MediaDeliveryOverlayState =
+    MediaDeliveryOverlayState(destination, totalClips, clipIndex, clipFraction, filename, isCaching)

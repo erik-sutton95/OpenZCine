@@ -79,7 +79,7 @@ import com.opencapture.monitorui.MonitorFieldLayout
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.openzcine.settings.PanelCloseButton
-import com.opencapture.openzcine.relay.MonitorRelayWire
+import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.withTimeoutOrNull
@@ -966,75 +966,8 @@ internal fun monitorPickerFrame(
     isPortrait: Boolean,
     measuredCaptureBar: MonitorRect? = null,
 ): MonitorRect {
-    val outerMargin = if (isPortrait) 12f else 8f
-    // Portrait keeps a gap under the info bar. Landscape mirrors iOS: the
-    // bottom-anchored picker may grow upward through the info-bar band so the
-    // WB tint pad (header + 180dp arrow cluster + mode tabs) still fits on
-    // short handsets (~384dp tall landscape, e.g. SM-A12).
-    val topLimit =
-        if (isPortrait) {
-            max(
-                viewport.y + outerMargin,
-                layout.status.maxY + 8f,
-            )
-        } else {
-            viewport.y + outerMargin
-        }
-    // The picker seats against the shared camera values slot.
-    val zoneAnchor = layout.values
-    // iOS uses the measured GlassPanel (`captureBarFrame`), not the zone slot.
-    val measuredBar =
-        measuredCaptureBar?.takeIf {
-            !isPortrait &&
-                it.width > 1f &&
-                it.height > 1f
-        }
-    val anchorFrame = measuredBar ?: zoneAnchor
-    // iOS bottomPickerBody gap above the capture bar is 10pt landscape/portrait.
-    val barGap = 10f
-    // Landscape seats just above the bottom chrome. Prefer the higher strip
-    // (assist vs capture) so short handsets reclaim the dead band the zone map
-    // sometimes leaves above the glass pills — but when we have a measured bar,
-    // seat directly above it (iOS hasBar path).
-    val landscapeStripTop = measuredBar?.y ?: min(layout.values.y, layout.assists.y)
-    val bottomLimit =
-        when {
-            isPortrait -> zoneAnchor.y - barGap
-            else -> landscapeStripTop - barGap
-        }
-    val availableHeight = max(0f, bottomLimit - topLimit)
-    // Landscape max raised so the tint pad (header + 180dp arrow cluster + mode
-    // tabs) is never forced under ~300dp of panel height. Drum pickers fill
-    // leftover space.
-    val height = min(if (isPortrait) 320f else 360f, availableHeight)
-    // iOS `bottomPickerBody` hasBar: cap at the top-popup width and CENTRE the
-    // panel over the capture bar — a bar-wide drum panel reads as a
-    // full-screen sheet (width = min(bar.width, 420), centred on bar.midX).
-    val width =
-        if (isPortrait) {
-            max(0f, viewport.width - outerMargin * 2f)
-        } else {
-            min(420f, max(0f, anchorFrame.width))
-        }
-    val rawX =
-        if (isPortrait) {
-            viewport.x + outerMargin
-        } else {
-            anchorFrame.x + anchorFrame.width / 2f - width / 2f
-        }
-    // Keep the panel on-screen (iOS clamps its trailing edge to host − 8).
-    val minX = viewport.x + outerMargin
-    val maxX =
-        max(
-            minX,
-            viewport.x + viewport.width - width - outerMargin,
-        )
-    return MonitorRect(
-        x = rawX.coerceIn(minX, maxX),
-        y = max(topLimit, bottomLimit - height),
-        width = width,
-        height = height,
-    )
+    return com.opencapture.opencine.cameracontrols.monitorOperatorPickerFrame(
+        viewport, layout, isPortrait, measuredCaptureBar)
 }
 
 /**
@@ -1051,34 +984,11 @@ internal fun monitorTopBarPickerFrame(
     kind: MonitorPickerKind? = null,
     anchorPill: MonitorRect? = null,
 ): MonitorRect {
-    val outerMargin = 8f
-    val preferredWidth = if (kind == MonitorPickerKind.QUALITY) 400f else 340f
-    val width = min(preferredWidth, max(0f, viewport.width - outerMargin * 2f))
-    if (isCommandCenter) {
-        val height = min(300f, max(120f, viewport.height * 0.55f))
-        return MonitorRect(
-            x = viewport.x + (viewport.width - width) / 2f,
-            y = viewport.y + (viewport.height - height) / 2f,
-            width = width,
-            height = height,
-        )
-    }
-    val anchorMid =
-        anchorPill?.let { it.x + it.width / 2f }
-            ?: layout.status.midX
-    val anchorBottom =
-        anchorPill?.let { it.y + it.height }
-            ?: layout.status.maxY
-    val x =
-        (anchorMid - width / 2f).coerceIn(
-            viewport.x + outerMargin,
-            max(viewport.x + outerMargin, viewport.x + viewport.width - width - outerMargin),
-        )
-    val y = anchorBottom + 8f
-    val maxHeight = if (kind == MonitorPickerKind.QUALITY) 380f else 300f
-    val height =
-        min(maxHeight, max(120f, viewport.y + viewport.height - y - outerMargin))
-    return MonitorRect(x = x, y = y, width = width, height = height)
+    return com.opencapture.opencine.cameracontrols.monitorOperatorTopPickerFrame(
+        viewport, layout, isCommandCenter,
+        preferredWidth = if (kind == MonitorPickerKind.QUALITY) 400f else 340f,
+        maximumHeight = if (kind == MonitorPickerKind.QUALITY) 380f else 300f,
+        anchor = anchorPill)
 }
 
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */

@@ -6,10 +6,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.opencapture.openzcine.media.StagedMediaShare
+import com.opencapture.opencine.appkit.*
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 
 /** Operator-visible Frame.io account state; never contains bearer material. */
 internal enum class FrameioConnectionState {
@@ -77,10 +81,30 @@ internal class FrameioDeliveryArtifact(
     override fun toString(): String = "FrameioDeliveryArtifact(redacted)"
 }
 
+/** Immutable account facts returned to the existing shared preparation task. */
+internal class FrameioCapturedProjectListing internal constructor(
+    internal val owner: FrameioDeliveryController, internal val accountRevision: UUID,
+    val listing: FrameioProjectListing,
+)
+
+private data class FrameioBatchArtifact(val index: Int, val artifact: FrameioDeliveryArtifact)
+
 private data class FrameioArtifactUploadOutcome(
     val metadataFailure: Boolean,
     val cleanupFailure: Boolean,
 )
+
+/** Exact instance route claim; completion joins entered leave without owning another task. */
+internal class FrameioInternetLease internal constructor(
+    internal val owner: FrameioDeliveryController,
+    internal val revision: UUID,
+    internal val hop: FrameioCameraHop,
+    internal val admission: () -> Boolean,
+) {
+    internal var leaveStarted = false
+    internal var leftCamera: Boolean? = null
+    internal val left = CompletableDeferred<Boolean>()
+}
 
 /**
  * State holder for Android Frame.io sign-in, destination selection, and
@@ -119,6 +143,7 @@ internal class FrameioDeliveryController(
         private set
     var deliveryState by mutableStateOf<FrameioDeliveryState>(FrameioDeliveryState.Idle)
         private set
+    private var deliveryPublication = Any()
     var internetHopState by mutableStateOf<FrameioInternetHopState>(FrameioInternetHopState.Idle)
         private set
     var cameraHopAvailability by
@@ -127,8 +152,12 @@ internal class FrameioDeliveryController(
     var errorMessage by mutableStateOf<String?>(null)
         private set
 
+    internal var accountRevision = UUID.randomUUID()
+        private set
     private var cameraHop: FrameioCameraHop? = null
     private var activeCameraHop: FrameioCameraHop? = null
+    private var internetLease: FrameioInternetLease? = null
+    private var latestInternetLease: FrameioInternetLease? = null
     private val cameraRejoinMutex = Mutex()
 
     /** Whether a production Adobe client registration is available in this build. */
@@ -180,113 +209,141 @@ internal class FrameioDeliveryController(
      * request runs and no binding is released unless this explicit method is called.
      */
     suspend fun beginInternetHop(): Boolean {
+        if (isInternetHopActive) return internetHopState is FrameioInternetHopState.Online
+        val captured = claimInternetHop { true } ?: return false
+        return waitInternetHop(captured)
+    }
+
+    fun claimInternetHop(admission: () -> Boolean): FrameioInternetLease? {
         networkState = reachability.state()
         if (networkState != FrameioNetworkState.CAMERA_ACCESS_POINT) {
-            errorMessage =
-                if (networkState == FrameioNetworkState.ONLINE) {
-                    "This phone already has a validated internet route."
-                } else {
-                    FrameioReachabilityPolicy.operatorMessage(networkState)
-                }
-            return false
+            errorMessage = if (networkState == FrameioNetworkState.ONLINE)
+                "This phone already has a validated internet route." else FrameioReachabilityPolicy.operatorMessage(networkState)
+            return null
         }
         val hop = cameraHop
         cameraHopAvailability = hop?.availability ?: FrameioHopAvailability.NOT_CAMERA_ACCESS_POINT
         if (hop == null || cameraHopAvailability != FrameioHopAvailability.READY) {
             errorMessage = cameraHopAvailability.operatorMessage
-            return false
+            return null
         }
-        if (isInternetHopActive) return internetHopState is FrameioInternetHopState.Online
+        if (isInternetHopActive || internetLease != null || !admission() || cameraHop !== hop ||
+            isInternetHopActive || internetLease != null) return null
+        val captured = FrameioInternetLease(this, UUID.randomUUID(), hop, admission)
+        internetLease = captured; latestInternetLease = captured
+        errorMessage = null; internetHopState = FrameioInternetHopState.LeavingCamera
+        return captured.takeIf { ownsInternetHop(it) }
+    }
+    fun ownsInternetHop(captured: FrameioInternetLease): Boolean =
+        captured.owner === this && internetLease === captured && latestInternetLease === captured
+    fun endedInternetHop(captured: FrameioInternetLease): Boolean =
+        captured.owner === this && internetLease == null && latestInternetLease === captured && !cameraRejoinMutex.isLocked
 
-        errorMessage = null
-        internetHopState = FrameioInternetHopState.LeavingCamera
-        val leftCamera =
-            try {
-                // Consent has already been captured. Complete the session shutdown and binding
-                // release as one operation even if the delivery sheet is dismissed concurrently.
-                withContext(NonCancellable) { hop.leaveCameraNetwork() }
-            } catch (_: Exception) {
-                false
+    fun transferInternetHop(captured: FrameioInternetLease): FrameioInternetLease? {
+        if (!ownsInternetHop(captured)) return null
+        val transferred = FrameioInternetLease(this, captured.revision, captured.hop, captured.admission)
+        transferred.leaveStarted = captured.leaveStarted
+        if (!captured.left.isCompleted) return null
+        // Transfer is admitted only after the existing leave/wait has completed.
+        transferred.leftCamera = captured.leftCamera
+        transferred.left.complete(captured.leftCamera == true)
+        internetLease = transferred; latestInternetLease = transferred
+        return transferred
+    }
+
+    suspend fun waitInternetHop(captured: FrameioInternetLease): Boolean {
+        if (!ownsInternetHop(captured)) return false
+        if (!captured.leaveStarted) {
+            if (cameraHop !== captured.hop || !captured.admission() || !ownsInternetHop(captured) ||
+                cameraHop !== captured.hop) { endInternetHop(captured); return false }
+            captured.leaveStarted = true
+            val leftCamera = try { withContext(NonCancellable) { captured.hop.leaveCameraNetwork() } }
+                catch (_: Exception) { false }
+            captured.leftCamera = leftCamera
+            captured.left.complete(leftCamera)
+            if (!ownsInternetHop(captured)) return false
+            if (!leftCamera) {
+                internetLease = null
+                internetHopState = FrameioInternetHopState.Failed(
+                    "OpenZCine couldn't safely disconnect the camera, so its Wi-Fi binding was not released.")
+                errorMessage = (internetHopState as FrameioInternetHopState.Failed).message
+                return false
             }
-        if (!leftCamera) {
-            internetHopState =
-                FrameioInternetHopState.Failed(
-                    "OpenZCine couldn't safely disconnect the camera, so its Wi-Fi binding was not released.",
-                )
-            errorMessage = (internetHopState as FrameioInternetHopState.Failed).message
-            return false
-        }
-        activeCameraHop = hop
+            activeCameraHop = captured.hop
+        } else if (!captured.left.await()) return false
+        if (!ownsInternetHop(captured)) return false
         internetHopState = FrameioInternetHopState.WaitingForInternet
         try {
             repeat(internetWaitAttempts) {
-                networkState = reachability.state()
-                if (networkState == FrameioNetworkState.ONLINE) {
-                    internetHopState = FrameioInternetHopState.Online
-                    errorMessage = null
-                    return true
+                if (!ownsInternetHop(captured)) return false
+                val network = reachability.state()
+                if (!ownsInternetHop(captured)) return false
+                networkState = network
+                if (network == FrameioNetworkState.ONLINE) {
+                    internetHopState = FrameioInternetHopState.Online; errorMessage = null
+                    return ownsInternetHop(captured)
                 }
                 internetWaitPoll()
             }
         } catch (error: CancellationException) {
-            endInternetHop()
+            endInternetHop(captured)
             throw error
         }
-
+        if (!ownsInternetHop(captured)) return false
         val timeout = "A validated internet route did not become available."
         errorMessage = timeout
-        withContext(NonCancellable) { endInternetHop() }
-        if (internetHopState is FrameioInternetHopState.Failed) {
+        endInternetHop(captured)
+        if (latestInternetLease === captured && internetHopState is FrameioInternetHopState.Failed)
             errorMessage = "$timeout Camera rejoin could not be verified."
-        }
         return false
     }
 
-    /**
-     * Rejoins the camera after a consented hop, from a scope that outlives the surface that
-     * started it: the operator has already dismissed it, so this is best effort.
-     */
     fun endInternetHopAfterDismiss() {
+        val captured = internetLease ?: return
+        restoreInternetHopAfterDismiss(captured)
+    }
+    fun restoreInternetHopAfterDismiss(captured: FrameioInternetLease) {
         CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
-            try {
-                endInternetHop()
-            } catch (_: Exception) {
-                // Best-effort rejoin; the operator has already left the surface.
+            try { endInternetHop(captured) } catch (_: Exception) { }
+        }
+    }
+    suspend fun endInternetHop(): Boolean {
+        val captured = internetLease
+        if (captured != null) return endInternetHop(captured)
+        val entered = latestInternetLease ?: return internetHopState is FrameioInternetHopState.Rejoined
+        // Legacy concurrent callers still join the exact already-entered attempt and result.
+        return withContext(NonCancellable) {
+            cameraRejoinMutex.withLock { latestInternetLease === entered &&
+                internetHopState is FrameioInternetHopState.Rejoined }
+        }
+    }
+    suspend fun endInternetHop(captured: FrameioInternetLease): Boolean = withContext(NonCancellable) {
+        cameraRejoinMutex.withLock {
+            if (!ownsInternetHop(captured)) return@withLock false
+            // Claim once before suspension; an old caller never reads a successor's native owner.
+            internetLease = null
+            val leftCamera = if (captured.leaveStarted) captured.left.await() else false
+            if (!leftCamera) {
+                if (latestInternetLease === captured) internetHopState = FrameioInternetHopState.Idle
+                return@withLock false
+            }
+            if (latestInternetLease !== captured) return@withLock false
+            activeCameraHop = null
+            internetHopState = FrameioInternetHopState.RejoiningCamera
+            val evidence = try { captured.hop.rejoinCameraNetwork() } catch (_: Exception) { null }
+            if (latestInternetLease !== captured) return@withLock false
+            networkState = reachability.state()
+            if (evidence != null) {
+                internetHopState = FrameioInternetHopState.Rejoined(evidence)
+                true
+            } else {
+                val message = "Frame.io work finished, but OpenZCine could not verify a new camera session. " +
+                    "Reconnect from Your cameras."
+                internetHopState = FrameioInternetHopState.Failed(message); errorMessage = message
+                false
             }
         }
     }
-
-    /** Rejoins through the exact saved profile and records only a protocol-connected result. */
-    suspend fun endInternetHop(): Boolean =
-        withContext(NonCancellable) {
-            cameraRejoinMutex.withLock {
-                val hop = activeCameraHop
-                    ?: return@withLock internetHopState is FrameioInternetHopState.Rejoined
-                // Claim the exact owner before the first suspension. A second
-                // caller waits for this attempt, then observes its result
-                // instead of starting a competing Wi-Fi join/session connect.
-                activeCameraHop = null
-                internetHopState = FrameioInternetHopState.RejoiningCamera
-                val evidence =
-                    try {
-                        hop.rejoinCameraNetwork()
-                    } catch (_: Exception) {
-                        null
-                    }
-                networkState = reachability.state()
-                if (evidence != null) {
-                    internetHopState = FrameioInternetHopState.Rejoined(evidence)
-                    true
-                } else {
-                    val message =
-                        "Frame.io work finished, but OpenZCine could not verify a new camera session. " +
-                            "Reconnect from Your cameras."
-                    internetHopState = FrameioInternetHopState.Failed(message)
-                    errorMessage = message
-                    false
-                }
-            }
-        }
 
     /**
      * Starts an Adobe browser sign-in and persists only encrypted PKCE state.
@@ -364,6 +421,7 @@ internal class FrameioDeliveryController(
             requireSuccess(response, "Frame.io sign-in")
             val token = core.decodeToken(response.body)
                 ?: throw FrameioDeliveryException("Frame.io returned an invalid token response.")
+            accountRevision = UUID.randomUUID()
             secretStore.saveToken(token.storedAt(clock()))
             secretStore.clearPendingAuthorization()
             connectionState = FrameioConnectionState.CONNECTED
@@ -378,6 +436,7 @@ internal class FrameioDeliveryController(
 
     /** Removes the encrypted token, pending PKCE state, and selected destination. */
     fun disconnect() {
+        accountRevision = UUID.randomUUID()
         secretStore.clearAll()
         destinationStore.clear()
         selectedDestination = null
@@ -387,97 +446,87 @@ internal class FrameioDeliveryController(
         connectionState = if (isConfigured) FrameioConnectionState.SIGNED_OUT else FrameioConnectionState.UNCONFIGURED
     }
 
-    /** Loads the first account/workspace's eligible upload projects. */
+    /** Legacy settings facade over the same bounded native query. */
     suspend fun loadProjects() {
-        val config = requireConfiguration() ?: return
-        if (!requireOnline()) return
-        projectState = FrameioProjectState.LOADING
-        errorMessage = null
+        projectState = FrameioProjectState.LOADING; errorMessage = null
         try {
-            val accessToken = accessToken(config)
-            val accounts = apiResponse(FrameioCoreOperation.ACCOUNTS, accessToken)
-                .let { response -> core.decodeAccounts(response) }
-                ?.takeIf { values -> values.isNotEmpty() }
-                ?: throw FrameioDeliveryException("Frame.io has no available account.")
-            val account = accounts.first()
-            val workspaces =
-                apiResponse(
-                    operation = FrameioCoreOperation.WORKSPACES,
-                    accessToken = accessToken,
-                    accountID = account.id,
-                ).let { response -> core.decodeWorkspaces(response) }
-                    ?.takeIf { values -> values.isNotEmpty() }
-                    ?: throw FrameioDeliveryException("Frame.io has no available workspace.")
-            val workspace = workspaces.first()
-            val projects =
-                apiResponse(
-                    operation = FrameioCoreOperation.PROJECTS,
-                    accessToken = accessToken,
-                    accountID = account.id,
-                    workspaceID = workspace.id,
-                ).let { response -> core.decodeProjects(response) }
-                    ?: throw FrameioDeliveryException("Frame.io returned an invalid project list.")
-            val listing = FrameioProjectListing(account.id, workspace.id, workspace.name, projects)
-            projectListing = listing
-            projectState = FrameioProjectState.READY
-            chooseSavedOrFirstProject(listing)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            projectState = FrameioProjectState.ERROR
-            errorMessage = error.operatorMessage("Couldn't load Frame.io projects.")
-        }
+            val captured = loadProjectsCaptured { true }
+            if (!ownsProjects(captured)) return
+            projectListing = captured.listing; projectState = FrameioProjectState.READY
+            chooseSavedOrFirstProject(captured.listing)
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) { projectState = FrameioProjectState.ERROR
+            errorMessage = error.operatorMessage("Couldn't load Frame.io projects.") }
     }
 
-    /** Persists an eligible project selected in the delivery picker. */
+    /** Native account/query port; page/loading/create policy belongs to shared Preparation. */
+    suspend fun loadProjectsCaptured(current: () -> Boolean): FrameioCapturedProjectListing {
+        val revision = accountRevision
+        val admitted = MonitorDeliveryAdmission { accountRevision == revision && current() && accountRevision == revision }
+        checkDeliveryAdmission(admitted)
+        val config = requireConfiguration() ?: throw FrameioDeliveryException(errorMessage ?: "Frame.io isn't configured.")
+        requireOnlineOrThrow(admitted)
+        val token = accessToken(config, admitted)
+        val accounts = core.decodeAccounts(apiResponse(FrameioCoreOperation.ACCOUNTS, token, admission = admitted))
+            ?.takeIf { it.isNotEmpty() } ?: throw FrameioDeliveryException("Frame.io has no available account.")
+        checkDeliveryAdmission(admitted)
+        val account = accounts.first()
+        val workspaces = core.decodeWorkspaces(apiResponse(FrameioCoreOperation.WORKSPACES, token,
+            accountID = account.id, admission = admitted))?.takeIf { it.isNotEmpty() }
+            ?: throw FrameioDeliveryException("Frame.io has no available workspace.")
+        checkDeliveryAdmission(admitted)
+        val workspace = workspaces.first()
+        val projects = core.decodeProjects(apiResponse(FrameioCoreOperation.PROJECTS, token,
+            accountID = account.id, workspaceID = workspace.id, admission = admitted))
+            ?: throw FrameioDeliveryException("Frame.io returned an invalid project list.")
+        checkDeliveryAdmission(admitted)
+        return FrameioCapturedProjectListing(this, revision,
+            FrameioProjectListing(account.id, workspace.id, workspace.name, projects))
+    }
+    internal fun ownsProjects(captured: FrameioCapturedProjectListing): Boolean =
+        captured.owner === this && captured.accountRevision == accountRevision
+
     fun selectProject(project: FrameioProject): Boolean {
         val listing = projectListing ?: return false
-        val folderID = project.rootFolderID?.takeIf { value -> value.isNotBlank() } ?: return false
-        val destination =
-            FrameioDestination(
-                accountID = listing.accountID,
-                workspaceID = listing.workspaceID,
-                projectID = project.id,
-                projectName = project.name,
-                folderID = folderID,
-            )
+        return selectProjectCaptured(project, FrameioCapturedProjectListing(this, accountRevision, listing)) { true }
+    }
+    fun selectProjectCaptured(project: FrameioProject, captured: FrameioCapturedProjectListing, current: () -> Boolean): Boolean {
+        if (!ownsProjects(captured) || !current() || !ownsProjects(captured)) return false
+        val listing = captured.listing
+        val folder = project.rootFolderID?.takeIf { it.isNotBlank() } ?: return false
+        val destination = FrameioDestination(listing.accountID, listing.workspaceID, project.id, project.name, folder)
+        if (!current() || !ownsProjects(captured)) return false
         destinationStore.save(destination)
+        if (!current() || !ownsProjects(captured)) return false
         selectedDestination = destination
         return true
     }
 
-    /** Creates and selects a project using the shared Codable request model. */
     suspend fun createProject(name: String) {
-        val config = requireConfiguration() ?: return
-        val listing = projectListing ?: run {
-            errorMessage = "Load Frame.io projects before creating a project."
-            return
-        }
-        if (!requireOnline()) return
-        projectState = FrameioProjectState.LOADING
-        errorMessage = null
+        val listing = projectListing ?: run { errorMessage = "Load Frame.io projects before creating a project."; return }
+        val context = FrameioCapturedProjectListing(this, accountRevision, listing)
+        projectState = FrameioProjectState.LOADING; errorMessage = null
         try {
-            val created =
-                apiResponse(
-                    operation = FrameioCoreOperation.CREATE_PROJECT,
-                    accessToken = accessToken(config),
-                    accountID = listing.accountID,
-                    workspaceID = listing.workspaceID,
-                    name = name,
-                ).let { response -> core.decodeProject(response) }
-                    ?: throw FrameioDeliveryException("Frame.io returned an invalid project response.")
-            val updated = listing.copy(projects = listing.projects + created)
-            projectListing = updated
+            val created = createProjectCaptured(name, context) { true }
+            if (!ownsProjects(context)) return
+            projectListing = listing.copy(projects = listing.projects + created)
             projectState = FrameioProjectState.READY
-            if (!selectProject(created)) {
-                errorMessage = "Frame.io created a project without an upload folder. Pick another project."
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            projectState = FrameioProjectState.ERROR
-            errorMessage = error.operatorMessage("Couldn't create the Frame.io project.")
-        }
+            if (!selectProject(created)) errorMessage = "Frame.io created a project without an upload folder. Pick another project."
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) { if (ownsProjects(context)) { projectState = FrameioProjectState.ERROR
+            errorMessage = error.operatorMessage("Couldn't create the Frame.io project.") } }
+    }
+    suspend fun createProjectCaptured(name: String, captured: FrameioCapturedProjectListing, current: () -> Boolean): FrameioProject {
+        val admitted = MonitorDeliveryAdmission { ownsProjects(captured) && current() && ownsProjects(captured) }
+        checkDeliveryAdmission(admitted)
+        val config = requireConfiguration() ?: throw FrameioDeliveryException(errorMessage ?: "Frame.io isn't configured.")
+        requireOnlineOrThrow(admitted)
+        val listing = captured.listing
+        val created = core.decodeProject(apiResponse(FrameioCoreOperation.CREATE_PROJECT,
+            accessToken(config, admitted), accountID = listing.accountID, workspaceID = listing.workspaceID,
+            name = name, admission = admitted)) ?: throw FrameioDeliveryException("Frame.io returned an invalid project response.")
+        checkDeliveryAdmission(admitted)
+        return created
     }
 
     /**
@@ -491,121 +540,139 @@ internal class FrameioDeliveryController(
         options: MediaDeliveryConfiguration = MediaDeliveryConfiguration(),
         onDeliveryState: (FrameioDeliveryState) -> Unit = {},
     ) {
-        val rejoinAfterDelivery = isInternetHopActive
-        // This captured report is attached to this invocation, independent of global UI sampling.
-        val publishDeliveryState: (FrameioDeliveryState) -> Unit = { state ->
-            deliveryState = state
-            onDeliveryState(state)
+        deliverCaptured(artifacts, options, MonitorDeliveryAdmission { true }, internetLease,
+            MonitorDeliveryOriginalService({ true }, {}, { null }), { it.share.displayName }, { it },
+            onDeliveryState = onDeliveryState)
+    }
+
+    /** Shared ordered batch over supplied complete originals; HTTP/export leaves retain native policy. */
+    suspend fun <R> deliverCaptured(
+        records: List<R>, options: MediaDeliveryConfiguration, source: MonitorDeliveryAdmission,
+        route: FrameioInternetLease?, originals: MonitorDeliveryOriginalService<R>, filename: (R) -> String,
+        stage: suspend (R) -> FrameioDeliveryArtifact,
+        onBatchProgress: (MonitorDeliveryBatchProgress) -> Unit = {},
+        onDeliveryState: (FrameioDeliveryState) -> Unit = {},
+        completion: MonitorDeliveryAdmission = source,
+        capturedProjects: FrameioCapturedProjectListing? = null,
+        capturedDestination: FrameioDestination? = null,
+    ): FrameioDeliveryState {
+        val revision = capturedProjects?.accountRevision ?: accountRevision
+        fun accountCurrent(): Boolean = accountRevision == revision && (capturedProjects == null || ownsProjects(capturedProjects))
+        val admission = MonitorDeliveryAdmission { accountCurrent() && source.isCurrent() && accountCurrent() }
+        val completionAdmission = MonitorDeliveryAdmission { accountCurrent() && completion.isCurrent() && accountCurrent() }
+        var publication: Any? = null
+        fun publish(state: FrameioDeliveryState) {
+            if (admission.isCurrent()) {
+                val next = Any()
+                publication = next
+                deliveryPublication = next
+                deliveryState = state
+                onDeliveryState(state)
+            }
         }
+        if (records.isEmpty()) {
+            val failed = FrameioDeliveryState.Failed("Only complete cached media can be delivered.")
+            publish(failed); route?.let { endInternetHop(it) }; return failed
+        }
+        if (!admission.isCurrent()) { route?.let { endInternetHop(it) }; return FrameioDeliveryState.Idle }
+        val config = requireConfiguration()
+        if (config == null) { route?.let { endInternetHop(it) }; return deliveryState }
+        if (!requireOnline()) {
+            val failed = FrameioDeliveryState.Failed(errorMessage ?: "Frame.io needs a validated internet connection.")
+            publish(failed); route?.let { endInternetHop(it) }; return failed
+        }
+        val destination = if (capturedProjects != null) capturedDestination else capturedDestination ?: selectedDestination
+        if (destination == null) {
+            val failed = FrameioDeliveryState.Failed("Pick a Frame.io project before uploading.")
+            publish(failed); route?.let { endInternetHop(it) }; return failed
+        }
+        var uploaded = 0; var skipped = 0; var failed = 0
+        var metadataFailures = 0; var cleanupFailures = 0; var historyFailures = 0
+        var firstFailure: String? = null
+        var cancelled: CancellationException? = null
+        fun failure(error: Exception) { failed += 1; if (firstFailure == null) firstFailure = error.operatorMessage("Upload failed.") }
         try {
-            if (artifacts.isEmpty()) {
-                publishDeliveryState(FrameioDeliveryState.Failed("Only complete cached media can be delivered."))
-                return
-            }
-            val config = requireConfiguration() ?: return
-            if (!requireOnline()) {
-                publishDeliveryState(FrameioDeliveryState.Failed(
-                        errorMessage ?: "Frame.io needs a validated internet connection.",
-                    ))
-                return
-            }
-            val destination = selectedDestination ?: run {
-                publishDeliveryState(FrameioDeliveryState.Failed("Pick a Frame.io project before uploading."))
-                return
-            }
-            var uploaded = 0
-            var skipped = 0
-            var failed = 0
-            var metadataFailures = 0
-            var cleanupFailures = 0
-            var historyFailures = 0
-            var firstFailure: String? = null
-            artifacts.forEachIndexed { index, artifact ->
-                val stableIdentity = artifact.context.stableClipIdentity
-                val alreadyUploaded =
-                    if (stableIdentity.isNotBlank() && !options.forceFrameioReupload) {
-                        try {
-                            withContext(Dispatchers.IO) {
-                                uploadHistory.wasUploaded(stableIdentity)
-                            }
-                        } catch (error: CancellationException) {
-                            throw error
-                        } catch (_: Exception) {
-                            failed += 1
-                            historyFailures += 1
-                            if (firstFailure == null) {
-                                firstFailure = "OpenZCine couldn't read the private Frame.io upload history."
-                            }
-                            return@forEachIndexed
+            val indexed = records.mapIndexed { index, value -> IndexedValue(index, value) }
+            val batch = MonitorDeliveryModel.runBatch<IndexedValue<R>, FrameioBatchArtifact, FrameioInternetLease>(
+                records = indexed, destination = MonitorDeliveryDestination.REMOTE_UPLOAD,
+                action = MonitorDeliveryPostExportAction.SYSTEM_SHARE, admission = admission,
+                originals = MonitorDeliveryOriginalService({ originals.available(it.value) },
+                    { originals.acquire(it.value) }, { originals.progress(it.value) }),
+                exporter = MonitorDeliveryExportService { item, _ ->
+                    try {
+                        val artifact = stage(item.value)
+                        checkDeliveryAdmission(admission)
+                        val identity = artifact.context.stableClipIdentity
+                        val already = if (identity.isNotBlank() && !options.forceFrameioReupload) {
+                            try { withContext(Dispatchers.IO) { uploadHistory.wasUploaded(identity) } }
+                            catch (error: CancellationException) { throw error }
+                            catch (error: Exception) { historyFailures += 1
+                                throw FrameioDeliveryException("OpenZCine couldn't read the private Frame.io upload history.") }
+                        } else false
+                        checkDeliveryAdmission(admission)
+                        if (already) { skipped += 1; null } else FrameioBatchArtifact(item.index + 1, artifact)
+                    } catch (error: CancellationException) { cancelled = error; throw error }
+                    catch (error: Exception) { failure(error); throw error }
+                }, share = null, photos = null,
+                upload = MonitorDeliveryUploadService("Uploading to Frame.io") { entered, progress ->
+                    val artifact = entered.artifact
+                    val index = entered.index
+                    try {
+                        publish(FrameioDeliveryState.Uploading(index, records.size, artifact.share.displayName, 0.0))
+                        checkDeliveryAdmission(admission)
+                        val outcome = uploadArtifact(config, destination, artifact, options, index, records.size, { state ->
+                            publish(state)
+                            if (state is FrameioDeliveryState.Uploading)
+                                progress((state.progress - 0.45) / 0.55)
+                        }, admission)
+                        if (outcome.metadataFailure) metadataFailures += 1
+                        if (outcome.cleanupFailure) cleanupFailures += 1
+                        uploaded += 1
+                        val identity = artifact.context.stableClipIdentity
+                        if (identity.isNotBlank()) {
+                            val saved = try { withContext(Dispatchers.IO) { uploadHistory.recordUploaded(identity) } }
+                                catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+                            if (!saved) historyFailures += 1
                         }
-                    } else {
-                        false
-                    }
-                if (alreadyUploaded) {
-                    skipped += 1
-                    return@forEachIndexed
-                }
-                publishDeliveryState(FrameioDeliveryState.Uploading(
-                        itemIndex = index + 1,
-                        itemCount = artifacts.size,
-                        filename = artifact.share.displayName,
-                        progress = 0.0,
-                    ))
-                try {
-                    val outcome =
-                        uploadArtifact(
-                            config,
-                            destination,
-                            artifact,
-                            options,
-                            index + 1,
-                            artifacts.size,
-                            publishDeliveryState,
-                        )
-                    if (outcome.metadataFailure) metadataFailures += 1
-                    if (outcome.cleanupFailure) cleanupFailures += 1
-                    uploaded += 1
-                    if (stableIdentity.isNotBlank()) {
-                        val historySaved =
-                            try {
-                                withContext(Dispatchers.IO) {
-                                    uploadHistory.recordUploaded(stableIdentity)
-                                }
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (_: Exception) {
-                                false
-                            }
-                        if (!historySaved) historyFailures += 1
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    failed += 1
-                    if (firstFailure == null) firstFailure = error.operatorMessage("Upload failed.")
-                }
+                    } catch (error: CancellationException) { cancelled = error; throw error }
+                    catch (error: Exception) { failure(error); throw error }
+                },
+                internet = MonitorDeliveryInternetService(needsHop = { false },
+                    begin = { error("A route is acquired by the existing preparation owner.") },
+                    owns = ::ownsInternetHop, wait = ::waitInternetHop,
+                    restoreEntered = { endInternetHop(it) }, restore = ::restoreInternetHopAfterDismiss),
+                initialLease = route, filename = { filename(it.value) },
+                policy = MonitorDeliveryBatchPolicy(emptySelection = "Only complete cached media can be delivered.",
+                    behavior = MonitorDeliveryBatchBehavior(emptyUploadSucceeds = true, singleUploadFailureUsesDetail = false)),
+                progress = onBatchProgress)
+            cancelled?.let { throw it }
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (!completionAdmission.isCurrent()) return FrameioDeliveryState.Idle
+            val result = if (batch is MonitorDeliveryBatchOutcome.Failed && failed == 0 && skipped == 0 && uploaded == 0)
+                FrameioDeliveryState.Failed(batch.message)
+            else FrameioDeliveryState.Completed(uploaded, failed, skipped, metadataFailures, cleanupFailures, historyFailures, firstFailure)
+            if (completionAdmission.isCurrent()) {
+                val next = Any()
+                publication = next
+                deliveryPublication = next
+                deliveryState = result
+                onDeliveryState(result)
             }
-            publishDeliveryState(FrameioDeliveryState.Completed(
-                    uploadedCount = uploaded,
-                    skippedCount = skipped,
-                    failedCount = failed,
-                    metadataFailureCount = metadataFailures,
-                    cleanupFailureCount = cleanupFailures,
-                    historyFailureCount = historyFailures,
-                    firstFailureMessage = firstFailure,
-                ))
+            return result
         } catch (error: CancellationException) {
-            publishDeliveryState(FrameioDeliveryState.Idle)
-            throw error
-        } finally {
-            if (rejoinAfterDelivery) {
-                withContext(NonCancellable) { endInternetHop() }
+            if (publication != null && deliveryPublication === publication) {
+                val next = Any()
+                deliveryPublication = next
+                deliveryState = FrameioDeliveryState.Idle
+                if (admission.isCurrent() && deliveryPublication === next) onDeliveryState(FrameioDeliveryState.Idle)
             }
+            throw error
         }
     }
 
     /** Clears a completed/failed delivery message when its overlay is dismissed. */
     fun clearDeliveryState() {
+        deliveryPublication = Any()
         deliveryState = FrameioDeliveryState.Idle
     }
 
@@ -643,9 +710,13 @@ internal class FrameioDeliveryController(
         itemIndex: Int,
         itemCount: Int,
         publishDeliveryState: (FrameioDeliveryState) -> Unit,
+        admission: MonitorDeliveryAdmission? = null,
     ): FrameioArtifactUploadOutcome {
+        checkDeliveryAdmission(admission)
         validateApprovedArtifact(artifact)
-        val accessToken = accessToken(config)
+        checkDeliveryAdmission(admission)
+        val accessToken = accessToken(config, admission)
+        checkDeliveryAdmission(admission)
         val prepared =
             artifactPreparer.prepare(artifact, options) { fraction ->
                 withContext(uiDispatcher) {
@@ -660,7 +731,9 @@ internal class FrameioDeliveryController(
         var metadataFailure = false
         var primaryFailure: Throwable? = null
         try {
+            checkDeliveryAdmission(admission)
             validateApprovedArtifact(prepared.share, prepared.byteCount)
+            checkDeliveryAdmission(admission)
             val filename = prepared.share.displayName
             val response =
                 apiResponse(
@@ -670,6 +743,7 @@ internal class FrameioDeliveryController(
                     folderID = destination.folderID,
                     name = filename,
                     fileSize = prepared.byteCount,
+                    admission = admission,
                 )
             val plan = core.decodeUploadPlan(response)
                 ?: throw FrameioDeliveryException("Frame.io returned an invalid upload plan.")
@@ -693,7 +767,7 @@ internal class FrameioDeliveryController(
             val uploadProgressStart =
                 if (options.bakeLut) PREPARATION_PROGRESS_SHARE else DIRECT_UPLOAD_PROGRESS_START
             plan.parts.forEach { part ->
-                requireOnlineOrThrow()
+                requireOnlineOrThrow(admission)
                 val sentBeforePart = offset
                 val result =
                     http.putUploadPart(
@@ -731,6 +805,7 @@ internal class FrameioDeliveryController(
                 itemCount = itemCount,
                 filename = filename,
                 publishDeliveryState = publishDeliveryState,
+                admission = admission,
             )
             metadataFailure = if (options.includeMetadata) {
                 try {
@@ -777,14 +852,16 @@ internal class FrameioDeliveryController(
         itemCount: Int,
         filename: String,
         publishDeliveryState: (FrameioDeliveryState) -> Unit,
+        admission: MonitorDeliveryAdmission? = null,
     ) {
         repeat(MAX_UPLOAD_STATUS_POLLS) { attempt ->
             val response =
                 apiResponse(
                     operation = FrameioCoreOperation.UPLOAD_STATUS,
-                    accessToken = accessToken(config),
+                    accessToken = accessToken(config, admission),
                     accountID = accountID,
                     fileID = fileID,
+                    admission = admission,
                 )
             when (core.decodeUploadComplete(response)) {
                 true -> {
@@ -811,19 +888,23 @@ internal class FrameioDeliveryController(
         fileID: String? = null,
         name: String? = null,
         fileSize: Long = 0,
+        admission: MonitorDeliveryAdmission? = null,
     ): String {
-        requireOnlineOrThrow()
+        requireOnlineOrThrow(admission)
         val request =
             core.apiRequest(operation, accountID, workspaceID, folderID, fileID, name, fileSize)
                 ?: throw FrameioDeliveryException("Frame.io support is unavailable in this install.")
+        checkDeliveryAdmission(admission)
         val response = http.execute(request, bearerToken = accessToken)
         requireSuccess(response, "Frame.io request")
         return response.body
     }
 
-    private suspend fun accessToken(config: FrameioPublicConfiguration): String {
+    private suspend fun accessToken(config: FrameioPublicConfiguration, admission: MonitorDeliveryAdmission? = null): String {
+        checkDeliveryAdmission(admission)
         val stored = secretStore.load().token
             ?: throw FrameioDeliveryException("Sign in to Frame.io from Settings → Storage first.")
+        checkDeliveryAdmission(admission)
         if (clock() < stored.expiresAtEpochMillis - REFRESH_EARLY_MILLIS) return stored.accessToken
         val refreshToken = stored.refreshToken
             ?: run {
@@ -831,18 +912,20 @@ internal class FrameioDeliveryController(
                 connectionState = FrameioConnectionState.SIGNED_OUT
                 throw FrameioDeliveryException("Your Frame.io session expired. Sign in again from Settings → Storage.")
             }
-        requireOnlineOrThrow()
+        requireOnlineOrThrow(admission)
         val request =
             core.tokenRequest(
                 kind = TOKEN_REFRESH,
                 config = config,
                 refreshToken = refreshToken,
             ) ?: throw FrameioDeliveryException("Frame.io could not prepare a token refresh.")
+        checkDeliveryAdmission(admission)
         val response =
             http.execute(
                 request = request,
                 contentType = "application/x-www-form-urlencoded",
             )
+        checkDeliveryAdmission(admission)
         if (response.statusCode !in 200..299) {
             secretStore.clearToken()
             connectionState = FrameioConnectionState.SIGNED_OUT
@@ -912,8 +995,15 @@ internal class FrameioDeliveryController(
         return false
     }
 
-    private fun requireOnlineOrThrow() {
-        if (requireOnline()) return
+    private fun checkDeliveryAdmission(admission: MonitorDeliveryAdmission?) {
+        if (admission != null && !admission.isCurrent()) throw CancellationException("Delivery source is no longer available.")
+    }
+
+    private fun requireOnlineOrThrow(admission: MonitorDeliveryAdmission? = null) {
+        checkDeliveryAdmission(admission)
+        val online = requireOnline()
+        checkDeliveryAdmission(admission)
+        if (online) return
         throw FrameioDeliveryException(errorMessage ?: "Frame.io needs a validated internet connection.")
     }
 

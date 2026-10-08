@@ -18,21 +18,19 @@ import com.opencapture.monitorui.settings.MonitorDisplaySettings
 import com.opencapture.monitorui.settings.MonitorDisplayToggle
 import com.opencapture.monitorui.settings.MonitorSettingsScrollContext
 import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.opencine.cameracontrols.MonitorOperatorBorrowedDisplay
 import com.opencapture.openzcine.R
 
 /** Existing saved values and admitted Nikon actions; common code owns the Display assembly. */
 @Composable
-internal fun NikonDisplaySettings(
+internal fun rememberNikonBorrowedDisplay(
     settings: OperatorSettings,
     assist: MonitorAssistState,
-    compact: Boolean,
     onToggle: (OperatorSettings.Toggle) -> Unit,
     onInteraction: () -> Unit,
-    parentScrollState: ScrollState,
-    viewportBounds: Rect?,
     liveCaptureMode: CaptureLayoutMode,
     onEditView: (MonitorDisplayMode) -> Unit,
-) {
+): MonitorOperatorBorrowedDisplay {
     var expandedMode by rememberSaveable { mutableStateOf<MonitorDisplayMode?>(null) }
     var pickedCapture by rememberSaveable { mutableStateOf<CaptureLayoutMode?>(null) }
     val capture = pickedCapture ?: liveCaptureMode
@@ -72,7 +70,7 @@ internal fun NikonDisplaySettings(
             pins = if (mode == MonitorDisplayMode.CLEAN) pins else emptyList(),
         )
     }
-    MonitorDisplaySettings(
+    return MonitorOperatorBorrowedDisplay(
         layoutTitle = stringResource(R.string.settings_layout_for),
         layoutHelp = stringResource(R.string.settings_layout_for_help),
         choices = CaptureLayoutMode.entries.map { MonitorDisplayChoice(it.name, it.title) },
@@ -85,10 +83,21 @@ internal fun NikonDisplaySettings(
         onExpand = { id -> expandedMode = MonitorDisplayMode.entries.firstOrNull { it.name == id }; onInteraction() },
         sections = sections,
         order = displayOrder(settings, onInteraction),
-        compact = compact,
-        onInteraction = onInteraction,
-        scrollContext = MonitorSettingsScrollContext(parentScrollState, viewportBounds),
     )
+}
+
+/** Compatibility leaf; production settings pass the same values into the complete shared page. */
+@Composable
+internal fun NikonDisplaySettings(
+    settings: OperatorSettings, assist: MonitorAssistState, compact: Boolean,
+    onToggle: (OperatorSettings.Toggle) -> Unit, onInteraction: () -> Unit,
+    parentScrollState: ScrollState, viewportBounds: Rect?, liveCaptureMode: CaptureLayoutMode,
+    onEditView: (MonitorDisplayMode) -> Unit,
+) {
+    val display = rememberNikonBorrowedDisplay(settings, assist, onToggle, onInteraction, liveCaptureMode, onEditView)
+    MonitorDisplaySettings(display.layoutTitle, display.layoutHelp, display.choices, display.selection,
+        display.onSelect, display.expandedSection, display.onExpand, display.sections, display.order,
+        compact, onInteraction, MonitorSettingsScrollContext(parentScrollState, viewportBounds))
 }
 
 @Composable

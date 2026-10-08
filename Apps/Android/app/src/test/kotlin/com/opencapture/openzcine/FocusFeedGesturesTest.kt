@@ -1,5 +1,8 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorFocusGestureState as FocusFeedGestureState
+import com.opencapture.monitorui.MonitorFocusGestureEvent as FocusFeedGestureEvent
+
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.LiveFocusBox
 import com.opencapture.opencine.nikon.LiveFocusInfo

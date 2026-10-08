@@ -30,8 +30,8 @@ final class MediaDeliveryCompositionTests: XCTestCase {
                         clip: movie.clip, maxCardHeight: size.height - 48,
                         onBeginDelivery: { requests.append($0) }, onClose: { closes += 1 }
                     ).environment(model).padding(20)))
-            let window = mount(host, size: size)
-            defer { retire(window) }
+            let (window, originalKeyWindow) = try mount(host, size: size)
+            defer { retire(window, restoring: originalKeyWindow) }
             try await activate(identifier: "monitor.share.destination.nativeShare", in: host)
             let back = try await element(identifier: "monitor.share.back", in: host, button: true)
             XCTAssertTrue(contained(back, in: window))
@@ -102,8 +102,8 @@ final class MediaDeliveryCompositionTests: XCTestCase {
             var expands = 0
             var collapses = 0
             let host = UIHostingController(rootView: AnyView(Color.clear))
-            let window = mount(host, size: size)
-            defer { retire(window) }
+            let (window, originalKeyWindow) = try mount(host, size: size)
+            defer { retire(window, restoring: originalKeyWindow) }
             for (index, state) in states.enumerated() {
                 host.rootView = AnyView(
                     MediaDeliveryOverlay(state: state, onCancel: { cancels += 1 }).padding(20))
@@ -172,21 +172,28 @@ final class MediaDeliveryCompositionTests: XCTestCase {
     }
 
     @MainActor
-    private func mount(_ host: UIViewController, size: CGSize) -> UIWindow {
-        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+    private func mount(_ host: UIViewController, size: CGSize) throws -> (UIWindow, UIWindow?) {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: size)
         host.view.backgroundColor = UIColor(MonitorTheme.background)
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.frame = window.bounds
         host.view.layoutIfNeeded()
         XCTAssertEqual(host.view.bounds.size, size)
-        return window
+        return (window, originalKeyWindow)
     }
 
     @MainActor
-    private func retire(_ window: UIWindow) {
+    private func retire(_ window: UIWindow, restoring originalKeyWindow: UIWindow?) {
         window.isHidden = true
         window.rootViewController = nil
+        originalKeyWindow?.makeKeyAndVisible()
     }
 
     @MainActor

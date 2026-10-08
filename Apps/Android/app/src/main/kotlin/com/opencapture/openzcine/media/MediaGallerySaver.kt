@@ -304,7 +304,7 @@ internal class MediaGallerySaver(private val gateway: MediaGalleryGateway) {
         return MediaGalleryBatchResult(savedCount = saved, failures = failures)
     }
 
-    private fun saveOne(
+    internal fun saveOne(
         artifact: MediaGalleryArtifact,
         cancellationCheck: () -> Unit,
     ): MediaGalleryFailure? {

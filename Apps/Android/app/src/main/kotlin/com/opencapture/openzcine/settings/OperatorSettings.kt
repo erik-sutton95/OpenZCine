@@ -502,7 +502,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         )
     }
 
-    private val chromeEditorModeState = mutableStateOf<MonitorDisplayMode?>(null)
+    internal val displaySession = com.opencapture.opencine.appkit.MonitorDisplaySession(MonitorDisplayMode.LIVE)
 
     /**
      * The DISP mode whose chrome the operator is editing on the monitor itself, or `null` when the
@@ -510,15 +510,15 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
      * operator in the editor.
      */
     public val chromeEditorMode: MonitorDisplayMode?
-        get() = chromeEditorModeState.value
+        get() = displaySession.editingMode
 
     /** Opens the Edit view on [mode]. The caller dismisses Operator Setup. */
     public fun beginChromeEditing(mode: MonitorDisplayMode) {
-        chromeEditorModeState.value = mode
+        displaySession.beginEditing(mode)
     }
 
     public fun endChromeEditing() {
-        chromeEditorModeState.value = null
+        displaySession.finishEditing(enabledDisplayModeOrder)
     }
 
     // Controls — all four are app-local behavior and therefore safe to expose

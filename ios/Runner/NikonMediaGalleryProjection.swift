@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
 import OpenCineNikon
@@ -176,5 +177,44 @@ extension NativeAppModel {
             photoSizes: mediaPhotoSizeFilters, dateWindow: mediaDateWindow,
             storage: mediaStorageSlotFilter,
             requireLocal: !isConnected, downloaded: isClipDownloaded)
+    }
+
+    /// Supplies current source metadata to the shared gallery and its typed filter form.
+    func mediaGalleryPresentation(_ pass: NikonAppGalleryProjection) -> MonitorMediaGalleryPresentation {
+        let options = pass.filterOptions
+        let slots = mediaBrowserSource == .camera ? mediaStorageSlots : []
+        return .init(projection: pass.result,
+            categories: MediaCategoryTab.allCases.map { .init(id: $0.id, title: $0.rawValue, count: pass.count(in: $0)) },
+            category: mediaCategoryTab.id, layout: mediaBrowserLayout,
+            thumbnailSize: mediaThumbnailSize, sortTitle: mediaSortOrder.rawValue.capitalized,
+            status: mediaFetchInProgress
+                ? (mediaFetchListedCount == 0 ? "Scanning…" : "Listing… \(mediaFetchListedCount) found")
+                : (isConnected && mediaBrowserSource == .camera ? "Camera + local cache" : "Available on this phone"),
+            activeFilterCount: mediaActiveFilterCount,
+            filters: .init(formats: options.formats.map(\.rawValue), resolutions: options.resolutions.map(\.rawValue),
+                photoSizes: options.photoSizes.map { .init(id: $0.rawValue, label: $0.rawValue) },
+                dateWindows: options.dateWindows.map { .init(id: $0.rawValue, label: $0.rawValue) },
+                storage: slots.map { .init(id: String($0.storageID), label: "SLOT \($0.slotNumber)") },
+                formatSelection: Set(mediaFormatFilters.map(\.rawValue)),
+                resolutionSelection: Set(mediaResolutionFilters.map(\.rawValue)),
+                photoSizeSelection: Set(mediaPhotoSizeFilters.map(\.rawValue)),
+                dateWindow: mediaDateWindow?.rawValue, storageID: mediaStorageSlotFilter.map(String.init)),
+            storage: slots.map { .init(id: String($0.storageID), title: "Slot \($0.slotNumber)",
+                summary: $0.summaryLine, selected: mediaStorageSlotFilter == $0.storageID) })
+    }
+
+    /// Applies a declared source choice; card labels never become storage identities.
+    func applyMediaGalleryFilter(_ action: MonitorMediaGalleryFilterAction) {
+        switch action {
+        case .format(let id): if let value = MediaFormatChip(rawValue: id) { toggleMediaFormatFilter(value) }
+        case .resolution(let id): if let value = NikonMediaResolutionBucket(rawValue: id) { toggleMediaResolutionFilter(value) }
+        case .photoSize(let id): if let value = NikonMediaPhotoSizeClass(rawValue: id) { toggleMediaPhotoSizeFilter(value) }
+        case .dateWindow(let id): if let value = NikonMediaDateWindow(rawValue: id) { toggleMediaDateWindow(value) }
+        case .storage(let id):
+            guard mediaBrowserSource == .camera, let value = UInt32(id),
+                mediaStorageSlots.contains(where: { $0.storageID == value }) else { return }
+            mediaStorageSlotFilter = mediaStorageSlotFilter == value ? nil : value
+        case .reset: clearMediaFilters()
+        }
     }
 }

@@ -92,7 +92,8 @@ import OpenZCineCore
                 representations: [representation: String(media.dropFirst(root.count))],
                 favoriteKey: clip.id),
             favorite: clip.isFavorited,
-            facts: .init(orderKey: clip.captureDate.isEmpty ? clip.filename : clip.captureDate),
+            facts: .init(orderKey: clip.captureDate.isEmpty ? clip.filename : clip.captureDate,
+                playbackEligible: clip.mediaKind == .photo || MediaClipFilename.isPlayableProxy(clip.filename)),
             favoriteAuthority: .legacyCombined,
             sourceFavorite: clip.starRating.map { $0 >= 1 })
     }
@@ -240,29 +241,34 @@ import OpenZCineCore
 /// Captured host authority for an already-admitted native action. Wire policy is unchanged.
 @MainActor final class NikonMediaLibraryAction {
     let owner: MonitorMediaLibraryModel<MediaClip>?
-    let token: MonitorMediaLibraryActionToken?
+    private let capturedToken: MonitorMediaLibraryActionToken?
+    private var deletionAuthority: MonitorMediaLibraryDeletionAuthority?
+    var token: MonitorMediaLibraryActionToken? { deletionAuthority?.actionToken ?? capturedToken }
     private let store: MediaClipStore
     private let codec: NikonMediaLibraryCodec
     private let bytes: NikonMediaLibraryByteStore?
     private let generation: UInt64
     private let namespace: String
     private let admitted: () -> Bool
+    private let canonicalCurrent: (() -> Bool)?
     private let expected: [String: MediaClip]
     private let previouslyAbsent: Set<String>
     private let capturedRecords: [MonitorMediaRecord<MediaClip>]
     init(
         owner: MonitorMediaLibraryModel<MediaClip>?, store: MediaClipStore,
         codec: NikonMediaLibraryCodec, bytes: NikonMediaLibraryByteStore?,
-        clips: [MediaClip], admitted: @escaping () -> Bool
+        clips: [MediaClip], canonicalCurrent: (() -> Bool)? = nil,
+        admitted: @escaping () -> Bool
     ) {
         self.owner = owner
-        token = owner?.actionToken
+        capturedToken = owner?.actionToken
         self.store = store
         self.codec = codec
         self.bytes = bytes
         generation = bytes?.generation ?? 0
         namespace = bytes?.namespace ?? store.root.absoluteString
         self.admitted = admitted
+        self.canonicalCurrent = canonicalCurrent
         var expected: [String: MediaClip] = [:]
         var absent: Set<String> = []
         for clip in clips {
@@ -281,16 +287,42 @@ import OpenZCineCore
             expected[row.payload.id].map { Self.sameContent($0, row.payload) } == true
         }
     }
-    var isCurrent: Bool {
+    /// Captured source/content check independent of the one explicit catalog preparation.
+    var sourceIsCurrent: Bool {
         admitted() && (bytes?.generation ?? 0) == generation
             && (bytes?.namespace ?? store.root.absoluteString) == namespace
-            && (token.map { owner?.isCurrent($0) == true } ?? true)
-            && expected.values.allSatisfy { old in
-                let current = store.list(cameraID: old.cameraID).first {
-                    $0.filename == old.filename
-                }
-                return current.map { Self.sameContent(old, $0) } ?? true
+            && capturedIndexMatches
+            && admitted() && (bytes?.generation ?? 0) == generation
+            && (bytes?.namespace ?? store.root.absoluteString) == namespace
+    }
+    /// Prepared content facts only. Delivery must also own its explicit route lease after a hop;
+    /// this value never admits a native camera action or a fresh library publication.
+    var contentIsCurrent: Bool {
+        if let canonicalCurrent {
+            return canonicalCurrent()
+                && (bytes?.namespace ?? store.root.absoluteString) == namespace
+                && capturedIndexMatches && canonicalCurrent()
+                && (bytes?.namespace ?? store.root.absoluteString) == namespace
+        }
+        return (bytes?.generation ?? 0) == generation
+            && (bytes?.namespace ?? store.root.absoluteString) == namespace
+            && capturedIndexMatches && (bytes?.generation ?? 0) == generation
+            && (bytes?.namespace ?? store.root.absoluteString) == namespace
+    }
+    private var capturedIndexMatches: Bool {
+        expected.values.allSatisfy { old in
+            let current = store.list(cameraID: old.cameraID).first {
+                $0.filename == old.filename
             }
+            return current.map { Self.sameContent(old, $0) } ?? true
+        }
+    }
+    var isCurrent: Bool {
+        sourceIsCurrent && (deletionAuthority?.isCurrent ?? true)
+            && (token.map { owner?.isCurrent($0) == true } ?? true)
+    }
+    func admitDeletion(_ authority: MonitorMediaLibraryDeletionAuthority) {
+        deletionAuthority = authority
     }
     func capturedClip(_ clip: MediaClip) -> MediaClip { expected[clip.id] ?? clip }
     func canMutate(_ clip: MediaClip) -> Bool {

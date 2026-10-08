@@ -20,9 +20,12 @@ import OpenCineMedia
     private var endObserver: NSObjectProtocol?
     private var probeAsset: AVURLAsset?
     private var metadataTask: Task<Void, Never>?
+    private var enteredTransfer: Task<Void, Never>?
+    private var preparationBarrier: (@MainActor () async -> Void)?
     private var facts = MonitorPlaybackMetadata()
     private let playable: @MainActor (AVURLAsset) async -> Bool
     private let poll: @MainActor () async throws -> Void
+    private let captureBeforePrepare: @MainActor () -> (@MainActor () async -> Void)
 
     /// Immutable actual clip/address/native primitive binding captured before preparation suspends.
     private struct Source {
@@ -40,11 +43,13 @@ import OpenCineMedia
         },
         poll: @escaping @MainActor () async throws -> Void = {
             try await Task.sleep(for: .milliseconds(400))
-        }
+        },
+        captureBeforePrepare: @escaping @MainActor () -> (@MainActor () async -> Void) = { {} }
     ) {
         self.player = player
         self.playable = playable
         self.poll = poll
+        self.captureBeforePrepare = captureBeforePrepare
     }
 
     func candidates(for clip: MediaClip, model: NativeAppModel) -> [MonitorPlaybackCandidate] {
@@ -66,9 +71,13 @@ import OpenCineMedia
         guard claimedOwner == nil || claimedOwner == admitted.owner else { return }
         guard claimedOwner != nil || admitted.revision == 0 else { return }
         guard token == nil || admitted.revision >= token!.revision else { return }
-        retireNativeItem()
         claimedOwner = admitted.owner
         token = admitted
+        let barrier = captureBeforePrepare()
+        guard current(admitted) else { return }
+        retireNativeItem()
+        guard current(admitted) else { return }
+        preparationBarrier = barrier
         source = nil
         facts = .init()
     }
@@ -78,6 +87,14 @@ import OpenCineMedia
         readyTimeout: Duration?
     ) async throws -> MonitorPlaybackMetadata {
         guard current(admitted), let captured = source, captured.item == item else {
+            throw MonitorPlaybackError.retired
+        }
+        let transfer = enteredTransfer, barrier = preparationBarrier
+        // Join only the outgoing native operation and delivery run captured at retirement.
+        // A later coordinator run must never become cleanup for this item.
+        await transfer?.value
+        await barrier?()
+        guard current(admitted), !Task.isCancelled, source?.item == captured.item else {
             throw MonitorPlaybackError.retired
         }
         if !captured.downloaded() {
@@ -212,6 +229,7 @@ import OpenCineMedia
             admitted.revision >= current.revision
         else { return }
         retireNativeItem()
+        guard token == current else { return }
         token = nil
         source = nil
         beforeItemRetirement = nil
@@ -221,12 +239,21 @@ import OpenCineMedia
 
     private func current(_ admitted: MonitorPlaybackItemToken) -> Bool { token == admitted }
 
+    /// Back joins the actual entered native task after the shared item owner retires it.
+    func captureEnteredTransferCleanup() -> (@MainActor () async -> Void) {
+        let captured = enteredTransfer
+        return { await captured?.value }
+    }
+
     private func retireNativeItem() {
         metadataTask?.cancel()
         metadataTask = nil
         probeAsset?.cancelLoading()
         probeAsset = nil
-        if let stream, let source { source.cancel(stream) }
+        if let stream, let source {
+            enteredTransfer = stream.task
+            source.cancel(stream)
+        }
         stream = nil
         // The actual audio tap must be detached before the AVPlayerItem is released.
         beforeItemRetirement?()

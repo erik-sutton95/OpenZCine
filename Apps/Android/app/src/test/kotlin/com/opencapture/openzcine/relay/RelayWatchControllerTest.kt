@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.relay
 
+import com.opencapture.opencine.nikonwire.MonitorRelayWire
+
 import com.opencapture.opencine.core.CameraCommandIntent
 import com.opencapture.opencine.core.CommandFailure
 import com.opencapture.opencine.core.CommandRejection

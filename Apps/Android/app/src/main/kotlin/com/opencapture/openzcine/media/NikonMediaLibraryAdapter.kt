@@ -3,6 +3,7 @@ package com.opencapture.openzcine.media
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.media.*
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonMediaLibraryAssets
 import com.opencapture.opencine.nikon.NikonMediaService
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +41,9 @@ internal class NikonMediaLibraryCodec(
                 representations = mapOf(asset.representations.single().id to cache.libraryRelativeAddress(value.bucket, MediaCacheObjectIdentity(clip))),
                 favoriteKey = key),
             favorite = false,
-            facts = MonitorMediaFilterFacts(orderKey = clip.captureDate.ifEmpty { clip.filename }),
+            facts = MonitorMediaFilterFacts(orderKey = clip.captureDate.ifEmpty { clip.filename },
+                playbackEligible = clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY ||
+                    clip.contentKind == NikonMediaContentKind.STILL_PHOTO),
             favoriteAuthority = MonitorMediaFavoriteAuthority.LEGACY_COMBINED,
             sourceFavorite = null)
     }
@@ -169,7 +172,9 @@ internal class NikonMediaLibraryActions(
     }
     inner class Capture(values: List<NikonLibraryClip>) {
         private val owner = currentOwner()
-        private val token = owner?.actionToken
+        private val capturedToken = owner?.actionToken
+        private var deletionAuthority: MonitorMediaLibraryDeletionAuthority? = null
+        private val token: MonitorMediaLibraryActionToken? get() = deletionAuthority?.actionToken ?: capturedToken
         private val codec = currentCodec()
         private val root = cache.rootDirectory
         private val stores = values.map { it.bucket }.distinct().associateWith(index::catalogByteStore)
@@ -189,16 +194,20 @@ internal class NikonMediaLibraryActions(
                 sameNikonActionContent(original.clip, it.payload.clip)
             } == true
         }
-        val isCurrent: Boolean get() {
+        val sourceIsCurrent: Boolean get() {
             owner?.state?.value // Establish the same synchronous published-state observation as actions.
-            return currentOwner() === owner && cache.rootDirectory == root &&
-                (token == null || owner?.isCurrent(token) == true) &&
+            return currentOwner() === owner && currentCodec() === codec && cache.rootDirectory == root &&
                 stores.all { (bucket, store) -> store.generation == generations[bucket] && store.namespace == namespaces[bucket] } &&
                 requested.values.all { old ->
                     val current = index.persistedClips(old.bucket).firstOrNull { it.libraryKey(old.bucket) == old.clip.libraryKey(old.bucket) }
                     current == null || sameNikonActionContent(expected[old.clip.libraryKey(old.bucket)] ?: old.clip, current)
-                }
+                } && currentOwner() === owner && currentCodec() === codec && cache.rootDirectory == root &&
+                stores.all { (bucket, store) -> store.generation == generations[bucket] && store.namespace == namespaces[bucket] }
         }
+        val isCurrent: Boolean get() = sourceIsCurrent && deletionAuthority?.isCurrent != false &&
+            (token?.let { owner?.isCurrent(it) == true } ?: true)
+        fun captureDeletionAuthority(): MonitorMediaLibraryDeletionAuthority? =
+            owner?.captureDeletion(MonitorMediaLibraryIOKey("catalog-deletion")) { sourceIsCurrent }
         private fun mutate(value: NikonLibraryClip, operation: () -> Unit): Boolean {
             val key = value.clip.libraryKey(value.bucket)
             val requestedValue = requested[key] ?: return false
@@ -223,22 +232,37 @@ internal class NikonMediaLibraryActions(
         /** Caller drains native transfer first and supplies each admitted native boolean result. */
         suspend fun deleteBatch(values: List<NikonLibraryClip>,
             deleteObject: suspend (NikonLibraryClip) -> Boolean,
-            onProgress: (Int, Int) -> Unit): Int {
-            var removed = 0
-            values.forEachIndexed { index, value ->
-                if (deleteObject(value)) {
-                    val purged = withContext(Dispatchers.IO) {
-                        mutate(value) {
-                            runCatching { cache.purgeEntry(value.bucket, MediaCacheObjectIdentity(value.clip)) }
-                            this@NikonMediaLibraryActions.index.purgeClip(value.bucket, value.clip) { isCurrent }
-                        }
+            onProgress: (Int, Int) -> Unit): Int =
+            deleteBatch(values, deleteObject, onProgress, accepted = null)
+        suspend fun deleteBatch(values: List<NikonLibraryClip>,
+            deleteObject: suspend (NikonLibraryClip) -> Boolean,
+            onProgress: (Int, Int) -> Unit,
+            accepted: MonitorMediaLibraryDeletionAuthority?,
+            preparation: MonitorMediaDeletionPreparation = MonitorMediaDeletionPreparation.PRESERVE_GALLERY,
+            prepare: () -> Unit = {},
+            afterFinish: (suspend (MonitorMediaLibraryDeletionAuthority) -> Unit)? = null): Int {
+            val authority = accepted ?: captureDeletionAuthority()
+            if (preparation == MonitorMediaDeletionPreparation.RETIRE_GALLERY) deletionAuthority = authority
+            val targets = values.map { MonitorMediaDeletionTarget(it, listOf(it)) }
+            val port = MonitorMediaDeletionPort<NikonLibraryClip, NikonLibraryClip>(remove = {
+                if (deleteObject(it)) MonitorMediaDeleteAcknowledgement.REMOVED else MonitorMediaDeleteAcknowledgement.RETAINED
+            }, commit = { value, survivors ->
+                if (survivors.isNotEmpty()) false else withContext(Dispatchers.IO) {
+                    mutate(value) {
+                        runCatching { cache.purgeEntry(value.bucket, MediaCacheObjectIdentity(value.clip)) }
+                        index.purgeClip(value.bucket, value.clip) { isCurrent }
                     }
-                    if (purged) removed += 1
                 }
-                if (isCurrent) onProgress(index + 1, values.size)
+            }, finish = {
+                publish()
+                if (authority?.isCompleting == true && sourceIsCurrent) afterFinish?.invoke(authority)
+            })
+            val progress: (MonitorMediaDeletionProgress) -> Unit = { value ->
+                if (value.completed > 0 && isCurrent) onProgress(value.completed, value.total)
             }
-            publish()
-            return removed
+            return if (owner != null && authority != null) owner.deleteHostBatch(authority, targets, values.size,
+                preparation, prepare, progress, port)
+            else MonitorMediaOrderedDeletion.run(targets, values.size, { isCurrent }, port, progress)
         }
         fun publish() {
             if (!isCurrent) return

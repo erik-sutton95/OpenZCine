@@ -248,38 +248,11 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
         }
         return
     }
-    val tint = if (locked) LiveDesign.accent else LiveDesign.text.copy(alpha = 0.86f)
-    // iOS says the same two things about this button — a label and an accessibilityHint
-    // (MonitorUnified.swift:1092-1093). Compose has no hint slot, so both ride the description and
-    // TalkBack speaks the identical words; the engaged state rides `toggleableState`, which the
-    // system localises, rather than a pair of strings this app would have to keep in step.
     val lockLabel = stringResource(R.string.a11y_monitor_lock)
     val lockHint = stringResource(R.string.a11y_monitor_lock_hint)
-    Box(
-        modifier =
-            modifier
-                .glass(ChromeShape)
-                .then(
-                    if (locked) {
-                        Modifier.border(
-                            1.5.dp,
-                            LiveDesign.accent.copy(alpha = 0.75f),
-                            ChromeShape,
-                        )
-                    } else {
-                        Modifier
-                    },
-                )
-                .chromeClickable(onClick)
-                .semantics {
-                    contentDescription = "$lockLabel. $lockHint"
-                    role = Role.Switch
-                    toggleableState = ToggleableState(locked)
-                },
-        contentAlignment = Alignment.Center,
-    ) {
-        MonitorIcon(MonitorIcon.LOCK, null, Modifier.size(17.dp), tint)
-    }
+    com.opencapture.opencine.cameracontrols.LockButton(
+        locked = locked, label = "$lockLabel. $lockHint", modifier = modifier, onClick = onClick)
+
 }
 
 /** DISP pill: label over mode dashes, the active dash lit (iOS `displayButton`). */
@@ -290,44 +263,11 @@ fun DispButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    // Label ink matches iOS. The active dash carries the brand accent.
-    val labelColor = LiveDesign.text
-    // "DISP" plus dashes says nothing out loud. iOS labels the same button "Change display mode"
-    // (MonitorUnified.swift).
-    val dispLabel = stringResource(R.string.a11y_monitor_disp)
-    Column(
-        modifier =
-            modifier
-                .glass(ChromeShape)
-                .chromeClickable(onClick)
-                .semantics {
-                    contentDescription = dispLabel
-                    role = Role.Button
-                },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            stringResource(R.string.monitor_disp),
-            style = chromeStyle(12f, FontWeight.Bold),
-            color = labelColor,
-        )
-        Row(
-            Modifier.padding(top = 3.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            repeat(modeCount) { index ->
-                Box(
-                    Modifier.size(width = 14.dp, height = 3.dp)
-                        .background(
-                            if (index == activeIndex) LiveDesign.accent
-                            else LiveDesign.faint,
-                            CircleShape,
-                        ),
-                )
-            }
-        }
-    }
+    com.opencapture.monitorui.MonitorDisplayButton(
+        activeIndex = activeIndex.takeIf { it in 0 until modeCount }, modeCount = modeCount,
+        description = stringResource(R.string.a11y_monitor_disp), width = 54f, height = 54f,
+        modifier = modifier, onClick = onClick)
+
 }
 
 /**

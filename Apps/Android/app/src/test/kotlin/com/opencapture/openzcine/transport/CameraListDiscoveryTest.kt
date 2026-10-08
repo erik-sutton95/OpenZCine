@@ -5,7 +5,7 @@ import com.opencapture.opencine.nikon.NikonDialPurpose
 import com.opencapture.opencine.nikon.NikonDialer
 import com.opencapture.opencine.nikon.NikonLocalInterface
 import com.opencapture.opencine.nikon.NikonPresence
-import com.opencapture.openzcine.relay.MonitorRelayWire
+import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.openzcine.relay.RelayPresence
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test

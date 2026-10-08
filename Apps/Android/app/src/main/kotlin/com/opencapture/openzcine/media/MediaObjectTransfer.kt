@@ -1,5 +1,11 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.appkit.MonitorDeliveryAdmission
+import com.opencapture.opencine.appkit.MonitorDeliveryDestination
+import com.opencapture.opencine.appkit.MonitorDeliveryModel
+import com.opencapture.opencine.appkit.MonitorDeliveryOriginalService
+import com.opencapture.opencine.appkit.cacheOriginals
+import kotlinx.coroutines.CancellationException
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.openzcine.bridge.SwiftCore
 import java.io.IOException
@@ -209,34 +215,66 @@ internal suspend fun cacheSelectionForDelivery(
     /** `(1-based index among clips being cached, count being cached, clip, 0…1)`. */
     onProgress: (Int, Int, MediaDeliverySelection, Double) -> Unit = { _, _, _, _ -> },
 ): MediaDeliveryCachePass {
-    val resolved =
-        withContext(ioContext) {
-            selection.map { item -> completedDeliveryEntryOrNull(cacheStore, item) }
-        }.toMutableList()
-    val cachingCount = resolved.count { it == null }
-    var cachingIndex = 0
-    selection.forEachIndexed { index, item ->
-        if (resolved[index] != null) return@forEachIndexed
-        currentCoroutineContext().ensureActive()
-        cachingIndex += 1
-        if (!cameraTransferAvailable) return@forEachIndexed
-        onProgress(cachingIndex, cachingCount, item, 0.0)
-        val position = cachingIndex
-        resolved[index] =
-            cacheOneClipForDelivery(
-                cacheStore = cacheStore,
-                item = item,
-                bridge = bridge,
-                ioContext = ioContext,
-                pollIntervalMillis = pollIntervalMillis,
-                report = { fraction -> onProgress(position, cachingCount, item, fraction) },
-            )
-    }
-    val items =
-        selection.mapIndexedNotNull { index, item ->
-            resolved[index]?.let { entry -> MediaDeliveryWorkItem(item.cameraID, item.clip, entry) }
-        }
+    val originals = NikonDeliveryOriginals(selection, cacheStore, cameraTransferAvailable,
+        bridge, MonitorDeliveryAdmission { true }, ioContext, pollIntervalMillis)
+    originals.loadCompleteEntries()
+    val missing = selection.filter { !originals.service.available(it) }
+    val cached = MonitorDeliveryModel.cacheOriginals(
+        records = selection, destination = MonitorDeliveryDestination.NATIVE_SHARE,
+        admission = originals.admission, originals = originals.service,
+        filename = { it.clip.filename }, sleep = { delay(pollIntervalMillis) },
+        progress = { value ->
+            if (cameraTransferAvailable) missing.getOrNull(value.clipIndex - 1)?.let { item ->
+                onProgress(value.clipIndex, value.totalClips, item, value.clipFraction)
+            }
+        },
+    ) ?: throw CancellationException("Delivery cache source retired.")
+    val items = cached.ready.mapNotNull(originals::workItem)
     return MediaDeliveryCachePass(items, uncachedCount = selection.size - items.size)
+}
+
+/** Captured native cache facts and the original one-clip SDK port; shared owners order the work. */
+internal class NikonDeliveryOriginals(
+    private val selection: List<MediaDeliverySelection>,
+    private val cacheStore: MediaCacheStore,
+    private val cameraTransferAvailable: Boolean,
+    private val bridge: MediaObjectTransferBridge,
+    val admission: MonitorDeliveryAdmission,
+    private val ioContext: CoroutineContext = Dispatchers.IO,
+    private val pollIntervalMillis: Long = CACHE_PASS_POLL_MILLIS,
+) {
+    private val resolved = mutableMapOf<MediaDeliverySelection, MediaCacheEntry?>()
+    suspend fun loadCompleteEntries() = withContext(ioContext) {
+        for (item in selection) {
+            if (!admission.isCurrent()) throw CancellationException("Delivery cache source retired.")
+            resolved[item] = completedDeliveryEntryOrNull(cacheStore, item)
+        }
+    }
+    val service = MonitorDeliveryOriginalService<MediaDeliverySelection>(
+        available = { resolved[it]?.state == MediaCacheState.COMPLETE },
+        acquire = { item ->
+            if (cameraTransferAvailable && admission.isCurrent()) {
+                // Size resolution and first native start still address the captured connection owner.
+                val admittedBridge = object : MediaObjectTransferBridge {
+                    override val isAvailable get() = admission.isCurrent() && bridge.isAvailable
+                    override fun resolveMediaSize(handle: Int, reportedSize: Long): Long =
+                        if (admission.isCurrent()) bridge.resolveMediaSize(handle, reportedSize) else -1L
+                    override fun startMediaTransfer(handle: Int, reportedSize: Long, resumeOffset: Long,
+                        listener: NikonNative.MediaTransferListener) {
+                        if (admission.isCurrent()) bridge.startMediaTransfer(handle, reportedSize, resumeOffset, listener)
+                        else listener.onFailed("Delivery cache source retired.")
+                    }
+                    override fun stopMediaTransfer() = bridge.stopMediaTransfer()
+                }
+                resolved[item] = cacheOneClipForDelivery(cacheStore, item, admittedBridge, ioContext,
+                    pollIntervalMillis, report = {}, onEntry = { resolved[item] = it })
+            }
+        },
+        progress = { resolved[it]?.progress },
+    )
+    fun workItem(item: MediaDeliverySelection): MediaDeliveryWorkItem? = resolved[item]?.let {
+        if (it.state == MediaCacheState.COMPLETE) MediaDeliveryWorkItem(item.cameraID, item.clip, it) else null
+    }
 }
 
 /** Operator sentence for a pre-pass that could not bring every selected clip across. */
@@ -267,6 +305,7 @@ private suspend fun cacheOneClipForDelivery(
     ioContext: CoroutineContext,
     pollIntervalMillis: Long,
     report: (Double) -> Unit,
+    onEntry: (MediaCacheEntry) -> Unit = {},
 ): MediaCacheEntry? {
     val preparation =
         withContext(ioContext) {
@@ -279,6 +318,7 @@ private suspend fun cacheOneClipForDelivery(
             )
         }
     val entry = (preparation as? MediaTransferPreparation.Ready)?.entry ?: return null
+    onEntry(entry)
     var completed = false
     try {
         while (true) {

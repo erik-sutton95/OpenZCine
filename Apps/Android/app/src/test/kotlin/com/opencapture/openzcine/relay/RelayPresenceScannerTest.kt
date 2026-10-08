@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.relay
 
+import com.opencapture.opencine.nikonwire.MonitorRelayWire
+
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

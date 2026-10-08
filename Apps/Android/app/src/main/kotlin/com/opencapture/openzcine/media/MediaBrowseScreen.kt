@@ -1,29 +1,28 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.cameracontrols.MonitorOperatorCatalogScreen
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryPresentation
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryEmpty
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilters
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFileFacts
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryNavigation
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilterAction
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryStorage
+import com.opencapture.opencine.appkit.MonitorMediaGalleryOperations
+import com.opencapture.opencine.appkit.MonitorMediaGalleryOpen
+import com.opencapture.opencine.appkit.MonitorMediaRecord
+import com.opencapture.opencine.appkit.MonitorMediaGalleryDeletion
+import com.opencapture.opencine.appkit.MonitorMediaGalleryAccess
+import com.opencapture.opencine.appkit.MonitorMediaDeletionPreparation
+import com.opencapture.opencine.appkit.MonitorMediaLibraryActionToken
+
 import com.opencapture.monitorui.MonitorIcon
-import com.opencapture.monitorui.MonitorClipCard
-import com.opencapture.monitorui.MonitorCatalogDisplayControls
-import com.opencapture.monitorui.MonitorCatalogHeader
-import com.opencapture.monitorui.MonitorMediaNavigation
-import com.opencapture.monitorui.MonitorMediaNavigationCategory
-import com.opencapture.monitorui.MonitorMediaFilterForm
 import com.opencapture.monitorui.MonitorMediaFilterChoice
-import com.opencapture.monitorui.MonitorMediaFilterChipLayout
-import com.opencapture.monitorui.MonitorMediaPhotoSizeChoices
-import com.opencapture.monitorui.MonitorMediaDateWindowChoices
-import com.opencapture.monitorui.MonitorMediaStorageChoices
-import com.opencapture.monitorui.MonitorPageHeading
-import com.opencapture.monitorui.MonitorPageScaffold
 import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaSelectionConfiguration
-import com.opencapture.monitorui.MonitorMediaSelectionFeedback
-import com.opencapture.monitorui.MonitorMediaSelectionHost
-import com.opencapture.monitorui.MonitorMediaHitTarget
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.NikonAssists
-import com.opencapture.openzcine.framing
-import com.opencapture.openzcine.performOperatorHaptic
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import android.content.Context
 import android.graphics.Bitmap
@@ -31,61 +30,32 @@ import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import android.view.HapticFeedbackConstants
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.setValue
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.media.MediaCatalog
-import kotlin.properties.ReadWriteProperty
-import kotlin.reflect.KProperty
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -93,18 +63,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -116,8 +80,6 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
-import com.opencapture.openzcine.frameio.FrameioDeliveryArtifact
-import com.opencapture.openzcine.frameio.FrameioArtifactContext
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
@@ -128,23 +90,13 @@ import com.opencapture.opencine.nikon.CameraStorageSlotStatus
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
-import kotlin.math.abs
-import kotlin.math.roundToInt
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonMediaClips
 import com.opencapture.opencine.nikon.NikonNative
-import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.monitorui.MonitorMediaLayout
-import androidx.compose.ui.platform.LocalConfiguration
-import com.opencapture.monitorui.monitorCatalogColumns
-import com.opencapture.monitorui.MonitorCatalogGrid
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
 internal sealed interface BrowseState {
@@ -167,61 +119,6 @@ internal fun incompleteCameraBrowseState(partialClips: List<NikonMediaClipRecord
     return BrowseState.Failed(
         "Listing stopped after ${partialClips.size} $itemLabel. Retry to load the complete library.",
     )
-}
-
-/** Outcome of staging the safe subset of a multi-selection for Android sharing. */
-private data class BatchShareResult(
-    val staged: List<StagedMediaShare>,
-    val stagedClips: List<NikonMediaClipRecord>,
-    val incompleteCount: Int,
-    val failedCount: Int,
-    val firstFailure: String?,
-)
-
-/**
- * Stages the exact same immutable ready copies for native Share, Gallery, and
- * Frame.io delivery. This is intentionally the only bridge from a camera cache
- * entry to an external destination; progressive `.part` files never reach it.
- */
-private fun stageSelectedMedia(
-    context: Context,
-    cacheStore: MediaCacheStore,
-    cameraID: String,
-    selection: List<NikonMediaClipRecord>,
-    cameraIDFor: (NikonMediaClipRecord) -> String = { cameraID },
-    cancellationCheck: () -> Unit = {},
-): BatchShareResult {
-    val stager = MediaShareStager(context.cacheDir.toPath())
-    val staged = mutableListOf<StagedMediaShare>()
-    val stagedClips = mutableListOf<NikonMediaClipRecord>()
-    var incomplete = 0
-    var failed = 0
-    var firstFailure: String? = null
-    selection.forEach { clip ->
-        cancellationCheck()
-        val entry =
-            runCatching {
-                cacheStore.completedEntryOrNull(
-                    cameraIDFor(clip),
-                    MediaCacheObjectIdentity(clip),
-                    clip.sizeBytes,
-                )
-            }.getOrNull()
-        if (entry == null) {
-            incomplete += 1
-            return@forEach
-        }
-        try {
-            staged += stager.stage(entry, clip, cancellationCheck)
-            stagedClips += clip
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            failed += 1
-            if (firstFailure == null) firstFailure = error.message
-        }
-    }
-    return BatchShareResult(staged, stagedClips, incomplete, failed, firstFailure)
 }
 
 /** Privacy-bounded details attached to Android's share intent only when requested. */
@@ -374,6 +271,7 @@ internal fun mediaLibrarySourceForConnection(cameraConnected: Boolean): MediaLib
  */
 @Composable
 internal fun MediaBrowseScreen(
+    cacheStore: MediaCacheStore,
     cameraID: String,
     cameraConnected: Boolean,
     cameraSessionAvailable: Boolean = true,
@@ -415,10 +313,6 @@ internal fun MediaBrowseScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val cacheStore =
-        remember(context) {
-            MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
-        }
     val libraryIndex =
         remember(context, catalogIndex) {
             catalogIndex ?: MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
@@ -511,31 +405,20 @@ internal fun MediaBrowseScreen(
     var deleteConfirmTargets by remember { mutableStateOf<List<NikonMediaClipRecord>?>(null) }
     var playingClip by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
     var viewingPhoto by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
+    var openedPhotoLibrary by remember { mutableStateOf<MonitorMediaLibraryModel<NikonLibraryClip>?>(null) }
+    var photoOpening by remember { mutableStateOf<MonitorMediaGalleryOpen<NikonLibraryClip>?>(null) }
+    var seriesFrames by remember { mutableStateOf<List<MonitorMediaRecord<NikonLibraryClip>>>(emptyList()) }
     // The representative of a burst series whose members are being browsed (Manage series).
     var seriesRepresentative by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var autoPlayHandled by remember { mutableStateOf(false) }
-    val selection = NikonMediaLibrarySelection(owner = { library }, observe = { libraryState })
-    var isSelecting by object : ReadWriteProperty<Any?, Boolean> {
-        override fun getValue(thisRef: Any?, property: KProperty<*>): Boolean = selection.selecting
-        override fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
-            selection.selecting = value
-        }
-    }
-    var selectedIDs by object : ReadWriteProperty<Any?, Set<String>> {
-        override fun getValue(thisRef: Any?, property: KProperty<*>): Set<String> = selection.selectedKeys
-        override fun setValue(thisRef: Any?, property: KProperty<*>, value: Set<String>) {
-            selection.selectedKeys = value
-        }
-    }
-    var readySelectionIDs by remember { mutableStateOf(emptySet<String>()) }
-    var shareInProgress by remember { mutableStateOf(false) }
+    var deliverySelection by remember(cameraID) { mutableStateOf<List<NikonLibraryClip>>(emptyList()) }
+    var deliveryAdmission by remember(cameraID) { mutableStateOf<MonitorMediaLibraryActionToken?>(null) }
+    var deliveryHost by remember { mutableStateOf<NikonMediaDeliveryHost?>(null) }
+    val deliveryDisplay by mediaDeliveryCoordinator.display.collectAsState()
+    val shareInProgress = deliveryDisplay.overlay != null
     var shareMessage by remember { mutableStateOf<String?>(null) }
-    var shareJob by remember { mutableStateOf<Job?>(null) }
-    var frameioPreparationInProgress by remember { mutableStateOf(false) }
-    var nativeDeliveryPresented by remember { mutableStateOf(false) }
     var filters by remember(cameraID) { mutableStateOf(MediaLibraryFilters()) }
-    var filterDialogPresented by remember { mutableStateOf(false) }
     var browseStorageSlots by
         remember(cameraID) { mutableStateOf<List<CameraStorageSlotStatus>?>(null) }
 
@@ -545,17 +428,11 @@ internal fun MediaBrowseScreen(
         val coerced = updated.copy(source = librarySource)
         options = coerced
         libraryIndex.saveViewOptions(coerced)
-        isSelecting = false
-        selectedIDs = emptySet()
-        readySelectionIDs = emptySet()
         shareMessage = null
-        nativeDeliveryPresented = false
     }
 
     fun updateFilters(updated: MediaLibraryFilters) {
         filters = updated
-        isSelecting = false
-        selectedIDs = emptySet()
     }
 
     fun toggleStorageSlot(storageId: Long) {
@@ -563,19 +440,13 @@ internal fun MediaBrowseScreen(
     }
 
     fun exitSelection() {
-        isSelecting = false
-        selectedIDs = emptySet()
-        readySelectionIDs = emptySet()
-        nativeDeliveryPresented = false
+        library?.clearSelection()
+        deliverySelection = emptyList(); deliveryAdmission = null
     }
 
     fun cancelActiveShareOrExitSelection() {
-        val activeShare = shareJob
-        if (!shareInProgress || activeShare == null) {
-            exitSelection()
-            return
-        }
-        activeShare.cancel()
+        val outgoing = deliveryHost?.capturedRun
+        if (shareInProgress && outgoing != null) outgoing.cancel() else exitSelection()
     }
 
     LaunchedEffect(cameraID, offlineCameraIDs) {
@@ -612,7 +483,7 @@ internal fun MediaBrowseScreen(
                     cacheStore.completedEntryOrNull(cameraID, MediaCacheObjectIdentity(clip), clip.sizeBytes)
                 }.getOrNull() != null })
             owner = MonitorMediaLibraryModel(
-                cache = MonitorMediaCache(MonitorMediaCacheDirectory(context.noBackupFilesDir.resolve("media-cache")), codec,
+                cache = MonitorMediaCache(cacheStore.libraryDirectory, codec,
                     eligibility = MonitorMediaOriginalEligibility.ExactSize,
                     catalogAddress = libraryIndex.catalogByteStore(cameraID).namespace, preservedMetadata = emptyList(),
                     catalogStore = libraryIndex.catalogByteStore(cameraID)),
@@ -654,7 +525,7 @@ internal fun MediaBrowseScreen(
             if (actual.state.value.browsing) actual.refresh() else actual.begin()
             actual.state.collect { snapshot ->
                 val binding = actual.binding
-                if (library !== actual) return@collect
+                if (library !== actual || !snapshot.browsing) return@collect
                 val clips = if (binding != null && connectedSource.isCurrent(binding)) {
                     NikonMediaClips.newestFirst(snapshot.catalog.assets.mapNotNull { asset ->
                         connectedSource.mediaCatalogRecord(asset.id, binding)?.clip
@@ -666,7 +537,16 @@ internal fun MediaBrowseScreen(
                     else BrowseState.Loaded(clips, isLoadingMore = snapshot.fetching)
                 if (autoPlayFirstProxy && !autoPlayHandled && !snapshot.fetching) {
                     autoPlayHandled = true
-                    playingClip = clips.firstOrNull { it.contentKind == NikonMediaContentKind.PLAYABLE_PROXY }
+                    val first = snapshot.records.firstOrNull {
+                        it.payload.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY
+                    }
+                    if (first != null) {
+                        openedPhotoLibrary = actual
+                        photoOpening = MonitorMediaGalleryOpen(first,
+                            snapshot.records.filter { it.facts.playbackEligible != false &&
+                                (it.facts.presentationKind ?: it.asset.kind) == first.asset.kind }, actual.actionToken)
+                        playingClip = first.payload.clip
+                    }
                 }
             }
         }
@@ -759,43 +639,7 @@ internal fun MediaBrowseScreen(
     fun burstMembers(representative: NikonMediaClipRecord): List<NikonMediaClipRecord> =
         projection.members(representative, ::clipKey)
     fun hasRawSibling(clip: NikonMediaClipRecord): Boolean = projection.hasRawSibling(clip, ::clipKey)
-    val selectedClips = projection.selected(selectedIDs)
-    val selectedSeriesClips = projection.expanded(selectedClips, ::clipKey)
-    val visibleIDs = projection.visibleKeys
-
-    LaunchedEffect(visibleIDs) {
-        val retained = MediaLibrarySelection.retainVisible(selectedIDs, visibleIDs)
-        if (retained != selectedIDs) selectedIDs = retained
-        if (retained.isEmpty()) isSelecting = false
-    }
-
-    // Only the delivery popup reads this, and it stats every selected clip on disk. Keyed on the
-    // ID set rather than the rebuilt clip list so it doesn't restart on unrelated recompositions,
-    // and skipped entirely while no popup is up — otherwise every selection tap paid for a disk
-    // fan-out plus the second full pass of this screen that writing the result triggers.
-    LaunchedEffect(
-        cameraID,
-        offlineClipOwners,
-        selectedIDs,
-        nativeDeliveryPresented,
-    ) {
-        if (!nativeDeliveryPresented) return@LaunchedEffect
-        readySelectionIDs =
-            withContext(Dispatchers.IO) {
-                selectedClips.mapNotNull { clip ->
-                    val owner = ownerCameraID(clip)
-                    val complete =
-                        runCatching {
-                            cacheStore.completedEntryOrNull(
-                                owner,
-                                MediaCacheObjectIdentity(clip),
-                                clip.sizeBytes,
-                            )
-                        }.getOrNull()
-                    clip.libraryKey(owner).takeIf { complete != null }
-                }.toSet()
-            }
-    }
+    val selectedClips = deliverySelection.map { it.clip }
     val selectedLut = assists.lut
     val selectedLutLabel =
         when (selectedLut) {
@@ -845,10 +689,75 @@ internal fun MediaBrowseScreen(
     }
     fun mirrorRating(clip: NikonMediaClipRecord, stars: Int) { captureRatingCompletion(clip).mirror(stars) }
 
-    fun open(clip: NikonMediaClipRecord) {
+    fun galleryOperations(actual: MonitorMediaLibraryModel<NikonLibraryClip>): MonitorMediaGalleryOperations<NikonLibraryClip> = MonitorMediaGalleryOperations<NikonLibraryClip>(
+        favorite = { record -> toggleFavorite(record.payload.clip) },
+        access = { record -> MonitorMediaGalleryAccess(
+            share = !shareInProgress,
+            delete = librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected &&
+                !shareInProgress,
+        ) },
+        openNotice = { record -> when (record.payload.clip.contentKind) {
+            NikonMediaContentKind.R3D_MASTER -> "${record.payload.clip.filename} is a camera master; preview is unavailable."
+            NikonMediaContentKind.UNSUPPORTED -> "${record.payload.clip.filename} has no Android preview yet."
+            else -> null
+        } },
+        deletionMessage = { rows -> deleteConfirmationMessage(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID) },
+        acceptedDeletion = MonitorMediaGalleryDeletion(
+            capture = { rows ->
+                val targets = cameraDeletionTargets(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID)
+                libraryActions.capture(targets.map { NikonLibraryClip(ownerCameraID(it), it) }).captureDeletionAuthority()
+            }, perform = { rows, authority ->
+                val targets = cameraDeletionTargets(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID)
+                    .map { NikonLibraryClip(ownerCameraID(it), it) }
+                val action = libraryActions.capture(targets)
+                val nativeOwner = connectionOwner
+                val browseBinding = actual.binding
+                val browseSource = librarySourceOwner
+                // SDK drain stays source-specific; the Library retires all gallery work itself.
+                if (authority.isCurrent && action.isCurrent) withContext(Dispatchers.IO) {
+                    if (SwiftCore.isAvailable && authority.isCurrent) nativeOwner?.let(NikonNative::sessionStopMediaTransfer)
+                }
+                action.deleteBatch(targets, deleteObject = { value ->
+                    withContext(Dispatchers.IO) {
+                        SwiftCore.isAvailable && nativeOwner != null &&
+                            NikonNative.sessionDeleteObject(nativeOwner, value.clip.handle.toInt())
+                    }
+                }, onProgress = { _, _ -> }, accepted = authority,
+                    preparation = MonitorMediaDeletionPreparation.RETIRE_GALLERY,
+                    prepare = { browseBinding?.let { browseSource?.retireBrowse(it) } },
+                    afterFinish = { completed ->
+                        if (completed.isCompleting && action.sourceIsCurrent) {
+                            val updated = withContext(Dispatchers.IO) {
+                                (offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID))
+                                    .flatMap { libraryIndex.favoriteIDs(it) }.toSet()
+                            }
+                            if (completed.isCompleting && action.sourceIsCurrent) {
+                                favorites = updated
+                                actual.relist(after = completed)
+                            }
+                        }
+                    })
+            },
+        ),
+    )
+
+    fun open(clip: NikonMediaClipRecord, captured: MonitorMediaGalleryOpen<NikonLibraryClip>? = null) {
+        val actual = library ?: return
+        val record = captured?.record ?: actual.state.value.records.firstOrNull {
+            it.payload.clip.libraryKey(it.payload.bucket) == clipKey(clip)
+        } ?: return
+        val opening = captured ?: MonitorMediaGalleryOpen(record,
+            actual.displayedRecords.filter { it.facts.playbackEligible != false &&
+                (it.facts.presentationKind ?: it.asset.kind) == (record.facts.presentationKind ?: record.asset.kind) }, actual.actionToken)
+        if (!actual.isCurrent(opening.admission)) return
+        openedPhotoLibrary = actual
+        photoOpening = opening
         // A burst representative opens the series view (its other frames are hidden in the grid).
         if (burstByRepresentative[clipKey(clip)] != null) {
             seriesRepresentative = clip
+            seriesFrames = burstMembers(clip).mapNotNull { member -> actual.state.value.records.firstOrNull {
+                it.payload.clip.libraryKey(it.payload.bucket) == clipKey(member)
+            } }
             return
         }
         when (clip.contentKind) {
@@ -861,327 +770,127 @@ internal fun MediaBrowseScreen(
         }
     }
 
-    fun beginSelection(clip: NikonMediaClipRecord) {
-        if (shareInProgress) return
-        isSelecting = true
-        selectedIDs = MediaLibrarySelection.begin(clipKey(clip))
-        shareMessage = null
-    }
-
-
-
-    fun beginBatchShare(configuration: MediaDeliveryConfiguration) {
-        if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedSeriesClips
-        // The whole selection goes to the coordinator: it caches whatever is still only on
-        // the camera before delivering. Filtering to already-cached entries here is what
-        // silently shipped 2 of 10 selected clips.
-        mediaDeliveryCoordinator.beginNativeShare(
-            selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-            configuration = configuration,
-            cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
-        ) { published, metadata ->
-            context.startActivity(
-                AndroidMediaShareIntent.chooserIntent(context, published, metadata),
-            )
-            exitSelection()
-        }
-    }
-
     fun presentNativeDelivery() {
-        if (shareInProgress || selectedClips.isEmpty()) return
-        nativeDeliveryPresented = true
-    }
-
-    fun beginBatchGallerySave(configuration: MediaDeliveryConfiguration) {
-        if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedSeriesClips
-        // Gallery accepts playable proxies AND still photos; only R3D masters
-        // and unsupported objects are omitted.
-        val savableSelection =
-            selectionSnapshot.filter { clip ->
-                clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY ||
-                    clip.contentKind == NikonMediaContentKind.STILL_PHOTO
-            }
-        val omittedCount = selectionSnapshot.size - savableSelection.size
-        nativeDeliveryPresented = false
-        if (savableSelection.isEmpty()) {
-            shareMessage =
-                MediaGalleryBatchResult(savedCount = 0, failures = emptyList())
-                    .operatorMessage(MediaGalleryOmissions(nonVideoCount = omittedCount))
-            return
-        }
-        // The full snapshot goes across: the coordinator caches the on-camera clips first and
-        // reports the non-savable ones itself, so nothing is dropped between here and Gallery.
-        mediaDeliveryCoordinator.beginSaveToPhotos(
-            selection = selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-            configuration = configuration,
-            cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
-        )
-        exitSelection()
-    }
-
-    fun beginFrameioDelivery(options: MediaDeliveryConfiguration) {
-        if (shareInProgress || selectedClips.isEmpty()) return
-        val selectionSnapshot = selectedSeriesClips
-        shareInProgress = true
-        frameioPreparationInProgress = true
-        shareMessage = null
-        shareJob =
-            scope.launch {
-                val stageContext = coroutineContext
-                // The upload runs here, not in the coordinator, so hand it the job the overlay's
-                // Cancel must reach — otherwise Cancel stopped nothing mid-upload.
-                val deliveryTicket = mediaDeliveryCoordinator.trackExternalDelivery(stageContext[Job])
-                var skippedBeforeUpload: Int? = null
-                var completedWithoutFailures = false
-                var cancelled = false
-                try {
-                    // Pull the on-camera clips down first; staging only sees complete entries, so
-                    // without this pass an uncached selection uploaded nothing and said nothing.
-                    // Mid-hop the phone is off the camera's Wi-Fi — that selection was already
-                    // cached before the hop, and retrying here would only stall on dead sockets.
-                    mediaDeliveryCoordinator.cacheFromCamera(
-                        destination = MediaDeliveryKind.FRAMEIO,
-                        selection =
-                            selectionSnapshot.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                        cameraConnectionOwner =
-                            connectionOwner.takeIf {
-                                effectiveCameraConnected && !frameioController.isInternetHopActive
-                            },
-                        ticket = deliveryTicket,
-                    )
-                    val result =
-                        withContext(Dispatchers.IO) {
-                            stageSelectedMedia(
-                                context,
-                                cacheStore,
-                                cameraID,
-                                selectionSnapshot,
-                                cameraIDFor = ::ownerCameraID,
-                            ) { stageContext.ensureActive() }
-                        }
-                    if (result.staged.isEmpty()) {
-                        shareMessage =
-                            result.firstFailure
-                                ?: "Only complete cached media can be delivered to Frame.io."
-                        return@launch
-                    }
-                    val artifacts =
-                        withContext(Dispatchers.IO) {
-                            result.staged.zip(result.stagedClips).map { (share, clip) ->
-                                val owner = ownerCameraID(clip)
-                                FrameioDeliveryArtifact(
-                                    share = share,
-                                    byteCount = Files.size(share.file),
-                                    context =
-                                        FrameioArtifactContext(
-                                            cameraID = owner,
-                                            captureDate = clip.captureDate,
-                                            supportsLutBake =
-                                                clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY,
-                                            stableClipIdentity = clip.libraryKey(owner),
-                                        ),
-                                )
-                            }
-                        }
-                    skippedBeforeUpload = result.incompleteCount + result.failedCount
-                    frameioController.deliver(artifacts, options) { state ->
-                        mediaDeliveryCoordinator.bindFrameioDeliveryState(deliveryTicket, state)
-                    }
-                    val completed = frameioController.deliveryState as? FrameioDeliveryState.Completed
-                    completedWithoutFailures = completed != null && completed.failedCount == 0
-                } catch (error: CancellationException) {
-                    cancelled = true
-                    shareMessage = "Frame.io delivery cancelled."
-                    throw error
-                } catch (_: Exception) {
-                    shareMessage = "Couldn't prepare the selected media for Frame.io delivery."
-                } finally {
-                    endActiveFrameioHopAfterMediaJob(
-                        isActive = { frameioController.isInternetHopActive },
-                        endHop = { frameioController.endInternetHop() },
-                    )
-                    shareMessage =
-                        if (skippedBeforeUpload != null && !cancelled) {
-                            frameioDeliverySummary(
-                                state = frameioController.deliveryState,
-                                internetHopState = frameioController.internetHopState,
-                                errorMessage = frameioController.errorMessage,
-                                skippedBeforeUpload = skippedBeforeUpload,
-                            )
-                        } else {
-                            frameioPreparationMessageAfterRejoin(
-                                shareMessage,
-                                frameioController.internetHopState,
-                            )
-                        }
-                    if (completedWithoutFailures && !cancelled) exitSelection()
-                    mediaDeliveryCoordinator.finishExternalDelivery(deliveryTicket)
-                    frameioPreparationInProgress = false
-                    shareInProgress = false
-                    shareJob = null
-                }
-            }
+        val actual = library ?: return
+        val token = deliveryAdmission ?: return
+        if (shareInProgress || selectedClips.isEmpty() || !actual.isCurrent(token)) return
+        val records = deliverySelection.mapNotNull { selected -> actual.state.value.records.firstOrNull {
+            it.payload.bucket == selected.bucket && sameNikonActionContent(it.payload.clip, selected.clip)
+        } }
+        if (records.size != deliverySelection.size || records.isEmpty()) return
+        val action = libraryActions.capture(records.map { it.payload })
+        if (!action.sourceIsCurrent || !actual.isCurrent(token)) return
+        val capturedLut = selectedLut.takeIf { selectedLutLabel != null }
+        val capturedLabel = selectedLutLabel
+        val outgoing = deliveryHost
+        outgoing?.close()
+        val host = NikonMediaDeliveryHost(scope, mediaDeliveryCoordinator, frameioController, cacheStore,
+            actual, MonitorMediaGalleryOpen(records.first(), records, token), connectionOwner,
+            sourceCurrent = { library === actual && action.sourceIsCurrent },
+            captureRecord = { record -> val captured = libraryActions.capture(listOf(record.payload))
+                MonitorPlaybackAdmission { library === actual && actual.isCurrent(token) && captured.sourceIsCurrent } },
+            configuration = { MediaDeliveryConfiguration(selectedLut = capturedLut) },
+            lutLabel = { capturedLabel }, beforeFirstIO = { outgoing?.cancelAndJoin() })
+        deliveryHost = host
+        host.share(records)
     }
 
     LaunchedEffect(closeRequested) {
         if (!closeRequested) return@LaunchedEffect
-        shareJob?.cancelAndJoin()
-        if (frameioController.isInternetHopActive) {
-            withContext(NonCancellable) { frameioController.endInternetHop() }
-        }
+        val outgoing = deliveryHost
+        outgoing?.cancelAndJoin()
         library?.close()
         onClose()
     }
-    BackHandler(enabled = playingClip == null && viewingPhoto == null) {
-        if (isSelecting) cancelActiveShareOrExitSelection() else closeRequested = true
+    BackHandler(enabled = shareInProgress && playingClip == null && viewingPhoto == null) {
+        cancelActiveShareOrExitSelection()
     }
-
-    val density = LocalDensity.current
-    val direction = LocalLayoutDirection.current
-    val cutout = WindowInsets.displayCutout
-    fun edge(insetPx: Int, extra: Float, floor: Float): Float =
-        maxOf(with(density) { insetPx.toDp().value } + extra, floor)
-    val topPad = edge(cutout.getTop(density), 6f, 16f)
-    val trailingPad = edge(cutout.getRight(density, direction), 6f, 20f)
-    val bottomPad = edge(cutout.getBottom(density), 4f, 14f)
-
-    Box(
-        Modifier.fillMaxSize()
-            .background(LiveDesign.background)
-            // This overlay owns every empty pixel; gestures never reach the
-            // paused monitor below it.
-            .pointerInput(Unit) { detectTapGestures {} },
-    ) {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val portrait = maxHeight > maxWidth
-            val leadingPad = edge(cutout.getLeft(density, direction), 6f, if (portrait) 16f else 64f)
-            val contentModifier =
-                Modifier.fillMaxSize().padding(
-                    top = topPad.dp,
-                    start = leadingPad.dp,
-                    end = trailingPad.dp,
-                    bottom = bottomPad.dp,
-                )
-
-            val showsGridControls =
-                !isSelecting && !shareInProgress && !frameioPreparationInProgress
-            val showRefresh =
-                librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected
-            val refreshInProgress =
-                state is BrowseState.Loading ||
-                    (state as? BrowseState.Loaded)?.isLoadingMore == true
-            MonitorPageScaffold(
-                modifier = contentModifier,
-                navigationWidth = 206f,
-                heading = {
-                    Box(Modifier.padding(start = if (portrait) 45.dp else 0.dp)) {
-                        MonitorPageHeading(title = "Media", kicker = "OpenZCine")
-                    }
-                },
-                navigation = { navigationPortrait ->
-                    if (navigationPortrait) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MediaCategoryStrip(
-                                selected = options.category,
-                                onSelect = { category -> updateOptions(options.copy(category = category)) },
-                            )
-                            if (visibleStorageSlots.isNotEmpty() && effectiveCameraConnected) {
-                                MediaStorageSlotSelector(
-                                    slots = visibleStorageSlots,
-                                    selectedStorageId = filters.storageId,
-                                    horizontal = true,
-                                    onSelect = ::toggleStorageSlot,
-                                )
-                            }
-                        }
-                    } else {
-                        MediaLibraryRail(
-                            category = options.category,
-                            storageSlots = if (effectiveCameraConnected) visibleStorageSlots else emptyList(),
-                            selectedStorageId = filters.storageId,
-                            onCategoryChange = { category -> updateOptions(options.copy(category = category)) },
-                            onStorageSelect = ::toggleStorageSlot,
-                            showsGridControls = showsGridControls,
-                            layout = options.layout,
-                            thumbnailSize = options.thumbnailSize,
-                            onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
-                            onThumbnailSizeChange = { size -> updateOptions(options.copy(thumbnailSize = size)) },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                },
-            ) {
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MediaLibraryHeader(
-                        state = state,
-                        category = options.category,
-                        displayedCount = displayedClips.size,
-                        isSelecting = isSelecting,
-                        selectedCount = selectedClips.size,
-                        shareInProgress = shareInProgress,
-                        frameioPreparationInProgress = frameioPreparationInProgress,
-                        frameioDeliveryState = frameioController.deliveryState,
-                        frameioInternetHopState = internetHopState,
-                        sortOrder = options.sortOrder,
-                        activeFilterCount = filters.activeCount,
-                        deleteAvailable = librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
-                        showRefresh = showRefresh,
-                        refreshInProgress = refreshInProgress,
-                        compact = portrait,
-                        onRefresh = { reloadKey += 1 },
-                        onExitSelection = ::cancelActiveShareOrExitSelection,
-                        onDelete = { deleteConfirmTargets = selectedSeriesClips },
-                        onShare = { presentNativeDelivery() },
-                        onSortChange = { sort -> updateOptions(options.copy(sortOrder = sort)) },
-                        onShowFilters = { filterDialogPresented = true },
+    Box(Modifier.fillMaxSize().background(LiveDesign.background)) {
+        val selectionHaptics = LocalOperatorHaptics.current
+        library?.let { actual ->
+            val catalogOperations = galleryOperations(actual)
+            val sourcePresentation = MonitorMediaGalleryPresentation(
+                projection.result,
+                category = com.opencapture.opencine.vocabulary.MediaLibraryTab.valueOf(options.category.name),
+                layout = com.opencapture.monitorui.MonitorMediaLayout.valueOf(options.layout.name),
+                thumbnailSize = com.opencapture.monitorui.MonitorThumbnailSize.valueOf(options.thumbnailSize.name),
+                sort = com.opencapture.opencine.vocabulary.MediaLibrarySort.valueOf(options.sortOrder.name),
+                activeFilterCount = filters.activeCount,
+                filters = MonitorMediaGalleryFilters(
+                    formats = filterOptions.formats.map { it.title }, resolutions = filterOptions.resolutions.map { it.title },
+                    photoSizes = filterOptions.photoSizes.map { MonitorMediaFilterChoice(it.name, it.title) },
+                    dateWindows = filterOptions.dateWindows.map { MonitorMediaFilterChoice(it.name, it.title) },
+                    storage = visibleStorageSlots.map { MonitorMediaFilterChoice(it.storageId.toString(), "SLOT ${it.slotNumber}") },
+                    formatSelection = filters.formats.mapTo(linkedSetOf()) { it.title },
+                    resolutionSelection = filters.resolutions.mapTo(linkedSetOf()) { it.title },
+                    photoSizeSelection = filters.photoSizes.mapTo(linkedSetOf()) { it.name },
+                    dateWindow = filters.dateWindow?.name, storageID = filters.storageId?.toString(), dialog = true,
+                ), storage = mediaGalleryStorageValues(visibleStorageSlots, filters.storageId),
+                navigationClearsSelection = true, filterClearsSelection = true, retainsVisibleSelection = true,
+                empty = when (val load = state) {
+                    BrowseState.Loading -> MonitorMediaGalleryEmpty(
+                        if (librarySource == MediaLibrarySource.CAMERA) "Listing clips on camera…" else "Opening local library…",
+                        if (librarySource == MediaLibrarySource.CAMERA) "Querying card storage…" else "Checking persisted complete cache entries…",
+                        loading = true,
                     )
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        MediaLibraryBody(
-                            state = state,
-                            clips = gridClips,
-                            source = librarySource,
-                            layout = options.layout,
-                            thumbnailSize = options.thumbnailSize,
-                            cameraID = cameraID,
-                            cameraIDFor = ::ownerCameraID,
-                            clipIdentity = ::clipKey,
-                            hasRawSibling = ::hasRawSibling,
-                            burstCountOf = { burstByRepresentative[clipKey(it)]?.count },
-                            cameraConnected = cameraConnected,
-                            connectionOwner = connectionOwner,
-                            cacheStore = cacheStore,
-                            favorites = favorites,
-                            isSelecting = isSelecting,
-                            selectedIDs = selectedIDs,
-                            onOpen = ::open,
-                            onBeginSelection = { identity -> if (!shareInProgress) beginSelection(identity) },
-                            onSweepSelection = { next -> if (!shareInProgress) selectedIDs = next },
-                            onToggleFavorite = ::toggleFavorite,
-                            onRetry = { reloadKey += 1 },
-                            modifier = Modifier.fillMaxSize()
-                                .padding(bottom = if (portrait && showsGridControls) 84.dp else 0.dp),
-                        )
-                        if (portrait && showsGridControls) {
-                            PortraitMediaGridControlsBand(
-                                layout = options.layout,
-                                thumbnailSize = options.thumbnailSize,
-                                onLayoutChange = { layout -> updateOptions(options.copy(layout = layout)) },
-                                onThumbnailSizeChange = { size -> updateOptions(options.copy(thumbnailSize = size)) },
-                                modifier = Modifier.align(Alignment.BottomCenter),
-                            )
-                        }
+                    is BrowseState.Failed -> MonitorMediaGalleryEmpty("Couldn't list media", load.message, retry = true)
+                    is BrowseState.Loaded -> MonitorMediaGalleryEmpty(
+                        if (librarySource == MediaLibrarySource.CAMERA) "No clips yet" else "No complete cached media",
+                        if (librarySource == MediaLibrarySource.CAMERA) "Clips appear here as they're discovered on the card."
+                        else "Complete camera media you have opened appears here safely.",
+                    )
+                },
+            )
+            MonitorOperatorCatalogScreen(library = actual, brand = "OpenZCine", sourceAvailable = effectiveCameraConnected,
+                operations = catalogOperations, presentation = sourcePresentation,
+                selectionConfiguration = rememberSelectionInputPolicy(),
+                selectionChanged = selectionHaptics::tick,
+                navigation = { action -> when (action) {
+                    is MonitorMediaGalleryNavigation.Category -> updateOptions(options.copy(category = MediaLibraryCategory.valueOf(action.value.name)))
+                    is MonitorMediaGalleryNavigation.Layout -> updateOptions(options.copy(layout = com.opencapture.monitorui.MonitorMediaLayout.valueOf(action.value.name)))
+                    is MonitorMediaGalleryNavigation.ThumbnailSize -> updateOptions(options.copy(thumbnailSize = MonitorThumbnailSize.valueOf(action.value.name)))
+                    MonitorMediaGalleryNavigation.CycleSort -> {
+                        val all = MediaLibrarySortOrder.entries
+                        updateOptions(options.copy(sortOrder = all[(all.indexOf(options.sortOrder) + 1) % all.size]))
                     }
+                } }, sourceFilter = { action -> when (action) {
+                    is MonitorMediaGalleryFilterAction.Format -> filterOptions.formats.firstOrNull { it.title == action.id }
+                        ?.let { updateFilters(filters.copy(formats = filters.formats.toMutableSet().apply { if (!add(it)) remove(it) })) }
+                    is MonitorMediaGalleryFilterAction.Resolution -> filterOptions.resolutions.firstOrNull { it.title == action.id }
+                        ?.let { updateFilters(filters.copy(resolutions = filters.resolutions.toMutableSet().apply { if (!add(it)) remove(it) })) }
+                    is MonitorMediaGalleryFilterAction.PhotoSize -> filterOptions.photoSizes.firstOrNull { it.name == action.id }
+                        ?.let { updateFilters(filters.copy(photoSizes = filters.photoSizes.toMutableSet().apply { if (!add(it)) remove(it) })) }
+                    is MonitorMediaGalleryFilterAction.DateWindow -> filterOptions.dateWindows.firstOrNull { it.name == action.id }
+                        ?.let { updateFilters(filters.copy(dateWindow = it.takeUnless { it == filters.dateWindow })) }
+                    is MonitorMediaGalleryFilterAction.Storage -> action.id.toLongOrNull()?.let(::toggleStorageSlot)
+                    MonitorMediaGalleryFilterAction.Reset -> updateFilters(MediaLibraryFilters())
+                } }, facts = { record -> MonitorMediaGalleryFileFacts(record.payload.clip.badgeLabel) },
+                cell = { record, cell -> mediaClipCellPresentation(record.payload.clip, record.payload.bucket,
+                    record.favorite, hasRawSibling(record.payload.clip), burstByRepresentative[clipKey(record.payload.clip)]?.count,
+                    cell.list, cell.selecting, cell.selected) },
+                deletionDetail = { progress -> if (progress.total > progress.selectedCount)
+                    "${progress.completed} of ${progress.total} files · incl. RAW + copies" else null },
+                begin = {}, refresh = { reloadKey += 1 }, close = { closeRequested = true },
+                open = { request -> if (actual.isCurrent(request.admission)) open(request.record.payload.clip, request) },
+                share = { records, token ->
+                    if (actual.isCurrent(token) && !shareInProgress) {
+                        deliverySelection = records.map { it.payload }; deliveryAdmission = token; presentNativeDelivery()
+                    }
+                },
+            ) { request ->
+                key(request.admission) {
+                    ClipArtwork(clip = request.record.payload.clip, source = librarySource,
+                        cameraID = request.record.payload.bucket, cameraConnected = effectiveCameraConnected,
+                        connectionOwner = connectionOwner, cacheStore = cacheStore, modifier = Modifier.fillMaxSize(),
+                        admission = { request.isCurrent })
                 }
             }
         }
-
-        PanelCloseButton(
-            onClick = { closeRequested = true },
-            modifier = Modifier.padding(start = 16.dp, top = maxOf(topPad, 22f).dp),
+        if (library == null) com.opencapture.opencine.cameracontrols.MediaEmptyState(
+            listing = true,
+            subtitle = if (librarySource == MediaLibrarySource.CAMERA) "Querying card storage…" else "Checking persisted complete cache entries…",
+            title = if (librarySource == MediaLibrarySource.CAMERA) "Listing clips on camera…" else "Opening local library…",
         )
-
         shareMessage?.let { message ->
             MediaStatusMessage(
                 message = message,
@@ -1189,112 +898,43 @@ internal fun MediaBrowseScreen(
             )
         }
 
-        if (nativeDeliveryPresented) {
-            MediaDeliveryPopup(
-                clipCount = selectedClips.size,
-                readyCount = readySelectionIDs.size,
-                cameraConnected = effectiveCameraConnected,
-                selectedLut = selectedLut.takeIf { selectedLutLabel != null },
-                selectedLutLabel = selectedLutLabel,
-                frameioController = frameioController,
-                busy = shareInProgress || frameioPreparationInProgress,
-                onCacheBeforeHop = {
-                    mediaDeliveryCoordinator.cacheFromCamera(
-                        destination = MediaDeliveryKind.FRAMEIO,
-                        selection =
-                            selectedSeriesClips.map { MediaDeliverySelection(ownerCameraID(it), it) },
-                        cameraConnectionOwner = connectionOwner.takeIf { effectiveCameraConnected },
-                    )
-                },
-                onDismiss = {
-                    nativeDeliveryPresented = false
-                    if (frameioController.isInternetHopActive) {
-                        scope.launch {
-                            withContext(NonCancellable) { frameioController.endInternetHop() }
-                        }
-                    }
-                },
-                onNativeShare = { configuration ->
-                    nativeDeliveryPresented = false
-                    beginBatchShare(configuration)
-                },
-                onSaveToGallery = { configuration ->
-                    nativeDeliveryPresented = false
-                    beginBatchGallerySave(configuration)
-                },
-                onFrameioDeliver = { options ->
-                    nativeDeliveryPresented = false
-                    beginFrameioDelivery(options)
-                },
-            )
-        }
+        deliveryHost?.let { NikonMediaDeliveryHostView(it) }
 
-        if (filterDialogPresented) {
-            MediaFilterDialog(
-                filters = filters,
-                options = filterOptions,
-                storageIds = visibleStorageSlots.map(MediaStorageSlotPresentation::storageId),
-                onFiltersChanged = ::updateFilters,
-                onDismiss = { filterDialogPresented = false },
-            )
-        }
-
-        // Manage-series view, iPhone-Photos burst style: the selected frame full-screen through
-        // the still viewer (streaming decode, zoom, rating, RAW toggle, share, single-frame
-        // delete all keep working) with a bottom scrubber strip; "Delete all" routes the whole
-        // set through the shared confirm + batch deletion. Dismisses when its frames are gone.
         seriesRepresentative?.let { representative ->
-            val members = remember(representative, displayedClips) { burstMembers(representative) }
-            LaunchedEffect(members) { if (members.isEmpty()) seriesRepresentative = null }
+            val actual = openedPhotoLibrary
+            val opening = photoOpening
+            val members = seriesFrames
             var selectedFrameKey by remember(representative) { mutableStateOf<String?>(null) }
-            val selected =
-                members.firstOrNull { clipKey(it) == selectedFrameKey } ?: members.firstOrNull()
-            selected?.let { clip ->
-                val owner = ownerCameraID(clip)
-                MediaStillViewer(
-                    clip = clip,
-                    desqueeze = assists.shared.framing(assists.shared::isOn, operatorSettings.levelStyle),
-                    cameraID = owner,
-                    cameraTransferAvailable = cameraConnected,
-                    connectionOwner = connectionOwner,
-                    rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
-                    deleteAvailable =
-                        librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
-                    deleteConfirmMessage =
-                        deleteConfirmationMessage(loadedClips, listOf(clip), ::ownerCameraID),
-                    onDelete = { requestDeletion(listOf(clip)) },
-                    onDeleteAll = { if (members.isNotEmpty()) deleteConfirmTargets = members },
-                    onRatingMirrored = ::mirrorRating,
-                    onCaptureRatingCompletion = ::captureRatingCompletion,
-                    onRatingDiagnostic = onRatingDiagnostic,
-                    onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                        libraryIndex.rememberResolvedObjectSize(
-                            ownerCameraID(resolvedClip),
-                            resolvedClip,
-                            resolvedSize,
-                        )
-                    },
-                    filmstrip = {
-                        BurstFilmstrip(
-                            members = members,
-                            selectedKey = clipKey(clip),
-                            keyOf = ::clipKey,
-                            onSelect = { selectedFrameKey = it },
-                            thumb = { member, thumbModifier ->
-                                ClipArtwork(
-                                    clip = member,
-                                    source = librarySource,
-                                    cameraID = ownerCameraID(member),
-                                    cameraConnected = effectiveCameraConnected,
-                                    connectionOwner = connectionOwner,
-                                    cacheStore = cacheStore,
-                                    modifier = thumbModifier,
-                                )
-                            },
-                        )
-                    },
-                    onClose = { seriesRepresentative = null },
-                )
+            val selected = members.firstOrNull { it.asset.id.rawValue == selectedFrameKey } ?: members.firstOrNull()
+            if (actual != null && opening != null && selected != null) {
+                val actualState by actual.state.collectAsState()
+                val target = selected.payload
+                val raw = rawSibling(loadedClips, target.clip, ::ownerCameraID)?.let { sibling ->
+                    actualState.records.firstOrNull { it.payload.clip.libraryKey(it.payload.bucket) == sibling.libraryKey(target.bucket) }
+                }
+                val action = remember(actual, opening.admission, selected.asset.id) {
+                    libraryActions.capture((listOf(selected) + listOfNotNull(raw) + members).map { it.payload })
+                }
+                MediaStillViewer(cacheStore = cacheStore, library = actual, record = selected, admission = opening.admission,
+                    sourceCurrent = { library === actual && action.sourceIsCurrent }, operations = galleryOperations(actual),
+                    assist = assists.shared, cameraTransferAvailable = cameraConnected, connectionOwner = connectionOwner,
+                    rawRecord = raw, collection = members, selectRecord = { selectedFrameKey = it.asset.id.rawValue },
+                    thumbnail = { request, modifier ->
+                        ClipArtwork(clip = request.record.payload.clip, source = librarySource,
+                            cameraID = request.record.payload.bucket, cameraConnected = effectiveCameraConnected,
+                            connectionOwner = connectionOwner, cacheStore = cacheStore, modifier = modifier,
+                            admission = { request.isCurrent() })
+                    }, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
+                    onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                        libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
+                    }, onDeletedReturning = { admission ->
+                        if (library !== actual || !actual.isCurrent(admission)) return@MediaStillViewer
+                        val index = members.indexOfFirst { it.asset.id == selected.asset.id }.coerceAtLeast(0)
+                        seriesFrames = members.mapNotNull { actual.record(it.asset.id) }
+                        photoOpening = MonitorMediaGalleryOpen(opening.record, opening.playlist, admission)
+                        if (seriesFrames.isEmpty()) seriesRepresentative = null
+                        else selectedFrameKey = seriesFrames[minOf(index, seriesFrames.lastIndex)].asset.id.rawValue
+                    }, onClose = { seriesRepresentative = null })
             }
         }
 
@@ -1309,70 +949,75 @@ internal fun MediaBrowseScreen(
         }
 
         playingClip?.let { clip ->
-            val owner = ownerCameraID(clip)
-            MediaPlaybackScreen(
-                library = library,
-                playbackRecords = displayedClips.mapNotNull { row ->
-                    libraryCodec?.record(NikonLibraryClip(ownerCameraID(row), row))
-                },
-                initialClip = clip,
-                filteredClips = displayedClips,
-                cameraID = owner,
-                cameraTransferAvailable = cameraConnected,
-                connectionOwner = connectionOwner,
-                favoriteIDs = favorites,
-                assists = assists,
-                exposureAssistCameraInput = exposureAssistCameraInput,
-                operatorSettings = operatorSettings,
-                lutLibrary = lutLibrary,
-                frameioController = frameioController,
-                mediaDeliveryCoordinator = mediaDeliveryCoordinator,
-                onToggleFavorite = ::toggleFavorite,
-                onRatingMirrored = ::mirrorRating,
+            val actual = openedPhotoLibrary
+            val opening = photoOpening
+            if (actual != null && opening != null) {
+                val owner = ownerCameraID(clip)
+                val action = remember(actual, opening.id) { libraryActions.capture(listOf(opening.record.payload)) }
+                MediaPlaybackScreen(
+                    cacheStore = cacheStore,
+                    library = actual,
+                    playbackRecords = opening.playlist,
+                    initialClip = clip,
+                    filteredClips = displayedClips,
+                    cameraID = owner,
+                    cameraTransferAvailable = cameraConnected,
+                    connectionOwner = connectionOwner,
+                    favoriteIDs = favorites,
+                    assists = assists,
+                    exposureAssistCameraInput = exposureAssistCameraInput,
+                    operatorSettings = operatorSettings,
+                    lutLibrary = lutLibrary,
+                    frameioController = frameioController,
+                    mediaDeliveryCoordinator = mediaDeliveryCoordinator,
+                    onToggleFavorite = ::toggleFavorite,
+                    onRatingMirrored = ::mirrorRating,
                     onCaptureRatingCompletion = ::captureRatingCompletion,
-                onRatingDiagnostic = onRatingDiagnostic,
-                onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                    libraryIndex.rememberResolvedObjectSize(
-                        ownerCameraID(resolvedClip),
-                        resolvedClip,
-                        resolvedSize,
-                    )
-                },
-                onClose = {
-                    playingClip = null
-                    reloadKey += 1
-                },
-            )
+                    onRatingDiagnostic = onRatingDiagnostic,
+                    onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                        libraryIndex.rememberResolvedObjectSize(
+                            ownerCameraID(resolvedClip),
+                            resolvedClip,
+                            resolvedSize,
+                        )
+                    },
+                    onClose = {
+                        if (photoOpening?.id == opening.id && openedPhotoLibrary === actual) {
+                            playingClip = null; photoOpening = null; openedPhotoLibrary = null
+                            reloadKey += 1
+                        }
+                    },
+                    opening = opening,
+                    sourceCurrent = { library === actual && action.sourceIsCurrent },
+                    captureRecord = { record ->
+                        val captured = libraryActions.capture(listOf(record.payload))
+                        MonitorPlaybackAdmission {
+                            library === actual && actual.isCurrent(opening.admission) && captured.sourceIsCurrent &&
+                                library === actual && actual.isCurrent(opening.admission)
+                        }
+                    },
+                )
+            }
         }
         viewingPhoto?.let { clip ->
-            val owner = ownerCameraID(clip)
-            MediaStillViewer(
-                clip = clip,
-                desqueeze = assists.shared.framing(assists.shared::isOn, operatorSettings.levelStyle),
-                cameraID = owner,
-                cameraTransferAvailable = cameraConnected,
-                connectionOwner = connectionOwner,
-                rawSibling = rawSibling(loadedClips, clip, ::ownerCameraID),
-                deleteAvailable =
-                    librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected,
-                deleteConfirmMessage =
-                    deleteConfirmationMessage(loadedClips, listOf(clip), ::ownerCameraID),
-                onDelete = { requestDeletion(listOf(clip)) },
-                onRatingMirrored = ::mirrorRating,
-                    onCaptureRatingCompletion = ::captureRatingCompletion,
-                onRatingDiagnostic = onRatingDiagnostic,
-                onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                    libraryIndex.rememberResolvedObjectSize(
-                        ownerCameraID(resolvedClip),
-                        resolvedClip,
-                        resolvedSize,
-                    )
-                },
-                onClose = {
-                    viewingPhoto = null
-                    reloadKey += 1
-                },
-            )
+            val actual = openedPhotoLibrary
+            val opening = photoOpening
+            if (actual != null && opening != null) {
+                val actualState by actual.state.collectAsState()
+                val raw = rawSibling(loadedClips, clip, ::ownerCameraID)?.let { sibling ->
+                    actualState.records.firstOrNull { it.payload.clip.libraryKey(it.payload.bucket) == sibling.libraryKey(opening.record.payload.bucket) }
+                }
+                val action = remember(actual, opening.admission, opening.record.asset.id) {
+                    libraryActions.capture((listOf(opening.record) + listOfNotNull(raw)).map { it.payload })
+                }
+                MediaStillViewer(cacheStore = cacheStore, library = actual, record = opening.record, admission = opening.admission,
+                    sourceCurrent = { library === actual && action.sourceIsCurrent }, operations = galleryOperations(actual),
+                    assist = assists.shared, cameraTransferAvailable = cameraConnected, connectionOwner = connectionOwner,
+                    rawRecord = raw, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
+                    onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                        libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
+                    }, onClose = { viewingPhoto = null; reloadKey += 1 })
+            }
         }
 
         // Batch-delete progress: the grid holds steady behind this until the run finishes.
@@ -1415,852 +1060,84 @@ internal fun MediaBrowseScreen(
     }
 }
 
-/** Horizontal category strip that keeps labels readable on portrait phones. */
+/** Existing source APIs map values into the same storage/navigation/form owners used in production. */
 @Composable
-private fun MediaCategoryStrip(
-    selected: MediaLibraryCategory,
-    onSelect: (MediaLibraryCategory) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val scroll = rememberScrollState()
-    MonitorMediaNavigation(
-        categories = mediaNavigationCategories,
-        selectedID = selected.name,
-        vertical = false,
-        onSelect = { id -> MediaLibraryCategory.entries.firstOrNull { it.name == id }?.let(onSelect) },
-        modifier = modifier.horizontalScroll(scroll),
-    )
-}
-
-private val mediaNavigationCategories = MediaLibraryCategory.entries.map {
-    MonitorMediaNavigationCategory(id = it.name, title = it.title)
-}
-
-/** Ordered, selectable capacity cards shared by portrait and landscape media layouts. */
-@Composable
-internal fun MediaStorageSlotSelector(
-    slots: List<MediaStorageSlotPresentation>,
-    selectedStorageId: Long?,
-    horizontal: Boolean,
-    onSelect: (Long) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    if (slots.isEmpty()) return
-    if (horizontal) {
-        Row(
-            modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            slots.forEach { slot ->
-                MediaStorageSlotCard(
-                    slot = slot,
-                    active = selectedStorageId == slot.storageId,
-                    horizontal = true,
-                    onClick = { onSelect(slot.storageId) },
-                )
-            }
-        }
-    } else {
-        Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            slots.forEach { slot ->
-                MediaStorageSlotCard(
-                    slot = slot,
-                    active = selectedStorageId == slot.storageId,
-                    horizontal = false,
-                    onClick = { onSelect(slot.storageId) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MediaStorageSlotCard(
-    slot: MediaStorageSlotPresentation,
-    active: Boolean,
-    horizontal: Boolean,
-    onClick: () -> Unit,
-) {
-    val label = stringResource(R.string.media_storage_slot_label, slot.slotNumber)
-    val summary =
-        if (slot.totalGigabytes > 0) {
-            stringResource(
-                R.string.media_storage_slot_summary,
-                slot.freeGigabytes,
-                slot.totalGigabytes,
-            )
-        } else {
-            stringResource(R.string.media_storage_slot_summary_unknown_total, slot.freeGigabytes)
-        }
-    val description =
-        stringResource(
-            if (active) {
-                R.string.media_storage_slot_filter_selected_description
-            } else {
-                R.string.media_storage_slot_filter_description
-            },
-            slot.slotNumber,
-            summary,
-        )
-    val shape = RoundedCornerShape(8.dp)
-    Column(
-        Modifier.then(if (horizontal) Modifier.width(154.dp) else Modifier.fillMaxWidth())
-            .heightIn(min = 48.dp)
-            .clip(shape)
-            .background(if (active) LiveDesign.accentDim else LiveDesign.surface.copy(alpha = 0.55f))
-            .border(
-                1.dp,
-                if (active) LiveDesign.accent.copy(alpha = 0.5f) else LiveDesign.hairline,
-                shape,
-            ).semantics {
-                contentDescription = description
-                role = Role.RadioButton
-                selected = active
-            }.chromeClickable(onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(
-            label,
-            style = chromeStyle(11f, FontWeight.SemiBold, mono = true),
-            color = if (active) LiveDesign.accent else LiveDesign.text,
-            maxLines = 1,
-        )
-        Text(
-            summary,
-            style = chromeStyle(9f, FontWeight.Medium, mono = true),
-            color = LiveDesign.muted,
-            maxLines = if (horizontal) 1 else 2,
-        )
-    }
-}
-
-/**
- * Landscape navigation rail — iOS sidebar: category tabs, optional storage
- * cards, spacer, then layout/density controls at the bottom (172pt wide).
- * No Camera/On-device source toggle (iOS sets source programmatically).
- */
-@Composable
-internal fun MediaLibraryRail(
-    category: MediaLibraryCategory,
-    storageSlots: List<MediaStorageSlotPresentation>,
-    selectedStorageId: Long?,
-    onCategoryChange: (MediaLibraryCategory) -> Unit,
-    onStorageSelect: (Long) -> Unit,
-    showsGridControls: Boolean,
-    layout: MonitorMediaLayout,
-    thumbnailSize: MonitorThumbnailSize,
-    onLayoutChange: (MonitorMediaLayout) -> Unit,
-    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Column(
-            Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            MonitorMediaNavigation(
-                categories = mediaNavigationCategories,
-                selectedID = category.name,
-                vertical = true,
-                onSelect = { id -> MediaLibraryCategory.entries.firstOrNull { it.name == id }?.let(onCategoryChange) },
-            )
-            if (storageSlots.isNotEmpty()) {
-                MediaStorageSlotSelector(
-                    slots = storageSlots,
-                    selectedStorageId = selectedStorageId,
-                    horizontal = false,
-                    onSelect = onStorageSelect,
-                )
-            }
-        }
-        if (showsGridControls) {
-            MediaGridLayoutControls(layout, thumbnailSize, onLayoutChange, onThumbnailSizeChange)
-        }
-    }
-}
-
-@Composable
-private fun MediaGridLayoutControls(
-    layout: MonitorMediaLayout,
-    thumbnailSize: MonitorThumbnailSize,
-    onLayoutChange: (MonitorMediaLayout) -> Unit,
-    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    MonitorCatalogDisplayControls(
-        list = layout == MonitorMediaLayout.LIST,
-        thumbnailSize = thumbnailSize,
-        onList = { onLayoutChange(if (it) MonitorMediaLayout.LIST else MonitorMediaLayout.GRID) },
-        onThumbnailSize = onThumbnailSizeChange,
-        modifier = modifier,
-    )
-}
-
-/** iOS portrait bottom band: gradient fade + layout/density capsule. */
-@Composable
-private fun PortraitMediaGridControlsBand(
-    layout: MonitorMediaLayout,
-    thumbnailSize: MonitorThumbnailSize,
-    onLayoutChange: (MonitorMediaLayout) -> Unit,
-    onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(84.dp)
-            .background(
-                Brush.verticalGradient(
-                    colors =
-                        listOf(
-                            LiveDesign.background.copy(alpha = 0f),
-                            LiveDesign.background.copy(alpha = 0.94f),
-                        ),
-                ),
-            ),
-        contentAlignment = Alignment.BottomCenter,
-    ) {
-        MediaGridLayoutControls(
-            layout = layout,
-            thumbnailSize = thumbnailSize,
-            onLayoutChange = onLayoutChange,
-            onThumbnailSizeChange = onThumbnailSizeChange,
-            modifier = Modifier.padding(bottom = 4.dp),
-        )
-    }
-}
-
-/**
- * Main title/header — iOS mainHeader: MULTIMEDIA identity + FILTER/SORT only.
- * Layout density controls live in the sidebar / portrait bottom band.
- */
-@Composable
-private fun MediaLibraryHeader(
-    state: BrowseState,
-    category: MediaLibraryCategory,
-    displayedCount: Int,
-    isSelecting: Boolean,
-    selectedCount: Int,
-    shareInProgress: Boolean,
-    frameioPreparationInProgress: Boolean,
-    frameioDeliveryState: FrameioDeliveryState,
-    frameioInternetHopState: FrameioInternetHopState,
-    sortOrder: MediaLibrarySortOrder,
-    activeFilterCount: Int,
-    deleteAvailable: Boolean,
-    showRefresh: Boolean,
-    refreshInProgress: Boolean,
-    compact: Boolean,
-    onRefresh: () -> Unit,
-    onExitSelection: () -> Unit,
-    onDelete: () -> Unit,
-    onShare: () -> Unit,
-    onSortChange: (MediaLibrarySortOrder) -> Unit,
-    onShowFilters: () -> Unit,
-) {
-    if (isSelecting) {
-        SelectionHeader(
-            selectedCount = selectedCount,
-            shareInProgress = shareInProgress,
-            frameioPreparationInProgress = frameioPreparationInProgress,
-            frameioDeliveryState = frameioDeliveryState,
-            frameioInternetHopState = frameioInternetHopState,
-            deleteAvailable = deleteAvailable,
-            onExit = onExitSelection,
-            onDelete = onDelete,
-            onShare = onShare,
-        )
-        return
+private fun mediaGalleryStorageValues(slots: List<MediaStorageSlotPresentation>, selected: Long?): List<MonitorMediaGalleryStorage> =
+    slots.map { slot ->
+        val label = stringResource(R.string.media_storage_slot_label, slot.slotNumber)
+        val summary = if (slot.totalGigabytes > 0) stringResource(R.string.media_storage_slot_summary,
+            slot.freeGigabytes, slot.totalGigabytes)
+            else stringResource(R.string.media_storage_slot_summary_unknown_total, slot.freeGigabytes)
+        val active = selected == slot.storageId
+        val description = stringResource(if (active) R.string.media_storage_slot_filter_selected_description
+            else R.string.media_storage_slot_filter_description, slot.slotNumber, summary)
+        MonitorMediaGalleryStorage(slot.storageId.toString(), label, summary, active, description)
     }
 
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val orders = MediaLibrarySortOrder.entries
-        MonitorCatalogHeader(
-            title = category.titleForHeader(),
-            subtitle = itemCountLabel(state, displayedCount),
-            compact = compact,
-            sort = sortOrder.title,
-            filterActive = activeFilterCount > 0,
-            filterCount = activeFilterCount,
-            onSort = { onSortChange(orders[(orders.indexOf(sortOrder) + 1) % orders.size]) },
-            onFilter = onShowFilters,
-            modifier = Modifier.weight(1f),
-        )
-        if (showRefresh) RefreshControl(enabled = !refreshInProgress, onClick = onRefresh)
-        if (refreshInProgress) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-    }
-}
-
-/**
- * iOS `selectionHeader`: close · "N selected" · single Share capsule.
- * Share opens the unified delivery popup (native + Frame.io), same as a clip.
- */
 @Composable
-private fun SelectionHeader(
-    selectedCount: Int,
-    shareInProgress: Boolean,
-    frameioPreparationInProgress: Boolean,
-    frameioDeliveryState: FrameioDeliveryState,
-    frameioInternetHopState: FrameioInternetHopState,
-    deleteAvailable: Boolean,
-    onExit: () -> Unit,
-    onDelete: () -> Unit,
-    onShare: () -> Unit,
-) {
-    val rejoiningCamera = frameioInternetHopState is FrameioInternetHopState.RejoiningCamera
-    val upload = frameioDeliveryState as? FrameioDeliveryState.Uploading
-    val busy = shareInProgress || frameioPreparationInProgress || upload != null || rejoiningCamera
-    val shareEnabled = selectedCount > 0 && !busy
-    val deleteEnabled = deleteAvailable && selectedCount > 0 && !busy
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            if (rejoiningCamera) "Rejoining" else if (busy) "Stop" else "Cancel",
-            style = chromeStyle(13f, FontWeight.SemiBold),
-            color = if (busy && !rejoiningCamera) LiveDesign.accent else LiveDesign.muted,
-            modifier =
-                Modifier.glass(CircleShape)
-                    .semantics {
-                        contentDescription =
-                            if (rejoiningCamera) {
-                                "Rejoining saved camera Wi-Fi network"
-                            } else if (busy) {
-                                "Cancel active media delivery"
-                            } else {
-                                "Exit media selection"
-                            }
-                        if (rejoiningCamera) disabled() else role = Role.Button
-                    }
-                    .chromeClickable(enabled = !rejoiningCamera, onClick = onExit)
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-        )
-        Text(
-            "$selectedCount selected",
-            modifier = Modifier.weight(1f),
-            style = chromeStyle(20f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        // iOS selection-bar Delete capsule: destructive red, camera source only.
-        if (deleteAvailable) {
-            Text(
-                "Delete",
-                style = chromeStyle(14f, FontWeight.SemiBold),
-                color = if (deleteEnabled) Color(0xFFFF5A54) else LiveDesign.faint,
-                maxLines = 1,
-                modifier =
-                    Modifier.clip(CapsuleShape)
-                        .border(1.dp, LiveDesign.hairline, CapsuleShape)
-                        .semantics {
-                            contentDescription =
-                                if (deleteEnabled) {
-                                    "Delete $selectedCount selected items from the camera card"
-                                } else {
-                                    "Delete selected media"
-                                }
-                            if (deleteEnabled) role = Role.Button else disabled()
-                        }
-                        .chromeClickable(enabled = deleteEnabled, onClick = onDelete)
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-            )
-        }
-        // iOS Label("Share", systemImage: "square.and.arrow.up") capsule.
-        val shareLabel =
-            when {
-                rejoiningCamera -> "REJOINING…"
-                upload != null ->
-                    "UP ${upload.itemIndex}/${upload.itemCount} ${(upload.progress * 100).roundToInt()}%"
-                frameioPreparationInProgress || shareInProgress -> "PREPARING…"
-                else -> "Share"
-            }
-        Text(
-            shareLabel,
-            style = chromeStyle(14f, FontWeight.SemiBold),
-            color = if (shareEnabled || busy) LiveDesign.accent else LiveDesign.faint,
-            maxLines = 1,
-            modifier =
-                Modifier.clip(CapsuleShape)
-                    .background(if (shareEnabled) LiveDesign.accentDim else Color.Transparent)
-                    .border(1.dp, LiveDesign.hairline, CapsuleShape)
-                    .semantics {
-                        contentDescription =
-                            if (shareEnabled) {
-                                "Share $selectedCount selected items"
-                            } else if (busy) {
-                                "Media delivery in progress"
-                            } else {
-                                "Share selected media"
-                            }
-                        if (shareEnabled) role = Role.Button else disabled()
-                    }
-                    .chromeClickable(enabled = shareEnabled, onClick = onShare)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-        )
-    }
-}
-
-/** Sort popup uses explicit menu choices rather than cycling a hidden state. */
-/** iOS gallery REFRESH — an on-demand authoritative re-enumeration. */
-@Composable
-private fun RefreshControl(enabled: Boolean, onClick: () -> Unit) {
-    val description = stringResource(R.string.media_refresh_cd)
-    Row(
-        Modifier.glass(CapsuleShape)
-            .alpha(if (enabled) 1f else 0.5f)
-            .semantics {
-                contentDescription = description
-                role = Role.Button
-                if (!enabled) disabled()
-            }
-            .chromeClickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            stringResource(R.string.media_refresh),
-            style = chromeStyle(10f, FontWeight.Bold, mono = true),
-            color = LiveDesign.muted,
-        )
-    }
+internal fun MediaStorageSlotSelector(slots: List<MediaStorageSlotPresentation>, selectedStorageId: Long?,
+    horizontal: Boolean, onSelect: (Long) -> Unit, modifier: Modifier = Modifier) {
+    com.opencapture.opencine.cameracontrols.MonitorMediaGalleryStorageCards(
+        mediaGalleryStorageValues(slots, selectedStorageId),
+        select = { it.toLongOrNull()?.let(onSelect) }, horizontal = horizontal, modifier = modifier)
 }
 
 @Composable
-internal fun MediaFilterDialog(
-    filters: MediaLibraryFilters,
-    options: MediaFilterOptions,
-    storageIds: List<Long>,
-    onFiltersChanged: (MediaLibraryFilters) -> Unit,
-    onDismiss: () -> Unit,
-) {
+internal fun MediaLibraryRail(category: MediaLibraryCategory, storageSlots: List<MediaStorageSlotPresentation>,
+    selectedStorageId: Long?, onCategoryChange: (MediaLibraryCategory) -> Unit, onStorageSelect: (Long) -> Unit,
+    showsGridControls: Boolean, layout: MonitorMediaLayout, thumbnailSize: MonitorThumbnailSize,
+    onLayoutChange: (MonitorMediaLayout) -> Unit, onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
+    modifier: Modifier = Modifier) {
+    com.opencapture.opencine.cameracontrols.MonitorMediaGalleryNavigationRail(
+        category = com.opencapture.opencine.vocabulary.MediaLibraryTab.valueOf(category.name),
+        storage = mediaGalleryStorageValues(storageSlots, selectedStorageId),
+        selectCategory = { onCategoryChange(MediaLibraryCategory.valueOf(it.name)) },
+        selectStorage = { it.toLongOrNull()?.let(onStorageSelect) }, layout = layout, thumbnailSize = thumbnailSize,
+        selectLayout = onLayoutChange, selectThumbnailSize = onThumbnailSizeChange,
+        showsDisplayControls = showsGridControls, modifier = modifier)
+}
+
+@Composable
+internal fun MediaFilterDialog(filters: MediaLibraryFilters, options: MediaFilterOptions, storageIds: List<Long>,
+    onFiltersChanged: (MediaLibraryFilters) -> Unit, onDismiss: () -> Unit) {
     val haptics = LocalOperatorHaptics.current
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
-        properties =
-            androidx.compose.ui.window.DialogProperties(
-                usePlatformDefaultWidth = false,
-            ),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
-                .chromeClickable(onClick = onDismiss),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            Column(
-                Modifier
-                    .padding(top = 72.dp, start = 20.dp, end = 20.dp)
-                    .widthIn(max = 400.dp)
-                    .fillMaxWidth()
-                    .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                    .chromeClickable(onClick = {}) // absorb taps so backdrop doesn't dismiss mid-row
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    "Filters",
-                    style = chromeStyle(16f, FontWeight.SemiBold),
-                    color = LiveDesign.text,
-                )
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .heightIn(max = 290.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    MonitorMediaFilterForm(
-                        formats = options.formats.map(MediaFormatFilter::title),
-                        resolutions = options.resolutions.map(MediaResolutionFilter::title),
-                        colors = emptyList(),
-                        formatSelection = filters.formats.mapTo(linkedSetOf(), MediaFormatFilter::title),
-                        resolutionSelection = filters.resolutions.mapTo(linkedSetOf(), MediaResolutionFilter::title),
-                        colorSelection = emptySet(),
-                        dateStartLabel = null,
-                        dateEndLabel = null,
-                        hasDates = false,
-                        onToggleFormat = { id ->
-                            options.formats.firstOrNull { it.title == id }?.let { value ->
-                                haptics.selection()
-                                onFiltersChanged(filters.copy(formats = filters.formats.toggled(value)))
-                            }
-                        },
-                        onToggleResolution = { id ->
-                            options.resolutions.firstOrNull { it.title == id }?.let { value ->
-                                haptics.selection()
-                                onFiltersChanged(filters.copy(resolutions = filters.resolutions.toggled(value)))
-                            }
-                        },
-                        onToggleColor = {},
-                        onPickStart = {},
-                        onPickEnd = {},
-                        onClear = { onFiltersChanged(MediaLibraryFilters()) },
-                        photoSizes = options.photoSizes.takeIf { it.isNotEmpty() }?.let { sizes ->
-                            MonitorMediaPhotoSizeChoices(
-                                options = sizes.map { MonitorMediaFilterChoice(it.name, it.title) },
-                                selectedIds = filters.photoSizes.mapTo(linkedSetOf()) { it.name },
-                                onToggle = { id ->
-                                    sizes.firstOrNull { it.name == id }?.let { value ->
-                                        haptics.selection()
-                                        onFiltersChanged(filters.copy(photoSizes = filters.photoSizes.toggled(value)))
-                                    }
-                                },
-                            )
-                        },
-                        dateWindows = options.dateWindows.takeIf { it.isNotEmpty() }?.let { windows ->
-                            MonitorMediaDateWindowChoices(
-                                options = windows.map { MonitorMediaFilterChoice(it.name, it.title) },
-                                selectedId = filters.dateWindow?.name,
-                                onToggle = { id ->
-                                    windows.firstOrNull { it.name == id }?.let { value ->
-                                        haptics.selection()
-                                        onFiltersChanged(
-                                            filters.copy(dateWindow = value.takeUnless { filters.dateWindow == value }),
-                                        )
-                                    }
-                                },
-                            )
-                        },
-                        storage = storageIds.takeIf { it.isNotEmpty() }?.let { slots ->
-                            MonitorMediaStorageChoices(
-                                options = slots.mapIndexed { index, id ->
-                                    MonitorMediaFilterChoice(id.toString(), "SLOT ${index + 1}")
-                                },
-                                selectedId = filters.storageId?.toString(),
-                                onToggle = { id ->
-                                    slots.firstOrNull { it.toString() == id }?.let { storageId ->
-                                        haptics.selection()
-                                        onFiltersChanged(filters.togglingStorageSlot(storageId))
-                                    }
-                                },
-                            )
-                        },
-                        chipLayout = MonitorMediaFilterChipLayout.HORIZONTAL_SCROLL,
-                        showsInlineClear = false,
-                    )
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        "Clear all",
-                        style = chromeStyle(13f, FontWeight.Medium),
-                        color =
-                            if (filters.activeCount > 0) LiveDesign.accent else LiveDesign.faint,
-                        modifier =
-                            Modifier.chromeClickable(enabled = filters.activeCount > 0) {
-                                onFiltersChanged(MediaLibraryFilters())
-                            },
-                    )
-                    Text(
-                        "Done",
-                        style = chromeStyle(13f, FontWeight.SemiBold),
-                        color = LiveDesign.accent,
-                        modifier = Modifier.chromeClickable(onClick = onDismiss),
-                    )
-                }
+    com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilterDialog(
+        filters = MonitorMediaGalleryFilters(formats = options.formats.map { it.title }, resolutions = options.resolutions.map { it.title },
+            photoSizes = options.photoSizes.map { MonitorMediaFilterChoice(it.name, it.title) },
+            dateWindows = options.dateWindows.map { MonitorMediaFilterChoice(it.name, it.title) },
+            storage = storageIds.mapIndexed { index, id -> MonitorMediaFilterChoice(id.toString(), "SLOT ${index + 1}") },
+            formatSelection = filters.formats.mapTo(linkedSetOf()) { it.title },
+            resolutionSelection = filters.resolutions.mapTo(linkedSetOf()) { it.title },
+            photoSizeSelection = filters.photoSizes.mapTo(linkedSetOf()) { it.name },
+            dateWindow = filters.dateWindow?.name, storageID = filters.storageId?.toString(), dialog = true),
+        hasActiveFilters = filters.activeCount > 0, close = onDismiss,
+        action = { action ->
+            if (action != MonitorMediaGalleryFilterAction.Reset) haptics.selection()
+            when (action) {
+                is MonitorMediaGalleryFilterAction.Format -> options.formats.firstOrNull { it.title == action.id }
+                    ?.let { onFiltersChanged(filters.copy(formats = filters.formats.toMutableSet().apply { if (!add(it)) remove(it) })) }
+                is MonitorMediaGalleryFilterAction.Resolution -> options.resolutions.firstOrNull { it.title == action.id }
+                    ?.let { onFiltersChanged(filters.copy(resolutions = filters.resolutions.toMutableSet().apply { if (!add(it)) remove(it) })) }
+                is MonitorMediaGalleryFilterAction.PhotoSize -> options.photoSizes.firstOrNull { it.name == action.id }
+                    ?.let { onFiltersChanged(filters.copy(photoSizes = filters.photoSizes.toMutableSet().apply { if (!add(it)) remove(it) })) }
+                is MonitorMediaGalleryFilterAction.DateWindow -> options.dateWindows.firstOrNull { it.name == action.id }
+                    ?.let { onFiltersChanged(filters.copy(dateWindow = it.takeUnless { it == filters.dateWindow })) }
+                is MonitorMediaGalleryFilterAction.Storage -> action.id.toLongOrNull()?.let { onFiltersChanged(filters.togglingStorageSlot(it)) }
+                MonitorMediaGalleryFilterAction.Reset -> onFiltersChanged(MediaLibraryFilters())
             }
-        }
-    }
+        })
 }
 
-
-private fun <Value> Set<Value>.toggled(value: Value): Set<Value> =
-    toMutableSet().apply { if (!add(value)) remove(value) }
-
-/** Body chooses state, grid, or list without changing the data source. */
-@Composable
-private fun MediaLibraryBody(
-    state: BrowseState,
-    clips: List<NikonMediaClipRecord>,
-    source: MediaLibrarySource,
-    layout: MonitorMediaLayout,
-    thumbnailSize: MonitorThumbnailSize,
-    cameraID: String,
-    cameraIDFor: (NikonMediaClipRecord) -> String = { cameraID },
-    clipIdentity: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) },
-    /** A same-stem RAW rides behind this JPEG — the cell shows one item for the pair. */
-    hasRawSibling: (NikonMediaClipRecord) -> Boolean = { false },
-    /** Frame count when a clip represents a burst series (null for an ordinary clip). */
-    burstCountOf: (NikonMediaClipRecord) -> Int? = { null },
-    cameraConnected: Boolean,
-    connectionOwner: Long?,
-    cacheStore: MediaCacheStore,
-    favorites: Set<String>,
-    isSelecting: Boolean,
-    selectedIDs: Set<String>,
-    onOpen: (NikonMediaClipRecord) -> Unit,
-    onBeginSelection: (NikonMediaClipRecord) -> Unit,
-    /** Full selection set after a Photos-style range paint (not a delta). */
-    onSweepSelection: (Set<String>) -> Unit,
-    onToggleFavorite: (NikonMediaClipRecord) -> Unit,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(modifier) {
-        when (state) {
-            BrowseState.Loading -> ListingState(source)
-            is BrowseState.Failed -> FailedState(state.message, onRetry)
-            is BrowseState.Loaded ->
-                if (clips.isEmpty() && state.isLoadingMore) {
-                    ListingState(source)
-                } else if (clips.isEmpty()) {
-                    EmptyState(source)
-                } else {
-                    MediaClipGallery(
-                        clips = clips,
-                        list = layout == MonitorMediaLayout.LIST,
-                        thumbnailSize = thumbnailSize,
-                        source = source,
-                        cameraIDFor = cameraIDFor,
-                        clipIdentity = clipIdentity,
-                        hasRawSibling = hasRawSibling,
-                        burstCountOf = burstCountOf,
-                        cameraConnected = cameraConnected,
-                        connectionOwner = connectionOwner,
-                        cacheStore = cacheStore,
-                        favorites = favorites,
-                        isSelecting = isSelecting,
-                        selectedIDs = selectedIDs,
-                        onOpen = onOpen,
-                        onBeginSelection = onBeginSelection,
-                        onSweepSelection = onSweepSelection,
-                        onToggleFavorite = onToggleFavorite,
-                    )
-                }
-        }
-    }
-}
-
-/** Source-native hold/slop plus the actual 72dp band; common frames replace per-MOVE steps. */
+/** Platform input facts only; the common selection owner performs hold/sweep/edge policy. */
 @Composable
 private fun rememberSelectionInputPolicy(): MonitorMediaSelectionConfiguration {
     val density = LocalDensity.current.density
-    val nativeInput = LocalViewConfiguration.current
-    return remember(nativeInput.longPressTimeoutMillis, nativeInput.touchSlop, density) {
-        MonitorMediaSelectionConfiguration(
-            holdMilliseconds = nativeInput.longPressTimeoutMillis,
-            movementTolerance = nativeInput.touchSlop / density,
-            allowsSelectionEntry = false,
-            sweepsSideways = false,
-            edgeBand = 72f,
-            maximumEdgeSpeed = 620f,
-            edgeCurve = MonitorMediaSelectionConfiguration.EdgeCurve.LINEAR,
-            viewportEdgeLimitRatio = null,
-        )
-    }
-}
-
-/** Actual source cards consume the common mounted-hit and native input owner, in the shared
- * catalog grid or a list. Browsing entry remains on the cells; a subsequent selecting touch arms a
- * hold. Native vertical scrolling and frame-clock edge scrolling share the real lazy state.
- */
-@Composable
-private fun MediaClipGallery(
-    clips: List<NikonMediaClipRecord>,
-    list: Boolean,
-    thumbnailSize: MonitorThumbnailSize,
-    source: MediaLibrarySource,
-    cameraIDFor: (NikonMediaClipRecord) -> String,
-    clipIdentity: (NikonMediaClipRecord) -> String,
-    hasRawSibling: (NikonMediaClipRecord) -> Boolean,
-    burstCountOf: (NikonMediaClipRecord) -> Int? = { null },
-    cameraConnected: Boolean,
-    connectionOwner: Long?,
-    cacheStore: MediaCacheStore,
-    favorites: Set<String>,
-    isSelecting: Boolean,
-    selectedIDs: Set<String>,
-    onOpen: (NikonMediaClipRecord) -> Unit,
-    onBeginSelection: (NikonMediaClipRecord) -> Unit,
-    onSweepSelection: (Set<String>) -> Unit,
-    onToggleFavorite: (NikonMediaClipRecord) -> Unit,
-) {
-    val gridState = rememberLazyGridState()
-    val listState = rememberLazyListState()
-    val orderedIDs = remember(clips, clipIdentity) { clips.map(clipIdentity) }
-    // Read at tap time, so a sweep step does not hand every row a new lambda and recompose it.
-    val currentSelectedIDs by rememberUpdatedState(selectedIDs)
-    val view = LocalView.current
-    val selectionInput = rememberSelectionInputPolicy()
-    val configuration = LocalConfiguration.current
-    val columns =
-        monitorCatalogColumns(thumbnailSize, minOf(configuration.screenWidthDp, configuration.screenHeightDp) >= 600)
-    MonitorMediaSelectionHost(
-        ids = orderedIDs,
-        selecting = isSelecting,
-        selected = selectedIDs,
-        scroll = if (list) listState else gridState,
-        onOpen = { id -> clips.firstOrNull { clipIdentity(it) == id }?.let(onOpen) },
-        onSelectionChange = { _, next -> onSweepSelection(next) },
-        modifier = Modifier.fillMaxSize(),
-        sessionKey = Triple(source, connectionOwner, list),
-        configuration = selectionInput,
-        onFeedback = { event ->
-            view.performOperatorHaptic(
-                if (event == MonitorMediaSelectionFeedback.BEGAN) HapticFeedbackConstants.LONG_PRESS
-                else HapticFeedbackConstants.CLOCK_TICK,
-            )
-        },
-    ) { registry ->
-        val cell: @Composable (NikonMediaClipRecord) -> Unit = { clip ->
-            val identity = clipIdentity(clip)
-            MonitorMediaHitTarget(registry = registry, id = identity) {
-                MediaClipArtworkAdapter(
-                    clip = clip,
-                    list = list,
-                    source = source,
-                    cameraID = cameraIDFor(clip),
-                    hasRawSibling = hasRawSibling(clip),
-                    // List rows carry no burst count.
-                    burstCount = if (list) null else burstCountOf(clip),
-                    cameraConnected = cameraConnected,
-                    connectionOwner = connectionOwner,
-                    cacheStore = cacheStore,
-                    favorite = identity in favorites,
-                    selected = identity in selectedIDs,
-                    isSelecting = isSelecting,
-                    onClick = { onOpen(clip) },
-                    onLongPress = { onBeginSelection(clip) },
-                    onToggleSelection = { onSweepSelection(MediaLibrarySelection.toggle(currentSelectedIDs, identity)) },
-                    onToggleFavorite = { onToggleFavorite(clip) },
-                )
-            }
-        }
-        if (list) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 28.dp),
-            ) {
-                items(clips, key = clipIdentity) { cell(it) }
-            }
-        } else {
-            MonitorCatalogGrid(clips, columns, key = clipIdentity, modifier = Modifier.fillMaxSize(), state = gridState, cell = cell)
-        }
-    }
-}
-/** Source artwork and intents adapted to the exercised common grid/list owner. */
-@Composable
-private fun MediaClipArtworkAdapter(
-    clip: NikonMediaClipRecord, source: MediaLibrarySource, cameraID: String,
-    hasRawSibling: Boolean, burstCount: Int? = null, cameraConnected: Boolean,
-    connectionOwner: Long?, cacheStore: MediaCacheStore, favorite: Boolean, selected: Boolean,
-    isSelecting: Boolean, list: Boolean, onClick: () -> Unit, onLongPress: () -> Unit,
-    onToggleSelection: () -> Unit, onToggleFavorite: () -> Unit, modifier: Modifier = Modifier,
-) {
-    MonitorClipCard(
-        clip = mediaClipCellPresentation(
-            clip, cameraID, favorite, hasRawSibling, burstCount, list, isSelecting, selected),
-        list = list, selecting = isSelecting, selected = selected,
-        onOpen = onClick, onSelect = if (isSelecting) onToggleSelection else onLongPress,
-        onFavorite = if (isSelecting) null else onToggleFavorite,
-        modifier = modifier, clicks = !isSelecting,
-    ) {
-        ClipArtwork(
-            clip = clip, source = source, cameraID = cameraID, cameraConnected = cameraConnected,
-            connectionOwner = connectionOwner, cacheStore = cacheStore, modifier = Modifier.fillMaxSize(),
-        )
-    }
-}
-
-/**
- * iPhone-Photos-style burst scrubber (iOS `BurstFilmstrip`): dragging scrolls the strip with the
- * centered thumb highlighting live; the displayed frame commits only when the scroll SETTLES, not
- * on every intermediate frame. The viewer re-streams each frame, so committing on every thumb that
- * crossed centre was the lag + reload storm (and the programmatic-scroll rubber-band). Tapping a
- * thumb jumps to it immediately; external selection changes (deletion advance) re-center the strip.
- */
-@Composable
-private fun BurstFilmstrip(
-    members: List<NikonMediaClipRecord>,
-    selectedKey: String,
-    keyOf: (NikonMediaClipRecord) -> String,
-    onSelect: (String) -> Unit,
-    thumb: @Composable (NikonMediaClipRecord, Modifier) -> Unit,
-) {
-    // Widest a thumb gets (selected). Half of it is subtracted from the side inset so the
-    // first/last frame can sit dead-centre; the inset math and the item width must stay in sync.
-    val maxThumbWidth = 46.dp
-    val listState = rememberLazyListState()
-    val currentSelected by rememberUpdatedState(selectedKey)
-    val currentOnSelect by rememberUpdatedState(onSelect)
-    // The thumb under the centre line — drives the live highlight only, NOT the heavy viewer
-    // (which commits when the scrub settles). Reset when the series changes.
-    var centeredKey by remember(members) { mutableStateOf(selectedKey) }
-
-    fun centeredKeyNow(): String? {
-        val info = listState.layoutInfo
-        val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
-        val index = info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - center) }?.index
-        return index?.let { members.getOrNull(it) }?.let(keyOf)
-    }
-
-    // Cheap live highlight: track the centred thumb continuously (no viewer reload).
-    LaunchedEffect(listState, members) {
-        snapshotFlow { centeredKeyNow() }.collect { key -> if (key != null) centeredKey = key }
-    }
-    // Commit the displayed frame only after the scrub SETTLES (idle after a real drag/fling).
-    // Reading layoutInfo at settle time picks the actually-rested thumb, so a programmatic
-    // re-center (which rests on the already-selected frame) never commits back — no rubber-band.
-    LaunchedEffect(listState, members) {
-        var wasScrolling = false
-        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
-            if (wasScrolling && !scrolling) {
-                val key = centeredKeyNow()
-                if (key != null && key != currentSelected) currentOnSelect(key)
-            }
-            wasScrolling = scrolling
-        }
-    }
-    // External selection (tap, deletion advance) re-centers the strip; a settle-commit already
-    // left centeredKey == selectedKey, so this no-ops for scrubs (iOS `guard scrolledID != …`).
-    LaunchedEffect(selectedKey, members) {
-        if (centeredKey == selectedKey) return@LaunchedEffect
-        centeredKey = selectedKey
-        val index = members.indexOfFirst { keyOf(it) == selectedKey }
-        if (index >= 0 && !listState.isScrollInProgress) listState.animateScrollToItem(index)
-    }
-    BoxWithConstraints(Modifier.fillMaxWidth().height(56.dp)) {
-        // Half the viewport (minus half a max-width thumb) so ANY thumb — first and last
-        // included — can reach the centre anchor (was a fixed 130, unreachable on a wide
-        // landscape screen). With this inset, start-aligned snapping lands a thumb centred.
-        val sideInset = ((maxWidth - maxThumbWidth) / 2f).coerceAtLeast(0.dp)
-        LazyRow(
-            state = listState,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            contentPadding = PaddingValues(horizontal = sideInset),
-            // .viewAligned snapping: the scrub lands cleanly on a frame instead of drifting.
-            flingBehavior = rememberSnapFlingBehavior(listState),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            items(members, key = { keyOf(it) }) { member ->
-                val isSelected = keyOf(member) == centeredKey
-                Box(
-                    Modifier
-                        .width(if (isSelected) maxThumbWidth else 30.dp)
-                        .height(44.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .border(
-                            if (isSelected) 1.5.dp else 0.dp,
-                            if (isSelected) LiveDesign.accent else Color.Transparent,
-                            RoundedCornerShape(4.dp),
-                        )
-                        .chromeClickable { onSelect(keyOf(member)) },
-                ) {
-                    thumb(member, Modifier.fillMaxSize())
-                }
-            }
-        }
+    val input = LocalViewConfiguration.current
+    return remember(input.longPressTimeoutMillis, input.touchSlop, density) {
+        MonitorMediaSelectionConfiguration(holdMilliseconds = input.longPressTimeoutMillis,
+            movementTolerance = input.touchSlop / density, allowsSelectionEntry = true,
+            sweepsSideways = false, edgeBand = 72f, maximumEdgeSpeed = 620f,
+            edgeCurve = MonitorMediaSelectionConfiguration.EdgeCurve.LINEAR, viewportEdgeLimitRatio = null)
     }
 }
 
@@ -2274,11 +1151,12 @@ private fun ClipArtwork(
     connectionOwner: Long?,
     cacheStore: MediaCacheStore,
     modifier: Modifier = Modifier,
+    admission: () -> Boolean = { true },
 ) {
     var thumbnail by remember(clip.libraryKey(cameraID), source) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(clip.libraryKey(cameraID), source, cameraConnected) {
-        thumbnail =
-            withContext(Dispatchers.IO) {
+    LaunchedEffect(clip.libraryKey(cameraID), source, cameraConnected, connectionOwner) {
+        if (!admission()) return@LaunchedEffect
+        val decoded = withContext(Dispatchers.IO) {
                 val cameraThumbnail =
                     if (
                         source == MediaLibrarySource.CAMERA &&
@@ -2303,6 +1181,7 @@ private fun ClipArtwork(
                     }
                 cameraThumbnail ?: cachedStillThumbnail(cacheStore, cameraID, clip)
             }
+        if (admission()) thumbnail = decoded
     }
     val image = thumbnail
     if (image != null) {
@@ -2361,89 +1240,6 @@ private fun cachedStillThumbnail(
     }
 }
 
-/** iOS-aligned loading state, specialized for its selected safe source. */
-@Composable
-private fun ListingState(source: MediaLibrarySource) {
-    CenteredState {
-        CircularProgressIndicator(color = LiveDesign.muted)
-        Text(
-            if (source == MediaLibrarySource.CAMERA) "Listing clips on camera…" else "Opening local library…",
-            style = chromeStyle(15f, FontWeight.Medium),
-            color = LiveDesign.muted,
-        )
-        Text(
-            if (source == MediaLibrarySource.CAMERA) {
-                "Querying card storage…"
-            } else {
-                "Checking persisted complete cache entries…"
-            },
-            style = chromeStyle(12f, FontWeight.Normal),
-            color = LiveDesign.faint,
-        )
-    }
-}
-
-/** Empty local media never means arbitrary files were searched. */
-@Composable
-private fun EmptyState(source: MediaLibrarySource) {
-    CenteredState {
-        MonitorIcon(MonitorIcon.FILM, null, Modifier.size(40.dp), LiveDesign.faint)
-        Text(
-            if (source == MediaLibrarySource.CAMERA) "No clips yet" else "No complete cached media",
-            style = chromeStyle(15f, FontWeight.Medium),
-            color = LiveDesign.muted,
-        )
-        Text(
-            if (source == MediaLibrarySource.CAMERA) {
-                "Clips appear here as they\u2019re discovered on the card."
-            } else {
-                "Complete camera media you have opened appears here safely."
-            },
-            style = chromeStyle(12f, FontWeight.Normal),
-            color = LiveDesign.faint,
-        )
-    }
-}
-
-/** Listing failure (including no camera connection), with an explicit retry action. */
-@Composable
-private fun FailedState(message: String, onRetry: () -> Unit) {
-    CenteredState {
-        Text(
-            "Couldn't list media",
-            style = chromeStyle(15f, FontWeight.Medium),
-            color = LiveDesign.muted,
-        )
-        Text(
-            message,
-            style = chromeStyle(12f, FontWeight.Normal),
-            color = LiveDesign.faint,
-        )
-        Text(
-            "Retry",
-            style = chromeStyle(13f, FontWeight.SemiBold),
-            color = LiveDesign.accent,
-            modifier =
-                Modifier.glass(CircleShape)
-                    .chromeClickable(onRetry)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-    }
-}
-
-/** Shared centered-column scaffold for listing, empty, and failure states. */
-@Composable
-private fun CenteredState(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            content()
-        }
-    }
-}
-
 /** A brief in-app result message that remains above the safe bottom edge. */
 @Composable
 private fun MediaStatusMessage(message: String, modifier: Modifier = Modifier) {
@@ -2456,26 +1252,3 @@ private fun MediaStatusMessage(message: String, modifier: Modifier = Modifier) {
         overflow = TextOverflow.Ellipsis,
     )
 }
-
-private fun MediaLibraryCategory.titleForHeader(): String =
-    when (this) {
-        MediaLibraryCategory.ALL -> "All clips"
-        MediaLibraryCategory.VIDEOS -> "Videos"
-        MediaLibraryCategory.PHOTOS -> "Photos"
-        MediaLibraryCategory.FAVORITES -> "Favorites"
-    }
-
-private fun itemCountLabel(state: BrowseState, displayedCount: Int): String =
-    when (state) {
-        BrowseState.Loading -> "Scanning…"
-        is BrowseState.Failed -> "—"
-        is BrowseState.Loaded ->
-            if (state.isLoadingMore) {
-                "Listing… ${state.clips.size} found"
-            } else {
-                "$displayedCount item${if (displayedCount == 1) "" else "s"}"
-            }
-    }
-
-private val CapsuleShape: RoundedCornerShape
-    get() = RoundedCornerShape(percent = 50)

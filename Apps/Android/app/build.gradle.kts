@@ -293,6 +293,11 @@ dependencies {
     // Keystore sealing for the camera Wi-Fi keys.
     implementation(libs.opencine.platform)
     implementation(project(":wear-relay"))
+    // Shared transport owners; hardware camera sessions stay in the Nikon integration.
+    implementation("com.opencapture.opencine:relay:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:relay-runtime:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:watch-runtime:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:nikon-wire:0.1.0-SNAPSHOT")
     // Sentry adapters for the shared problem report and reliability reporting (as Pocket).
     implementation(libs.okhttp)
     implementation(libs.sentry.android)

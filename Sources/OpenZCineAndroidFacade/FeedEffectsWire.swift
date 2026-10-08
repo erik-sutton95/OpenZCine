@@ -405,24 +405,11 @@ public enum FeedEffectsWire {
     /// Reorders a red-fastest cube into the packed-2D bitmap layout and
     /// quantizes to RGBA8 (alpha 255).
     static func packedRGBA(cube: CubeLUT) -> [UInt8] {
-        let size = cube.size
-        var out = [UInt8](repeating: 255, count: size * size * size * 4)
-        for g in 0..<size {
-            for b in 0..<size {
-                for r in 0..<size {
-                    let src = (r + g * size + b * size * size) * 3
-                    let dst = (g * size * size + b * size + r) * 4
-                    out[dst] = quantized(cube.rgb[src])
-                    out[dst + 1] = quantized(cube.rgb[src + 1])
-                    out[dst + 2] = quantized(cube.rgb[src + 2])
-                }
-            }
-        }
-        return out
+        cube.packedRGBA
     }
 
     /// `[0, 1]` float component to an 8-bit code, round-to-nearest.
     static func quantized(_ value: Float) -> UInt8 {
-        UInt8((min(max(value, 0), 1) * 255).rounded())
+        CubeLUT.quantizedRGBAChannel(value)
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineMedia
 
 /// One bounded zone of a false-colour measurement scale. Components are in `[0, 1]`.
 public struct FalseColorBand: Equatable, Sendable {
@@ -417,43 +418,7 @@ public enum FalseColorMap {
     public static func cube(
         scale: FalseColorScale, mapping: ExposureSignalMapping, size: Int = 64
     ) -> CubeLUT {
-        precondition(
-            CubeLUT.rendererSizeRange.contains(size),
-            "Core Image false-colour cubes require a dimension from 2 through 64.")
-        let denominator = Double(size - 1)
-        let encoded = (0..<size).map { Double($0) / denominator }
-        let decoded = (0..<size).map {
-            mapping.curve.decode(encodedValue: Double($0) / denominator)
-        }
-        let coefficients = luminanceCoefficients(curve: mapping.curve)
-        let monitorTone = MonitorDisplayToneMap(mapping: mapping)
-        var rgb = [Float]()
-        rgb.reserveCapacity(size * size * size * 3)
-        for b in 0..<size {
-            for g in 0..<size {
-                for r in 0..<size {
-                    let luminance =
-                        coefficients.red * decoded[r]
-                        + coefficients.green * decoded[g]
-                        + coefficients.blue * decoded[b]
-                    let value =
-                        scale == .stops
-                        ? exposureValue(
-                            linearLuminance: luminance, scale: scale, mapping: mapping)
-                        : monitorTone.ire(sceneLinear: luminance)
-                    let chosen = renderedColor(
-                        value: value,
-                        scale: scale,
-                        mapping: mapping,
-                        source: (encoded[r], encoded[g], encoded[b]),
-                        monitorGray: monitorTone.displayCode(sceneLinear: luminance))
-                    rgb.append(Float(chosen.red))
-                    rgb.append(Float(chosen.green))
-                    rgb.append(Float(chosen.blue))
-                }
-            }
-        }
-        return CubeLUT(size: size, rgb: rgb)
+        lattice(scale: scale, mapping: mapping, size: size).cube(.composite)
     }
 
     /// The feathered Limits paint for one monitor-IRE value: the normalized crush/clip zone colour
@@ -463,20 +428,7 @@ public enum FalseColorMap {
     public static func limitsPaint(
         value: Double, mapping: ExposureSignalMapping
     ) -> (red: Double, green: Double, blue: Double, weight: Double) {
-        let scale = FalseColorScale.limits
-        var paint = (red: 0.0, green: 0.0, blue: 0.0)
-        var total = 0.0
-        for band in scale.bands(mapping: mapping) {
-            let weight = bandWeight(value: value, band: band, width: scale.transitionWidth)
-            paint.red += band.red * weight
-            paint.green += band.green * weight
-            paint.blue += band.blue * weight
-            total += weight
-        }
-        guard total > 0 else { return (0, 0, 0, 0) }
-        // Adjacent zone feathers are complementary, so the summed weight never exceeds 1; the
-        // clamp only guards floating-point noise.
-        return (paint.red / total, paint.green / total, paint.blue / total, min(1, total))
+        painting(scale: .limits, mapping: mapping).paint(value: value, monitorGray: 0)
     }
 
     /// Normalized Limits crush/clip paint colours indexed by log-encoded RGB, for GPU compositing:
@@ -485,7 +437,7 @@ public enum FalseColorMap {
     public static func limitsPaintCube(
         mapping: ExposureSignalMapping, size: Int = 64
     ) -> CubeLUT {
-        limitsCube(mapping: mapping, size: size) { ($0.red, $0.green, $0.blue) }
+        lattice(scale: .limits, mapping: mapping, size: size).cube(.paint)
     }
 
     /// Grayscale Limits zone-weight mask indexed by log-encoded RGB: 1 inside the crush/clip
@@ -493,132 +445,40 @@ public enum FalseColorMap {
     public static func limitsWeightCube(
         mapping: ExposureSignalMapping, size: Int = 64
     ) -> CubeLUT {
-        limitsCube(mapping: mapping, size: size) { ($0.weight, $0.weight, $0.weight) }
+        lattice(scale: .limits, mapping: mapping, size: size).cube(.weight)
     }
 
-    private static func limitsCube(
-        mapping: ExposureSignalMapping, size: Int,
-        component: ((red: Double, green: Double, blue: Double, weight: Double)) -> (
-            Double, Double, Double
-        )
-    ) -> CubeLUT {
-        precondition(
-            CubeLUT.rendererSizeRange.contains(size),
+    private static func painting(scale: FalseColorScale, mapping: ExposureSignalMapping)
+        -> MonitorFalseColorPainting {
+        MonitorFalseColorPainting(
+            bands: scale.bands(mapping: mapping).map {
+                LiveFalseColorBand(lowerBound: $0.lowerBound, upperBound: $0.upperBound,
+                    red: $0.red, green: $0.green, blue: $0.blue, label: "")
+            }, edgeSoftness: scale.transitionWidth,
+            domain: scale == .stops ? .sceneStops : .monitorPercent,
+            background: scale == .limits ? .source : .monitorGray,
+            detailBlend: scale == .stops ? zcStopsDetailBlend : 0)
+    }
+
+    private static func lattice(scale: FalseColorScale, mapping: ExposureSignalMapping, size: Int)
+        -> MonitorFalseColorLattice {
+        precondition(CubeLUT.rendererSizeRange.contains(size),
             "Core Image false-colour cubes require a dimension from 2 through 64.")
         let denominator = Double(size - 1)
         let decoded = (0..<size).map {
             mapping.curve.decode(encodedValue: Double($0) / denominator)
         }
-        let coefficients = luminanceCoefficients(curve: mapping.curve)
-        let monitorTone = MonitorDisplayToneMap(mapping: mapping)
-        var rgb = [Float]()
-        rgb.reserveCapacity(size * size * size * 3)
-        for b in 0..<size {
-            for g in 0..<size {
-                for r in 0..<size {
-                    let luminance =
-                        coefficients.red * decoded[r]
-                        + coefficients.green * decoded[g]
-                        + coefficients.blue * decoded[b]
-                    let chosen = component(
-                        limitsPaint(
-                            value: monitorTone.ire(sceneLinear: luminance), mapping: mapping))
-                    rgb.append(Float(chosen.0))
-                    rgb.append(Float(chosen.1))
-                    rgb.append(Float(chosen.2))
-                }
-            }
-        }
-        return CubeLUT(size: size, rgb: rgb)
+        return .sceneLinear(decodedChannels: decoded,
+            luminanceCoefficients: luminanceCoefficients(curve: mapping.curve),
+            tone: MonitorDisplayToneMap(mapping: mapping),
+            painting: painting(scale: scale, mapping: mapping))
     }
 
-    private static func renderedColor(
-        value: Double,
-        scale: FalseColorScale,
-        mapping: ExposureSignalMapping,
-        source: (red: Double, green: Double, blue: Double),
-        monitorGray: Double
-    ) -> (red: Double, green: Double, blue: Double) {
-        let base: (red: Double, green: Double, blue: Double)
-        switch scale {
-        case .stops, .ire:
-            let gray = min(1, max(0, monitorGray))
-            base = (gray, gray, gray)
-        case .limits:
-            base = (
-                min(1, max(0, source.red)),
-                min(1, max(0, source.green)),
-                min(1, max(0, source.blue))
-            )
-        }
-
-        let weightedBands = scale.bands(mapping: mapping).map { band in
-            (band, bandWeight(value: value, band: band, width: scale.transitionWidth))
-        }
-        let totalWeight = weightedBands.reduce(0) { $0 + $1.1 }
-        guard totalWeight > 0 else { return base }
-        let normalization = max(1, totalWeight)
-        let baseWeight = max(0, 1 - totalWeight)
-        let painted = weightedBands.reduce(
-            (
-                red: base.red * baseWeight, green: base.green * baseWeight,
-                blue: base.blue * baseWeight
-            )
-        ) { result, item in
-            let color = renderedBandColor(
-                item.0, scale: scale, detailGray: monitorGray)
-            return (
-                result.red + color.red * item.1,
-                result.green + color.green * item.1,
-                result.blue + color.blue * item.1
-            )
-        }
-        return (
-            painted.red / normalization,
-            painted.green / normalization,
-            painted.blue / normalization
-        )
-    }
-
-    private static func renderedBandColor(
-        _ band: FalseColorBand,
-        scale: FalseColorScale,
-        detailGray: Double
-    ) -> (red: Double, green: Double, blue: Double) {
-        guard scale == .stops else { return (band.red, band.green, band.blue) }
-        let gray = min(1, max(0, detailGray))
-        let colorWeight = 1 - zcStopsDetailBlend
-        return (
-            band.red * colorWeight + gray * zcStopsDetailBlend,
-            band.green * colorWeight + gray * zcStopsDetailBlend,
-            band.blue * colorWeight + gray * zcStopsDetailBlend
-        )
-    }
-
-    private static func bandWeight(
-        value: Double, band: FalseColorBand, width: Double
-    ) -> Double {
-        let rising =
-            band.lowerBound.isFinite && band.lowerBound != 0
-            ? smoothStep(
-                edge0: band.lowerBound - width,
-                edge1: band.lowerBound + width,
-                value: value)
-            : 1
-        let falling =
-            band.upperBound.isFinite
-            ? 1
-                - smoothStep(
-                    edge0: band.upperBound - width,
-                    edge1: band.upperBound + width,
-                    value: value)
-            : 1
-        return rising * falling
-    }
-
-    private static func smoothStep(edge0: Double, edge1: Double, value: Double) -> Double {
-        let progress = min(1, max(0, (value - edge0) / (edge1 - edge0)))
-        return progress * progress * (3 - 2 * progress)
+    private static func renderedColor(value: Double, scale: FalseColorScale,
+        mapping: ExposureSignalMapping, source: (red: Double, green: Double, blue: Double),
+        monitorGray: Double) -> (red: Double, green: Double, blue: Double) {
+        painting(scale: scale, mapping: mapping).compositeColor(value: value,
+            monitorGray: monitorGray, source: source)
     }
 
     private static func luminanceCoefficients(

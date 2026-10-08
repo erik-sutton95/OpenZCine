@@ -207,55 +207,16 @@ internal fun NikonAssistInspector(
     onRequestLutImport: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
-    var helpVisible by remember { mutableStateOf(false) }
-    MonitorInspector(
-        title = tool.title, helpVisible = helpVisible, onToggleHelp = { helpVisible = !helpVisible },
-        viewportWidth = viewportWidth, viewportHeight = viewportHeight, onDismiss = onDismiss,
-        safeLeading = safeLeading, safeTrailing = safeTrailing, safeTop = safeTop, safeBottom = safeBottom,
-        navigation = { portrait ->
-            val scroll = rememberScrollState()
-            if (portrait) {
-                Row(Modifier.fillMaxWidth().monitorScrollFade(scroll, vertical = false).horizontalScroll(scroll)
-                    .monitorTabStrip()) {
-                    tools.forEach { InspectorTab(it, tool, assists, portrait = true) }
-                }
-            } else {
-                Column(Modifier.fillMaxHeight().monitorScrollFade(scroll).verticalScroll(scroll).monitorTabStrip()) {
-                    tools.forEach { InspectorTab(it, tool, assists, portrait = false) }
-                }
-            }
-        },
-    ) {
-        key(tool) {
-            CompositionLocalProvider(LocalMonitorInspectorHelp provides helpVisible) {
-                val scroll = rememberScrollState()
-                Column(
-                    Modifier.fillMaxWidth().then(
-                        if (tool == MonitorAssistTool.LUT) Modifier
-                        else Modifier.monitorScrollFade(scroll).verticalScroll(scroll),
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    AssistOptions(tool, assists, settings, cameraInput, lutLibrary, onOpenRedDownload, onRequestLutImport)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun InspectorTab(tool: MonitorAssistTool, selected: MonitorAssistTool, assists: NikonAssists, portrait: Boolean) {
     val haptics = LocalOperatorHaptics.current
-    val active = tool == selected
-    val tint = if (active) LiveDesign.accent else LiveDesign.muted
-    MonitorTab(active, { haptics.selection(); assists.shared.configureTool = tool },
-        Modifier.then(if (portrait) Modifier.width(94.dp) else Modifier.fillMaxWidth()).height(44.dp),
-        vertical = !portrait, separator = true, accessibilityLabel = tool.title) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            MonitorAssistToolGlyph(tool, tint, Modifier.size(15.dp))
-            Text(tool.chipLabel, color = tint, style = chromeStyle(9f, FontWeight.SemiBold), maxLines = 1)
-        }
+    fun descriptor(item: MonitorAssistTool) = com.opencapture.monitorui.MonitorInspectorTool(
+        value = item, title = item.title, label = item.chipLabel)
+    com.opencapture.monitorui.MonitorToolInspector(selection = descriptor(tool), tools = tools.map(::descriptor),
+        viewportWidth = viewportWidth, viewportHeight = viewportHeight,
+        safeLeading = safeLeading, safeTop = safeTop, safeBottom = safeBottom, safeTrailing = safeTrailing,
+        trailing = true, scrollContents = tool != MonitorAssistTool.LUT,
+        onSelect = { haptics.selection(); assists.shared.configureTool = it }, onDismiss = onDismiss,
+        glyph = { item, tint, modifier -> MonitorAssistToolGlyph(item, tint, modifier) }) { _ ->
+        AssistOptions(tool, assists, settings, cameraInput, lutLibrary, onOpenRedDownload, onRequestLutImport)
     }
 }
 
@@ -273,7 +234,7 @@ private fun AssistOptions(
     val state = assists.shared
     val haptics = LocalOperatorHaptics.current
     when (tool) {
-        MonitorAssistTool.LUT -> LutOptions(assists, lutLibrary, onOpenRedDownload, onRequestLutImport)
+        MonitorAssistTool.LUT -> NikonLutOptions(assists, lutLibrary, onOpenRedDownload, onRequestLutImport)
         MonitorAssistTool.WAVE, MonitorAssistTool.PARADE ->
             nikonAssistSection(tool, state, cameraInput, haptics::selection)?.Menu()
         else -> MonitorOptionGroup {
@@ -341,11 +302,12 @@ private data class LutWheelEntry(
 )
 
 @Composable
-private fun LutOptions(
+internal fun NikonLutOptions(
     assists: NikonAssists,
     lutLibrary: AndroidLutLibrary?,
     onOpenRedDownload: () -> Unit,
     onRequestLutImport: (() -> Unit)?,
+    includesComparison: Boolean = true,
 ) {
     val shared = assists.shared
     val storedEntries = lutLibrary?.entries?.collectAsState()?.value.orEmpty()
@@ -530,10 +492,10 @@ private fun LutOptions(
     // orientation itself survives either way, so switching back on returns to the operator's
     // choice rather than the default.
     // Comparison is meaningless with the grade off, so switching it on arms the LUT.
-    MonitorSettingsSwitchInlineRow("50/50 Comparison", isOn = shared.splitComparison) {
+    if (includesComparison) MonitorSettingsSwitchInlineRow("50/50 Comparison", isOn = shared.splitComparison) {
         shared.setSplitComparison(!shared.splitComparison)
     }
-    if (shared.splitComparison) {
+    if (includesComparison && shared.splitComparison) {
         MonitorSettingsInlineRow("Split",
             help = "Log on one half, the selected LUT on the other, divided at the centre of the " +
                 "image. Monitor only: nothing is written to the camera or the recording.") {
@@ -775,4 +737,3 @@ private fun LutDrumWheel(
         )
     }
 }
-

@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineAppKit
 import OpenCineFrameIO
 import OpenZCineCore
 
@@ -44,16 +45,40 @@ extension NativeAppModel {
 
     /// Connects via Adobe IMS OAuth (`ASWebAuthenticationSession` + PKCE) and loads the user.
     func connectFrameio() async throws {
+        guard frameioConfiguration != nil else { throw FrameioError.notConfigured }
+        let account = frameioAccount.retire()
+        try await connectFrameio(captured: account)
+    }
+
+    /// The settings task retains the exact account receipt it presented before native sign-in.
+    func connectFrameio(captured account: NikonFrameioAccount.Receipt) async throws {
         guard let config = frameioConfiguration else { throw FrameioError.notConfigured }
+        guard account.isCurrent, !Task.isCancelled else { throw CancellationError() }
         frameioConnecting = true
-        defer { frameioConnecting = false }
-        _ = try await FrameioAuthCoordinator(config: config).signIn()
-        frameioUser = try? await FrameioClient.nikon(config).currentUser()
+        defer { if account.isCurrent { frameioConnecting = false } }
+        _ = try await FrameioAuthCoordinator(
+            config: config,
+            transport: NikonFrameioAdmittedTransport(
+                native: FrameioURLSessionTransport(session: .shared),
+                admission: .init { account.isCurrent }),
+            tokens: NikonFrameioCapturedTokens(account: account)
+        ).signIn()
+        guard account.isCurrent, !Task.isCancelled else { throw CancellationError() }
+        let service = FrameioClient(
+            config: config,
+            transport: NikonFrameioAdmittedTransport(
+                native: FrameioURLSessionTransport.interactive,
+                admission: .init { account.isCurrent }),
+            tokens: NikonFrameioCapturedTokens(account: account))
+        let user = try? await service.currentUser()
+        guard account.isCurrent, !Task.isCancelled else { throw CancellationError() }
+        frameioUser = user
     }
 
     func disconnectFrameio() {
         // Clearing the stored token needs no OAuth config — never gate log-out on it, or an
         // unconfigured build can't shed a keychain session left by a previous install.
+        _ = frameioAccount.retire()
         FrameioTokenStore().clear()
         frameioUser = nil
         FrameioDestination.persist(nil)
@@ -127,51 +152,51 @@ extension NativeAppModel {
         metadata: MediaClipDeliveryMetadata?,
         onProgress: (@Sendable (Double) -> Void)?
     ) async {
-        guard let config = frameioConfiguration else {
+        guard frameioConfiguration != nil else {
             frameioUploadError = FrameioError.notConfigured.errorDescription
             return
         }
-        guard !frameioUploadInFlight.contains(clip.id) else { return }
+        guard frameioUploadInFlight[clip.id] == nil else { return }
 
         let currentStatus =
             mediaClips.first { $0.id == clip.id }?.frameioStatus ?? clip.frameioStatus
         guard currentStatus != .uploading else { return }
         if !forceReupload, currentStatus == .uploaded { return }
 
-        frameioUploadInFlight.insert(clip.id)
-        defer { frameioUploadInFlight.remove(clip.id) }
+        let ticket = UUID()
+        frameioUploadInFlight[clip.id] = ticket
+        defer {
+            if frameioUploadInFlight[clip.id] == ticket { frameioUploadInFlight[clip.id] = nil }
+        }
 
+        let originalAction = captureMediaLibraryAction([clip])
         do {
             if !isFrameioConnected { try await connectFrameio() }
-            let service = FrameioClient.nikon(config)
-            if frameioUser == nil { frameioUser = try? await service.currentUser() }
-            let destination = try await resolveDestination(using: service)
-
+            guard let originalAction, originalAction.sourceIsCurrent,
+                let capture = NikonMediaDeliveryCapture(
+                    model: self, clips: [clip], action: originalAction)
+            else { throw CancellationError() }
+            let admission = MonitorDeliveryAdmission {
+                capture.isCurrent && self.frameioUploadInFlight[clip.id] == ticket
+                    && capture.account.isCurrent && capture.isCurrent
+                    && capture.account.isCurrent
+            }
+            if frameioUser == nil {
+                let user = try? await capture.frameioClient(admission: admission).currentUser()
+                guard admission.isCurrent() else { throw CancellationError() }
+                frameioUser = user
+            }
             guard
                 let sourceURL = preparedURL ?? exportedClipURL(for: clip) ?? clipLocalURL(clip)
             else { throw FrameioError.unsafeMediaFilename }
-            let size = (FileManager.default.attributesOfItemSize(sourceURL)) ?? 0
-            let name = uploadName ?? sourceURL.lastPathComponent
-            let mediaType = FrameioMediaType.forFilename(name)
-
-            frameioUploadProgress[clip.id] = 0
-            setClipFrameioStatus(.uploading, for: clip)
-            let fileID = try await service.upload(
-                fileURL: sourceURL, name: name, mediaType: mediaType,
-                fileSize: size, accountID: destination.accountID, folderID: destination.folderID
-            ) { @MainActor [self] fraction in
-                frameioUploadProgress[clip.id] = fraction
-                onProgress?(fraction)
-            }
-            frameioLogger.info(
-                "uploaded \(name, privacy: .private(mask: .hash)) → file \(fileID, privacy: .private(mask: .hash))"
-            )
-            frameioUploadProgress[clip.id] = nil
-            if metadata != nil {
-                try? writeFrameioMetadataSidecar(metadata, nextTo: sourceURL)
-            }
-            setClipFrameioUploaded(fileID: fileID, for: clip)
+            try await uploadCapturedFrameio(
+                clip, source: sourceURL, metadata: metadata,
+                capture: capture, admission: admission,
+                progress: { onProgress?($0) }, uploadName: uploadName, existingTicket: ticket)
         } catch {
+            guard originalAction?.sourceIsCurrent == true,
+                frameioUploadInFlight[clip.id] == ticket, !Task.isCancelled
+            else { return }
             frameioUploadProgress[clip.id] = nil
             setClipFrameioStatus(.failed, for: clip)
             frameioUploadError = error.localizedDescription
@@ -191,28 +216,6 @@ extension NativeAppModel {
             $0.frameioFileID = fileID
         }
         refreshMediaClips()
-    }
-
-    /// The saved destination, or the first account's first project (auto-picked + saved).
-    private func resolveDestination(using service: FrameioClient) async throws
-        -> FrameioDestination
-    {
-        if let saved = FrameioDestination.loaded { return saved }
-        guard let account = try await service.accounts().first else { throw FrameioError.noProject }
-        guard let workspace = try await service.workspaces(accountID: account.id).first else {
-            throw FrameioError.noProject
-        }
-        guard
-            let project = try await service.projects(
-                accountID: account.id, workspaceID: workspace.id
-            ).first,
-            let folderID = project.rootFolderID
-        else { throw FrameioError.noProject }
-        let destination = FrameioDestination(
-            accountID: account.id, workspaceID: workspace.id, projectID: project.id,
-            projectName: project.name, folderID: folderID)
-        FrameioDestination.persist(destination)
-        return destination
     }
 
     /// Lists projects in the first account/workspace for the delivery-sheet picker.
@@ -295,7 +298,7 @@ extension NativeAppModel {
         return result.videoURL
     }
 
-    private func writeFrameioMetadataSidecar(
+    func writeFrameioMetadataSidecar(
         _ metadata: MediaClipDeliveryMetadata?, nextTo videoURL: URL
     ) throws {
         guard let metadata else { return }
@@ -305,11 +308,5 @@ extension NativeAppModel {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(metadata)
         try data.write(to: url, options: .atomic)
-    }
-}
-
-extension FileManager {
-    fileprivate func attributesOfItemSize(_ url: URL) -> Int? {
-        (try? attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue
     }
 }

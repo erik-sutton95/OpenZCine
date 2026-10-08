@@ -776,7 +776,7 @@ internal data class FalseColorReferenceCopy(
 )
 
 @Composable
-private fun falseColorReferenceCopy(scale: FeedFalseColorScale): FalseColorReferenceCopy =
+internal fun falseColorReferenceCopy(scale: FeedFalseColorScale): FalseColorReferenceCopy =
     FalseColorReferenceCopy(
         scale = stringResource(scale.labelResource()),
         stopLabels =

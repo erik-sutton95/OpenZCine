@@ -34,6 +34,11 @@ includeBuild("../../../OpenCine/Android") {
         // The shared capture sheets over the camera vocabulary (LadderSheet).
         substitute(module("com.opencapture.opencine:camera-controls")).using(project(":camera-controls"))
         substitute(module("com.opencapture.opencine:native-runtime")).using(project(":native-runtime"))
+        // Shared relay/watch owners and transport-free deployed Nikon schemas.
+        substitute(module("com.opencapture.opencine:relay")).using(project(":relay"))
+        substitute(module("com.opencapture.opencine:relay-runtime")).using(project(":relay-runtime"))
+        substitute(module("com.opencapture.opencine:watch-runtime")).using(project(":watch-runtime"))
+        substitute(module("com.opencapture.opencine:nikon-wire")).using(project(":nikon-wire"))
         // The shared renderer's legacy OpcVulkan JNI class, probed by the live-feed backend factory.
         substitute(module("com.opencapture.opencine:vulkan")).using(project(":vulkan"))
         // Device-only Keystore sealing for camera Wi-Fi keys.

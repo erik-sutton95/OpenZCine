@@ -8,9 +8,18 @@ import UIKit
 @MainActor
 final class FrameioAuthCoordinator: NSObject, ASWebAuthenticationPresentationContextProviding {
     private let config: FrameioConfiguration
+    private let transport: (any FrameioHTTPTransport)?
+    private let tokens: (any FrameioTokenStorage)?
     private var session: ASWebAuthenticationSession?
 
-    init(config: FrameioConfiguration) { self.config = config }
+    init(
+        config: FrameioConfiguration, transport: (any FrameioHTTPTransport)? = nil,
+        tokens: (any FrameioTokenStorage)? = nil
+    ) {
+        self.config = config
+        self.transport = transport
+        self.tokens = tokens
+    }
 
     /// Presents the Frame.io login, exchanges the returned code (PKCE), and stores the token.
     func signIn() async throws -> FrameioToken {
@@ -24,9 +33,12 @@ final class FrameioAuthCoordinator: NSObject, ASWebAuthenticationPresentationCon
         let callbackURL = try await present(authorizeURL, redirect: redirect)
         let code = try FrameioOAuth.parseRedirect(callbackURL, expectedState: state)
         // The default-timeout shared session, as before: this runs once, right after sign-in.
-        return try await FrameioClient.nikon(
-            config, transport: FrameioURLSessionTransport(session: .shared)
-        ).completeSignIn(code: code, verifier: pkce.verifier)
+        return try await FrameioClient(
+            config: config,
+            transport: transport ?? FrameioURLSessionTransport(session: .shared),
+            tokens: tokens ?? FrameioTokenStore()
+        )
+        .completeSignIn(code: code, verifier: pkce.verifier)
     }
 
     func signOut() {

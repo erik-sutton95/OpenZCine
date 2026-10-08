@@ -2,86 +2,9 @@ import CoreMotion
 import MonitorPresentation
 import MonitorUI
 import OpenCineMedia
+import OpenCineCameraControls
 import OpenZCineCore
 import SwiftUI
-
-struct FeedAssistOverlayModule: View {
-    @Environment(NativeAppModel.self) private var model
-    let viewportWidth: Double
-    /// The shared layout's picture rect, in this module's (viewport) space.
-    let picture: CGRect
-    /// Suppresses the floating scope/false-colour `MovablePanel`s. Set by `MonitorShell`'s
-    /// portrait branch: those panels bleed over the narrow portrait feed strip and are redundant
-    /// there — `PortraitScopesStack` already shows scopes. Landscape never passes this.
-    var suppressFloatingScopes: Bool = false
-
-    var body: some View {
-        // Photography filters the cinema-only panels (a flipped-over video scope must not
-        // ride into the photo chrome); the persisted set itself is untouched.
-        let visible = model.renderedLiveAssistTools
-        GeometryReader { proxy in
-            let screenBounds = CGRect(
-                x: 0, y: 0, width: CGFloat(viewportWidth), height: proxy.size.height)
-            // Bands the inside-fallback anchors must clear: the status pill on top, the floating
-            // assist/capture strips on the bottom (reserved in every mode — see
-            // `landscapeBottomBarHeight` in MonitorUnified.swift).
-            let chromeClearance = EdgeInsets(
-                top: CGFloat(
-                    MonitorEdgeInsets.chrome(for: .zero).clearingWindowControls.top
-                        + MonitorLiveViewModuleLayout.topInfoDeckHeight),
-                leading: 0,
-                bottom: CGFloat(MonitorLiveViewModuleLayout.bottomBarBottomInset)
-                    + LiveDesign.controlHeight,
-                trailing: 0)
-            ZStack(alignment: .topLeading) {
-                // Guides/grid/crosshair/level draw on the feed image itself (`FeedAlignedAssists`);
-                // the shared scope panels, audio meters and false-colour reference float here,
-                // skipped in portrait (see `suppressFloatingScopes`).
-                if !suppressFloatingScopes {
-                    NikonScopeOverlay(
-                        tools: visible, bundle: model.scopeAssist,
-                        mapping: model.exposureSignalMapping, canvas: screenBounds,
-                        clearance: chromeClearance, onOptions: { model.presentAssistOptions($0) })
-                    if visible.contains(.audioMeters) {
-                        let size = MonitorAudioMetrics.panelSize
-                        MovablePanel(
-                            id: "audio", size: size,
-                            defaultCenter: feedOutsideCenter(
-                                picture, size, .bottomTrailing,
-                                bounds: screenBounds, chromeClearance: chromeClearance),
-                            bounds: screenBounds
-                        ) {
-                            NikonAudioMeter(
-                                levels: model.liveAudioLevels,
-                                sensitivity: model.commandMicrophoneSensLabel)
-                        }
-                    }
-                    if visible.contains(.falseColor)
-                        && model.assist.falseColorReference
-                    {
-                        let size = MonitorFalseColorReference.panelSize
-                        MovablePanel(
-                            id: "fcref", size: size,
-                            // An unplaced key starts at the canvas centre, as on Pocket.
-                            defaultCenter: CGPoint(x: screenBounds.midX, y: screenBounds.midY),
-                            bounds: screenBounds
-                        ) {
-                            MonitorFalseColorReference(
-                                values: FalseColorReference.values(
-                                    scale: model.assist.falseColorScale.nikonScale,
-                                    mapping: model.exposureSignalMapping))
-                        }
-                    }
-                }
-            }
-            .frame(
-                width: CGFloat(viewportWidth),
-                height: proxy.size.height,
-                alignment: .topLeading
-            )
-        }
-    }
-}
 
 /// Default centre for the floating audio meter, anchored just outside the video feed edge. When the
 /// outside position doesn't fit `bounds` — landscape's full-bleed feed spans the whole screen, so
@@ -171,10 +94,7 @@ struct PlaybackAssistOverlayModule: View {
     }
 }
 
-/// Long-press-and-drag wrapper for a floating panel (a scope or the false-colour reference). After a
-/// brief hold the panel lifts and follows the finger, clamped inside `bounds` and snapped to a coarse
-/// grid; a rigid tap fires on pick-up and a light tick on each snap, in keeping with the assist
-/// haptics. Positions persist across launches via `model.movablePanelPositions`.
+/// Nikon's saved panel identities adapt to the common drag owner without a resize control.
 struct MovablePanel<Content: View>: View {
     @Environment(NativeAppModel.self) private var model
     let id: String
@@ -183,83 +103,24 @@ struct MovablePanel<Content: View>: View {
     let bounds: CGRect
     @ViewBuilder var content: () -> Content
 
-    @State private var dragOrigin: CGPoint?
-    @State private var isDragging = false
-    @State private var snapCell = 0
-
-    // A fine position snap keeps the drag feeling smooth; the haptic ticks on a coarser interval so
-    // it doesn't buzz continuously while moving.
-    private let positionGrid: CGFloat = 4
-    private let hapticGrid: CGFloat = 22
-    /// Invisible padding around the panel body for long-press drag pickup.
-    private let dragHitPadding: CGFloat = 10
-
     var body: some View {
-        let center = clamp(resolvedCenter())
-        content()
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
-            .padding(dragHitPadding)
-            .contentShape(Rectangle())
-            .padding(-dragHitPadding)
-            .gesture(panelDragGesture(center: center))
-            .scaleEffect(isDragging ? 1.03 : 1)
-            .shadow(color: .black.opacity(isDragging ? 0.5 : 0), radius: 18, y: 8)
-            .position(x: center.x, y: center.y)
-            .sensoryFeedback(trigger: isDragging) { _, dragging in
-                dragging ? .impact(flexibility: .rigid, intensity: 1) : nil
+        let center = model.movablePanelCenters[id]
+            ?? model.movablePanelPositions[id]?.center(in: bounds) ?? defaultCenter
+        let layout = MonitorScopePanelLayout(baseSize: size, preferredSize: size,
+            center: center, scale: 1, canvas: bounds, movementBounds: bounds, resizable: false)
+        MonitorMovableScopePanel(layout: layout, enabled: !model.interfaceLocked, onMove: move,
+            content: content)
+    }
+
+    private func move(_ event: MonitorScopePanelMove) {
+        switch event {
+        case .began(let center), .changed(let center): model.movablePanelCenters[id] = center
+        case .ended:
+            if let center = model.movablePanelCenters[id] {
+                model.setMovablePanelCenter(id, center, bounds: bounds)
             }
-            .sensoryFeedback(.selection, trigger: snapCell)
-            .animation(.easeOut(duration: 0.14), value: isDragging)
-    }
-
-    /// Long-press then drag on the panel body to reposition.
-    private func panelDragGesture(center: CGPoint) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
-            .onChanged { value in
-                guard case .second(true, let drag) = value else { return }
-                if !isDragging {
-                    isDragging = true
-                    dragOrigin = center
-                }
-                guard let drag, let origin = dragOrigin else { return }
-                let proposed = CGPoint(
-                    x: origin.x + drag.translation.width,
-                    y: origin.y + drag.translation.height)
-                let snapped = clamp(snap(proposed))
-                let cell =
-                    Int((snapped.x / hapticGrid).rounded()) &* 100_000
-                    &+ Int((snapped.y / hapticGrid).rounded())
-                if cell != snapCell { snapCell = cell }
-                model.movablePanelCenters[id] = snapped
-            }
-            .onEnded { _ in
-                if let final = model.movablePanelCenters[id] {
-                    model.setMovablePanelCenter(id, final, bounds: bounds)
-                }
-                isDragging = false
-                dragOrigin = nil
-            }
-    }
-
-    private func resolvedCenter() -> CGPoint {
-        if let session = model.movablePanelCenters[id] { return session }
-        if let stored = model.movablePanelPositions[id] { return stored.center(in: bounds) }
-        return defaultCenter
-    }
-
-    private func clamp(_ point: CGPoint) -> CGPoint {
-        let halfWidth = size.width / 2
-        let halfHeight = size.height / 2
-        return CGPoint(
-            x: min(max(bounds.minX + halfWidth, point.x), bounds.maxX - halfWidth),
-            y: min(max(bounds.minY + halfHeight, point.y), bounds.maxY - halfHeight))
-    }
-
-    private func snap(_ point: CGPoint) -> CGPoint {
-        CGPoint(
-            x: (point.x / positionGrid).rounded() * positionGrid,
-            y: (point.y / positionGrid).rounded() * positionGrid)
+        case .cancelled: model.movablePanelCenters.removeValue(forKey: id)
+        }
     }
 }
 
@@ -343,11 +204,14 @@ struct FeedAlignedAssists: View {
             let feed = desqueezedRect(
                 baseFeed, model.assist.desqueeze(visible: visible.contains(.desqueeze)))
             ZStack {
-                if visible.contains(.guides) {
-                    MonitorAspectGuideFrames(
-                        selectedRatios: model.assist.selectedGuides,
-                        maskEnabled: model.assist.guideMask, feed: feed)
-                }
+                MonitorOperatorFramingMarks(assist: model.assist, feed: feed,
+                    visible: Set(visible.map(\.selection)),
+                    comparison: LUTResolution.splitComparison(visibleTools: visible,
+                        enabled: model.assist.splitComparison, vertical: model.assist.splitVertical,
+                        muted: model.splitComparisonMuted).map {
+                            .init(vertical: $0 == .vertical, originalLabel: SplitComparison.logLabel,
+                                processedLabel: SplitComparison.lutLabel)
+                        })
                 if visible.contains(.evMeter),
                     // Photography-only: a persisted visibility set from an older build may
                     // still carry the tool, so the render guards the mode as well.
@@ -368,25 +232,6 @@ struct FeedAlignedAssists: View {
                             x: feed.midX, y: feed.maxY - (clean || feedBottomFree ? 28 : 92)
                         )
                         .allowsHitTesting(false)
-                }
-                if visible.contains(.grid) {
-                    MonitorFeedGrid(
-                        feed: feed, thirds: model.assist.gridThirds, phi: model.assist.gridPhi,
-                        diagonal: model.assist.gridDiagonal)
-                }
-                if visible.contains(.crosshair) {
-                    MonitorFeedCrosshair(feed: feed)
-                }
-                // Drawn once over the whole feed like every other framing aid, from the same rect
-                // — so the divider lands exactly on the boundary the grade was split at.
-                if let split = LUTResolution.splitComparison(
-                    visibleTools: visible, enabled: model.assist.splitComparison,
-                    vertical: model.assist.splitVertical, muted: model.splitComparisonMuted)
-                {
-                    MonitorFeedComparisonMarks(
-                        vertical: split == .vertical, feed: feed,
-                        originalLabel: SplitComparison.logLabel,
-                        processedLabel: SplitComparison.lutLabel)
                 }
                 if visible.contains(.level) {
                     FeedLevelView(

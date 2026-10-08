@@ -20,7 +20,7 @@ struct LinkExperience: View {
         let pages = model.shell.monitor == nil
         AppShell(
             model: model.shell, brand: ShellBrand(name: "OpenZCine", nearbyNote: "on this network"),
-            actions: actions, extraNearby: extraNearby, prePage: prePage
+            actions: actions, extraNearby: extraNearby, coverPresentation: .shell, prePage: prePage
         ) { _ in
             MonitorExperience()
         } page: { cover in
@@ -265,18 +265,12 @@ private struct NikonCoverPage: View {
     let cover: ShellModel.Cover
 
     var body: some View {
-        // The real device safe area, as the monitor host passes it. iOS reports the landscape
-        // Dynamic Island lane on both short edges; the clean side (the smaller inset) is zeroed so
-        // the surface hugs that bezel, matching the monitor's `fullScreenPanelSafeArea`.
-        GeometryReader { proxy in
-            let insets = proxy.safeAreaInsets
-            let islandOnLeading = insets.leading >= insets.trailing
+        MonitorCoverPage { insets in
             let safeArea = MonitorEdgeInsets(
                 top: Double(insets.top),
-                leading: islandOnLeading ? Double(insets.leading) : 0,
+                leading: Double(insets.leading),
                 bottom: Double(insets.bottom),
-                trailing: islandOnLeading ? 0 : Double(insets.trailing)
-            ).clearingWindowControls
+                trailing: Double(insets.trailing))
             switch cover {
             case .media: MediaBrowserView(safeArea: safeArea)
             case .settings: OperatorSettingsPanel(safeArea: safeArea)

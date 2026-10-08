@@ -14,6 +14,9 @@ import kotlin.test.*
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
@@ -173,6 +176,186 @@ class NikonPlaybackOwnerAdoptionTest {
         } finally { fixture.close() }
     }
 
+    @Test fun `complete player refuses unsupported masters before native preparation`() = runTest {
+        val f = Fixture(backgroundScope)
+        try {
+            val unsupported = f.records[0].copy(facts = f.records[0].facts.copy(playbackEligible = false))
+            f.library.applyLocalRecords(MonitorMediaCatalogCapture(resetLibrary = false, upserts = emptyList(), amendments = listOf(unsupported)), f.library.actionToken)
+            val opening = MonitorMediaGalleryOpen(unsupported, f.records, f.library.actionToken)
+            val calls = mutableListOf<String>()
+            val context = NikonOperatorPlaybackContext(f.library, opening, backgroundScope, { true },
+                { MonitorPlaybackAdmission { true } }, { record, _ ->
+                    MediaTransferCoordinator({ calls += record.payload.clip.filename; MediaTransferPreparation.Ready(f.entry(record)) }, {})
+                }, cleanupScope = backgroundScope)
+            assertFalse(context.media.open(opening.record, opening.playlist, opening.admission))
+            runCurrent(); assertNull(context.native); assertTrue(calls.isEmpty())
+            assertEquals(f.records[0].asset, f.library.record(unsupported.asset.id)?.asset)
+        } finally { f.close() }
+    }
+
+    @Test fun `complete player canonical retirement before first IO acquires no native transfer`() = runTest {
+        val f = Fixture(backgroundScope)
+        try {
+            val opening = MonitorMediaGalleryOpen(f.records[0], f.records, f.library.actionToken)
+            var preparations = 0
+            val context = NikonOperatorPlaybackContext(f.library, opening, backgroundScope, { true },
+                { MonitorPlaybackAdmission { true } }, { record, _ ->
+                    MediaTransferCoordinator({ preparations++; MediaTransferPreparation.Ready(f.entry(record)) }, {})
+                }, cleanupScope = backgroundScope)
+            assertTrue(context.media.open(opening.record, opening.playlist, opening.admission))
+            f.library.cache.directory.retireWrites(); runCurrent()
+            assertEquals(0, preparations)
+            assertTrue(context.media.state.value.playback?.state?.value?.closed == true)
+            context.media.closePlayback()
+        } finally { f.close() }
+    }
+
+    @Test fun `adjacent source waits for exact entered native preparation and stop`() = runTest {
+        val f = Fixture(backgroundScope)
+        val releasePrepare = CompletableDeferred<Unit>(); val releaseStop = CompletableDeferred<Unit>()
+        try {
+            val events = mutableListOf<String>()
+            val opening = MonitorMediaGalleryOpen(f.records[0], f.records, f.library.actionToken)
+            val context = NikonOperatorPlaybackContext(f.library, opening, backgroundScope, { true },
+                { MonitorPlaybackAdmission { true } }, { record, _ ->
+                    MediaTransferCoordinator({
+                        events += "prepare:" + record.payload.clip.filename
+                        if (record.asset.id == f.records[0].asset.id) withContext(NonCancellable) { releasePrepare.await() }
+                        MediaTransferPreparation.Ready(f.entry(record))
+                    }, {
+                        events += "stop:" + record.payload.clip.filename
+                        if (record.asset.id == f.records[0].asset.id) withContext(NonCancellable) { releaseStop.await() }
+                        events += "stopped:" + record.payload.clip.filename
+                    })
+                }, cleanupScope = backgroundScope)
+            context.media.playerVisible(true)
+            assertTrue(context.media.open(opening.record, opening.playlist, opening.admission)); runCurrent()
+            val owner = assertNotNull(context.media.state.value.playback)
+            assertEquals(listOf("prepare:A.MOV"), events)
+            assertTrue(context.media.adjacent(1, owner.state.value.token)); runCurrent()
+            assertEquals(listOf("prepare:A.MOV"), events)
+            releasePrepare.complete(Unit); runCurrent()
+            assertEquals(listOf("prepare:A.MOV", "stop:A.MOV"), events)
+            releaseStop.complete(Unit); runCurrent()
+            assertEquals(listOf("prepare:A.MOV", "stop:A.MOV", "stopped:A.MOV", "prepare:B.MOV"), events)
+            assertEquals(f.records[1].asset.id, owner.state.value.active?.asset?.id)
+            context.media.closePlayback(); runCurrent()
+        } finally { releasePrepare.complete(Unit); releaseStop.complete(Unit); f.close() }
+    }
+
+    @Test fun `Back joins entered cleanup without starting a successor transfer`() = runTest {
+        val f = Fixture(backgroundScope); val release = CompletableDeferred<Unit>()
+        try {
+            val events = mutableListOf<String>()
+            val opening = MonitorMediaGalleryOpen(f.records[0], f.records, f.library.actionToken)
+            val context = NikonOperatorPlaybackContext(f.library, opening, backgroundScope, { true },
+                { MonitorPlaybackAdmission { true } }, { record, _ ->
+                    MediaTransferCoordinator({ events += "entered"; withContext(NonCancellable) { release.await() }
+                        MediaTransferPreparation.Ready(f.entry(record)) }, { events += "stopped" })
+                }, cleanupScope = backgroundScope)
+            assertTrue(context.media.open(opening.record, opening.playlist, opening.admission)); runCurrent()
+            val native = assertNotNull(context.native)
+            context.media.closePlayback()
+            val joined = async { native.finishEnteredTransfer() }; runCurrent()
+            assertFalse(joined.isCompleted); assertEquals(listOf("entered"), events)
+            release.complete(Unit); runCurrent(); joined.await()
+            assertEquals(listOf("entered", "stopped"), events)
+            assertNull(context.media.state.value.playback)
+        } finally { release.complete(Unit); f.close() }
+    }
+
+    @Test fun `each item boundary captures its outgoing delivery cleanup instead of borrowing a later run`() = runTest {
+        val f = Fixture(backgroundScope); val release = CompletableDeferred<Unit>()
+        try {
+            val events = mutableListOf<String>()
+            var cleanup: suspend () -> Unit = {}
+            val opening = MonitorMediaGalleryOpen(f.records[0], f.records, f.library.actionToken)
+            val context = NikonOperatorPlaybackContext(f.library, opening, backgroundScope, { true },
+                { MonitorPlaybackAdmission { true } }, { record, _ ->
+                    MediaTransferCoordinator({ events += "prepare:" + record.payload.clip.filename
+                        MediaTransferPreparation.Ready(f.entry(record)) }, {})
+                }, captureDeliveryCleanup = { cleanup }, cleanupScope = backgroundScope)
+            assertTrue(context.media.open(opening.record, opening.playlist, opening.admission)); runCurrent()
+            val native = assertNotNull(context.native); val owner = assertNotNull(context.media.state.value.playback)
+            native.attach(player("A", mutableListOf()), owner.state.value.token, {}) { _, _ -> }; runCurrent()
+            cleanup = { events += "cleanup:outgoing"; withContext(NonCancellable) { release.await() } }
+            assertTrue(context.media.adjacent(1, owner.state.value.token))
+            cleanup = { events += "cleanup:successor" }
+            runCurrent()
+            assertEquals(listOf("prepare:A.MOV", "cleanup:outgoing"), events)
+            release.complete(Unit); runCurrent()
+            assertEquals(listOf("prepare:A.MOV", "cleanup:outgoing", "prepare:B.MOV"), events)
+            context.media.closePlayback(); runCurrent()
+        } finally { release.complete(Unit); f.close() }
+    }
+
+    @Test fun `SDK release reentry cannot overwrite successor pending attachment`() = runTest {
+        val f = Fixture(backgroundScope)
+        try {
+            val port = NikonPlaybackNativePort(); val id = java.util.UUID.randomUUID()
+            port.retireItem(MonitorPlaybackItemToken(id, 0))
+            val a = MonitorPlaybackItemToken(id, 1); val outgoing = MonitorPlaybackItemToken(id, 2); val b = MonitorPlaybackItemToken(id, 3)
+            port.retireItem(a)
+            val first = (port.candidates(f.records[0], f.library).single() as MonitorPlaybackCandidate.Cached).item
+            val preparing = async { port.prepare(first, a, null) }; runCurrent()
+            val calls = mutableListOf<String>(); var next: NikonPlaybackNativePort.Attachment? = null
+            port.attach(player("A", calls), a, {
+                port.retireItem(b); port.candidates(f.records[1], f.library)
+                next = port.attach(player("B", calls), b, {}) { _, _ -> }
+            }) { _, _ -> }; preparing.await()
+            port.retireItem(outgoing)
+            val second = assertNotNull(port.preparedSource.value)
+            assertEquals(b, second.token)
+            val item = (port.candidates(f.records[1], f.library).single() as MonitorPlaybackCandidate.Cached).item
+            port.prepare(item, b, null)
+            assertTrue(port.isCurrent(next)); port.play(1.0, b)
+            assertEquals(listOf("pause:A", "release:A", "play:B"), calls)
+            port.close(MonitorPlaybackItemToken(id, 4))
+        } finally { f.close() }
+    }
+
+    @Test fun `source predicate replacement cannot send old native play to a successor`() = runTest {
+        val f = Fixture(backgroundScope)
+        try {
+            val id = java.util.UUID.randomUUID(); val a = MonitorPlaybackItemToken(id, 1); val b = MonitorPlaybackItemToken(id, 2)
+            var replace = false; lateinit var port: NikonPlaybackNativePort
+            val calls = mutableListOf<String>(); var next: NikonPlaybackNativePort.Attachment? = null
+            port = NikonPlaybackNativePort(sourceCurrent = {
+                if (replace) {
+                    replace = false; port.retireItem(b); port.candidates(f.records[1], f.library)
+                    next = port.attach(player("B", calls), b, {}) { _, _ -> }
+                }; true
+            })
+            port.retireItem(MonitorPlaybackItemToken(id, 0)); port.retireItem(a); port.candidates(f.records[0], f.library)
+            port.attach(player("A", calls), a, {}) { _, _ -> }; calls.clear()
+            replace = true; port.play(1.0, a)
+            assertEquals(listOf("pause:A", "release:A"), calls)
+            assertTrue(port.isCurrent(next)); assertEquals(b, port.preparedSource.value?.token)
+            port.close(MonitorPlaybackItemToken(id, 3))
+        } finally { f.close() }
+    }
+
+    @Test fun `complete Android player scene return preserves original explicit pause`() = runTest {
+        val f = Fixture(backgroundScope)
+        try {
+            val opening = MonitorMediaGalleryOpen(f.records[0], f.records, f.library.actionToken)
+            val context = NikonOperatorPlaybackContext(f.library, opening, backgroundScope, { true },
+                { MonitorPlaybackAdmission { true } }, { record, _ ->
+                    MediaTransferCoordinator({ MediaTransferPreparation.Ready(f.entry(record)) }, {})
+                }, cleanupScope = backgroundScope)
+            context.media.playerVisible(true)
+            assertTrue(context.media.open(opening.record, opening.playlist, opening.admission)); runCurrent()
+            val native = assertNotNull(context.native); val owner = assertNotNull(context.media.state.value.playback)
+            val calls = mutableListOf<String>()
+            native.attach(player("scene", calls), owner.state.value.token, {}) { _, _ -> }; runCurrent()
+            context.media.sceneActive(false)
+            assertFalse(owner.state.value.playRequested)
+            calls.clear(); context.media.sceneActive(true); runCurrent()
+            assertTrue(calls.isEmpty()); assertFalse(owner.state.value.playRequested)
+            context.media.closePlayback(); runCurrent()
+        } finally { f.close() }
+    }
+
     private class Fixture(scope: CoroutineScope) {
         private val root = createTempDirectory("SIMULATED-nikon-playback")
         private val index = MediaLibraryIndex(Preferences())
@@ -193,6 +376,8 @@ class NikonPlaybackOwnerAdoptionTest {
             cacheScanning = MonitorMediaCacheScanning.IMMEDIATE,
             initialCatalog = MediaCatalog(), initialRecords = records,
         )
+        fun entry(record: MonitorMediaRecord<NikonLibraryClip>) = cache.openEntry(
+            record.payload.bucket, MediaCacheObjectIdentity(record.payload.clip), record.payload.clip.sizeBytes)
         init { library.begin() }
         suspend fun close() { library.dispose(); root.toFile().deleteRecursively() }
     }

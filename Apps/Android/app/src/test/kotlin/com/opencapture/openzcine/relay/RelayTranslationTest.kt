@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.relay
 
+import com.opencapture.opencine.nikonwire.MonitorRelayWire
+
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.LiveAudioMeterChannel
 import com.opencapture.opencine.nikon.LiveAudioMeterLevels

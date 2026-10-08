@@ -188,11 +188,11 @@ class MonitorCameraControlsTest {
             relayCaptureSettings(
                 monitorCaptureSettings(dashboard(CameraPropertySnapshot()), strings),
                 listOf(
-                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue("ISO", "800"),
-                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue(
+                    com.opencapture.opencine.nikonwire.MonitorRelayWire.StateValue("ISO", "800"),
+                    com.opencapture.opencine.nikonwire.MonitorRelayWire.StateValue(
                         "SHUTTER", "180°"),
-                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue("WB", ""),
-                    com.opencapture.openzcine.relay.MonitorRelayWire.StateValue(
+                    com.opencapture.opencine.nikonwire.MonitorRelayWire.StateValue("WB", ""),
+                    com.opencapture.opencine.nikonwire.MonitorRelayWire.StateValue(
                         "UNKNOWN", "x"),
                 ),
             )

@@ -37,6 +37,8 @@ android {
 }
 
 dependencies {
+    api("com.opencapture.opencine:nikon-wire:0.1.0-SNAPSHOT")
+    api("com.opencapture.opencine:watch-runtime:0.1.0-SNAPSHOT")
     testImplementation(libs.kotlin.test.junit)
     // Android provides org.json at runtime. The tiny JVM-only test dependency
     // executes the exact same strict wire parser without an emulator.

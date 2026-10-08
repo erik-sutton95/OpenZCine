@@ -340,7 +340,7 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
      * A watcher's readouts arrive over the relay already formatted by the host — apply them
      * verbatim (iOS `applyRelayState`). Blank fields keep the last value, like [update].
      */
-    fun applyRelayed(state: com.opencapture.openzcine.relay.MonitorRelayWire.State) {
+    fun applyRelayed(state: com.opencapture.opencine.nikonwire.MonitorRelayWire.State) {
         resolution = state.resolutionFrameRate.monitorValueOrNull() ?: resolution
         codec = state.codec.monitorValueOrNull() ?: codec
         media =
@@ -432,31 +432,18 @@ internal fun fpsChipLabel(rate: Double?, state: MonitorFeedState?): String =
  * first measurable interval.
  */
 internal class MonitorFrameRateSampler {
-    private val intervals = ArrayDeque<Double>()
-    private var lastFrameNanos = 0L
-    private var lastPublishNanos = 0L
+    private val sampler = com.opencapture.opencine.media.FrameRateSampler(
+        windowSize = 30,
+        displayRefreshInterval = 1.0,
+    )
 
     /** Formatted through [fpsChipLabel] so the chip has one definition of a printed rate. */
     var formatted: String by mutableStateOf(fpsChipLabel(rate = null, state = null))
         private set
 
     fun accept(nowNanos: Long) {
-        if (lastFrameNanos != 0L) {
-            val seconds = (nowNanos - lastFrameNanos) / 1e9
-            if (seconds > 0.0) {
-                intervals.addLast(seconds)
-                while (intervals.size > WINDOW) intervals.removeFirst()
-            }
-        }
-        lastFrameNanos = nowNanos
-        if (intervals.isNotEmpty() && nowNanos - lastPublishNanos >= 1_000_000_000L) {
-            lastPublishNanos = nowNanos
-            formatted = fpsChipLabel(rate = intervals.size / intervals.sum(), state = null)
-        }
-    }
-
-    private companion object {
-        const val WINDOW = 30
+        sampler.recordFrame(at = nowNanos / 1e9)
+        formatted = fpsChipLabel(rate = sampler.displayFPS.takeIf { sampler.intervalCount > 0 }, state = null)
     }
 }
 

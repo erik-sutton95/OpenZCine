@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.wearrelay
 
+import com.opencapture.opencine.nikonwire.WatchRelayWireException
+
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertContains

@@ -83,6 +83,7 @@ struct MetalLiveView: UIViewRepresentable {
     let effects: LiveImageEffects
     let fileStore: LUTFileStore
     var source: LiveFrameSampleBus.Source? = nil
+    var qualification: (@MainActor () -> MonitorNativeQualificationSnapshot?)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(fileStore: fileStore) }
 
@@ -106,11 +107,22 @@ struct MetalLiveView: UIViewRepresentable {
         view.clipsToBounds = true
         context.coordinator.update(image: image, effects: effects, source: source)
         context.coordinator.attach(view: view)
+        if let qualification {
+            context.coordinator.qualificationProbe = MonitorNativeQualificationProbe.install(in: view) {
+                [weak coordinator = context.coordinator] in
+                coordinator?.qualificationSnapshot(qualification)
+            }
+        }
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
         let needsRedraw = context.coordinator.update(image: image, effects: effects, source: source)
+        if let qualification {
+            context.coordinator.qualificationProbe?.snapshot = { [weak coordinator = context.coordinator] in
+                coordinator?.qualificationSnapshot(qualification)
+            }
+        }
         context.coordinator.noteDrawableSize(uiView.drawableSize)
         if needsRedraw {
             uiView.setNeedsDisplay()
@@ -119,6 +131,8 @@ struct MetalLiveView: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: MTKView, coordinator: Coordinator) {
         uiView.delegate = nil
+        coordinator.qualificationProbe?.snapshot = { nil }
+        coordinator.qualificationProbe?.removeFromSuperview()
         coordinator.close()
     }
 
@@ -132,6 +146,17 @@ struct MetalLiveView: UIViewRepresentable {
         private var currentSource: LiveFrameSampleBus.Source?
         private var currentEffects = LiveImageEffects()
         private weak var mtkView: MTKView?
+        var qualificationProbe: MonitorNativeQualificationProbe?
+
+        @MainActor func qualificationSnapshot(
+            _ provider: @MainActor () -> MonitorNativeQualificationSnapshot?
+        ) -> MonitorNativeQualificationSnapshot? {
+            guard currentImage != nil, let currentSource, currentSource.isActive,
+                let value = provider(),
+                value.sourceIdentity == String(describing: ObjectIdentifier(currentSource))
+            else { return nil }
+            return value
+        }
 
         init(fileStore: LUTFileStore) {
             device = MTLCreateSystemDefaultDevice()!

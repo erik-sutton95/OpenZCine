@@ -21,6 +21,18 @@ import com.opencapture.opencine.nikon.LiveAudioMeterLevels
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.currentCoroutineContext
+import com.opencapture.opencine.appkit.MonitorPlaybackAudioSession
+import com.opencapture.opencine.media.MonitorAudioMeterLevels
+import com.opencapture.opencine.media.MonitorAudioMeterChannel
+import com.opencapture.opencine.media.MonitorPlaybackItemToken
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -226,6 +238,7 @@ internal class PlaybackAudioMeterCoordinator(
 ) {
     private val polling = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
+    private val terminal = CompletableDeferred<Unit>()
     private val mutableLevels = MutableStateFlow<LiveAudioMeterLevels?>(null)
 
     init {
@@ -239,60 +252,71 @@ internal class PlaybackAudioMeterCoordinator(
     fun renderersFactory(context: Context): PlaybackAudioMeterRenderersFactory =
         PlaybackAudioMeterRenderersFactory(context, audioProcessor)
 
-    /** Polls until cancellation, publishing only validated shared-core meter values. */
+    private var previousPayload = FloatArray(0)
+    private var previousInput: MonitorPcmAudioInput? = null
+    private var shared: MonitorPlaybackAudioSession? = null
+
+    /** The common item owner polls this real decoded PCM source; there is no app timer. */
+    fun sharedSession(scope: CoroutineScope): MonitorPlaybackAudioSession {
+        check(!closed.get()) { "Playback audio meter is closed." }
+        return shared ?: MonitorPlaybackAudioSession(scope = scope,
+            read = { elapsed, _ -> readNative(elapsed) }, reset = ::resetNative,
+            now = monotonicNanos, sleep = { delay(pollIntervalMillis) }).also { shared = it }
+    }
+    private fun resetNative() {
+        audioProcessor.drainSample(); previousPayload = FloatArray(0); previousInput = null
+    }
+    private fun readNative(elapsed: Double): MonitorAudioMeterLevels? {
+        if (closed.get()) return null
+        val ticket = audioProcessor.drainTicket()
+        if (ticket == null) {
+            previousPayload = FloatArray(0); previousInput = null; return null
+        }
+        if (previousInput !== ticket.input) previousPayload = FloatArray(0)
+        val wire = PlaybackAudioMeterWire.parse(stepper.step(previousPayload,
+            ticket.sample.left, ticket.sample.right, elapsed.coerceAtLeast(0.0).toFloat()))
+        var output: MonitorAudioMeterLevels? = null
+        val published = audioProcessor.publishIfCurrent(ticket) {
+            previousInput = ticket.input; previousPayload = wire?.payload ?: FloatArray(0)
+            output = wire?.payload?.let {
+                MonitorAudioMeterLevels(MonitorAudioMeterChannel(it[0].toDouble(), it[1].toDouble(), it[2].toDouble()),
+                    MonitorAudioMeterChannel(it[3].toDouble(), it[4].toDouble(), it[5].toDouble()))
+            }
+        }
+        if (!published) { previousPayload = FloatArray(0); previousInput = null }
+        return output
+    }
+
+    /** Compatibility surface uses the same common polling owner and original wire values. */
     suspend fun poll() {
         check(!closed.get()) { "Playback audio meter is closed." }
         check(polling.compareAndSet(false, true)) { "Playback audio meter is already polling." }
-        audioProcessor.drainSample()
-        var previousPayload = FloatArray(0)
-        var previousInput: MonitorPcmAudioInput? = null
-        var lastTickNanos = monotonicNanos()
+        val session = sharedSession(CoroutineScope(currentCoroutineContext()))
+        val token = MonitorPlaybackItemToken(UUID.randomUUID(), 1)
         try {
-            while (true) {
-                delay(pollIntervalMillis)
-                val nowNanos = monotonicNanos()
-                val elapsedNanos = (nowNanos - lastTickNanos).coerceAtLeast(0L)
-                lastTickNanos = nowNanos
-                if (closed.get()) return
-                val ticket = audioProcessor.drainTicket()
-                val peaks = ticket?.sample
-                if (ticket == null || peaks == null) {
-                    previousPayload = FloatArray(0)
-                    previousInput = null
-                    mutableLevels.value = null
-                    continue
+            session.synchronize(token, visible = true, outputMuted = false, ifCurrent = { !closed.get() })
+            coroutineScope {
+                val publication = launch {
+                    session.levels.collect { value ->
+                        if (!closed.get()) mutableLevels.value = value?.let {
+                            LiveAudioMeterLevels(LiveAudioMeterChannel(it.left.levelDB, it.left.peakDB),
+                                LiveAudioMeterChannel(it.right.levelDB, it.right.peakDB))
+                        }
+                    }
                 }
-                if (previousInput !== ticket.input) {
-                    previousPayload = FloatArray(0)
-                }
-                val payload =
-                    stepper.step(
-                        previousPayload = previousPayload,
-                        leftPeakLinear = peaks.left,
-                        rightPeakLinear = peaks.right,
-                        deltaTimeSeconds = elapsedNanos / 1_000_000_000f,
-                    )
-                val wire = PlaybackAudioMeterWire.parse(payload)
-                val published = audioProcessor.publishIfCurrent(ticket) {
-                    previousInput = ticket.input
-                    previousPayload = wire?.payload ?: FloatArray(0)
-                    mutableLevels.value = wire?.levels
-                }
-                if (!published) {
-                    previousPayload = FloatArray(0)
-                    previousInput = null
-                    mutableLevels.value = null
-                }
+                try { terminal.await() } finally { publication.cancelAndJoin() }
             }
         } finally {
-            audioProcessor.drainSample()
-            mutableLevels.value = null
-            polling.set(false)
+            session.close()
+            if (shared === session) shared = null
+            mutableLevels.value = null; polling.set(false)
         }
     }
 
     fun close() {
         closed.set(true)
+        shared?.close(); shared = null
+        terminal.complete(Unit)
         audioProcessor.close()
         mutableLevels.value = null
     }

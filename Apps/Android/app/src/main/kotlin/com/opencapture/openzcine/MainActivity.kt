@@ -119,6 +119,8 @@ import com.opencapture.opencine.appkit.CamerasModel
 import com.opencapture.opencine.appkit.ShellActions
 import com.opencapture.opencine.appkit.ShellBrand
 import com.opencapture.opencine.appkit.ShellModel
+import com.opencapture.opencine.appkit.ShellCoverPresentation
+import com.opencapture.opencine.appkit.MonitorSettingsAccountModel
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.core.ConnectedCamera
 import com.opencapture.opencine.core.IntegrationID
@@ -144,11 +146,8 @@ import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.transport.WifiLowLatencyLock
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
-import com.opencapture.openzcine.relay.RelayPresence
 import com.opencapture.openzcine.transport.CameraListDiscovery
-import com.opencapture.openzcine.relay.mergedNearbyBroadcasts
-import com.opencapture.openzcine.relay.presenceProvesFiltering
-import com.opencapture.openzcine.relay.updatedPresenceHiddenSince
+import com.opencapture.openzcine.relay.monitorRelayNearbyOwner
 import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.settings.LiveViewQualityBias
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
@@ -379,16 +378,22 @@ class MainActivity : ComponentActivity() {
                     }
                 val frameioController =
                     remember { frameioDeliveryController(applicationContext, lutLibrary) }
+                val settingsAccount = remember(frameioController) { MonitorSettingsAccountModel(connectionScope) }
+                var settingsAccountCurrent by remember(settingsAccount) { mutableStateOf(true) }
+                DisposableEffect(settingsAccount) {
+                    onDispose { settingsAccountCurrent = false; settingsAccount.retire() }
+                }
                 // The root releases the delivery owners before their supplied scope.
                 val deliveryScope = remember(frameioController) {
                     CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
                 }
                 // App-scoped share/export progress (iOS MediaDeliveryCoordinator).
                 val mediaDeliveryCoordinator =
-                    remember(frameioController) {
+                    remember(frameioController, mediaCacheStore) {
                         MediaDeliveryCoordinator(
                             appContext = applicationContext,
                             frameioController = frameioController,
+                            cacheStore = mediaCacheStore,
                             galleryGateway =
                                 AndroidMediaGalleryGateway(
                                     applicationContext.contentResolver,
@@ -838,6 +843,7 @@ class MainActivity : ComponentActivity() {
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
+                                accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                                 // The Link tab's "Held By" reads the token off this state.
                                 // Without it the row falls back to "The broadcaster" forever —
                                 // including while THIS device holds control, which is the one
@@ -855,7 +861,6 @@ class MainActivity : ComponentActivity() {
                                 onDisconnect = leaveWatch,
                                 onClose = { watchSettingsPresented = false },
                             )
-                            BackHandler { watchSettingsPresented = false }
                         }
                     }
                 } else {
@@ -882,55 +887,94 @@ class MainActivity : ComponentActivity() {
                             // multicast, the NSD browse lists nothing; direct answers on the presence
                             // port keep broadcasts joinable, and an answer NSD cannot see is the proof
                             // the network filters discovery (the operator warning in the list).
-                            var relayPresences by
-                                remember { mutableStateOf(emptyMap<String, RelayPresence>()) }
-                            var presenceRefutedNames by
-                                remember { mutableStateOf(emptySet<String>()) }
-                            var networkFiltersDiscovery by remember { mutableStateOf(false) }
+                            val relayNearby = remember { monitorRelayNearbyOwner() }
+                            var nearbyPublication by remember { mutableStateOf(relayNearby.publication) }
                             LaunchedEffect(Unit) {
-                                // The cameras list's discovery: passive only (presence sweep).
+                                // The SDK scanner retains the original passive 30-second limiter.
                                 val scanner = CameraListDiscovery()
-                                var hiddenSince = emptyMap<String, Long>()
-                                while (true) {
-                                    // The scanner's own 30 s limiter makes most ticks no-ops. Each
-                                    // completed sweep REPLACES the set (authoritative, so a host that
-                                    // stopped answering leaves no ghost row) and the verdict
-                                    // re-evaluates every tick so the 10 s hidden threshold trips
-                                    // between sweeps.
-                                    scanner.presences()?.let { hits ->
-                                        relayPresences = hits
-                                        // A browsed name with no unicast answer is a stale NSD
-                                        // record: the goodbye packet is multicast too, and this
-                                        // network eats it (iOS presenceRefutedRelayNames).
-                                        presenceRefutedNames =
-                                            nearbyBroadcasts.mapTo(mutableSetOf()) { it.name } -
-                                                hits.values.mapTo(mutableSetOf()) { it.name }
+                                val publicationSource = relayNearby.beginSweep()
+                                try {
+                                    while (true) {
+                                        relayNearby.replaceListings(nearbyBroadcasts)
+                                        val hits = scanner.presences()
+                                        val now = android.os.SystemClock.elapsedRealtime()
+                                        if (hits != null) {
+                                            relayNearby.applySweep(hits, relayDeviceName, now, publicationSource)
+                                        }
+                                        if (relayNearby.evaluateFiltering(relayDeviceName, now, publicationSource)) {
+                                            nearbyPublication = relayNearby.publication
+                                        }
+                                        delay(10_000)
                                     }
-                                    val now = android.os.SystemClock.elapsedRealtime()
-                                    hiddenSince =
-                                        updatedPresenceHiddenSince(
-                                            presences = relayPresences,
-                                            nsdNames =
-                                                nearbyBroadcasts.mapTo(mutableSetOf()) { it.name },
-                                            selfName = relayDeviceName,
-                                            previous = hiddenSince,
-                                            nowMillis = now,
-                                        )
-                                    networkFiltersDiscovery = presenceProvesFiltering(hiddenSince, now)
-                                    delay(10_000)
+                                } finally {
+                                    relayNearby.retireSweep(publicationSource)
                                 }
                             }
-                            // In-use beacons (w=0) shield their camera from probes but are not joinable;
-                            // presence answers NSD never delivered join as rows.
-                            mergedNearbyBroadcasts(nearbyBroadcasts, relayPresences, relayDeviceName, presenceRefutedNames)
-                                .filter { it.isWatchable } to networkFiltersDiscovery
+                            relayNearby.watchableListings(nearbyBroadcasts, relayDeviceName) to
+                                nearbyPublication.networkFiltersDiscovery
                         } else {
                             emptyList<com.opencapture.openzcine.relay.RelayBroadcast>() to false
                         }
+                    var monitorSessionRecoveryEnabled by remember(monitored) { mutableStateOf(true) }
+                    val monitorAssist = remember(monitored) {
+                        monitored?.let {
+                            restoreNikonAssists(applicationContext, debugAssistEffects, debugScopes, lutLibrary::contains).also { assists ->
+                                debugSplitComparison?.let {
+                                    assists.shared.setSplitComparison(true, vertical = it == FeedSplitOrientation.VERTICAL)
+                                }
+                            }
+                        }
+                    }
+                    val monitorState = monitored?.state?.collectAsState()?.value
+                    val monitorProperties = monitored?.cameraProperties?.collectAsState()?.value
+                    val monitorLinkHealth = remember(monitored) { AndroidLinkHealthMonitor() }
+                    // Preserve the camera's existing storage namespace across the planned AP leave.
+                    val monitorCameraID = remember(monitored, activeSavedCamera) {
+                        (monitored?.state?.value as? CameraSessionState.Connected)?.identity?.let { identity ->
+                            identity.serialNumber.ifBlank { "${identity.model}:${identity.name}" }
+                        } ?: activeSavedCamera?.host ?: "camera"
+                    }
+                    fun disconnectToSavedCameraHome(active: CameraSession): (Boolean) -> Unit = disconnect@{ reconnect ->
+                            val exitingSession = active
+                            // A multicam member lent to Live View goes back to its tile: the
+                            // session stays open (no CloseSession) and the stage resumes it.
+                            if (multicam.lentMember(exitingSession) != null) {
+                                shell.close()
+                                return@disconnect
+                            }
+                            val reconnectID = activeSavedCamera?.id
+                            monitorSessionRecoveryEnabled = false
+                            suppressedUsbAutoReconnectHosts =
+                                usbAutoReconnectSuppressionAfterUserAction(
+                                    suppressedHosts = suppressedUsbAutoReconnectHosts,
+                                    record = activeSavedCamera,
+                                    reconnect = reconnect,
+                                )
+                            // iOS `disconnectCameraSession`: clear the shell
+                            // synchronously, then fire-and-forget network
+                            // teardown. Awaiting CloseSession / EndLiveView
+                            // here made Android feel hung for several seconds
+                            // after a drop or manual disconnect (stopLiveView
+                            // alone can wait commandTimeout+2s on a dead link).
+                            // The monitor LaunchedEffect dispose path still
+                            // runs disconnect + releaseCameraAp when the
+                            // session leaves composition.
+                            if (monitorSession === exitingSession) {
+                                relayBroadcastController.stop(
+                                    notifyReason = "The broadcast ended.")
+                                relayBroadcastEnabled = false
+                                shell.close()
+                                monitorSession = null
+                                uvcSource?.close()
+                                uvcSource = null
+                                // Back to the cameras page, or the pair page when nothing
+                                // is saved (an HDMI-only user may have no saved cameras).
+                                shell.endPairing()
+                                requestedReconnectID = if (reconnect) reconnectID else null
+                            }
+                        }
                     @Composable
                     fun CameraMonitor(active: CameraSession) {
-                        var monitorSessionRecoveryEnabled by
-                            remember(active) { mutableStateOf(true) }
                         LaunchedEffect(active, pairingEnvironment) {
                             try {
                                 awaitCancellation()
@@ -954,15 +998,9 @@ class MainActivity : ComponentActivity() {
                                 shell.open(ShellModel.Cover.MEDIA)
                             }
                         }
-                        val assist = remember(active) {
-                            restoreNikonAssists(applicationContext, debugAssistEffects, debugScopes, lutLibrary::contains).also { assists ->
-                                debugSplitComparison?.let {
-                                    assists.shared.setSplitComparison(true, vertical = it == FeedSplitOrientation.VERTICAL)
-                                }
-                            }
-                        }
-                        val currentSessionState by active.state.collectAsState()
-                        val currentCameraProperties by active.cameraProperties.collectAsState()
+                        val assist = monitorAssist ?: return
+                        val currentSessionState = monitorState ?: return
+                        val currentCameraProperties = monitorProperties ?: return
                         LaunchedEffect(currentSessionState) {
                             diagnostics.record(
                                 when (currentSessionState) {
@@ -1011,19 +1049,6 @@ class MainActivity : ComponentActivity() {
                                 beacon.stop()
                             }
                         }
-                        val playbackExposureAssistCameraInput =
-                            remember(
-                                currentCameraProperties.codec,
-                                currentCameraProperties.iso,
-                                currentCameraProperties.baseIso,
-                            ) {
-                                ExposureAssistCameraInput(
-                                    codec = currentCameraProperties.codec,
-                                    iso = currentCameraProperties.iso,
-                                    baseIso = currentCameraProperties.baseIso,
-                                )
-                            }
-                        val monitorLinkHealth = remember(active) { AndroidLinkHealthMonitor() }
                         val frameioCameraHop =
                             remember(active, activeSavedCamera, pairingEnvironment, pairingScript, demo) {
                                 AndroidFrameioCameraApHop(
@@ -1038,60 +1063,7 @@ class MainActivity : ComponentActivity() {
                             frameioController.attachCameraHop(frameioCameraHop)
                             onDispose { frameioController.attachCameraHop(null) }
                         }
-                        val disconnectToSavedCameraHome: (Boolean) -> Unit = disconnect@{ reconnect ->
-                            val exitingSession = active
-                            // A multicam member lent to Live View goes back to its tile: the
-                            // session stays open (no CloseSession) and the stage resumes it.
-                            if (multicam.lentMember(exitingSession) != null) {
-                                shell.close()
-                                return@disconnect
-                            }
-                            val reconnectID = activeSavedCamera?.id
-                            monitorSessionRecoveryEnabled = false
-                            suppressedUsbAutoReconnectHosts =
-                                usbAutoReconnectSuppressionAfterUserAction(
-                                    suppressedHosts = suppressedUsbAutoReconnectHosts,
-                                    record = activeSavedCamera,
-                                    reconnect = reconnect,
-                                )
-                            // iOS `disconnectCameraSession`: clear the shell
-                            // synchronously, then fire-and-forget network
-                            // teardown. Awaiting CloseSession / EndLiveView
-                            // here made Android feel hung for several seconds
-                            // after a drop or manual disconnect (stopLiveView
-                            // alone can wait commandTimeout+2s on a dead link).
-                            // The monitor LaunchedEffect dispose path still
-                            // runs disconnect + releaseCameraAp when the
-                            // session leaves composition.
-                            if (monitorSession === exitingSession) {
-                                relayBroadcastController.stop(
-                                    notifyReason = "The broadcast ended.")
-                                relayBroadcastEnabled = false
-                                shell.close()
-                                monitorSession = null
-                                uvcSource?.close()
-                                uvcSource = null
-                                // Back to the cameras page, or the pair page when nothing
-                                // is saved (an HDMI-only user may have no saved cameras).
-                                shell.endPairing()
-                                requestedReconnectID = if (reconnect) reconnectID else null
-                            }
-                        }
-                        // Keep the library identity stable while a consented Frame.io hop
-                        // disconnects this exact session. Re-keying it to "camera" here would
-                        // discard the selected clips and project context before upload.
-                        val cameraID =
-                            remember(active, activeSavedCamera) {
-                                (active.state.value as? CameraSessionState.Connected)
-                                    ?.identity
-                                    ?.let { identity ->
-                                        identity.serialNumber.ifBlank {
-                                            "${identity.model}:${identity.name}"
-                                        }
-                                    }
-                                    ?: activeSavedCamera?.host
-                                    ?: "camera"
-                            }
+                        val disconnectToSavedCameraHome = disconnectToSavedCameraHome(active)
                         val returnToMulticam: (() -> Unit)? =
                             if (multicam.lentMember(active) != null) {
                                 { disconnectToSavedCameraHome(false) }
@@ -1186,6 +1158,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             relayBroadcastUi.pendingControlRequestName?.let { asking ->
+                                val pendingRequest = relayBroadcastUi.pendingControlRequest
                                 Row(
                                     Modifier.align(Alignment.TopCenter)
                                         .padding(top = 10.dp)
@@ -1211,7 +1184,7 @@ class MainActivity : ComponentActivity() {
                                         modifier =
                                             Modifier.clickable {
                                                 relayBroadcastController
-                                                    .declinePendingControl()
+                                                    .let { owner -> pendingRequest?.let(owner::declinePendingControl) }
                                             },
                                     )
                                     Text(
@@ -1220,13 +1193,34 @@ class MainActivity : ComponentActivity() {
                                         fontSize = 13.sp,
                                         modifier =
                                             Modifier.clickable {
-                                                relayBroadcastController.grantPendingControl()
+                                                pendingRequest?.let(relayBroadcastController::grantPendingControl)
                                             },
                                     )
                                 }
                             }
-                            when (overlay) {
-                                null -> Unit
+                        }
+                        }
+                    }
+                    @Composable
+                    fun CameraPage(active: CameraSession, cover: ShellModel.Cover) {
+                        val assist = monitorAssist ?: return
+                        val currentSessionState = monitorState ?: return
+                        val currentCameraProperties = monitorProperties ?: return
+                        val cameraID = monitorCameraID
+                        val disconnectToSavedCameraHome = disconnectToSavedCameraHome(active)
+                        val playbackExposureAssistCameraInput =
+                            remember(
+                                currentCameraProperties.codec,
+                                currentCameraProperties.iso,
+                                currentCameraProperties.baseIso,
+                            ) {
+                                ExposureAssistCameraInput(
+                                    codec = currentCameraProperties.codec,
+                                    iso = currentCameraProperties.iso,
+                                    baseIso = currentCameraProperties.baseIso,
+                                )
+                            }
+                            when (cover) {
                                 ShellModel.Cover.SETTINGS ->
                                     OperatorSettingsScreen(
                                         session = active,
@@ -1234,6 +1228,7 @@ class MainActivity : ComponentActivity() {
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
+                                        accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                                         linkHealth = monitorLinkHealth,
                                         relaySharing = relayBroadcastController,
                                         relaySharingEnabled = relayBroadcastEnabled,
@@ -1295,6 +1290,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 ShellModel.Cover.MEDIA ->
                                     MediaBrowseScreen(
+                                        cacheStore = mediaCacheStore,
                                         catalogIndex = mediaLibraryIndex,
                                         cameraID = cameraID,
                                         mediaService = shellSessions.media(active, multicam.lentMember(active)?.control ?: shellSessions.acquire(active)),
@@ -1325,11 +1321,6 @@ class MainActivity : ComponentActivity() {
                                         onClose = { shell.dismissCover() },
                                     )
                             }
-                        }
-                        }
-                        BackHandler(enabled = overlay == ShellModel.Cover.SETTINGS) {
-                            shell.dismissCover()
-                        }
                     }
                     @Composable
                     fun StandaloneMedia() {
@@ -1340,6 +1331,7 @@ class MainActivity : ComponentActivity() {
                                 restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
                             }
                         MediaBrowseScreen(
+                            cacheStore = mediaCacheStore,
                             catalogIndex = mediaLibraryIndex,
                             cameraID = primary?.cameraID ?: "offline-all-cameras",
                             cameraConnected = false,
@@ -1376,6 +1368,7 @@ class MainActivity : ComponentActivity() {
                             settings = operatorSettings,
                             mediaCacheStore = mediaCacheStore,
                             frameioController = frameioController,
+                            accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                             // iOS's startup Settings lands on Link; a debug
                             // intent can still force a specific tab.
                             initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,
@@ -1518,14 +1511,14 @@ class MainActivity : ComponentActivity() {
                             if (monitored != null && common?.id == live.session.id) CameraMonitor(monitored)
                         },
                         page = { cover ->
-                            when (cover) {
+                            val active = monitored
+                            if (active != null) CameraPage(active, cover)
+                            else when (cover) {
                                 ShellModel.Cover.MEDIA -> StandaloneMedia()
-                                ShellModel.Cover.SETTINGS -> {
-                                    BackHandler { shell.dismissCover() }
-                                    StandaloneSettings()
-                                }
+                                ShellModel.Cover.SETTINGS -> StandaloneSettings()
                             }
                         },
+                        coverPresentation = ShellCoverPresentation.SHELL,
                         pageFrame = { _, content ->
                             if (!standaloneMedia) {
                                 DisposableEffect(nikonPort) {

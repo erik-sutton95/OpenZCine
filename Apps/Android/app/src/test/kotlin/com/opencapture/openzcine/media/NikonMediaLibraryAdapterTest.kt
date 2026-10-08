@@ -15,6 +15,23 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.async
 
 class NikonMediaLibraryAdapterTest {
+    @Test fun `playback eligibility preserves raw master kind and canonical source identity`() {
+        val root = createTempDirectory("SIMULATED-nikon-playback-facts")
+        try {
+            val codec = NikonMediaLibraryCodec("SIMULATED", null, MediaCacheStore(root), { emptySet() }, { false })
+            val facts = listOf(NikonMediaContentKind.PLAYABLE_PROXY to true, NikonMediaContentKind.R3D_MASTER to false,
+                NikonMediaContentKind.STILL_PHOTO to true, NikonMediaContentKind.UNSUPPORTED to false)
+            for ((kind, eligible) in facts) {
+                val source = clip(100).copy(contentKind = kind)
+                val record = codec.record(NikonLibraryClip("SIMULATED", source))
+                assertEquals(eligible, record.facts.playbackEligible)
+                assertEquals(source, record.payload.clip)
+                assertEquals(source.filename, record.asset.filename)
+                assertEquals(if (kind == NikonMediaContentKind.STILL_PHOTO) com.opencapture.opencine.media.MediaAssetKind.PHOTO
+                    else com.opencapture.opencine.media.MediaAssetKind.VIDEO, record.asset.kind)
+            }
+        } finally { root.toFile().deleteRecursively() }
+    }
     @Test fun `exact canonical preference bytes round trip without extra registry writes`() {
         val preferences = Preferences()
         val index = MediaLibraryIndex(preferences)

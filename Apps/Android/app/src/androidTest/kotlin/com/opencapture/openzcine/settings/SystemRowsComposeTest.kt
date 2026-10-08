@@ -1,9 +1,6 @@
 package com.opencapture.openzcine.settings
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.Modifier
+import android.content.Context
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
@@ -12,27 +9,44 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.openzcine.OpenZCineTheme
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
+import com.opencapture.openzcine.idleNikonAssists
+import com.opencapture.openzcine.media.MediaCacheStore
+import java.nio.file.Files
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
 class SystemRowsComposeTest {
     @get:Rule val compose = createComposeRule()
+    private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val preferences = context.getSharedPreferences("system-rows-compose", Context.MODE_PRIVATE)
+    private val cacheDirectory = Files.createTempDirectory(context.cacheDir.toPath(), "system-rows-compose")
 
     @Test
     fun reportProblemUsesTheNativeCallbackWhileFeatureRemainsAnExternalAction() {
+        preferences.edit().clear().commit()
+        val settings = OperatorSettings(preferences)
+        val assists = idleNikonAssists()
+        val cache = MediaCacheStore(cacheDirectory)
         val actions = RecordingSystemSettingsActions()
         var report = 0
         compose.setContent {
             OpenZCineTheme {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    SystemRows(
-                        actions = actions,
-                        onReportProblem = { report += 1 },
-                    )
-                }
+                OperatorSettingsScreen(
+                    session = null,
+                    assists = assists,
+                    settings = settings,
+                    mediaCacheStore = cache,
+                    systemSettingsActions = actions,
+                    onReportProblem = { report += 1 },
+                    initialTab = MonitorSettingsTab.SYSTEM,
+                    onClose = {},
+                )
             }
         }
 
@@ -66,6 +80,12 @@ class SystemRowsComposeTest {
         // OpenCine's reporting rows: the automatic-reports row and the reporting privacy link.
         compose.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Reporting Privacy").performScrollTo().assertIsDisplayed()
+    }
+
+    @After
+    fun clearTestStores() {
+        preferences.edit().clear().commit()
+        cacheDirectory.toFile().deleteRecursively()
     }
 
     private class RecordingSystemSettingsActions : SystemSettingsActions {

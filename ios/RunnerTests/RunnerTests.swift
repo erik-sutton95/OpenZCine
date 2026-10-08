@@ -5,6 +5,7 @@ import MonitorUI
 import Network
 import Observation
 import OpenCineApple
+import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
 import SwiftUI
@@ -23,12 +24,19 @@ final class RunnerTests: XCTestCase {
         // The real form is rebuilt from observed choices after each native accessibility action.
         let content = NativeDefaultFilterFixtureView(state: state)
         let host = UIHostingController(rootView: content)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
             window.rootViewController = nil
+            originalKeyWindow?.makeKeyAndVisible()
         }
         for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
             state.formats = []
@@ -122,7 +130,9 @@ final class RunnerTests: XCTestCase {
             filterClip("L.JPG", width: 6048, date: today),
             filterClip("M.TIF", width: 4032, date: old),
         ]
-        var form = nikonMediaFilterForm(model: model)
+        var form = MonitorMediaFilterForm(
+            presentation: model.mediaGalleryPresentation(model.mediaGalleryProjection),
+            onAction: model.applyMediaGalleryFilter)
         XCTAssertFalse(form.hasDates)
         XCTAssertTrue(form.colors.isEmpty)
         form.onToggleFormat("JPEG")
@@ -147,7 +157,9 @@ final class RunnerTests: XCTestCase {
         model.mediaCategoryTab = .videos
         XCTAssertTrue(model.mediaFormatFilters.isEmpty)
         XCTAssertTrue(model.mediaPhotoSizeFilters.isEmpty)
-        form = nikonMediaFilterForm(model: model)
+        form = MonitorMediaFilterForm(
+            presentation: model.mediaGalleryPresentation(model.mediaGalleryProjection),
+            onAction: model.applyMediaGalleryFilter)
         XCTAssertNil(form.photoSizes)
         form.onToggleFormat("MOV")
         form.onToggleFormat("MP4")
@@ -188,7 +200,9 @@ final class RunnerTests: XCTestCase {
         var single = filterClip("PRIMARY.MOV", width: 1920, date: filterCaptureDate(daysAgo: 90))
         single.storageID = first
         model.mediaClips = [backup, single]
-        let form = nikonMediaFilterForm(model: model)
+        let form = MonitorMediaFilterForm(
+            presentation: model.mediaGalleryPresentation(model.mediaGalleryProjection),
+            onAction: model.applyMediaGalleryFilter)
         let storage = try XCTUnwrap(form.storage)
         XCTAssertEqual(storage.options.map(\.label), ["SLOT 3", "SLOT 7"])
         storage.onToggle(String(second))
@@ -205,7 +219,9 @@ final class RunnerTests: XCTestCase {
         storage.onToggle(String(second))
         let sort = model.mediaSortOrder
         model.mediaBrowserSource = .iPhone
-        let hidden = nikonMediaFilterForm(model: model)
+        let hidden = MonitorMediaFilterForm(
+            presentation: model.mediaGalleryPresentation(model.mediaGalleryProjection),
+            onAction: model.applyMediaGalleryFilter)
         XCTAssertNil(hidden.storage)
         XCTAssertEqual(hidden.hasActiveFilters, true)
         XCTAssertEqual(model.mediaStorageSlotFilter, second)
@@ -274,7 +290,7 @@ final class RunnerTests: XCTestCase {
         }
         let host = UIHostingController(
             rootView:
-                ScrollView { NikonViewAssistSettings() }.environment(model))
+                NikonZebraNativeFixtureView(model: model))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
         window.rootViewController = host
         window.makeKeyAndVisible()
@@ -3250,6 +3266,19 @@ private struct NikonSelectionNativeFixture: View {
 }
 
 @MainActor
+private struct NikonZebraNativeFixtureView: View {
+    let model: NativeAppModel
+    var body: some View {
+        ScrollView {
+            MonitorViewAssistSettings(sections: [
+                .zebra(NikonAssistMenuAdapter(model: model, compact: true).zebra)
+            ])
+        }
+        .environment(model)
+    }
+}
+
+@MainActor
 private struct NativeDefaultFilterFixtureView: View {
     var state: NativeDefaultFilterFixture
     var body: some View {
@@ -3372,13 +3401,20 @@ extension RunnerTests {
                 onOpen: { XCTFail("A child control must not open the clip") },
                 onSelect: { selections += 1 }, onFavorite: { favorites += 1 }
             ) { Color.gray })
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         host.view.backgroundColor = UIColor(MonitorTheme.background)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
             window.rootViewController = nil
+            originalKeyWindow?.makeKeyAndVisible()
         }
         for layout in [MonitorMediaLayout.grid, .list] {
             host.rootView = MonitorMediaCell(
@@ -3439,13 +3475,20 @@ extension RunnerTests {
             } filters: {
                 EmptyView()
             })
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         host.view.backgroundColor = UIColor(MonitorTheme.background)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
             window.rootViewController = nil
+            originalKeyWindow?.makeKeyAndVisible()
         }
         let favorite = try await nativeFilterElement("Add favorite", host: host)
         let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
@@ -3488,13 +3531,20 @@ extension RunnerTests {
                 .environment(\._accessibilityReduceTransparency, true)
             })
         host.safeAreaRegions = []
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.frame = window.bounds
         defer {
             window.isHidden = true
             window.rootViewController = nil
+            originalKeyWindow?.makeKeyAndVisible()
         }
         func settle() async throws {
             for _ in 0..<60 {
