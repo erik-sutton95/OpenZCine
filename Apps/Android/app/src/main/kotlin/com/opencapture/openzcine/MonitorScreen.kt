@@ -2152,7 +2152,8 @@ internal fun MonitorScreen(
             assists.shared.configureTool = null
             activeCommandControl = null
             activeMonitorPickerKind = nextMonitorPicker(activeMonitorPickerKind, kind,
-                commandControlsEnabled && pendingCommandControl == null)
+                sessionState is CameraSessionState.Connected && !locked && !editingThisMode &&
+                    isMonitorFront && pendingCommandControl == null)
             commandControlFeedback = null
         }
         val nativeSettings = if (isPhotographyMode) photographySettings else captureSettings
@@ -2173,15 +2174,18 @@ internal fun MonitorScreen(
                 if (field != null) field.label else setting.value, field = field,
                 quickEnabled = setting.kind != MonitorPickerKind.SHUTTER,
                 itemModifier = if (setting.kind == MonitorPickerKind.SHUTTER && !isPhotographyMode) {
-                    Modifier.pointerInput(commandControlsEnabled, locked, editingThisMode, isMonitorFront) {
+                    Modifier.pointerInput(session, sessionState is CameraSessionState.Connected,
+                        commandControlsEnabled, locked, editingThisMode, isMonitorFront) {
                         awaitEachGesture {
                             awaitFirstDown()
                             val captured = commonControl.state.value.snapshot?.let { it.session to it.epoch }
-                                ?: return@awaitEachGesture
                             val released = withTimeoutOrNull(450L) { waitForUpOrCancellation() }
                             if (commonControl.state.value.snapshot?.let { it.session to it.epoch } == captured &&
-                                commandControlsEnabled && !locked && !editingThisMode && isMonitorFront) {
-                                if (released == null) { shutterLongPressToggle(); waitForUpOrCancellation() }
+                                sessionState is CameraSessionState.Connected && !locked && !editingThisMode && isMonitorFront) {
+                                if (released == null) {
+                                    if (commandControlsEnabled) shutterLongPressToggle()
+                                    waitForUpOrCancellation()
+                                }
                                 else openSharedPicker(MonitorPickerKind.SHUTTER)
                             }
                         }
@@ -2307,7 +2311,12 @@ internal fun MonitorScreen(
         val codecKind = if (isPhotographyMode) MonitorPickerKind.QUALITY else MonitorPickerKind.CODEC
         val panelValue = activeMonitorPicker?.let { picker -> MonitorOperatorCameraPanel(picker.kind.name,
             picker.kind.isTopBarPicker(), if (picker.kind == MonitorPickerKind.QUALITY) 400f else 340f,
-            if (picker.kind == MonitorPickerKind.QUALITY) 380f else 300f) }
+            if (picker.kind == MonitorPickerKind.QUALITY) 380f else 300f,
+            chrome = if (picker.kind in ladderKinds) MonitorOperatorCameraPanelChrome.SHARED_SHEET else MonitorOperatorCameraPanelChrome.CONTENT,
+            title = picker.title, subtitle = picker.subtitle) }
+            ?: activeCommandControl?.let { request -> MonitorOperatorCameraPanel("command:${request.control.name}",
+                false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
+                subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
         MonitorOperatorDescriptorLiveSurface(
             control = commonControl, identity = identity,
             current = { captured -> val snapshot = commonControl.state.value.snapshot
@@ -2721,7 +2730,22 @@ internal fun MonitorScreen(
                                 CameraControl.STILL_RAW_COMPRESSION),
                         mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
                         onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
+                        chromeless = true,
                     )
+                    }
+                }
+                activeCommandControl?.takeIf { "command:${it.control.name}" == key }?.let { request ->
+                    CompositionLocalProvider(LocalMonitorGlass provides glass,
+                        com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
+                        CommandControlDialog(
+                            request = request,
+                            controlsEnabled = commandControlsEnabled,
+                            pendingControl = pendingCommandControl,
+                            feedback = commandControlFeedback,
+                            onSelect = { label -> applyCameraControl(request, label) },
+                            onDismiss = { activeCommandControl = null },
+                            chromeless = true,
+                        )
                     }
                 }
             },
@@ -2785,18 +2809,6 @@ internal fun MonitorScreen(
             )
         }
 
-    }
-    activeCommandControl?.let { request ->
-        CompositionLocalProvider(LocalMonitorGlass provides glass) {
-            CommandControlDialog(
-                request = request,
-                controlsEnabled = commandControlsEnabled,
-                pendingControl = pendingCommandControl,
-                feedback = commandControlFeedback,
-                onSelect = { label -> applyCameraControl(request, label) },
-                onDismiss = { activeCommandControl = null },
-            )
-        }
     }
 }
 

@@ -3,8 +3,6 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,7 +28,6 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
@@ -40,7 +37,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -1765,11 +1761,7 @@ internal fun commandLadderPresentation(
     )
 }
 
-/**
- * Command-mode control surface. Same glass drum and tint pad as the live pickers
- * (iOS PickerPanel, dead-centred when displayMode is command), not a Material dialog.
- * The host keeps the backdrop, the reveal, and the card bounds.
- */
+/** Native command ladder; the live composition supplies the common popup chrome. */
 @Composable
 internal fun CommandControlDialog(
     request: CommandControlRequest,
@@ -1778,47 +1770,25 @@ internal fun CommandControlDialog(
     feedback: CommandControlFeedback?,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
+    chromeless: Boolean = false,
 ) {
     // An in-flight write stays interactive. pendingControl names that write, and it is not a lock.
     val interactive = controlsEnabled &&
         commandControlOptions(request, pendingControl, controlsEnabled).all { it.enabled }
-    // Dismiss stays available while a write drains. The sheet does not trap the operator.
-    BackHandler(onBack = onDismiss)
-
-    var revealed by remember(request.control, request.title) { mutableStateOf(false) }
-    LaunchedEffect(request.control, request.title) { revealed = true }
-    val travel = 320.dp
-    val revealOffset by
-        animateDpAsState(
-            targetValue = if (revealed) 0.dp else travel,
-            animationSpec = IosPanelRevealSpec,
-            label = "commandPickerReveal",
-        )
     val subtitle = stringResource(R.string.command_current_value, request.currentValue)
 
-    Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier.fillMaxSize()
-                .chromeClickable(onClick = onDismiss),
-        )
-        LadderSheet(
-            presentation = commandLadderPresentation(request, subtitle),
-            enabled = interactive,
-            onWrite = { write ->
-                if (write.value.isNotBlank()) onSelect(write.value)
-            },
-            onClose = onDismiss,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(y = revealOffset)
-                .alpha(if (revealed) 1f else 0f)
-                .width(420.dp)
-                .height(360.dp),
-            error = feedback?.takeIf { it.isError }?.message,
-            unavailable = if (interactive) null else stringResource(R.string.camera_controls_unavailable),
-            tintLabel = { tint -> WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta) },
-            tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
-                stringResource(R.string.camera_wb_tint_double_tap_help),
-        )
-    }
+    LadderSheet(
+        presentation = commandLadderPresentation(request, subtitle),
+        enabled = interactive,
+        onWrite = { write ->
+            if (write.value.isNotBlank()) onSelect(write.value)
+        },
+        onClose = onDismiss,
+        chromeless = chromeless,
+        error = feedback?.takeIf { it.isError }?.message,
+        unavailable = if (interactive) null else stringResource(R.string.camera_controls_unavailable),
+        tintLabel = { tint -> WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta) },
+        tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
+            stringResource(R.string.camera_wb_tint_double_tap_help),
+    )
 }

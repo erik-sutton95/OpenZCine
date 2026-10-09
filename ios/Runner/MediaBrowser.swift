@@ -176,7 +176,7 @@ struct MediaPopupPlacement: Equatable {
 
 /// Source composition for the complete shared catalog; card, RAW and delivery facts stay typed.
 struct MediaBrowserView: View {
-    var safeArea: MonitorEdgeInsets = .zero
+    var safeArea: MonitorEdgeInsets? = nil
     @Environment(NativeAppModel.self) private var model
     @Environment(\.monitorWindowGeometry) private var windowGeometry
     @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
@@ -321,12 +321,12 @@ struct MediaBrowserView: View {
         if let toast = deliveryCoordinator.completionToast, deliveryCoordinator.showsLocalOverlay {
             VStack { Spacer(); Text(toast).font(MonitorTheme.font(13, weight: .medium)).foregroundStyle(MonitorTheme.text)
                 .multilineTextAlignment(.center).padding(.horizontal, 16).padding(.vertical, 10)
-                .liquidGlass(in: Capsule(), interactive: false).padding(.bottom, max(CGFloat(safeArea.bottom) + 80, 96))
+                .liquidGlass(in: Capsule(), interactive: false).padding(.bottom, max(CGFloat(safeArea?.bottom ?? 0) + 80, 96))
             }.frame(maxWidth: .infinity, maxHeight: .infinity).transition(.opacity).zIndex(5)
         }
         if let request = deliveryRequest {
             MediaDeliveryPopupOverlay(clips: request.clips, anchorFrame: .zero, placement: .aboveAnchor,
-                preferredDestination: request.preferredDestination, safeArea: safeArea, capture: request.capture,
+                preferredDestination: request.preferredDestination, safeArea: safeArea ?? .zero, capture: request.capture,
                 onBeginDelivery: { value in
                     guard let capture = value.capture, capture === request.capture, capture.isCurrent else { return }
                     if deliveryRequest?.id == request.id { deliveryRequest = nil; deliveryAdmission = nil }
@@ -341,9 +341,11 @@ struct MediaBrowserView: View {
         }
     }
     private var resolvedSafeArea: EdgeInsets {
-        if windowGeometry.validSize != nil { return windowGeometry.safeArea }
-        return .init(top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
-            bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing))
+        if let safeArea {
+            return .init(top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
+                bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing))
+        }
+        return windowGeometry.validSize == nil ? EdgeInsets() : windowGeometry.safeArea
     }
 }
 

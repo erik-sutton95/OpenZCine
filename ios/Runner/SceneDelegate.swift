@@ -1,26 +1,40 @@
 import SwiftUI
 import UIKit
 
-final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
-    var window: UIWindow?
+@main
+struct OpenZCineApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    var body: some Scene {
+        WindowGroup {
+            NativeAppRoot()
+        }
+    }
+}
+
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(
         _ scene: UIScene,
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-        guard let windowScene = scene as? UIWindowScene else { return }
-        let window = UIWindow(windowScene: windowScene)
-        window.insetsLayoutMarginsFromSafeArea = false
-
-        let hostingController = UIHostingController(rootView: NativeAppRoot())
-        hostingController.view.backgroundColor = .clear
-        hostingController.view.insetsLayoutMarginsFromSafeArea = false
-        hostingController.view.layoutMargins = .zero
-
-        window.rootViewController = hostingController
-        window.makeKeyAndVisible()
-        self.window = window
+        guard scene is UIWindowScene else { return }
+        configureWindowMargins(in: scene)
         AppDiagnostics.shared.record(.sceneConnected)
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        configureWindowMargins(in: scene)
+    }
+
+    private func configureWindowMargins(in scene: UIScene) {
+        guard let windowScene = scene as? UIWindowScene,
+            let window = windowScene.windows.first(where: \.isKeyWindow)
+        else { return }
+        window.insetsLayoutMarginsFromSafeArea = false
+        guard let view = window.rootViewController?.viewIfLoaded else { return }
+        view.backgroundColor = .clear
+        view.insetsLayoutMarginsFromSafeArea = false
+        view.layoutMargins = .zero
     }
 }

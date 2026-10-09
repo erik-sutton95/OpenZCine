@@ -2244,32 +2244,26 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
     }
 }
 
-/// The settings cover has its own presentation environment. Observe its containing window
-/// here so rotation cannot replace a physical cutout lane with child GeometryReader insets.
+/// A supplied common-cover clearance stays authoritative through rotation.
+/// An omitted clearance keeps the legacy containing-window fallback.
 private struct NikonSettingsViewport<Content: View>: View {
     @Environment(\.monitorWindowGeometry) private var windowGeometry
-    let fallback: MonitorEdgeInsets
+    let fallback: MonitorEdgeInsets?
     @ViewBuilder let content: (EdgeInsets, Bool) -> Content
 
     var body: some View {
         GeometryReader { proxy in
-            let insets =
-                windowGeometry.validSize == nil
-                ? EdgeInsets(
-                    top: CGFloat(fallback.top), leading: CGFloat(fallback.leading),
-                    bottom: CGFloat(fallback.bottom), trailing: CGFloat(fallback.trailing))
-                : EdgeInsets(
-                    top: windowGeometry.safeArea.top + windowGeometry.topControlInset,
-                    leading: windowGeometry.safeArea.leading,
-                    bottom: windowGeometry.safeArea.bottom,
-                    trailing: windowGeometry.safeArea.trailing)
+            let insets = fallback.map { supplied in
+                EdgeInsets(top: CGFloat(supplied.top), leading: CGFloat(supplied.leading),
+                    bottom: CGFloat(supplied.bottom), trailing: CGFloat(supplied.trailing))
+            } ?? (windowGeometry.validSize == nil ? EdgeInsets() : windowGeometry.safeArea)
             content(insets, proxy.size.height > proxy.size.width)
         }
     }
 }
 
 struct OperatorSettingsPanel: View {
-    var safeArea: MonitorEdgeInsets = .zero
+    var safeArea: MonitorEdgeInsets? = nil
     @Environment(NativeAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var relayPasscodeDraft: String?

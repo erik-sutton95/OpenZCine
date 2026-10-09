@@ -58,7 +58,8 @@ struct NikonMonitorShell: View {
             guard let picker = CameraPicker.forValueLabel(value.label, photography: model.isPhotographyMode) else { return nil }
             // The shutter's lock and angle/speed circuits use the existing typed LadderSheet.
             let field = value.label == "SHUTTER" ? nil : picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
-            return Readout(id: .picker(picker), title: value.label, value: value.value, field: field)
+            return Readout(id: .picker(picker), title: value.label, value: value.value, field: field,
+                accessibilityIdentifier: picker.nikonControlSetting.map { "monitor.capture." + $0.key.rawValue } ?? "")
         }
     }
     private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, DisplayChromeVisibility.Section> {
@@ -195,7 +196,7 @@ private struct NikonCameraSettingExtension: View {
     var body: some View {
         if picker == .stillQuality { QualityPickerPanel(embedded: true) }
         else if picker == .stabilization { StabilizationPickerPanel() }
-        else if picker.usesLadderSheet { LadderPickerPanel(picker: picker) }
+        else if picker.usesLadderSheet { LadderPickerPanel(picker: picker, chromeless: true) }
         else { PickerPanel(picker: picker, embedded: true) }
     }
 }

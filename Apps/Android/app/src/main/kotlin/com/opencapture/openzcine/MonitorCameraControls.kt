@@ -1037,7 +1037,81 @@ internal fun MonitorControlPickerPanel(
     mfScrubEnabled: Boolean = true,
     /** Flips the focus-scrub preference; null omits the FOCUS popup's toggle row. */
     onToggleMfScrub: (() -> Unit)? = null,
+    /** Shared monitor popup supplies all panel chrome; this slot supplies controls only. */
+    chromeless: Boolean = false,
 ) {
+    val writeEnabled = controlsEnabled && com.opencapture.opencine.appkit.LocalMonitorCaptureCommandEnabled.current
+    @Composable fun PickerContent(currentPicker: MonitorPickerPresentation) {
+        if (currentPicker.kind == MonitorPickerKind.QUALITY) {
+            // Image quality is a dual-drum pair, not a value wheel
+            // (iOS `QualityPickerPanel`).
+            QualityPickerPanelBody(
+                picker = currentPicker,
+                nefCompression = nefCompression,
+                onSelect = onSelect,
+                onDismiss = onDismiss,
+                nefOptions =
+                    nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
+                controlsEnabled = writeEnabled,
+                chromeless = chromeless,
+            )
+        } else if (currentPicker.kind in ladderKinds) {
+            VideoLadderBody(
+                picker = currentPicker,
+                field = commonField,
+                control = commonControl,
+                controlsEnabled = writeEnabled,
+                error = feedback?.takeIf { it.isError }?.message,
+                unavailable = stringResource(R.string.camera_controls_unavailable),
+                fromTop = slideFromTop,
+                chromeless = chromeless,
+                onWrite = onSelect,
+                onClose = onDismiss,
+                onHold = if (currentPicker.kind == MonitorPickerKind.SHUTTER && writeEnabled) onShutterLongPress else null,
+                tintLabel = { tint ->
+                    WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta)
+                },
+                tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
+                    stringResource(R.string.camera_wb_tint_double_tap_help),
+                footer = { tab ->
+                    if (ladderShowsTimerShots(currentPicker, tab) && onAdjustTimerShots != null) {
+                        TimerShotsRow(
+                            count = timerShotsCount,
+                            enabled = writeEnabled && !tab.disabled,
+                            onAdjust = onAdjustTimerShots,
+                        )
+                    }
+                    if (currentPicker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
+                        MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
+                    }
+                },
+                modifier = if (chromeless) Modifier else Modifier.fillMaxSize(),
+            )
+        } else {
+            PickerPanelBody(
+                picker = currentPicker,
+                commonControl = commonControl,
+                commonField = commonField,
+                frame = frame,
+                controlsEnabled = writeEnabled,
+                pendingControl = pendingControl,
+                feedback = feedback,
+                onSelect = onSelect,
+                onDismiss = onDismiss,
+                onShutterLongPress = onShutterLongPress.takeIf { writeEnabled },
+                timerShotsCount = timerShotsCount,
+                onAdjustTimerShots = onAdjustTimerShots,
+                mfScrubEnabled = mfScrubEnabled,
+                onToggleMfScrub = onToggleMfScrub,
+                chromeless = chromeless,
+            )
+        }
+    }
+    if (chromeless) {
+        PickerContent(picker)
+        return
+    }
+
     // Dismissal is NEVER gated on an in-flight write (#328): a focus-mode write can hold
     // the command mutex for seconds — or wedge on a flaky link — and gating Back/scrim
     // here trapped the operator in the popup. iOS `dismissActivePanel` has no such gate;
@@ -1091,66 +1165,7 @@ internal fun MonitorControlPickerPanel(
                 contentKey = { it.kind },
                 label = "monitorPickerSwitch",
             ) { currentPicker ->
-                if (currentPicker.kind == MonitorPickerKind.QUALITY) {
-                    // Image quality is a dual-drum pair, not a value wheel
-                    // (iOS `QualityPickerPanel`).
-                    QualityPickerPanelBody(
-                        picker = currentPicker,
-                        nefCompression = nefCompression,
-                        onSelect = onSelect,
-                        onDismiss = onDismiss,
-                        nefOptions =
-                            nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
-                    )
-                } else if (currentPicker.kind in ladderKinds) {
-                    VideoLadderBody(
-                        picker = currentPicker,
-                        field = commonField,
-                        control = commonControl,
-                        controlsEnabled = controlsEnabled,
-                        error = feedback?.takeIf { it.isError }?.message,
-                        unavailable = stringResource(R.string.camera_controls_unavailable),
-                        fromTop = slideFromTop,
-                        onWrite = onSelect,
-                        onClose = onDismiss,
-                        onHold = if (currentPicker.kind == MonitorPickerKind.SHUTTER) onShutterLongPress else null,
-                        tintLabel = { tint ->
-                            WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta)
-                        },
-                        tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
-                            stringResource(R.string.camera_wb_tint_double_tap_help),
-                        footer = { tab ->
-                            if (ladderShowsTimerShots(currentPicker, tab) && onAdjustTimerShots != null) {
-                                TimerShotsRow(
-                                    count = timerShotsCount,
-                                    enabled = controlsEnabled && !tab.disabled,
-                                    onAdjust = onAdjustTimerShots,
-                                )
-                            }
-                            if (currentPicker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
-                                MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    PickerPanelBody(
-                        picker = currentPicker,
-                        commonControl = commonControl,
-                        commonField = commonField,
-                        frame = frame,
-                        controlsEnabled = controlsEnabled,
-                        pendingControl = pendingControl,
-                        feedback = feedback,
-                        onSelect = onSelect,
-                        onDismiss = onDismiss,
-                        onShutterLongPress = onShutterLongPress,
-                        timerShotsCount = timerShotsCount,
-                        onAdjustTimerShots = onAdjustTimerShots,
-                        mfScrubEnabled = mfScrubEnabled,
-                        onToggleMfScrub = onToggleMfScrub,
-                    )
-                }
+                PickerContent(currentPicker)
             }
         }
     }
@@ -1173,6 +1188,7 @@ internal fun PickerPanelBody(
     onAdjustTimerShots: ((Int) -> Unit)? = null,
     mfScrubEnabled: Boolean = true,
     onToggleMfScrub: (() -> Unit)? = null,
+    chromeless: Boolean = false,
 ) {
     val pickerDescription =
         stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
@@ -1230,10 +1246,10 @@ internal fun PickerPanelBody(
     Column(
         modifier =
             Modifier
-                .fillMaxSize()
-                .heightIn(max = frame.height.dp)
-                .overlayGlass(ChromeShape)
-                .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
+                .then(if (chromeless) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
+                    .heightIn(max = frame.height.dp)
+                    .overlayGlass(ChromeShape)
+                    .border(1.dp, LiveDesign.hairlineStrong, ChromeShape))
                 // iOS PickerPanel: long-press anywhere (incl. lock banner) toggles shutter
                 // control lock. requireUnconsumed=false so the drum still scrolls.
                 .then(
@@ -1257,39 +1273,41 @@ internal fun PickerPanelBody(
                 )
                 // Absorb plain taps so they don't fall through to the dismiss scrim.
                 .pointerInput(Unit) { detectTapGestures(onTap = {}) }
-                .padding(horizontal = 20.dp, vertical = panelVPad)
+                .then(if (chromeless) Modifier else Modifier.padding(horizontal = 20.dp, vertical = panelVPad))
                 .semantics { contentDescription = pickerDescription },
         verticalArrangement = Arrangement.spacedBy(panelGap),
     ) {
-        // iOS `PickerHeader`: kerned heavy name + mono uppercase subtitle.
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        if (!chromeless) {
+            // iOS `PickerHeader`: kerned heavy name + mono uppercase subtitle.
             Row(
-                Modifier.weight(1f),
+                Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.Bottom,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    picker.title,
-                    style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
-                    color = LiveDesign.text,
-                    maxLines = 1,
-                )
-                Text(
-                    picker.subtitle.uppercase(),
-                    style =
-                        chromeStyle(11f, FontWeight.SemiBold, mono = true)
-                            .copy(letterSpacing = 1.5.sp),
-                    color = LiveDesign.faint,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip,
-                    modifier = Modifier.padding(bottom = 2.dp),
-                )
+                Row(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text(
+                        picker.title,
+                        style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
+                        color = LiveDesign.text,
+                        maxLines = 1,
+                    )
+                    Text(
+                        picker.subtitle.uppercase(),
+                        style =
+                            chromeStyle(11f, FontWeight.SemiBold, mono = true)
+                                .copy(letterSpacing = 1.5.sp),
+                        color = LiveDesign.faint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    )
+                }
+                PanelCloseButton(onDismiss)
             }
-            PanelCloseButton(onDismiss)
         }
 
         // Errors / lock only — never the green "WB set to …" success line.
@@ -1371,7 +1389,7 @@ internal fun PickerPanelBody(
         // Flexible body — drum or tint pad only. Fine-adjust + mode bar are
         // fixed below so short landscape panels cannot clip ±10 under the wheel.
         Box(
-            Modifier.fillMaxWidth().weight(1f, fill = true),
+            Modifier.fillMaxWidth().then(if (chromeless) Modifier else Modifier.weight(1f, fill = true)),
             contentAlignment = Alignment.Center,
         ) {
             if (isTintMode) {

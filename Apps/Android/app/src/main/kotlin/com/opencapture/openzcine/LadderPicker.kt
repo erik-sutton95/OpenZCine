@@ -195,6 +195,7 @@ internal fun VideoLadderBody(
     tintHelp: String?,
     footer: @Composable (LadderTab<CameraControl>) -> Unit,
     modifier: Modifier = Modifier,
+    chromeless: Boolean = false,
 ) {
     LadderSheet(
         presentation = videoLadderPresentation(picker, field),
@@ -207,6 +208,7 @@ internal fun VideoLadderBody(
         modifier = modifier,
         control = control,
         fromTop = fromTop,
+        chromeless = chromeless,
         error = error,
         unavailable = if (controlsEnabled) null else unavailable,
         onHold = onHold,

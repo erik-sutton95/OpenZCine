@@ -792,6 +792,8 @@ internal fun QualityPickerPanelBody(
     onDismiss: () -> Unit,
     /** The body's advertised NEF compressions; the ladder is only a fallback (#274). */
     nefOptions: List<String> = StillPickerPolicy.NEF_OPTIONS,
+    controlsEnabled: Boolean = true,
+    chromeless: Boolean = false,
 ) {
     val qualityRequest = picker.modes.first().request
     // Seed once from the camera (never re-read per frame — the wheels would
@@ -807,6 +809,7 @@ internal fun QualityPickerPanelBody(
     }
 
     fun applyIfChanged() {
+        if (!controlsEnabled) return
         val label = config.compressionLabel() ?: return
         if (label == lastApplied) return
         lastApplied = label
@@ -815,46 +818,48 @@ internal fun QualityPickerPanelBody(
 
     Column(
         Modifier
-            .fillMaxSize()
-            .overlayGlass(ChromeShape)
-            .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
-            .padding(horizontal = 20.dp, vertical = 14.dp),
+            .then(if (chromeless) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
+                .overlayGlass(ChromeShape)
+                .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
+                .padding(horizontal = 20.dp, vertical = 14.dp)),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        if (!chromeless) {
             Row(
-                Modifier.weight(1f),
+                Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.Bottom,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    picker.title,
-                    style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
-                    color = LiveDesign.text,
-                    maxLines = 1,
-                )
-                Text(
-                    picker.subtitle.uppercase(),
-                    style =
-                        chromeStyle(11f, FontWeight.SemiBold, mono = true)
-                            .copy(letterSpacing = 1.5.sp),
-                    color = LiveDesign.faint,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip,
-                    modifier = Modifier.padding(bottom = 2.dp),
-                )
+                Row(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text(
+                        picker.title,
+                        style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
+                        color = LiveDesign.text,
+                        maxLines = 1,
+                    )
+                    Text(
+                        picker.subtitle.uppercase(),
+                        style =
+                            chromeStyle(11f, FontWeight.SemiBold, mono = true)
+                                .copy(letterSpacing = 1.5.sp),
+                        color = LiveDesign.faint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    )
+                }
+                PanelCloseButton(onDismiss)
             }
-            PanelCloseButton(onDismiss)
         }
         Row(
             Modifier
                 .fillMaxWidth()
                 // Short landscape panels scroll rather than clipping the chips.
-                .verticalScroll(rememberScrollState()),
+                .then(if (chromeless) Modifier else Modifier.verticalScroll(rememberScrollState())),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // RAW half: On/Off drum + NEF compression, parked while RAW is off.
@@ -868,7 +873,9 @@ internal fun QualityPickerPanelBody(
                     options = listOf("On", "Off"),
                     selection = if (config.rawEnabled) "On" else "Off",
                     wheelHeight = 112.dp,
+                    interactive = controlsEnabled,
                     onSettle = { settled ->
+                        if (!controlsEnabled) return@AccentDrumWheel
                         val enabled = settled == "On"
                         if (enabled == config.rawEnabled) return@AccentDrumWheel
                         config =
@@ -892,7 +899,7 @@ internal fun QualityPickerPanelBody(
                         QualityOptionChip(
                             label = option,
                             active = nefCompression == option,
-                            enabled = config.rawEnabled,
+                            enabled = controlsEnabled && config.rawEnabled,
                         ) {
                             onSelect(
                                 CommandControlRequest(
@@ -918,7 +925,9 @@ internal fun QualityPickerPanelBody(
                     options = StillQualityConfig.TIER_OPTIONS,
                     selection = config.tier,
                     wheelHeight = 112.dp,
+                    interactive = controlsEnabled,
                     onSettle = { settled ->
+                        if (!controlsEnabled) return@AccentDrumWheel
                         if (settled == config.tier) return@AccentDrumWheel
                         config =
                             if (settled == StillQualityConfig.TIER_OFF) {
@@ -938,7 +947,7 @@ internal fun QualityPickerPanelBody(
                         applyIfChanged()
                     },
                 )
-                val starEnabled = config.tier != StillQualityConfig.TIER_OFF
+                val starEnabled = controlsEnabled && config.tier != StillQualityConfig.TIER_OFF
                 Box(Modifier.fillMaxWidth().alpha(if (starEnabled) 1f else 0.35f)) {
                     QualityOptionChip(
                         label = "★ Optimal quality",

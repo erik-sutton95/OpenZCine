@@ -33,6 +33,7 @@ extension CameraPicker {
 struct LadderPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
     let picker: CameraPicker
+    var chromeless = false
 
     @State private var lensApertures: [String] = []
     @State private var screenModes: [String] = []
@@ -51,6 +52,7 @@ struct LadderPickerPanel: View {
             onClose: { model.dismissActivePanel() },
             control: model.shell.control,
             fromTop: picker.isTopBar,
+            chromeless: chromeless,
             onHold: picker == .shutter ? { holdShutter() } : nil,
             tintLabel: { tint in
                 WhiteBalanceTint.label(

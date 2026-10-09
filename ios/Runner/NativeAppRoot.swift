@@ -11647,9 +11647,52 @@ final class NativeAppModel {
     /// WB fine-tune grid position in cells (x = amber(+)/blue(−), y = green(+)/magenta(−),
     /// the camera's 13×13 grid — one A–B cell = 0.5 units, one G–M cell = 0.25, per Nikon's
     /// fine-tuning convention). Seeded from the camera when the Tint tab opens.
-    var whiteBalanceTintAB = 0
-    var whiteBalanceTintGM = 0
+    @ObservationIgnored private var whiteBalanceTintCells = (amberBlue: 0, greenMagenta: 0)
+    @ObservationIgnored private var notifyingWhiteBalanceTint = false
+    @ObservationIgnored private var tintAmberBlueNeedsNotification = false
+    @ObservationIgnored private var tintGreenMagentaNeedsNotification = false
+    var whiteBalanceTintAB: Int {
+        get { access(keyPath: \.whiteBalanceTintAB); return whiteBalanceTintCells.amberBlue }
+        set {
+            whiteBalanceTintCells.amberBlue = newValue
+            notifyWhiteBalanceTint(amberBlue: true, greenMagenta: false)
+        }
+    }
+    var whiteBalanceTintGM: Int {
+        get { access(keyPath: \.whiteBalanceTintGM); return whiteBalanceTintCells.greenMagenta }
+        set {
+            whiteBalanceTintCells.greenMagenta = newValue
+            notifyWhiteBalanceTint(amberBlue: false, greenMagenta: true)
+        }
+    }
     @ObservationIgnored private var lastCommittedTint: (ab: Int, gm: Int)?
+
+    /// Commit the complete camera read before any observer can replace its source or values.
+    func publishWhiteBalanceTint(amberBlue: Int, greenMagenta: Int) {
+        whiteBalanceTintCells = (amberBlue, greenMagenta)
+        lastCommittedTint = (amberBlue, greenMagenta)
+        notifyWhiteBalanceTint(amberBlue: true, greenMagenta: true)
+    }
+
+    private func notifyWhiteBalanceTint(amberBlue: Bool, greenMagenta: Bool) {
+        tintAmberBlueNeedsNotification = tintAmberBlueNeedsNotification || amberBlue
+        tintGreenMagentaNeedsNotification = tintGreenMagentaNeedsNotification || greenMagenta
+        guard !notifyingWhiteBalanceTint else { return }
+        notifyingWhiteBalanceTint = true
+        defer { notifyingWhiteBalanceTint = false }
+        // A nested publication commits immediately. Drain after the outgoing one-shot
+        // observer unregisters rather than invoking its willSet callback recursively.
+        while tintAmberBlueNeedsNotification || tintGreenMagentaNeedsNotification {
+            if tintAmberBlueNeedsNotification {
+                tintAmberBlueNeedsNotification = false
+                withMutation(keyPath: \.whiteBalanceTintAB) {}
+            }
+            if tintGreenMagentaNeedsNotification {
+                tintGreenMagentaNeedsNotification = false
+                withMutation(keyPath: \.whiteBalanceTintGM) {}
+            }
+        }
+    }
 
     /// Whether the active WB mode has a mapped tune property for the active selector
     /// (Preset slots don't; movie additionally has no Flash tune).
@@ -11706,22 +11749,25 @@ final class NativeAppModel {
     /// assuming neutral.
     func refreshWhiteBalanceTintFromCamera() {
         guard let session = cameraSession, !isDemoSession else { return }
+        let generation = connectionGeneration
+        let photography = isPhotographyMode
         guard
+            let mode = cameraPropertySnapshot.activeWBMode(photography: photography),
             let property = WhiteBalanceTint.tuneProperty(
-                forWBModeLabel: cameraPropertySnapshot.activeWBMode(
-                    photography: isPhotographyMode) ?? "Auto",
-                photography: isPhotographyMode)
+                forWBModeLabel: mode, photography: photography)
         else { return }
         Task { [weak self] in
             guard let data = try? await session.readCameraProperty(property), data.count >= 2
             else { return }
             let raw = UInt16(data[0]) | (UInt16(data[1]) << 8)
-            guard let self, let cells = WhiteBalanceTint.cells(fromPropertyValue: raw) else {
+            guard let self, self.cameraSession === session,
+                self.connectionGeneration == generation, !self.isDemoSession,
+                self.isPhotographyMode == photography,
+                self.cameraPropertySnapshot.activeWBMode(photography: photography) == mode,
+                let cells = WhiteBalanceTint.cells(fromPropertyValue: raw) else {
                 return
             }
-            whiteBalanceTintAB = cells.amberBlue
-            whiteBalanceTintGM = cells.greenMagenta
-            lastCommittedTint = (cells.amberBlue, cells.greenMagenta)
+            publishWhiteBalanceTint(amberBlue: cells.amberBlue, greenMagenta: cells.greenMagenta)
         }
     }
 

@@ -1519,19 +1519,21 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         coverPresentation = ShellCoverPresentation.SHELL,
-                        pageFrame = { _, content ->
+                        pageFrame = { route, content ->
                             if (!standaloneMedia) {
                                 DisposableEffect(nikonPort) {
                                     nikonPort.pageVisible = true
                                     onDispose { nikonPort.pageVisible = false }
                                 }
-                                // The shared pages' own ground and margins (the pair page draws
-                                // MonitorPalette.background itself; this page leaves it to the app).
+                                // Camera clearance belongs to the shared page; the pair page
+                                // retains its existing frame and both pages retain this ground.
                                 Box(
                                     Modifier.fillMaxSize()
                                         .background(MonitorPalette.background)
-                                        .windowInsetsPadding(WindowInsets.safeDrawing)
-                                        .padding(start = 18.dp, top = 24.dp, end = 18.dp, bottom = 16.dp),
+                                        .then(if (route == ShellModel.Route.PAIR) {
+                                            Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
+                                                .padding(start = 18.dp, top = 24.dp, end = 18.dp, bottom = 16.dp)
+                                        } else Modifier),
                                 ) {
                                     content()
                                 }
