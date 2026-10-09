@@ -21,6 +21,9 @@ ZR = "ZR"
 MTP = "MTP"
 PTP = "PTP"
 UVC = "UVC"
+# Neutral density assist and CoreAudio File Format extension.
+ND = "ND"
+caf = "caf"
 # Retransmission timeout — a TCP term, quoted as "RTO-class stalls" in the transport docs.
 RTO = "RTO"
 # QuickTime atom names, spelled by the format and not by us. `trak` is the track container the

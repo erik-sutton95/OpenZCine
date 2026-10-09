@@ -46,8 +46,10 @@ struct WhiteBalanceTintPublicationTests {
             }
         }
         model.publishWhiteBalanceTint(amberBlue: 3, greenMagenta: -2)
-        #expect(probe.pairs == [TintPair(3, -2)], "A one-shot callback must not recursively reenter")
-        #expect(TintPair(model) == TintPair(-4, 5), "The outgoing read cannot overwrite its successor")
+        #expect(
+            probe.pairs == [TintPair(3, -2)], "A one-shot callback must not recursively reenter")
+        #expect(
+            TintPair(model) == TintPair(-4, 5), "The outgoing read cannot overwrite its successor")
     }
 
     @Test func reentrantPublicationDuringGreenMagentaNotificationPreservesTheSuccessor() {
@@ -146,9 +148,11 @@ private struct TintPair: Equatable {
     let amberBlue: Int
     let greenMagenta: Int
     init(_ amberBlue: Int, _ greenMagenta: Int) {
-        self.amberBlue = amberBlue; self.greenMagenta = greenMagenta
+        self.amberBlue = amberBlue
+        self.greenMagenta = greenMagenta
     }
     @MainActor init(_ model: NativeAppModel) {
-        amberBlue = model.whiteBalanceTintAB; greenMagenta = model.whiteBalanceTintGM
+        amberBlue = model.whiteBalanceTintAB
+        greenMagenta = model.whiteBalanceTintGM
     }
 }

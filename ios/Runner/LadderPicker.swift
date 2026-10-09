@@ -478,7 +478,9 @@ struct LadderPickerPanel: View {
     }
 
     /// The pad reports the operator label. Map it back onto grid cells for the existing tint write.
-    nonisolated static func cells(fromTintLabel label: String) -> (amberBlue: Int, greenMagenta: Int)? {
+    nonisolated static func cells(fromTintLabel label: String) -> (
+        amberBlue: Int, greenMagenta: Int
+    )? {
         if label == "Neutral" { return (0, 0) }
         var amberBlue = 0
         var greenMagenta = 0

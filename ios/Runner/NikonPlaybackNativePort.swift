@@ -89,7 +89,8 @@ import OpenCineMedia
         guard current(admitted), let captured = source, captured.item == item else {
             throw MonitorPlaybackError.retired
         }
-        let transfer = enteredTransfer, barrier = preparationBarrier
+        let transfer = enteredTransfer
+        let barrier = preparationBarrier
         // Join only the outgoing native operation and delivery run captured at retirement.
         // A later coordinator run must never become cleanup for this item.
         await transfer?.value

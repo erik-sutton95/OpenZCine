@@ -603,14 +603,14 @@ import Testing
     // older blob; they are the app migration's to read, and must not stop the rest decoding.
     let legacy = #"""
         {"guides":{"family":"Film","selectedRatios":["2.39:1"],"maskEnabled":false},
-         "grid":{"thirds":true,"phi":false,"diagonal":false},
-         "level":{"enabled":true,"style":"Gauge"},
-         "desqueeze":{"enabled":false,"ratio":"1.33x","factor":1.33,"orientation":"Vertical"},
-         "falseColorReferenceEnabled":true,"falseColorScale":"IRE",
-         "zebra":{"unit":"Native","highlightEnabled":true,"highlightIRE":95,"highlightColor":"Red",
-                  "midtoneEnabled":true,"midtoneIRE":55,"midtoneColor":"Amber"},
-         "peakingColor":"Blue","peakingSensitivity":"High",
-         "selectedLUT":{"builtIn":{"_0":"Log3G10→709"}},"instantReviewSeconds":3}
+        "grid":{"thirds":true,"phi":false,"diagonal":false},
+        "level":{"enabled":true,"style":"Gauge"},
+        "desqueeze":{"enabled":false,"ratio":"1.33x","factor":1.33,"orientation":"Vertical"},
+        "falseColorReferenceEnabled":true,"falseColorScale":"IRE",
+        "zebra":{"unit":"Native","highlightEnabled":true,"highlightIRE":95,"highlightColor":"Red",
+                "midtoneEnabled":true,"midtoneIRE":55,"midtoneColor":"Amber"},
+        "peakingColor":"Blue","peakingSensitivity":"High",
+        "selectedLUT":{"builtIn":{"_0":"Log3G10→709"}},"instantReviewSeconds":3}
         """#
     let decoded = try JSONDecoder().decode(AssistConfiguration.self, from: Data(legacy.utf8))
     #expect(decoded.level.style == .gauge)

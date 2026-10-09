@@ -11,14 +11,20 @@ import XCTest
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MediaClipStore(root: root)
-        let codec = NikonMediaLibraryCodec(store: store, bucket: "SIMULATED", service: nil, downloaded: { _ in true })
-        for (name, eligible) in [("PROXY.MOV", true), ("MASTER.R3D", false), ("STILL.NEF", true), ("UNKNOWN.BIN", false)] {
-            var clip = sample(); clip.filename = name
+        let codec = NikonMediaLibraryCodec(
+            store: store, bucket: "SIMULATED", service: nil, downloaded: { _ in true })
+        for (name, eligible) in [
+            ("PROXY.MOV", true), ("MASTER.R3D", false), ("STILL.NEF", true), ("UNKNOWN.BIN", false),
+        ] {
+            var clip = sample()
+            clip.filename = name
             let record = try codec.record(clip)
             XCTAssertEqual(record.facts.playbackEligible, eligible)
             XCTAssertEqual(record.payload, clip)
             XCTAssertEqual(record.asset.filename, name)
-            XCTAssertEqual(record.address.representations[record.asset.representations[0].id], "SIMULATED/" + name)
+            XCTAssertEqual(
+                record.address.representations[record.asset.representations[0].id],
+                "SIMULATED/" + name)
         }
     }
 

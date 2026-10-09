@@ -15,7 +15,8 @@ enum NativeNikonDiscovery {
         }
     }
 
-    static let sources = NikonAppleDiscoverySources(usbBrowser: USBCameraDeviceBrowser.shared) { line in
+    static let sources = NikonAppleDiscoverySources(usbBrowser: USBCameraDeviceBrowser.shared) {
+        line in
         Task { @MainActor in logConnection(line) }
     }
     static let shared = NikonDiscovery(dialer: dialer, sources: sources)

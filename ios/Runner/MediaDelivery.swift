@@ -208,7 +208,8 @@ extension NativeAppModel {
             records: records, destination: remote ? .remoteUpload : .nativeShare,
             action: .systemShare, admission: admission,
             originals: .init(available: { _ in true }, acquire: { _ in }, progress: { _ in nil }),
-            exporter: .init { record, progress -> (clip: MediaClip, export: MediaLUT.ExportResult)? in
+            exporter: .init {
+                record, progress -> (clip: MediaClip, export: MediaLUT.ExportResult)? in
                 let clip = record.clip
                 let status =
                     capture.store.list(cameraID: clip.cameraID).first { $0.id == clip.id }?

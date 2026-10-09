@@ -15,7 +15,8 @@ private enum NikonLiveReadoutKey: Hashable {
 
 extension NativeAppModel {
     var operatorLiveIdentity: MonitorOperatorLiveIdentity {
-        .init(monitor: shell.monitor?.id, camera: shell.control.snapshot?.session,
+        .init(
+            monitor: shell.monitor?.id, camera: shell.control.snapshot?.session,
             epoch: shell.control.snapshot?.epoch, picture: videoSource.rawValue,
             pictureOwner: liveFrameSource.map(ObjectIdentifier.init))
     }
@@ -24,114 +25,190 @@ extension NativeAppModel {
 struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     let context: LiveViewLayoutContext
-    private typealias Readout = MonitorOperatorLiveReadout<NikonLiveReadoutKey, DisplayChromeVisibility.Section>
+    private typealias Readout = MonitorOperatorLiveReadout<
+        NikonLiveReadoutKey, DisplayChromeVisibility.Section
+    >
 
     private var sourceAspect: Double {
         let raw: Double
-        if model.videoSource == .hdmiCapture, let image = model.liveFrameImage, image.size.height > 0 {
+        if model.videoSource == .hdmiCapture, let image = model.liveFrameImage,
+            image.size.height > 0
+        {
             raw = Double(image.size.width / image.size.height)
-        } else { raw = model.isPhotographyMode ? model.cameraPropertySnapshot.photographyFeedAspect : 16 / 9 }
+        } else {
+            raw =
+                model.isPhotographyMode
+                ? model.cameraPropertySnapshot.photographyFeedAspect : 16 / 9
+        }
         return model.displayedFeedRotation.isVertical ? 1 / raw : raw
     }
     private var safeArea: MonitorSafeArea {
-        .init(top: context.feedSafeArea.top, leading: context.feedSafeArea.leading,
+        .init(
+            top: context.feedSafeArea.top, leading: context.feedSafeArea.leading,
             bottom: context.feedSafeArea.bottom, trailing: context.feedSafeArea.trailing)
     }
     private var layout: FieldMonitorLayout {
-        .init(width: context.viewportWidth, height: context.viewportHeight, safeArea: safeArea,
+        .init(
+            width: context.viewportWidth, height: context.viewportHeight, safeArea: safeArea,
             sourceAspect: sourceAspect, fill: model.preferences.portraitFeedAspect != .fit16x9,
-            showsValues: model.chromeSectionMounts(.cameraValues), topControlInset: context.topControlInset)
+            showsValues: model.chromeSectionMounts(.cameraValues),
+            topControlInset: context.topControlInset)
     }
     private var mounted: Set<DisplayChromeVisibility.Section> {
         let rail = model.monitorSideRailPlan
-        var value = Set(DisplayChromeVisibility.Section.allCases.filter { model.chromeSectionMounts($0) })
-        for section in [DisplayChromeVisibility.Section.batteryIndicators, .lockButton, .railSettings,
-            .railMedia, .railRecord, .railDisp] {
-            if model.railControlMounts(section, plan: rail) { value.insert(section) }
-            else { value.remove(section) }
+        var value = Set(
+            DisplayChromeVisibility.Section.allCases.filter { model.chromeSectionMounts($0) })
+        for section in [
+            DisplayChromeVisibility.Section.batteryIndicators, .lockButton, .railSettings,
+            .railMedia, .railRecord, .railDisp,
+        ] {
+            if model.railControlMounts(section, plan: rail) {
+                value.insert(section)
+            } else {
+                value.remove(section)
+            }
         }
         return value
     }
     private var readouts: [Readout] {
-        let values = model.isPhotographyMode ? model.cameraPropertySnapshot.photographyCaptureValues : model.shownCameraValues
+        let values =
+            model.isPhotographyMode
+            ? model.cameraPropertySnapshot.photographyCaptureValues : model.shownCameraValues
         return values.compactMap { value in
-            guard let picker = CameraPicker.forValueLabel(value.label, photography: model.isPhotographyMode) else { return nil }
+            guard
+                let picker = CameraPicker.forValueLabel(
+                    value.label, photography: model.isPhotographyMode)
+            else { return nil }
             // The shutter's lock and angle/speed circuits use the existing typed LadderSheet.
-            let field = value.label == "SHUTTER" ? nil : picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
-            return Readout(id: .picker(picker), title: value.label, value: value.value, field: field,
-                accessibilityIdentifier: picker.nikonControlSetting.map { "monitor.capture." + $0.key.rawValue } ?? "")
+            let field =
+                value.label == "SHUTTER"
+                ? nil
+                : picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
+            return Readout(
+                id: .picker(picker), title: value.label, value: value.value, field: field,
+                accessibilityIdentifier: picker.nikonControlSetting.map {
+                    "monitor.capture." + $0.key.rawValue
+                } ?? "")
         }
     }
-    private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, DisplayChromeVisibility.Section> {
+    private var status:
+        MonitorOperatorLiveStatus<NikonLiveReadoutKey, DisplayChromeVisibility.Section>
+    {
         let photo = model.isPhotographyMode
-        let reportedRecord = model.shell.control.session == nil
-            ? (model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil) : model.shell.control.isRecording
+        let reportedRecord =
+            model.shell.control.session == nil
+            ? (model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil)
+            : model.shell.control.isRecording
         let tc = model.liveTimecode
-        let recording = MonitorStatusPresentation(recording: reportedRecord,
-            timecode: model.cameraReportsTimecode ? String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second) : nil)
+        let recording = MonitorStatusPresentation(
+            recording: reportedRecord,
+            timecode: model.cameraReportsTimecode
+                ? String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second) : nil)
         var format: [Readout] = []
         if mounted.contains(.resolutionReadout) {
-            format.append(.init(id: .picker(photo ? .stillSize : .resolution), title: "Format",
-                value: photo ? model.stillSizeAreaDisplay ?? "--" : model.cameraState.resolutionFrameRate,
-                section: .resolutionReadout))
+            format.append(
+                .init(
+                    id: .picker(photo ? .stillSize : .resolution), title: "Format",
+                    value: photo
+                        ? model.stillSizeAreaDisplay ?? "--"
+                        : model.cameraState.resolutionFrameRate,
+                    section: .resolutionReadout))
         }
         if mounted.contains(.codecReadout) {
-            format.append(.init(id: .picker(photo ? .stillQuality : .codec), title: "Codec",
-                value: photo ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--" : MonitorTextFormat.codecCompactLabel(model.cameraState.codec),
-                section: .codecReadout))
+            format.append(
+                .init(
+                    id: .picker(photo ? .stillQuality : .codec), title: "Codec",
+                    value: photo
+                        ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--"
+                        : MonitorTextFormat.codecCompactLabel(model.cameraState.codec),
+                    section: .codecReadout))
         }
         let storage: Readout?
         if photo && mounted.contains(.timecodeReadout) {
-            storage = .init(id: .storage, title: "Storage",
-                value: model.photoPillShowsStorage ? model.mediaReadout : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
+            storage = .init(
+                id: .storage, title: "Storage",
+                value: model.photoPillShowsStorage
+                    ? model.mediaReadout
+                    : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
                 section: .timecodeReadout, action: { model.photoPillShowsStorage.toggle() })
         } else if mounted.contains(.mediaReadout) {
-            storage = .init(id: .storage, title: "Storage", value: model.mediaReadout,
+            storage = .init(
+                id: .storage, title: "Storage", value: model.mediaReadout,
                 section: .mediaReadout, action: model.toggleMediaReadout)
-        } else { storage = nil }
-        return .init(recording: recording, showsTimecode: !photo && mounted.contains(.timecodeReadout),
-            showsRecording: !photo && mounted.contains(.recReadout), storage: storage, format: format,
+        } else {
+            storage = nil
+        }
+        return .init(
+            recording: recording, showsTimecode: !photo && mounted.contains(.timecodeReadout),
+            showsRecording: !photo && mounted.contains(.recReadout), storage: storage,
+            format: format,
             fps: mounted.contains(.fpsReadout) ? model.liveFPS : nil,
-            signalBars: mounted.contains(.fpsReadout) ? model.liveSignalBars : nil, fpsSection: .fpsReadout)
+            signalBars: mounted.contains(.fpsReadout) ? model.liveSignalBars : nil,
+            fpsSection: .fpsReadout)
     }
     private var power: [MonitorOperatorPowerReading] {
-        let gauge = CameraBatteryGauge.gauge(rawBatteryLevel: model.cameraState.cameraBatteryPercent)
-        return [.init(id: "phone", title: "Phone battery", camera: false,
-            percent: model.cameraState.phoneBatteryPercent, warning: model.cameraState.phoneBatteryPercent <= 15,
-            charging: model.phoneBatteryCharging),
-            .init(id: "camera", title: "Camera battery", camera: true,
-                bars: gauge == .unknown ? nil : gauge.filledBars, barCount: CameraBatteryGauge.barCount,
-                warning: gauge.urgency != .nominal, exhausted: gauge.pulses, charging: model.cameraBatteryCharging)]
+        let gauge = CameraBatteryGauge.gauge(
+            rawBatteryLevel: model.cameraState.cameraBatteryPercent)
+        return [
+            .init(
+                id: "phone", title: "Phone battery", camera: false,
+                percent: model.cameraState.phoneBatteryPercent,
+                warning: model.cameraState.phoneBatteryPercent <= 15,
+                charging: model.phoneBatteryCharging),
+            .init(
+                id: "camera", title: "Camera battery", camera: true,
+                bars: gauge == .unknown ? nil : gauge.filledBars,
+                barCount: CameraBatteryGauge.barCount,
+                warning: gauge.urgency != .nominal, exhausted: gauge.pulses,
+                charging: model.cameraBatteryCharging),
+        ]
     }
     private var panel: MonitorOperatorCameraPanel<NikonLiveReadoutKey>? {
         guard case .picker(let picker) = model.activePanel else { return nil }
-        return .init(key: .picker(picker), top: picker.isTopBar,
+        return .init(
+            key: .picker(picker), top: picker.isTopBar,
             chrome: picker.usesLadderSheet ? .sharedSheet : .content,
             title: picker == .stabilization ? "VR / E-VR" : picker.valueLabel,
             subtitle: model.pickerSubtitle(for: picker))
     }
-    private var haptics: OperatorHaptics { .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }) }
+    private var haptics: OperatorHaptics {
+        .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true })
+    }
     private var assists: MonitorOperatorLiveAssistSource {
-        .init(stores: model.scopePanels.operatorStores,
-            looks: .init(scaleHelp: "The reported source selects its exposure curve.", rec709LookCurve: { _ in nil }),
-            haptics: haptics, readBundle: {
+        .init(
+            stores: model.scopePanels.operatorStores,
+            looks: .init(
+                scaleHelp: "The reported source selects its exposure curve.",
+                rec709LookCurve: { _ in nil }),
+            haptics: haptics,
+            readBundle: {
                 var value = model.scopeAssist
                 value.levelAxis = model.exposureSignalMapping.scopeLevelAxis
                 return value
-            }, readTransfer: { model.scopeAssist.transfer }, readClipByte: { _ in model.scopeAssist.clipByte },
+            }, readTransfer: { model.scopeAssist.transfer },
+            readClipByte: { _ in model.scopeAssist.clipByte },
             audioAvailable: model.monitorAvailability.audioMeters,
-            configurableTools: Set(model.liveAssistPaletteTools.filter { !model.isScopeCapBlocked($0) }.map(\.selection)),
+            configurableTools: Set(
+                model.liveAssistPaletteTools.filter { !model.isScopeCapBlocked($0) }.map(
+                    \.selection)),
             optionsUnavailableNotice: model.scopeCapNoticeText, paradeIntensityScale: 0.25)
     }
     private var bodyViews: MonitorOperatorBodyViews {
-        .init(focusDrive: model.showsMFDriveScrub ? AnyView(MFDriveVerticalScrub()) : nil,
-            dashboard: AnyView(NikonCommandDashboard(layout: layout)), connection: connectionControl,
-            comparison: LUTResolution.showsSplitComparisonKey(visibleTools: model.renderedLiveAssistTools, enabled: model.assist.splitComparison)
+        .init(
+            focusDrive: model.showsMFDriveScrub ? AnyView(MFDriveVerticalScrub()) : nil,
+            dashboard: AnyView(NikonCommandDashboard(layout: layout)),
+            connection: connectionControl,
+            comparison: LUTResolution.showsSplitComparisonKey(
+                visibleTools: model.renderedLiveAssistTools, enabled: model.assist.splitComparison)
                 ? AnyView(SplitComparisonKey()) : nil,
-            resetFocus: mounted.contains(.focusBox) && model.isFocusResetAvailable ? (model.resetFocusPoint as () -> Void) : nil)
+            resetFocus: mounted.contains(.focusBox) && model.isFocusResetAvailable
+                ? (model.resetFocusPoint as () -> Void) : nil)
     }
     private var connectionControl: AnyView? {
-        if model.videoSource == .relay, model.relayHoldsControl || model.relayAllowsControlRequests { return AnyView(WatcherControlKey()) }
+        if model.videoSource == .relay, model.relayHoldsControl || model.relayAllowsControlRequests
+        {
+            return AnyView(WatcherControlKey())
+        }
         if model.relayControlSurrendered { return AnyView(BroadcasterControlKey()) }
         return nil
     }
@@ -141,52 +218,92 @@ struct NikonMonitorShell: View {
         let layout: FieldMonitorLayout = self.layout
         let identity = model.operatorLiveIdentity
         let menus = NikonAssistMenuAdapter(model: model, compact: false)
-        MonitorOperatorDescriptorLiveSurface(host: model, control: model.shell.control, identity: identity,
-            current: { [weak model] in model?.operatorLiveIdentity == $0 }, layout: layout, safeArea: safeArea, sourceAspect: sourceAspect,
-            sections: .init(status: .statusBar, power: .batteryIndicators, capture: .cameraValues,
-                assists: .assistToolbar, lock: .lockButton, settings: .railSettings, media: .railMedia, record: .railRecord, display: .railDisp),
+        MonitorOperatorDescriptorLiveSurface(
+            host: model, control: model.shell.control, identity: identity,
+            current: { [weak model] in model?.operatorLiveIdentity == $0 }, layout: layout,
+            safeArea: safeArea, sourceAspect: sourceAspect,
+            sections: .init(
+                status: .statusBar, power: .batteryIndicators, capture: .cameraValues,
+                assists: .assistToolbar, lock: .lockButton, settings: .railSettings,
+                media: .railMedia, record: .railRecord, display: .railDisp),
             mounted: mounted, editing: model.chromeEditorMode,
-            locked: Binding(get: { model.interfaceLocked }, set: { _ in model.toggleInterfaceLock() }),
-            covered: model.activePanel?.coversFullScreen == true, clean: model.displayMode == .clean,
+            locked: Binding(
+                get: { model.interfaceLocked }, set: { _ in model.toggleInterfaceLock() }),
+            covered: model.activePanel?.coversFullScreen == true,
+            clean: model.displayMode == .clean,
             command: model.displayMode == .command, readOnly: model.relayControlSurrendered,
-            recovering: model.sessionRecovery.isRecovering, status: status, power: power, readouts: readouts,
-            panel: panel, open: { key in if case .picker(let picker) = key { model.showPicker(picker) } },
-            dismiss: { if model.activePanel?.coversFullScreen == false { model.dismissActivePanel() } },
+            recovering: model.sessionRecovery.isRecovering, status: status, power: power,
+            readouts: readouts,
+            panel: panel,
+            open: { key in if case .picker(let picker) = key { model.showPicker(picker) } },
+            dismiss: {
+                if model.activePanel?.coversFullScreen == false { model.dismissActivePanel() }
+            },
             settings: { model.activePanel = .settings }, media: model.openMediaBrowser,
             cycleDisplay: model.cycleDisplayMode, displayTitle: model.displayMode.title,
-            displayIndex: model.displayOrder.firstIndex(of: model.displayMode), displayCount: model.displayOrder.count,
-            photo: model.isPhotographyMode, confirmRecord: model.preferences.recordConfirmationEnabled,
-            externalRecord: model.shell.control.session == nil ? .init(recording: model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil,
-                confirmation: model.pendingRecordConfirmation, request: model.toggleRecording,
-                cancel: model.cancelRecordToggle, confirm: model.confirmRecordToggle) : nil,
-            assist: model.assist, tools: model.liveAssistPaletteTools.map(\.selection), usage: $model.assistToolUsage,
-            toggleTool: { if let tool = MonitorAssistTool(rawValue: $0.rawValue) { model.toggleAssist(tool, context: .liveView) } },
-            assistSource: assists, signalOptions: .init(falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
-                reference: menus.falseColorReference, level: AnyView(NikonAssistOptions(tool: .level)),
+            displayIndex: model.displayOrder.firstIndex(of: model.displayMode),
+            displayCount: model.displayOrder.count,
+            photo: model.isPhotographyMode,
+            confirmRecord: model.preferences.recordConfirmationEnabled,
+            externalRecord: model.shell.control.session == nil
+                ? .init(
+                    recording: model.isDemoSession || model.videoSource == .relay
+                        ? model.isRecording : nil,
+                    confirmation: model.pendingRecordConfirmation, request: model.toggleRecording,
+                    cancel: model.cancelRecordToggle, confirm: model.confirmRecordToggle) : nil,
+            assist: model.assist, tools: model.liveAssistPaletteTools.map(\.selection),
+            usage: $model.assistToolUsage,
+            toggleTool: {
+                if let tool = MonitorAssistTool(rawValue: $0.rawValue) {
+                    model.toggleAssist(tool, context: .liveView)
+                }
+            },
+            assistSource: assists,
+            signalOptions: .init(
+                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                reference: menus.falseColorReference,
+                level: AnyView(NikonAssistOptions(tool: .level)),
                 instantReview: AnyView(NikonAssistOptions(tool: .instantReview))),
-            readAudio: { model.monitorAvailability.audioMeters ? model.observedLiveAudioLevels : nil },
-            fittedScopes: model.renderedFitScopes.map(\.selection), renderedTools: Set(model.renderedLiveAssistTools.map(\.selection)),
-            usageSeed: nikonAssistUsageSeed, cameraViews: bodyViews, retireEditor: model.displaySession.retireEditor,
+            readAudio: {
+                model.monitorAvailability.audioMeters ? model.observedLiveAudioLevels : nil
+            },
+            fittedScopes: model.renderedFitScopes.map(\.selection),
+            renderedTools: Set(model.renderedLiveAssistTools.map(\.selection)),
+            usageSeed: nikonAssistUsageSeed, cameraViews: bodyViews,
+            retireEditor: model.displaySession.retireEditor,
             returnToStage: model.isMulticamLiveView ? (model.returnToMulticam as () -> Void) : nil,
             notice: model.monitorNotice, noticeRevision: model.monitorNoticeTrigger,
-            onCaptureFrame: { if model.operatorLiveIdentity == identity { model.captureBarFrame = $0 } },
+            onCaptureFrame: {
+                if model.operatorLiveIdentity == identity { model.captureBarFrame = $0 }
+            },
             picture: {
                 GeometryReader { picture in
-                    LiveFeedModule(viewportWidth: picture.size.width, fixedContentHeight: picture.size.height)
-                        .opacity(model.displayMode == .command ? 0 : 1)
-                        .allowsHitTesting(model.chromeEditorMode == nil && !model.interfaceLocked && model.displayMode != .command)
+                    LiveFeedModule(
+                        viewportWidth: picture.size.width, fixedContentHeight: picture.size.height
+                    )
+                    .opacity(model.displayMode == .command ? 0 : 1)
+                    .allowsHitTesting(
+                        model.chromeEditorMode == nil && !model.interfaceLocked
+                            && model.displayMode != .command)
                 }.transaction { $0.animation = nil }
-            }, cameraPanel: { key in
+            },
+            cameraPanel: { key in
                 if case .picker(let picker) = key { NikonCameraSettingExtension(picker: picker) }
-            }, photoRelease: { NikonPhotoRelease(diameter: Double($0)) }, preview: { _ in EmptyView() },
-            lookMenu: { LUTPickerContent() })
-            .overlay { MonitorRecoveryOverlay() }
-            .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
-            .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value }
-            .onChange(of: model.activePanel) { _, panel in
-                // Compatibility callers still presenting a native assist route feed the same shared inspector.
-                if case .assist(let tool) = panel { model.activePanel = nil; model.assist.configureTool = tool.selection }
+            }, photoRelease: { NikonPhotoRelease(diameter: Double($0)) },
+            preview: { _ in EmptyView() },
+            lookMenu: { LUTPickerContent() }
+        )
+        .overlay { MonitorRecoveryOverlay() }
+        .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
+        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value
+        }
+        .onChange(of: model.activePanel) { _, panel in
+            // Compatibility callers still presenting a native assist route feed the same shared inspector.
+            if case .assist(let tool) = panel {
+                model.activePanel = nil
+                model.assist.configureTool = tool.selection
             }
+        }
     }
 }
 
@@ -194,10 +311,15 @@ struct NikonMonitorShell: View {
 private struct NikonCameraSettingExtension: View {
     let picker: CameraPicker
     var body: some View {
-        if picker == .stillQuality { QualityPickerPanel(embedded: true) }
-        else if picker == .stabilization { StabilizationPickerPanel() }
-        else if picker.usesLadderSheet { LadderPickerPanel(picker: picker, chromeless: true) }
-        else { PickerPanel(picker: picker, embedded: true) }
+        if picker == .stillQuality {
+            QualityPickerPanel(embedded: true)
+        } else if picker == .stabilization {
+            StabilizationPickerPanel()
+        } else if picker.usesLadderSheet {
+            LadderPickerPanel(picker: picker, chromeless: true)
+        } else {
+            PickerPanel(picker: picker, embedded: true)
+        }
     }
 }
 
@@ -262,7 +384,9 @@ private struct NikonPhotoRelease: View {
                         bodyShutterFlash = false
                     }
                 }
-                .accessibilityAction { if model.operatorLiveIdentity == source { model.captureStill() } }
+                .accessibilityAction {
+                    if model.operatorLiveIdentity == source { model.captureStill() }
+                }
                 .accessibilityIdentifier("monitor.system.shutter")
             }
         }.opacity(model.relayControlSurrendered ? 0.4 : 1).allowsHitTesting(

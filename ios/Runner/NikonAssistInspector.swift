@@ -91,12 +91,14 @@ struct NikonAssistInspector: View {
 
     private var tabs: [MonitorAssistTool] { tools.filter(\.hasConfiguration) }
     private func descriptor(_ tool: MonitorAssistTool) -> MonitorInspectorTool<MonitorAssistTool> {
-        MonitorInspectorTool(value: tool, title: tool.title, label: tool.rawValue,
+        MonitorInspectorTool(
+            value: tool, title: tool.title, label: tool.rawValue,
             contentStyle: tool == .waveform || tool == .parade ? .fullWidth : .card)
     }
 
     var body: some View {
-        MonitorToolInspector(selection: descriptor(tool), tools: tabs.map(descriptor),
+        MonitorToolInspector(
+            selection: descriptor(tool), tools: tabs.map(descriptor),
             viewport: viewport, safeArea: safeArea, onSelect: onSelect, onDismiss: onDismiss
         ) { selection in
             NikonAssistGlyph(tool: selection, size: 17)

@@ -1,7 +1,7 @@
 import Foundation
+import Observation
 import OpenCineAppKit
 import OpenCineMedia
-import Observation
 
 /// Borrows the actual gallery lifetime and immutable caller playlist. PTP/cache/rating stay
 /// on NativeAppModel; the shared model owns the logical player instead of a second view state.
@@ -76,7 +76,8 @@ struct NikonPlaybackTailPresentation {
     let initial: MonitorMediaGalleryOpen<MediaClip>
     let library: MonitorMediaLibraryModel<MediaClip>
     @ObservationIgnored private let sourceAdmission: MonitorPlaybackAdmission
-    @ObservationIgnored private let captureDeliveryCleanup: @MainActor () -> (@MainActor () async -> Void)
+    @ObservationIgnored private let captureDeliveryCleanup:
+        @MainActor () -> (@MainActor () async -> Void)
     @ObservationIgnored private weak var app: NativeAppModel?
     private struct Installation {
         let id: UUID
@@ -88,8 +89,14 @@ struct NikonPlaybackTailPresentation {
     @ObservationIgnored private var notifying = false
     @ObservationIgnored private var pendingNotifications: [Field] = []
     private enum Field: Equatable { case native, assists }
-    var native: NikonPlaybackNativePort? { access(keyPath: \.native); return installation?.native }
-    var assists: NikonPlaybackAssistAdapter? { access(keyPath: \.assists); return installation?.assists }
+    var native: NikonPlaybackNativePort? {
+        access(keyPath: \.native)
+        return installation?.native
+    }
+    var assists: NikonPlaybackAssistAdapter? {
+        access(keyPath: \.assists)
+        return installation?.assists
+    }
     private func notify(_ fields: [Field]) {
         for field in fields where !pendingNotifications.contains(field) {
             pendingNotifications.append(field)
@@ -107,19 +114,25 @@ struct NikonPlaybackTailPresentation {
             }
         }
     }
-    @ObservationIgnored lazy var media = MonitorOperatorMediaModel<MediaClip, String>(library: library,
+    @ObservationIgnored lazy var media = MonitorOperatorMediaModel<MediaClip, String>(
+        library: library,
         recordAdmission: { [weak self] record in
-            guard let self, let app = self.app, self.sourceAdmission.isCurrent() else { return .init { false } }
+            guard let self, let app = self.app, self.sourceAdmission.isCurrent() else {
+                return .init { false }
+            }
             let action = app.captureMediaLibraryAction([record.payload])
             return .init { [weak self] in
                 self?.sourceAdmission.isCurrent() == true && action?.sourceIsCurrent == true
                     && self?.sourceAdmission.isCurrent() == true
             }
-        }, makeAdmittedPlayback: { [weak self] library, admission in
+        },
+        makeAdmittedPlayback: { [weak self] library, admission in
             guard let self else { return nil }
             let revision = UUID()
             self.factoryRevision = revision
-            guard let app = self.app, admission.isCurrent(), self.factoryRevision == revision else { return nil }
+            guard let app = self.app, admission.isCurrent(), self.factoryRevision == revision else {
+                return nil
+            }
             let outgoing = self.assists
             outgoing?.close()
             guard admission.isCurrent(), self.factoryRevision == revision else { return nil }
@@ -127,14 +140,18 @@ struct NikonPlaybackTailPresentation {
             let captureDelivery = self.captureDeliveryCleanup
             let native = NikonPlaybackNativePort(captureBeforePrepare: {
                 let delivery = captureDelivery()
-                return { await previousTransfer?(); await delivery() }
+                return {
+                    await previousTransfer?()
+                    await delivery()
+                }
             })
             let assists = NikonPlaybackAssistAdapter(model: app, native: native)
             let owner = MonitorMediaPlaybackModel<MediaClip, String>(
                 library: library, native: native, readyTimeout: nil, retryNativeFailures: false,
                 startTiming: .afterNativeItemInstallation,
                 candidates: { [weak app] record in
-                    guard let app else { return [] }; return native.candidates(for: record.payload, model: app)
+                    guard let app else { return [] }
+                    return native.candidates(for: record.payload, model: app)
                 }, seekEndClearance: 0.25)
             owner.setItemAdmission { [weak self, weak app] record in
                 let action = app?.captureMediaLibraryAction([record.payload])
@@ -145,18 +162,24 @@ struct NikonPlaybackTailPresentation {
             }
             native.isScrubbing = { [weak owner] in owner?.scrubbing ?? true }
             guard admission.isCurrent(), self.factoryRevision == revision else {
-                owner.close(); assists.close(); return nil
+                owner.close()
+                assists.close()
+                return nil
             }
             // One observable value commits both adapters before a synchronous observer can reenter.
             self.installation = .init(id: revision, native: native, assists: assists)
             self.notify([.native])
-            if self.factoryRevision == revision, self.installation?.id == revision, admission.isCurrent(),
-                self.factoryRevision == revision, self.installation?.id == revision {
+            if self.factoryRevision == revision, self.installation?.id == revision,
+                admission.isCurrent(),
+                self.factoryRevision == revision, self.installation?.id == revision
+            {
                 self.notify([.assists])
             }
             guard self.factoryRevision == revision, admission.isCurrent(),
-                self.factoryRevision == revision, self.installation?.id == revision else {
-                owner.close(); assists.close()
+                self.factoryRevision == revision, self.installation?.id == revision
+            else {
+                owner.close()
+                assists.close()
                 if self.factoryRevision == revision, self.installation?.id == revision {
                     self.installation = nil
                     self.notify([.native])
@@ -169,16 +192,25 @@ struct NikonPlaybackTailPresentation {
             return owner
         })
 
-    init?(model: NativeAppModel, initial: MonitorMediaGalleryOpen<MediaClip>,
-        captureDeliveryCleanup: @escaping @MainActor () -> (@MainActor () async -> Void) = { {} }) {
+    init?(
+        model: NativeAppModel, initial: MonitorMediaGalleryOpen<MediaClip>,
+        captureDeliveryCleanup: @escaping @MainActor () -> (@MainActor () async -> Void) = { {} }
+    ) {
         guard let library = model.mediaLibrary, library.isCurrent(initial.admission),
-            let source = model.captureMediaLibraryAction([initial.record.payload]), source.sourceIsCurrent else { return nil }
-        let directory = library.cache.directory, generation = directory.generation, namespace = directory.root
+            let source = model.captureMediaLibraryAction([initial.record.payload]),
+            source.sourceIsCurrent
+        else { return nil }
+        let directory = library.cache.directory
+        let generation = directory.generation
+        let namespace = directory.root
         sourceAdmission = .init {
-            directory.generation == generation && directory.root == namespace && source.sourceIsCurrent
+            directory.generation == generation && directory.root == namespace
+                && source.sourceIsCurrent
                 && directory.generation == generation && directory.root == namespace
         }
-        self.initial = initial; self.library = library; app = model
+        self.initial = initial
+        self.library = library
+        app = model
         self.captureDeliveryCleanup = captureDeliveryCleanup
     }
 
@@ -186,7 +218,8 @@ struct NikonPlaybackTailPresentation {
     /// The shared media owner retires the item; this leaf only joins its entered native work.
     func captureCloseCleanup(run: MonitorDeliveryRunHandle?) -> (@MainActor () async -> Bool)? {
         guard let owner = media.playback, let native,
-            media.playback === owner, self.native === native else { return nil }
+            media.playback === owner, self.native === native
+        else { return nil }
         media.closePlayback()
         let transfer = native.captureEnteredTransferCleanup()
         return { [weak self] in

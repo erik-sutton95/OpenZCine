@@ -1,8 +1,8 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
-import OpenCineCameraControls
 import OpenCineApple
+import OpenCineCameraControls
 import OpenCineMedia
 import OpenCineNikon
 import OpenZCineCore
@@ -690,8 +690,13 @@ struct PickerPanel: View {
 
     var body: some View {
         Group {
-            if embedded { contents }
-            else { GlassPanel(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) { contents } }
+            if embedded {
+                contents
+            } else {
+                GlassPanel(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) {
+                    contents
+                }
+            }
         }
 
         // Seed once on appear — NOT in `body`. Camera state is reassigned every live-view frame, so
@@ -868,96 +873,96 @@ struct PickerPanel: View {
     /// Setting name in bold with its dimmed descriptor inline, and an X close button trailing so
     /// the way out of the menu is explicit (in addition to tapping off).
     private var contents: some View {
-            VStack(alignment: .leading, spacing: 14) {
-                if !embedded { header }
-                if isShutterControlLocked {
-                    shutterLockBanner
-                }
-                if isISORecordingLocked {
-                    isoRecordingLockBanner
-                }
-                if isISOAutoValueLocked || isStillISOAutoLocked {
-                    isoAutoLockBanner
-                }
-                if isTintMode {
-                    // The WB Tint tab swaps the drum for the fine-tune pad.
-                    WhiteBalanceTintPad()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else if let field = commonCaptureField {
-                    let offered = currentOptions.compactMap { label in
-                        picker.nikonControlSetting.flatMap {
-                            NikonCameraSession.setting($0, label: label)
-                        }
-                    }
-                    MonitorCaptureDrum(
-                        control: model.shell.control, field: field,
-                        enabled: !isDrumInteractionLocked,
-                        haptics: model.preferences.hapticsEnabled,
-                        choices: field.choices.filter { offered.contains($0.value) },
-                        marked: markedValues
-                    )
-                    .id(selectedMode)
-                } else {
-                    // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
-                    // reuses the pair for the bit depths a body advertises for that codec.
-                    let sideAdjust =
-                        !isKelvinMode
-                        ? codecDepthAdjust
-                        : DrumSideAdjust(
-                            minusEnabled: !isDrumInteractionLocked
-                                && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                    from: selection,
-                                    delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
-                            plusEnabled: !isDrumInteractionLocked
-                                && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                    from: selection,
-                                    delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
-                            onMinus: {
-                                applyKelvinSideStep(
-                                    delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
-                            },
-                            onPlus: {
-                                applyKelvinSideStep(
-                                    delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
-                            }
-                        )
-                    HStack(spacing: 8) {
-                        if let sideAdjust {
-                            DrumSideAdjustButton(
-                                title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
-                                selected: sideAdjust.minusSelected,
-                                label: sideAdjust.minusAccessibilityLabel,
-                                action: sideAdjust.onMinus)
-                        }
-                        MonitorValueDrum(
-                            options: currentOptions, selection: $selection,
-                            markedValues: markedValues, isInteractive: !isDrumInteractionLocked,
-                            haptics: model.preferences.hapticsEnabled)
-                        if let sideAdjust {
-                            DrumSideAdjustButton(
-                                title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
-                                selected: sideAdjust.plusSelected,
-                                label: sideAdjust.plusAccessibilityLabel,
-                                action: sideAdjust.onPlus)
-                        }
-                    }
-                    .accessibilityHint(sideAdjust?.hint ?? "")
-                    // Fresh drum per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
-                    // and the centred value at once.
-                    .id(selectedMode)
-                }
-                if picker == .stillDrive, selectedMode == 1 || selectedMode == 2 {
-                    // The timers' shared shot count rides inside both timer tabs — fired by
-                    // the app after the countdown (the body's own count is menu-only).
-                    timerShotsRow
-                }
-                if !activePickerModes.isEmpty {
-                    modeBar
-                }
-                if picker == .focus || picker == .stillFocus {
-                    mfScrubToggleRow
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            if !embedded { header }
+            if isShutterControlLocked {
+                shutterLockBanner
             }
+            if isISORecordingLocked {
+                isoRecordingLockBanner
+            }
+            if isISOAutoValueLocked || isStillISOAutoLocked {
+                isoAutoLockBanner
+            }
+            if isTintMode {
+                // The WB Tint tab swaps the drum for the fine-tune pad.
+                WhiteBalanceTintPad()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let field = commonCaptureField {
+                let offered = currentOptions.compactMap { label in
+                    picker.nikonControlSetting.flatMap {
+                        NikonCameraSession.setting($0, label: label)
+                    }
+                }
+                MonitorCaptureDrum(
+                    control: model.shell.control, field: field,
+                    enabled: !isDrumInteractionLocked,
+                    haptics: model.preferences.hapticsEnabled,
+                    choices: field.choices.filter { offered.contains($0.value) },
+                    marked: markedValues
+                )
+                .id(selectedMode)
+            } else {
+                // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
+                // reuses the pair for the bit depths a body advertises for that codec.
+                let sideAdjust =
+                    !isKelvinMode
+                    ? codecDepthAdjust
+                    : DrumSideAdjust(
+                        minusEnabled: !isDrumInteractionLocked
+                            && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                from: selection,
+                                delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
+                        plusEnabled: !isDrumInteractionLocked
+                            && WhiteBalanceKelvinPolicy.canFineAdjust(
+                                from: selection,
+                                delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
+                        onMinus: {
+                            applyKelvinSideStep(
+                                delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
+                        },
+                        onPlus: {
+                            applyKelvinSideStep(
+                                delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
+                        }
+                    )
+                HStack(spacing: 8) {
+                    if let sideAdjust {
+                        DrumSideAdjustButton(
+                            title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
+                            selected: sideAdjust.minusSelected,
+                            label: sideAdjust.minusAccessibilityLabel,
+                            action: sideAdjust.onMinus)
+                    }
+                    MonitorValueDrum(
+                        options: currentOptions, selection: $selection,
+                        markedValues: markedValues, isInteractive: !isDrumInteractionLocked,
+                        haptics: model.preferences.hapticsEnabled)
+                    if let sideAdjust {
+                        DrumSideAdjustButton(
+                            title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
+                            selected: sideAdjust.plusSelected,
+                            label: sideAdjust.plusAccessibilityLabel,
+                            action: sideAdjust.onPlus)
+                    }
+                }
+                .accessibilityHint(sideAdjust?.hint ?? "")
+                // Fresh drum per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
+                // and the centred value at once.
+                .id(selectedMode)
+            }
+            if picker == .stillDrive, selectedMode == 1 || selectedMode == 2 {
+                // The timers' shared shot count rides inside both timer tabs — fired by
+                // the app after the countdown (the body's own count is menu-only).
+                timerShotsRow
+            }
+            if !activePickerModes.isEmpty {
+                modeBar
+            }
+            if picker == .focus || picker == .stillFocus {
+                mfScrubToggleRow
+            }
+        }
     }
 
     private var header: some View {
@@ -1258,8 +1263,10 @@ struct StabilizationPickerPanel: View {
         // extra .padding(16) doubled the inset to ~36pt. The toast floats ABOVE the sheet header
         // so it's never cut off at the bottom edge.
         .overlay(alignment: .top) {
-            MonitorTransientNotice(text: "e-VR is unavailable in RAW codecs", revision: evrBlockedNotice)
-                .offset(y: -52)
+            MonitorTransientNotice(
+                text: "e-VR is unavailable in RAW codecs", revision: evrBlockedNotice
+            )
+            .offset(y: -52)
         }
     }
 
@@ -1354,8 +1361,13 @@ struct QualityPickerPanel: View {
 
     var body: some View {
         Group {
-            if embedded { contents }
-            else { GlassPanel(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) { contents } }
+            if embedded {
+                contents
+            } else {
+                GlassPanel(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) {
+                    contents
+                }
+            }
         }
         .onAppear(perform: seed)
         .onChange(of: rawSelection) { _, newValue in
@@ -1389,25 +1401,27 @@ struct QualityPickerPanel: View {
 
     /// A captioned drum column, equal-width so the two wheels split the panel evenly.
     private var contents: some View {
-            VStack(alignment: .leading, spacing: 14) {
-                if !embedded {
-                    PickerHeader(label: "QUALITY", subtitle: CameraPicker.stillQuality.subtitle) { model.dismissActivePanel() }
-                }
-                HStack(alignment: .top, spacing: 16) {
-                    column(caption: "RAW") {
-                        MonitorValueDrum(
-                            options: Self.rawOptions, selection: $rawSelection,
-                            haptics: model.preferences.hapticsEnabled)
-                        nefRows
-                    }
-                    column(caption: "JPEG · HEIF") {
-                        MonitorValueDrum(
-                            options: Self.tierOptions, selection: $tierSelection,
-                            haptics: model.preferences.hapticsEnabled)
-                        starToggle
-                    }
+        VStack(alignment: .leading, spacing: 14) {
+            if !embedded {
+                PickerHeader(label: "QUALITY", subtitle: CameraPicker.stillQuality.subtitle) {
+                    model.dismissActivePanel()
                 }
             }
+            HStack(alignment: .top, spacing: 16) {
+                column(caption: "RAW") {
+                    MonitorValueDrum(
+                        options: Self.rawOptions, selection: $rawSelection,
+                        haptics: model.preferences.hapticsEnabled)
+                    nefRows
+                }
+                column(caption: "JPEG · HEIF") {
+                    MonitorValueDrum(
+                        options: Self.tierOptions, selection: $tierSelection,
+                        haptics: model.preferences.hapticsEnabled)
+                    starToggle
+                }
+            }
+        }
     }
 
     private func column(
@@ -1839,9 +1853,11 @@ struct LUTPickerContent: View {
     /// spends most of it on the drum, so the two-row version pushed the category tabs off the top
     /// of the screen.
     private var splitComparisonControls: some View {
-        MonitorOperatorLookComparison(assist: model.assist,
+        MonitorOperatorLookComparison(
+            assist: model.assist,
             haptics: OperatorHaptics(isEnabled: { model.preferences.hapticsEnabled }),
-            exposureAvailable: nil, onArm: {
+            exposureAvailable: nil,
+            onArm: {
                 model.splitComparisonMuted = false
                 model.setAssist(.lut, visible: true)
             })
@@ -2253,10 +2269,12 @@ private struct NikonSettingsViewport<Content: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let insets = fallback.map { supplied in
-                EdgeInsets(top: CGFloat(supplied.top), leading: CGFloat(supplied.leading),
-                    bottom: CGFloat(supplied.bottom), trailing: CGFloat(supplied.trailing))
-            } ?? (windowGeometry.validSize == nil ? EdgeInsets() : windowGeometry.safeArea)
+            let insets =
+                fallback.map { supplied in
+                    EdgeInsets(
+                        top: CGFloat(supplied.top), leading: CGFloat(supplied.leading),
+                        bottom: CGFloat(supplied.bottom), trailing: CGFloat(supplied.trailing))
+                } ?? (windowGeometry.validSize == nil ? EdgeInsets() : windowGeometry.safeArea)
             content(insets, proxy.size.height > proxy.size.width)
         }
     }
@@ -2274,201 +2292,364 @@ struct OperatorSettingsPanel: View {
     var body: some View {
         let _ = model.settingsAccount.accountRevision
         NikonSettingsViewport(fallback: safeArea) { insets, _ in
-            MonitorOperatorSettingsScreen(brand: "OpenZCine", configuration: configuration(insets: insets),
+            MonitorOperatorSettingsScreen(
+                brand: "OpenZCine", configuration: configuration(insets: insets),
                 library: model.mediaLibrary,
-                selectedTab: Binding(get: { model.operatorSettingsTab }, set: { model.operatorSettingsTab = $0 }),
-                scrollOffsets: Binding(get: { model.operatorSettingsScrollOffsets }, set: { model.operatorSettingsScrollOffsets = $0 }),
+                selectedTab: Binding(
+                    get: { model.operatorSettingsTab }, set: { model.operatorSettingsTab = $0 }),
+                scrollOffsets: Binding(
+                    get: { model.operatorSettingsScrollOffsets },
+                    set: { model.operatorSettingsScrollOffsets = $0 }),
                 borrowedDisplay: borrowedDisplay, sourceIdentity: model.shell.monitor?.id,
-                initialReportPresented: model.isStandaloneSettingsPresented && DemoHarness.openBugReport)
+                initialReportPresented: model.isStandaloneSettingsPresented
+                    && DemoHarness.openBugReport)
         }
         .observeMonitorWindowGeometry()
         .onAppear {
             model.settingsAccount.bind(accountActions)
             model.settingsSupport.bind(supportActions)
-            if let destination = SettingsInternetDestination.demoValue(DemoHarness.internetHandoffConfirmation),
-                let value = browserDestination(destination) { model.settingsSupport.request(value) }
-            else if DemoHarness.openBugReport && !model.isStandaloneSettingsPresented { model.isBugReportPresented = true }
+            if let destination = SettingsInternetDestination.demoValue(
+                DemoHarness.internetHandoffConfirmation),
+                let value = browserDestination(destination)
+            {
+                model.settingsSupport.request(value)
+            } else if DemoHarness.openBugReport && !model.isStandaloneSettingsPresented {
+                model.isBugReportPresented = true
+            }
         }
     }
 
-    private func configuration(insets: EdgeInsets) -> MonitorOperatorSettingsConfiguration<NikonMonitorLooks> {
+    private func configuration(insets: EdgeInsets) -> MonitorOperatorSettingsConfiguration<
+        NikonMonitorLooks
+    > {
         let menus = NikonAssistMenuAdapter(model: model, compact: true)
-        return .init(borrowedSafeArea: insets,
-            phase: isConnected ? "\(model.cameraState.cameraName) · \(transportLabel)" : model.linkHealthDetail,
+        return .init(
+            borrowedSafeArea: insets,
+            phase: isConnected
+                ? "\(model.cameraState.cameraName) · \(transportLabel)" : model.linkHealthDetail,
             isLive: isConnected, sharingSubtitle: "Broadcast this feed and manage its watchers.",
             close: {
-                model.settingsAccount.retire(); model.settingsSupport.retire(); model.dismissMediaLibrary()
-            }, disconnect: {
-                model.settingsAccount.retire(); model.settingsSupport.retire(); model.disconnect()
+                model.settingsAccount.retire()
+                model.settingsSupport.retire()
+                model.dismissMediaLibrary()
+            },
+            disconnect: {
+                model.settingsAccount.retire()
+                model.settingsSupport.retire()
+                model.disconnect()
             }, feedback: settingsFeedback, link: linkSource, sharing: sharingSource,
-            account: accountSource, cache: model.captureOperatorMediaCacheSource(), support: supportSource,
-            information: .init(theme: "Charcoal", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
-                themeHelp: "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
-                protocolHelp: "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
+            account: accountSource, cache: model.captureOperatorMediaCacheSource(),
+            support: supportSource,
+            information: .init(
+                theme: "Charcoal", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
+                themeHelp:
+                    "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
+                protocolHelp:
+                    "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
                 versionHelp: "Current OpenZCine build from the native project metadata."),
-            recordConfirmation: preferenceBinding(\.recordConfirmationEnabled), haptics: preferenceBinding(\.hapticsEnabled),
+            recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
+            haptics: preferenceBinding(\.hapticsEnabled),
             keepAwake: preferenceBinding(\.keepScreenAwake),
             hapticsHelp: "Short confirmation pulses for critical switches and setting changes.",
-            keepAwakeHelp: "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load. Disable tools you are not using. iOS may still dim when the device overheats.",
+            keepAwakeHelp:
+                "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load. Disable tools you are not using. iOS may still dim when the device overheats.",
             hdrHelp: "", cacheHelp: "",
-            clearHelp: "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card.",
-            exposureHelp: "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
-            assist: model.assist, stores: model.scopePanels.operatorStores, falseColorLooks: .signal,
-            palette: LiveDesign.self, operatorHaptics: .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }),
+            clearHelp:
+                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card.",
+            exposureHelp:
+                "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
+            assist: model.assist, stores: model.scopePanels.operatorStores,
+            falseColorLooks: .signal,
+            palette: LiveDesign.self,
+            operatorHaptics: .init(isEnabled: { [weak model] in
+                model?.preferences.hapticsEnabled == true
+            }),
             transfer: model.scopeAssist.transfer, clipByte: model.scopeAssist.clipByte,
             lookLabel: lookLabel, lookCatalog: { AnyView(LUTPickerContent().environment(model)) },
-            input: .init(remoteShutter: preferenceBinding(\.bluetoothShutterEnabled), remoteTitle: "Bluetooth Remote Shutter",
-                remoteHelp: "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
+            input: .init(
+                remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
+                remoteTitle: "Bluetooth Remote Shutter",
+                remoteHelp:
+                    "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
                 autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
-                rotationHelp: "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."),
-            signalOptions: .init(falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                rotationHelp:
+                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
+            ),
+            signalOptions: .init(
+                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
                 reference: menus.falseColorReference,
                 resetFalseColor: { model.assist.resetOptions(.falseColor) },
                 resetZebra: {
                     model.assist.resetOptions(.zebra)
                     model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
                 }), resetPolicy: .plotControls,
-            cacheScopeHelp: "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
-            cacheConfirmationMessage: "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact.")
+            cacheScopeHelp:
+                "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
+            cacheConfirmationMessage:
+                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact."
+        )
     }
 
-    private func settingsFeedback() { OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled) }
-    private func preferenceBinding(_ keyPath: WritableKeyPath<OperatorPreferences, Bool>) -> Binding<Bool> {
-        Binding(get: { model.preferences[keyPath: keyPath] }, set: { model.preferences[keyPath: keyPath] = $0 })
+    private func settingsFeedback() {
+        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
+    }
+    private func preferenceBinding(_ keyPath: WritableKeyPath<OperatorPreferences, Bool>)
+        -> Binding<Bool>
+    {
+        Binding(
+            get: { model.preferences[keyPath: keyPath] },
+            set: { model.preferences[keyPath: keyPath] = $0 })
     }
     private var selectableVideoSources: [VideoSourceKind] {
-        VideoSourceKind.operatorSelectableCases.filter { $0 != .hdmiCapture || UVCVideoSource.isSupportedHardware }
+        VideoSourceKind.operatorSelectableCases.filter {
+            $0 != .hdmiCapture || UVCVideoSource.isSupportedHardware
+        }
     }
     private var linkSource: MonitorSettingsLinkSource {
-        .init(transport: transportLabel,
-            transportHelp: "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
-            phase: model.connection.label, phaseHelp: "The current connection state reported by this device.",
+        .init(
+            transport: transportLabel,
+            transportHelp:
+                "Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.",
+            phase: model.connection.label,
+            phaseHelp: "The current connection state reported by this device.",
             network: nil, networkHelp: "", signalBars: model.liveSignalBars,
-            saved: model.savedCameras.map { .init(id: $0.host, name: $0.displayName, detail: $0.host) },
+            saved: model.savedCameras.map {
+                .init(id: $0.host, name: $0.displayName, detail: $0.host)
+            },
             savedHelp: "Cameras paired through the connection screen.", sourceGroups: sourceGroups,
             healthScore: model.linkHealth, healthCaption: linkHealthCaption)
     }
-    private func choice(id: String, title: String, help: String, options: [String], value: String,
-        compact: Bool = false, select: @escaping (String) -> Void) -> MonitorSettingsSourceProperty {
+    private func choice(
+        id: String, title: String, help: String, options: [String], value: String,
+        compact: Bool = false, select: @escaping (String) -> Void
+    ) -> MonitorSettingsSourceProperty {
         let identity = model.operatorLiveIdentity
-        return .init(id: id, title: title, help: help, value: .choice(.init(options: options,
-            selection: Binding(get: { value }, set: { if model.operatorLiveIdentity == identity { select($0) } }),
-            help: help, feedback: settingsFeedback)), compact: compact)
+        return .init(
+            id: id, title: title, help: help,
+            value: .choice(
+                .init(
+                    options: options,
+                    selection: Binding(
+                        get: { value },
+                        set: { if model.operatorLiveIdentity == identity { select($0) } }),
+                    help: help, feedback: settingsFeedback)), compact: compact)
     }
     private var sourceGroups: [MonitorSettingsSourceGroup] {
         var groups: [MonitorSettingsSourceGroup] = []
         var source: [MonitorSettingsSourceProperty] = []
         if selectableVideoSources.count > 1, model.monitorAvailability.offersSourceSwitch {
-            source.append(choice(id: "picture.source", title: "Picture Source",
-                help: "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it.",
-                options: selectableVideoSources.map(\.title), value: model.videoSource.title) { value in
-                    if let kind = selectableVideoSources.first(where: { $0.title == value }) { model.selectVideoSource(kind) }
+            source.append(
+                choice(
+                    id: "picture.source", title: "Picture Source",
+                    help:
+                        "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it.",
+                    options: selectableVideoSources.map(\.title), value: model.videoSource.title
+                ) { value in
+                    if let kind = selectableVideoSources.first(where: { $0.title == value }) {
+                        model.selectVideoSource(kind)
+                    }
                 })
         }
         if model.videoSource == .hdmiCapture {
-            source.append(.init(id: "picture.capture", title: "Capture Device",
-                help: "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR.",
-                value: .reported(model.hdmiCaptureState.shortStatus)))
+            source.append(
+                .init(
+                    id: "picture.capture", title: "Capture Device",
+                    help:
+                        "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR.",
+                    value: .reported(model.hdmiCaptureState.shortStatus)))
         }
         if model.videoSource == .relay {
-            source.append(.init(id: "picture.heldBy", title: "Held By", help: "Which device the camera is currently taking commands from.",
-                value: .reported(model.relayHoldsControl ? "This device" : model.relayControlHolderName ?? "The broadcaster")))
+            source.append(
+                .init(
+                    id: "picture.heldBy", title: "Held By",
+                    help: "Which device the camera is currently taking commands from.",
+                    value: .reported(
+                        model.relayHoldsControl
+                            ? "This device" : model.relayControlHolderName ?? "The broadcaster")))
         }
-        if !source.isEmpty { groups.append(.init(id: "picture.source", title: "Picture Source", properties: source)) }
-        groups.append(.init(id: "picture", title: "Picture", properties: [
-            choice(id: "picture.stream", title: "Stream Preset",
-                help: "Combines Nikon live-view stream size and compression grade into three operator-facing choices.",
-                options: LiveViewStreamPreset.allCases.map(\.rawValue), value: model.preferences.streamPreset.rawValue) {
-                    if let preset = LiveViewStreamPreset(rawValue: $0) { model.setStreamPreset(preset) }
-                },
-            choice(id: "picture.quality", title: "Quality Bias",
-                help: "Steers the selected stream preset toward smaller frames or more image detail.",
-                options: LiveViewQualityBias.allCases.map(\.settingsLabel), value: model.preferences.qualityBias.settingsLabel) { value in
-                    if let bias = LiveViewQualityBias.allCases.first(where: { $0.settingsLabel == value }) { model.setQualityBias(bias) }
-                }
-        ]))
+        if !source.isEmpty {
+            groups.append(.init(id: "picture.source", title: "Picture Source", properties: source))
+        }
+        groups.append(
+            .init(
+                id: "picture", title: "Picture",
+                properties: [
+                    choice(
+                        id: "picture.stream", title: "Stream Preset",
+                        help:
+                            "Combines Nikon live-view stream size and compression grade into three operator-facing choices.",
+                        options: LiveViewStreamPreset.allCases.map(\.rawValue),
+                        value: model.preferences.streamPreset.rawValue
+                    ) {
+                        if let preset = LiveViewStreamPreset(rawValue: $0) {
+                            model.setStreamPreset(preset)
+                        }
+                    },
+                    choice(
+                        id: "picture.quality", title: "Quality Bias",
+                        help:
+                            "Steers the selected stream preset toward smaller frames or more image detail.",
+                        options: LiveViewQualityBias.allCases.map(\.settingsLabel),
+                        value: model.preferences.qualityBias.settingsLabel
+                    ) { value in
+                        if let bias = LiveViewQualityBias.allCases.first(where: {
+                            $0.settingsLabel == value
+                        }) {
+                            model.setQualityBias(bias)
+                        }
+                    },
+                ]))
         var processing: [MonitorSettingsSourceProperty] = []
         if MonitorUpscaler.supportedOnThisDevice.count > 1 {
-            processing.append(choice(id: "processing.upscaler", title: "Feed Upscaler",
-                help: "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
-                options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue), value: FeedUpscaleSwitch.shared.upscaler.rawValue,
-                compact: true) { if let value = MonitorUpscaler(rawValue: $0) { FeedUpscaleSwitch.shared.upscaler = value } })
+            processing.append(
+                choice(
+                    id: "processing.upscaler", title: "Feed Upscaler",
+                    help:
+                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
+                    options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue),
+                    value: FeedUpscaleSwitch.shared.upscaler.rawValue,
+                    compact: true
+                ) {
+                    if let value = MonitorUpscaler(rawValue: $0) {
+                        FeedUpscaleSwitch.shared.upscaler = value
+                    }
+                })
         }
         if LiveDenoiseSwitch.isSupportedOnThisDevice {
             if let reason = LiveDenoiseSwitch.decoderReportsUnavailable {
-                processing.append(.init(id: "processing.denoise", title: "Feed Noise Reduction",
-                    help: "The noise filter turned itself off after the camera sent something it could not take. Reconnecting the camera gives it another go.", value: .reported(reason)))
+                processing.append(
+                    .init(
+                        id: "processing.denoise", title: "Feed Noise Reduction",
+                        help:
+                            "The noise filter turned itself off after the camera sent something it could not take. Reconnecting the camera gives it another go.",
+                        value: .reported(reason)))
             } else {
-                processing.append(.init(id: "processing.denoise", title: "Feed Noise Reduction",
-                    help: "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames — the blocky structure of a compressed stream stays put — and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
-                    value: .toggle(.init(value: Binding(get: { LiveDenoiseSwitch.shared.enabled }, set: { LiveDenoiseSwitch.shared.enabled = $0 }),
-                        help: "", feedback: settingsFeedback))))
+                processing.append(
+                    .init(
+                        id: "processing.denoise", title: "Feed Noise Reduction",
+                        help:
+                            "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames — the blocky structure of a compressed stream stays put — and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
+                        value: .toggle(
+                            .init(
+                                value: Binding(
+                                    get: { LiveDenoiseSwitch.shared.enabled },
+                                    set: { LiveDenoiseSwitch.shared.enabled = $0 }),
+                                help: "", feedback: settingsFeedback))))
             }
         }
         #if DEBUG
-        processing.append(.init(id: "processing.capture", title: "Capture Frames",
-            help: "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end.",
-            value: .native(AnyView(LiveViewCaptureControl()))))
+            processing.append(
+                .init(
+                    id: "processing.capture", title: "Capture Frames",
+                    help:
+                        "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end.",
+                    value: .native(AnyView(LiveViewCaptureControl()))))
         #endif
-        if !processing.isEmpty { groups.append(.init(id: "processing", title: "Processing", properties: processing)) }
+        if !processing.isEmpty {
+            groups.append(.init(id: "processing", title: "Processing", properties: processing))
+        }
         return groups
     }
 
     private var sharingSource: MonitorSettingsSharingSource {
-        .init(enabled: model.videoSource != .relay,
-            unavailableHelp: "This device is watching another device's broadcast. Sharing is done from the broadcasting device — re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.",
-            sharing: Binding(get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
-            passcode: Binding(get: { relayPasscodeDraft ?? model.preferences.relayWatcherPasscode },
+        .init(
+            enabled: model.videoSource != .relay,
+            unavailableHelp:
+                "This device is watching another device's broadcast. Sharing is done from the broadcasting device — re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.",
+            sharing: Binding(
+                get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
+            passcode: Binding(
+                get: { relayPasscodeDraft ?? model.preferences.relayWatcherPasscode },
                 set: { relayPasscodeDraft = String($0.filter(\.isNumber).prefix(4)) }),
-            controlRequests: Binding(get: { model.preferences.relayAllowsControlRequests }, set: { model.setRelayAllowsControlRequests($0) }),
-            prioritySelection: Binding(get: { model.preferences.relayEncoderProfile.title }, set: { title in
-                if let profile = RelayEncoderProfile.allCases.first(where: { $0.title == title }) { model.setRelayEncoderProfile(profile) }
-            }), priorities: RelayEncoderProfile.allCases.map(\.title),
+            controlRequests: Binding(
+                get: { model.preferences.relayAllowsControlRequests },
+                set: { model.setRelayAllowsControlRequests($0) }),
+            prioritySelection: Binding(
+                get: { model.preferences.relayEncoderProfile.title },
+                set: { title in
+                    if let profile = RelayEncoderProfile.allCases.first(where: { $0.title == title }
+                    ) {
+                        model.setRelayEncoderProfile(profile)
+                    }
+                }), priorities: RelayEncoderProfile.allCases.map(\.title),
             help: .init(
-                sharing: "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device; this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi: its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
-                passcode: "Four digits watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
-                controlRequests: "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.",
-                priority: "Low latency is the tightest glass-to-glass path, the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."),
-            browseHelp: "Find another device's broadcast in the camera list.", browse: model.showSavedCameras,
-            passcodeChanged: { if $0.count == 4 || $0.isEmpty { model.setRelayWatcherPasscode($0) } },
-            watchers: model.captureOperatorSettingsWatchers(), unavailableTitle: "Watching", unavailableValue: model.cameraState.cameraName)
+                sharing:
+                    "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device; this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi: its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
+                passcode:
+                    "Four digits watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
+                controlRequests:
+                    "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.",
+                priority:
+                    "Low latency is the tightest glass-to-glass path, the stance for pulling focus. Quality trades about four frames (~130 ms) for a steadier, better-looking stream: longer keyframe spacing spends the bitrate where it shows, and a deeper per-watcher window rides out network jitter instead of dropping. Changing it mid-broadcast briefly restarts the stream; watchers rejoin on their own."
+            ),
+            browseHelp: "Find another device's broadcast in the camera list.",
+            browse: model.showSavedCameras,
+            passcodeChanged: {
+                if $0.count == 4 || $0.isEmpty { model.setRelayWatcherPasscode($0) }
+            },
+            watchers: model.captureOperatorSettingsWatchers(), unavailableTitle: "Watching",
+            unavailableValue: model.cameraState.cameraName)
     }
 
     private var accountActions: MonitorSettingsAccountActions {
         let account = model.frameioAccount.capture()
-        return .init(identity: account.identity, isCurrent: { [weak model] in model != nil && account.isCurrent },
+        return .init(
+            identity: account.identity,
+            isCurrent: { [weak model] in model != nil && account.isCurrent },
             requiresInternetConsent: model.isOnCameraAccessPoint,
-            connect: { [weak model] in guard let model else { throw CancellationError() }; try await model.connectFrameio(captured: account) },
+            connect: { [weak model] in
+                guard let model else { throw CancellationError() }
+                try await model.connectFrameio(captured: account)
+            },
             disconnect: { [weak model] in if account.isCurrent { model?.disconnectFrameio() } },
             beginInternet: { [weak model] admission in
                 guard let model,
                     let token = await model.beginInternetHopCaptured(admission: admission)
                 else { return nil }
-                return .init(isCurrent: { [weak model] in model?.ownsInternetHop(token) == true && account.isCurrent },
-                    wait: { [weak model] in await model?.waitForInternetPath(captured: token, timeoutSeconds: 30) == true },
+                return .init(
+                    isCurrent: { [weak model] in
+                        model?.ownsInternetHop(token) == true && account.isCurrent
+                    },
+                    wait: { [weak model] in
+                        await model?.waitForInternetPath(captured: token, timeoutSeconds: 30)
+                            == true
+                    },
                     restore: { [weak model] in await model?.restoreInternetHop(token) })
-            }, internetFailure: "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi.")
+            },
+            internetFailure:
+                "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi."
+        )
     }
     private var accountSource: MonitorSettingsAccountSource {
-        .init(title: "Frame.io",
-            help: "Sign in once here and the share sheet's Frame.io option unlocks everywhere. On the camera's Wi‑Fi, signing in hops to home Wi‑Fi or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.",
+        .init(
+            title: "Frame.io",
+            help:
+                "Sign in once here and the share sheet's Frame.io option unlocks everywhere. On the camera's Wi‑Fi, signing in hops to home Wi‑Fi or cellular, signs in, then reconnects the camera. Logging out removes the stored sign-in and remembered project.",
             model: model.settingsAccount, actions: accountActions,
             readState: {
                 if model.isFrameioConnected { return .signedIn }
                 if !model.isFrameioConfigured { return .notConfigured }
                 return model.settingsAccount.busy ? .connecting : .signedOut
             }, consentTitle: "Leave camera Wi‑Fi to sign in?",
-            consentMessage: "We'll hop to home Wi‑Fi or cellular so you can sign in to Frame.io, then reconnect to the camera automatically.",
+            consentMessage:
+                "We'll hop to home Wi‑Fi or cellular so you can sign in to Frame.io, then reconnect to the camera automatically.",
             consentAction: "Sign in")
     }
 
-    private func browserDestination(_ source: SettingsInternetDestination) -> MonitorSettingsBrowserDestination? {
-        source.webURL.map { .init(id: source.id, title: source.title, url: $0, confirmationMessage: source.confirmationMessage) }
+    private func browserDestination(_ source: SettingsInternetDestination)
+        -> MonitorSettingsBrowserDestination?
+    {
+        source.webURL.map {
+            .init(
+                id: source.id, title: source.title, url: $0,
+                confirmationMessage: source.confirmationMessage)
+        }
     }
     private var supportActions: MonitorSettingsSupportActions {
         let approvedAPDeparture = model.isOnCameraAccessPoint
         var preparingTitle: String?
-        return .init(identity: ObjectIdentifier(model), isCurrent: { [weak model] in model != nil },
+        return .init(
+            identity: ObjectIdentifier(model), isCurrent: { [weak model] in model != nil },
             requiresInternetConsent: model.isOnCameraAccessPoint,
             makeReport: { try await AppDiagnostics.shared.makeReport() },
             prepareBrowser: { [weak model] admission in
@@ -2478,29 +2659,60 @@ struct OperatorSettingsPanel: View {
                     return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
                 })
             },
-            open: { url in await withCheckedContinuation { continuation in openURL(url) { continuation.resume(returning: $0) } } },
+            open: { url in
+                await withCheckedContinuation { continuation in
+                    openURL(url) { continuation.resume(returning: $0) }
+                }
+            },
             preparationChanged: { [weak model] title in
-                if let title { preparingTitle = title; model?.beginInternetDestinationPreparation(title) }
-                else if let captured = preparingTitle { preparingTitle = nil; model?.finishInternetDestinationPreparation(captured) }
-            }, internetFailure: "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again.")
+                if let title {
+                    preparingTitle = title
+                    model?.beginInternetDestinationPreparation(title)
+                } else if let captured = preparingTitle {
+                    preparingTitle = nil
+                    model?.finishInternetDestinationPreparation(captured)
+                }
+            },
+            internetFailure:
+                "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+        )
     }
     private var supportSource: MonitorSettingsSupportSource {
-        .init(consent: Binding(get: { reliabilityOptIn }, set: {
-                reliabilityOptIn = $0; ReliabilityDiagnostics.reporting.setConsent($0)
-            }), available: ReliabilityDiagnostics.reporting.isAvailable,
-            automaticHelp: Self.reliabilityReportsHelp, unavailableHelp: Self.reliabilityUnavailableHelp,
-            sourceHelp: "View the OpenZCine project and contribute on GitHub.", termsHelp: "Read the OpenZCine terms of use.",
+        .init(
+            consent: Binding(
+                get: { reliabilityOptIn },
+                set: {
+                    reliabilityOptIn = $0
+                    ReliabilityDiagnostics.reporting.setConsent($0)
+                }), available: ReliabilityDiagnostics.reporting.isAvailable,
+            automaticHelp: Self.reliabilityReportsHelp,
+            unavailableHelp: Self.reliabilityUnavailableHelp,
+            sourceHelp: "View the OpenZCine project and contribute on GitHub.",
+            termsHelp: "Read the OpenZCine terms of use.",
             model: model.settingsSupport, actions: supportActions,
             links: [
-                browserDestination(.support).map { .init(destination: $0,
-                    help: "Connection guides, camera controls, media workflows, and troubleshooting.", actionTitle: "Open", accessibilityLabel: "Open Support") },
-                browserDestination(.featureRequest).map { .init(destination: $0,
-                    help: "Start an idea in the project’s feature-request discussion category.", actionTitle: "Request", accessibilityLabel: "Request a Feature") }
-            ].compactMap { $0 }, privacy: browserDestination(.privacyPolicy), source: browserDestination(.sourceCode), terms: browserDestination(.termsOfUse),
+                browserDestination(.support).map {
+                    .init(
+                        destination: $0,
+                        help:
+                            "Connection guides, camera controls, media workflows, and troubleshooting.",
+                        actionTitle: "Open", accessibilityLabel: "Open Support")
+                },
+                browserDestination(.featureRequest).map {
+                    .init(
+                        destination: $0,
+                        help: "Start an idea in the project’s feature-request discussion category.",
+                        actionTitle: "Request", accessibilityLabel: "Request a Feature")
+                },
+            ].compactMap { $0 }, privacy: browserDestination(.privacyPolicy),
+            source: browserDestination(.sourceCode), terms: browserDestination(.termsOfUse),
             reportTitle: "Report a Problem", reportActionTitle: "Report",
-            diagnosticsHelp: "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
-            reportAction: model.isStandaloneSettingsPresented ? nil : { model.isBugReportPresented = true },
-            report: { AnyView(ProblemReportView().environment(model)) }, shareReport: { AnyView(DiagnosticsShareSheet(url: $0)) })
+            diagnosticsHelp:
+                "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
+            reportAction: model.isStandaloneSettingsPresented
+                ? nil : { model.isBugReportPresented = true },
+            report: { AnyView(ProblemReportView().environment(model)) },
+            shareReport: { AnyView(DiagnosticsShareSheet(url: $0)) })
     }
     private var lookLabel: String {
         switch model.assistConfiguration.selectedLUT {
@@ -2510,21 +2722,43 @@ struct OperatorSettingsPanel: View {
     }
     private var borrowedDisplay: MonitorOperatorBorrowedDisplay {
         let capture = editedCaptureMode
-        return .init(layoutHelp: "Video and photo keep their own monitor layouts. This picks which one the DISP sections set up; the camera's own mode dial picks which one the monitor renders.",
+        return .init(
+            layoutHelp:
+                "Video and photo keep their own monitor layouts. This picks which one the DISP sections set up; the camera's own mode dial picks which one the monitor renders.",
             choices: CaptureLayoutMode.allCases.map { .init(id: $0.rawValue, title: $0.title) },
-            selection: Binding(get: { editedCaptureMode.rawValue }, set: {
-                guard let choice = CaptureLayoutMode(rawValue: $0) else { return }; settingsFeedback(); editedCaptureMode = choice
-            }), expandedSection: Binding(get: { expandedDispSection?.rawValue }, set: { expandedDispSection = $0.flatMap(DispMode.init(rawValue:)) }),
+            selection: Binding(
+                get: { editedCaptureMode.rawValue },
+                set: {
+                    guard let choice = CaptureLayoutMode(rawValue: $0) else { return }
+                    settingsFeedback()
+                    editedCaptureMode = choice
+                }),
+            expandedSection: Binding(
+                get: { expandedDispSection?.rawValue },
+                set: { expandedDispSection = $0.flatMap(DispMode.init(rawValue:)) }),
             sections: DispMode.allCases.map { mode in
                 let eligible = mode != .command && capture == model.captureLayoutMode
-                return .init(id: mode.rawValue, title: "DISP \(dispNumber(mode)) · \(mode.title)", caption: dispCaption(mode),
-                    reset: { settingsFeedback(); model.resetChromeVisibility(for: mode, capture: capture) },
+                return .init(
+                    id: mode.rawValue, title: "DISP \(dispNumber(mode)) · \(mode.title)",
+                    caption: dispCaption(mode),
+                    reset: {
+                        settingsFeedback()
+                        model.resetChromeVisibility(for: mode, capture: capture)
+                    },
                     editHint: "Opens the monitor with an eye on each element you can show or hide",
                     edit: eligible ? { model.beginChromeEditing(mode) } : nil,
-                    unavailableEditHelp: mode == .command ? nil : "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor.",
-                    visibility: chromeToggles(for: mode, capture: capture), pinsTitle: "View assists that stay on in clean view", pins: mode == .clean ? cleanPins : [])
-            }, order: displayOrder, returnedFromEditor: {
-                if let returning = model.chromeEditorReturnMode { expandedDispSection = returning; model.chromeEditorReturnMode = nil }
+                    unavailableEditHelp: mode == .command
+                        ? nil
+                        : "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor.",
+                    visibility: chromeToggles(for: mode, capture: capture),
+                    pinsTitle: "View assists that stay on in clean view",
+                    pins: mode == .clean ? cleanPins : [])
+            }, order: displayOrder,
+            returnedFromEditor: {
+                if let returning = model.chromeEditorReturnMode {
+                    expandedDispSection = returning
+                    model.chromeEditorReturnMode = nil
+                }
             })
     }
     private var editedCaptureMode: CaptureLayoutMode {
@@ -2612,11 +2846,14 @@ struct OperatorSettingsPanel: View {
     static let reliabilityUnavailableHelp =
         "This build cannot send automatic reports. You can still share diagnostics stored on this phone."
 
-
-    private var isConnected: Bool { model.isDemoSession || model.connection == .connected || model.connection == .preparingLiveView }
+    private var isConnected: Bool {
+        model.isDemoSession || model.connection == .connected
+            || model.connection == .preparingLiveView
+    }
     private var linkHealthCaption: String {
         guard isConnected || model.isDemoSession else { return model.linkHealthDetail }
-        return "\(model.linkHealthDetail) · \(model.linkHealth >= 80 ? "Stable" : model.linkHealth >= 50 ? "Watch" : "Poor")"
+        return
+            "\(model.linkHealthDetail) · \(model.linkHealth >= 80 ? "Stable" : model.linkHealth >= 50 ? "Watch" : "Poor")"
     }
     private var transportLabel: String {
         if model.isDemoSession { return "Demo session" }

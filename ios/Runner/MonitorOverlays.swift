@@ -1,8 +1,8 @@
 import CoreMotion
 import MonitorPresentation
 import MonitorUI
-import OpenCineMedia
 import OpenCineCameraControls
+import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 
@@ -104,11 +104,14 @@ struct MovablePanel<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        let center = model.movablePanelCenters[id]
+        let center =
+            model.movablePanelCenters[id]
             ?? model.movablePanelPositions[id]?.center(in: bounds) ?? defaultCenter
-        let layout = MonitorScopePanelLayout(baseSize: size, preferredSize: size,
+        let layout = MonitorScopePanelLayout(
+            baseSize: size, preferredSize: size,
             center: center, scale: 1, canvas: bounds, movementBounds: bounds, resizable: false)
-        MonitorMovableScopePanel(layout: layout, enabled: !model.interfaceLocked, onMove: move,
+        MonitorMovableScopePanel(
+            layout: layout, enabled: !model.interfaceLocked, onMove: move,
             content: content)
     }
 
@@ -204,14 +207,18 @@ struct FeedAlignedAssists: View {
             let feed = desqueezedRect(
                 baseFeed, model.assist.desqueeze(visible: visible.contains(.desqueeze)))
             ZStack {
-                MonitorOperatorFramingMarks(assist: model.assist, feed: feed,
+                MonitorOperatorFramingMarks(
+                    assist: model.assist, feed: feed,
                     visible: Set(visible.map(\.selection)),
-                    comparison: LUTResolution.splitComparison(visibleTools: visible,
+                    comparison: LUTResolution.splitComparison(
+                        visibleTools: visible,
                         enabled: model.assist.splitComparison, vertical: model.assist.splitVertical,
-                        muted: model.splitComparisonMuted).map {
-                            .init(vertical: $0 == .vertical, originalLabel: SplitComparison.logLabel,
-                                processedLabel: SplitComparison.lutLabel)
-                        })
+                        muted: model.splitComparisonMuted
+                    ).map {
+                        .init(
+                            vertical: $0 == .vertical, originalLabel: SplitComparison.logLabel,
+                            processedLabel: SplitComparison.lutLabel)
+                    })
                 if visible.contains(.evMeter),
                     // Photography-only: a persisted visibility set from an older build may
                     // still carry the tool, so the render guards the mode as well.

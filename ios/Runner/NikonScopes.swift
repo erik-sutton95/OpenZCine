@@ -49,39 +49,54 @@ final class NikonScopePanels {
             options: legacy?.histogram, storage: storage, key: Self.histogramKey)
         trafficLights = MonitorTrafficLightsPreferenceStore(
             storage: storage, key: Self.trafficLightsKey, histogram: histogram)
-        let restoredWaveform = waveform, restoredParade = parade, restoredVectorscope = vectorscope
-        let restoredHistogram = histogram, restoredTrafficLights = trafficLights
+        let restoredWaveform = waveform
+        let restoredParade = parade
+        let restoredVectorscope = vectorscope
+        let restoredHistogram = histogram
+        let restoredTrafficLights = trafficLights
         func stores(playback: Bool) -> AssistPanelStores {
             let prefix = playback ? "OpenZCine.Playback" : "OpenZCine"
-            let audioKey = prefix + ".Assist.audio.v1", referenceKey = prefix + ".Assist.falseColorReference.positions.v1"
+            let audioKey = prefix + ".Assist.audio.v1"
+            let referenceKey = prefix + ".Assist.falseColorReference.positions.v1"
             let audio = MonitorAudioPreferenceStore(storage: storage, key: audioKey)
-            let reference = MonitorFalseColorReferencePositionStore(storage: storage, key: referenceKey)
-            let positions = storage.data(forKey: Self.legacyPositionsKey)
+            let reference = MonitorFalseColorReferencePositionStore(
+                storage: storage, key: referenceKey)
+            let positions =
+                storage.data(forKey: Self.legacyPositionsKey)
                 .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             func center(_ id: String) -> (Double, Double)? {
                 guard let values = positions[id] as? [String: Any],
                     let x = (values["xFraction"] as? NSNumber)?.doubleValue,
                     let y = (values["yFraction"] as? NSNumber)?.doubleValue,
-                    x.isFinite, y.isFinite else { return nil }
+                    x.isFinite, y.isFinite
+                else { return nil }
                 return (x, y)
             }
             if storage.data(forKey: audioKey) == nil,
-                let (x, y) = center(playback ? "playback-audio" : "audio") {
-                audio.options.landscapeCenter = .init(x: x, y: y); audio.persist()
+                let (x, y) = center(playback ? "playback-audio" : "audio")
+            {
+                audio.options.landscapeCenter = .init(x: x, y: y)
+                audio.persist()
             }
             if storage.data(forKey: referenceKey) == nil,
-                let (x, y) = center(playback ? "playback-fcref" : "fcref") {
+                let (x, y) = center(playback ? "playback-fcref" : "fcref")
+            {
                 reference.positions.landscape = .init(x: x, y: y)
-                if let data = try? JSONEncoder().encode(reference.positions) { storage.set(data, forKey: referenceKey) }
+                if let data = try? JSONEncoder().encode(reference.positions) {
+                    storage.set(data, forKey: referenceKey)
+                }
             }
-            return .init(storage: storage, zebraUnitKey: "OpenZCine.zebraUnit",
-                waveform: restoredWaveform, parade: restoredParade, vectorscope: restoredVectorscope,
+            return .init(
+                storage: storage, zebraUnitKey: "OpenZCine.zebraUnit",
+                waveform: restoredWaveform, parade: restoredParade,
+                vectorscope: restoredVectorscope,
                 histogram: restoredHistogram,
                 audio: audio, reference: reference,
                 nd: MonitorNDPreferenceStore(storage: storage, key: prefix + ".Assist.ndMeter.v1"),
                 trafficLights: restoredTrafficLights)
         }
-        operatorStores = stores(playback: false); playbackStores = stores(playback: true)
+        operatorStores = stores(playback: false)
+        playbackStores = stores(playback: true)
         guard let legacy else { return }
         trafficLights.scale = legacy.trafficLightsScale
         trafficLights.position = legacy.trafficLightsCenter

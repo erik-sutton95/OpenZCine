@@ -18,15 +18,19 @@ import XCTest
         try await assertFactoryPublicationReentry(observeAssists: true)
     }
     private func assertFactoryPublicationReentry(observeAssists: Bool) async throws {
-        let fixture = try PlaybackFixture(); defer { fixture.remove() }
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
         let first = try fixture.clip("FIRST.MOV", expected: 4, bytes: 4)
         let second = try fixture.clip("SECOND.MOV", expected: 4, bytes: 4)
         fixture.model.refreshMediaClips()
-        let library = try XCTUnwrap(fixture.model.mediaLibrary); library.begin()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
         let a = try XCTUnwrap(library.records.first { $0.payload.id == first.id })
         let b = try XCTUnwrap(library.records.first { $0.payload.id == second.id })
-        let request = MonitorMediaGalleryOpen(record: a, playlist: [a, b], admission: library.actionToken)
-        let context = try XCTUnwrap(NikonOperatorPlaybackContext(model: fixture.model, initial: request))
+        let request = MonitorMediaGalleryOpen(
+            record: a, playlist: [a, b], admission: library.actionToken)
+        let context = try XCTUnwrap(
+            NikonOperatorPlaybackContext(model: fixture.model, initial: request))
         let capture = PlaybackFactoryPublicationCapture()
         withObservationTracking {
             if observeAssists { _ = context.assists } else { _ = context.native }
@@ -35,49 +39,65 @@ import XCTest
                 capture.entered = true
                 context.media.closePlayback()
                 XCTAssertTrue(context.media.open(b, playlist: [a, b], admitted: request.admission))
-                capture.native = context.native; capture.assists = context.assists
+                capture.native = context.native
+                capture.assists = context.assists
             }
         }
         XCTAssertFalse(context.media.open(a, playlist: [a, b], admitted: request.admission))
         XCTAssertTrue(capture.entered)
-        XCTAssertNotNil(capture.native); XCTAssertNotNil(capture.assists)
+        XCTAssertNotNil(capture.native)
+        XCTAssertNotNil(capture.assists)
         XCTAssertTrue(context.native === capture.native)
         XCTAssertTrue(context.assists === capture.assists)
         XCTAssertEqual(context.media.playback?.active?.asset.id, b.asset.id)
-        context.media.closePlayback(); await library.dispose()
+        context.media.closePlayback()
+        await library.dispose()
     }
 
     func testCompletePlayerBorrowsActualGalleryRequestAndRejectsBackRetirement() async throws {
-        let fixture = try PlaybackFixture(); defer { fixture.remove() }
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
         let clip = try fixture.clip("BORROW.MOV", expected: 4, bytes: 4)
         fixture.model.refreshMediaClips()
-        let library = try XCTUnwrap(fixture.model.mediaLibrary); library.begin()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
         let record = try XCTUnwrap(library.records.first { $0.payload.id == clip.id })
-        let request = MonitorMediaGalleryOpen(record: record, playlist: [record], admission: library.actionToken)
-        let context = try XCTUnwrap(NikonOperatorPlaybackContext(model: fixture.model, initial: request))
+        let request = MonitorMediaGalleryOpen(
+            record: record, playlist: [record], admission: library.actionToken)
+        let context = try XCTUnwrap(
+            NikonOperatorPlaybackContext(model: fixture.model, initial: request))
         XCTAssertTrue(context.library === library)
         XCTAssertEqual(context.initial.record.asset.id, record.asset.id)
         XCTAssertEqual(context.initial.playlist.map(\.asset.id), [record.asset.id])
         XCTAssertNil(context.native)
         library.close()
         XCTAssertFalse(context.media.open(record, playlist: [record], admitted: request.admission))
-        XCTAssertNil(context.native); XCTAssertNil(context.assists)
+        XCTAssertNil(context.native)
+        XCTAssertNil(context.assists)
         XCTAssertNil(NikonOperatorPlaybackContext(model: fixture.model, initial: request))
         await library.dispose()
     }
 
     func testCompletePlayerCacheRetirementCannotAcquireFirstNativePicture() async throws {
-        let fixture = try PlaybackFixture(); defer { fixture.remove() }
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
         let clip = try fixture.clip("CACHE.MOV", expected: 4, bytes: 4)
         fixture.model.refreshMediaClips()
-        let library = try XCTUnwrap(fixture.model.mediaLibrary); library.begin()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
         let record = try XCTUnwrap(library.records.first { $0.payload.id == clip.id })
-        let request = MonitorMediaGalleryOpen(record: record, playlist: [record], admission: library.actionToken)
-        let context = try XCTUnwrap(NikonOperatorPlaybackContext(model: fixture.model, initial: request))
+        let request = MonitorMediaGalleryOpen(
+            record: record, playlist: [record], admission: library.actionToken)
+        let context = try XCTUnwrap(
+            NikonOperatorPlaybackContext(model: fixture.model, initial: request))
         library.cache.directory.retireWrites()
         XCTAssertFalse(context.media.open(record, playlist: [record], admitted: request.admission))
-        XCTAssertNil(context.media.playback); XCTAssertNil(context.native); XCTAssertNil(context.assists)
-        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(fixture.model.clipLocalURL(clip))), Data(repeating: 0x80, count: 4))
+        XCTAssertNil(context.media.playback)
+        XCTAssertNil(context.native)
+        XCTAssertNil(context.assists)
+        XCTAssertEqual(
+            try Data(contentsOf: XCTUnwrap(fixture.model.clipLocalURL(clip))),
+            Data(repeating: 0x80, count: 4))
         await library.dispose()
     }
 

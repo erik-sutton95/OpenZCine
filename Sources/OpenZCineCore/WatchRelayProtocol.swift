@@ -70,7 +70,9 @@ public struct DeployedWatchRelayCodec: RelayWatchCodec {
         return .init(connection: connection, feedLive: state.feedLive)
     }
     public func isRecording(_ state: WatchRelayState) -> Bool { state.isRecording }
-    public func replacing(_ state: WatchRelayState, with result: WatchCommandResult) -> WatchRelayState {
+    public func replacing(_ state: WatchRelayState, with result: WatchCommandResult)
+        -> WatchRelayState
+    {
         .init(
             recordState: result.isRecording ? .recording : .standby,
             timecode: state.timecode, mediaStatus: state.mediaStatus, media: state.media,

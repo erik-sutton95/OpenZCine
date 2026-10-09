@@ -449,10 +449,12 @@ public enum FalseColorMap {
     }
 
     private static func painting(scale: FalseColorScale, mapping: ExposureSignalMapping)
-        -> MonitorFalseColorPainting {
+        -> MonitorFalseColorPainting
+    {
         MonitorFalseColorPainting(
             bands: scale.bands(mapping: mapping).map {
-                LiveFalseColorBand(lowerBound: $0.lowerBound, upperBound: $0.upperBound,
+                LiveFalseColorBand(
+                    lowerBound: $0.lowerBound, upperBound: $0.upperBound,
                     red: $0.red, green: $0.green, blue: $0.blue, label: "")
             }, edgeSoftness: scale.transitionWidth,
             domain: scale == .stops ? .sceneStops : .monitorPercent,
@@ -461,23 +463,29 @@ public enum FalseColorMap {
     }
 
     private static func lattice(scale: FalseColorScale, mapping: ExposureSignalMapping, size: Int)
-        -> MonitorFalseColorLattice {
-        precondition(CubeLUT.rendererSizeRange.contains(size),
+        -> MonitorFalseColorLattice
+    {
+        precondition(
+            CubeLUT.rendererSizeRange.contains(size),
             "Core Image false-colour cubes require a dimension from 2 through 64.")
         let denominator = Double(size - 1)
         let decoded = (0..<size).map {
             mapping.curve.decode(encodedValue: Double($0) / denominator)
         }
-        return .sceneLinear(decodedChannels: decoded,
+        return .sceneLinear(
+            decodedChannels: decoded,
             luminanceCoefficients: luminanceCoefficients(curve: mapping.curve),
             tone: MonitorDisplayToneMap(mapping: mapping),
             painting: painting(scale: scale, mapping: mapping))
     }
 
-    private static func renderedColor(value: Double, scale: FalseColorScale,
+    private static func renderedColor(
+        value: Double, scale: FalseColorScale,
         mapping: ExposureSignalMapping, source: (red: Double, green: Double, blue: Double),
-        monitorGray: Double) -> (red: Double, green: Double, blue: Double) {
-        painting(scale: scale, mapping: mapping).compositeColor(value: value,
+        monitorGray: Double
+    ) -> (red: Double, green: Double, blue: Double) {
+        painting(scale: scale, mapping: mapping).compositeColor(
+            value: value,
             monitorGray: monitorGray, source: source)
     }
 

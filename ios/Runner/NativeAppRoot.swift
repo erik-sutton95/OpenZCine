@@ -1189,7 +1189,8 @@ final class NativeAppModel {
     /// Compatibility entry for direct completed reports and existing consumer assertions.
     func applyRelayPresences(_ hits: [String: RelayPresence]) {
         let previous = networkFiltersDiscovery
-        relayNearby.applySweep(hits, selfName: UIDevice.current.name,
+        relayNearby.applySweep(
+            hits, selfName: UIDevice.current.name,
             now: Date.timeIntervalSinceReferenceDate)
         noteRelayFilteringTransition(from: previous)
     }
@@ -1197,17 +1198,20 @@ final class NativeAppModel {
     /// The actual SDK sweep supplies its captured publication ticket, never ambient authority.
     private func applyRelayPresences(_ hits: [String: RelayPresence], source: UUID) {
         let previous = networkFiltersDiscovery
-        guard relayNearby.applySweep(hits, selfName: UIDevice.current.name,
-            now: Date.timeIntervalSinceReferenceDate, source: source)
+        guard
+            relayNearby.applySweep(
+                hits, selfName: UIDevice.current.name,
+                now: Date.timeIntervalSinceReferenceDate, source: source)
         else { return }
         noteRelayFilteringTransition(from: previous)
     }
 
     private func noteRelayFilteringTransition(from previous: Bool) {
         guard previous != networkFiltersDiscovery else { return }
-        logConnection(networkFiltersDiscovery
-            ? "presence answers where Bonjour is blind \u{2014} multicast filtering detected"
-            : "Bonjour sees every presence again \u{2014} multicast filtering cleared")
+        logConnection(
+            networkFiltersDiscovery
+                ? "presence answers where Bonjour is blind \u{2014} multicast filtering detected"
+                : "Bonjour sees every presence again \u{2014} multicast filtering cleared")
     }
 
     /// Publishes (or stops) this device's own unicast presence line, mirroring exactly what its
@@ -1307,14 +1311,19 @@ final class NativeAppModel {
             }
             host.onControlChanged = { [weak self, weak host] in
                 guard let self, let host, self.relayHost === host else { return }
-                let source = host.sourceToken, revision = host.controlRevision
-                let request = host.pendingRequest, name = host.pendingRequestName, holder = host.controlHolderName
+                let source = host.sourceToken
+                let revision = host.controlRevision
+                let request = host.pendingRequest
+                let name = host.pendingRequestName
+                let holder = host.controlHolderName
                 self.relayPendingRequest = request
                 guard self.relayHost === host, host.sourceToken == source,
-                    host.controlRevision == revision, host.pendingRequest == request else { return }
+                    host.controlRevision == revision, host.pendingRequest == request
+                else { return }
                 self.relayPendingControlRequest = name
                 guard self.relayHost === host, host.sourceToken == source,
-                    host.controlRevision == revision, host.pendingRequest == request else { return }
+                    host.controlRevision == revision, host.pendingRequest == request
+                else { return }
                 self.relayControlHeldBy = holder
             }
             host.onAdmittedCommand = { [weak self, weak host] command, receipt in
@@ -1325,7 +1334,8 @@ final class NativeAppModel {
                     owner: owner, isCurrent: host.capturedCommandAdmission(for: receipt))
                 self.executeRelayCommand(command, admission: admission)
             }
-            relayBroadcastPipeline = MonitorRelayBroadcastPipeline(host: host,
+            relayBroadcastPipeline = MonitorRelayBroadcastPipeline(
+                host: host,
                 profile: preferences.relayEncoderProfile, frameInterval: Self.relayFrameInterval)
             // Peer-to-peer (AWDL) advertising time-slices the radio the camera stream rides —
             // ~30–100 ms locks every second, measured as multi-fps loss on a router path — so it
@@ -1496,20 +1506,27 @@ final class NativeAppModel {
     /// Source/native image projection only. Cadence, adaptation, stage bounds and callbacks are
     /// owned by the shared pipeline against this actual native source's retained admission.
     private func broadcastRelayFrame(image: UIImage) {
-        guard let pipeline = relayBroadcastPipeline, let source = nativePictureSource else { return }
-        let metadata = latestRelayFrameMetadata ?? MonitorRelayFrameMetadata(
-            timecode: nil, isRecording: isRecording, focus: nil, levelRoll: nil,
-            levelPitch: nil, sound: nil)
+        guard let pipeline = relayBroadcastPipeline, let source = nativePictureSource else {
+            return
+        }
+        let metadata =
+            latestRelayFrameMetadata
+            ?? MonitorRelayFrameMetadata(
+                timecode: nil, isRecording: isRecording, focus: nil, levelRoll: nil,
+                levelPitch: nil, sound: nil)
         let admission = RelayFrameAdmission(isCurrent: { [weak self] in
-            source.isActive && self?.nativePictureSource === source && self?.relayBroadcastPipeline === pipeline
+            source.isActive && self?.nativePictureSource === source
+                && self?.relayBroadcastPipeline === pipeline
         })
         let cameraFPS = videoSource == .cameraLiveView ? measuredLiveViewFPS : nil
         if let cgImage = image.cgImage {
-            pipeline.submit(cgImage, metadata: metadata, admission: admission, cameraFPS: cameraFPS,
+            pipeline.submit(
+                cgImage, metadata: metadata, admission: admission, cameraFPS: cameraFPS,
                 soloBaselineFPS: relaySoloFPSBaseline)
         } else {
             let jpeg = MonitorRelayJPEGImage(image)
-            pipeline.submitJPEG(metadata: metadata, admission: admission, cameraFPS: cameraFPS,
+            pipeline.submitJPEG(
+                metadata: metadata, admission: admission, cameraFPS: cameraFPS,
                 soloBaselineFPS: relaySoloFPSBaseline, encode: { jpeg.encode() })
         }
     }
@@ -1832,9 +1849,10 @@ final class NativeAppModel {
         if let roll = metadata.levelRoll { cameraLevelRoll = roll }
         if let pitch = metadata.levelPitch { cameraLevelPitch = pitch }
         observedLiveAudioLevels = metadata.sound.map { sound in
-            MonitorAudioMeterLevels(cameraIndicator: PTPLiveViewSoundIndicator(
-                peakLeft: sound.peakLeft, peakRight: sound.peakRight,
-                currentLeft: sound.currentLeft, currentRight: sound.currentRight))
+            MonitorAudioMeterLevels(
+                cameraIndicator: PTPLiveViewSoundIndicator(
+                    peakLeft: sound.peakLeft, peakRight: sound.peakRight,
+                    currentLeft: sound.currentLeft, currentRight: sound.currentRight))
         }
     }
 
@@ -4503,15 +4521,15 @@ final class NativeAppModel {
                 guard let self else { return false }
                 return self.mediaClipStore.root.absoluteString == root
                     && self.mediaActionStoreGeneration == generation
-            }
-        ) { [weak self] in
-            guard let self else { return false }
-            return self.mediaLibrary === owner && self.mediaLibraryBytes === bytes
-                && self.mediaClipStore.root.absoluteString == root
-                && self.mediaActionStoreGeneration == generation
-                && self.connectionGeneration == connection
-                && self.cameraSession === session
-        }
+            },
+            admitted: { [weak self] in
+                guard let self else { return false }
+                return self.mediaLibrary === owner && self.mediaLibraryBytes === bytes
+                    && self.mediaClipStore.root.absoluteString == root
+                    && self.mediaActionStoreGeneration == generation
+                    && self.connectionGeneration == connection
+                    && self.cameraSession === session
+            })
     }
 
     /// Native callers and deterministic tests use the same delayed result/persistence completion.
@@ -4729,8 +4747,10 @@ final class NativeAppModel {
         let value: String
         let write: PTPCameraPropertyWrite
         let admission: NikonCommandAdmission?
-        init(picker: CameraPicker, value: String, write: PTPCameraPropertyWrite,
-            admission: NikonCommandAdmission? = nil) {
+        init(
+            picker: CameraPicker, value: String, write: PTPCameraPropertyWrite,
+            admission: NikonCommandAdmission? = nil
+        ) {
             self.picker = picker
             self.value = value
             self.write = write
@@ -4990,7 +5010,8 @@ final class NativeAppModel {
                 },
                 onPresences: { [weak self] hits in
                     guard !Task.isCancelled else { return }
-                    await self?.applyRelayPresences(NativeNikonDiscovery.relayPresences(hits),
+                    await self?.applyRelayPresences(
+                        NativeNikonDiscovery.relayPresences(hits),
                         source: presencePublication)
                 }
             )) ?? []
@@ -5508,31 +5529,42 @@ final class NativeAppModel {
         guard isOnCameraAccessPoint else {
             return .init(isCurrent: admission, complete: { _ in })
         }
-        guard let token = await beginInternetHopCaptured(rehostActivePanel: false, admission: admission) else { return nil }
+        guard
+            let token = await beginInternetHopCaptured(
+                rehostActivePanel: false, admission: admission)
+        else { return nil }
         guard await waitForInternetPath(captured: token, timeoutSeconds: 30),
             ownsInternetHop(token), admission(), ownsInternetHop(token)
-        else { await restoreInternetHop(token); return nil }
+        else {
+            await restoreInternetHop(token)
+            return nil
+        }
         externalInternetLinkToken = token
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = true
         guard externalInternetLinkToken == token, ownsInternetHop(token), admission(),
             externalInternetLinkToken == token, ownsInternetHop(token)
-        else { await restoreInternetHop(token); return nil }
-        return .init(isCurrent: { [weak self] in
-            guard let self, self.ownsInternetHop(token) else { return false }
-            let admitted = admission()
-            return admitted && self.ownsInternetHop(token)
-        }, complete: { [weak self] accepted in
-            guard let self else { return }
-            if !accepted {
-                if self.externalInternetLinkToken == token {
-                    self.externalInternetLinkToken = nil
-                    self.externalInternetLinkSawBackground = false
-                    self.externalInternetLinkHandoffActive = false
+        else {
+            await restoreInternetHop(token)
+            return nil
+        }
+        return .init(
+            isCurrent: { [weak self] in
+                guard let self, self.ownsInternetHop(token) else { return false }
+                let admitted = admission()
+                return admitted && self.ownsInternetHop(token)
+            },
+            complete: { [weak self] accepted in
+                guard let self else { return }
+                if !accepted {
+                    if self.externalInternetLinkToken == token {
+                        self.externalInternetLinkToken = nil
+                        self.externalInternetLinkSawBackground = false
+                        self.externalInternetLinkHandoffActive = false
+                    }
+                    await self.restoreInternetHop(token)
                 }
-                await self.restoreInternetHop(token)
-            }
-        })
+            })
     }
 
     /// Shows root-owned progress while an external destination waits for an internet route.
@@ -5555,8 +5587,11 @@ final class NativeAppModel {
         externalInternetLinkToken = nil
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = false
-        if let captured { _ = endInternetHopCaptured(captured) }
-        else if externalInternetLinkToken == nil { endInternetHop() }
+        if let captured {
+            _ = endInternetHopCaptured(captured)
+        } else if externalInternetLinkToken == nil {
+            endInternetHop()
+        }
     }
 
     /// Records that an accepted external page really took OpenZCine into the background. A mere
@@ -5578,8 +5613,11 @@ final class NativeAppModel {
         externalInternetLinkToken = nil
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = false
-        if let captured { _ = endInternetHopCaptured(captured) }
-        else if externalInternetLinkToken == nil { endInternetHop() }
+        if let captured {
+            _ = endInternetHopCaptured(captured)
+        } else if externalInternetLinkToken == nil {
+            endInternetHop()
+        }
     }
 
     /// Re-applies the camera AP config (throttled) while waiting for a just-paired camera to return,
@@ -7757,14 +7795,18 @@ final class NativeAppModel {
             guard cameraSession === session else { return }
             // The operator chose to AF at a point — subsequent releases resume normal AF focus.
             do {
-                if let admission = point.admission { try admission.require(owner: session.commandOwner) }
+                if let admission = point.admission {
+                    try admission.require(owner: session.commandOwner)
+                }
                 focusManuallyDialed = false
                 if let admission = point.admission {
                     try await session.changeAfArea(x: point.x, y: point.y, admission: admission)
                 } else {
                     try await session.changeAfArea(x: point.x, y: point.y)
                 }
-                guard cameraSession === session, connectionGeneration == sourceGeneration else { return }
+                guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                    return
+                }
                 // Moving the point alone never focuses — drive AF like a half-press, with a
                 // short DeviceReady drain so the body isn't left mid-drive. Subject tracking
                 // latches through the same area change. Out-of-focus or a still-busy timeout
@@ -7787,14 +7829,18 @@ final class NativeAppModel {
                     } else {
                         try await session.afDrive()
                     }
-                    guard cameraSession === session, connectionGeneration == sourceGeneration else { return }
+                    guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                        return
+                    }
                     // Drain readiness one poll per safe point instead of sleeping ~0.5 s inline:
                     // this runs INSIDE the live-view frame loop, so blocking here is a visible
                     // feed hitch every time tap-to-focus starts.
                     focusAFSettlePolls = 4
                 }
             } catch {
-                guard cameraSession === session, connectionGeneration == sourceGeneration else { return }
+                guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                    return
+                }
                 if case NativeCameraSessionError.commandAuthorityExpired = error {
                     connectionMessage = error.localizedDescription
                     logConnection("focus point authority expired before the next command")
@@ -8355,7 +8401,9 @@ final class NativeAppModel {
             } else {
                 try await session.writeCameraProperty(pending.write)
             }
-            guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+            guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                return true
+            }
             // A body can sit on a write for seconds (e.g. a focus-mode motor handoff) while
             // it holds the transaction gate — and with it the whole feed. Leave a trace so
             // "the app stalled" reports become attributable to the property that stalled.
@@ -8375,7 +8423,9 @@ final class NativeAppModel {
             // A failed read keeps the requested bytes on screen, but never in the reported
             // snapshot: the seam calls that outcome unknown, not success.
             let readback = try? await session.readCameraProperty(pending.write.property)
-            guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+            guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                return true
+            }
             if let readback {
                 applyCameraRead(pending.write.property, readback)
             } else {
@@ -8399,7 +8449,8 @@ final class NativeAppModel {
                         pendingShutterMode = nil
                         await refreshShutterModeDependentOptions(
                             session: session, mode: requested)
-                        guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+                        guard cameraSession === session, connectionGeneration == sourceGeneration
+                        else { return true }
                     }
                 }
                 if isBaseISOWrite {
@@ -8441,21 +8492,28 @@ final class NativeAppModel {
                 connectionMessage = "\(pending.picker.title) set to \(pending.value)."
             }
         } catch {
-            guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+            guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                return true
+            }
             if case NativeCameraSessionError.commandAuthorityExpired = error {
                 // Refused before the first send, not a camera lock. Keep any valid successor target.
-                let refused = [pending] + pendingCameraWrites.filter {
-                    $0.admission.map { !$0.admits(session.commandOwner) } == true
-                }
+                let refused =
+                    [pending]
+                    + pendingCameraWrites.filter {
+                        $0.admission.map { !$0.admits(session.commandOwner) } == true
+                    }
                 pendingCameraWrites.removeAll {
                     $0.admission.map { !$0.admits(session.commandOwner) } == true
                 }
                 for refusedWrite in refused {
                     let property = refusedWrite.write.property
-                    guard !pendingCameraWrites.contains(where: { $0.write.property == property }) else { continue }
+                    guard !pendingCameraWrites.contains(where: { $0.write.property == property })
+                    else { continue }
                     if property == .movieShutterMode { pendingShutterMode = nil }
                     if property == .movieBaseISO { pendingBaseISOHigh = nil }
-                    if property == .movieISOAutoControl || property == .stillISOAutoControl { pendingISOAuto = nil }
+                    if property == .movieISOAutoControl || property == .stillISOAutoControl {
+                        pendingISOAuto = nil
+                    }
                     if property == .movieTVLockSetting { pendingShutterLockState = nil }
                     if refusedWrite.picker == .whiteBalance { lastCommittedTint = nil }
                 }
@@ -8485,11 +8543,15 @@ final class NativeAppModel {
             if isShutterLockWrite {
                 pendingShutterLockState = nil
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+                    guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                        return true
+                    }
                     applyCameraRead(pending.write.property, actual)
                     publishCameraDisplayState()
                 }
-                guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+                guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                    return true
+                }
                 syncFocusFromSnapshot()
                 syncShutterLockFromSnapshot()
                 let locking = pending.write.data.first == 1
@@ -8499,12 +8561,16 @@ final class NativeAppModel {
                     : "Could not unlock shutter control on camera."
             } else if isShutterModeWrite || isBaseISOWrite {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+                    guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                        return true
+                    }
                     applyCameraRead(pending.write.property, actual)
                     publishCameraDisplayState()
                     syncFocusFromSnapshot()
                 }
-                guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+                guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                    return true
+                }
                 syncShutterLockFromSnapshot()
                 if isShutterModeWrite {
                     connectionMessage =
@@ -8515,12 +8581,16 @@ final class NativeAppModel {
             } else {
                 lockedControls.insert(pending.picker)
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
-                    guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+                    guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                        return true
+                    }
                     applyCameraRead(pending.write.property, actual)
                     publishCameraDisplayState()
                     syncFocusFromSnapshot()
                 }
-                guard cameraSession === session, connectionGeneration == sourceGeneration else { return true }
+                guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                    return true
+                }
                 syncShutterLockFromSnapshot()
                 if isFocusModeWrite {
                     connectionMessage = focusModeWriteFailureMessage(
@@ -9249,7 +9319,9 @@ final class NativeAppModel {
         assist.clean = displaySession.mode == .clean
         if MonitorChromePolicy.dismissesPopupsOnEntry(to: displaySession.mode),
             activePanel?.coversFullScreen == false
-        { dismissActivePanel() }
+        {
+            dismissActivePanel()
+        }
     }
 
     func toggleInterfaceLock() {
@@ -9314,14 +9386,18 @@ final class NativeAppModel {
     /// Done returns to where the operator came from — Display settings, on the section they were
     /// editing — rather than dropping them on the live monitor to find their way back.
     func endChromeEditing() {
-        guard displaySession.finishEditing(order: preferences.enabledDispOrder) != nil else { return }
+        guard displaySession.finishEditing(order: preferences.enabledDispOrder) != nil else {
+            return
+        }
         synchronizeDisplayPresentation()
         operatorSettingsTab = .display
         activePanel = .settings
     }
 
     private func reconcileDisplayModeAfterDispPreferenceChange() {
-        if displaySession.reconcile(order: preferences.enabledDispOrder) { synchronizeDisplayPresentation() }
+        if displaySession.reconcile(order: preferences.enabledDispOrder) {
+            synchronizeDisplayPresentation()
+        }
     }
 
     // MARK: Demo UI mode (simulator capture driving)
@@ -9630,7 +9706,8 @@ final class NativeAppModel {
     private func applyFocusPoint(
         cameraX: Int, cameraY: Int, coordinateWidth: Int, coordinateHeight: Int
     ) {
-        applyFocusPoint(cameraX: cameraX, cameraY: cameraY, coordinateWidth: coordinateWidth,
+        applyFocusPoint(
+            cameraX: cameraX, cameraY: cameraY, coordinateWidth: coordinateWidth,
             coordinateHeight: coordinateHeight, admission: nil)
     }
 
@@ -10481,8 +10558,11 @@ final class NativeAppModel {
     }
 
     /// The shared library captures this before preparation; content and source are never rebound.
-    func captureMediaDeletionAuthority(_ clips: [MediaClip]) -> MonitorMediaLibraryDeletionAuthority? {
-        guard let owner = mediaLibrary, let action = captureMediaLibraryAction(deletionPlan(for: clips).targets)
+    func captureMediaDeletionAuthority(_ clips: [MediaClip])
+        -> MonitorMediaLibraryDeletionAuthority?
+    {
+        guard let owner = mediaLibrary,
+            let action = captureMediaLibraryAction(deletionPlan(for: clips).targets)
         else { return nil }
         return owner.captureDeletion(key: .init("catalog-deletion")) { action.sourceIsCurrent }
     }
@@ -10492,50 +10572,66 @@ final class NativeAppModel {
         admitted authority: MonitorMediaLibraryDeletionAuthority? = nil
     ) async -> Int {
         let targets = deletionPlan(for: clips).targets
-        let owner = mediaLibrary, producer = mediaProducer?.service, session = cameraSession
+        let owner = mediaLibrary
+        let producer = mediaProducer?.service
+        let session = cameraSession
         let action = captureMediaLibraryAction(targets)
         let accepted = authority ?? captureMediaDeletionAuthority(clips)
         if let accepted { action?.admitDeletion(accepted) }
         let plan = targets.map {
-            MonitorMediaDeletionTarget(value: $0, locations: $0.allLocations,
+            MonitorMediaDeletionTarget(
+                value: $0, locations: $0.allLocations,
                 canRemove: $0.allLocations.isEmpty || session != nil || deleteLocation != nil)
         }
-        let port = MonitorMediaDeletionPort<MediaClip, MediaObjectHandle>(remove: { location in
-            if let deleteLocation { return await deleteLocation(location) ? .removed : .retained }
-            guard let session else { return .unknown }
-            return (try? await session.deleteObject(handle: location.handle)) != nil ? .removed : .unknown
-        }, commit: { [weak self] clip, survivors in
-            guard let self, action?.canMutate(clip) != false else { return false }
-            if !survivors.isEmpty {
-                self.mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
-                    $0.storageLocations = survivors; $0.handle = survivors.first?.handle
-                    $0.storageID = survivors.first?.storageID
+        let port = MonitorMediaDeletionPort<MediaClip, MediaObjectHandle>(
+            remove: { location in
+                if let deleteLocation {
+                    return await deleteLocation(location) ? .removed : .retained
                 }
-                return false
-            }
-            self.mediaClipStore.purgeClip(cameraID: clip.cameraID, filename: clip.filename)
-            return true
-        }, finish: { [weak self] in
-            guard let self, action?.isCurrent != false else { return }
-            if let action { action.publish() } else { self.refreshMediaClips() }
-            guard action?.isCurrent != false else { return }
-            self.seedInstantReviewBaseline()
-            if self.isConnected {
-                if let accepted { await self.scheduleFetchClipsFromCamera(afterDeletion: accepted) }
-                else { self.scheduleFetchClipsFromCamera() }
-            }
-        })
+                guard let session else { return .unknown }
+                return (try? await session.deleteObject(handle: location.handle)) != nil
+                    ? .removed : .unknown
+            },
+            commit: { [weak self] clip, survivors in
+                guard let self, action?.canMutate(clip) != false else { return false }
+                if !survivors.isEmpty {
+                    self.mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
+                        $0.storageLocations = survivors
+                        $0.handle = survivors.first?.handle
+                        $0.storageID = survivors.first?.storageID
+                    }
+                    return false
+                }
+                self.mediaClipStore.purgeClip(cameraID: clip.cameraID, filename: clip.filename)
+                return true
+            },
+            finish: { [weak self] in
+                guard let self, action?.isCurrent != false else { return }
+                if let action { action.publish() } else { self.refreshMediaClips() }
+                guard action?.isCurrent != false else { return }
+                self.seedInstantReviewBaseline()
+                if self.isConnected {
+                    if let accepted {
+                        await self.scheduleFetchClipsFromCamera(afterDeletion: accepted)
+                    } else {
+                        self.scheduleFetchClipsFromCamera()
+                    }
+                }
+            })
         if let owner, let accepted {
-            return await owner.deleteHostBatch(accepted, targets: plan, selectedCount: clips.count,
+            return await owner.deleteHostBatch(
+                accepted, targets: plan, selectedCount: clips.count,
                 preparation: .retireGallery, prepare: { producer?.cancelCatalog() }, port: port)
         }
         // A local-only caller has no browse lease. It uses the same ordered executor and source ACKs.
         producer?.cancelCatalog()
         defer { if action?.isCurrent != false { mediaDeletionProgress = nil } }
-        return await MonitorMediaOrderedDeletion.run(plan, selectedCount: clips.count,
+        return await MonitorMediaOrderedDeletion.run(
+            plan, selectedCount: clips.count,
             ifCurrent: { action?.isCurrent != false }, port: port,
             progress: { [weak self] in
-                self?.mediaDeletionProgress = .init(completed: $0.completed, total: $0.total, selectedCount: $0.selectedCount)
+                self?.mediaDeletionProgress = .init(
+                    completed: $0.completed, total: $0.total, selectedCount: $0.selectedCount)
             })
     }
 
@@ -10853,14 +10949,16 @@ final class NativeAppModel {
                     let ceiling = PTPCameraPropertyWrite(
                         property: .burstNumber, data: Data(ByteCoding.uint16LE(65535)))
                     if let admission = work.admission {
-                        do { try await session.changeCameraMode(remote: true, admission: admission) }
-                        catch { try admission.require(owner: session.commandOwner) }
+                        do {
+                            try await session.changeCameraMode(remote: true, admission: admission)
+                        } catch { try admission.require(owner: session.commandOwner) }
                         guard cameraSession === session else { return true }
                         // Entered remote mode must be released by the original cleanup even if
                         // the following unsent ceiling/release is refused after retirement.
                         remoteModeHeldForBurst = true
-                        do { try await session.writeCameraProperty(ceiling, admission: admission) }
-                        catch { try admission.require(owner: session.commandOwner) }
+                        do {
+                            try await session.writeCameraProperty(ceiling, admission: admission)
+                        } catch { try admission.require(owner: session.commandOwner) }
                     } else {
                         try? await session.changeCameraMode(remote: true)
                         try? await session.writeCameraProperty(ceiling)
@@ -11087,21 +11185,25 @@ final class NativeAppModel {
         watchRelayActivated = true
         watchRelay.onToggleRecord = { [weak self] in
             self?.watchToggleRecord()
-                ?? OpenZCineCore.WatchCommandResult(accepted: false, isRecording: false, error: "unavailable")
+                ?? OpenZCineCore.WatchCommandResult(
+                    accepted: false, isRecording: false, error: "unavailable")
         }
         watchRelay.onCapture = { [weak self] in
             self?.watchCapture()
-                ?? OpenZCineCore.WatchCommandResult(accepted: false, isRecording: false, error: "unavailable")
+                ?? OpenZCineCore.WatchCommandResult(
+                    accepted: false, isRecording: false, error: "unavailable")
         }
         watchRelay.onAdmittedToggleRecord = { [weak self] receipt in
             guard let self, let admission = self.watchCommandAdmission(receipt) else {
-                return OpenZCineCore.WatchCommandResult(accepted: false, isRecording: false, error: "unavailable")
+                return OpenZCineCore.WatchCommandResult(
+                    accepted: false, isRecording: false, error: "unavailable")
             }
             return self.watchToggleRecord(admission: admission)
         }
         watchRelay.onAdmittedCapture = { [weak self] receipt in
             guard let self, let admission = self.watchCommandAdmission(receipt) else {
-                return OpenZCineCore.WatchCommandResult(accepted: false, isRecording: false, error: "unavailable")
+                return OpenZCineCore.WatchCommandResult(
+                    accepted: false, isRecording: false, error: "unavailable")
             }
             return self.watchCapture(admission: admission)
         }
@@ -11184,9 +11286,11 @@ final class NativeAppModel {
 
     func watchCapture() -> OpenZCineCore.WatchCommandResult { watchCapture(admission: nil) }
 
-    private func watchCapture(admission: NikonCommandAdmission?) -> OpenZCineCore.WatchCommandResult {
+    private func watchCapture(admission: NikonCommandAdmission?) -> OpenZCineCore.WatchCommandResult
+    {
         guard admitsCameraCommand(admission) else {
-            return OpenZCineCore.WatchCommandResult(accepted: false, isRecording: isRecording, error: "unavailable")
+            return OpenZCineCore.WatchCommandResult(
+                accepted: false, isRecording: isRecording, error: "unavailable")
         }
         let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
             selector: cameraPropertySnapshot.captureSelector)
@@ -11197,14 +11301,20 @@ final class NativeAppModel {
         }
         captureStill(admission: admission)
         publishWatchState()
-        return OpenZCineCore.WatchCommandResult(accepted: true, isRecording: isRecording, error: nil)
+        return OpenZCineCore.WatchCommandResult(
+            accepted: true, isRecording: isRecording, error: nil)
     }
 
-    func watchToggleRecord() -> OpenZCineCore.WatchCommandResult { watchToggleRecord(admission: nil) }
+    func watchToggleRecord() -> OpenZCineCore.WatchCommandResult {
+        watchToggleRecord(admission: nil)
+    }
 
-    private func watchToggleRecord(admission: NikonCommandAdmission?) -> OpenZCineCore.WatchCommandResult {
+    private func watchToggleRecord(admission: NikonCommandAdmission?)
+        -> OpenZCineCore.WatchCommandResult
+    {
         guard admitsCameraCommand(admission) else {
-            return OpenZCineCore.WatchCommandResult(accepted: false, isRecording: isRecording, error: "unavailable")
+            return OpenZCineCore.WatchCommandResult(
+                accepted: false, isRecording: isRecording, error: "unavailable")
         }
         let wasRecording = isRecording
         executeRecord(start: !wasRecording, admission: admission)
@@ -11652,14 +11762,20 @@ final class NativeAppModel {
     @ObservationIgnored private var tintAmberBlueNeedsNotification = false
     @ObservationIgnored private var tintGreenMagentaNeedsNotification = false
     var whiteBalanceTintAB: Int {
-        get { access(keyPath: \.whiteBalanceTintAB); return whiteBalanceTintCells.amberBlue }
+        get {
+            access(keyPath: \.whiteBalanceTintAB)
+            return whiteBalanceTintCells.amberBlue
+        }
         set {
             whiteBalanceTintCells.amberBlue = newValue
             notifyWhiteBalanceTint(amberBlue: true, greenMagenta: false)
         }
     }
     var whiteBalanceTintGM: Int {
-        get { access(keyPath: \.whiteBalanceTintGM); return whiteBalanceTintCells.greenMagenta }
+        get {
+            access(keyPath: \.whiteBalanceTintGM)
+            return whiteBalanceTintCells.greenMagenta
+        }
         set {
             whiteBalanceTintCells.greenMagenta = newValue
             notifyWhiteBalanceTint(amberBlue: false, greenMagenta: true)
@@ -11764,7 +11880,8 @@ final class NativeAppModel {
                 self.connectionGeneration == generation, !self.isDemoSession,
                 self.isPhotographyMode == photography,
                 self.cameraPropertySnapshot.activeWBMode(photography: photography) == mode,
-                let cells = WhiteBalanceTint.cells(fromPropertyValue: raw) else {
+                let cells = WhiteBalanceTint.cells(fromPropertyValue: raw)
+            else {
                 return
             }
             publishWhiteBalanceTint(amberBlue: cells.amberBlue, greenMagenta: cells.greenMagenta)
@@ -11788,7 +11905,9 @@ final class NativeAppModel {
     /// inside a relayed picker command and dispatches to the helper instead of the generic
     /// value write. Both ends pin the same wire version, so the vocabulary cannot drift.
     /// Returns true when the value was a helper's.
-    private func routeRelayHelperValue(_ value: String, for picker: CameraPicker, admission: NikonCommandAdmission) -> Bool {
+    private func routeRelayHelperValue(
+        _ value: String, for picker: CameraPicker, admission: NikonCommandAdmission
+    ) -> Bool {
         switch (picker, value) {
         case (.iso, "High base"), (.iso, "Low base"):
             switchBaseISO(highBase: value == "High base", admission: admission)
@@ -11927,7 +12046,9 @@ final class NativeAppModel {
         switchAutoISO(enabled: false)
     }
 
-    func switchShutterMode(speedMode: Bool) { switchShutterMode(speedMode: speedMode, admission: nil) }
+    func switchShutterMode(speedMode: Bool) {
+        switchShutterMode(speedMode: speedMode, admission: nil)
+    }
 
     private func switchShutterMode(speedMode: Bool, admission: NikonCommandAdmission?) {
         guard admitsCameraCommand(admission) else { return }
@@ -11950,7 +12071,9 @@ final class NativeAppModel {
             cameraControlOptions.removeValue(forKey: staleProperty)
         }
         enqueueCameraWrite(
-            PendingCameraWrite(picker: .shutter, value: speedMode ? "Speed" : "Angle", write: write, admission: admission)
+            PendingCameraWrite(
+                picker: .shutter, value: speedMode ? "Speed" : "Angle", write: write,
+                admission: admission)
         )
         connectionMessage =
             "Queued shutter \(speedMode ? "speed" : "angle") mode for the next live-view safe point."
@@ -13709,21 +13832,29 @@ extension NativeAppModel {
     /// `identityProbeBudget` caps how many reused handles are `GetObjectInfo`'d to
     /// catch a formatted card that recycled PTP handles (#296).
     func scheduleFetchClipsFromCamera(identityProbeBudget: Int = 8) {
-        guard let owner = prepareCameraMediaListing(identityProbeBudget: identityProbeBudget) else { return }
+        guard let owner = prepareCameraMediaListing(identityProbeBudget: identityProbeBudget) else {
+            return
+        }
         if owner.browsing { owner.refresh() } else { owner.begin() }
     }
 
     /// Only the exact finished deletion may carry its photo return through this planned relist.
-    func scheduleFetchClipsFromCamera(afterDeletion authority: MonitorMediaLibraryDeletionAuthority,
-        identityProbeBudget: Int = 8) async {
+    func scheduleFetchClipsFromCamera(
+        afterDeletion authority: MonitorMediaLibraryDeletionAuthority,
+        identityProbeBudget: Int = 8
+    ) async {
         guard authority.isCompleting, let captured = mediaLibrary,
-            captured.cache.directory === authority.directory else { return }
+            captured.cache.directory === authority.directory
+        else { return }
         guard let owner = prepareCameraMediaListing(identityProbeBudget: identityProbeBudget),
-            owner === captured, authority.isCompleting else { return }
+            owner === captured, authority.isCompleting
+        else { return }
         await owner.relist(after: authority)
     }
 
-    private func prepareCameraMediaListing(identityProbeBudget: Int) -> MonitorMediaLibraryModel<MediaClip>? {
+    private func prepareCameraMediaListing(identityProbeBudget: Int) -> MonitorMediaLibraryModel<
+        MediaClip
+    >? {
         guard let service = currentMediaService() else { return nil }
         let bucket = mediaBucketID
         let cached = mediaClipStore.list(cameraID: bucket)
@@ -13766,11 +13897,14 @@ extension NativeAppModel {
     func captureOperatorMediaCacheSource() -> MonitorSettingsCacheSource {
         let root = mediaClipStore.root
         let revision = mediaActionStoreGeneration
-        return .init(identity: .init(namespace: root.path, source: nil), revision: revision,
+        return .init(
+            identity: .init(namespace: root.path, source: nil), revision: revision,
             isCurrent: { [weak self] in self?.mediaClipStore.root == root },
             count: { [weak self] in self?.totalMediaCacheByteCount() ?? 0 },
             clear: { [weak self] in
-                guard let self, self.mediaClipStore.root == root, self.mediaActionStoreGeneration == revision else {
+                guard let self, self.mediaClipStore.root == root,
+                    self.mediaActionStoreGeneration == revision
+                else {
                     throw CancellationError()
                 }
                 self.clearAllMediaCaches()
@@ -13780,26 +13914,40 @@ extension NativeAppModel {
     /// UI actions keep the actual relay source, lease revision and request peer they displayed.
     func captureOperatorSettingsWatchers() -> MonitorSettingsWatchersSource? {
         guard isRelayBroadcasting, let host = relayHost else { return nil }
-        let source = host.sourceToken, revision = host.controlRevision
+        let source = host.sourceToken
+        let revision = host.controlRevision
         let current: () -> Bool = { [weak self, weak host] in
             guard let self, let host else { return false }
-            return self.relayHost === host && host.sourceToken == source && host.controlRevision == revision
+            return self.relayHost === host && host.sourceToken == source
+                && host.controlRevision == revision
         }
-        let request = relayPendingControlRequest.flatMap { name -> MonitorSettingsWatchersSource.Request? in
-            guard let captured = relayPendingRequest, host.pendingRequest == captured else { return nil }
-            return .init(name: name,
-                help: "A device watching this feed is asking to drive the camera. Granting it does not move the camera link: this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly.",
-                decline: { if current(), host.pendingRequest == captured { host.declinePendingControl() } },
-                grant: { if current(), host.pendingRequest == captured { host.grantPendingControl() } })
+        let request = relayPendingControlRequest.flatMap {
+            name -> MonitorSettingsWatchersSource.Request? in
+            guard let captured = relayPendingRequest, host.pendingRequest == captured else {
+                return nil
+            }
+            return .init(
+                name: name,
+                help:
+                    "A device watching this feed is asking to drive the camera. Granting it does not move the camera link: this device keeps that and runs the other one's commands on its behalf, so you can take control back instantly.",
+                decline: {
+                    if current(), host.pendingRequest == captured { host.declinePendingControl() }
+                },
+                grant: {
+                    if current(), host.pendingRequest == captured { host.grantPendingControl() }
+                })
         }
         let holder = relayControlHeldBy.map { name in
             let peer = host.controlHolder
-            return MonitorSettingsWatchersSource.Holder(name: name,
+            return MonitorSettingsWatchersSource.Holder(
+                name: name,
                 help: "Take the camera back. This device holds the link, so it never has to ask.",
                 reclaim: { if current(), host.controlHolder == peer { host.reclaimControl() } })
         }
-        return .init(watching: relayPeerCount == 1 ? "1 device" : "\(relayPeerCount) devices",
-            watchingHelp: "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control.",
+        return .init(
+            watching: relayPeerCount == 1 ? "1 device" : "\(relayPeerCount) devices",
+            watchingHelp:
+                "Devices currently receiving this feed. They see the picture and every view-assist tool, and cannot change anything on the camera unless handed control.",
             request: request, holder: holder)
     }
 
@@ -14150,14 +14298,13 @@ extension CameraPicker {
     }
 }
 
-
 extension NativeAppModel {
     /// Actual source lease/freshness and decoded camera reports for opted-in physical checks.
     var nativeQualificationSnapshot: MonitorNativeQualificationSnapshot {
         #if targetEnvironment(simulator)
-        let simulated = true
+            let simulated = true
         #else
-        let simulated = isDemoSession
+            let simulated = isDemoSession
         #endif
         let source = nativePictureSource
         return MonitorNativeQualificationSnapshot(

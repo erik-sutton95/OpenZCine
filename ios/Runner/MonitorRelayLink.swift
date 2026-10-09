@@ -79,13 +79,17 @@ extension RelayAppleInUseBeacon {
 enum MonitorRelayNearbyComposition {
     static func make() -> RelayNearbyOwner<MonitorRelayDiscovery, RelayPresence> {
         .init(
-            policy: .init(hiddenIdentity: .sourceAddress, duplicateIdentity: .allListings,
+            policy: .init(
+                hiddenIdentity: .sourceAddress, duplicateIdentity: .allListings,
                 removesPresenceOnListingRemoval: true, confirmation: .watchableAnswers),
             listingFacts: { .init(name: $0.name, isWatchable: $0.isWatchable) },
             presenceFacts: { .init(name: $0.n, isWatchable: $0.isWatchable, relayPort: $0.p) },
             presenceListing: { host, rawPort, presence in
-                guard let port = NWEndpoint.Port(rawValue: UInt16(clamping: rawPort)) else { return nil }
-                return MonitorRelayDiscovery(id: "presence:\(host)", name: presence.n,
+                guard let port = NWEndpoint.Port(rawValue: UInt16(clamping: rawPort)) else {
+                    return nil
+                }
+                return MonitorRelayDiscovery(
+                    id: "presence:\(host)", name: presence.n,
                     endpoint: .hostPort(host: NWEndpoint.Host(host), port: port),
                     servedCameraHost: presence.ch, isWatchable: true)
             })

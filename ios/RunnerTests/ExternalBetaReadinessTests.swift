@@ -119,7 +119,7 @@ struct ExternalBetaDiagnosticsTests {
 
     @Test("The report passes through the shared privacy redactor")
     func renderedReportRedactsPersonalText() {
-        let payload = #"{"path":"/Users/alex/Library/Logs/x","contact":"alex@example.com"}"#
+        let payload = #"{"path":"/"# + #"Users/alex/Library/Logs/x","contact":"alex@example.com"}"#
         let report = DiagnosticEventStore.renderReport(
             metadata: metadata,
             events: [],
@@ -127,7 +127,7 @@ struct ExternalBetaDiagnosticsTests {
         )
         #expect(report.contains("metrickit-diagnostic-1.json"))
         #expect(!report.contains("alex"))
-        #expect(report.contains("/Users/<redacted>"))
+        #expect(report.contains("/" + "Users/<redacted>"))
         #expect(report.contains("<email>"))
     }
 

@@ -1,10 +1,10 @@
 import AVFoundation
 import OSLog
-import OpenCineApple
+import Observation
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineMedia
 import OpenZCineCore
-import Observation
 
 private let playbackAudioLogger = Logger(subsystem: "OpenZCine", category: "media-playback-audio")
 
@@ -52,7 +52,8 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
     }
 
     func bundle(samples: ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
-        var result = ScopeAssistSampling.bundle(samples: samples,
+        var result = ScopeAssistSampling.bundle(
+            samples: samples,
             trafficLightsCrushClip: trafficLightsCrushClip, mapping: mapping,
             vectorscopeCube: vectorscopeCube, previous: previous)
         result.transfer = transfer
@@ -66,7 +67,9 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
 /// and samples from the compositor source, before the display look and false color.
 @MainActor @Observable final class NikonPlaybackAssistAdapter: MonitorPlaybackAssistService {
     private(set) var audioLevels: MonitorAudioMeterLevels?
-    let scopes = MonitorPlaybackScopeSession<NikonPlaybackScopeConfiguration>(cadence: .milliseconds(84)) {
+    let scopes = MonitorPlaybackScopeSession<NikonPlaybackScopeConfiguration>(
+        cadence: .milliseconds(84)
+    ) {
         samples, configuration, previous in
         await Task.detached(priority: .utility) {
             configuration.bundle(samples: samples, previous: previous)
@@ -94,15 +97,19 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
         if value.levelAxis == nil, let model {
             let mapping = model.playbackExposureSignalMapping
             value.levelAxis = mapping.scopeLevelAxis
-            value.transfer = NikonPlaybackScopeConfiguration(trafficLightsCrushClip: model.assist.crushClipCompensation,
-                mapping: mapping, vectorscopeCube: nil).transfer
+            value.transfer =
+                NikonPlaybackScopeConfiguration(
+                    trafficLightsCrushClip: model.assist.crushClipCompensation,
+                    mapping: mapping, vectorscopeCube: nil
+                ).transfer
             value.clipByte = Int(mapping.clipNative.rounded())
         }
         return value
     }
 
     init(model: NativeAppModel, native: NikonPlaybackNativePort) {
-        self.model = model; self.native = native
+        self.model = model
+        self.native = native
         native.beforeItemRetirement = { [weak self] in self?.retireNativeItem() }
         native.afterItemInstallation = { [weak self] item in self?.install(item) }
     }
@@ -114,24 +121,33 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
         MediaPlaybackAudioSession.activateForPlayback()
     }
 
-    func synchronize(item: MonitorPlaybackItemToken, effects: MonitorFrameEffects,
-        audioVisible: Bool, outputMuted: Bool, ifCurrent: @escaping @MainActor () -> Bool) {
+    func synchronize(
+        item: MonitorPlaybackItemToken, effects: MonitorFrameEffects,
+        audioVisible: Bool, outputMuted: Bool, ifCurrent: @escaping @MainActor () -> Bool
+    ) {
         guard !closed else { return }
-        request = UUID(); let invocation = request, before = revision
+        request = UUID()
+        let invocation = request
+        let before = revision
         guard ifCurrent(), !closed, request == invocation, revision == before else { return }
         if token != item { revision = UUID() }
         let captured = revision
-        token = item; admission = ifCurrent
-        self.audioVisible = audioVisible; scopesVisible = effects.needsScopes
+        token = item
+        admission = ifCurrent
+        self.audioVisible = audioVisible
+        scopesVisible = effects.needsScopes
         activate()
         guard current(item, revision: captured, request: invocation) else { return }
-        if let nativeItem = native.player.currentItem, installed !== nativeItem { install(nativeItem) }
+        if let nativeItem = native.player.currentItem, installed !== nativeItem {
+            install(nativeItem)
+        }
         guard current(item, revision: captured, request: invocation), let model else { return }
         let resolved = model.resolvedPlaybackEffects()
         guard current(item, revision: captured, request: invocation) else { return }
         let changed = box.set(effects: resolved)
         if changed, native.player.rate == 0, let nativeItem = installed,
-            native.player.currentItem === nativeItem, nativeItem.videoComposition != nil {
+            native.player.currentItem === nativeItem, nativeItem.videoComposition != nil
+        {
             nativeItem.videoComposition = box.makeVideoComposition(for: nativeItem.asset)
         }
         guard current(item, revision: captured, request: invocation) else { return }
@@ -140,17 +156,26 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
 
     private func install(_ item: AVPlayerItem) {
         guard !closed, let token, native.player.currentItem === item,
-            current(token, revision: revision), let model else { return }
+            current(token, revision: revision), let model
+        else { return }
         let captured = revision
         if installed !== item {
-            meter.stopPolling(); polling = false
-            meter.detach(from: installed); audioLevels = nil
-            guard current(token, revision: captured), native.player.currentItem === item else { return }
+            meter.stopPolling()
+            polling = false
+            meter.detach(from: installed)
+            audioLevels = nil
+            guard current(token, revision: captured), native.player.currentItem === item else {
+                return
+            }
             installed = item
             if DemoHarness.mediaLUT { model.setAssist(.lut, visible: true) }
-            guard current(token, revision: captured), native.player.currentItem === item else { return }
+            guard current(token, revision: captured), native.player.currentItem === item else {
+                return
+            }
             _ = box.set(effects: model.resolvedPlaybackEffects())
-            guard current(token, revision: captured), native.player.currentItem === item else { return }
+            guard current(token, revision: captured), native.player.currentItem === item else {
+                return
+            }
             item.videoComposition = box.makeVideoComposition(for: item.asset)
             meter.attach(to: item)
         }
@@ -162,14 +187,17 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
         let configuration = NikonPlaybackScopeConfiguration(
             trafficLightsCrushClip: model.assist.crushClipCompensation,
             mapping: model.playbackExposureSignalMapping,
-            vectorscopeCube: model.vectorscopeMonitorCube(visibleTools: model.assist.playbackTools,
+            vectorscopeCube: model.vectorscopeMonitorCube(
+                visibleTools: model.assist.playbackTools,
                 curve: model.playbackExposureSignalMapping.curve))
         guard current(item, revision: captured) else { return }
         box.setScopesActive(scopesVisible)
-        scopes.synchronize(item: item, enabled: scopesVisible, configuration: configuration,
+        scopes.synchronize(
+            item: item, enabled: scopesVisible, configuration: configuration,
             read: { [weak self] in
                 guard let self, self.current(item, revision: captured),
-                    let installed = self.installed, self.native.player.currentItem === installed else { return nil }
+                    let installed = self.installed, self.native.player.currentItem === installed
+                else { return nil }
                 let snapshot = self.box.readScopeSnapshot()
                 return .init(revision: snapshot.revision, samples: snapshot.samples)
             }, ifCurrent: { [weak self] in self?.current(item, revision: captured) == true })
@@ -182,13 +210,18 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
                 self.audioLevels = levels
             }
         } else if !audioVisible {
-            polling = false; meter.stopPolling(); audioLevels = nil
+            polling = false
+            meter.stopPolling()
+            audioLevels = nil
         }
     }
 
-    private func current(_ item: MonitorPlaybackItemToken, revision captured: UUID, request expected: UUID? = nil) -> Bool {
+    private func current(
+        _ item: MonitorPlaybackItemToken, revision captured: UUID, request expected: UUID? = nil
+    ) -> Bool {
         guard !closed, revision == captured, token == item, native.token == item,
-            expected == nil || request == expected, let admission else { return false }
+            expected == nil || request == expected, let admission
+        else { return false }
         let admitted = admission()
         return admitted && !closed && revision == captured && token == item && native.token == item
             && (expected == nil || request == expected)
@@ -196,18 +229,28 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
 
     private func retireNativeItem() {
         let previous = token
-        revision = UUID(); request = UUID(); token = nil; admission = nil
-        box.invalidateScopeComposition(); box.setScopesActive(false)
+        revision = UUID()
+        request = UUID()
+        token = nil
+        admission = nil
+        box.invalidateScopeComposition()
+        box.setScopesActive(false)
         if let previous { scopes.retire(item: previous) }
-        polling = false; meter.stopPolling(); meter.detach(from: installed)
-        installed = nil; audioLevels = nil
+        polling = false
+        meter.stopPolling()
+        meter.detach(from: installed)
+        installed = nil
+        audioLevels = nil
     }
 
     func close() {
         guard !closed else { return }
         closed = true
-        retireNativeItem(); scopes.close(); meter.close()
-        native.beforeItemRetirement = nil; native.afterItemInstallation = nil
+        retireNativeItem()
+        scopes.close()
+        meter.close()
+        native.beforeItemRetirement = nil
+        native.afterItemInstallation = nil
         if activated {
             MediaPlaybackAudioSession.deactivateAfterPlayback()
             model?.setMediaPlaybackOwnsAudioSession(false)

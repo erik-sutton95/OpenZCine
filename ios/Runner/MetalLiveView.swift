@@ -108,7 +108,9 @@ struct MetalLiveView: UIViewRepresentable {
         context.coordinator.update(image: image, effects: effects, source: source)
         context.coordinator.attach(view: view)
         if let qualification {
-            context.coordinator.qualificationProbe = MonitorNativeQualificationProbe.install(in: view) {
+            context.coordinator.qualificationProbe = MonitorNativeQualificationProbe.install(
+                in: view
+            ) {
                 [weak coordinator = context.coordinator] in
                 coordinator?.qualificationSnapshot(qualification)
             }
@@ -119,7 +121,8 @@ struct MetalLiveView: UIViewRepresentable {
     func updateUIView(_ uiView: MTKView, context: Context) {
         let needsRedraw = context.coordinator.update(image: image, effects: effects, source: source)
         if let qualification {
-            context.coordinator.qualificationProbe?.snapshot = { [weak coordinator = context.coordinator] in
+            context.coordinator.qualificationProbe?.snapshot = {
+                [weak coordinator = context.coordinator] in
                 coordinator?.qualificationSnapshot(qualification)
             }
         }

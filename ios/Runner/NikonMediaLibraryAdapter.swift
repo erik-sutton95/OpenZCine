@@ -92,8 +92,10 @@ import OpenZCineCore
                 representations: [representation: String(media.dropFirst(root.count))],
                 favoriteKey: clip.id),
             favorite: clip.isFavorited,
-            facts: .init(orderKey: clip.captureDate.isEmpty ? clip.filename : clip.captureDate,
-                playbackEligible: clip.mediaKind == .photo || MediaClipFilename.isPlayableProxy(clip.filename)),
+            facts: .init(
+                orderKey: clip.captureDate.isEmpty ? clip.filename : clip.captureDate,
+                playbackEligible: clip.mediaKind == .photo
+                    || MediaClipFilename.isPlayableProxy(clip.filename)),
             favoriteAuthority: .legacyCombined,
             sourceFavorite: clip.starRating.map { $0 >= 1 })
     }

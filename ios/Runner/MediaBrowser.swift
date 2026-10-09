@@ -4,8 +4,8 @@ import MonitorPresentation
 import MonitorUI
 import OSLog
 import OpenCineAppKit
-import OpenCineCameraControls
 import OpenCineApple
+import OpenCineCameraControls
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -191,7 +191,8 @@ struct MediaBrowserView: View {
         ZStack {
             if let library = model.mediaLibrary {
                 let projection = model.mediaGalleryProjection
-                MonitorOperatorCatalogScreen(library: library, brand: "OpenZCine", safeArea: resolvedSafeArea,
+                MonitorOperatorCatalogScreen(
+                    library: library, brand: "OpenZCine", safeArea: resolvedSafeArea,
                     sourceAvailable: model.isConnected, operations: operations,
                     presentation: model.mediaGalleryPresentation(projection), navigation: navigate,
                     sourceFilter: model.applyMediaGalleryFilter,
@@ -202,52 +203,79 @@ struct MediaBrowserView: View {
                             : nil
                     },
                     facts: { record in
-                        .init(resolution: record.payload.resolutionBucket?.rawValue,
-                            byteCount: record.payload.sizeBytes > 0 ? record.payload.sizeBytes : nil,
+                        .init(
+                            resolution: record.payload.resolutionBucket?.rawValue,
+                            byteCount: record.payload.sizeBytes > 0
+                                ? record.payload.sizeBytes : nil,
                             durationSeconds: nil, dateKey: nil, colorLabel: nil,
                             progress: model.isClipStreaming(record.payload)
                                 ? model.mediaDownloadProgress[record.payload.id] : nil)
-                    }, cell: { record, context in
-                        let clip = record.payload, downloaded = model.isClipDownloaded(clip)
+                    },
+                    cell: { record, context in
+                        let clip = record.payload
+                        let downloaded = model.isClipDownloaded(clip)
                         let raw = model.rawSibling(of: clip) != nil
-                        return MediaClipCellPresentation.item(clip: clip,
-                            detail: context.list ? MediaClipCellPresentation.metadataLine(clip,
-                                hasRawSibling: raw, duration: context.duration, isDownloaded: downloaded) : "",
-                            isDownloaded: downloaded, cacheProgress: model.mediaDownloadProgress[clip.id]
+                        return MediaClipCellPresentation.item(
+                            clip: clip,
+                            detail: context.list
+                                ? MediaClipCellPresentation.metadataLine(
+                                    clip,
+                                    hasRawSibling: raw, duration: context.duration,
+                                    isDownloaded: downloaded) : "",
+                            isDownloaded: downloaded,
+                            cacheProgress: model.mediaDownloadProgress[clip.id]
                                 ?? model.clipBufferedFraction(clip),
                             isStreaming: model.isClipStreaming(clip), hasRawSibling: raw,
-                            burstCount: projection.series(for: clip)?.count, duration: context.duration,
+                            burstCount: projection.series(for: clip)?.count,
+                            duration: context.duration,
                             list: context.list, selecting: context.selecting)
                     }, begin: begin, refresh: model.refreshCameraMediaInventory,
                     close: model.dismissMediaLibrary, open: open,
                     share: { records, token in
-                        guard library.isCurrent(token), let admission = model.captureMediaLibraryAction(records.map(\.payload)),
-                            admission.isCurrent else { return }
-                        guard let capture = NikonMediaDeliveryCapture(model: model, clips: records.map(\.payload), action: admission),
-                            library.isCurrent(token), capture.isCurrent else { return }
+                        guard library.isCurrent(token),
+                            let admission = model.captureMediaLibraryAction(records.map(\.payload)),
+                            admission.isCurrent
+                        else { return }
+                        guard
+                            let capture = NikonMediaDeliveryCapture(
+                                model: model, clips: records.map(\.payload), action: admission),
+                            library.isCurrent(token), capture.isCurrent
+                        else { return }
                         deliveryAdmission = admission
                         deliveryRequest = .init(clips: capture.clips, capture: capture)
-                    }) { request in
-                        let clip = request.record.payload
-                        MediaClipThumbnail(clip: clip, list: request.list,
-                            isDownloaded: model.isClipDownloaded(clip), localURL: model.clipLocalURL(clip),
-                            thumbnailURL: model.clipThumbnailURL(clip), needsDuration: request.resolvedDuration == nil,
-                            onDuration: { if request.isCurrent() { request.duration($0) } })
                     }
+                ) { request in
+                    let clip = request.record.payload
+                    MediaClipThumbnail(
+                        clip: clip, list: request.list,
+                        isDownloaded: model.isClipDownloaded(clip),
+                        localURL: model.clipLocalURL(clip),
+                        thumbnailURL: model.clipThumbnailURL(clip),
+                        needsDuration: request.resolvedDuration == nil,
+                        onDuration: { if request.isCurrent() { request.duration($0) } })
+                }
             } else {
-                ProgressView().tint(MonitorTheme.muted).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(MonitorTheme.canvas).onAppear { model.refreshMediaClips() }
+                ProgressView().tint(MonitorTheme.muted).frame(
+                    maxWidth: .infinity, maxHeight: .infinity
+                )
+                .background(MonitorTheme.canvas).onAppear { model.refreshMediaClips() }
             }
             deliveryOverlays
         }
         .ignoresSafeArea().observeMonitorWindowGeometry()
         .fullScreenCover(item: $playing, onDismiss: { resumeShareDestination = nil }) { request in
-            MediaPlayerView(clips: request.playlist.map(\.payload), startingAt: request.record.payload,
-                initialShareDestination: resumeShareDestination, opening: request)
-                .environment(model).environment(deliveryCoordinator)
+            MediaPlayerView(
+                clips: request.playlist.map(\.payload), startingAt: request.record.payload,
+                initialShareDestination: resumeShareDestination, opening: request
+            )
+            .environment(model).environment(deliveryCoordinator)
         }
-        .fullScreenCover(item: $photo) { request in MediaPhotoViewer(clip: request.record.payload, opening: request).environment(model) }
-        .fullScreenCover(item: $series) { request in MediaBurstSeriesView(opening: request).environment(model) }
+        .fullScreenCover(item: $photo) { request in
+            MediaPhotoViewer(clip: request.record.payload, opening: request).environment(model)
+        }
+        .fullScreenCover(item: $series) { request in
+            MediaBurstSeriesView(opening: request).environment(model)
+        }
         .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
         .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
         .onDisappear { deliveryCoordinator.exitLocalOverlayContext() }
@@ -255,24 +283,34 @@ struct MediaBrowserView: View {
     }
 
     private var operations: MonitorMediaGalleryOperations<MediaClip> {
-        .init(download: { record in
-            guard let action = model.captureMediaLibraryAction([record.payload]), action.isCurrent else { return }
-            _ = await model.cacheClipFromCamera(record.payload)
-        }, favorite: { record in model.toggleClipFavorite(record.payload) },
-        acceptedDeletion: .init(capture: { records in model.captureMediaDeletionAuthority(records.map(\.payload)) },
-            perform: { records, authority in _ = await model.deleteMediaClips(records.map(\.payload), deleteLocation: nil, admitted: authority) }),
-        access: { record in
-            .init(download: model.isConnected && record.payload.handle != nil && !model.isClipDownloaded(record.payload),
-                share: true, delete: true)
-        }, deletionMessage: { model.deletionConfirmMessage(for: $0.map(\.payload)) },
-        openNotice: { record in
-            MediaClipFilename.isR3D(record.payload.filename)
-                ? "R3D master - no playable proxy was found for this clip." : nil
-        })
+        .init(
+            download: { record in
+                guard let action = model.captureMediaLibraryAction([record.payload]),
+                    action.isCurrent
+                else { return }
+                _ = await model.cacheClipFromCamera(record.payload)
+            }, favorite: { record in model.toggleClipFavorite(record.payload) },
+            acceptedDeletion: .init(
+                capture: { records in model.captureMediaDeletionAuthority(records.map(\.payload)) },
+                perform: { records, authority in
+                    _ = await model.deleteMediaClips(
+                        records.map(\.payload), deleteLocation: nil, admitted: authority)
+                }),
+            access: { record in
+                .init(
+                    download: model.isConnected && record.payload.handle != nil
+                        && !model.isClipDownloaded(record.payload),
+                    share: true, delete: true)
+            }, deletionMessage: { model.deletionConfirmMessage(for: $0.map(\.payload)) },
+            openNotice: { record in
+                MediaClipFilename.isR3D(record.payload.filename)
+                    ? "R3D master - no playable proxy was found for this clip." : nil
+            })
     }
     private func navigate(_ action: MonitorMediaGalleryNavigation) {
         switch action {
-        case .category(let id): if let tab = MediaCategoryTab(rawValue: id) { model.mediaCategoryTab = tab }
+        case .category(let id):
+            if let tab = MediaCategoryTab(rawValue: id) { model.mediaCategoryTab = tab }
         case .layout(let value): model.mediaBrowserLayout = value
         case .thumbnailSize(let value): model.mediaThumbnailSize = value
         case .cycleSort: model.cycleMediaSortOrder()
@@ -281,9 +319,13 @@ struct MediaBrowserView: View {
     private func open(_ request: MonitorMediaGalleryOpen<MediaClip>) {
         guard model.mediaLibrary?.isCurrent(request.admission) == true else { return }
         let clip = request.record.payload
-        if model.burstSeries(for: clip) != nil { series = request }
-        else if clip.mediaKind == .photo { photo = request }
-        else { playing = request }
+        if model.burstSeries(for: clip) != nil {
+            series = request
+        } else if clip.mediaKind == .photo {
+            photo = request
+        } else {
+            playing = request
+        }
     }
     private func begin() {
         if let pending = model.pendingMediaDelivery {
@@ -291,48 +333,84 @@ struct MediaBrowserView: View {
             model.pendingMediaDelivery = nil
             if let captured {
                 deliveryAdmission = captured.action
-                deliveryRequest = .init(clips: captured.clips, preferredDestination: .frameio, capture: captured)
+                deliveryRequest = .init(
+                    clips: captured.clips, preferredDestination: .frameio, capture: captured)
             }
         }
         model.refreshMediaClips()
         if let resume = model.pendingHopShareResumeClips {
             model.pendingHopShareResumeClips = nil
-            let records = model.mediaLibrary?.records.filter { row in resume.contains { $0.id == row.payload.id } } ?? []
-            if resume.count == 1, let record = records.first, model.isClipDownloaded(record.payload), let library = model.mediaLibrary {
+            let records =
+                model.mediaLibrary?.records.filter { row in
+                    resume.contains { $0.id == row.payload.id }
+                } ?? []
+            if resume.count == 1, let record = records.first,
+                model.isClipDownloaded(record.payload), let library = model.mediaLibrary
+            {
                 resumeShareDestination = .frameio
                 open(.init(record: record, playlist: records, admission: library.actionToken))
-            } else if !resume.isEmpty, let action = model.captureMediaLibraryAction(resume), action.isCurrent {
-                if let captured = NikonMediaDeliveryCapture(model: model, clips: resume, action: action) {
-                    deliveryAdmission = action; deliveryRequest = .init(clips: captured.clips, preferredDestination: .frameio, capture: captured)
+            } else if !resume.isEmpty, let action = model.captureMediaLibraryAction(resume),
+                action.isCurrent
+            {
+                if let captured = NikonMediaDeliveryCapture(
+                    model: model, clips: resume, action: action)
+                {
+                    deliveryAdmission = action
+                    deliveryRequest = .init(
+                        clips: captured.clips, preferredDestination: .frameio, capture: captured)
                 }
             }
         }
-        if !model.isStandaloneMediaLibraryPresented, model.mediaBrowserSource == .iPhone, !model.hasLocalMediaClips {
+        if !model.isStandaloneMediaLibraryPresented, model.mediaBrowserSource == .iPhone,
+            !model.hasLocalMediaClips
+        {
             model.mediaBrowserSource = .camera
         }
         Task { await model.refreshMediaStorageSlots() }
-        if model.isConnected, model.mediaBrowserSource == .camera { model.scheduleFetchClipsFromCamera() }
+        if model.isConnected, model.mediaBrowserSource == .camera {
+            model.scheduleFetchClipsFromCamera()
+        }
         if DemoHarness.openMediaAction == "play", let library = model.mediaLibrary,
-            let record = library.records.first(where: { model.isClipDownloaded($0.payload) }) {
+            let record = library.records.first(where: { model.isClipDownloaded($0.payload) })
+        {
             open(.init(record: record, playlist: library.records, admission: library.actionToken))
         }
     }
     @ViewBuilder private var deliveryOverlays: some View {
         if let toast = deliveryCoordinator.completionToast, deliveryCoordinator.showsLocalOverlay {
-            VStack { Spacer(); Text(toast).font(MonitorTheme.font(13, weight: .medium)).foregroundStyle(MonitorTheme.text)
+            VStack {
+                Spacer()
+                Text(toast).font(MonitorTheme.font(13, weight: .medium)).foregroundStyle(
+                    MonitorTheme.text
+                )
                 .multilineTextAlignment(.center).padding(.horizontal, 16).padding(.vertical, 10)
-                .liquidGlass(in: Capsule(), interactive: false).padding(.bottom, max(CGFloat(safeArea?.bottom ?? 0) + 80, 96))
+                .liquidGlass(in: Capsule(), interactive: false).padding(
+                    .bottom, max(CGFloat(safeArea?.bottom ?? 0) + 80, 96))
             }.frame(maxWidth: .infinity, maxHeight: .infinity).transition(.opacity).zIndex(5)
         }
         if let request = deliveryRequest {
-            MediaDeliveryPopupOverlay(clips: request.clips, anchorFrame: .zero, placement: .aboveAnchor,
-                preferredDestination: request.preferredDestination, safeArea: safeArea ?? .zero, capture: request.capture,
+            MediaDeliveryPopupOverlay(
+                clips: request.clips, anchorFrame: .zero, placement: .aboveAnchor,
+                preferredDestination: request.preferredDestination, safeArea: safeArea ?? .zero,
+                capture: request.capture,
                 onBeginDelivery: { value in
-                    guard let capture = value.capture, capture === request.capture, capture.isCurrent else { return }
-                    if deliveryRequest?.id == request.id { deliveryRequest = nil; deliveryAdmission = nil }
+                    guard let capture = value.capture, capture === request.capture,
+                        capture.isCurrent
+                    else { return }
+                    if deliveryRequest?.id == request.id {
+                        deliveryRequest = nil
+                        deliveryAdmission = nil
+                    }
                     deliveryCoordinator.beginCaptured(value, model: model)
-                }, onDismiss: { if deliveryRequest?.id == request.id { deliveryRequest = nil; deliveryAdmission = nil } })
-                .environment(model)
+                },
+                onDismiss: {
+                    if deliveryRequest?.id == request.id {
+                        deliveryRequest = nil
+                        deliveryAdmission = nil
+                    }
+                }
+            )
+            .environment(model)
         }
         if deliveryCoordinator.showsLocalOverlay, let state = deliveryCoordinator.overlayState {
             MediaDeliveryTopAnchor(horizontalPadding: 24) {
@@ -342,7 +420,8 @@ struct MediaBrowserView: View {
     }
     private var resolvedSafeArea: EdgeInsets {
         if let safeArea {
-            return .init(top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
+            return .init(
+                top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
                 bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing))
         }
         return windowGeometry.validSize == nil ? EdgeInsets() : windowGeometry.safeArea
@@ -568,7 +647,9 @@ private struct MediaBurstSeriesView: View {
                 // Recreated per frame (`.id`) so its per-clip state and stream reset cleanly.
                 MediaPhotoViewer(
                     clip: selected,
-                    opening: .init(record: record, playlist: records, admission: returnAdmission ?? opening.admission),
+                    opening: .init(
+                        record: record, playlist: records,
+                        admission: returnAdmission ?? opening.admission),
                     collection: members,
                     onSelected: { selectedID = $0.id },
                     onDeletedReturning: { advanceAfterDeletion(of: selected, admission: $0) }
@@ -585,24 +666,34 @@ private struct MediaBurstSeriesView: View {
         }
         .statusBarHidden()
         .onAppear {
-            guard let library = model.mediaLibrary, library.isCurrent(opening.admission) else { dismiss(); return }
+            guard let library = model.mediaLibrary, library.isCurrent(opening.admission) else {
+                dismiss()
+                return
+            }
             self.library = library
             members = model.burstMembers(of: representative)
-            records = members.compactMap { member in library.records.first { $0.payload.id == member.id } }
+            records = members.compactMap { member in
+                library.records.first { $0.payload.id == member.id }
+            }
             selectedID = members.first?.id
         }
     }
 
     /// Drops the deleted frame from the strip and shows its neighbour; a series that empties
     /// (or degrades to nothing worth paging) closes back to the grid.
-    private func advanceAfterDeletion(of clip: MediaClip, admission: MonitorMediaLibraryActionToken) {
-        guard let library, model.mediaLibrary === library, library.isCurrent(admission) else { return }
+    private func advanceAfterDeletion(of clip: MediaClip, admission: MonitorMediaLibraryActionToken)
+    {
+        guard let library, model.mediaLibrary === library, library.isCurrent(admission) else {
+            return
+        }
         let index = members.firstIndex { $0.id == clip.id } ?? 0
         let survivors = model.burstMembers(of: representative)
         guard model.mediaLibrary === library, library.isCurrent(admission) else { return }
         returnAdmission = admission
         members = survivors
-        records = survivors.compactMap { member in library.records.first { $0.payload.id == member.id } }
+        records = survivors.compactMap { member in
+            library.records.first { $0.payload.id == member.id }
+        }
         guard !members.isEmpty else {
             dismiss()
             return
@@ -629,11 +720,13 @@ private struct NikonStripThumbnail: View {
         guard request.isCurrent() else { return }
         let cacheKey = "\(clip.id)#strip#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
-            if request.isCurrent() { image = cached }; return
+            if request.isCurrent() { image = cached }
+            return
         }
         func decodeCachedThumb() async -> UIImage? {
             guard request.isCurrent(), let url = model.clipThumbnailURL(clip) else { return nil }
-            return await MediaCellImageLoader.shared.downsampled(at: url, maxPixelSize: 120,
+            return await MediaCellImageLoader.shared.downsampled(
+                at: url, maxPixelSize: 120,
                 fallbackOrientation: clip.exifOrientation)
         }
         var loaded = await decodeCachedThumb()
@@ -680,132 +773,208 @@ struct MediaPhotoViewer: View {
     var body: some View {
         Group {
             if let context {
-                MonitorOperatorPhotoScreen(library: context.library, record: context.record,
+                MonitorOperatorPhotoScreen(
+                    library: context.library, record: context.record,
                     admission: context.admission, assist: model.assist, loaders: loaders,
                     operations: operations,
-                    haptics: .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }),
+                    haptics: .init(isEnabled: { [weak model] in
+                        model?.preferences.hapticsEnabled == true
+                    }),
                     coverPresented: isSharePresented, variants: context.variants,
-                    rating: rating, sharing: .init(readiness: { [weak model] request in
+                    rating: rating,
+                    sharing: .init(readiness: { [weak model] request in
                         guard request.isCurrent(), let model else { return .unavailable }
                         return model.isClipDownloaded(request.record.payload) ? .ready : .waiting
                     }), collection: context.collection,
-                    selectRecord: onSelected.map { selected in { record in selected(record.payload) } },
-                    collectionThumbnail: { request in AnyView(NikonStripThumbnail(request: request).environment(model)) },
-                    sourceCurrent: { context.action?.sourceIsCurrent != false }, close: { dismiss() },
+                    selectRecord: onSelected.map { selected in
+                        { record in selected(record.payload) }
+                    },
+                    collectionThumbnail: { request in
+                        AnyView(NikonStripThumbnail(request: request).environment(model))
+                    },
+                    sourceCurrent: { context.action?.sourceIsCurrent != false },
+                    close: { dismiss() },
                     deleted: { if let onDeleted { onDeleted() } else { dismiss() } },
                     share: { request in
-                        guard request.isCurrent(), let url = model.clipLocalURL(request.record.payload) else { return }
-                        shareURL = url; isSharePresented = true
+                        guard request.isCurrent(),
+                            let url = model.clipLocalURL(request.record.payload)
+                        else { return }
+                        shareURL = url
+                        isSharePresented = true
                     }, deletedReturning: onDeletedReturning)
             } else {
-                ProgressView().tint(MonitorTheme.accent).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.black)
+                ProgressView().tint(MonitorTheme.accent).frame(
+                    maxWidth: .infinity, maxHeight: .infinity
+                )
+                .background(.black)
             }
         }
         .task {
             guard context == nil else { return }
-            guard let library = model.mediaLibrary else { dismiss(); return }
+            guard let library = model.mediaLibrary else {
+                dismiss()
+                return
+            }
             let admission = opening?.admission ?? library.actionToken
             guard library.isCurrent(admission),
-                let record = opening?.record ?? library.records.first(where: { $0.payload.id == clip.id }) else { dismiss(); return }
-            let raw = model.rawSibling(of: clip).flatMap { raw in library.records.first { $0.payload.id == raw.id } }
-            let variants = raw.map { [MonitorMediaPictureVariant(label: "JPG", record: record), .init(label: "RAW", record: $0)] } ?? []
-            let members = collection.compactMap { member in library.records.first { $0.payload.id == member.id } }
-            context = .init(library: library, record: record, admission: admission,
+                let record = opening?.record
+                    ?? library.records.first(where: { $0.payload.id == clip.id })
+            else {
+                dismiss()
+                return
+            }
+            let raw = model.rawSibling(of: clip).flatMap { raw in
+                library.records.first { $0.payload.id == raw.id }
+            }
+            let variants =
+                raw.map {
+                    [
+                        MonitorMediaPictureVariant(label: "JPG", record: record),
+                        .init(label: "RAW", record: $0),
+                    ]
+                } ?? []
+            let members = collection.compactMap { member in
+                library.records.first { $0.payload.id == member.id }
+            }
+            context = .init(
+                library: library, record: record, admission: admission,
                 variants: variants, collection: members,
-                action: model.captureMediaLibraryAction([clip] + (raw.map { [$0.payload] } ?? []) + collection))
+                action: model.captureMediaLibraryAction(
+                    [clip] + (raw.map { [$0.payload] } ?? []) + collection))
         }
         .sheet(isPresented: $isSharePresented) {
-            if let shareURL { MultiShareSheet(urls: [shareURL], metadataText: nil) { isSharePresented = false } }
+            if let shareURL {
+                MultiShareSheet(urls: [shareURL], metadataText: nil) { isSharePresented = false }
+            }
         }
     }
     private var operations: MonitorMediaGalleryOperations<MediaClip> {
-        .init(favorite: { record in model.toggleClipFavorite(record.payload) },
-            acceptedDeletion: .init(capture: { rows in model.captureMediaDeletionAuthority(rows.map(\.payload)) },
+        .init(
+            favorite: { record in model.toggleClipFavorite(record.payload) },
+            acceptedDeletion: .init(
+                capture: { rows in model.captureMediaDeletionAuthority(rows.map(\.payload)) },
                 perform: { rows, authority in
-                    _ = await model.deleteMediaClips(rows.map(\.payload), deleteLocation: nil, admitted: authority)
+                    _ = await model.deleteMediaClips(
+                        rows.map(\.payload), deleteLocation: nil, admitted: authority)
                 }), access: { _ in .init(share: true, delete: true) },
             deletionMessage: { rows in
-                if rows.count > 1, !collection.isEmpty { return burstDeletionMessage(rows.map(\.payload)) }
+                if rows.count > 1, !collection.isEmpty {
+                    return burstDeletionMessage(rows.map(\.payload))
+                }
                 return model.deletionConfirmMessage(for: rows.map(\.payload))
             })
     }
     private var rating: MonitorMediaPictureRatingService<MediaClip> {
-        .init(levels: [1, 2, 3, 4, 5], read: { [weak model] request in
-            guard request.isCurrent(), let model else { return nil }
-            return await model.mediaStarRating(for: request.record.payload)
-        }, commit: { [weak model] target, request in
-            guard request.isCurrent(), let model else { return .unavailable }
-            switch await model.setMediaStarRating(target, for: request.record.payload) {
-            case .confirmed(let value): return .confirmed(value)
-            case .refused(_, let message): return .refused(message)
-            case .offline: return .unavailable
-            }
-        })
+        .init(
+            levels: [1, 2, 3, 4, 5],
+            read: { [weak model] request in
+                guard request.isCurrent(), let model else { return nil }
+                return await model.mediaStarRating(for: request.record.payload)
+            },
+            commit: { [weak model] target, request in
+                guard request.isCurrent(), let model else { return .unavailable }
+                switch await model.setMediaStarRating(target, for: request.record.payload) {
+                case .confirmed(let value): return .confirmed(value)
+                case .refused(_, let message): return .refused(message)
+                case .offline: return .unavailable
+                }
+            })
     }
     private var loaders: MonitorMediaPictureLoaders<MediaClip, UIImage> {
-        .init(preview: { [weak model] request in
-            guard request.isCurrent(), let url = model?.clipThumbnailURL(request.record.payload),
-                let data = try? Data(contentsOf: url) else { return nil }
-            return UIImage(data: data)
-        }, cached: { [weak model] request in
-            guard request.isCurrent(), let model, model.isClipDownloaded(request.record.payload) else { return nil }
-            return await NikonPhotoDecode.complete(request, model: model)
-        }, progressive: { [weak model] publication in
-            guard publication.isCurrent, let model else { return nil }
-            let ticket = model.startClipStream(publication.request.record.payload)
-            let result = await NikonPhotoDecode.progressive(publication, model: model)
-            if let ticket { model.cancelClipStream(ticket); await ticket.task.value }
-            return publication.isCurrent ? result : nil
-        })
+        .init(
+            preview: { [weak model] request in
+                guard request.isCurrent(),
+                    let url = model?.clipThumbnailURL(request.record.payload),
+                    let data = try? Data(contentsOf: url)
+                else { return nil }
+                return UIImage(data: data)
+            },
+            cached: { [weak model] request in
+                guard request.isCurrent(), let model, model.isClipDownloaded(request.record.payload)
+                else { return nil }
+                return await NikonPhotoDecode.complete(request, model: model)
+            },
+            progressive: { [weak model] publication in
+                guard publication.isCurrent, let model else { return nil }
+                let ticket = model.startClipStream(publication.request.record.payload)
+                let result = await NikonPhotoDecode.progressive(publication, model: model)
+                if let ticket {
+                    model.cancelClipStream(ticket)
+                    await ticket.task.value
+                }
+                return publication.isCurrent ? result : nil
+            })
     }
     private func burstDeletionMessage(_ targets: [MediaClip]) -> String {
         let plan = model.deletionPlan(for: targets)
-        var message = "Delete this burst of \(targets.count) frames? This removes every frame in the series from the card."
-        if plan.pairCount > 0 { message += " Both the RAW and JPEG files of each pair are removed." }
-        if plan.backupCount > 0 { message += " The backup copies on the other card are removed too." }
+        var message =
+            "Delete this burst of \(targets.count) frames? This removes every frame in the series from the card."
+        if plan.pairCount > 0 {
+            message += " Both the RAW and JPEG files of each pair are removed."
+        }
+        if plan.backupCount > 0 {
+            message += " The backup copies on the other card are removed too."
+        }
         return message + " This can't be undone."
     }
 }
 
 /// Bounded ImageIO/native-file port. The shared picture owner owns load/variant/publication lifetime.
 @MainActor private enum NikonPhotoDecode {
-    static func progressive(_ publication: MonitorMediaPicturePublication<MediaClip, UIImage>, model: NativeAppModel) async -> UIImage? {
-        let request = publication.request, target = request.record.payload
-        let incremental = CGImageSourceCreateIncremental([kCGImageSourceShouldCache: false] as CFDictionary)
-        var deliveredBytes = 0, lastAttemptBytes = 0
+    static func progressive(
+        _ publication: MonitorMediaPicturePublication<MediaClip, UIImage>, model: NativeAppModel
+    ) async -> UIImage? {
+        let request = publication.request
+        let target = request.record.payload
+        let incremental = CGImageSourceCreateIncremental(
+            [kCGImageSourceShouldCache: false] as CFDictionary)
+        var deliveredBytes = 0
+        var lastAttemptBytes = 0
         while !Task.isCancelled, request.isCurrent() {
             if model.isClipDownloaded(target) { return await complete(request, model: model) }
-            publication.publish(status: .init(message: model.mediaDownloadProgress[target.id] == nil
-                ? "Preparing image…" : "Loading from camera…"))
+            publication.publish(
+                status: .init(
+                    message: model.mediaDownloadProgress[target.id] == nil
+                        ? "Preparing image…" : "Loading from camera…"))
             guard let url = model.clipLocalURL(target) else { return nil }
-            let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }.value
+            let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }
+                .value
             guard !Task.isCancelled, request.isCurrent() else { return nil }
             if let data, data.count > deliveredBytes {
                 deliveredBytes = data.count
                 CGImageSourceUpdateData(incremental, data as CFData, false)
                 if deliveredBytes >= 262_144, deliveredBytes - lastAttemptBytes >= 1_000_000,
-                    let partial = partialImage(from: incremental) {
-                    lastAttemptBytes = deliveredBytes; publication.publish(partial)
+                    let partial = partialImage(from: incremental)
+                {
+                    lastAttemptBytes = deliveredBytes
+                    publication.publish(partial)
                 }
             }
             try? await Task.sleep(for: .milliseconds(600))
         }
         return nil
     }
-    static func complete(_ request: MonitorMediaPictureRequest<MediaClip>, model: NativeAppModel) async -> UIImage? {
+    static func complete(_ request: MonitorMediaPictureRequest<MediaClip>, model: NativeAppModel)
+        async -> UIImage?
+    {
         guard request.isCurrent(), let url = model.clipLocalURL(request.record.payload),
             let image = await MediaCellImageLoader.shared.downsampled(at: url, maxPixelSize: 4096),
-            request.isCurrent() else { return nil }
+            request.isCurrent()
+        else { return nil }
         model.resolveEXIFOrientation(for: request.record.payload, at: url)
         return request.isCurrent() ? image : nil
     }
     private static func partialImage(from source: CGImageSource) -> UIImage? {
-        guard CGImageSourceGetCount(source) > 0, let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        guard CGImageSourceGetCount(source) > 0,
+            let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
         var orientation = UIImage.Orientation.up
         if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
             let raw = properties[kCGImagePropertyOrientation] as? UInt32,
-            let exif = CGImagePropertyOrientation(rawValue: raw) { orientation = UIImage.Orientation(exif) }
+            let exif = CGImagePropertyOrientation(rawValue: raw)
+        {
+            orientation = UIImage.Orientation(exif)
+        }
         return UIImage(cgImage: cgImage, scale: 1, orientation: orientation)
     }
 }
@@ -840,41 +1009,64 @@ struct MediaPlayerView: View {
     @State private var deliveryPresentation: MediaDeliveryPresentation?
     @State private var shareButtonFrame = CGRect.zero
 
-    init(clips: [MediaClip], startingAt clip: MediaClip,
+    init(
+        clips: [MediaClip], startingAt clip: MediaClip,
         initialShareDestination: MediaDeliveryDestination? = nil,
-        opening: MonitorMediaGalleryOpen<MediaClip>? = nil) {
-        self.clips = clips; startingClip = clip; self.opening = opening
+        opening: MonitorMediaGalleryOpen<MediaClip>? = nil
+    ) {
+        self.clips = clips
+        startingClip = clip
+        self.opening = opening
         if let initialShareDestination {
-            _deliveryPresentation = State(initialValue: .init(clip: clip, preferredDestination: initialShareDestination))
+            _deliveryPresentation = State(
+                initialValue: .init(clip: clip, preferredDestination: initialShareDestination))
         }
     }
     private var player: MonitorMediaPlaybackModel<MediaClip, String>? { context?.media.playback }
     private var playing: Bool { player?.reportedPlaying ?? player?.playRequested ?? false }
     private var covered: Bool {
-        deliveryPresentation != nil || deliveryCoordinator.isActive || deliveryCoordinator.sharePayload != nil
+        deliveryPresentation != nil || deliveryCoordinator.isActive
+            || deliveryCoordinator.sharePayload != nil
     }
 
     var body: some View {
         ZStack {
-            if let context { sharedPlayer(context) }
-            else { Color.black.overlay { ProgressView().tint(MonitorTheme.accent) } }
+            if let context {
+                sharedPlayer(context)
+            } else {
+                Color.black.overlay { ProgressView().tint(MonitorTheme.accent) }
+            }
             deliveryOverlays
         }
         .task {
             guard context == nil, let library = model.mediaLibrary else { return }
             let request: MonitorMediaGalleryOpen<MediaClip>
-            if let opening { request = opening }
-            else {
-                guard let record = library.records.first(where: { $0.payload.id == startingClip.id }) else { dismiss(); return }
+            if let opening {
+                request = opening
+            } else {
+                guard
+                    let record = library.records.first(where: { $0.payload.id == startingClip.id })
+                else {
+                    dismiss()
+                    return
+                }
                 let ids = Set(clips.map(\.id))
-                request = .init(record: record, playlist: library.records.filter { ids.contains($0.payload.id) },
+                request = .init(
+                    record: record,
+                    playlist: library.records.filter { ids.contains($0.payload.id) },
                     admission: library.actionToken)
             }
-            guard let created = NikonOperatorPlaybackContext(model: model, initial: request,
-                captureDeliveryCleanup: {
-                    let outgoing = deliveryCoordinator.capturedRun
-                    return { await outgoing?.cancelAndJoin() }
-                }) else { dismiss(); return }
+            guard
+                let created = NikonOperatorPlaybackContext(
+                    model: model, initial: request,
+                    captureDeliveryCleanup: {
+                        let outgoing = deliveryCoordinator.capturedRun
+                        return { await outgoing?.cancelAndJoin() }
+                    })
+            else {
+                dismiss()
+                return
+            }
             context = created
         }
         .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
@@ -892,40 +1084,55 @@ struct MediaPlayerView: View {
     private func sharedPlayer(_ context: NikonOperatorPlaybackContext) -> some View {
         @Bindable var model = model
         let menus = NikonAssistMenuAdapter(model: model, compact: false, context: .playback)
-        return MonitorOperatorPlaybackScreen(model: context.media, initial: context.initial,
+        return MonitorOperatorPlaybackScreen(
+            model: context.media, initial: context.initial,
             assist: model.assist, stores: model.scopePanels.playbackStores, looks: .signal,
-            palette: LiveDesign.self, haptics: .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }),
+            palette: LiveDesign.self,
+            haptics: .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }
+            ),
             usage: $model.assistToolUsage, cacheOriginal: false, deliveryPresented: covered,
             operations: operations, source: sourceValues,
             nativeAssists: { owner in context.media.playback === owner ? context.assists : nil },
-            readScopes: { context.assists?.scopeBundle ?? .empty }, close: { closeAfterEnteredCleanup(context) },
+            readScopes: { context.assists?.scopeBundle ?? .empty },
+            close: { closeAfterEnteredCleanup(context) },
             share: { record in
                 guard let owner = context.media.playback, context.media.isCurrent(owner.token),
-                    access(record).share == true else { return }
-                guard let capture = NikonMediaDeliveryCapture(model: model, clips: [record.payload]),
-                    context.media.isCurrent(owner.token), capture.isCurrent else { return }
+                    access(record).share == true
+                else { return }
+                guard
+                    let capture = NikonMediaDeliveryCapture(model: model, clips: [record.payload]),
+                    context.media.isCurrent(owner.token), capture.isCurrent
+                else { return }
                 deliveryPresentation = .init(clip: record.payload, capture: capture)
             }, onShareButtonFrame: { shareButtonFrame = $0 },
             initialRatingShadeOpen: DemoHarness.ratingShade == "open",
-            signalOptions: .init(falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+            signalOptions: .init(
+                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
                 reference: menus.falseColorReference),
             availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
             initialChromeVisible: !DemoHarness.playbackCleanView, loopAvailable: false,
             paradeIntensityScale: 0.25,
             picture: { owner, _ in
                 if let native = context.native, context.media.playback === owner {
-                    PlayerLayerView(player: native.player, qualificationItemToken: { [weak owner] in
-                        guard let owner, owner.isActive, owner.ready else { return nil }; return owner.token
-                    })
+                    PlayerLayerView(
+                        player: native.player,
+                        qualificationItemToken: { [weak owner] in
+                            guard let owner, owner.isActive, owner.ready else { return nil }
+                            return owner.token
+                        }
+                    )
                     .aspectRatio(nativePictureAspect(owner), contentMode: .fill)
                     .scaleEffect(desqueezeScale(model.playbackDesqueeze))
-                } else { Color.black }
+                } else {
+                    Color.black
+                }
             }, preview: { _ in EmptyView() }, lookMenu: { LUTPickerContent().environment(model) })
     }
 
     private func closeAfterEnteredCleanup(_ captured: NikonOperatorPlaybackContext) {
         guard context === captured,
-            let finish = captured.captureCloseCleanup(run: deliveryCoordinator.capturedRun) else { return }
+            let finish = captured.captureCloseCleanup(run: deliveryCoordinator.capturedRun)
+        else { return }
         Task { @MainActor in
             let completed = await finish()
             guard completed, context === captured else { return }
@@ -933,25 +1140,34 @@ struct MediaPlayerView: View {
         }
     }
 
-    private func nativePictureAspect(_ owner: MonitorMediaPlaybackModel<MediaClip, String>) -> CGFloat {
-        let width = owner.metadata.width ?? 16, height = owner.metadata.height ?? 9
+    private func nativePictureAspect(_ owner: MonitorMediaPlaybackModel<MediaClip, String>)
+        -> CGFloat
+    {
+        let width = owner.metadata.width ?? 16
+        let height = owner.metadata.height ?? 9
         guard width.isFinite, height.isFinite, width > 0, height > 0 else { return 16 / 9 }
         return CGFloat(width / height)
     }
 
     private func access(_ record: MonitorMediaRecord<MediaClip>) -> MonitorMediaGalleryAccess {
-        .init(download: model.isConnected && record.payload.handle != nil && !model.isClipDownloaded(record.payload),
-            share: MediaDeliveryEligibility.canDeliver(clipIsLocal: model.isClipDownloaded(record.payload),
+        .init(
+            download: model.isConnected && record.payload.handle != nil
+                && !model.isClipDownloaded(record.payload),
+            share: MediaDeliveryEligibility.canDeliver(
+                clipIsLocal: model.isClipDownloaded(record.payload),
                 cameraConnected: model.isConnected))
     }
     private var operations: MonitorOperatorPlaybackOperations<MediaClip, String> {
-        .init(favorite: { record in model.toggleClipFavorite(record.payload) }, access: access,
-            rating: .init(levels: [1, 2, 3, 4, 5], noticeDuration: .seconds(4),
+        .init(
+            favorite: { record in model.toggleClipFavorite(record.payload) }, access: access,
+            rating: .init(
+                levels: [1, 2, 3, 4, 5], noticeDuration: .seconds(4),
                 unavailableMessage: "Connect the camera to rate this clip",
                 read: { [weak model] request in
                     guard request.isCurrent, let model else { return nil }
                     return await model.mediaStarRating(for: request.record.payload)
-                }, commit: { [weak model] target, request in
+                },
+                commit: { [weak model] target, request in
                     guard request.isCurrent, let model else { return .unavailable }
                     switch await model.setMediaStarRating(target, for: request.record.payload) {
                     case .confirmed(let value): return .confirmed(value)
@@ -960,22 +1176,32 @@ struct MediaPlayerView: View {
                     }
                 }))
     }
-    private func sourceValues(_ record: MonitorMediaRecord<MediaClip>) -> MonitorPlaybackSourceValues {
-        let clip = record.payload, mapping = model.playbackExposureSignalMapping
+    private func sourceValues(_ record: MonitorMediaRecord<MediaClip>)
+        -> MonitorPlaybackSourceValues
+    {
+        let clip = record.payload
+        let mapping = model.playbackExposureSignalMapping
         var rows: [MonitorPlaybackMetadataValue] = []
         if let master = clip.linkedR3DFilename { rows.append(.init("Master", master)) }
         if let storage = clip.storageID { rows.append(.init("Storage", String(storage))) }
-        return .init(availability: model.isClipDownloaded(clip) ? .original : .camera,
-            progress: model.mediaDownloadProgress[clip.id], buffered: model.clipBufferedFraction(clip),
-            colorLabel: mapping.curve.rawValue, transfer: NikonPlaybackScopeConfiguration(
+        return .init(
+            availability: model.isClipDownloaded(clip) ? .original : .camera,
+            progress: model.mediaDownloadProgress[clip.id],
+            buffered: model.clipBufferedFraction(clip),
+            colorLabel: mapping.curve.rawValue,
+            transfer: NikonPlaybackScopeConfiguration(
                 trafficLightsCrushClip: model.assist.crushClipCompensation, mapping: mapping,
-                vectorscopeCube: nil).transfer, clipByte: Int(mapping.clipNative.rounded()),
+                vectorscopeCube: nil
+            ).transfer, clipByte: Int(mapping.clipNative.rounded()),
             metadata: rows, clockStyle: .roundedMinutesSeconds)
     }
     private func synchronizeNativeFacts() {
-        guard let context, let player = context.media.playback, context.media.isCurrent(player.token) else { return }
+        guard let context, let player = context.media.playback,
+            context.media.isCurrent(player.token)
+        else { return }
         let token = player.token
-        context.assists?.synchronize(item: token, effects: model.assist.playbackEffects,
+        context.assists?.synchronize(
+            item: token, effects: model.assist.playbackEffects,
             audioVisible: model.assist.isPlaybackVisible(.audioMeters),
             outputMuted: player.muted || player.conformTarget != nil,
             ifCurrent: { context.media.isCurrent(token) })
@@ -983,10 +1209,14 @@ struct MediaPlayerView: View {
 
     @ViewBuilder private var deliveryOverlays: some View {
         if let toast = deliveryCoordinator.completionToast, deliveryCoordinator.showsLocalOverlay {
-            VStack { Spacer(); Text(toast).font(MonitorTheme.font(13, weight: .medium))
-                .foregroundStyle(MonitorTheme.text).multilineTextAlignment(.center)
-                .padding(.horizontal, 16).padding(.vertical, 10).liquidGlass(in: Capsule(), interactive: false)
-                .padding(.bottom, 96)
+            VStack {
+                Spacer()
+                Text(toast).font(MonitorTheme.font(13, weight: .medium))
+                    .foregroundStyle(MonitorTheme.text).multilineTextAlignment(.center)
+                    .padding(.horizontal, 16).padding(.vertical, 10).liquidGlass(
+                        in: Capsule(), interactive: false
+                    )
+                    .padding(.bottom, 96)
             }.frame(maxWidth: .infinity, maxHeight: .infinity).transition(.opacity).zIndex(5)
         }
         if deliveryCoordinator.showsLocalOverlay, let state = deliveryCoordinator.overlayState {
@@ -995,15 +1225,22 @@ struct MediaPlayerView: View {
             }.transition(.move(edge: .top).combined(with: .opacity)).zIndex(50)
         }
         if let request = deliveryPresentation {
-            MediaDeliveryPopupOverlay(clips: [request.clip], anchorFrame: shareButtonFrame,
-                placement: .aboveAnchor, preferredDestination: request.preferredDestination, capture: request.capture,
+            MediaDeliveryPopupOverlay(
+                clips: [request.clip], anchorFrame: shareButtonFrame,
+                placement: .aboveAnchor, preferredDestination: request.preferredDestination,
+                capture: request.capture,
                 onBeginDelivery: { value in
                     guard let capture = value.capture, capture.isCurrent,
-                        request.capture == nil || capture === request.capture else { return }
+                        request.capture == nil || capture === request.capture
+                    else { return }
                     if deliveryPresentation?.id == request.id { deliveryPresentation = nil }
                     deliveryCoordinator.beginCaptured(value, model: model)
-                }, onDismiss: { if deliveryPresentation?.id == request.id { deliveryPresentation = nil } })
-                .environment(model).zIndex(3)
+                },
+                onDismiss: {
+                    if deliveryPresentation?.id == request.id { deliveryPresentation = nil }
+                }
+            )
+            .environment(model).zIndex(3)
         }
     }
 }
@@ -1022,10 +1259,12 @@ private struct PlayerLayerView: UIViewRepresentable {
         view.playerLayer.videoGravity = .resizeAspect
         view.accessibilityIdentifier = "monitor.native.picture"
         let qualificationItemToken = qualificationItemToken
-        view.qualificationProbe = MonitorNativeQualificationProbe.install(in: view) { [weak view, weak player] in
+        view.qualificationProbe = MonitorNativeQualificationProbe.install(in: view) {
+            [weak view, weak player] in
             guard let view, let player else { return nil }
-            return .playback(player: player, layer: view.playerLayer,
-                             itemToken: qualificationItemToken?())
+            return .playback(
+                player: player, layer: view.playerLayer,
+                itemToken: qualificationItemToken?())
         }
         return view
     }
@@ -1036,8 +1275,9 @@ private struct PlayerLayerView: UIViewRepresentable {
         let qualificationItemToken = qualificationItemToken
         uiView.qualificationProbe?.snapshot = { [weak uiView, weak player] in
             guard let uiView, let player else { return nil }
-            return .playback(player: player, layer: uiView.playerLayer,
-                             itemToken: qualificationItemToken?())
+            return .playback(
+                player: player, layer: uiView.playerLayer,
+                itemToken: qualificationItemToken?())
         }
     }
 

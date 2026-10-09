@@ -199,8 +199,10 @@ struct LiveFeedModule: View {
         let controlEpoch: ControlEpoch?
     }
     private var pictureSource: PictureSource {
-        .init(monitor: model.shell.monitor?.id, pictureKind: model.videoSource.rawValue,
-            controlSession: model.shell.control.snapshot?.session, controlEpoch: model.shell.control.snapshot?.epoch)
+        .init(
+            monitor: model.shell.monitor?.id, pictureKind: model.videoSource.rawValue,
+            controlSession: model.shell.control.snapshot?.session,
+            controlEpoch: model.shell.control.snapshot?.epoch)
     }
     private var pictureInteractive: Bool {
         !model.interfaceLocked && model.chromeEditorMode == nil
@@ -279,9 +281,11 @@ struct LiveFeedModule: View {
     @ViewBuilder private func feedImage(width: CGFloat, height: CGFloat) -> some View {
         let size = CGSize(width: width, height: height)
         let captured = pictureSource
-        MonitorInteractivePicture(source: captured, size: size, maximumZoom: 8,
+        MonitorInteractivePicture(
+            source: captured, size: size, maximumZoom: 8,
             enabled: pictureInteractive,
-            focus: MonitorPictureFocusInteraction(locked: model.focusPointLocked,
+            focus: MonitorPictureFocusInteraction(
+                locked: model.focusPointLocked,
                 current: { pictureSource == captured && pictureInteractive },
                 tap: { model.setFocusPoint(at: $0, feedSize: size) },
                 toggleLock: model.toggleFocusPointLock),
@@ -293,17 +297,18 @@ struct LiveFeedModule: View {
                     case .none: break
                     }
                 }
-            }) { progress in
-                ZStack {
-                    LiveFrameRaster(width: width, height: height)
-                    LiveFeedFocusOverlay(lockProgress: progress)
-                    LiveFeedWaitingOverlay()
-                    if model.demoUIMode {
-                        DemoFocusPointerSurface(model: model, size: size)
-                    }
+            }
+        ) { progress in
+            ZStack {
+                LiveFrameRaster(width: width, height: height)
+                LiveFeedFocusOverlay(lockProgress: progress)
+                LiveFeedWaitingOverlay()
+                if model.demoUIMode {
+                    DemoFocusPointerSurface(model: model, size: size)
                 }
             }
-            .overlay { FeedAlignedAssists(clean: model.displayMode == .clean) }
+        }
+        .overlay { FeedAlignedAssists(clean: model.displayMode == .clean) }
     }
 
 }
