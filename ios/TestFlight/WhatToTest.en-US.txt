@@ -15,7 +15,7 @@ Fixes
 - Frame.io no longer asks you to sign in again after a token refresh.
 - Original Z 7, Z 6, Z 5, and Z 50 now reach live view over USB-C, and USB-C reconnects after the cable is knocked loose or a few seconds in the background, without force-quitting the app.
 - Original Z 6, Z 5, and Z 7 no longer get pairing steps they do not support. A Z 6III is no longer treated as an original Z 6. Settings > Share Diagnostics keeps a connect-attempt trace on the phone until you send it.
-- Share and Save to Photos work on clips from the camera, including proxies whose media is shorter than the header. They used to fail with "Invalid sample cursor".
+- Share and Save to Photos handle camera clips, even proxies shorter than their header, without "Invalid sample cursor". Pause holds during loops, seeks and scrubs.
 - Support, Privacy, and Terms in Settings now open at opencapture.org/openzcine, the project's new home. Old links keep working.
 
 What to test
@@ -24,4 +24,4 @@ What to test
 - Share This Feed and hand camera control to a watcher, then press record on Apple Watch or a Bluetooth shutter: it should be refused. Take control back and both work again.
 - If you were signed in to Frame.io before this update, upload a clip without signing in again. Watch the FPS readout across a Wi-Fi hiccup: it should stay steady.
 - Plug in over USB-C, connect, then knock the cable loose and plug it back in. It should come back without force-quitting. On an original Z 6, Z 5, Z 7, or Z 6III, connect over USB-C and the camera's own Wi-Fi.
-- Play a clip from the camera, tap Share, then Share and Save to Photos. Both should finish, with a spinner while Photos writes, without disconnecting first.
+- Pause during a clip loop or scrub, then tap Share and use Share and Save to Photos. Pause should hold; both exports should finish without disconnecting, with a spinner while Photos writes.
