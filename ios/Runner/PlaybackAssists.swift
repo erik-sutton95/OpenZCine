@@ -8,34 +8,6 @@ import OpenZCineCore
 
 private let playbackAudioLogger = Logger(subsystem: "OpenZCine", category: "media-playback-audio")
 
-/// Configures `AVAudioSession` for in-app clip playback so audio plays through the mute switch.
-enum MediaPlaybackAudioSession {
-    /// Activates `.playback` (like YouTube and other media apps).
-    static func activateForPlayback() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playback, mode: .moviePlayback)
-            try session.setActive(true)
-        } catch {
-            playbackAudioLogger.error(
-                "Failed to activate playback audio session: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-    }
-
-    /// Releases the playback session when clip playback ends.
-    static func deactivateAfterPlayback() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setActive(false, options: .notifyOthersOnDeactivation)
-        } catch {
-            playbackAudioLogger.error(
-                "Failed to deactivate playback audio session: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-    }
-}
-
 /// The measured source axis and selected monitor cube travel with each derivation.
 struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
     let trafficLightsCrushClip: MonitorCrushClipCompensation
@@ -77,6 +49,7 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
     }
     @ObservationIgnored private weak var model: NativeAppModel?
     @ObservationIgnored private let native: NikonPlaybackNativePort
+    @ObservationIgnored private let audio: MonitorPlaybackAudioSession.Lease
     @ObservationIgnored private let box = MediaLUT.PlaybackEffectsBox()
     @ObservationIgnored private let meter = MonitorPlaybackAudioMeterRuntime { status in
         playbackAudioLogger.error("MTAudioProcessingTapCreate failed: \(status)")
@@ -107,9 +80,30 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
         return value
     }
 
-    init(model: NativeAppModel, native: NikonPlaybackNativePort) {
+    convenience init(model: NativeAppModel, native: NikonPlaybackNativePort) {
+        self.init(model: model, native: native, audioSession: model.playbackAudioSession)
+    }
+
+    init(
+        model: NativeAppModel, native: NikonPlaybackNativePort,
+        audioSession: MonitorPlaybackAudioSession
+    ) {
         self.model = model
         self.native = native
+        audio = audioSession.makeLease(
+            onFailure: { failure in
+                switch failure {
+                case .activation(let message):
+                    playbackAudioLogger.error(
+                        "Failed to activate playback audio session: \(message, privacy: .public)")
+                case .deactivation(let message):
+                    playbackAudioLogger.error(
+                        "Failed to deactivate playback audio session: \(message, privacy: .public)")
+                }
+            },
+            onReleased: { [weak model] in
+                model?.setMediaPlaybackOwnsAudioSession(false)
+            })
         native.beforeItemRetirement = { [weak self] in self?.retireNativeItem() }
         native.afterItemInstallation = { [weak self] item in self?.install(item) }
     }
@@ -117,8 +111,9 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
     func activate() {
         guard !closed, !activated else { return }
         activated = true
-        model?.setMediaPlaybackOwnsAudioSession(true)
-        MediaPlaybackAudioSession.activateForPlayback()
+        audio.activate { [weak model] in
+            model?.setMediaPlaybackOwnsAudioSession(true)
+        }
     }
 
     func synchronize(
@@ -252,8 +247,7 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
         native.beforeItemRetirement = nil
         native.afterItemInstallation = nil
         if activated {
-            MediaPlaybackAudioSession.deactivateAfterPlayback()
-            model?.setMediaPlaybackOwnsAudioSession(false)
+            audio.close()
         }
     }
 }
