@@ -1,9 +1,24 @@
 package com.opencapture.openzcine
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import com.opencapture.opencine.cameracontrols.SheetHeader
+import com.opencapture.monitorui.MonitorPalette
+import com.opencapture.monitorui.MonitorTypography
+import androidx.compose.ui.text.font.FontWeight
+import com.opencapture.openzcine.pairing.StartupColors
 import androidx.compose.ui.Modifier
 import com.opencapture.opencine.appkit.MonitorCaptureField
 import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.cameracontrols.CaptureFormatChoice
+import com.opencapture.opencine.cameracontrols.CaptureFormatGroup
+import com.opencapture.opencine.cameracontrols.CaptureFormatPicker
+import com.opencapture.opencine.nikon.NikonRecordingFormatPresentation
 import com.opencapture.opencine.cameracontrols.LadderSheet
 import com.opencapture.opencine.cameracontrols.LadderSheetPresentation
 import com.opencapture.opencine.cameracontrols.LadderStep
@@ -197,6 +212,32 @@ internal fun VideoLadderBody(
     modifier: Modifier = Modifier,
     chromeless: Boolean = false,
 ) {
+    if (picker.kind == MonitorPickerKind.RESOLUTION) {
+        val request = picker.modes.singleOrNull()?.request ?: return
+        val source = control?.state?.collectAsState()?.value?.snapshot?.let { it.session to it.epoch }
+        val choices = request.options.map { token ->
+            val format = NikonRecordingFormatPresentation.fromToken(token)
+            CaptureFormatChoice(value = token, title = token,
+                imageArea = format.imageArea?.let { CaptureFormatGroup(it, it) },
+                resolution = format.resolution?.let { CaptureFormatGroup(it, it) },
+                frameRate = format.frameRate?.let { CaptureFormatGroup(it, it) })
+        }
+        Column(modifier.testTag("ladder_sheet"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!chromeless) SheetHeader(picker.title, picker.subtitle, onClose)
+            if (!error.isNullOrBlank()) Text(error, style = MonitorTypography.text(11f, FontWeight.Medium), color = StartupColors.destructive, maxLines = 2)
+            if (!controlsEnabled && !unavailable.isNullOrBlank()) Text(unavailable, style = MonitorTypography.text(11f, FontWeight.Medium), color = MonitorPalette.muted, maxLines = 2)
+            val banner = if (picker.interactionLocked) picker.lockBanner else if (picker.drumInteractionLocked) picker.drumLockBanner else null
+            if (!banner.isNullOrBlank()) Text(banner, style = MonitorTypography.text(11.5f, FontWeight.Medium), color = MonitorPalette.accent, maxLines = 2)
+            CaptureFormatPicker(choices = choices, current = request.currentValue,
+            enabled = controlsEnabled && !picker.interactionLocked && !picker.drumInteractionLocked,
+            sourceIdentity = source ?: request, isCurrent = {
+                control?.state?.value?.snapshot?.let { it.session to it.epoch } == source
+            }) { choice ->
+            if (choice.value in request.options) onWrite(request, choice.value)
+            }
+        }
+        return
+    }
     LadderSheet(
         presentation = videoLadderPresentation(picker, field),
         enabled = controlsEnabled,

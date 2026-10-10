@@ -931,6 +931,7 @@ final class NativeAppModel {
     /// True while the full-screen clip player owns the process-wide audio session, including when
     /// paused. The Bluetooth shutter must not reconfigure or deactivate that shared session.
     @ObservationIgnored private var mediaPlaybackOwnsAudioSession = false
+    @ObservationIgnored let playbackAudioSession = MonitorPlaybackAudioSession()
     /// Full-screen Media browser opened from the connection menu (no live-view session required):
     /// the shell's Media cover, not the monitor's panel.
     var isStandaloneMediaLibraryPresented: Bool {
@@ -1926,6 +1927,16 @@ final class NativeAppModel {
         return cameraScreenModes.map {
             screenSizePresentationLabel(for: $0, codec: codec)
         }.filter { seen.insert($0).inserted }
+    }
+
+    /// Actual advertised movie tuples for the shared format leaf; writes retain their complete labels.
+    var recordingFormatPresentations: [NikonRecordingFormatPresentation] {
+        var seen = Set<String>()
+        return cameraScreenModes.map {
+            NikonRecordingFormatPresentation(
+                mode: $0, currentCodec: cameraPropertySnapshot.fileType,
+                isNikonZR: isConnectedNikonZR)
+        }.filter { seen.insert($0.token).inserted }
     }
 
     /// Whether the connected body is a Nikon ZR (enables ZR-only RAW crop presentation).

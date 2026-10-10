@@ -1,3 +1,4 @@
+import MonitorUI
 import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCameraVocabulary
@@ -45,6 +46,52 @@ struct LadderPickerPanel: View {
     @State private var audioTab: Int?
 
     var body: some View {
+        Group {
+            if picker == .resolution {
+                formatPicker.onAppear(perform: seed)
+            } else {
+                ladder
+            }
+        }
+    }
+
+    private var formatPicker: some View {
+        let source = model.operatorLiveIdentity
+        let inventory = model.recordingFormatPresentations
+        let choices = inventory.map { format in
+            CaptureFormatChoice(
+                value: format.token, title: format.token,
+                imageArea: format.imageArea.map { CaptureFormatGroup(id: $0, title: $0) },
+                resolution: CaptureFormatGroup(id: format.resolution, title: format.resolution),
+                frameRate: CaptureFormatGroup(id: format.frameRate, title: format.frameRate))
+        }
+        let content = CaptureFormatPicker(
+            choices: choices, current: model.cameraValue(for: .resolution),
+            enabled: !inventory.isEmpty, haptics: model.preferences.hapticsEnabled,
+            sourceIdentity: AnyHashable(source),
+            isCurrent: { model.operatorLiveIdentity == source },
+            onSelect: { choice in
+                guard model.operatorLiveIdentity == source,
+                    model.recordingFormatPresentations == inventory,
+                    inventory.contains(where: { $0.token == choice.value })
+                else { return }
+                model.applyPicker(.resolution, mode: 0, value: choice.value)
+            })
+        return Group {
+            if chromeless {
+                content
+            } else {
+                MonitorCapturePanel(
+                    title: presentation.title, subtitle: presentation.subtitle,
+                    edge: picker.isTopBar ? .top : .bottom, close: { model.dismissActivePanel() }
+                ) { content }
+            }
+        }
+        .monitorCapturePanelHeader(title: presentation.title, subtitle: presentation.subtitle)
+        .accessibilityIdentifier("ladder_sheet")
+    }
+
+    private var ladder: some View {
         LadderSheet(
             presentation: presentation,
             enabled: true,
