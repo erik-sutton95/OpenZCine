@@ -502,4 +502,3 @@ fun SignalBarsGlyph(bars: Int, tint: Color, modifier: Modifier = Modifier.size(1
         }
     }
 }
-
