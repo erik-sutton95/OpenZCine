@@ -41,6 +41,38 @@ class NikonAssistsTest {
     private val NikonAssists.live: FeedEffects get() = feedEffects(shared::isOn)
 
     @Test
+    fun `canonical false color choices reach distinct native scales and retain read mode`() {
+        assertEquals(listOf("CineStop", "Video", "IRE", "Limits"), nikonFalseColorScales.map { it.menuLabel })
+        assertEquals(listOf(FeedFalseColorScale.STOPS, FeedFalseColorScale.VIDEO,
+            FeedFalseColorScale.IRE, FeedFalseColorScale.LIMITS), nikonFalseColorScales.map { it.feedScale })
+        val state = restore()
+        assertFalse(state.shared.falseColorRec709)
+        for (scale in nikonFalseColorScales) {
+            state.shared.setFalseColor(scale)
+            state.shared.setFalseColorRead(true)
+            val restored = restore()
+            assertEquals(scale, restored.shared.falseColorScale)
+            assertEquals(scale.feedScale, restored.live.falseColor)
+            assertTrue(restored.live.falseColorRec709)
+        }
+    }
+
+    @Test
+    fun `mirror axes persist and live and playback visibility remain independent`() {
+        val state = restore()
+        assertTrue(MonitorAssistTool.MIRROR.nikonHasOptions)
+        assertTrue(state.shared.mirrorHorizontal)
+        assertFalse(state.shared.mirrorVertical)
+        state.shared.setMirrorAxes(horizontal = false, vertical = true)
+        state.shared.toggle(MonitorAssistTool.MIRROR)
+        val restored = restore()
+        val framing = restored.shared.framing(restored.shared::isVisible, LocalLevelStyle.HORIZON)
+        assertFalse(framing.mirrorsHorizontally)
+        assertTrue(framing.flipsVertically)
+        assertFalse(restored.shared.isPlaybackVisible(MonitorAssistTool.MIRROR))
+    }
+
+    @Test
     fun `lut toggles on with the default look and off again`() {
         val state = restore()
         assertFalse(state.shared.isOn(MonitorAssistTool.LUT))
@@ -362,9 +394,10 @@ class NikonAssistsTest {
         assertFalse(MonitorAssistTool.ND in tools)
         assertTrue(MonitorAssistTool.AUDIO in tools)
         assertEquals(
-            tools.toSet() - setOf(MonitorAssistTool.AUDIO, MonitorAssistTool.MIRROR),
+            tools.toSet() - setOf(MonitorAssistTool.AUDIO),
             tools.filter { it.nikonHasOptions }.toSet(),
         )
+        assertTrue(MonitorAssistTool.MIRROR.nikonHasOptions)
         assertTrue(MonitorAssistTool.CROSS.nikonHasOptions)
         assertTrue(MonitorAssistTool.LEVEL.nikonHasOptions)
         assertFalse(MonitorAssistTool.EV.nikonHasOptions)
@@ -554,11 +587,11 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `waveform and parade use calibrated quarter strength`() {
+    fun `waveform and parade use the common unity brightness scale`() {
         assertEquals(0.0, waveformParadeIntensity(0))
-        assertEquals(0.25, waveformParadeIntensity(100))
-        assertEquals(0.5, waveformParadeIntensity(200))
-        assertEquals(0.5, waveformParadeIntensity(Int.MAX_VALUE))
+        assertEquals(1.0, waveformParadeIntensity(100))
+        assertEquals(2.0, waveformParadeIntensity(200))
+        assertEquals(2.0, waveformParadeIntensity(Int.MAX_VALUE))
     }
 
     @Test

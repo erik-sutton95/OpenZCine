@@ -54,10 +54,16 @@ enum ImageEffectsCompositor {
             let key = falseColorCacheKey(falseColor)
             if let paint = LUTCubeCache.cube(
                 forKey: "limitsPaint:\(key)",
-                { FalseColorMap.limitsPaintCube(mapping: falseColor.mapping) }),
+                {
+                    FalseColorMap.limitsPaintCube(
+                        mapping: falseColor.mapping, read709: falseColor.read709)
+                }),
                 let weight = LUTCubeCache.cube(
                     forKey: "limitsWeight:\(key)",
-                    { FalseColorMap.limitsWeightCube(mapping: falseColor.mapping) })
+                    {
+                        FalseColorMap.limitsWeightCube(
+                            mapping: falseColor.mapping, read709: falseColor.read709)
+                    })
             {
                 limitsDimension = paint.size
                 limitsPaint = paint.rgbaComponents.withUnsafeBytes { Data($0) }
@@ -68,7 +74,9 @@ enum ImageEffectsCompositor {
             if let cube = LUTCubeCache.cube(
                 forKey: key,
                 {
-                    FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
+                    FalseColorMap.cube(
+                        scale: falseColor.scale, mapping: falseColor.mapping,
+                        read709: falseColor.read709)
                 })
             {
                 dimension = cube.size
@@ -300,7 +308,7 @@ enum ImageEffectsCompositor {
     }
 
     private static func falseColorCacheKey(_ settings: FalseColorSettings) -> String {
-        "false:\(settings.scale.rawValue):\(settings.curve.rawValue):\(settings.mapping.clipNative)"
+        "false:\(settings.scale.rawValue):\(settings.curve.rawValue):\(settings.mapping.clipNative):\(settings.read709)"
     }
 }
 

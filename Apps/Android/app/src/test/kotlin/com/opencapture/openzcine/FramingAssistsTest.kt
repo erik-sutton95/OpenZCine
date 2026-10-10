@@ -191,4 +191,20 @@ class FramingAssistsTest {
             desqueezeFactor = desqueezeFactor,
             desqueezeDirection = desqueezeDirection,
         )
+
+    @Test
+    fun `mirror selections retain independent axes while each context admits visibility`() {
+        val legacy = LocalFramingAssistConfiguration(mirrorEnabled = true)
+        assertTrue(legacy.mirrorsHorizontally)
+        assertFalse(legacy.flipsVertically)
+        val vertical = legacy.copy(mirrorHorizontal = false, mirrorVertical = true)
+        assertFalse(vertical.mirrorsHorizontally)
+        assertTrue(vertical.flipsVertically)
+        val hidden = vertical.copy(mirrorEnabled = false)
+        assertFalse(hidden.mirrorsHorizontally)
+        assertFalse(hidden.flipsVertically)
+        assertFalse(hidden.mirrorHorizontal)
+        assertTrue(hidden.mirrorVertical)
+    }
+
 }

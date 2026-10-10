@@ -191,7 +191,7 @@ struct NikonMonitorShell: View {
             configurableTools: Set(
                 model.liveAssistPaletteTools.filter { !model.isScopeCapBlocked($0) }.map(
                     \.selection)),
-            optionsUnavailableNotice: model.scopeCapNoticeText, paradeIntensityScale: 0.25)
+            optionsUnavailableNotice: model.scopeCapNoticeText, paradeIntensityScale: 1)
     }
     private var bodyViews: MonitorOperatorBodyViews {
         .init(

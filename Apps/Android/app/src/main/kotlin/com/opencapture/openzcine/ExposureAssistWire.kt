@@ -3,6 +3,15 @@ package com.opencapture.openzcine
 import com.opencapture.monitorui.MonitorZebraUnit
 import com.opencapture.openzcine.bridge.SwiftCore
 
+/** Label the applied native read: the facade supplies built-in looks for the two log curves. */
+internal fun FeedFalseColorReference.curveLabel(read709: Boolean): String = when (curveOrdinal) {
+    ExposureCurveOrdinals.SRGB -> "sRGB"
+    ExposureCurveOrdinals.HLG -> "HLG"
+    ExposureCurveOrdinals.NIKON_NLOG -> if (read709) "709" else "N-Log"
+    ExposureCurveOrdinals.RED_LOG3G10 -> if (read709) "709" else "L3G10"
+    else -> error("Invalid validated false-color reference curve $curveOrdinal")
+}
+
 /**
  * Camera-aware signal mapping resolved by the shared Swift exposure core.
  * Kotlin carries this opaque record between the renderer, clean scope sampler,
@@ -159,14 +168,18 @@ data class FeedFalseColorReference(
                 "invalid false-color curve"
             }
             require(curve == expectedCurveOrdinal) { "mismatched false-color curve" }
-            val expectedSegmentCount =
+            // CineStop trims zones at the calibrated clip. Display-referred stills can omit
+            // its highlights zone, so accept the bounded canonical shape rather than inventing
+            // a clipping policy in Kotlin. Video, IRE and Limits have fixed canonical counts.
+            val validSegmentCount =
                 when (scale) {
-                    FeedFalseColorScale.STOPS -> 8
-                    FeedFalseColorScale.IRE -> 9
-                    FeedFalseColorScale.LIMITS -> 4
+                    FeedFalseColorScale.STOPS -> segmentCount in 3..9
+                    FeedFalseColorScale.VIDEO -> segmentCount == 9
+                    FeedFalseColorScale.IRE -> segmentCount == 6
+                    FeedFalseColorScale.LIMITS -> segmentCount == 4
                 }
-            val expectedMarkerCount = if (scale == FeedFalseColorScale.STOPS) 6 else 0
-            require(values[2] == segmentCount.toFloat() && segmentCount == expectedSegmentCount) {
+            val expectedMarkerCount = if (scale == FeedFalseColorScale.STOPS) 7 else 0
+            require(values[2] == segmentCount.toFloat() && validSegmentCount) {
                 "invalid false-color segment count"
             }
             require(values[3] == markerCount.toFloat() && markerCount == expectedMarkerCount) {
@@ -222,12 +235,15 @@ fun resolveExposureAssistMapping(input: ExposureAssistCameraInput): ExposureAssi
 fun resolveFalseColorReference(
     scale: FeedFalseColorScale,
     input: ExposureAssistCameraInput,
+    read709: Boolean = false,
 ): FeedFalseColorReference? {
     val mapping = resolveExposureAssistMapping(input) ?: return null
     return runCatching {
         val payload =
             requireNotNull(
-                SwiftCore.falseColorReference(scale.wireOrdinal, mapping.curveOrdinal, mapping.clipNative),
+                SwiftCore.falseColorReference(
+                    scale.wireOrdinal + if (read709) 4 else 0, mapping.curveOrdinal, mapping.clipNative,
+                ),
             ) { "missing false-color reference" }
         FeedFalseColorReference.parse(payload, scale, mapping.curveOrdinal)
     }.getOrNull()

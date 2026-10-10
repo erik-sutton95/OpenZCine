@@ -47,6 +47,7 @@ import com.opencapture.monitorui.MonitorAssistToolGlyph
 import com.opencapture.monitorui.MonitorDesqueezeMenu
 import com.opencapture.monitorui.MonitorGridMenu
 import com.opencapture.monitorui.MonitorGuidesMenu
+import com.opencapture.monitorui.MonitorMirrorMenu
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorInspector
 import com.opencapture.monitorui.MonitorOptionGroup
@@ -57,6 +58,7 @@ import com.opencapture.monitorui.settings.MonitorSettingsChoices
 import com.opencapture.monitorui.settings.MonitorSettingsInlineRow
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
 import com.opencapture.opencine.appkit.MonitorToolUsagePreferences
+import com.opencapture.opencine.cameracontrols.MirrorAssist
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.reconciledLutSelectionAfterDeletion
@@ -104,9 +106,9 @@ internal fun retainLiveAssistOptions(
     resumed: Boolean,
 ): Boolean = tool != null && tool.nikonHasOptions && tool in tools && liveMode && !locked && resumed
 
-/** The camera level has a style; the camera meters and the one-axis mirror have nothing to tune. */
+/** The camera level has a style; camera meters carry no operator-tunable options. */
 internal val MonitorAssistTool.nikonHasOptions: Boolean
-    get() = this !in setOf(MonitorAssistTool.EV, MonitorAssistTool.AUDIO, MonitorAssistTool.MIRROR, MonitorAssistTool.ND)
+    get() = this !in setOf(MonitorAssistTool.EV, MonitorAssistTool.AUDIO, MonitorAssistTool.ND)
 
 /** The approved palette defaults, with the between-shots PLAY and EV leading the photo toolset. */
 internal val nikonUsageSeed =
@@ -257,6 +259,10 @@ private fun AssistOptions(
                             "horizontally squeezed picture; vertical narrows it.",
                         onSelect = { if (it == null) state.selectCustomDesqueeze() else state.selectDesqueezePreset(it) },
                         onFactor = state::updateDesqueezeFactor, onDirection = state::updateDesqueezeDirection)
+                MonitorAssistTool.MIRROR ->
+                    MonitorMirrorMenu(state.mirrorHorizontal, { haptics.selection(); state.setMirrorAxes(horizontal = it) },
+                        state.mirrorVertical, { haptics.selection(); state.setMirrorAxes(vertical = it) },
+                        MirrorAssist.EXPLANATION, MirrorAssist.HORIZONTAL_HELP, MirrorAssist.VERTICAL_HELP)
                 MonitorAssistTool.CROSS -> MonitorAssistHelp("Tap the toolbar button to show or hide the centre crosshair.")
                 else -> {
                     val section = nikonAssistSection(tool, state, cameraInput, haptics::selection)

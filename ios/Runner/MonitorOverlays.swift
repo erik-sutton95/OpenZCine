@@ -479,15 +479,15 @@ enum FalseColorReference {
     }
 
     static func values(
-        scale: FalseColorScale, mapping: ExposureSignalMapping
+        scale: FalseColorScale, mapping: ExposureSignalMapping, read709: Bool = false
     ) -> MonitorFalseColorReferenceValues {
-        let scaleLabel =
+        let selection: MonitorFalseColorSelection =
             switch scale {
-            case .stops: "ZC Stops"
-            case .ire: "IRE"
-            case .limits: "Limits"
+            case .stops: .sceneStops
+            case .video: .stops
+            case .ire: .ire
+            case .limits: .limits
             }
-        // The measured curve's compact key label; the photo previews are display-referred.
         let curveLabel =
             switch mapping.curve {
             case .redLog3G10: "L3G10"
@@ -495,65 +495,48 @@ enum FalseColorReference {
             case .srgb: "sRGB"
             case .hlg: "HLG"
             }
-        let axisLabels: [String] =
-            switch scale {
-            case .stops: []
-            case .ire: ["clip / shadows", "18%", "skin hi", "highlights → clip"]
-            case .limits: ["crushed", "midtones untouched", "clipped"]
-            }
         return MonitorFalseColorReferenceValues(
-            subtitle: "\(scaleLabel) · \(curveLabel)",
-            segments: segments(scale: scale, mapping: mapping).map {
+            subtitle:
+                "\(selection.referenceScaleLabel) · \(FalseColorMap.readsThroughLook(mapping: mapping, read709: read709) ? "709" : curveLabel)",
+            segments: segments(scale: scale, mapping: mapping, read709: read709).map {
                 MonitorFalseColorReferenceSegment(
                     id: $0.id, lowerFraction: $0.lowerFraction, upperFraction: $0.upperFraction,
                     red: $0.band.red, green: $0.band.green, blue: $0.band.blue)
             },
             markers: scale == .stops
-                ? stopAxisMarkers(mapping: mapping).map {
+                ? stopAxisMarkers(mapping: mapping, read709: read709).map {
                     MonitorFalseColorReferenceMarker(
                         id: $0.id, label: $0.label, fraction: $0.fraction)
                 } : [],
-            axisLabels: axisLabels)
+            axisLabels: FalseColorAssist.legendLabels(scale: selection))
     }
 
     static func segments(
-        scale: FalseColorScale, mapping: ExposureSignalMapping
+        scale: FalseColorScale, mapping: ExposureSignalMapping, read709: Bool = false
     ) -> [Segment] {
-        let bands = scale.bands(mapping: mapping)
-        switch scale {
-        case .stops:
-            let domain = stopReferenceDomain(mapping: mapping)
-            return bands.enumerated().map { index, band in
-                Segment(
-                    id: index,
-                    lowerFraction: stopFraction(
-                        band.lowerBound, in: domain, infiniteFallback: 0),
-                    upperFraction: stopFraction(
-                        band.upperBound, in: domain, infiniteFallback: 1),
-                    band: band)
-            }
-        case .ire, .limits:
-            return bands.enumerated().map { index, band in
-                Segment(
-                    id: index,
-                    lowerFraction: min(1, max(0, band.lowerBound / 100)),
-                    upperFraction: band.upperBound.isFinite
-                        ? min(1, max(0, band.upperBound / 100)) : 1,
-                    band: band)
-            }
+        let bands = scale.bands(mapping: mapping, read709: read709)
+        let domain = stopReferenceDomain(mapping: mapping, read709: read709)
+        return bands.enumerated().map { index, band in
+            Segment(
+                id: index,
+                lowerFraction: scale == .stops
+                    ? stopFraction(band.lowerBound, in: domain, infiniteFallback: 0)
+                    : min(1, max(0, band.lowerBound / 100)),
+                upperFraction: scale == .stops
+                    ? stopFraction(band.upperBound, in: domain, infiniteFallback: 1)
+                    : band.upperBound.isFinite ? min(1, max(0, band.upperBound / 100)) : 1,
+                band: band)
         }
     }
 
-    static func stopAxisMarkers(mapping: ExposureSignalMapping) -> [AxisMarker] {
-        let domain = stopReferenceDomain(mapping: mapping)
-        let maximum = FalseColorMap.maximumSceneStop(mapping: mapping)
+    static func stopAxisMarkers(mapping: ExposureSignalMapping, read709: Bool = false)
+        -> [AxisMarker]
+    {
+        let domain = stopReferenceDomain(mapping: mapping, read709: read709)
+        let maximum = FalseColorMap.maximumSceneStop(mapping: mapping, read709: read709)
         let markers: [(String, Double)] = [
-            ("Min", FalseColorMap.minimumSceneStop),
-            ("−3", -3),
-            ("18%", 0),
-            ("Skin", 1),
-            ("+2", 2),
-            ("Max", maximum),
+            ("Min", FalseColorMap.minimumSceneStop), ("−2", -2), ("−1", -1),
+            ("18%", 0), ("+1", 1), ("+2", 2), ("Clip", maximum),
         ]
         return markers.enumerated().map { index, marker in
             AxisMarker(
@@ -563,10 +546,10 @@ enum FalseColorReference {
     }
 
     private static func stopReferenceDomain(
-        mapping: ExposureSignalMapping
+        mapping: ExposureSignalMapping, read709: Bool
     ) -> ClosedRange<Double> {
-        let lower = FalseColorMap.minimumSceneStop - 1.0 / 6
-        let upper = max(6, FalseColorMap.maximumSceneStop(mapping: mapping) + 1.0 / 6)
+        let lower = FalseColorMap.minimumSceneStop - 0.5
+        let upper = max(6, FalseColorMap.maximumSceneStop(mapping: mapping, read709: read709) + 0.5)
         return lower...upper
     }
 

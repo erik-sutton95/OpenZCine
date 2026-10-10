@@ -227,16 +227,24 @@ public data class LocalFramingAssistConfiguration(
     /** Whether the local de-squeeze presentation is applied. */
     public val desqueezeEnabled: Boolean = false,
     /**
-     * Whether the monitored picture is flipped left-to-right, for a body pointed back at the
-     * person watching it. Display only: the recording, the scopes and every camera-reported
-     * coordinate stay in the true orientation.
+     * Whether the selected mirror axes are visible in this monitor context. Display only:
+     * the recording, scopes and camera-reported coordinates retain the source orientation.
      */
     public val mirrorEnabled: Boolean = false,
     /** Applied squeeze factor in 1.0...2.0. */
     public val desqueezeFactor: Float = 1f,
     /** The lens squeeze axis: horizontal widens the picture (letterbox), vertical narrows it. */
     public val desqueezeDirection: MonitorDesqueezeDirection = MonitorDesqueezeDirection.HORIZONTAL,
+    /** Selected axes, independent from live/playback mirror visibility. */
+    public val mirrorHorizontal: Boolean = true,
+    public val mirrorVertical: Boolean = false,
 ) {
+    /** Horizontal display transform admitted by this context's visibility. */
+    public val mirrorsHorizontally: Boolean get() = mirrorEnabled && mirrorHorizontal
+
+    /** Vertical display transform admitted by this context's visibility. */
+    public val flipsVertically: Boolean get() = mirrorEnabled && mirrorVertical
+
     /** Whether at least one selected guide is currently visible. */
     public val drawsGuides: Boolean
         get() = guidesVisible && selectedGuideRatios.isNotEmpty()

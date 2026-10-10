@@ -1557,34 +1557,31 @@ struct DrumSideAdjustButton: View {
         context == .playback ? model.playbackExposureSignalMapping : model.exposureSignalMapping
     }
 
-    /// Nikon renders three ramps; the shared CineStop ramp has no Nikon counterpart.
-    static let falseColorScales: [MonitorFalseColorSelection] = [.sceneStops, .ire, .limits]
+    /// The shared monitor scale order, with camera calibration supplied separately.
+    static let falseColorScales = MonitorFalseColorSelection.allCases
 
     var falseColor: MonitorFalseColorMenu<MonitorFalseColorSelection> {
         MonitorFalseColorMenu(
             scales: Self.falseColorScales,
             scale: model.assist.binding(\.falseColorScale),
             referenceEnabled: model.assist.binding(\.falseColorReference),
+            read709: model.assist.binding(\.falseColorRec709),
             optionalReference: falseColorReference,
-            title: { scale in
-                switch scale.nikonScale {
-                case .stops: "ZC Stops"
-                case .ire: "IRE"
-                case .limits: "Limits"
-                }
-            },
+            title: { $0.referenceScaleLabel },
             scaleHelp:
-                "The camera signal selects Log3G10 or N-Log automatically. ZC Stops marks minimum exposure, −3, 18% gray, skin, +2, and clip-relative highlight levels. IRE reads the curve-aware monitoring scale. Limits paints shadow and highlight warnings.",
-            readHelp: "",
+                "CineStop marks exposure relative to 18% gray. Video and IRE read the monitor signal. Limits paints shadow and highlight warnings. The camera supplies the source curve and clip calibration.",
+            readHelp:
+                "LOG reads the source signal. 709 reads the built-in Rec.709 monitor look, independently of the selected creative LUT.",
             referenceHelp: "Show a compact color key over live view while False Color is active.",
             compact: compact, selectionFeedback: selectionFeedback,
-            referenceFeedback: selectionFeedback,
+            readFeedback: selectionFeedback, referenceFeedback: selectionFeedback,
             onReferenceEnabled: { model.setAssist(.falseColor, visible: true, context: context) })
     }
 
     var falseColorReference: MonitorFalseColorReferenceValues {
         FalseColorReference.values(
-            scale: model.assist.falseColorScale.nikonScale, mapping: mapping)
+            scale: model.assist.falseColorScale.nikonScale, mapping: mapping,
+            read709: model.assist.falseColorRec709)
     }
 
     var zebra: MonitorZebraMenu<AssistConfiguration.Zebra.Unit, MonitorZebraPaint> {
@@ -1595,7 +1592,7 @@ struct DrumSideAdjustButton: View {
                 set: { model.assistConfiguration.zebra.unit = $0 }),
             title: { $0 == .native ? "0-255" : "IRE" }, unitsTitle: "Units",
             unitsHelp:
-                "Switch between Nikon-style native 0-255 codes and OpenZCine's normalized 0-100 monitoring IRE scale.",
+                "Switch between native 0-255 encoded codes and a 0-100 monitoring IRE scale.",
             highlightHelp:
                 "High zebra warns when bright detail approaches clipping after the active log curve is compensated.",
             midtoneHelp:

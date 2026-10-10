@@ -2003,7 +2003,8 @@ internal fun MonitorScreen(
                         focusMetadataAvailable
                     },
                     generation = liveFeedPresentation.focusGestureGeometryGeneration,
-                    mirrored = renderedFraming.mirrorEnabled,
+                    mirrored = renderedFraming.mirrorsHorizontally,
+                    mirroredVertical = renderedFraming.flipsVertically,
                 )
             } else {
                 focusFeedViewportGeometry(
@@ -2251,7 +2252,7 @@ internal fun MonitorScreen(
             lookMenu = { NikonLutOptions(assists, lutLibrary,
                 onOpenRedDownload = { assists.shared.configureTool = null; redDownloadPresented = true },
                 onRequestLutImport = lutLibrary?.let { { lutImportLauncher.launch(arrayOf("*/*", "application/octet-stream")) } },
-                includesComparison = false) }, paradeIntensityScale = .25)
+                includesComparison = false) }, paradeIntensityScale = 1.0)
         val haptics = com.opencapture.opencine.appkit.LocalOperatorHaptics.current
         val signal = MonitorOperatorSignalOptions(
             falseColor = { com.opencapture.openzcine.settings.nikonAssistSection(MonitorAssistTool.FALSE,
@@ -2595,7 +2596,8 @@ internal fun MonitorScreen(
                         aspectFill = portraitRasterFill,
                         // Reads the DISP-filtered set, not the raw config, so clean view honours
                         // the pin exactly as every other framing tool does.
-                        mirrored = renderedFraming.mirrorEnabled,
+                        mirrored = renderedFraming.mirrorsHorizontally,
+                        mirroredVertical = renderedFraming.flipsVertically,
                         // SurfaceView graded feed is invisible to Kyant
                         // layerBackdrop — FULL glass must present via Compose. A rotated
                         // (vertical) feed must too: SurfaceView buffers composite outside

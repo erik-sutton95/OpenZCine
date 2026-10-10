@@ -230,6 +230,23 @@ class FeedEffectsTest {
     }
 
     @Test
+    fun `ruler uses common axis words and labels only the applied native look`() {
+        for ((curve, sourceLabel) in listOf(0 to "L3G10", 1 to "N-Log", 2 to "sRGB", 3 to "HLG")) {
+            val reference = FeedFalseColorReference(curve, emptyList(), floatArrayOf())
+            for (scale in FeedFalseColorScale.entries) {
+                val copy = FalseColorReferenceCopy(scale.label, emptyList(), emptyList(), emptyList())
+                for (read709 in listOf(false, true)) {
+                    val values = FalseColorReferencePresentation(scale, reference, read709).referenceValues(copy)
+                    val expectedLabel = if (read709 && curve < 2) "709" else sourceLabel
+                    assertEquals("${scale.label} · $expectedLabel", values.subtitle)
+                    assertEquals(com.opencapture.opencine.cameracontrols.FalseColorReference.axisLabels(scale.sharedScale),
+                        values.axisLabels)
+                }
+            }
+        }
+    }
+
+    @Test
     fun `stop ruler end labels stay inside the shared false colour panel`() {
         val reference = FeedFalseColorReference(0, emptyList(), floatArrayOf(0f, 0.3f, 0.5f, 0.6f, 0.75f, 1f))
         val copy = FalseColorReferenceCopy("Stops", listOf("Min", "-3", "18%", "Skin", "+2", "Max"), emptyList(), emptyList())

@@ -32,11 +32,11 @@ struct NikonDesqueeze: Equatable, Sendable {
 }
 
 extension MonitorFalseColorSelection {
-    /// The Nikon false colour ramp this selection renders with. Nikon has no CineStop ramp, so it
-    /// reads as scene stops (the shared `.sceneStops` is Nikon's scene-EV ramp).
+    /// Native image processing uses the same four shared monitor scales.
     var nikonScale: FalseColorScale {
         switch self {
-        case .sceneStops, .stops: .stops
+        case .sceneStops: .stops
+        case .stops: .video
         case .ire: .ire
         case .limits: .limits
         }

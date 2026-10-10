@@ -124,15 +124,19 @@ struct FalseColorSettings: Equatable, Sendable {
     var scale: FalseColorScale = .stops
     var curve: ExposureToneCurve = .redLog3G10
     var clipNative: Double? = nil
+    var read709: Bool = false
 
     init(scale: FalseColorScale, curve: ExposureToneCurve) {
         self.init(scale: scale, curve: curve, clipNative: nil)
     }
 
-    init(scale: FalseColorScale, curve: ExposureToneCurve, clipNative: Double?) {
+    init(
+        scale: FalseColorScale, curve: ExposureToneCurve, clipNative: Double?, read709: Bool = false
+    ) {
         self.scale = scale
         self.curve = curve
         self.clipNative = clipNative
+        self.read709 = read709
     }
 
     var mapping: ExposureSignalMapping {
@@ -214,18 +218,24 @@ extension NativeAppModel {
     /// colour, peaking, and zebra use their default parameters for now (the tools are on/off
     /// toggles); the LUT follows the operator's picked look.
     var playbackImageEffects: LiveImageEffects {
-        imageEffects(for: assist.playbackTools)
+        imageEffects(
+            for: assist.playbackTools, mapping: playbackExposureSignalMapping,
+            photographyPreview: false)
     }
 
-    private func imageEffects(for visible: Set<MonitorAssistTool>) -> LiveImageEffects {
+    private func imageEffects(
+        for visible: Set<MonitorAssistTool>, mapping: ExposureSignalMapping,
+        photographyPreview: Bool
+    ) -> LiveImageEffects {
         LiveImageEffects(
             lut: LUTResolution.active(
                 visibleTools: visible, selected: assistConfiguration.selectedLUT),
             falseColor: visible.contains(.falseColor)
                 ? FalseColorSettings(
                     scale: assist.falseColorScale.nikonScale,
-                    curve: exposureSignalMapping.curve,
-                    clipNative: exposureSignalMapping.clipNative) : nil,
+                    curve: mapping.curve,
+                    clipNative: mapping.clipNative,
+                    read709: assist.falseColorRec709) : nil,
             peaking: visible.contains(.peaking)
                 ? PeakingSettings(
                     color: Peaking.Color(rawValue: assist.peakingColor.rawValue) ?? .red,
@@ -234,7 +244,7 @@ extension NativeAppModel {
                     // The photography feed is a display-referred preview, so its gradients run
                     // larger than the log video feed the gates were calibrated on. Shared core
                     // owns the squaring, so both shells resolve the same number.
-                    gateScale: isPhotographyMode
+                    gateScale: photographyPreview
                         ? Peaking.gateScale(
                             gradientScale: Peaking.displayReferredGradientScale) : 1) : nil,
             zebra: visible.contains(.zebra)
@@ -246,8 +256,8 @@ extension NativeAppModel {
                     midtoneEnabled: assist.zebraMidtone,
                     midtoneIRE: assist.zebraMidtoneIRE,
                     midtoneColor: assist.zebraMidtoneColor,
-                    curve: exposureSignalMapping.curve,
-                    clipNative: exposureSignalMapping.clipNative) : nil,
+                    curve: mapping.curve,
+                    clipNative: mapping.clipNative) : nil,
             blockSmoothing: DemoHarness.blockSmoothStrength.map { strength in
                 BlockSmoothingSettings(
                     gateLevels: DemoHarness.blockSmoothGateLevels ?? 5,
@@ -263,7 +273,9 @@ extension NativeAppModel {
         // The photo-filtered set: a creative LUT (or any cinema-only effect) left on in video
         // must not ride into the photo feed — it cannot even be turned off from the photo
         // toolbar. It comes back untouched on the flip to video.
-        imageEffects(for: renderedLiveAssistTools)
+        imageEffects(
+            for: renderedLiveAssistTools, mapping: exposureSignalMapping,
+            photographyPreview: isPhotographyMode)
     }
 
     /// Whether any scope tool is on, so the frame loop only pays for sampling when a scope is shown.
@@ -374,22 +386,27 @@ final class LiveFrameProcessor {
             request(key: lut.cacheKey) { self.cube(for: lut) }
         }
         if let falseColor = effects.falseColor, falseColor.scale == .limits {
-            let mappingKey = "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
+            let mappingKey =
+                "\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative):\(falseColor.read709)"
             graph.look = .limits(
                 grade: grade, splitVertical: split,
                 paint: request(key: "limitsPaint:\(mappingKey)") {
-                    FalseColorMap.limitsPaintCube(mapping: falseColor.mapping)
+                    FalseColorMap.limitsPaintCube(
+                        mapping: falseColor.mapping, read709: falseColor.read709)
                 },
                 weight: request(key: "limitsWeight:\(mappingKey)") {
-                    FalseColorMap.limitsWeightCube(mapping: falseColor.mapping)
+                    FalseColorMap.limitsWeightCube(
+                        mapping: falseColor.mapping, read709: falseColor.read709)
                 })
         } else if let falseColor = effects.falseColor {
             graph.look = .replacement(
                 request(
                     key:
-                        "false:\(falseColor.scale.rawValue):\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative)"
+                        "false:\(falseColor.scale.rawValue):\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative):\(falseColor.read709)"
                 ) {
-                    FalseColorMap.cube(scale: falseColor.scale, mapping: falseColor.mapping)
+                    FalseColorMap.cube(
+                        scale: falseColor.scale, mapping: falseColor.mapping,
+                        read709: falseColor.read709)
                 })
         } else if let grade {
             graph.look = .grade(grade, splitVertical: split)

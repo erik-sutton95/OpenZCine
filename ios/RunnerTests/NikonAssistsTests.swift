@@ -64,8 +64,43 @@ final class NikonAssistsTests: XCTestCase {
             XCTAssertEqual(tool.selection.rawValue, tool.rawValue)
         }
         XCTAssertFalse(MonitorAssistTool.nikonCleanPinCases.contains(.evMeter))
-        XCTAssertEqual(MonitorFalseColorSelection.stops.nikonScale, .stops)
+        XCTAssertEqual(MonitorFalseColorSelection.stops.nikonScale, .video)
         XCTAssertEqual(MonitorFalseColorSelection.sceneStops.nikonScale, .stops)
+    }
+
+    func testCanonicalFalseColorChoicesReachDistinctNativeScalesAndPersistRead() {
+        let state = relaunch()
+        XCTAssertEqual(
+            NikonAssistMenuAdapter.falseColorScales.map(\.referenceScaleLabel),
+            ["CineStop", "Video", "IRE", "Limits"])
+        XCTAssertEqual(
+            NikonAssistMenuAdapter.falseColorScales.map(\.nikonScale),
+            [.stops, .video, .ire, .limits])
+        XCTAssertFalse(state.falseColorRec709)
+        for scale in NikonAssistMenuAdapter.falseColorScales {
+            state.falseColorScale = scale
+            state.falseColorRec709 = true
+            state.persist()
+            let restored = relaunch()
+            XCTAssertEqual(restored.falseColorScale, scale)
+            XCTAssertTrue(restored.falseColorRec709)
+        }
+    }
+
+    func testMirrorOptionsPersistBothAxesWithoutActivatingPlayback() {
+        let state = relaunch()
+        XCTAssertTrue(MonitorAssistTool.mirror.hasConfiguration)
+        XCTAssertTrue(state.mirrorHorizontal)
+        XCTAssertFalse(state.mirrorVertical)
+        state.mirrorHorizontal = false
+        state.mirrorVertical = true
+        state.set(.mirror, visible: true, context: .liveView)
+        state.persist()
+        let restored = relaunch()
+        XCTAssertFalse(restored.mirrorHorizontal)
+        XCTAssertTrue(restored.mirrorVertical)
+        XCTAssertTrue(restored.isVisible(.mirror))
+        XCTAssertFalse(restored.isPlaybackVisible(.mirror))
     }
 
     func testAFreshInstallTakesTheSharedDefaults() {
@@ -78,6 +113,54 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertEqual(state.zebraHighlightIRE, LiveZebra.highlightIRE)
         XCTAssertEqual(state.crushClipCompensation, .zero)
         XCTAssertEqual(state.cleanViewPinnedTools, [.lut, .peaking, .desqueeze, .mirror])
+    }
+
+    /// SIMULATED: real model and compositor; no session or native camera is created.
+    func testVideoPlaybackKeepsItsCalibrationWhileLivePhotoAndOfflineMappingsDiffer() throws {
+        for connected in [true, false] {
+            let model = NativeAppModel(assist: relaunch())
+            model.connection = connected ? .connected : .disconnected
+            model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+            XCTAssertTrue(model.isPhotographyMode)
+            XCTAssertFalse(model.isDemoSession)
+            XCTAssertEqual(model.exposureSignalMapping.curve, .srgb)
+            XCTAssertEqual(model.playbackExposureSignalMapping.curve, .redLog3G10)
+            model.assist.set(.falseColor, visible: true, context: .playback)
+            model.assist.set(.zebra, visible: true, context: .playback)
+            model.assist.set(.peaking, visible: true, context: .playback)
+            model.assist.set(.peaking, visible: true, context: .liveView)
+            XCTAssertEqual(
+                try XCTUnwrap(model.liveImageEffects.peaking).gateScale,
+                Peaking.gateScale(gradientScale: Peaking.displayReferredGradientScale))
+            for scale in NikonAssistMenuAdapter.falseColorScales {
+                model.assist.falseColorScale = scale
+                for read709 in [false, true] {
+                    model.assist.falseColorRec709 = read709
+                    let effects = model.playbackImageEffects
+                    XCTAssertEqual(try XCTUnwrap(effects.peaking).gateScale, 1)
+                    let falseColor = try XCTUnwrap(effects.falseColor)
+                    XCTAssertEqual(falseColor.mapping, model.playbackExposureSignalMapping)
+                    XCTAssertEqual(falseColor.scale, scale.nikonScale)
+                    XCTAssertEqual(falseColor.read709, read709)
+                    XCTAssertEqual(
+                        try XCTUnwrap(effects.zebra).mapping,
+                        model.playbackExposureSignalMapping)
+                }
+            }
+            // Verify the actual AVVideoComposition payload, not only the input projection.
+            model.assist.falseColorScale = .stops
+            model.assist.falseColorRec709 = true
+            let expected = FalseColorMap.cube(
+                scale: .video,
+                mapping: ExposureSignalMapping(curve: .redLog3G10), read709: true)
+            let resolved = model.resolvedPlaybackEffects()
+            XCTAssertEqual(resolved.baseCubeDimension, expected.size)
+            XCTAssertEqual(
+                resolved.baseCubeData,
+                expected.rgbaComponents.withUnsafeBytes { Data($0) })
+            XCTAssertEqual(try XCTUnwrap(resolved.zebra).curve, .redLog3G10)
+            XCTAssertEqual(try XCTUnwrap(resolved.peaking).gateScale, 1)
+        }
     }
 
     // MARK: - Persistence

@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineCameraControls
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -173,7 +174,14 @@ struct NikonAssistOptions: View {
             Text("Tap the palette button to show or hide the centre crosshair.")
                 .font(.system(size: 13))
                 .foregroundStyle(LiveDesign.muted)
-        case .audioMeters, .evMeter, .mirror, .magnification:
+        case .mirror:
+            MonitorMirrorMenu(
+                horizontal: model.assist.binding(\.mirrorHorizontal),
+                vertical: model.assist.binding(\.mirrorVertical),
+                explanation: MirrorAssist.explanation,
+                horizontalHelp: MirrorAssist.horizontalHelp,
+                verticalHelp: MirrorAssist.verticalHelp, feedback: selectionFeedback)
+        case .audioMeters, .evMeter, .magnification:
             // No options (`hasConfiguration` is false), so the inspector never offers them.
             EmptyView()
         }

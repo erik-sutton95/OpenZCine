@@ -68,8 +68,8 @@ internal fun liveFeedEffectsCanRender(
 
 internal class LegacyLiveFeedGlSurface(context: Context) :
     com.opencapture.opencine.runtime.MonitorBitmapGlesSurface(context, ::Media3FeedGlBackend) {
-    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean, mirrored: Boolean) =
-        super.update(plan.nativePlan, aspectFill, mirrored)
+    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean = false) =
+        super.update(plan.nativePlan, aspectFill, mirrored, mirroredVertical)
 }
 
 @Stable
@@ -80,8 +80,8 @@ internal class LegacyLiveFeedSurfaceState {
     var renderFailed: Boolean by mutableStateOf(false)
         private set
     fun submit(frame: Bitmap) = native.submit(frame)
-    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean, mirrored: Boolean) =
-        native.update(plan.nativePlan, aspectFill, mirrored)
+    fun update(plan: FeedEffectsRenderPlan, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean = false) =
+        native.update(plan.nativePlan, aspectFill, mirrored, mirroredVertical)
     fun attach(view: LegacyLiveFeedGlSurface) = native.attach(view)
     fun detach(view: LegacyLiveFeedGlSurface) = native.detach(view)
     fun clear() = native.clear()

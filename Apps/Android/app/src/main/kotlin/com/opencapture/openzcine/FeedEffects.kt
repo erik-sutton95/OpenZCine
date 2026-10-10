@@ -47,13 +47,14 @@ sealed interface FeedLutSelection {
 
 /** False-colour scales. [wireOrdinal] mirrors `FeedEffectsWire.bakedFalseColor`. */
 enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int, val label: String) {
-    STOPS("stops", 0, "ZC Stops"),
+    STOPS("stops", 0, "CineStop"),
     IRE("ire", 1, "IRE"),
     /**
      * Crush/clip-only false colour. Unlike STOPS/IRE it composites over the
      * selected monitor look, matching iOS `FalseColorScale.limits`.
      */
-    LIMITS("limits", 2, "Limits");
+    LIMITS("limits", 2, "Limits"),
+    VIDEO("video", 3, "Video");
 
     companion object {
         fun fromId(id: String): FeedFalseColorScale? = entries.firstOrNull { it.id == id }
@@ -136,7 +137,7 @@ data class FeedEffectsConfiguration(
     val peakingColor: MonitorPeakingColor = MonitorPeakingColor.RED,
     val zebraUnit: MonitorZebraUnit = MonitorZebraUnit.IRE,
     val zebraHighlightEnabled: Boolean = true,
-    val zebraHighlightIre: Float = 100f,
+    val zebraHighlightIre: Float = 99f,
     val zebraHighlightColor: MonitorZebraPaint = MonitorZebraPaint.WHITE,
     val zebraMidtoneEnabled: Boolean = true,
     val zebraMidtoneIre: Float = 55f,
@@ -146,7 +147,7 @@ data class FeedEffectsConfiguration(
     fun normalized(): FeedEffectsConfiguration =
         copy(
             zebraHighlightIre =
-                zebraHighlightIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 100f,
+                zebraHighlightIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 99f,
             zebraMidtoneIre =
                 zebraMidtoneIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 55f,
         )
@@ -171,6 +172,7 @@ data class FeedEffects(
     val zebra: Boolean = false,
     /** The operator's 50/50 comparison choice, carried even while there is no LUT to apply it to. */
     val splitComparison: FeedSplitOrientation? = null,
+    val falseColorRec709: Boolean = false,
 ) {
     /**
      * The comparison actually rendered. Derived rather than stored so it can never outlive the

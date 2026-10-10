@@ -52,11 +52,10 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         case .lut, .peaking, .falseColor, .zebra, .waveform, .parade, .histogram, .vectorscope,
             .trafficLights,
             .guides, .grid,
-            .crosshair, .level, .desqueeze, .instantReview, .magnification:
+            .crosshair, .level, .desqueeze, .mirror, .instantReview, .magnification:
             true
-        case .audioMeters, .evMeter, .mirror:
-            // Tap-only tools — the meters carry no operator-tunable options, and a left-to-right
-            // flip has nothing to tune: it is on or it is not.
+        case .audioMeters, .evMeter:
+            // Camera meters carry no operator-tunable options.
             false
         }
     }

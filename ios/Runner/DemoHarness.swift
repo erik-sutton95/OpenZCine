@@ -522,6 +522,7 @@ enum DemoHarness {
                     model.assist.falseColorScale =
                         switch scale {
                         case .stops: .sceneStops
+                        case .video: .stops
                         case .ire: .ire
                         case .limits: .limits
                         }

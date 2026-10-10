@@ -115,6 +115,7 @@ internal fun NikonAssists.feedEffects(visible: (MonitorAssistTool) -> Boolean): 
     FeedEffects(
         lut = lut.takeIf { visible(MonitorAssistTool.LUT) },
         falseColor = shared.falseColorScale.feedScale.takeIf { visible(MonitorAssistTool.FALSE) },
+        falseColorRec709 = shared.falseColorRec709,
         peaking = visible(MonitorAssistTool.PEAK),
         zebra = visible(MonitorAssistTool.ZEBRA),
         splitComparison =
@@ -123,16 +124,16 @@ internal fun NikonAssists.feedEffects(visible: (MonitorAssistTool) -> Boolean): 
             else FeedSplitOrientation.HORIZONTAL,
     )
 
-/** This camera renders scene stops, IRE and limits; the shared Video scale is not offered. */
-internal val nikonFalseColorScales =
-    listOf(MonitorFalseColorSelection.SCENE_STOPS, MonitorFalseColorSelection.IRE, MonitorFalseColorSelection.LIMITS)
+/** Canonical shared scale order; the native renderer supplies camera calibration. */
+internal val nikonFalseColorScales = MonitorFalseColorSelection.entries
 
 internal val MonitorFalseColorSelection.feedScale: FeedFalseColorScale
     get() =
         when (this) {
             MonitorFalseColorSelection.IRE -> FeedFalseColorScale.IRE
             MonitorFalseColorSelection.LIMITS -> FeedFalseColorScale.LIMITS
-            MonitorFalseColorSelection.SCENE_STOPS, MonitorFalseColorSelection.STOPS -> FeedFalseColorScale.STOPS
+            MonitorFalseColorSelection.SCENE_STOPS -> FeedFalseColorScale.STOPS
+            MonitorFalseColorSelection.STOPS -> FeedFalseColorScale.VIDEO
         }
 
 /** The renderer's image-assist options, read from the shared state. */
@@ -170,12 +171,14 @@ internal fun MonitorAssistState.framing(
         evMeterEnabled = visible(MonitorAssistTool.EV),
         desqueezeEnabled = visible(MonitorAssistTool.DESQ),
         mirrorEnabled = visible(MonitorAssistTool.MIRROR),
+        mirrorHorizontal = mirrorHorizontal,
+        mirrorVertical = mirrorVertical,
         desqueezeFactor = desqueezeFactor.toFloat(),
         desqueezeDirection = desqueezeDirection,
     )
 
-/** Waveform and parade trace gain: 100% keeps this camera's calibrated quarter-strength trace. */
-internal fun waveformParadeIntensity(percent: Int): Double = percent.coerceIn(0, 200) / 400.0
+/** The common trace gain: 100% is unity and 200% is double intensity. */
+internal fun waveformParadeIntensity(percent: Int): Double = percent.coerceIn(0, 200) / 100.0
 
 private const val ASSIST_PREFERENCES = "assist"
 private const val OPERATOR_PREFERENCES = "openzcine.operator-settings"
@@ -279,10 +282,11 @@ private fun storedLut(assist: SharedPreferences): StoredLutSelection? =
     if (assist.all[LUT_KIND_KEY] != LUT_STORED) null
     else StoredLutSelection.fromPersisted(assist.all[LUT_CATEGORY_KEY] as? String, assist.all[LUT_FILE_KEY] as? String)
 
-private val FeedFalseColorScale.sharedScale: MonitorFalseColorSelection
+internal val FeedFalseColorScale.sharedScale: MonitorFalseColorSelection
     get() =
         when (this) {
             FeedFalseColorScale.STOPS -> MonitorFalseColorSelection.SCENE_STOPS
+            FeedFalseColorScale.VIDEO -> MonitorFalseColorSelection.STOPS
             FeedFalseColorScale.IRE -> MonitorFalseColorSelection.IRE
             FeedFalseColorScale.LIMITS -> MonitorFalseColorSelection.LIMITS
         }

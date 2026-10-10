@@ -1111,7 +1111,7 @@ struct MediaPlayerView: View {
                 reference: menus.falseColorReference),
             availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
             initialChromeVisible: !DemoHarness.playbackCleanView, loopAvailable: false,
-            paradeIntensityScale: 0.25,
+            paradeIntensityScale: 1,
             picture: { owner, _ in
                 if let native = context.native, context.media.playback === owner {
                     PlayerLayerView(

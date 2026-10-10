@@ -6,6 +6,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.res.stringResource
 import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorFalseColorReadChoice
 import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
 import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
 import com.opencapture.monitorui.MonitorFalseColorReferenceValues
@@ -25,6 +26,9 @@ import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.ExposureCurveOrdinals
 import com.opencapture.openzcine.FeedFalseColorScale
 import com.opencapture.openzcine.feedScale
+import com.opencapture.openzcine.sharedScale
+import com.opencapture.openzcine.curveLabel
+import com.opencapture.opencine.cameracontrols.FalseColorReference as CommonFalseColorReference
 import com.opencapture.openzcine.nikonFalseColorScales
 import com.opencapture.openzcine.resolveFalseColorReference
 import com.opencapture.openzcine.zebraEditorValue
@@ -106,38 +110,30 @@ internal fun nikonAssistSection(
     }
 }
 
-/** This camera's scale names: its stops scale is its own scene-referred table. */
-private val MonitorFalseColorSelection.nikonLabel: String
-    get() = if (this == MonitorFalseColorSelection.IRE || this == MonitorFalseColorSelection.LIMITS) menuLabel else "ZC Stops"
-
 @Composable
 private fun falseColor(state: MonitorAssistState, cameraInput: ExposureAssistCameraInput,
     onInteraction: () -> Unit): MonitorAssistSettingsSection {
     val scale = state.falseColorScale.feedScale
-    val reference by produceState<MonitorFalseColorReferenceValues?>(null, scale, cameraInput) {
+    val read709 = state.falseColorRec709
+    val reference by produceState<MonitorFalseColorReferenceValues?>(null, scale, cameraInput, read709) {
         value = null
-        value = withContext(Dispatchers.Default) { nikonFalseColorReference(scale, cameraInput) }
+        value = withContext(Dispatchers.Default) { nikonFalseColorReference(scale, cameraInput, read709 = read709) }
     }
     return MonitorAssistSettingsSection.FalseColor(nikonFalseColorScales, state.falseColorScale,
-        { state.setFalseColor(scale = it); onInteraction() }, { it.nikonLabel },
-        readChoice = null, reference = reference, referenceEnabled = state.falseColorReference,
+        { state.setFalseColor(scale = it); onInteraction() }, { it.menuLabel },
+        readChoice = MonitorFalseColorReadChoice(state.falseColorRec709) { state.setFalseColorRead(it); onInteraction() }, reference = reference, referenceEnabled = state.falseColorReference,
         onReferenceEnabled = { state.setFalseColor(reference = it); onInteraction() },
-        scaleHelp = "The camera signal supplies the curve and reference calibration.", readHelp = "",
+        scaleHelp = "CineStop marks exposure relative to 18% gray. Video and IRE read the monitor signal. Limits paints shadow and highlight warnings. The camera supplies the source curve and clip calibration.",
+        readHelp = "LOG reads the source signal. 709 reads the built-in Rec.709 monitor look, independently of the selected creative LUT.",
         referenceHelp = "Show a compact color key over live view while False Color is active.",
         reset = { state.resetSettings(MonitorAssistTool.FALSE); onInteraction() })
 }
 
 internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
-    input: ExposureAssistCameraInput): MonitorFalseColorReferenceValues? {
-    val reference = resolveFalseColorReference(scale, input) ?: return null
-    val curve = when (reference.curveOrdinal) {
-        ExposureCurveOrdinals.SRGB -> "sRGB"
-        ExposureCurveOrdinals.HLG -> "HLG"
-        ExposureCurveOrdinals.NIKON_NLOG -> "N-Log"
-        ExposureCurveOrdinals.RED_LOG3G10 -> "L3G10"
-        else -> return null
-    }
-    val labels = listOf("Min", "−3", "18%", "Skin", "+2", "Max")
+    input: ExposureAssistCameraInput, read709: Boolean = false): MonitorFalseColorReferenceValues? {
+    val reference = resolveFalseColorReference(scale, input, read709) ?: return null
+    val curve = reference.curveLabel(read709)
+    val labels = listOf("Min", "−2", "−1", "18%", "+1", "+2", "Clip")
     return MonitorFalseColorReferenceValues(subtitle = "${scale.label} · $curve",
         segments = reference.segments.mapIndexed { index, segment ->
             MonitorFalseColorReferenceSegment(index, segment.lowerFraction.toDouble(), segment.upperFraction.toDouble(),
@@ -146,11 +142,7 @@ internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
             reference.stopMarkerFractions.mapIndexed { index, fraction ->
                 MonitorFalseColorReferenceMarker(index, labels[index], fraction.toDouble())
             }
-        } else emptyList(), axisLabels = when (scale) {
-            FeedFalseColorScale.STOPS -> emptyList()
-            FeedFalseColorScale.IRE -> listOf("clip / shadows", "18%", "skin hi", "highlights → clip")
-            FeedFalseColorScale.LIMITS -> listOf("crushed", "midtones untouched", "clipped")
-        })
+        } else emptyList(), axisLabels = CommonFalseColorReference.axisLabels(scale.sharedScale))
 }
 
 @Composable

@@ -2,6 +2,7 @@ import CoreImage
 import MonitorPresentation
 import MonitorUI
 import OpenCineApple
+import OpenCineCameraControls
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -204,6 +205,12 @@ struct LiveFeedModule: View {
             controlSession: model.shell.control.snapshot?.session,
             controlEpoch: model.shell.control.snapshot?.epoch)
     }
+    private var presentationScale: CGSize {
+        MirrorAssist.feedScale(
+            mirrored: model.liveFeedMirrored,
+            flippedVertically: model.liveFeedMirroredVertically,
+            squeeze: desqueezeScale(model.liveDesqueeze))
+    }
     private var pictureInteractive: Bool {
         !model.interfaceLocked && model.chromeEditorMode == nil
             && model.activePanel?.coversFullScreen != true && model.displayMode != .command
@@ -281,23 +288,29 @@ struct LiveFeedModule: View {
     @ViewBuilder private func feedImage(width: CGFloat, height: CGFloat) -> some View {
         let size = CGSize(width: width, height: height)
         let captured = pictureSource
+        let capturedScale = presentationScale
         MonitorInteractivePicture(
             source: captured, size: size, maximumZoom: 8,
             enabled: pictureInteractive,
             focus: MonitorPictureFocusInteraction(
                 locked: model.focusPointLocked,
-                current: { pictureSource == captured && pictureInteractive },
+                current: {
+                    pictureSource == captured && presentationScale == capturedScale
+                        && pictureInteractive
+                },
                 tap: { model.setFocusPoint(at: $0, feedSize: size) },
                 toggleLock: model.toggleFocusPointLock),
             swipe: { direction in
-                if pictureSource == captured && pictureInteractive {
+                if pictureSource == captured && presentationScale == capturedScale
+                    && pictureInteractive
+                {
                     switch direction {
                     case .hide: model.setDisplayMode(.clean)
                     case .show: model.setDisplayMode(.live)
                     case .none: break
                     }
                 }
-            }
+            }, presentationScale: capturedScale
         ) { progress in
             ZStack {
                 LiveFrameRaster(width: width, height: height)
@@ -338,7 +351,7 @@ private struct LiveFrameRaster: View {
     }
 
     /// De-squeeze and mirror are the same kind of thing — a transform of the raster alone — so they
-    /// ride one `scaleEffect` rather than stacking two. The mirror is a negative x scale, which is
+    /// ride one `scaleEffect`. The selected axes are negative X and Y scales, which is
     /// why it lands here and not in the effects graph: this node is above BOTH feed renderers, so
     /// the Metal path and the `UIImageView` fallback flip identically and neither had to learn it.
     ///
@@ -348,8 +361,9 @@ private struct LiveFrameRaster: View {
     /// handled where they are drawn.
     private var feedScale: CGSize {
         let squeeze = desqueezeScale(model.liveDesqueeze)
-        guard model.liveFeedMirrored else { return squeeze }
-        return CGSize(width: -squeeze.width, height: squeeze.height)
+        return MirrorAssist.feedScale(
+            mirrored: model.liveFeedMirrored,
+            flippedVertically: model.liveFeedMirroredVertically, squeeze: squeeze)
     }
 }
 
@@ -535,6 +549,7 @@ private struct LiveFeedFocusOverlay: View {
             LiveFocusBoxOverlay(
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
                 mirrored: model.liveFeedMirrored,
+                mirroredVertically: model.liveFeedMirroredVertically,
                 // The raster's own value: the box has to register with the picture as
                 // `LiveFrameRaster.feedScale` actually presents it.
                 desqueeze: model.liveDesqueeze
@@ -569,7 +584,8 @@ private struct LiveFeedFocusOverlay: View {
                 if let rect = liveFocusBoxRect(
                     box, focus: focus, in: proxy.size,
                     desqueeze: model.liveDesqueeze,
-                    mirrored: model.liveFeedMirrored)
+                    mirrored: model.liveFeedMirrored,
+                    mirroredVertically: model.liveFeedMirroredVertically)
                 {
                     Color.clear
                         .frame(width: rect.width, height: rect.height)
@@ -991,7 +1007,8 @@ func liveFocusBoxRect(
     focus: PTPLiveViewFocusInfo,
     in size: CGSize,
     desqueeze: NikonDesqueeze,
-    mirrored: Bool
+    mirrored: Bool,
+    mirroredVertically: Bool = false
 ) -> CGRect? {
     guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return nil }
     let feed = desqueezedRect(CGRect(origin: .zero, size: size), desqueeze)
@@ -1001,9 +1018,11 @@ func liveFocusBoxRect(
     let height = CGFloat(box.height) * scaleY
     let inset = CGFloat(box.centerX) * scaleX
     let centerX = mirrored ? feed.maxX - inset : feed.minX + inset
+    let insetY = CGFloat(box.centerY) * scaleY
+    let centerY = mirroredVertically ? feed.maxY - insetY : feed.minY + insetY
     return CGRect(
         x: centerX - width / 2,
-        y: feed.minY + CGFloat(box.centerY) * scaleY - height / 2,
+        y: centerY - height / 2,
         width: width,
         height: height
     )
@@ -1021,6 +1040,8 @@ struct LiveFocusBoxOverlay: View, Equatable {
     /// Whether the picture underneath is flipped left-to-right. The camera's box coordinates never
     /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
     var mirrored: Bool = false
+    /// Top-to-bottom presentation flip; AF metadata stays in source coordinates.
+    var mirroredVertically: Bool = false
     /// The de-squeeze the raster below is presenting with — see ``liveFocusBoxRect``.
     var desqueeze = NikonDesqueeze.off
 
@@ -1029,6 +1050,7 @@ struct LiveFocusBoxOverlay: View, Equatable {
         // properties of `focus`, so its memberwise == already covers them.
         lhs.focus == rhs.focus && lhs.locked == rhs.locked
             && lhs.lockProgress == rhs.lockProgress && lhs.mirrored == rhs.mirrored
+            && lhs.mirroredVertically == rhs.mirroredVertically
             && lhs.desqueeze == rhs.desqueeze
     }
 
@@ -1056,7 +1078,7 @@ struct LiveFocusBoxOverlay: View, Equatable {
                         guard
                             let rect = liveFocusBoxRect(
                                 box, focus: focus, in: size, desqueeze: desqueeze,
-                                mirrored: mirrored)
+                                mirrored: mirrored, mirroredVertically: mirroredVertically)
                         else { continue }
                         let color: Color = index == 0 ? primaryBoxColor : .green
                         let radius = min(min(rect.width, rect.height) * 0.12, 7)
@@ -1101,7 +1123,8 @@ struct LiveFocusBoxOverlay: View, Equatable {
     private func primaryBoxRect(in size: CGSize) -> CGRect? {
         guard let box = focus.boxes.first else { return nil }
         return liveFocusBoxRect(
-            box, focus: focus, in: size, desqueeze: desqueeze, mirrored: mirrored)
+            box, focus: focus, in: size, desqueeze: desqueeze, mirrored: mirrored,
+            mirroredVertically: mirroredVertically)
     }
 }
 

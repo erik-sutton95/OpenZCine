@@ -3,6 +3,7 @@ import MonitorUI
 import Network
 import OpenCineAppKit
 import OpenCineApple
+import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
 import OpenCineMedia
@@ -9598,9 +9599,12 @@ final class NativeAppModel {
         // A mirrored feed is a mirrored tap: what the operator touched on the left of the picture
         // is on the camera's right. Undo the flip here rather than anywhere downstream — the
         // camera's coordinate space never mirrors, only the monitor does.
-        let tappedX = liveFeedMirrored ? presented.maxX - point.x : point.x - presented.minX
-        let normalizedX = min(max(tappedX / presented.width, 0), 1)
-        let normalizedY = min(max((point.y - presented.minY) / presented.height, 0), 1)
+        let cameraPoint = LiveFeedFocusGesture.cameraPoint(
+            CGPoint(x: point.x - presented.minX, y: point.y - presented.minY),
+            in: presented.size, mirrored: liveFeedMirrored,
+            flippedVertically: liveFeedMirroredVertically)
+        let normalizedX = cameraPoint.x
+        let normalizedY = cameraPoint.y
         // Coordinate space from the latest live-view header, then the last one the camera reported
         // (which outlives a switch to a source that carries no header), then a 16:9 default before
         // any frame has stated one.
@@ -11108,7 +11112,12 @@ final class NativeAppModel {
     /// camera reports stay in the true orientation. Only the raster and the things drawn to sit on
     /// top of it — the AF boxes, and a tap that moves them — take the flip into account.
     var liveFeedMirrored: Bool {
-        renderedLiveAssistTools.contains(.mirror)
+        renderedLiveAssistTools.contains(.mirror) && assist.mirrorHorizontal
+    }
+
+    /// Vertical presentation axis, admitted independently from playback visibility.
+    var liveFeedMirroredVertically: Bool {
+        renderedLiveAssistTools.contains(.mirror) && assist.mirrorVertical
     }
 
     /// The de-squeeze the live picture presents (DISP mode and photography applied).

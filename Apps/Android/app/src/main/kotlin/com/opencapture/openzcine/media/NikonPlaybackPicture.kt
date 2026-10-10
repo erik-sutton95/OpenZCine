@@ -318,6 +318,7 @@ internal fun rememberNikonPlaybackPicture(
         falseColorReady,
         effects.falseColor,
         effectsConfiguration.falseColorReferenceEnabled,
+        effects.falseColorRec709,
         cameraInput,
     ) {
         reference = null
@@ -326,7 +327,7 @@ internal fun rememberNikonPlaybackPicture(
         if (falseColorReady && scale != null) {
             val nextReference =
                 withContext(Dispatchers.Default) {
-                    nikonFalseColorReference(scale, cameraInput)
+                    nikonFalseColorReference(scale, cameraInput, read709 = effects.falseColorRec709)
                 }
             if (native.isCurrent(attachment)) reference = nextReference
         }
@@ -410,8 +411,10 @@ internal fun rememberNikonPlaybackPicture(
             AndroidView(factory = { playerView },
                 update = { view -> if (view.player !== player && native.isCurrent(attachment)) view.player = player },
                 modifier = Modifier.requiredSize((rawWidth / density).dp, (rawHeight / density).dp).graphicsLayer {
-                    scaleX = geometry.zoom.scale * playbackFramingConfiguration.horizontalPresentationScale
-                    scaleY = geometry.zoom.scale * playbackFramingConfiguration.verticalPresentationScale
+                    scaleX = geometry.zoom.scale * playbackFramingConfiguration.horizontalPresentationScale *
+                        (if (playbackFramingConfiguration.mirrorsHorizontally) -1f else 1f)
+                    scaleY = geometry.zoom.scale * playbackFramingConfiguration.verticalPresentationScale *
+                        (if (playbackFramingConfiguration.flipsVertically) -1f else 1f)
                     translationX = geometry.zoom.offsetX
                     translationY = geometry.zoom.offsetY
                 })

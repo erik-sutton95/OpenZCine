@@ -188,6 +188,7 @@ internal fun liveFocusBoxRect(
     box: LiveFocusBox,
     feed: LiveOverlayRect,
     mirrored: Boolean = false,
+    mirroredVertical: Boolean = false,
 ): LiveOverlayRect? {
     if (
         focus.coordinateWidth <= 0 ||
@@ -206,7 +207,7 @@ internal fun liveFocusBoxRect(
     val centerX = box.centerX * scaleX
     return LiveOverlayRect(
         left = feed.left + (if (mirrored) feed.width - centerX else centerX) - width / 2f,
-        top = feed.top + box.centerY * scaleY - height / 2f,
+        top = feed.top + (if (mirroredVertical) feed.height - box.centerY * scaleY else box.centerY * scaleY) - height / 2f,
         width = width,
         height = height,
     )
@@ -404,7 +405,8 @@ internal fun LiveFrameMetadataOverlay(
                     lockProgress = focusLockProgress,
                     alpha = focusBoxAlpha,
                     editModifier = focusBoxEditModifier,
-                    mirrored = configuration.mirrorEnabled,
+                    mirrored = configuration.mirrorsHorizontally,
+                    mirroredVertical = configuration.flipsVertically,
                 )
             }
             if (levelEnabled) {
@@ -453,12 +455,13 @@ private fun CameraFocusOverlay(
     alpha: Float = 1f,
     editModifier: Modifier? = null,
     mirrored: Boolean = false,
+    mirroredVertical: Boolean = false,
 ) {
     if (focus == null || focus.boxes.isEmpty()) return
     val description =
         focus.accessibilityDescription() +
             if (locked) " Focus point position locked in app." else ""
-    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed, mirrored)
+    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed, mirrored, mirroredVertical)
     // The Edit view's outline and badge go on the primary AF box, not the whole feed — a dashed
     // rectangle round the entire image would name nothing.
     if (editModifier != null && primaryRect != null) {
@@ -488,7 +491,7 @@ private fun CameraFocusOverlay(
         var lockLabelSize by remember { mutableStateOf(IntSize.Zero) }
         Canvas(Modifier.fillMaxSize()) {
             focus.boxes.forEachIndexed { index, box ->
-                val rect = liveFocusBoxRect(focus, box, feed, mirrored) ?: return@forEachIndexed
+                val rect = liveFocusBoxRect(focus, box, feed, mirrored, mirroredVertical) ?: return@forEachIndexed
                 val color = focusBoxColor(focus, index)
                 val radius = min(min(rect.width, rect.height) * 0.12f, 7.dp.toPx())
                 drawRoundRect(

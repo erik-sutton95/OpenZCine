@@ -1078,6 +1078,7 @@ final class RunnerTests: XCTestCase {
         let model = NativeAppModel(assist: .scratch())
         model.assist.set(.falseColor, visible: true, context: .liveView)
         model.assist.set(.falseColor, visible: true, context: .playback)
+        model.connection = .connected
         let cases: [(codec: String, curve: ExposureToneCurve)] = [
             ("R3D NE", .redLog3G10),
             ("N-RAW", .nikonNLog),
@@ -1091,6 +1092,12 @@ final class RunnerTests: XCTestCase {
             XCTAssertEqual(model.liveImageEffects.falseColor?.curve, value.curve)
             XCTAssertEqual(model.playbackImageEffects.falseColor?.curve, value.curve)
         }
+
+        model.cameraState = model.cameraState.updating(codec: "N-RAW")
+        model.connection = .disconnected
+        XCTAssertEqual(model.liveImageEffects.falseColor?.curve, .nikonNLog)
+        XCTAssertEqual(model.playbackExposureSignalMapping.curve, .redLog3G10)
+        XCTAssertEqual(model.playbackImageEffects.falseColor?.curve, .redLog3G10)
     }
 
     @MainActor
@@ -1186,14 +1193,19 @@ final class RunnerTests: XCTestCase {
     func testReferenceFalseColorRendererMapsBothCurvesToSharedIREZones() {
         for curve in ExposureToneCurve.allCases {
             let middleGray = renderedReferenceFalseColorPixel(
-                monitorIRE: 42, scale: .ire, curve: curve)
-            let skinHighlight = renderedReferenceFalseColorPixel(
+                monitorIRE: 40, scale: .ire, curve: curve)
+            let irePassthrough = renderedReferenceFalseColorPixel(
                 monitorIRE: 66, scale: .ire, curve: curve)
+            let skinHighlight = renderedReferenceFalseColorPixel(
+                monitorIRE: 66, scale: .video, curve: curve)
             let clipped = renderedReferenceFalseColorPixel(
                 monitorIRE: 100, scale: .ire, curve: curve)
 
             XCTAssertGreaterThan(middleGray[1], middleGray[0] + 25)
             XCTAssertGreaterThan(middleGray[1], middleGray[2] + 30)
+            for channel in irePassthrough.prefix(3) {
+                XCTAssertEqual(Double(channel), 0.66 * 255, accuracy: 1)
+            }
             XCTAssertGreaterThan(skinHighlight[0], skinHighlight[1] + 50)
             XCTAssertGreaterThan(skinHighlight[2], skinHighlight[1] + 20)
             XCTAssertGreaterThan(clipped[0], 170)
@@ -1205,33 +1217,40 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(MonitorFalseColorReference.panelSize, CGSize(width: 264, height: 52))
         let mapping = ExposureSignalMapping(curve: .redLog3G10)
         let ire = FalseColorReference.segments(scale: .ire, mapping: mapping)
-
-        XCTAssertEqual(ire.count, 9)
+        XCTAssertEqual(ire.count, 6)
         XCTAssertEqual(ire[0].lowerFraction, 0, accuracy: 0.0001)
-        XCTAssertEqual(ire[0].upperFraction, 0.05, accuracy: 0.0001)
-        XCTAssertEqual(ire[3].lowerFraction, 0.41, accuracy: 0.0001)
-        XCTAssertEqual(ire[3].upperFraction, 0.49, accuracy: 0.0001)
-        XCTAssertEqual(ire[8].lowerFraction, 0.99, accuracy: 0.0001)
-        XCTAssertEqual(ire[8].upperFraction, 1, accuracy: 0.0001)
+        XCTAssertEqual(ire[0].upperFraction, 0.025, accuracy: 0.0001)
+        XCTAssertEqual(ire[2].lowerFraction, 0.38, accuracy: 0.0001)
+        XCTAssertEqual(ire[2].upperFraction, 0.42, accuracy: 0.0001)
+        XCTAssertEqual(ire[5].lowerFraction, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(ire[5].upperFraction, 1, accuracy: 0.0001)
         XCTAssertGreaterThan(ire[2].lowerFraction, ire[1].upperFraction)
-
+        let video = FalseColorReference.segments(scale: .video, mapping: mapping)
+        XCTAssertEqual(video.count, 9)
+        XCTAssertEqual(video[3].lowerFraction, 0.41, accuracy: 0.0001)
+        XCTAssertEqual(video[3].upperFraction, 0.49, accuracy: 0.0001)
         let stops = FalseColorReference.segments(scale: .stops, mapping: mapping)
-        XCTAssertEqual(stops.count, 8)
+        XCTAssertEqual(stops.count, 9)
         XCTAssertEqual(stops.first?.lowerFraction, 0)
         XCTAssertEqual(stops.last?.upperFraction, 1)
-        XCTAssertLessThan(stops[0].upperFraction, stops[1].lowerFraction)
-        XCTAssertLessThan(stops[1].upperFraction, stops[2].lowerFraction)
-        XCTAssertLessThan(stops[2].upperFraction, stops[3].lowerFraction)
-        XCTAssertLessThan(stops[4].upperFraction, stops[5].lowerFraction)
-        XCTAssertEqual(stops[5].upperFraction, stops[6].lowerFraction, accuracy: 0.0001)
-        XCTAssertEqual(stops[6].upperFraction, stops[7].lowerFraction, accuracy: 0.0001)
-
+        for pair in zip(stops, stops.dropFirst()) {
+            XCTAssertEqual(pair.0.upperFraction, pair.1.lowerFraction, accuracy: 0.0001)
+        }
         let markers = FalseColorReference.stopAxisMarkers(mapping: mapping)
-        XCTAssertEqual(markers.map(\.label), ["Min", "−3", "18%", "Skin", "+2", "Max"])
+        XCTAssertEqual(markers.map(\.label), ["Min", "−2", "−1", "18%", "+1", "+2", "Clip"])
         XCTAssertEqual(
-            markers[2].fraction,
-            (stops[2].lowerFraction + stops[2].upperFraction) * 0.5,
-            accuracy: 0.0001)
+            markers[3].fraction,
+            (stops[4].lowerFraction + stops[4].upperFraction) * 0.5, accuracy: 0.0001)
+        let reference = FalseColorReference.values(scale: .stops, mapping: mapping, read709: true)
+        XCTAssertEqual(reference.subtitle, "CineStop · 709")
+        for (curve, label) in [(ExposureToneCurve.srgb, "sRGB"), (.hlg, "HLG")] {
+            XCTAssertEqual(
+                FalseColorReference.values(
+                    scale: .video,
+                    mapping: ExposureSignalMapping(curve: curve), read709: true
+                ).subtitle,
+                "Video · \(label)")
+        }
     }
 
     func testAudioMeterPanelUsesQuarterOriginalWidth() {
@@ -1387,8 +1406,16 @@ final class RunnerTests: XCTestCase {
         curve: ExposureToneCurve
     ) -> [UInt8] {
         let mapping = ExposureSignalMapping(curve: curve)
-        let encoded = curve.encode(
-            linearLight: linearValue(monitorIRE: monitorIRE, mapping: mapping))
+        let transfer: MonitorTransfer =
+            switch curve {
+            case .redLog3G10: .log3G10
+            case .nikonNLog: .nlog
+            case .srgb: .srgb
+            case .hlg: .hdr
+            }
+        let encoded = OpenCineMedia.ScopeDisplayScale.signalNative(
+            monitorPercent: monitorIRE, transfer: transfer,
+            clipByte: Int(mapping.clipNative.rounded()))
         let encodedSource = CIImage(
             color: CIColor(red: encoded, green: encoded, blue: encoded, alpha: 1)
         ).cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
@@ -1411,27 +1438,6 @@ final class RunnerTests: XCTestCase {
                 colorSpace: nil)
         }
         return pixel
-    }
-
-    private func linearValue(
-        monitorIRE: Double, mapping: ExposureSignalMapping
-    ) -> Double {
-        if monitorIRE <= 0 { return 0 }
-        let clip = mapping.curve.decode(encodedValue: mapping.clipNative / 255)
-        if monitorIRE >= 100 { return clip }
-        var lower = 0.0
-        var upper = clip
-        for _ in 0..<80 {
-            let middle = (lower + upper) * 0.5
-            let actual = FalseColorMap.exposureValue(
-                linearLuminance: middle, scale: .ire, mapping: mapping)
-            if actual < monitorIRE {
-                lower = middle
-            } else {
-                upper = middle
-            }
-        }
-        return (lower + upper) * 0.5
     }
 
     private func rgbaPixel(_ image: UIImage) -> [UInt8] {
@@ -3655,6 +3661,43 @@ extension RunnerTests {
             XCTAssertLessThanOrEqual(
                 differing(index + 1), noise(rect),
                 "A camera value drew over the open palette at \(NSCoder.string(for: rect))")
+        }
+    }
+}
+
+@MainActor
+@Test func nikonMirrorAxesKeepBoxesAndInverseTapsOnTheDesqueezedPicture() throws {
+    let focus = PTPLiveViewFocusInfo(
+        coordinateWidth: 1_000, coordinateHeight: 1_000,
+        focusResult: .focused, subjectDetectionActive: false, selectedBoxIndex: 0,
+        boxes: [PTPLiveViewAFBox(centerX: 750, centerY: 250, width: 100, height: 200)])
+    let box = try #require(focus.boxes.first)
+    let size = CGSize(width: 800, height: 400)
+    for horizontalSqueeze in [false, true] {
+        let desqueeze = NikonDesqueeze(factor: 2, horizontal: horizontalSqueeze)
+        let feed = desqueezedRect(CGRect(origin: .zero, size: size), desqueeze)
+        for horizontal in [false, true] {
+            for vertical in [false, true] {
+                let drawn = try #require(
+                    liveFocusBoxRect(
+                        box, focus: focus, in: size,
+                        desqueeze: desqueeze, mirrored: horizontal, mirroredVertically: vertical))
+                #expect(
+                    abs(drawn.midX - (feed.minX + feed.width * (horizontal ? 0.25 : 0.75))) < 0.001)
+                #expect(
+                    abs(drawn.midY - (feed.minY + feed.height * (vertical ? 0.75 : 0.25))) < 0.001)
+                let inverse = LiveFeedFocusGesture.cameraPoint(
+                    CGPoint(x: drawn.midX - feed.minX, y: drawn.midY - feed.minY),
+                    in: feed.size, mirrored: horizontal, flippedVertically: vertical)
+                #expect(abs(inverse.x - 0.75) < 0.001)
+                #expect(abs(inverse.y - 0.25) < 0.001)
+                let squeeze = desqueezeScale(desqueeze)
+                let scale = MirrorAssist.feedScale(
+                    mirrored: horizontal,
+                    flippedVertically: vertical, squeeze: squeeze)
+                #expect(scale.width == (horizontal ? -squeeze.width : squeeze.width))
+                #expect(scale.height == (vertical ? -squeeze.height : squeeze.height))
+            }
         }
     }
 }

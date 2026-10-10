@@ -30,7 +30,7 @@ internal interface LiveFeedGpuBackend {
 
     fun detach(view: View)
 
-    fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean)
+    fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean = false)
 
     fun submitFrame(frame: Bitmap)
 
@@ -132,20 +132,22 @@ internal class GlesLiveFeedBackend : LiveFeedGpuBackend {
     private var uploadedPlan: FeedEffectsRenderPlan? = null
     private var uploadedAspectFill = false
     private var uploadedMirrored = false
+    private var uploadedMirroredVertical = false
 
-    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) {
+    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean) {
         // Same per-recomposition storm as the Vulkan path — see the note on its own `uploadedPlan`.
         // Cheaper per call here, but a texture re-upload per frame is still a texture re-upload per
         // frame, and the two backends must not drift on when they consider a plan new.
         if (plan === uploadedPlan && aspectFill == uploadedAspectFill &&
-            mirrored == uploadedMirrored
+            mirrored == uploadedMirrored && mirroredVertical == uploadedMirroredVertical
         ) {
             return
         }
         uploadedPlan = plan
         uploadedAspectFill = aspectFill
         uploadedMirrored = mirrored
-        if (plan != null) state.update(plan, aspectFill, mirrored) else state.clear()
+        uploadedMirroredVertical = mirroredVertical
+        if (plan != null) state.update(plan, aspectFill, mirrored, mirroredVertical) else state.clear()
     }
 
     override fun submitFrame(frame: Bitmap) {
@@ -179,8 +181,8 @@ internal class VulkanLiveFeedBackend(
     override fun createView(context: Context): View = native.createView(context)
     override fun attach(view: View) = native.attach(view)
     override fun detach(view: View) = native.detach(view)
-    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) =
-        native.updatePlan(plan?.nativePlan, aspectFill, mirrored)
+    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean) =
+        native.updatePlan(plan?.nativePlan, aspectFill, mirrored, mirroredVertical)
     override fun submitFrame(frame: Bitmap) = native.submit(frame)
     override fun clearFrame() = native.clearFrame()
     override fun resume() = native.resume()

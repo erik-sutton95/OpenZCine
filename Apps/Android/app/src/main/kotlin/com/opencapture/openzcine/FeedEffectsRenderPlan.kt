@@ -64,7 +64,7 @@ internal class FeedEffectsRenderPlan(
     val falseColorReady: Boolean
         get() =
             when (effects.falseColor) {
-                FeedFalseColorScale.STOPS, FeedFalseColorScale.IRE -> baseCube != null
+                FeedFalseColorScale.STOPS, FeedFalseColorScale.VIDEO, FeedFalseColorScale.IRE -> baseCube != null
                 FeedFalseColorScale.LIMITS -> limitsReady
                 null -> false
             }
@@ -110,16 +110,17 @@ internal object FeedEffectsRenderPlanFactory {
         }
         val baseCube = baseCube(effects, renderConfiguration, lutLibrary)
         val limitsActive = effects.falseColor == FeedFalseColorScale.LIMITS
+        val readingCurveOrdinal = renderConfiguration.curveOrdinal + if (effects.falseColorRec709) 4 else 0
         val limitsPaint =
             if (limitsActive) {
                 cachedCube(
                     key =
-                        "limits-paint:${renderConfiguration.curveOrdinal}:" +
+                        "limits-paint:$readingCurveOrdinal:" +
                             renderConfiguration.clipNative.toBits(),
                     size = 64,
                 ) {
                     SwiftCore.bakeFalseColorLimitsPaint(
-                        renderConfiguration.curveOrdinal,
+                        readingCurveOrdinal,
                         renderConfiguration.clipNative,
                     )
                 }
@@ -130,12 +131,12 @@ internal object FeedEffectsRenderPlanFactory {
             if (limitsActive) {
                 cachedCube(
                     key =
-                        "limits-weight:${renderConfiguration.curveOrdinal}:" +
+                        "limits-weight:$readingCurveOrdinal:" +
                             renderConfiguration.clipNative.toBits(),
                     size = 64,
                 ) {
                     SwiftCore.bakeFalseColorLimitsWeight(
-                        renderConfiguration.curveOrdinal,
+                        readingCurveOrdinal,
                         renderConfiguration.clipNative,
                     )
                 }
@@ -194,12 +195,12 @@ internal object FeedEffectsRenderPlanFactory {
                 effects.falseColor != null && effects.falseColor != FeedFalseColorScale.LIMITS ->
                     cachedCube(
                         key =
-                            "false:${effects.falseColor.wireOrdinal}:${configuration.curveOrdinal}:" +
+                            "false:${effects.falseColor.wireOrdinal}:${effects.falseColorRec709}:${configuration.curveOrdinal}:" +
                                 configuration.clipNative.toBits(),
                         size = 64,
                     ) {
                         SwiftCore.bakeFalseColorCube(
-                            effects.falseColor.wireOrdinal,
+                            effects.falseColor.wireOrdinal + if (effects.falseColorRec709) 4 else 0,
                             configuration.curveOrdinal,
                             configuration.clipNative,
                         )

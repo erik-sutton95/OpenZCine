@@ -17,11 +17,12 @@ internal typealias FocusFeedGestureEvent = MonitorFocusGestureEvent
 internal data class FocusFeedGeometry(
     val presentedFeed: LiveOverlayRect, val hitBounds: LiveOverlayRect,
     val coordinateWidth: Int?, val coordinateHeight: Int?, val generation: Long, val mirrored: Boolean = false,
+    val mirroredVertical: Boolean = false,
 ) {
     internal val common: MonitorFocusGeometry get() = MonitorFocusGeometry(
         MonitorRect(presentedFeed.left, presentedFeed.top, presentedFeed.width, presentedFeed.height),
         MonitorRect(hitBounds.left, hitBounds.top, hitBounds.width, hitBounds.height),
-        coordinateWidth, coordinateHeight, generation, mirrored)
+        coordinateWidth, coordinateHeight, generation, mirrored, mirroredVertical)
     init { common }
     val signature: FocusFeedGeometrySignature get() = common.signature
     val hasAuthoritativeCoordinateSpace: Boolean get() = common.hasAuthoritativeCoordinateSpace
@@ -45,6 +46,7 @@ internal fun focusFeedGeometry(
     coordinateHeight: Int? = null,
     generation: Long,
     mirrored: Boolean = false,
+    mirroredVertical: Boolean = false,
 ): FocusFeedGeometry? {
     if (!viewport.hasFinitePositiveSize()) return null
     val presented =
@@ -66,6 +68,7 @@ internal fun focusFeedGeometry(
         coordinateHeight = coordinateHeight.takeIf { hasCoordinateSpace },
         generation = generation,
         mirrored = mirrored,
+        mirroredVertical = mirroredVertical,
     )
 }
 

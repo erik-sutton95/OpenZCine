@@ -50,6 +50,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.opencapture.monitorui.MonitorFalseColorReference
+import com.opencapture.opencine.cameracontrols.FalseColorReference as CommonFalseColorReference
 import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
 import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
 import com.opencapture.monitorui.MonitorFalseColorReferenceValues
@@ -228,6 +229,7 @@ private data class FocusGestureGeometrySignature(
 internal data class FalseColorReferencePresentation(
     val scale: FeedFalseColorScale,
     val reference: FeedFalseColorReference,
+    val read709: Boolean = false,
 )
 
 /** Render-success state consumed by the unscaled sibling reference overlay. */
@@ -236,8 +238,8 @@ public class LiveFeedEffectsPresentationState {
     internal var falseColorReference: FalseColorReferencePresentation? by mutableStateOf(null)
         private set
 
-    internal fun present(scale: FeedFalseColorScale, reference: FeedFalseColorReference) {
-        falseColorReference = FalseColorReferencePresentation(scale, reference)
+    internal fun present(scale: FeedFalseColorScale, reference: FeedFalseColorReference, read709: Boolean = false) {
+        falseColorReference = FalseColorReferencePresentation(scale, reference, read709)
     }
 
     internal fun clear() {
@@ -337,6 +339,8 @@ fun LiveFeedView(
     preferComposablePresentation: Boolean = false,
     /** Pauses acquisition without replacing the retained native picture host or held raster. */
     collectFrames: Boolean = true,
+    /** Vertical display transform; raw frame publication remains in source orientation. */
+    mirroredVertical: Boolean = false,
 ) {
     val applicationContext = LocalContext.current.applicationContext
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
@@ -420,7 +424,7 @@ fun LiveFeedView(
         if (nextPlan == null) return@LaunchedEffect
         // Atomic present-path swap: push GPU uniforms first, then Compose state.
         if (!preferComposablePresentation) {
-            gpuBackend.updatePlan(nextPlan, aspectFill, mirrored)
+            gpuBackend.updatePlan(nextPlan, aspectFill, mirrored, mirroredVertical)
         }
         renderPlan = nextPlan
         val nextBaker =
@@ -448,7 +452,7 @@ fun LiveFeedView(
     SideEffect {
         val plan = renderPlan
         if (!preferComposablePresentation && plan != null && !gpuBackend.renderFailed) {
-            gpuBackend.updatePlan(plan, aspectFill, mirrored)
+            gpuBackend.updatePlan(plan, aspectFill, mirrored, mirroredVertical)
         }
     }
     // SurfaceView is a separate buffer — Kyant layerBackdrop cannot sample it.
@@ -471,14 +475,15 @@ fun LiveFeedView(
         falseColorReady,
         effects.falseColor,
         configuration.falseColorReferenceEnabled,
+        effects.falseColorRec709,
         cameraInput,
         effectsPresentationState,
     ) {
         effectsPresentationState?.clear()
         val scale = effects.falseColor?.takeIf { configuration.falseColorReferenceEnabled }
         if (falseColorReady && scale != null) {
-            val reference = withContext(Dispatchers.Default) { resolveFalseColorReference(scale, cameraInput) }
-            if (reference != null) effectsPresentationState?.present(scale, reference)
+            val reference = withContext(Dispatchers.Default) { resolveFalseColorReference(scale, cameraInput, read709 = effects.falseColorRec709) }
+            if (reference != null) effectsPresentationState?.present(scale, reference, effects.falseColorRec709)
         }
     }
     val ownedPreviewBaker = previewBaker
@@ -573,7 +578,7 @@ fun LiveFeedView(
             modifier = modifier,
             update = {
                 val plan = renderPlan
-                if (plan != null) gpuBackend.updatePlan(plan, aspectFill, mirrored)
+                if (plan != null) gpuBackend.updatePlan(plan, aspectFill, mirrored, mirroredVertical)
             },
             onRelease = { view -> gpuBackend.detach(view) },
         )
@@ -628,8 +633,9 @@ fun LiveFeedView(
                     }
                 }
             }
-            if (mirrored) {
-                scale(scaleX = -1f, scaleY = 1f, pivot = pivot) { paintFeed() }
+            if (mirrored || mirroredVertical) {
+                scale(scaleX = if (mirrored) -1f else 1f,
+                    scaleY = if (mirroredVertical) -1f else 1f, pivot = pivot) { paintFeed() }
             } else {
                 paintFeed()
             }
@@ -778,15 +784,16 @@ internal data class FalseColorReferenceCopy(
 @Composable
 internal fun falseColorReferenceCopy(scale: FeedFalseColorScale): FalseColorReferenceCopy =
     FalseColorReferenceCopy(
-        scale = stringResource(scale.labelResource()),
+        scale = scale.label,
         stopLabels =
             listOf(
                 stringResource(R.string.false_color_axis_min),
-                stringResource(R.string.false_color_axis_minus_three),
+                "−2",
+                "−1",
                 stringResource(R.string.false_color_axis_middle_gray),
-                stringResource(R.string.false_color_axis_skin),
+                "+1",
                 stringResource(R.string.false_color_axis_plus_two),
-                stringResource(R.string.false_color_axis_max),
+                "Clip",
             ),
         ireLabels =
             listOf(
@@ -807,13 +814,7 @@ internal fun falseColorReferenceCopy(scale: FeedFalseColorScale): FalseColorRefe
 internal fun FalseColorReferencePresentation.referenceValues(
     copy: FalseColorReferenceCopy,
 ): MonitorFalseColorReferenceValues {
-    val curve =
-        when (reference.curveOrdinal) {
-            ExposureCurveOrdinals.SRGB -> "sRGB"
-            ExposureCurveOrdinals.HLG -> "HLG"
-            ExposureCurveOrdinals.NIKON_NLOG -> "N-Log"
-            else -> "L3G10"
-        }
+    val curve = reference.curveLabel(read709)
     return MonitorFalseColorReferenceValues(
         subtitle = "${copy.scale} · $curve",
         segments =
@@ -838,19 +839,6 @@ internal fun FalseColorReferencePresentation.referenceValues(
             } else {
                 emptyList()
             },
-        axisLabels =
-            when (scale) {
-                FeedFalseColorScale.STOPS -> emptyList()
-                FeedFalseColorScale.IRE -> copy.ireLabels
-                FeedFalseColorScale.LIMITS -> copy.limitsLabels
-            },
+        axisLabels = CommonFalseColorReference.axisLabels(scale.sharedScale),
     )
 }
-
-@androidx.annotation.StringRes
-internal fun FeedFalseColorScale.labelResource(): Int =
-    when (this) {
-        FeedFalseColorScale.STOPS -> R.string.false_color_scale_stops
-        FeedFalseColorScale.IRE -> R.string.false_color_scale_ire
-        FeedFalseColorScale.LIMITS -> R.string.false_color_scale_limits
-    }

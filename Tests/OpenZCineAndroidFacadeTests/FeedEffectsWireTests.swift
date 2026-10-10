@@ -66,11 +66,11 @@ struct FeedEffectsWireTests {
             #expect(pixel.green == byte(cube.rgb[index + 1]))
             #expect(pixel.blue == byte(cube.rgb[index + 2]))
         }
-        // Encoded 1.0 sits past the clip warning → the documented 99+ IRE red zone.
+        // Encoded 1.0 sits past the source ceiling and paints the canonical six-zone IRE red.
         let clip = packedPixel(bytes, size: size, r: 63, g: 63, b: 63)
-        #expect(clip.red == byte(0.78))
-        #expect(clip.green == byte(0.28))
-        #expect(clip.blue == byte(0.18))
+        #expect(clip.red == 220)
+        #expect(clip.green == 51)
+        #expect(clip.blue == 33)
     }
 
     @Test("Scalars are the core's black/clip anchors and zebra thresholds")
@@ -196,6 +196,54 @@ struct FeedEffectsWireTests {
         #expect(reference[2] == 4)
         #expect(reference[3] == 0)
         #expect(reference.count == 4 + Int(reference[2]) * 5)
+    }
+
+    @Test("Stable scale ordinals distinguish CineStop, IRE, Limits and Video")
+    func stableScaleOrdinals() throws {
+        for (ordinal, scale) in [(0, FalseColorScale.stops), (1, .ire), (2, .limits), (3, .video)] {
+            let reference = try #require(
+                FeedEffectsWire.falseColorReference(
+                    scaleOrdinal: ordinal, curveOrdinal: 1, clipNative: 200))
+            #expect(
+                Int(reference[2])
+                    == scale.bands(
+                        mapping: ExposureSignalMapping(
+                            curve: .nikonNLog, clipNative: 200)
+                    ).count)
+            #expect(reference[3] == (scale == .stops ? 7 : 0))
+        }
+        #expect(
+            FeedEffectsWire.bakedFalseColor(scaleOrdinal: 3, curveOrdinal: 1, clipNative: 200)
+                != nil)
+    }
+
+    @Test("709 ordinal projection reaches cubes, Limits masks and reference clip geometry")
+    func readProjection() throws {
+        let log = try #require(
+            FeedEffectsWire.bakedFalseColor(
+                scaleOrdinal: 3, curveOrdinal: 1, clipNative: 200))
+        let rec709 = try #require(
+            FeedEffectsWire.bakedFalseColor(
+                scaleOrdinal: 7, curveOrdinal: 1, clipNative: 200))
+        #expect(log != rec709)
+        let logMask = try #require(
+            FeedEffectsWire.bakedFalseColorLimitsWeight(
+                curveOrdinal: 1, clipNative: 200))
+        let rec709Mask = try #require(
+            FeedEffectsWire.bakedFalseColorLimitsWeight(
+                curveOrdinal: 5, clipNative: 200))
+        #expect(logMask != rec709Mask)
+        let logReference = try #require(
+            FeedEffectsWire.falseColorReference(
+                scaleOrdinal: 0, curveOrdinal: 1, clipNative: 200))
+        let rec709Reference = try #require(
+            FeedEffectsWire.falseColorReference(
+                scaleOrdinal: 4, curveOrdinal: 1, clipNative: 200))
+        #expect(logReference[1] == 1 && rec709Reference[1] == 1)
+        #expect(logReference != rec709Reference)
+        #expect(FeedEffectsWire.bakedFalseColor(scaleOrdinal: 8, curveOrdinal: 1) == nil)
+        #expect(
+            FeedEffectsWire.bakedFalseColorLimitsWeight(curveOrdinal: 8, clipNative: 200) == nil)
     }
 
     @Test("Unknown ordinals and unsupported sizes are rejected")

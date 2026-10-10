@@ -147,27 +147,32 @@ public enum FeedEffectsWire {
         return packedRGBA(cube: look.cube(size: size))
     }
 
-    /// A false-colour cube for Stops (`0`) or IRE (`1`) using the current
+    /// A false-colour cube for CineStop (`0`), IRE (`1`) or Video (`3`).
+    /// Add `4` to the scale ordinal for the built-in 709 reading. Uses the current
     /// camera-derived clip endpoint. Limits (`2`) uses the two dedicated
     /// paint/mask payloads below so it leaves unflagged monitor colour intact.
     public static func bakedFalseColor(
         scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double? = nil
     ) -> [UInt8]? {
-        guard let scale = falseColorScale(scaleOrdinal), scale != .limits,
+        guard let selection = falseColorSelection(scaleOrdinal), selection.scale != .limits,
             let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative)
         else { return nil }
-        return packedRGBA(cube: FalseColorMap.cube(scale: scale, mapping: mapping))
+        return packedRGBA(
+            cube: FalseColorMap.cube(
+                scale: selection.scale, mapping: mapping, read709: selection.read709))
     }
 
     /// Limits false-colour paint cube. It is composited over the selected LUT
-    /// (or the untouched source) with the sibling weight cube.
+    /// (or the untouched source) with the sibling weight cube. Add `4` to the
+    /// curve ordinal for 709; the underlying source curve ordinal remains `0...3`.
     public static func bakedFalseColorLimitsPaint(
         curveOrdinal: Int, clipNative: Double
     ) -> [UInt8]? {
-        guard let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative) else {
-            return nil
-        }
-        return packedRGBA(cube: FalseColorMap.limitsPaintCube(mapping: mapping))
+        guard let selection = falseColorCurveSelection(curveOrdinal),
+            let mapping = mapping(curveOrdinal: selection.ordinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: FalseColorMap.limitsPaintCube(mapping: mapping, read709: selection.read709))
     }
 
     /// Limits false-colour zone-weight cube, paired with
@@ -175,10 +180,11 @@ public enum FeedEffectsWire {
     public static func bakedFalseColorLimitsWeight(
         curveOrdinal: Int, clipNative: Double
     ) -> [UInt8]? {
-        guard let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative) else {
-            return nil
-        }
-        return packedRGBA(cube: FalseColorMap.limitsWeightCube(mapping: mapping))
+        guard let selection = falseColorCurveSelection(curveOrdinal),
+            let mapping = mapping(curveOrdinal: selection.ordinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: FalseColorMap.limitsWeightCube(mapping: mapping, read709: selection.read709))
     }
 
     /// Renderer-ready false-colour reference geometry:
@@ -192,11 +198,13 @@ public enum FeedEffectsWire {
     public static func falseColorReference(
         scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double
     ) -> [Float]? {
-        guard let scale = falseColorScale(scaleOrdinal),
+        guard let selection = falseColorSelection(scaleOrdinal),
             let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative)
         else { return nil }
-        let segments = falseColorReferenceSegments(scale: scale, mapping: mapping)
-        let markers = falseColorReferenceMarkers(scale: scale, mapping: mapping)
+        let segments = falseColorReferenceSegments(
+            scale: selection.scale, mapping: mapping, read709: selection.read709)
+        let markers = falseColorReferenceMarkers(
+            scale: selection.scale, mapping: mapping, read709: selection.read709)
         var result: [Float] = [
             1, Float(Self.curveOrdinal(mapping.curve)), Float(segments.count),
             Float(markers.count),
@@ -215,12 +223,12 @@ public enum FeedEffectsWire {
     }
 
     private static func falseColorReferenceSegments(
-        scale: FalseColorScale, mapping: ExposureSignalMapping
+        scale: FalseColorScale, mapping: ExposureSignalMapping, read709: Bool
     ) -> [(lower: Double, upper: Double, band: FalseColorBand)] {
-        let bands = scale.bands(mapping: mapping)
+        let bands = scale.bands(mapping: mapping, read709: read709)
         switch scale {
         case .stops:
-            let domain = falseColorStopReferenceDomain(mapping: mapping)
+            let domain = falseColorStopReferenceDomain(mapping: mapping, read709: read709)
             return bands.map { band in
                 (
                     falseColorStopFraction(band.lowerBound, domain: domain, infiniteFallback: 0),
@@ -228,7 +236,7 @@ public enum FeedEffectsWire {
                     band
                 )
             }
-        case .ire, .limits:
+        case .video, .ire, .limits:
             return bands.map { band in
                 (
                     min(1, max(0, band.lowerBound / 100)),
@@ -240,21 +248,21 @@ public enum FeedEffectsWire {
     }
 
     private static func falseColorReferenceMarkers(
-        scale: FalseColorScale, mapping: ExposureSignalMapping
+        scale: FalseColorScale, mapping: ExposureSignalMapping, read709: Bool
     ) -> [Double] {
         guard scale == .stops else { return [] }
-        let domain = falseColorStopReferenceDomain(mapping: mapping)
-        let maximum = FalseColorMap.maximumSceneStop(mapping: mapping)
-        return [FalseColorMap.minimumSceneStop, -3, 0, 1, 2, maximum].map {
+        let domain = falseColorStopReferenceDomain(mapping: mapping, read709: read709)
+        let maximum = FalseColorMap.maximumSceneStop(mapping: mapping, read709: read709)
+        return [FalseColorMap.minimumSceneStop, -2, -1, 0, 1, 2, maximum].map {
             falseColorStopFraction($0, domain: domain, infiniteFallback: 0)
         }
     }
 
     private static func falseColorStopReferenceDomain(
-        mapping: ExposureSignalMapping
+        mapping: ExposureSignalMapping, read709: Bool
     ) -> ClosedRange<Double> {
-        let lower = FalseColorMap.minimumSceneStop - 1.0 / 6
-        let upper = max(6, FalseColorMap.maximumSceneStop(mapping: mapping) + 1.0 / 6)
+        let lower = FalseColorMap.minimumSceneStop - 0.5
+        let upper = max(6, FalseColorMap.maximumSceneStop(mapping: mapping, read709: read709) + 0.5)
         return lower...upper
     }
 
@@ -361,13 +369,25 @@ public enum FeedEffectsWire {
         return ExposureSignalMapping(curve: curve, clipNative: resolvedClip)
     }
 
-    private static func falseColorScale(_ ordinal: Int) -> FalseColorScale? {
-        switch ordinal {
-        case 0: .stops
-        case 1: .ire
-        case 2: .limits
-        default: nil
+    private static func falseColorSelection(_ ordinal: Int)
+        -> (scale: FalseColorScale, read709: Bool)?
+    {
+        guard (0...7).contains(ordinal) else { return nil }
+        let scale: FalseColorScale
+        switch ordinal % 4 {
+        case 0: scale = .stops
+        case 1: scale = .ire
+        case 2: scale = .limits
+        default: scale = .video
         }
+        return (scale, ordinal >= 4)
+    }
+
+    private static func falseColorCurveSelection(_ ordinal: Int)
+        -> (ordinal: Int, read709: Bool)?
+    {
+        guard (0...7).contains(ordinal) else { return nil }
+        return (ordinal % 4, ordinal >= 4)
     }
 
     /// The operator-facing step; the detector constants behind it live in shared core
