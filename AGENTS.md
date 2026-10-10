@@ -28,6 +28,25 @@ Install local tooling with `just setup` (macOS / Homebrew).
 ## Where things live
 
 - `Sources/OpenZCineCore/` — production Swift shared core.
+  The iOS Runner and Watch targets link it as the `OpenZCineCore` product of the local package
+  at the repository root (`ios/Runner.xcodeproj` references `..`), so a new core file needs no
+  Xcode registration; app files that use core types `import OpenZCineCore`.
+- `OpenCineNikon` (product of the sibling `../OpenCine`, pinned in `opencine-pins.txt`): the Nikon PTP/IP and USB wire,
+  property codes and decoders, profiles, media naming, discovery/connect/session policy and
+  `NikonCameraSession`. `OpenZCineCore` re-exports it (`Sources/OpenZCineCore/OpenCineNikon.swift`),
+  so app, Watch and JNI facade code keeps importing `OpenZCineCore`. Edit Nikon protocol code and
+  its tests there (`Sources/OpenCineNikon`, `Tests/OpenCineNikonTests`), then bump the pin.
+- `../OpenCine` (sibling platform repo, pinned in `opencine-pins.txt`, `scripts/checkout-opencine.sh`):
+  `OpenCineMedia` supplies `CubeLUT` and `FrameRateSampler` (scoped re-exports in
+  `Sources/OpenZCineCore/CubeLUT.swift`; the Runner project links the product). `OpenCineApple`
+  supplies the iPad HDMI/UVC capture source (`UVCVideoSource`, leases); the Runner links it and keeps
+  the state copy and the `UIImage` render in `ios/Runner/UVCVideoSource.swift`.
+- Shared monitor UI and multicam (NIKON-01), also from `../OpenCine`: the Runner links `MonitorUI`,
+  `MonitorPresentation` and `OpenCineMulticam`; Android depends on `monitor-ui` and `multicam` from
+  the included OpenCine build. Never copy these into the app: change them in OpenCine (keep the
+  SwiftUI and Compose sides in step) and bump the pin. Multicam app code: `ios/Runner/Multicam*.swift`
+  and `Apps/Android/app/.../multicam/`; Nikon member policy lives in OpenCineNikon
+  (`NikonMulticam.swift`).
 - `Tests/OpenZCineCoreTests/` — Swift shared-core tests.
 - `ios/Runner/` — production SwiftUI iOS app shell.
 - `Apps/Android/` — production Jetpack Compose app, platform adapters, and Wear OS companion.
@@ -224,9 +243,10 @@ The canonical layer names map to this repository as follows:
 | Resources | `ios/Runner` | Assets, localisation strings, Info.plist |
 | Watch | `ios/OpenZCineWatch` | watchOS companion app (embedded in Runner) |
 | Core | `Sources/OpenZCineCore` | Portable camera protocol and business logic |
-| Android facade | `Sources/OpenZCineAndroidFacade` | Swift session/JNI boundary for Android |
+| Android facade | `Sources/OpenZCineAndroidFacade` | The app's own Swift JNI exports (scopes, feed effects, LUTs, Frame.io); the Nikon session layer is OpenCine `OpenCineNikonAndroid` |
 | Android app | `Apps/Android/app` | Compose phone shell and Android adapters |
-| Android API | `Apps/Android/core-api` | Kotlin interface shared by shell and adapters |
+| Android session | OpenCine `Android/nikon` (`com.opencapture.opencine:nikon`) | Nikon session contract, Kotlin session over the Swift layer, JNI facade `NikonNative` |
+| Android API | `Apps/Android/core-api` | Monitor availability and relay lease/encoder types |
 | Wear | `Apps/Android/wear`, `Apps/Android/wear-relay` | Wear OS UI and phone relay contract |
 | Android tests | `Apps/Android/*/src/test`, `Apps/Android/*/src/androidTest` | JVM and device UI tests |
 

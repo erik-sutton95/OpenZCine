@@ -1,3 +1,4 @@
+import OpenZCineCore
 import SwiftUI
 
 /// System-rail still shutter (replaces the red record control in photography mode).

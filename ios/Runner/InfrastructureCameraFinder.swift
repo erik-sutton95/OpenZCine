@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenZCineCore
 
 /// Isolated infrastructure (same-LAN Wi‑Fi) camera search.
 ///
@@ -7,7 +8,7 @@ import Foundation
 /// probes, occupancy-first local subnet sweep. Contains **no** Wi‑Fi join surface — that bug
 /// class stays unrepresentable (see `docs/transport-architecture.md`).
 ///
-/// The idle camera list keeps using `NativeCameraDiscoveryService` (passive / liveness) so an
+/// The idle camera list keeps using `NativeNikonDiscovery` (passive / liveness) so an
 /// idle phone never Inits a body another device holds. Pairing and +Add-setup Wi‑Fi use this
 /// finder because a pairing-wait body advertises nothing and must be probed.
 // SAFETY: `@unchecked Sendable` — no mutable stored state; all work is local to each `search`.

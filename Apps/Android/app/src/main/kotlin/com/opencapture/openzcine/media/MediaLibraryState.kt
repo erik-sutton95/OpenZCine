@@ -2,17 +2,21 @@ package com.opencapture.openzcine.media
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.MessageDigest
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
 import java.util.Base64
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** The two safe library sources exposed by the Android browser. */
 internal enum class MediaLibrarySource(val title: String) {
@@ -26,22 +30,6 @@ internal enum class MediaLibraryCategory(val title: String) {
     VIDEOS("Videos"),
     PHOTOS("Photos"),
     FAVORITES("Favorites"),
-}
-
-/** Operator-selectable arrangement for the Android media library. */
-internal enum class MediaLibraryLayout(val accessibilityLabel: String) {
-    GRID("Switch to list view"),
-    LIST("Switch to grid view"),
-}
-
-/** Persisted adaptive-grid density, matching the current iOS media browser. */
-internal enum class MediaThumbnailSize(
-    val accessibilityLabel: String,
-    val minimumCellWidthDp: Int,
-) {
-    SMALL("Small thumbnails", 148),
-    MEDIUM("Medium thumbnails", 210),
-    LARGE("Large thumbnails", 280),
 }
 
 /**
@@ -88,26 +76,8 @@ internal enum class MediaDateWindowFilter(val title: String, val dayCount: Long)
     LAST_30_DAYS("30 DAYS", 30),
     ;
 
-    /**
-     * True when a PTP `YYYYMMDDThhmmss` capture date falls inside the window. Future-dated
-     * captures (a body with a skewed clock) fall outside every window.
-     */
-    fun contains(captureDate: String, today: LocalDate): Boolean {
-        val day = captureDay(captureDate) ?: return false
-        return !day.isAfter(today) && !day.isBefore(today.minusDays(dayCount - 1))
-    }
-
-    private companion object {
-        fun captureDay(captureDate: String): LocalDate? {
-            val token = captureDate.take(8)
-            if (token.length != 8 || !token.all { it in '0'..'9' }) return null
-            return try {
-                LocalDate.parse(token, DateTimeFormatter.BASIC_ISO_DATE)
-            } catch (_: DateTimeParseException) {
-                null
-            }
-        }
-    }
+    fun contains(captureDate: String, today: LocalDate): Boolean =
+        com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.windowContains(captureDate, dayCount, today)
 }
 
 /** Camera-scoped filters composed with AND semantics across filter groups. */
@@ -146,9 +116,9 @@ internal data class MediaLibraryFilters(
     /** Drops a stale card selection whenever the source or connected camera changes. */
     fun retainingAvailableStorage(
         source: MediaLibrarySource,
-        clips: List<MediaClipRecord>,
+        clips: List<NikonMediaClipRecord>,
     ): MediaLibraryFilters =
-        retainingAvailableStorage(source, clips.mapTo(linkedSetOf(), MediaClipRecord::storageId))
+        retainingAvailableStorage(source, clips.mapTo(linkedSetOf(), NikonMediaClipRecord::storageId))
 
     /** Drops a stale card selection against the authoritative connected-card generation. */
     fun retainingAvailableStorage(
@@ -173,9 +143,9 @@ internal enum class MediaLibrarySortOrder(val title: String) {
 internal data class MediaLibraryViewOptions(
     val source: MediaLibrarySource,
     val category: MediaLibraryCategory = MediaLibraryCategory.ALL,
-    val layout: MediaLibraryLayout = MediaLibraryLayout.GRID,
+    val layout: MonitorMediaLayout = MonitorMediaLayout.GRID,
     val sortOrder: MediaLibrarySortOrder = MediaLibrarySortOrder.NEWEST,
-    val thumbnailSize: MediaThumbnailSize = MediaThumbnailSize.MEDIUM,
+    val thumbnailSize: MonitorThumbnailSize = MonitorThumbnailSize.MEDIUM,
 )
 
 /**
@@ -226,6 +196,32 @@ internal data class MediaLibraryCameraBucket(
  */
 internal class MediaLibraryIndex(private val preferences: MediaLibraryPreferences) {
     private val persistenceLock = Any()
+    private var catalogGeneration = 0L
+
+    /** Actual preference byte authority, including reread/encode/commit under the original lock. */
+    fun catalogByteStore(cameraID: String): com.opencapture.opencine.appkit.MonitorMediaCatalogByteStore =
+        object : com.opencapture.opencine.appkit.MonitorMediaCatalogByteStore {
+            override val namespace: String = indexKey(cameraID)
+            override val generation: Long get() = synchronized(persistenceLock) { catalogGeneration }
+            override fun read(): ByteArray? = synchronized(persistenceLock) {
+                preferences.getString(indexKey(cameraID))?.toByteArray(Charsets.UTF_8)
+            }
+            override fun write(bytes: ByteArray, ifCurrent: () -> Boolean) = synchronized(persistenceLock) {
+                check(ifCurrent()) { "Catalog retired" }
+                preferences.putString(indexKey(cameraID), bytes.toString(Charsets.UTF_8))
+                rememberIndexedCameraLocked(cameraID)
+            }
+            override fun update(ifCurrent: () -> Boolean, encode: (ByteArray?) -> ByteArray?) = synchronized(persistenceLock) {
+                check(ifCurrent()) { "Catalog retired" }
+                val current = preferences.getString(indexKey(cameraID))?.toByteArray(Charsets.UTF_8)
+                val bytes = encode(current) ?: return@synchronized
+                check(ifCurrent()) { "Catalog retired" }
+                preferences.putString(indexKey(cameraID), bytes.toString(Charsets.UTF_8))
+                rememberIndexedCameraLocked(cameraID)
+            }
+        }
+
+
 
     /**
      * Applies and commits one bounded listing delta. Multi-page callers should
@@ -233,8 +229,8 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      */
     fun rememberCameraListing(
         cameraID: String,
-        clips: List<MediaClipRecord>,
-        removedObjects: Collection<MediaObjectIdentity> = emptyList(),
+        clips: List<NikonMediaClipRecord>,
+        removedObjects: Collection<NikonMediaObjectIdentity> = emptyList(),
     ) {
         beginCameraListing(cameraID).apply {
             applyPage(clips, removedObjects)
@@ -283,7 +279,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      */
     fun rememberResolvedObjectSize(
         cameraID: String,
-        clip: MediaClipRecord,
+        clip: NikonMediaClipRecord,
         resolvedSizeBytes: Long,
     ) {
         require(resolvedSizeBytes >= 0) { "resolvedSizeBytes must not be negative." }
@@ -291,8 +287,22 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         rememberCameraListing(cameraID, listOf(clip.copy(sizeBytes = resolvedSizeBytes)))
     }
 
+    /** Canonical action result admission shares the actual index lock; no native work runs here. */
+    fun mutateCapturedAction(cameraID: String, clip: NikonMediaClipRecord, observed: NikonMediaClipRecord?,
+        generation: Long, ifCurrent: () -> Boolean, mutate: () -> Unit): Boolean = synchronized(persistenceLock) {
+        if (catalogGeneration != generation || !ifCurrent()) return@synchronized false
+        val current = persistedClipsLocked(cameraID).firstOrNull { it.libraryKey(cameraID) == clip.libraryKey(cameraID) }
+        if (observed == null) {
+            if (current != null && !sameNikonActionContent(clip, current)) return@synchronized false
+        } else {
+            if (current == null || !sameNikonActionContent(observed, current)) return@synchronized false
+        }
+        mutate()
+        true
+    }
+
     /** Returns only records previously received from the shared-core listing wire. */
-    fun persistedClips(cameraID: String): List<MediaClipRecord> =
+    fun persistedClips(cameraID: String): List<NikonMediaClipRecord> =
         synchronized(persistenceLock) { persistedClipsLocked(cameraID) }
 
     /**
@@ -302,6 +312,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      */
     fun clearCameraCatalogs() {
         synchronized(persistenceLock) {
+            catalogGeneration += 1
             indexedCameraIDsLocked().forEach { cameraID ->
                 preferences.putString(indexKey(cameraID), null)
             }
@@ -315,17 +326,19 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      * downloaded copy does not keep the row alive). Cache artifacts are the
      * [MediaCacheStore]'s side of the purge.
      */
-    fun purgeClip(cameraID: String, clip: MediaClipRecord) {
+    fun purgeClip(cameraID: String, clip: NikonMediaClipRecord, ifCurrent: () -> Boolean = { true }) {
         val identity = clip.libraryKey(cameraID)
         synchronized(persistenceLock) {
+            if (!ifCurrent()) return
             val remaining = persistedClipsLocked(cameraID).filter { it.libraryKey(cameraID) != identity }
             preferences.putString(
                 indexKey(cameraID),
                 MediaLibraryRecordCodec.encode(remaining).takeIf { remaining.isNotEmpty() },
             )
         }
+        if (!ifCurrent()) return
         val favorites = favoriteIDs(cameraID)
-        if (identity in favorites) {
+        if (identity in favorites && ifCurrent()) {
             preferences.putString(
                 favoritesKey(cameraID),
                 (favorites - identity).sorted().joinToString(separator = "\n").ifEmpty { null },
@@ -333,7 +346,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         }
     }
 
-    private fun persistedClipsLocked(cameraID: String): List<MediaClipRecord> =
+    private fun persistedClipsLocked(cameraID: String): List<NikonMediaClipRecord> =
         preferences.getString(indexKey(cameraID))
             ?.let(MediaLibraryRecordCodec::decode)
             .orEmpty()
@@ -388,7 +401,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
             .orEmpty()
 
     /** Changes one favorite and returns the complete updated set for UI state. */
-    fun toggleFavorite(cameraID: String, clip: MediaClipRecord): Set<String> {
+    fun toggleFavorite(cameraID: String, clip: NikonMediaClipRecord): Set<String> {
         val updated = favoriteIDs(cameraID).toMutableSet()
         val identity = clip.libraryKey(cameraID)
         if (!updated.add(identity)) updated.remove(identity)
@@ -405,7 +418,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      * >= 1 star becomes a favorite so the Favorites tab — which reads this set, not the camera
      * property — agrees with shots starred during a shoot. iOS `mirrorRatingIntoIndex`.
      */
-    fun setFavorite(cameraID: String, clip: MediaClipRecord, favorite: Boolean): Set<String> {
+    fun setFavorite(cameraID: String, clip: NikonMediaClipRecord, favorite: Boolean): Set<String> {
         val updated = favoriteIDs(cameraID).toMutableSet()
         val identity = clip.libraryKey(cameraID)
         val changed = if (favorite) updated.add(identity) else updated.remove(identity)
@@ -423,9 +436,9 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         MediaLibraryViewOptions(
             source = enumValue(PREF_SOURCE, defaultSource),
             category = enumValue(PREF_CATEGORY, MediaLibraryCategory.ALL),
-            layout = enumValue(PREF_LAYOUT, MediaLibraryLayout.GRID),
+            layout = enumValue(PREF_LAYOUT, MonitorMediaLayout.GRID),
             sortOrder = enumValue(PREF_SORT, MediaLibrarySortOrder.NEWEST),
-            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MediaThumbnailSize.MEDIUM),
+            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MonitorThumbnailSize.MEDIUM),
         )
 
     /** Persists only local browsing preferences; camera commands are never stored here. */
@@ -484,10 +497,10 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
 /** One in-memory camera-listing transaction with a single durable commit. */
 internal class MediaLibraryListingCheckpoint(
     private val cameraID: String,
-    initialClips: List<MediaClipRecord>,
-    private val commitCatalog: (List<MediaClipRecord>, Boolean) -> List<MediaClipRecord>,
+    initialClips: List<NikonMediaClipRecord>,
+    private val commitCatalog: (List<NikonMediaClipRecord>, Boolean) -> List<NikonMediaClipRecord>,
 ) {
-    private val clipsByIdentity = LinkedHashMap<String, MediaClipRecord>()
+    private val clipsByIdentity = LinkedHashMap<String, NikonMediaClipRecord>()
     private val listedIdentities = LinkedHashSet<String>()
     private var dirty = false
     private var committed = false
@@ -498,8 +511,8 @@ internal class MediaLibraryListingCheckpoint(
 
     /** Applies additions and exact removals from one native page without disk I/O. */
     fun applyPage(
-        addedClips: Collection<MediaClipRecord>,
-        removedObjects: Collection<MediaObjectIdentity>,
+        addedClips: Collection<NikonMediaClipRecord>,
+        removedObjects: Collection<NikonMediaObjectIdentity>,
     ) {
         check(!committed) { "Camera listing checkpoint is already committed." }
         addedClips.forEach { incoming ->
@@ -536,8 +549,8 @@ internal class MediaLibraryListingCheckpoint(
      */
     fun commit(
         prunesUnlistedClips: Boolean = false,
-        hasLocalCopy: (MediaClipRecord) -> Boolean = { false },
-    ): List<MediaClipRecord> {
+        hasLocalCopy: (NikonMediaClipRecord) -> Boolean = { false },
+    ): List<NikonMediaClipRecord> {
         check(!committed) { "Camera listing checkpoint is already committed." }
         committed = true
         if (prunesUnlistedClips) {
@@ -559,240 +572,31 @@ internal class MediaLibraryListingCheckpoint(
     }
 }
 
-/** Pure category filtering and ordering based on the shared core's action wire. */
+/** Legacy source callers delegate to the same captured neutral projection owner as the gallery. */
 internal object MediaLibraryFiltering {
-    /**
-     * The active category's listing before any chip filter (iOS `mediaCategoryTabClips`). The
-     * filter popup derives its chips from exactly this, so a category is only ever offered values
-     * its own media can match.
-     */
-    fun categoryScoped(
-        clips: List<MediaClipRecord>,
-        category: MediaLibraryCategory,
-        favoriteIDs: Set<String>,
-        cameraID: String,
-        libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
-    ): List<MediaClipRecord> =
-        when (category) {
-            MediaLibraryCategory.ALL -> clips
-            MediaLibraryCategory.VIDEOS ->
-                clips.filter {
-                    it.contentKind == MediaContentKind.PLAYABLE_PROXY ||
-                        it.contentKind == MediaContentKind.R3D_MASTER
-                }
-            MediaLibraryCategory.PHOTOS ->
-                clips.filter { it.contentKind == MediaContentKind.STILL_PHOTO }
-            MediaLibraryCategory.FAVORITES ->
-                clips.filter { libraryKey(it) in favoriteIDs }
-        }
-
-    fun displayed(
-        clips: List<MediaClipRecord>,
-        category: MediaLibraryCategory,
-        favoriteIDs: Set<String>,
-        cameraID: String,
-        sortOrder: MediaLibrarySortOrder,
-        filters: MediaLibraryFilters = MediaLibraryFilters(),
-        today: LocalDate = LocalDate.now(),
-        /** Offline multi-camera libraries resolve favorites with the owning bucket. */
-        libraryKey: (MediaClipRecord) -> String = { clip -> clip.libraryKey(cameraID) },
-        /** Offline multi-camera libraries pair RAW+JPEG within the owning bucket. */
-        ownerOf: (MediaClipRecord) -> String = { _ -> cameraID },
-    ): List<MediaClipRecord> {
-        val scoped = categoryScoped(clips, category, favoriteIDs, cameraID, libraryKey)
-        var filtered = scoped
-        if (filters.formats.isNotEmpty()) {
-            filtered = filtered.filter { clip -> clip.formatFilter() in filters.formats }
-        }
-        if (filters.resolutions.isNotEmpty()) {
-            filtered = filtered.filter { clip -> clip.resolutionFilter() in filters.resolutions }
-        }
-        if (filters.photoSizes.isNotEmpty()) {
-            val stillWidths = scoped.stillPixelWidths()
-            filtered =
-                filtered.filter { clip ->
-                    clip.photoSizeFilter(stillWidths) in filters.photoSizes
-                }
-        }
-        filters.dateWindow?.let { window ->
-            filtered = filtered.filter { clip -> window.contains(clip.captureDate, today) }
-        }
-        filters.storageId?.let { selectedStorage ->
-            filtered = filtered.filter { clip -> clip.storageId == selectedStorage }
-        }
-        // One item per RAW+JPEG pair: the JPEG carries the still (badge +
-        // viewer toggle), the same-shot RAW never renders its own cell. Keyed
-        // on the filter survivors so an offline pass can still surface a
-        // cached NEF whose JPEG side was filtered away (iOS `displayedClips`).
-        val jpegPairKeys =
-            filtered.mapNotNullTo(hashSetOf()) { clip ->
-                if (clip.isJpegStill) clip.rawPairKey(ownerOf(clip)) else null
-            }
-        filtered =
-            filtered.filterNot { clip ->
-                clip.isRawStill && clip.rawPairKey(ownerOf(clip)) in jpegPairKeys
-            }
-        return sort(filtered, sortOrder)
-    }
-
-    fun sort(
-        clips: List<MediaClipRecord>,
-        sortOrder: MediaLibrarySortOrder,
-    ): List<MediaClipRecord> =
-        when (sortOrder) {
-            MediaLibrarySortOrder.NEWEST ->
-                clips.sortedWith(
-                    compareByDescending<MediaClipRecord> { it.captureDate.ifEmpty { it.filename } }
-                        .thenByDescending { it.filename.lowercase(Locale.US) },
-                )
-            MediaLibrarySortOrder.OLDEST ->
-                clips.sortedWith(
-                    compareBy<MediaClipRecord> { it.captureDate.ifEmpty { it.filename } }
-                        .thenBy { it.filename.lowercase(Locale.US) },
-                )
-            MediaLibrarySortOrder.NAME ->
-                clips.sortedBy { it.filename.lowercase(Locale.US) }
-        }
+    fun displayed(clips: List<NikonMediaClipRecord>, category: MediaLibraryCategory,
+        favoriteIDs: Set<String>, cameraID: String, sortOrder: MediaLibrarySortOrder,
+        filters: MediaLibraryFilters = MediaLibraryFilters(), today: LocalDate = LocalDate.now(),
+        libraryKey: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) },
+        ownerOf: (NikonMediaClipRecord) -> String = { cameraID }): List<NikonMediaClipRecord> =
+        NikonAppGalleryProjection(clips, emptyMap(), category, favoriteIDs, cameraID,
+            sortOrder, filters, today, libraryKey, ownerOf).displayedClips
+    fun sort(clips: List<NikonMediaClipRecord>, sortOrder: MediaLibrarySortOrder): List<NikonMediaClipRecord> =
+        NikonAppGalleryProjection.sorted(clips, sortOrder)
 }
 
-/**
- * The FORMAT chip one listed object belongs to.
- *
- * Stills decode the shared core's `formatLabel` straight off the listing wire, so which
- * extensions count as HEIF or NEF stays a Swift-only decision. Only the two video containers are
- * named from the extension, and that is the same `codecLabel` the grid badge already renders.
- */
-internal fun MediaClipRecord.formatFilter(): MediaFormatFilter? =
-    stillPhoto?.let { still ->
-        MediaFormatFilter.entries.firstOrNull { it.title == still.formatLabel }
+/** Legacy metadata helpers map pure Nikon-owned facts into existing UI values. */
+internal fun NikonMediaClipRecord.formatFilter(): MediaFormatFilter? =
+    com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy.formatKey(this)?.let { key ->
+        MediaFormatFilter.entries.firstOrNull { it.title == key }
     }
-        ?: when (codecLabel) {
-            "MOV", "M4V" -> MediaFormatFilter.MOV
-            "MP4" -> MediaFormatFilter.MP4
-            else -> null
-        }
-
-/** Full-image widths of the stills in a listing, the domain L/M/S is ranked against. */
-internal fun List<MediaClipRecord>.stillPixelWidths(): List<Int> =
-    filter { it.contentKind == MediaContentKind.STILL_PHOTO }.map { it.pixelWidth }
-
-/**
- * Ranks this still's width among the widths present, widest first (core
- * `MediaPhotoSizeClass.rank`). Null for videos and for a still whose dimensions the camera never
- * reported, so an unknown size is left unclassified rather than guessed at — and null for *every*
- * still once the listing holds more than three distinct widths. Nikon's image size is a
- * three-way, so a wider spread is not an L/M/S shoot (a mixed FX and DX-crop card, say); ranking
- * it anyway would strand the fourth size behind chips claiming to cover everything, so the SIZE
- * row drops out entirely instead.
- */
-internal fun MediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? {
-    if (contentKind != MediaContentKind.STILL_PHOTO || pixelWidth <= 0) return null
-    val ranked = presentWidths.filter { it > 0 }.distinct().sortedDescending()
-    if (ranked.size > MediaPhotoSizeFilter.entries.size) return null
-    val index = ranked.indexOf(pixelWidth)
-    if (index < 0) return null
-    return MediaPhotoSizeFilter.entries.getOrNull(index)
-}
-
-/** The chips a filter popup may offer — the Kotlin mirror of the core's `MediaFilterOptions`. */
 internal data class MediaFilterOptions(
     val formats: List<MediaFormatFilter> = emptyList(),
     val resolutions: List<MediaResolutionFilter> = emptyList(),
     val photoSizes: List<MediaPhotoSizeFilter> = emptyList(),
     val dateWindows: List<MediaDateWindowFilter> = emptyList(),
 ) {
-    val isEmpty: Boolean
-        get() =
-            formats.isEmpty() &&
-                resolutions.isEmpty() &&
-                photoSizes.isEmpty() &&
-                dateWindows.isEmpty()
-}
-
-/**
- * Derives the browser's filter chips from the listing the operator is actually looking at — the
- * Kotlin mirror of the core's `MediaFilterDerivation`.
- *
- * One rule governs every row: a chip is offered only when it matches at least one listed object
- * and excludes at least one. A chip matching nothing is dead (the Photos tab used to offer MOV,
- * MP4, and 6K, none of which a still can be), and a chip matching everything filters nothing.
- * Deriving is also what keeps the two media kinds apart: resolution buckets are classified for
- * videos only and L/M/S for stills only, so Photos produces no RESOLUTION row and Videos no SIZE
- * row without either being told which category it is.
- */
-internal object MediaFilterDerivation {
-    private fun <T> partitioning(
-        candidates: List<T>,
-        itemCount: Int,
-        matchCount: (T) -> Int,
-    ): List<T> {
-        if (itemCount <= 0) return emptyList()
-        return candidates.filter { candidate ->
-            val matched = matchCount(candidate)
-            matched > 0 && matched < itemCount
-        }
-    }
-
-    fun options(
-        clips: List<MediaClipRecord>,
-        today: LocalDate = LocalDate.now(),
-    ): MediaFilterOptions {
-        if (clips.isEmpty()) return MediaFilterOptions()
-        val count = clips.size
-        val formats = clips.map { it.formatFilter() }
-        val stillWidths = clips.stillPixelWidths()
-        val sizes = clips.map { it.photoSizeFilter(stillWidths) }
-        // Resolution buckets describe video frame sizes; a still's rank belongs in the SIZE row.
-        val buckets =
-            clips.map { clip ->
-                if (clip.contentKind == MediaContentKind.STILL_PHOTO) null
-                else clip.resolutionFilter()
-            }
-        return MediaFilterOptions(
-            formats =
-                partitioning(MediaFormatFilter.entries, count) { chip ->
-                    formats.count { it == chip }
-                },
-            resolutions =
-                partitioning(MediaResolutionFilter.entries, count) { bucket ->
-                    buckets.count { it == bucket }
-                },
-            photoSizes =
-                partitioning(MediaPhotoSizeFilter.entries, count) { size ->
-                    sizes.count { it == size }
-                },
-            dateWindows =
-                partitioning(MediaDateWindowFilter.entries, count) { window ->
-                    clips.count { window.contains(it.captureDate, today) }
-                },
-        )
-    }
-}
-
-/** Resolution filtering follows shared source, proxy, then filename precedence. */
-internal fun MediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
-    resolutionFilter(sourcePixelWidth)
-        ?: resolutionFilter(pixelWidth)
-        ?: resolutionFilter(filename)
-
-private fun resolutionFilter(pixelWidth: Int): MediaResolutionFilter? =
-    when (pixelWidth) {
-        in 6_000..Int.MAX_VALUE -> MediaResolutionFilter.SIX_K
-        in 5_300..<6_000 -> MediaResolutionFilter.FIVE_FOUR_K
-        in 3_500..<5_300 -> MediaResolutionFilter.FOUR_K
-        in 1_000..<3_500 -> MediaResolutionFilter.HD
-        else -> null
-    }
-
-private fun resolutionFilter(filename: String): MediaResolutionFilter? {
-    val upper = filename.uppercase(Locale.US)
-    return when {
-        upper.contains("6K") -> MediaResolutionFilter.SIX_K
-        upper.contains("5.4K") || upper.contains("54K") -> MediaResolutionFilter.FIVE_FOUR_K
-        upper.contains("4K") || upper.contains("UHD") -> MediaResolutionFilter.FOUR_K
-        upper.contains("HD") || upper.contains("1080") -> MediaResolutionFilter.HD
-        else -> null
-    }
+    val isEmpty get() = formats.isEmpty() && resolutions.isEmpty() && photoSizes.isEmpty() && dateWindows.isEmpty()
 }
 
 /** Pure set updates used by long-press, tap, and sweep selection. */
@@ -834,18 +638,18 @@ internal object MediaLibrarySelection {
 }
 
 /** Stable private favorite/index identity — never a filename-only key. */
-internal fun MediaClipRecord.libraryKey(cameraID: String): String =
+internal fun NikonMediaClipRecord.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageId, handle, captureDate, filename)
 
 /**
  * Bucket-independent object identity used to map offline multi-camera clips
  * back to their owning cache cameraID.
  */
-internal fun MediaClipRecord.offlineObjectKey(): String =
+internal fun NikonMediaClipRecord.offlineObjectKey(): String =
     listOf(storageId.toString(), handle.toString(), captureDate, filename)
         .joinToString(separator = "\u0000")
 
-private fun MediaObjectIdentity.libraryKey(cameraID: String): String =
+internal fun NikonMediaObjectIdentity.libraryKey(cameraID: String): String =
     mediaLibraryKey(cameraID, storageID, handle, captureDate, filename)
 
 private fun mediaLibraryKey(
@@ -860,10 +664,10 @@ private fun mediaLibraryKey(
             .joinToString(separator = "\u0000"),
     )
 
-private fun mergeAuthoritativeObjectSize(
-    existing: MediaClipRecord?,
-    incoming: MediaClipRecord,
-): MediaClipRecord =
+internal fun mergeAuthoritativeObjectSize(
+    existing: NikonMediaClipRecord?,
+    incoming: NikonMediaClipRecord,
+): NikonMediaClipRecord =
     if (
         incoming.sizeBytes == PTP_UINT32_SENTINEL &&
             existing != null &&
@@ -884,7 +688,7 @@ private object MediaLibraryRecordCodec {
     private const val LEGACY_MINIMUM_RECORD_BYTES = 39
     private const val CURRENT_MINIMUM_RECORD_BYTES = 47
 
-    fun encode(clips: List<MediaClipRecord>): String {
+    fun encode(clips: List<NikonMediaClipRecord>): String {
         val bytes =
             ByteArrayOutputStream().use { raw ->
                 DataOutputStream(raw).use { output ->
@@ -898,7 +702,7 @@ private object MediaLibraryRecordCodec {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 
-    fun decode(encoded: String): List<MediaClipRecord> =
+    fun decode(encoded: String): List<NikonMediaClipRecord> =
         try {
             val bytes = Base64.getUrlDecoder().decode(encoded)
             DataInputStream(ByteArrayInputStream(bytes)).use { input ->
@@ -921,7 +725,7 @@ private object MediaLibraryRecordCodec {
             emptyList()
         }
 
-    private fun writeClip(output: DataOutputStream, clip: MediaClipRecord) {
+    private fun writeClip(output: DataOutputStream, clip: NikonMediaClipRecord) {
         output.writeLong(clip.handle)
         output.writeLong(clip.storageId)
         output.writeLong(clip.sizeBytes)
@@ -940,7 +744,7 @@ private object MediaLibraryRecordCodec {
         }
     }
 
-    private fun readClip(input: DataInputStream, version: Int): MediaClipRecord {
+    private fun readClip(input: DataInputStream, version: Int): NikonMediaClipRecord {
         val handle = input.readLong()
         val storageID = input.readLong()
         val sizeBytes = input.readLong()
@@ -950,12 +754,12 @@ private object MediaLibraryRecordCodec {
         val sourcePixelWidth = if (version >= VERSION) input.readInt() else 0
         val sourcePixelHeight = if (version >= VERSION) input.readInt() else 0
         val filename = input.readUTF()
-        val contentKind = MediaContentKind.valueOf(input.readUTF())
+        val contentKind = NikonMediaContentKind.valueOf(input.readUTF())
         val stillPhoto =
             if (input.readBoolean()) {
                 val formatLabel = input.readUTF()
-                val previewStrategy = StillPreviewStrategy.valueOf(input.readUTF())
-                StillPhotoClassification(formatLabel, previewStrategy)
+                val previewStrategy = NikonStillPreviewStrategy.valueOf(input.readUTF())
+                NikonStillPhotoClassification(formatLabel, previewStrategy)
             } else {
                 null
             }
@@ -965,8 +769,8 @@ private object MediaLibraryRecordCodec {
         check(sourcePixelWidth >= 0)
         check(sourcePixelHeight >= 0)
         check(isSafePersistedFilename(filename))
-        check((contentKind == MediaContentKind.STILL_PHOTO) == (stillPhoto != null))
-        return MediaClipRecord(
+        check((contentKind == NikonMediaContentKind.STILL_PHOTO) == (stillPhoto != null))
+        return NikonMediaClipRecord(
             handle = handle,
             storageId = storageID,
             sizeBytes = sizeBytes,
@@ -1054,4 +858,20 @@ private fun computeDigest(value: String): String {
             append(hex[unsigned and 0x0F])
         }
     }
+}
+
+/** Pure access to the exact legacy Base64/binary codec; no preference or registry side effects. */
+internal fun decodeMediaLibraryCatalogBytes(bytes: ByteArray): List<NikonMediaClipRecord> =
+    MediaLibraryRecordCodec.decode(bytes.toString(Charsets.UTF_8))
+internal fun encodeMediaLibraryCatalogBytes(clips: List<NikonMediaClipRecord>): ByteArray =
+    MediaLibraryRecordCodec.encode(clips).toByteArray(Charsets.UTF_8)
+
+/** Same legacy cache identity; unknown size may strengthen, conflicting known bytes retire. */
+internal fun sameNikonActionContent(old: NikonMediaClipRecord, current: NikonMediaClipRecord): Boolean {
+    if (old.filename != current.filename || old.storageId != current.storageId || old.handle != current.handle) return false
+    if (old.captureDate.isNotEmpty() && current.captureDate.isNotEmpty() && old.captureDate != current.captureDate) return false
+    if (old.sizeBytes > 0 && current.sizeBytes > 0 &&
+        old.sizeBytes != PTP_UINT32_SENTINEL && current.sizeBytes != PTP_UINT32_SENTINEL &&
+        old.sizeBytes != current.sizeBytes) return false
+    return true
 }

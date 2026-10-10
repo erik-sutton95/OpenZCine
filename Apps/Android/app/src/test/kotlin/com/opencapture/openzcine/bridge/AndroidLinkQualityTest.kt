@@ -1,10 +1,10 @@
 package com.opencapture.openzcine.bridge
 
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
-import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFrame
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveFrame
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
+import com.opencapture.opencine.nikon.SwiftLiveViewRequest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AndroidLinkQualityTest {
@@ -49,7 +52,7 @@ class AndroidLinkQualityTest {
         val serious = SwiftLiveViewRequest(2, 3, 49_500_000L)
         val configured = mutableListOf<SwiftLiveViewRequest>()
         var stops = 0
-        lateinit var listener: SwiftCore.LiveFrameListener
+        lateinit var listener: NikonNative.LiveFrameListener
         val source =
             SwiftCoreLiveFrameSource(
                 available = { true },
@@ -103,7 +106,7 @@ class AndroidLinkQualityTest {
         val recordingCapped = SwiftLiveViewRequest(2, 2, 16_666_666L)
         val configured = mutableListOf<SwiftLiveViewRequest>()
         var stops = 0
-        lateinit var listener: SwiftCore.LiveFrameListener
+        lateinit var listener: NikonNative.LiveFrameListener
         val source =
             SwiftCoreLiveFrameSource(
                 available = { true },

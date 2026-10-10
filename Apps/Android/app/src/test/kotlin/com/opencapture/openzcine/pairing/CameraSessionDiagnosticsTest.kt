@@ -3,6 +3,7 @@ package com.opencapture.openzcine.pairing
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import com.opencapture.opencine.nikon.CameraControl
 
 class CameraSessionDiagnosticsTest {
     @Test

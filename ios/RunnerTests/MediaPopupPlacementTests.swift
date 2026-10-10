@@ -1,5 +1,7 @@
 import CoreGraphics
+import OpenZCineCore
 import Testing
+import struct MonitorPresentation.MonitorEdgeInsets
 
 @testable import Runner
 

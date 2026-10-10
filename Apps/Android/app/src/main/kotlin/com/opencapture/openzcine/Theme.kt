@@ -4,6 +4,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import com.opencapture.monitorui.MonitorIosParity
+import com.opencapture.monitorui.MonitorPalette
 
 /**
  * OpenZCine brand tokens — gold on black, matching the iOS shell's
@@ -21,30 +23,36 @@ object BrandColors {
 }
 
 /**
- * Live-monitor design tokens — a 1:1 mirror of the iOS shell's `LiveDesign`
- * (ios/Runner/MonitorExperience.swift). Same float components, so the two
- * shells render identical chrome colors. Keep the two lists in sync.
+ * Live-monitor design tokens. Surfaces, type, and hairlines come from
+ * [MonitorPalette], the same tokens Pocket and Insta use. The accent is the
+ * OpenZCine gold [OpenZCineTheme] assigns. Assist swatches that are not the
+ * brand accent stay on [amber], [info], [good], and [rec]. Keep this list in
+ * step with iOS `LiveDesign` in `ios/Runner/MonitorExperience.swift`.
  */
 object LiveDesign {
-    val background = Color(0.072f, 0.064f, 0.053f)
-    val surface = Color(0.145f, 0.128f, 0.102f)
-    val glass = Color(0.105f, 0.092f, 0.073f, 0.64f)
-    /** Pre-liquid / demoted chrome: flat more-opaque fill (no fake frost). */
-    val glassOpaque = Color(0.105f, 0.092f, 0.073f, 0.90f)
-    val glassBright = Color(0.178f, 0.155f, 0.122f, 0.68f)
-    val hairline = Color(0.968f, 0.937f, 0.882f, 0.14f)
-    val hairlineStrong = Color(0.968f, 0.937f, 0.882f, 0.22f)
-    val text = Color(0.958f, 0.935f, 0.885f)
-    val muted = Color(0.642f, 0.600f, 0.535f)
-    val faint = Color(0.455f, 0.420f, 0.365f)
-    val accent = Color(0.914f, 0.674f, 0.208f)
-    val accentDim = Color(0.914f, 0.674f, 0.208f, 0.16f)
+    /** iOS `MonitorTheme.canvas` (`0x08090A`). */
+    val background = MonitorPalette.backgroundDeep
+    val surface = MonitorPalette.surface
+    val glass = surface
+    val glassOpaque = surface
+    /** iOS `MonitorTheme.raised`. */
+    val glassBright = MonitorPalette.tile
+    val hairline = MonitorPalette.border
+    val hairlineStrong = MonitorPalette.faint.copy(alpha = 0.5f)
+    val text = MonitorPalette.text
+    val muted = MonitorPalette.muted
+    val faint = MonitorPalette.faint
+    val accent get() = MonitorPalette.accent
+    val accentDim get() = accent.copy(alpha = 0.16f)
+    /** Zebra and highlight amber. Stable, so brand gold does not recolor stored paint. */
+    val amber = Color(0.914f, 0.674f, 0.208f)
     val good = Color(0.18f, 0.78f, 0.42f)
-    val rec = Color(0.82f, 0.20f, 0.23f)
+    val rec = MonitorPalette.recording
+    /** Cyan and blue assist previews. Not the brand accent. */
     val info = Color(0.10f, 0.58f, 0.98f)
 
-    /** Corner radius for rounded chrome surfaces (iOS `DesignTokens.cornerRadius`). */
-    const val CORNER_RADIUS_DP = 16f
+    /** iOS `MonitorTheme.radius`. */
+    const val CORNER_RADIUS_DP = 12f
 
     /** Height of the bottom control bars (iOS `LiveDesign.controlHeight`). */
     const val CONTROL_HEIGHT_DP = 58f
@@ -56,6 +64,12 @@ object LiveDesign {
  */
 @Composable
 fun OpenZCineTheme(content: @Composable () -> Unit) {
+    // Shared OpenCine monitor UI wears the OpenZCine gold; plain fields, set before any shared
+    // chrome in this tree draws.
+    MonitorPalette.accent = BrandColors.accent
+    // OpenZCine takes the iOS look of the shared Android pieces (engine-port UI-03 learning);
+    // Pocket and Insta keep the default until they review it (OpenCine monitor-ui README).
+    MonitorIosParity.enabled = true
     MaterialTheme(
         colorScheme =
             darkColorScheme(

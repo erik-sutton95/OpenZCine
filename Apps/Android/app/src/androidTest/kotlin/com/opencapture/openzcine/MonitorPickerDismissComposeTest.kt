@@ -1,15 +1,22 @@
 package com.opencapture.openzcine
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
-import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.monitorui.MonitorRect
+import com.opencapture.opencine.nikon.CameraControl
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -28,7 +35,7 @@ class MonitorPickerDismissComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private val pickerFrame = ZoneFrame(x = 140f, y = 40f, width = 220f, height = 220f)
+    private val pickerFrame = MonitorRect(x = 140f, y = 40f, width = 220f, height = 220f)
 
     private fun focusPicker(): MonitorPickerPresentation {
         val request =
@@ -81,5 +88,27 @@ class MonitorPickerDismissComposeTest {
         composeRule.onRoot().performTouchInput { click(Offset(8f, 8f)) }
 
         composeRule.runOnIdle { assertTrue(dismissed) }
+    }
+
+    /** The focus-dial row is a switch to TalkBack, so it must also say whether it is on. */
+    @Test
+    fun focusDialRowReportsWhetherItIsOn() {
+        var enabled by mutableStateOf(true)
+        composeRule.setContent {
+            MonitorControlPickerPanel(
+                picker = focusPicker(),
+                frame = pickerFrame,
+                controlsEnabled = true,
+                pendingControl = null,
+                feedback = null,
+                onSelect = { _, _ -> },
+                onDismiss = {},
+                mfScrubEnabled = enabled,
+                onToggleMfScrub = { enabled = !enabled },
+            )
+        }
+
+        composeRule.onNodeWithText("Focus dial").assertIsOn().performClick()
+        composeRule.onNodeWithText("Focus dial").assertIsOff()
     }
 }

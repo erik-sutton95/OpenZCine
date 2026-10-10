@@ -102,17 +102,17 @@ private func liveViewObject(declaredLength: UInt32, jpeg: [UInt8]) -> Data {
 
 @Test func audioMeterLevelsMapCameraSegmentsOntoTheDBFSScale() {
     // Segment 0 = meter floor, 14 = 0 dBFS, even dB spacing between.
-    let silent = AudioMeterLevels(
+    let silent = MonitorAudioMeterLevels(
         cameraIndicator: PTPLiveViewSoundIndicator(
             peakLeft: 0, peakRight: 0, currentLeft: 0, currentRight: 0))
-    #expect(silent.left.levelDB == AudioMeterBallistics.floorDB)
-    #expect(silent.right.peakDB == AudioMeterBallistics.floorDB)
+    #expect(silent.left.levelDB == MonitorAudioMeterBallistics.floorDB)
+    #expect(silent.right.peakDB == MonitorAudioMeterBallistics.floorDB)
 
-    let hot = AudioMeterLevels(
+    let hot = MonitorAudioMeterLevels(
         cameraIndicator: PTPLiveViewSoundIndicator(
             peakLeft: 14, peakRight: 7, currentLeft: 14, currentRight: 7))
     #expect(hot.left.levelDB == 0)
-    #expect(abs(hot.right.levelDB - AudioMeterBallistics.floorDB / 2) < 0.001)
+    #expect(abs(hot.right.levelDB - MonitorAudioMeterBallistics.floorDB / 2) < 0.001)
     #expect(hot.left.peakDB == 0)
 }
 

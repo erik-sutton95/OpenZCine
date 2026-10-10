@@ -1,18 +1,16 @@
 package com.opencapture.openzcine
 
-import android.os.BatteryManager
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraStorageStatus
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraStorageStatus
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.openzcine.settings.ChromeSection
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -90,66 +88,29 @@ class MonitorReadoutsTest {
         assertEquals("EXT", poweredOnly.label)
         assertTrue(poweredOnly.externalPower)
         assertFalse(monitorBatteryPresentation(80, externalPower = false).externalPower)
-        assertNull(readPhoneBatteryPercent(null))
-    }
-
-    @Test
-    fun `phone battery broadcast preserves percentage and charging state`() {
-        val charging =
-            phoneBatteryReadout(
-                level = 167,
-                scale = 200,
-                status = BatteryManager.BATTERY_STATUS_CHARGING,
-                fallbackPercent = null,
-            )
-        assertEquals(84, charging.percent)
-        assertEquals(true, charging.externalPower)
-
-        val full =
-            phoneBatteryReadout(
-                level = 100,
-                scale = 100,
-                status = BatteryManager.BATTERY_STATUS_FULL,
-                fallbackPercent = null,
-            )
-        assertEquals(true, full.externalPower)
-
-        val unplugged =
-            phoneBatteryReadout(
-                level = -1,
-                scale = 0,
-                status = BatteryManager.BATTERY_STATUS_DISCHARGING,
-                fallbackPercent = 62,
-            )
-        assertEquals(62, unplugged.percent)
-        assertEquals(false, unplugged.externalPower)
     }
 
     @Test
     fun `timecode uses exact camera header fields and never an elapsed clock`() {
         val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 4)
-        assertEquals(camera, authoritativeTimecode(camera))
-        assertEquals("01:02:03:04", cameraTimecodeLabel(camera))
+        assertEquals(camera, liveViewHeaderTimecode(camera))
 
         // Pure off/zero is unavailable (no invented clock).
         val offZero = LiveFrameTimecode(on = false, hour = 0, minute = 0, second = 0, frame = 0)
-        assertNull(authoritativeTimecode(offZero))
-        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(offZero))
-        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(null))
+        assertNull(liveViewHeaderTimecode(offZero))
+        assertNull(liveViewHeaderTimecode(null))
 
         // Nikon can leave the header "on" flag clear while still advancing H:M:S:F
         // during a take — digits must still be accepted (iOS liveTimecode parity).
         val rollingWithFlagOff = camera.copy(on = false)
-        assertEquals(rollingWithFlagOff, authoritativeTimecode(rollingWithFlagOff))
-        assertEquals("01:02:03:04", cameraTimecodeLabel(rollingWithFlagOff))
+        assertEquals(rollingWithFlagOff, liveViewHeaderTimecode(rollingWithFlagOff))
     }
 
     @Test
     fun `out of range timecode is unavailable rather than normalized`() {
         val invalid = LiveFrameTimecode(on = true, hour = 24, minute = 0, second = 0, frame = 0)
 
-        assertNull(authoritativeTimecode(invalid))
-        assertEquals(UNAVAILABLE_TIMECODE, cameraTimecodeLabel(invalid))
+        assertNull(liveViewHeaderTimecode(invalid))
     }
 
     @Test
@@ -219,7 +180,7 @@ class MonitorReadoutsTest {
     @Test
     fun `media status estimates minutes with the iOS bitrate table`() {
         val storage =
-            com.opencapture.openzcine.core.CameraStorageStatus(
+            CameraStorageStatus(
                 totalCapacityBytes = 1_000_000_000_000L,
                 freeSpaceBytes = 470_000_000_000L,
             )

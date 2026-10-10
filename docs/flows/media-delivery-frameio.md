@@ -52,15 +52,15 @@ flowchart TD
 ### FRAME-01 — Settings sign-in (prerequisite)
 
 - **Status:** shipped
-- **Screen:** Settings → Storage → Frame.io row: **Sign in** / **Log out** / **Not set up in this
-  build** / **Sign in over internet** (when on the camera AP).
+- **Screen:** Settings → Storage → Frame.io row (MonitorUI `MonitorAccountSettings`): **Sign in** /
+  **Log out** / **Not configured**.
 - **Code:** `MonitorPanels.swift` (`storageRows`, `signInFrameioOverInternet`),
-  `Frameio/FrameioAuthCoordinator.swift`, `Frameio/FrameioClient.swift` (`FrameioTokenStore`),
-  core `FrameioOAuth.swift`.
+  `Frameio/FrameioAuthCoordinator.swift`, `Frameio/FrameioCredentials.swift` (`FrameioTokenStore`),
+  OpenCineFrameIO `FrameioOAuth.swift` (OpenCine package).
 - **Detail:** Adobe IMS OAuth 2.0 (PKCE) via `ASWebAuthenticationSession` (iOS 17.4+). Token +
   refresh stored in Keychain (`OpenZCine.frameio` / `oauth-token`); auto-refreshed 60s before
   expiry. Requires `Frameio.local.xcconfig` → `Info.plist` (`FrameioClientID`, `FrameioRedirectURI`).
-  On the camera AP the row shows **Sign in over internet** → a confirm alert → consented internet
+  On the camera AP, **Sign in** opens a confirm alert → consented internet
   hop (`beginInternetHop` re-hosts the Storage panel as a standalone cover so it survives the
   monitor collapse) → `waitForInternetPath(30s)` → `connectFrameio()` (Adobe sign-in) →
   `endInternetHop()` rejoins the camera via the full join pipeline, sign-in outcome notwithstanding.
@@ -245,8 +245,8 @@ flowchart TD
   5. **PUT chunks** — sequential S3 upload with `Content-Type` from response.
   6. **Poll status** — `GET …/files/{id}/status` until `upload_complete` (45 attempts × 2s).
   7. **Metadata sidecar** — optional `.meta.json` written next to source (local only, not uploaded).
-- **Code:** `Frameio/FrameioClient.swift` (`FrameioService.upload`), `Frameio/FrameioModel.swift`
-  (`uploadClipToFrameio`), core `FrameioModels.swift`.
+- **Code:** OpenCineFrameIO `FrameioClient.upload` (OpenCine package), `Frameio/FrameioModel.swift`
+  (`uploadClipToFrameio`), OpenCineFrameIO `FrameioModels.swift`.
 - 📝 Notes:
 
 ### FRAME-O1 — Adobe IMS sign-in during upload
@@ -256,7 +256,7 @@ flowchart TD
   token — presents `ASWebAuthenticationSession`, exchanges code via PKCE, stores `StoredFrameioToken`.
   Not used from the delivery popup directly (Settings sign-in is the expected path); still works if
   token expired and refresh fails.
-- **Code:** `FrameioAuthCoordinator.swift`, core `FrameioOAuth.swift`, `FrameioTokenStore`.
+- **Code:** `FrameioAuthCoordinator.swift`, OpenCineFrameIO `FrameioOAuth.swift`, `FrameioTokenStore`.
 - 📝 Notes:
 
 ### FRAME-08 — Rejoin camera
@@ -265,7 +265,7 @@ flowchart TD
 - **Screen:** White connection-progress card (same join pipeline as first pair).
 - **Code:** `NativeAppRoot.endInternetHop` → `runCameraWiFiJoin(.specificSSID, .hotspotConfigurationOnly)`.
 - **Detail:** `defer` in runner calls `endInternetHop()` when hop was started (popup or runner).
-  Full rejoin with discovery → auto-reconnect; narrated in `ConnectionProgressSheet`.
+  Full rejoin with discovery → auto-reconnect; narrated on the shared pair page (`NikonConnectFlow`).
 - 📝 Notes:
 
 ### FRAME-09 — Upload summary toast

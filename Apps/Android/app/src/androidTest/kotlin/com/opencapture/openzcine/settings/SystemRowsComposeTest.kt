@@ -1,54 +1,60 @@
 package com.opencapture.openzcine.settings
 
 import android.content.Context
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithContentDescription
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
-import com.opencapture.openzcine.LiveViewGuideController
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.openzcine.OpenZCineTheme
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
+import com.opencapture.openzcine.idleNikonAssists
+import com.opencapture.openzcine.media.MediaCacheStore
+import java.nio.file.Files
+import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
 class SystemRowsComposeTest {
     @get:Rule val compose = createComposeRule()
+    private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val preferences = context.getSharedPreferences("system-rows-compose", Context.MODE_PRIVATE)
+    private val cacheDirectory = Files.createTempDirectory(context.cacheDir.toPath(), "system-rows-compose")
 
     @Test
     fun reportProblemUsesTheNativeCallbackWhileFeatureRemainsAnExternalAction() {
+        preferences.edit().clear().commit()
+        val settings = OperatorSettings(preferences)
+        val assists = idleNikonAssists()
+        val cache = MediaCacheStore(cacheDirectory)
         val actions = RecordingSystemSettingsActions()
-        val controller = freshController("system-links")
         var report = 0
         compose.setContent {
             OpenZCineTheme {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    SystemRows(
-                        actions = actions,
-                        onReportProblem = { report += 1 },
-                        guideController = controller,
-                        onShowGuideNow = null,
-                        onShowGuideOnNextRealFrame = controller::replayOnNextRealFrame,
-                    )
-                }
+                OperatorSettingsScreen(
+                    session = null,
+                    assists = assists,
+                    settings = settings,
+                    mediaCacheStore = cache,
+                    systemSettingsActions = actions,
+                    onReportProblem = { report += 1 },
+                    initialTab = MonitorSettingsTab.SYSTEM,
+                    onClose = {},
+                )
             }
         }
 
+        // The shared Help & Feedback and Project & Legal cards (iOS System page since #228).
         val actionDescriptions =
             listOf(
                 "Open Support",
-                "Report an Android Problem",
+                "Report a Problem",
                 "Request a Feature",
                 "Share Diagnostics",
                 "Open Source Code",
@@ -71,55 +77,20 @@ class SystemRowsComposeTest {
             assertEquals(1, actions.privacy)
             assertEquals(1, actions.terms)
         }
+        // OpenCine's reporting rows: the automatic-reports row and the reporting privacy link.
+        compose.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Reporting Privacy").performScrollTo().assertIsDisplayed()
     }
 
-    @Test
-    fun replayActionsExposeCurrentFrameAvailabilityAndPersistScheduling() {
-        val controller = freshController("system-guide")
-        var replayNow = 0
-        compose.setContent {
-            OpenZCineTheme {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    SystemRows(
-                        actions = RecordingSystemSettingsActions(),
-                        onReportProblem = {},
-                        guideController = controller,
-                        onShowGuideNow = { replayNow += 1 },
-                        onShowGuideOnNextRealFrame = controller::replayOnNextRealFrame,
-                    )
-                }
-            }
-        }
-
-        compose.onNodeWithText("Will show on the first real frame").performScrollTo().assertIsDisplayed()
-        assertTrue(
-            compose.onAllNodesWithContentDescription("Show Live View Guide Now")
-                .fetchSemanticsNodes()
-                .isEmpty(),
-        )
-        compose.onNodeWithContentDescription("Show Live View Guide on Next Real Frame")
-            .performScrollTo()
-            .performClick()
-        compose.onNodeWithText("Scheduled for next real frame").assertIsDisplayed()
-
-        compose.runOnIdle { controller.onRealDecodedFrame() }
-        compose.onNodeWithContentDescription("Show Live View Guide Now")
-            .performScrollTo()
-            .performClick()
-        compose.runOnIdle { assertEquals(1, replayNow) }
-    }
-
-    private fun freshController(name: String): LiveViewGuideController {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
+    @After
+    fun clearTestStores() {
         preferences.edit().clear().commit()
-        return LiveViewGuideController(preferences)
+        cacheDirectory.toFile().deleteRecursively()
     }
 
     private class RecordingSystemSettingsActions : SystemSettingsActions {
         var support = 0
         var feature = 0
-        var security = 0
         var source = 0
         var privacy = 0
         var terms = 0
@@ -128,10 +99,6 @@ class SystemRowsComposeTest {
         override fun openSupport(): Boolean = true.also { support += 1 }
 
         override fun requestFeature(): Boolean = true.also { feature += 1 }
-
-        override fun openGitHubBugReport(): Boolean = true
-
-        override fun openSecurityAdvisory(): Boolean = true.also { security += 1 }
 
         override fun openSource(): Boolean = true.also { source += 1 }
 

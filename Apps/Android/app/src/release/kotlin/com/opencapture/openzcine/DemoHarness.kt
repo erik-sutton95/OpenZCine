@@ -2,13 +2,14 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.Intent
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.monitorui.settings.MonitorSettingsTab
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.MonitorDisplayMode
-import com.opencapture.openzcine.settings.OperatorSettingsTab
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
 /**
  * Release stub — the demo harness does not exist outside debug builds. The
@@ -33,18 +34,11 @@ object DemoHarness {
     /** Never matched in release: the extra is read only by the debug harness. */
     const val EXTRA_MEDIA = "zc.media"
 
-    /** Never matched in release: the extra is read only by the debug harness. */
-    const val EXTRA_LIVE_GUIDE_STEP = "zc.liveGuide"
-
-    /** Release builds cannot force a guide over synthetic content. */
-    @Suppress("UNUSED_PARAMETER")
-    internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? = null
-
     /** Release builds cannot force a standalone settings surface. */
     @Suppress("UNUSED_PARAMETER")
     internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? = null
 
-    internal fun settingsTab(intent: Intent): OperatorSettingsTab? = null
+    internal fun settingsTab(intent: Intent): MonitorSettingsTab? = null
 
     /** Release builds cannot auto-open debug surfaces. */
     @Suppress("UNUSED_PARAMETER")
@@ -76,7 +70,7 @@ object DemoHarness {
 
     /** Always null: release builds cannot stage a dropped-session affordance. */
     @Suppress("UNUSED_PARAMETER")
-    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? = null
+    internal fun sessionRecoveryOverride(intent: Intent): SessionRecoveryUi? = null
 
     /** Release builds never provide a debug image-assist override. */
     @Suppress("UNUSED_PARAMETER")

@@ -26,7 +26,7 @@ require(resolvedVersionCode != handheldVersionCode) {
 
 android {
     namespace = "com.opencapture.openzcine.wear"
-    compileSdk = 36
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
 
     defaultConfig {
         // Data Layer peers must use the same signed application id. The
@@ -113,6 +113,8 @@ val verifyWearReleaseArtifact = tasks.register<Exec>("verifyWearReleaseArtifact"
 
 dependencies {
     implementation(project(":wear-relay"))
+    implementation("com.opencapture.opencine:watch-runtime:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:monitor-ui:0.1.0-SNAPSHOT")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)

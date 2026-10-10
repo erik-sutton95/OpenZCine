@@ -3,17 +3,18 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.bridge.SwiftCoreCameraSession
-import com.opencapture.openzcine.core.CameraConnectionPhase
-import com.opencapture.openzcine.core.CameraConnectionProgress
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingException
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.FakeCameraSession
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.CameraConnectionPhase
+import com.opencapture.opencine.nikon.CameraConnectionProgress
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingException
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.FakeCameraSession
+import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingCredentials
 import com.opencapture.openzcine.pairing.PairingEnvironment
@@ -23,18 +24,18 @@ import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import com.opencapture.openzcine.settings.MonitorDisplayMode
-import com.opencapture.openzcine.settings.OperatorSettingsTab
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.transport.UsbPtpCameraSource
-import com.opencapture.openzcine.transport.UsbPtpOpenResult
+import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
 /**
  * Debug-only demo hooks, mirroring `ios/Runner/DemoHarness.swift`: this real
@@ -123,7 +124,7 @@ object DemoHarness {
     const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
 
     /**
-     * Stages the connect popup over the network step (`ready`/`joining`/`failed`),
+     * Stages the connect pane over the network step (`ready`/`joining`/`failed`),
      * mirroring iOS `ZC_DEMO_JOIN_POPUP`: `--es zc.demo.joinPopup ready`.
      */
     const val EXTRA_JOIN_POPUP = "zc.demo.joinPopup"
@@ -160,11 +161,11 @@ object DemoHarness {
     const val EXTRA_SESSION_LOST = "zc.demo.sessionLost"
 
     /** Debug-only recovery state for screenshot verification, or null. */
-    internal fun sessionRecoveryOverride(intent: Intent): MonitorRecoveryState? =
+    internal fun sessionRecoveryOverride(intent: Intent): SessionRecoveryUi? =
         when (intent.getStringExtra(EXTRA_SESSION_LOST)) {
             null -> null
-            "retrying" -> MonitorRecoveryState.Retrying(attempt = 2, maxAttempts = 8)
-            else -> MonitorRecoveryState.WaitingForOperator(attemptsMade = 8)
+            "retrying" -> SessionRecoveryUi.Retrying(attempt = 2, maxAttempts = 8)
+            else -> SessionRecoveryUi.WaitingForOperator(attemptsMade = 8)
         }
 
     /** String intent extra selecting scopes: `wave,parade,histo,vector,lights`. */
@@ -236,15 +237,6 @@ object DemoHarness {
     const val EXTRA_MEDIA = "zc.media"
 
     /**
-     * Explicit screenshot-only guide card. Synthetic frames never trigger the
-     * automatic guide; this isolated debug override mirrors iOS's harness.
-     */
-    const val EXTRA_LIVE_GUIDE_STEP = "zc.liveGuide"
-
-    internal fun liveGuideStep(intent: Intent): LiveViewGuideStep? =
-        LiveViewGuideStep.debugValue(intent.getStringExtra(EXTRA_LIVE_GUIDE_STEP))
-
-    /**
      * Opens the Edit view on one DISP mode (`live` / `clean` / `command`) so the eye badges can be
      * captured headlessly — the editor is only reachable by tapping through Operator Setup.
      */
@@ -254,14 +246,14 @@ object DemoHarness {
         intent.getStringExtra(EXTRA_CHROME_EDIT)?.let { MonitorDisplayMode.fromStoredName(it) }
 
     /** Debug-only standalone settings selector; release builds always return null. */
-    internal fun settingsTab(intent: Intent): OperatorSettingsTab? =
+    internal fun settingsTab(intent: Intent): MonitorSettingsTab? =
         when (intent.getStringExtra(EXTRA_SETTINGS_TAB)) {
-            "link" -> OperatorSettingsTab.LINK
-            "assist" -> OperatorSettingsTab.ASSIST
-            "controls" -> OperatorSettingsTab.CONTROLS
-            "display" -> OperatorSettingsTab.DISPLAY
-            "storage" -> OperatorSettingsTab.STORAGE
-            "system" -> OperatorSettingsTab.SYSTEM
+            "link" -> MonitorSettingsTab.LINK
+            "assist" -> MonitorSettingsTab.ASSIST
+            "controls" -> MonitorSettingsTab.CONTROLS
+            "display" -> MonitorSettingsTab.DISPLAY
+            "storage" -> MonitorSettingsTab.STORAGE
+            "system" -> MonitorSettingsTab.SYSTEM
             else -> null
         }
 

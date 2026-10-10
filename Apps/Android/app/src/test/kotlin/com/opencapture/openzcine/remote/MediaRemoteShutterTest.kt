@@ -1,9 +1,9 @@
 package com.opencapture.openzcine.remote
 
 import android.view.KeyEvent
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.FakeCameraSession
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.FakeCameraSession
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

@@ -32,6 +32,8 @@ GoogleService-Info.plist
 service-account*.json
 # Local Frame.io OAuth config (PKCE client ID) — kept out of the public repo (see docs/frameio-setup.md)
 ios/Runner/Frameio.local.xcconfig
+# Local Sentry DSN for automatic reports (see ios/Runner/Reliability.local.xcconfig.example)
+ios/Runner/Reliability.local.xcconfig
 # CI-generated manual signing (see the matching examples under ios/Config/)
 ios/Config/CI-Signing.xcconfig
 ios/Config/CI-Watch-Signing.xcconfig
@@ -140,7 +142,7 @@ captures/
 # Local test footage (real camera clips are large; never commit)
 samples/
 .worktrees/
-Apps/Android/app/.cxx/
+Apps/Android/*/.cxx/
 feedback/
 
 # ── Handbook (Astro Starlight) dependencies, build output and generated types ──

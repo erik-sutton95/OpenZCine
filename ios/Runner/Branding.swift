@@ -1,3 +1,4 @@
+import MonitorUI
 import SwiftUI
 
 /// OpenZCine brand palette — Nikon-inspired gold on charcoal (no third-party trademarks).
@@ -8,30 +9,10 @@ enum BrandColors {
     static let ink = Color(red: 0.949, green: 0.925, blue: 0.886)
     static let muted = Color(red: 0.655, green: 0.612, blue: 0.553)
     static let accent = Color(red: 1.0, green: 0.882, blue: 0.0)
+    /// The same gold as 0xRRGGBB, handed to the shared OpenCine monitor UI at launch
+    /// (`MonitorTheme.accentRGB`), so shared screens wear the OpenZCine accent.
+    static let accentRGB: UInt32 = 0xFFE100
     static let accentSoft = Color(red: 1.0, green: 0.882, blue: 0.0).opacity(0.18)
-}
-
-/// OZC monogram mark (legacy programmatic branding; superseded by `AppLogo` raster assets).
-struct OZCMonogramMark: View {
-    var size: CGFloat = 72
-    var cornerRadius: CGFloat = DesignTokens.cornerRadius
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(BrandColors.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(BrandColors.accent.opacity(0.55), lineWidth: max(1, size * 0.018))
-            )
-            .overlay {
-                Text("OZC")
-                    .font(.system(size: size * 0.34, weight: .heavy, design: .rounded))
-                    .kerning(size * 0.02)
-                    .foregroundStyle(BrandColors.accent)
-            }
-            .frame(width: size, height: size)
-            .accessibilityLabel("OpenZCine")
-    }
 }
 
 /// OpenZCine wordmark title.

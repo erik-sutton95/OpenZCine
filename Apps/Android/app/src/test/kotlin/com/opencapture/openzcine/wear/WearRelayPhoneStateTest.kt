@@ -1,10 +1,10 @@
 package com.opencapture.openzcine.wear
 
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraRecordingException
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraStorageStatus
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraRecordingException
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.openzcine.wearrelay.WatchConnectionState
 import com.opencapture.openzcine.wearrelay.WatchTimecode
 import kotlin.test.Test

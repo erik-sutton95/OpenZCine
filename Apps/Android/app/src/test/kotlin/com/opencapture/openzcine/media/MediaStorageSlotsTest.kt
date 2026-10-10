@@ -1,6 +1,6 @@
 package com.opencapture.openzcine.media
 
-import com.opencapture.openzcine.core.CameraStorageSlotStatus
+import com.opencapture.opencine.nikon.CameraStorageSlotStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

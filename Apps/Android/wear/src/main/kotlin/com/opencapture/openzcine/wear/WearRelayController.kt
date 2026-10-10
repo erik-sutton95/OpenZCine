@@ -17,282 +17,111 @@ import com.google.android.gms.wearable.CapabilityInfo
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
-import com.opencapture.openzcine.wearrelay.WatchCommandResult
-import com.opencapture.openzcine.wearrelay.WatchConnectionState
-import com.opencapture.openzcine.wearrelay.WatchRecordState
-import com.opencapture.openzcine.wearrelay.WatchRelayCommand
-import com.opencapture.openzcine.wearrelay.WatchRelayEnvelope
-import com.opencapture.openzcine.wearrelay.WatchRelayFrame
+import com.opencapture.opencine.watchruntime.WatchMessagePort
+import com.opencapture.opencine.watchruntime.WatchReceiverOwner
+import com.opencapture.opencine.watchruntime.WatchReceiverPolicy
+import com.opencapture.opencine.watchruntime.WatchRuntimeScheduler
+import com.opencapture.opencine.watchruntime.WatchScheduled
+import com.opencapture.openzcine.wearrelay.DeployedWearRelayCodec
 import com.opencapture.openzcine.wearrelay.WatchRelayState
+import com.opencapture.openzcine.wearrelay.WatchTimecode
 import com.opencapture.openzcine.wearrelay.WearRelayTransport
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
-/**
- * Foreground Wear OS client for the phone-owned relay.
- *
- * It has no `WearableListenerService` by design: messages are useful only
- * while this monitor is visible, and a background listener could retain stale
- * preview/state or imply the watch can control a camera while the phone relay
- * is unavailable. On every foreground start it clears cached state, waits for
- * the phone's heartbeat, and expires a state snapshot that stops refreshing.
- */
-@Stable
-internal class WearRelayController(context: Context) :
-    MessageClient.OnMessageReceivedListener,
-    CapabilityClient.OnCapabilityChangedListener {
+/** Bounded Google/native SDK adapter. Shared WatchReceiverOwner owns all receiver policy. */
+@Stable internal class WearRelayController(context: Context) {
     private val applicationContext = context.applicationContext
     private val messageClient by lazy { Wearable.getMessageClient(applicationContext) }
     private val capabilityClient by lazy { Wearable.getCapabilityClient(applicationContext) }
     private val handler = Handler(Looper.getMainLooper())
-
-    var state: WatchRelayState? by mutableStateOf(null)
-        private set
-    var frame: Bitmap? by mutableStateOf(null)
-        private set
-    var frameTimecode by mutableStateOf<com.opencapture.openzcine.wearrelay.WatchTimecode?>(null)
-        private set
-    var phoneReachable: Boolean by mutableStateOf(false)
-        private set
-    var isSendingCommand: Boolean by mutableStateOf(false)
-        private set
-    var commandMessage: String? by mutableStateOf(null)
-        private set
-
-    private var active = false
-    private var closed = false
-    private val stateFreshness = WatchRelayFreshness(STATE_FRESHNESS_MILLIS)
-    private var reachablePhoneNodes: Set<String> = emptySet()
-    private var preferredPhoneNodeID: String? = null
-    private var pendingCommand: PendingWearCommand? = null
-    private var commandToken = 0L
-    private val frameSequence = LatestWearFrameSequence()
-
-    /** Begins foreground-only listeners and requires a fresh phone state. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var gate: AtomicReference<UUID?>? = null
+    private var messageListener: MessageClient.OnMessageReceivedListener? = null
+    private var capabilityListener: CapabilityClient.OnCapabilityChangedListener? = null
+    private val owner = WatchReceiverOwner(
+        codec = DeployedWearRelayCodec(), scheduler = object : WatchRuntimeScheduler {
+            override fun nowMillis(): Long = SystemClock.elapsedRealtime()
+            override fun schedule(afterMillis: Long, action: () -> Unit): WatchScheduled {
+                val runnable = Runnable(action)
+                handler.postDelayed(runnable, afterMillis)
+                return WatchScheduled { handler.removeCallbacks(runnable) }
+            }
+        }, messages = WatchMessagePort { node, path, bytes, failure ->
+            messageClient.sendMessage(node, path, bytes).addOnFailureListener { failure?.invoke() }
+        }, decodeImage = { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) },
+        policy = WatchReceiverPolicy(
+            unavailableError = applicationContext.getString(R.string.wear_phone_unavailable_error),
+            timeoutError = applicationContext.getString(R.string.wear_record_timeout)))
+    private var observed by mutableStateOf(owner.snapshot.value)
+    // Observe for recomposition, then read the actual owner atomically for captured action checks.
+    private val current get() = observed.let { owner.snapshot.value }
+    val presentationRevision: Long get() = current.presentationRevision
+    val state: WatchRelayState? get() = current.state
+    val frame: Bitmap? get() = current.image
+    val frameTimecode: WatchTimecode? get() = current.timecode
+    val phoneReachable: Boolean get() = current.phoneReachable
+    val isSendingCommand: Boolean get() = current.isSendingCommand
+    val commandMessage: String? get() = current.commandMessage
+    init {
+        owner.onSourceRetired = { gate?.set(it) }
+        scope.launch {
+            owner.snapshot.collect { observed = it }
+        }
+    }
     fun start() {
-        if (!hasGooglePlayServices() || active || closed) return
-        active = true
-        phoneReachable = false
-        reachablePhoneNodes = emptySet()
-        preferredPhoneNodeID = null
-        commandMessage = null
-        clearCachedPresentation()
-        messageClient.addListener(this)
-        capabilityClient.addListener(this, WearRelayTransport.PHONE_CAPABILITY)
-        refreshReachablePhones()
-    }
-
-    /** Stops all listeners while the watch surface is not visible. */
-    fun stop() {
-        if (!active) return
-        active = false
-        handler.removeCallbacks(stateExpiry)
-        handler.removeCallbacks(commandTimeout)
-        isSendingCommand = false
-        pendingCommand = null
-        commandMessage = null
-        phoneReachable = false
-        reachablePhoneNodes = emptySet()
-        preferredPhoneNodeID = null
-        if (hasGooglePlayServices()) {
-            messageClient.removeListener(this)
-            capabilityClient.removeListener(this, WearRelayTransport.PHONE_CAPABILITY)
+        if (!hasGooglePlayServices() || !owner.start()) return
+        val gate = AtomicReference<UUID?>(owner.source)
+        this.gate = gate
+        val message = MessageClient.OnMessageReceivedListener { event: MessageEvent ->
+            val window = gate.get() ?: return@OnMessageReceivedListener
+            val node = event.sourceNodeId
+            val path = event.path
+            val bytes = event.data.copyOf()
+            operator { owner.receive(node, path, bytes, window) }
         }
-        // A capability only proves the app is installed/reachable; never let
-        // the next resume use that fact as camera/monitor truth.
-        clearCachedPresentation()
-    }
-
-    /** Permanently tears down the Activity-owned foreground client. */
-    fun close() {
-        if (closed) return
-        stop()
-        closed = true
-    }
-
-    /** Sends the one supported command only if fresh state proves it is safe. */
-    fun sendToggleRecord() {
-        val snapshot = state
-        val nodeID = preferredPhoneNodeID
-        if (
-            !active ||
-                !phoneReachable ||
-                !stateFreshness.isFresh(SystemClock.elapsedRealtime()) ||
-                snapshot == null ||
-                snapshot.connection != WatchConnectionState.CONNECTED ||
-                isSendingCommand ||
-                nodeID == null
-        ) {
-            return
-        }
-        val data = runCatching { WatchRelayEnvelope.encode(WatchRelayCommand.TOGGLE_RECORD) }.getOrNull()
-            ?: return
-        isSendingCommand = true
-        commandMessage = null
-        commandToken += 1
-        val token = commandToken
-        pendingCommand = PendingWearCommand(nodeID, token)
-        messageClient
-            .sendMessage(nodeID, WearRelayTransport.commandPath(token), data)
-            .addOnFailureListener {
-                if (token == commandToken) {
-                    rejectPendingCommand(
-                        applicationContext.getString(R.string.wear_phone_unavailable_error),
-                    )
-                }
-            }
-        handler.postDelayed(commandTimeout, COMMAND_TIMEOUT_MILLIS)
-    }
-
-    override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
-        if (capabilityInfo.name != WearRelayTransport.PHONE_CAPABILITY) return
-        updateReachablePhones(capabilityInfo.nodes.map { it.id }.toSet())
-    }
-
-    override fun onMessageReceived(messageEvent: MessageEvent) {
-        if (!active) return
-        val frameRequestID = WearRelayTransport.frameRequestID(messageEvent.path)
-        if (frameRequestID != null) {
-            receivePreview(messageEvent, frameRequestID)
-            return
-        }
-        when (messageEvent.path) {
-            WearRelayTransport.STATE_PATH -> {
-                if (messageEvent.sourceNodeId !in reachablePhoneNodes) return
-                val snapshot = decode<WatchRelayState>(messageEvent.data) ?: return
-                preferredPhoneNodeID = messageEvent.sourceNodeId
-                updateState(snapshot)
-            }
-            else -> {
-                val requestID = WearRelayTransport.resultRequestID(messageEvent.path) ?: return
-                val result = decode<WatchCommandResult>(messageEvent.data) ?: return
-                acceptCommandResult(messageEvent.sourceNodeId, requestID, result)
+        val capability = CapabilityClient.OnCapabilityChangedListener { info: CapabilityInfo ->
+            if (info.name == WearRelayTransport.PHONE_CAPABILITY) {
+                val window = gate.get() ?: return@OnCapabilityChangedListener
+                val nodes = info.nodes.map { it.id }.toSet()
+                operator { owner.acceptNodes(nodes, window) }
             }
         }
-    }
-
-    private fun receivePreview(messageEvent: MessageEvent, requestID: Long) {
-        if (messageEvent.sourceNodeId != preferredPhoneNodeID) return
-        val relayFrame = decode<WatchRelayFrame>(messageEvent.data) ?: return
-        // State arrives as a heartbeat first. Ignore an unordered or late
-        // frame rather than making a stale camera look live.
-        if (
-            !stateFreshness.isFresh(SystemClock.elapsedRealtime()) ||
-                state?.connection != WatchConnectionState.CONNECTED ||
-                state?.feedLive != true
-        ) {
-            return
-        }
-        // Match watchOS reply pacing: acknowledge receipt immediately, then
-        // decode the sub-500 px JPEG. The three-slot pipeline already bounds
-        // work, while this keeps UI scheduling out of the measured link RTT.
-        messageClient.sendMessage(
-            messageEvent.sourceNodeId,
-            WearRelayTransport.frameAckPath(requestID),
-            byteArrayOf(),
-        )
-        if (!frameSequence.accept(requestID)) return
-        val image = BitmapFactory.decodeByteArray(relayFrame.jpeg, 0, relayFrame.jpeg.size) ?: return
-        frame = image
-        frameTimecode = relayFrame.timecode
-    }
-
-    private fun refreshReachablePhones() {
-        capabilityClient
-            .getCapability(WearRelayTransport.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-            .addOnSuccessListener { capability ->
-                updateReachablePhones(capability.nodes.map { it.id }.toSet())
+        messageListener = message
+        capabilityListener = capability
+        messageClient.addListener(message)
+        capabilityClient.addListener(capability, WearRelayTransport.PHONE_CAPABILITY)
+        capabilityClient.getCapability(WearRelayTransport.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
+            .addOnSuccessListener { info ->
+                val window = gate.get() ?: return@addOnSuccessListener
+                val nodes = info.nodes.map { it.id }.toSet()
+                operator { owner.acceptNodes(nodes, window) }
             }.addOnFailureListener {
-                updateReachablePhones(emptySet())
+                val window = gate.get() ?: return@addOnFailureListener
+                operator { owner.acceptNodes(emptySet(), window) }
             }
     }
-
-    private fun updateReachablePhones(nodes: Set<String>) {
-        if (!active) return
-        reachablePhoneNodes = nodes
-        phoneReachable = nodes.isNotEmpty()
-        if (preferredPhoneNodeID !in nodes) preferredPhoneNodeID = nodes.minOrNull()
-        if (!phoneReachable) clearCachedPresentation()
-    }
-
-    private fun updateState(snapshot: WatchRelayState) {
-        val priorState = state
-        state = snapshot
-        stateFreshness.accept(SystemClock.elapsedRealtime())
-        if (snapshot.connection != WatchConnectionState.CONNECTED || !snapshot.feedLive) {
-            frame = null
-            frameTimecode = null
-            frameSequence.clear()
-        } else if (
-            priorState == null ||
-                priorState.connection != WatchConnectionState.CONNECTED ||
-                !priorState.feedLive
-        ) {
-            // A newly live relay starts a new presentation generation. This
-            // also accepts low request IDs after the phone relay restarts.
-            frameSequence.clear()
+    fun stop() {
+        gate?.set(null)
+        gate = null
+        owner.stop()
+        if (hasGooglePlayServices()) {
+            messageListener?.let(messageClient::removeListener)
+            capabilityListener?.let { capabilityClient.removeListener(it, WearRelayTransport.PHONE_CAPABILITY) }
         }
-        handler.removeCallbacks(stateExpiry)
-        scheduleStateExpiry()
+        messageListener = null
+        capabilityListener = null
     }
-
-    private fun acceptCommandResult(nodeID: String, requestID: Long, result: WatchCommandResult) {
-        // The portable protocol has no command identifier, so only one request
-        // may be pending and its result must come from the exact destination.
-        // A late/mismatched response cannot alter a newer command's UI state.
-        if (!isSendingCommand || pendingCommand?.matches(nodeID, requestID) != true) return
-        handler.removeCallbacks(commandTimeout)
-        isSendingCommand = false
-        pendingCommand = null
-        commandMessage = result.error
-        state =
-            state?.copy(
-                recordState = if (result.isRecording) WatchRecordState.RECORDING else WatchRecordState.STANDBY,
-                isRecording = result.isRecording,
-            )
+    fun close() { stop(); owner.close(); scope.cancel() }
+    fun sendToggleRecord() { owner.sendToggleRecord() }
+    private fun operator(action: () -> Unit) {
+        if (Looper.myLooper() == handler.looper) action() else handler.post(action)
     }
-
-    private fun rejectPendingCommand(message: String) {
-        handler.removeCallbacks(commandTimeout)
-        isSendingCommand = false
-        pendingCommand = null
-        commandMessage = message
-    }
-
-    private fun clearCachedPresentation() {
-        state = null
-        frame = null
-        frameTimecode = null
-        frameSequence.clear()
-        stateFreshness.clear()
-    }
-
-    private val stateExpiry =
-        Runnable {
-            if (stateFreshness.isFresh(SystemClock.elapsedRealtime())) {
-                scheduleStateExpiry()
-            } else {
-                clearCachedPresentation()
-            }
-        }
-
-    private fun scheduleStateExpiry() {
-        val remaining = stateFreshness.remainingMillis(SystemClock.elapsedRealtime()) ?: return
-        handler.postDelayed(stateExpiry, remaining)
-    }
-
-    private val commandTimeout =
-        Runnable {
-            if (isSendingCommand) {
-                rejectPendingCommand(applicationContext.getString(R.string.wear_record_timeout))
-            }
-        }
-
-    private inline fun <reified Payload> decode(data: ByteArray): Payload? =
-        runCatching { WatchRelayEnvelope.decode(data) as? Payload }.getOrNull()
-
     private fun hasGooglePlayServices(): Boolean =
-        GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(applicationContext) ==
-            ConnectionResult.SUCCESS
+        GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(applicationContext) == ConnectionResult.SUCCESS
 }
-
-private const val STATE_FRESHNESS_MILLIS: Long = 6_000L
-private const val COMMAND_TIMEOUT_MILLIS: Long = 5_000L

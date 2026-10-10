@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorIcon
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -9,7 +10,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -30,29 +29,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import com.opencapture.openzcine.bridge.ZoneFrame
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
@@ -65,15 +51,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick as semanticsOnClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.offset
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
 
 // Compose mirrors of the iOS monitor chrome primitives (ios/Runner/
 // MonitorControls.swift + MonitorExperience.swift). Layout frames come from the
@@ -97,7 +81,7 @@ internal const val MIN_TAP_TARGET_DP = 44f
 /**
  * Grows a control's touch area to [MIN_TAP_TARGET_DP] without moving anything drawn — the Compose
  * transcription of the positive-then-negative padding iOS uses (`MinTapTargetModifier`,
- * ios/Runner/DesignShared.swift:114-137). It lives inside [chromeClickable] / [chromePressable] so
+ * ios/Runner/DesignShared.swift:114-137). It lives inside [chromeClickable] so
  * every chrome control inherits the floor from one place, the way iOS inherits it from one button
  * style instead of from its 131 call sites.
  *
@@ -180,47 +164,6 @@ fun Modifier.chromeClickable(enabled: Boolean, onClick: () -> Unit): Modifier {
     }
 }
 
-/**
- * iOS `.zcTapTarget` press feedback: while pressed the control drops to 60%
- * opacity and scales to 0.97 — chrome buttons read as buttons without a
- * Material ripple. Same [MIN_TAP_TARGET_DP] hit floor as [chromeClickable]; the press transform
- * rides the expanded box, which is concentric with the drawn one, so the scale reads identically.
- */
-@Composable
-fun Modifier.chromePressable(onClick: () -> Unit): Modifier {
-    val haptics = LocalOperatorHaptics.current
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val alpha by
-        androidx.compose.animation.core.animateFloatAsState(
-            if (pressed) 0.6f else 1f,
-            androidx.compose.animation.core.tween(durationMillis = 120),
-            label = "chrome press alpha",
-        )
-    val scale by
-        androidx.compose.animation.core.animateFloatAsState(
-            if (pressed) 0.97f else 1f,
-            androidx.compose.animation.core.tween(durationMillis = 120),
-            label = "chrome press scale",
-        )
-    return tapTargetFloor {
-        graphicsLayer {
-            this.alpha = alpha
-            scaleX = scale
-            scaleY = scale
-        }
-            .clickable(
-                enabled = true,
-                interactionSource = interaction,
-                indication = null,
-                onClick = {
-                    haptics.selection()
-                    onClick()
-                },
-            )
-    }
-}
-
 /** Text style matching iOS `.system(size:weight:design:)` closely enough. */
 fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextStyle =
     TextStyle(
@@ -231,185 +174,9 @@ fun chromeStyle(size: Float, weight: FontWeight, mono: Boolean = false): TextSty
         platformStyle = PlatformTextStyle(includeFontPadding = false),
     )
 
-/** Camera `HH:MM:SS` with the exact camera-provided `:FF` field tinted accent. */
-fun timecodeAnnotated(timecode: LiveFrameTimecode): AnnotatedString {
-    val label = cameraTimecodeLabel(timecode)
-    val main = label.take(8)
-    val frames = label.drop(8)
-    return buildAnnotatedString {
-        withStyle(SpanStyle(color = LiveDesign.text)) { append(main) }
-        withStyle(SpanStyle(color = LiveDesign.accent)) { append(frames) }
-    }
-}
-
-/** Camera timecode text that never substitutes an elapsed shell clock. */
-@Composable
-fun CameraTimecodeReadout(
-    timecode: LiveFrameTimecode?,
-    sizeSp: Float,
-    weight: FontWeight = FontWeight.Normal,
-    modifier: Modifier = Modifier,
-) {
-    val available = authoritativeTimecode(timecode)
-    // Timecode is the one readout that must survive a squeezed deck intact — on set a truncated TC
-    // is worse than no TC, and `maxLines = 1` otherwise clips digits off the end. Measuring
-    // unbounded makes it take its full intrinsic width first (iOS `.fixedSize(horizontal:)` +
-    // `.layoutPriority(1)`), so the softer readouts beside it give way instead.
-    val uncompressed =
-        modifier.wrapContentWidth(align = Alignment.Start, unbounded = true)
-    if (available == null) {
-        val description = stringResource(R.string.timecode_unavailable_description)
-        Text(
-            UNAVAILABLE_TIMECODE,
-            style = chromeStyle(sizeSp, weight, mono = true),
-            color = LiveDesign.muted,
-            maxLines = 1,
-            modifier = uncompressed.semantics { contentDescription = description },
-        )
-    } else {
-        val label = cameraTimecodeLabel(available)
-        val description = stringResource(R.string.timecode_description, label)
-        Text(
-            timecodeAnnotated(available),
-            style = chromeStyle(sizeSp, weight, mono = true),
-            maxLines = 1,
-            modifier = uncompressed.semantics { contentDescription = description },
-        )
-    }
-}
-
-/**
- * Leaf timecode readout that alone observes [MonitorTimecodeRetention] state.
- * Call sites must not read the retention in a large parent body — that was
- * recomposing the entire monitor chrome on every live frame (~25 Hz).
- */
-@Composable
-internal fun RetainedCameraTimecodeReadout(
-    retention: MonitorTimecodeRetention,
-    sessionState: CameraSessionState,
-    sizeSp: Float,
-    weight: FontWeight = FontWeight.Normal,
-    modifier: Modifier = Modifier,
-) {
-    CameraTimecodeReadout(
-        timecode = retention.timecodeFor(sessionState),
-        sizeSp = sizeSp,
-        weight = weight,
-        modifier = modifier,
-    )
-}
-
-/** STBY/REC pill: state dot + label in a glass capsule (iOS `RecordChip`). */
-@Composable
-fun RecordChip(recording: Boolean) {
-    Row(
-        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 12.dp, vertical = 7.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(9.dp)
-                .background(if (recording) LiveDesign.rec else LiveDesign.faint, CircleShape),
-        )
-        Text(
-            text =
-                stringResource(
-                    if (recording) R.string.record_state_rec
-                    else R.string.record_state_standby_short,
-                ),
-            style = chromeStyle(11f, FontWeight.Bold, mono = true),
-            color = if (recording) LiveDesign.text else LiveDesign.muted,
-            maxLines = 1,
-            softWrap = false,
-        )
-    }
-}
-
-/**
- * Glyph + value in a glass capsule (iOS `inlineReadout`).
- *
- * [label] is what the pill IS ("Resolution", "Codec", "Media"); the glyph carries that for a
- * sighted operator and nothing carries it otherwise, so TalkBack gets it spoken ahead of the value
- * the way iOS labels its readout buttons (`accessibilityLabel`, MonitorUnified.swift:60, :111).
- */
-@Composable
-fun ReadoutPill(
-    value: String,
-    active: Boolean = false,
-    onClick: (() -> Unit)? = null,
-    /** Publishes this pill's root bounds in dp (iOS `topBarPickerFrames`). */
-    onBoundsInRoot: ((ZoneFrame) -> Unit)? = null,
-    label: String? = null,
-    icon: @Composable (Color) -> Unit,
-) {
-    val density = LocalDensity.current
-    val description = label?.let { stringResource(R.string.a11y_monitor_readout, it, value) }
-    // Active = the iOS readout-button treatment: accent-dim capsule + an
-    // accent-dim border (iOS strokes with accentDim, not full accent) with
-    // glyph and value going gold while its picker is open.
-    val surface =
-        if (active) {
-            Modifier.background(LiveDesign.accentDim, CircleShape)
-                .border(1.dp, LiveDesign.accentDim, CircleShape)
-        } else {
-            Modifier.chipGlass(CircleShape)
-        }
-    Row(
-        modifier =
-            surface
-                .then(
-                    if (onBoundsInRoot != null) {
-                        Modifier.onGloballyPositioned { coords ->
-                            val b = coords.boundsInRoot()
-                            with(density) {
-                                onBoundsInRoot(
-                                    ZoneFrame(
-                                        x = b.left.toDp().value,
-                                        y = b.top.toDp().value,
-                                        width = b.width.toDp().value,
-                                        height = b.height.toDp().value,
-                                    ),
-                                )
-                            }
-                        }
-                    } else {
-                        Modifier
-                    },
-                )
-                .then(
-                    // iOS readout buttons always press like buttons; disabled
-                    // handlers no-op silently rather than losing button feel.
-                    if (onClick != null) Modifier.chromePressable(onClick) else Modifier
-                )
-                .then(
-                    if (description != null) {
-                        Modifier.semantics {
-                            contentDescription = description
-                            if (onClick != null) role = Role.Button
-                        }
-                    } else {
-                        Modifier
-                    },
-                )
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        icon(if (active) LiveDesign.accent else LiveDesign.muted)
-        Text(
-            // iOS collapses " · " to "·" in the tight top-bar pills.
-            text = value.replace(" · ", "·"),
-            style = chromeStyle(15f, FontWeight.Medium, mono = true),
-            color = if (active) LiveDesign.accent else LiveDesign.text,
-            maxLines = 1,
-            softWrap = false,
-        )
-    }
-}
-
 /** Signal bars + FPS readout capsule (iOS `FPSChip`). */
 @Composable
-fun FpsChip(signalBars: Int, fps: String) {
+fun FpsChip(signalBars: Int, fps: String, modifier: Modifier = Modifier) {
     val tint =
         when {
             signalBars >= 3 -> LiveDesign.good
@@ -418,7 +185,7 @@ fun FpsChip(signalBars: Int, fps: String) {
             else -> LiveDesign.faint
         }
     Row(
-        modifier = Modifier.chipGlass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
+        modifier = modifier.chipGlass(CircleShape).padding(horizontal = 11.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -437,64 +204,6 @@ fun FpsChip(signalBars: Int, fps: String) {
             maxLines = 1,
             softWrap = false,
         )
-    }
-}
-
-/**
- * One exposure readout: small label over a large mono value (iOS
- * `CaptureSettingButton`). [widestValue] reserves the cell's width so the bar
- * never shifts when a value changes — the iOS `widestValue` hidden-overlay trick.
- *
- * Active pickers tint label + value accent (iOS `isActive`); WB presets can
- * render as [wbIcon] instead of text; [controlLocked] shows a lock glyph.
- */
-@Composable
-internal fun CaptureSettingCell(
-    label: String,
-    value: String,
-    widestValue: String = value,
-    active: Boolean = false,
-    controlLocked: Boolean = false,
-    wbIcon: CaptureWbIcon? = null,
-) {
-    val labelColor = if (active) LiveDesign.accent.copy(alpha = 0.85f) else LiveDesign.faint
-    val valueColor = if (active) LiveDesign.accent else LiveDesign.text
-    Column(
-        modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(label, style = chromeStyle(9f, FontWeight.SemiBold), color = labelColor)
-            if (controlLocked) {
-                PadlockGlyph(
-                    tint = LiveDesign.accent.copy(alpha = 0.9f),
-                    filled = true,
-                    modifier = Modifier.size(7.5.dp, 9.dp),
-                )
-            }
-        }
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                widestValue,
-                style = chromeStyle(19f, FontWeight.Medium, mono = true),
-                color = Color.Transparent,
-                maxLines = 1,
-            )
-            if (wbIcon != null) {
-                CaptureWbGlyph(icon = wbIcon, tint = valueColor)
-            } else {
-                Text(
-                    value,
-                    style = chromeStyle(19f, FontWeight.Medium, mono = true),
-                    color = valueColor,
-                    maxLines = 1,
-                )
-            }
-        }
     }
 }
 
@@ -524,38 +233,26 @@ fun FitScale(maxWidth: Dp, content: @Composable () -> Unit) {
 /** Lock toggle: glass rounded square, gold when engaged (iOS `lockButton`). */
 @Composable
 fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val tint = if (locked) LiveDesign.accent else LiveDesign.text.copy(alpha = 0.86f)
-    // iOS says the same two things about this button — a label and an accessibilityHint
-    // (MonitorUnified.swift:1092-1093). Compose has no hint slot, so both ride the description and
-    // TalkBack speaks the identical words; the engaged state rides `toggleableState`, which the
-    // system localises, rather than a pair of strings this app would have to keep in step.
+    // While Live View shows a lent multicam member, the lock slot returns to the stage instead
+    // (iOS `returnToMulticamButton`); the member keeps its session.
+    com.opencapture.openzcine.multicam.LocalMulticamReturn.current?.let { returnToMulticam ->
+        Box(
+            modifier = modifier.glass(ChromeShape).chromeClickable(returnToMulticam)
+                .semantics { contentDescription = "Return to Multicam" },
+            contentAlignment = Alignment.Center,
+        ) {
+            MonitorIcon(
+                MonitorIcon.LAYOUT_GRID, null,
+                Modifier.size(17.dp), tint = LiveDesign.accent,
+            )
+        }
+        return
+    }
     val lockLabel = stringResource(R.string.a11y_monitor_lock)
     val lockHint = stringResource(R.string.a11y_monitor_lock_hint)
-    Box(
-        modifier =
-            modifier
-                .glass(ChromeShape)
-                .then(
-                    if (locked) {
-                        Modifier.border(
-                            1.5.dp,
-                            LiveDesign.accent.copy(alpha = 0.75f),
-                            ChromeShape,
-                        )
-                    } else {
-                        Modifier
-                    },
-                )
-                .chromeClickable(onClick)
-                .semantics {
-                    contentDescription = "$lockLabel. $lockHint"
-                    role = Role.Switch
-                    toggleableState = ToggleableState(locked)
-                },
-        contentAlignment = Alignment.Center,
-    ) {
-        PadlockGlyph(tint = tint, filled = locked, modifier = Modifier.size(13.dp, 17.dp))
-    }
+    com.opencapture.opencine.cameracontrols.LockButton(
+        locked = locked, label = "$lockLabel. $lockHint", modifier = modifier, onClick = onClick)
+
 }
 
 /** DISP pill: label over mode dashes, the active dash lit (iOS `displayButton`). */
@@ -563,49 +260,14 @@ fun LockButton(locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Un
 fun DispButton(
     activeIndex: Int,
     modeCount: Int,
-    isLiveActive: Boolean = activeIndex == 0,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    // The operator can reorder modes, so live tint follows typed mode state
-    // rather than assuming indicator position zero is always Live.
-    val labelColor = if (isLiveActive) LiveDesign.info else LiveDesign.text
-    // "DISP" plus dashes says nothing out loud — iOS labels the same button "Change display mode"
-    // (MonitorUnified.swift:1170).
-    val dispLabel = stringResource(R.string.a11y_monitor_disp)
-    Column(
-        modifier =
-            modifier
-                .glass(ChromeShape)
-                .chromeClickable(onClick)
-                .semantics {
-                    contentDescription = dispLabel
-                    role = Role.Button
-                },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            stringResource(R.string.monitor_disp),
-            style = chromeStyle(12f, FontWeight.Bold),
-            color = labelColor,
-        )
-        Row(
-            Modifier.padding(top = 3.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            repeat(modeCount) { index ->
-                Box(
-                    Modifier.size(width = 14.dp, height = 3.dp)
-                        .background(
-                            if (index == activeIndex) LiveDesign.info
-                            else LiveDesign.hairlineStrong,
-                            CircleShape,
-                        ),
-                )
-            }
-        }
-    }
+    com.opencapture.monitorui.MonitorDisplayButton(
+        activeIndex = activeIndex.takeIf { it in 0 until modeCount }, modeCount = modeCount,
+        description = stringResource(R.string.a11y_monitor_disp), width = 54f, height = 54f,
+        modifier = modifier, onClick = onClick)
+
 }
 
 /**
@@ -646,85 +308,12 @@ fun AuxCircleButton(
     }
 }
 
-/** Record control: red gradient disc, white ring, disc→stop square (iOS `RecordButton`). */
-@Composable
-fun RecordButton(
-    recording: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-) {
-    val actionLabel =
-        stringResource(if (recording) R.string.record_action_stop else R.string.record_action_start)
-    val recordingState =
-        stringResource(
-            if (recording) R.string.record_state_recording else R.string.record_state_standby,
-        )
-    Canvas(
-        modifier
-            .chromeClickable(enabled = enabled, onClick = onClick)
-            .semantics {
-                contentDescription = actionLabel
-                stateDescription = recordingState
-                role = Role.Button
-                if (enabled) {
-                    semanticsOnClick(label = actionLabel) {
-                        onClick()
-                        true
-                    }
-                }
-            },
-    ) {
-        val d = size.minDimension
-        val center = Offset(size.width / 2, size.height / 2)
-        if (recording) {
-            // Approximation of the iOS recording glow shadow.
-            drawCircle(LiveDesign.rec.copy(alpha = 0.28f), radius = d * 0.56f, center = center)
-        }
-        drawCircle(
-            brush =
-                Brush.radialGradient(
-                    colors = listOf(Color(0.88f, 0.28f, 0.30f), LiveDesign.rec),
-                    center = Offset(center.x, center.y - d / 2),
-                    radius = d * (48f / 72f),
-                ),
-            radius = d / 2,
-            center = center,
-        )
-        drawCircle(
-            Color.White.copy(alpha = 0.17f),
-            radius = d / 2 - 1.5.dp.toPx(),
-            center = center,
-            style = Stroke(width = 3.dp.toPx()),
-        )
-        if (recording) {
-            val side = d * (25f / 72f)
-            drawRoundRect(
-                LiveDesign.rec,
-                topLeft = Offset(center.x - side / 2, center.y - side / 2),
-                size = Size(side, side),
-                cornerRadius = CornerRadius(8.dp.toPx()),
-            )
-        } else {
-            drawCircle(LiveDesign.rec, radius = d * (58f / 72f) / 2, center = center)
-        }
-    }
-}
-
 // Battery row-stack footprint, in dp: each row is a 12dp device-glyph slot,
 // a 5dp gap, and the 28dp outline — 45dp across, so the whole stack stays
 // inside the leading rail lane and never reaches the feed edge.
 internal const val BATTERY_ROW_HEIGHT_DP = 16f
 internal const val BATTERY_ROW_GAP_DP = 5f
 internal const val BATTERY_OUTLINE_WIDTH_DP = 28f
-internal const val BATTERY_STACK_WIDTH_DP = 45f
-internal const val BATTERY_STACK_HEIGHT_DP = BATTERY_ROW_HEIGHT_DP * 2 + BATTERY_ROW_GAP_DP
-
-// The landscape leading rail (lock button + battery stack) sits a touch tight to
-// the feed edge; nudge the whole cluster left by this much. Applied to BOTH the
-// lock and the battery so the deliberate gap between them is preserved.
-// ponytail: a tuning knob — bump if the rail still crowds the feed on a given handset.
-internal const val LEADING_RAIL_LEFT_NUDGE_DP = 8f
 
 /**
  * Stacked phone + camera battery rows for the leading rail (iOS combined
@@ -811,9 +400,9 @@ private fun BatteryOutlineRow(percent: Int?, isCamera: Boolean, externalPower: B
     ) {
         Box(Modifier.width(12.dp), contentAlignment = Alignment.Center) {
             if (isCamera) {
-                CameraGlyph(tint = LiveDesign.muted, modifier = Modifier.size(12.dp, 10.dp))
+                MonitorIcon(MonitorIcon.CAMERA, null, Modifier.size(12.dp), LiveDesign.muted)
             } else {
-                PhoneGlyph(tint = LiveDesign.muted, modifier = Modifier.size(7.dp, 11.dp))
+                MonitorIcon(MonitorIcon.SMARTPHONE, null, Modifier.size(11.dp), LiveDesign.muted)
             }
         }
         BatteryOutlineReadout(
@@ -859,7 +448,7 @@ private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean)
             horizontalArrangement = Arrangement.spacedBy(1.5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (charging) BoltGlyph(tint, Modifier.size(5.dp, 9.dp))
+            if (charging) MonitorIcon(MonitorIcon.ZAP, null, Modifier.size(8.dp), tint)
             val gaugeBars = label.count { it == FILLED_BAR || it == EMPTY_BAR }
             if (gaugeBars > 0) {
                 // DRAWN segments, not the block characters this used to print. Glyphs carry the
@@ -894,158 +483,7 @@ private fun BatteryOutlineReadout(label: String, tint: Color, charging: Boolean)
     }
 }
 
-/** Solid charging bolt for the outline readout (no fill behind it to fight). */
-@Composable
-private fun BoltGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val bolt =
-            Path().apply {
-                moveTo(size.width * 0.52f, 0f)
-                lineTo(0f, size.height * 0.54f)
-                lineTo(size.width * 0.43f, size.height * 0.54f)
-                lineTo(size.width * 0.17f, size.height)
-                lineTo(size.width, size.height * 0.40f)
-                lineTo(size.width * 0.57f, size.height * 0.40f)
-                close()
-            }
-        drawPath(bolt, tint)
-    }
-}
-
 // MARK: - Canvas glyphs (SF Symbol approximations)
-
-/** SF `battery.NNpercent` (horizontal body, quarter-bucket fill), empty when unavailable. */
-@Composable
-fun BatteryGlyph(
-    percent: Int?,
-    tint: Color,
-    modifier: Modifier = Modifier,
-    externalPower: Boolean = false,
-) {
-    val batteryPercent = validBatteryPercent(percent)
-    // iOS buckets the fill at 0/25/50/75/100%.
-    val fill =
-        when {
-            batteryPercent == null || batteryPercent < 13 -> 0f
-            batteryPercent < 38 -> 0.25f
-            batteryPercent < 63 -> 0.5f
-            batteryPercent < 88 -> 0.75f
-            else -> 1f
-        }
-    Canvas(modifier) {
-        val bodyWidth = size.width * 0.86f
-        val stroke = 1.2.dp.toPx()
-        drawRoundRect(
-            tint.copy(alpha = 0.6f),
-            topLeft = Offset(0f, 0f),
-            size = Size(bodyWidth, size.height),
-            cornerRadius = CornerRadius(size.height * 0.3f),
-            style = Stroke(stroke),
-        )
-        // Terminal nub.
-        drawRoundRect(
-            tint.copy(alpha = 0.6f),
-            topLeft = Offset(bodyWidth + stroke, size.height * 0.3f),
-            size = Size(size.width - bodyWidth - stroke, size.height * 0.4f),
-            cornerRadius = CornerRadius(1.dp.toPx()),
-        )
-        if (fill > 0f) {
-            val inset = stroke * 1.8f
-            drawRoundRect(
-                tint,
-                topLeft = Offset(inset, inset),
-                size = Size((bodyWidth - 2 * inset) * fill, size.height - 2 * inset),
-                cornerRadius = CornerRadius(size.height * 0.18f),
-            )
-        }
-        if (externalPower) {
-            drawBatteryPowerMarker(bodyWidth)
-        }
-    }
-}
-
-/** Dark charging bolt with a light keyline, matching iOS's visible powered-state treatment. */
-private fun DrawScope.drawBatteryPowerMarker(bodyWidth: Float): Unit {
-    val centerX = bodyWidth * 0.5f
-    val marker =
-        Path().apply {
-            moveTo(centerX + size.height * 0.08f, size.height * 0.08f)
-            lineTo(centerX - size.height * 0.25f, size.height * 0.53f)
-            lineTo(centerX + size.height * 0.02f, size.height * 0.53f)
-            lineTo(centerX - size.height * 0.14f, size.height * 0.92f)
-            lineTo(centerX + size.height * 0.38f, size.height * 0.42f)
-            lineTo(centerX + size.height * 0.11f, size.height * 0.42f)
-            close()
-        }
-    drawPath(
-        path = marker,
-        color = LiveDesign.text.copy(alpha = 0.92f),
-        style = Stroke(width = 0.9.dp.toPx()),
-    )
-    drawPath(path = marker, color = LiveDesign.background)
-}
-
-/** SF `iphone` outline. */
-@Composable
-fun PhoneGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        drawRoundRect(
-            tint,
-            topLeft = Offset.Zero,
-            size = size,
-            cornerRadius = CornerRadius(size.width * 0.25f),
-            style = Stroke(1.2.dp.toPx()),
-        )
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.35f, size.height - 2.2.dp.toPx()),
-            end = Offset(size.width * 0.65f, size.height - 2.2.dp.toPx()),
-            strokeWidth = 1.dp.toPx(),
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-/** SF `camera` outline. */
-@Composable
-fun CameraGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.2.dp.toPx()
-        val bodyTop = size.height * 0.22f
-        drawRoundRect(
-            tint,
-            topLeft = Offset(0f, bodyTop),
-            size = Size(size.width, size.height - bodyTop),
-            cornerRadius = CornerRadius(size.height * 0.18f),
-            style = Stroke(stroke),
-        )
-        // Viewfinder hump.
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.32f, bodyTop),
-            end = Offset(size.width * 0.42f, 0.5f * stroke),
-            strokeWidth = stroke,
-        )
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.42f, 0.5f * stroke),
-            end = Offset(size.width * 0.58f, 0.5f * stroke),
-            strokeWidth = stroke,
-        )
-        drawLine(
-            tint,
-            start = Offset(size.width * 0.58f, 0.5f * stroke),
-            end = Offset(size.width * 0.68f, bodyTop),
-            strokeWidth = stroke,
-        )
-        drawCircle(
-            tint,
-            radius = size.height * 0.22f,
-            center = Offset(size.width / 2, bodyTop + (size.height - bodyTop) / 2),
-            style = Stroke(stroke),
-        )
-    }
-}
 
 /** SF `cellularbars` with `variableValue` (filled bars vs dim bars). */
 @Composable
@@ -1062,174 +500,5 @@ fun SignalBarsGlyph(bars: Int, tint: Color, modifier: Modifier = Modifier.size(1
                 cornerRadius = CornerRadius(barWidth * 0.35f),
             )
         }
-    }
-}
-
-/** SF `video` (camera body + lens flag). */
-@Composable
-fun VideoGlyph(tint: Color, modifier: Modifier = Modifier.size(14.dp, 10.dp)) {
-    Canvas(modifier) {
-        val bodyWidth = size.width * 0.68f
-        drawRoundRect(
-            tint,
-            topLeft = Offset.Zero,
-            size = Size(bodyWidth, size.height),
-            cornerRadius = CornerRadius(size.height * 0.28f),
-        )
-        val path =
-            Path().apply {
-                moveTo(bodyWidth + size.width * 0.06f, size.height * 0.5f)
-                lineTo(size.width, size.height * 0.12f)
-                lineTo(size.width, size.height * 0.88f)
-                close()
-            }
-        drawPath(path, tint)
-    }
-}
-
-/** SF `film` (frame + sprocket columns). */
-@Composable
-fun FilmGlyph(tint: Color, modifier: Modifier = Modifier.size(12.dp, 11.dp)) {
-    Canvas(modifier) {
-        val stroke = 1.1.dp.toPx()
-        drawRoundRect(
-            tint,
-            topLeft = Offset.Zero,
-            size = size,
-            cornerRadius = CornerRadius(size.height * 0.14f),
-            style = Stroke(stroke),
-        )
-        val inset = size.width * 0.22f
-        drawLine(tint, Offset(inset, 0f), Offset(inset, size.height), stroke)
-        drawLine(
-            tint,
-            Offset(size.width - inset, 0f),
-            Offset(size.width - inset, size.height),
-            stroke,
-        )
-        drawLine(
-            tint,
-            Offset(inset, size.height / 2),
-            Offset(size.width - inset, size.height / 2),
-            stroke * 0.8f,
-        )
-    }
-}
-
-/** SF `sdcard` (card outline with a clipped corner). */
-@Composable
-fun SdCardGlyph(tint: Color, modifier: Modifier = Modifier.size(9.dp, 12.dp)) {
-    Canvas(modifier) {
-        val cut = size.width * 0.34f
-        val r = size.width * 0.18f
-        val path =
-            Path().apply {
-                moveTo(cut, 0f)
-                lineTo(size.width - r, 0f)
-                quadraticTo(size.width, 0f, size.width, r)
-                lineTo(size.width, size.height - r)
-                quadraticTo(size.width, size.height, size.width - r, size.height)
-                lineTo(r, size.height)
-                quadraticTo(0f, size.height, 0f, size.height - r)
-                lineTo(0f, cut)
-                close()
-            }
-        drawPath(path, tint, style = Stroke(1.1.dp.toPx()))
-    }
-}
-
-/** SF `lock` / `lock.fill` (shackle + body). */
-@Composable
-fun PadlockGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.6.dp.toPx()
-        // SF proportions: near-square body on the lower ~55%, a tall narrow
-        // shackle on top.
-        val bodyTop = size.height * 0.45f
-        val bodyInset = size.width * 0.08f
-        val shackleWidth = size.width * 0.48f
-        drawArc(
-            tint,
-            startAngle = 180f,
-            sweepAngle = 180f,
-            useCenter = false,
-            topLeft = Offset((size.width - shackleWidth) / 2, stroke / 2),
-            size = Size(shackleWidth, (bodyTop - stroke / 2) * 2f),
-            style = Stroke(stroke),
-        )
-        val bodyRect = Rect(bodyInset, bodyTop, size.width - bodyInset, size.height)
-        drawRoundRect(
-            tint,
-            topLeft = bodyRect.topLeft,
-            size = bodyRect.size,
-            cornerRadius = CornerRadius(size.width * 0.16f),
-            style = if (filled) androidx.compose.ui.graphics.drawscope.Fill else Stroke(stroke),
-        )
-    }
-}
-
-/** iOS `IconSettings` (gearshape) stand-in. */
-@Composable
-fun GearGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 2.dp.toPx()
-        val center = Offset(size.width / 2, size.height / 2)
-        val outer = size.minDimension / 2 - stroke / 2
-        val ring = outer * 0.68f
-        drawCircle(tint, radius = ring, center = center, style = Stroke(stroke))
-        drawCircle(tint, radius = ring * 0.4f, center = center, style = Stroke(stroke * 0.85f))
-        repeat(8) { index ->
-            val angle = Math.toRadians(index * 45.0 + 22.5)
-            val dir = Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat())
-            drawLine(
-                tint,
-                start = center + dir * (ring - stroke / 2),
-                end = center + dir * outer,
-                strokeWidth = stroke * 1.6f,
-                cap = StrokeCap.Round,
-            )
-        }
-    }
-}
-
-/** iOS `IconMedia` (film-frame) stand-in: rounded frame + sprocket columns. */
-@Composable
-fun MediaStackGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.8.dp.toPx()
-        drawRoundRect(
-            tint,
-            topLeft = Offset(stroke / 2, stroke / 2),
-            size = Size(size.width - stroke, size.height - stroke),
-            cornerRadius = CornerRadius(size.height * 0.2f),
-            style = Stroke(stroke),
-        )
-        // Sprocket columns: two filled holes down each side.
-        val holeW = size.width * 0.12f
-        val holeH = size.height * 0.16f
-        for (side in listOf(size.width * 0.16f, size.width * 0.84f - holeW)) {
-            for (row in listOf(size.height * 0.24f, size.height * 0.6f)) {
-                drawRoundRect(
-                    tint,
-                    topLeft = Offset(side, row),
-                    size = Size(holeW, holeH),
-                    cornerRadius = CornerRadius(holeW * 0.4f),
-                )
-            }
-        }
-        // Center pane divider lines framing the picture area.
-        val paneInset = size.width * 0.34f
-        drawLine(
-            tint,
-            Offset(paneInset, stroke),
-            Offset(paneInset, size.height - stroke),
-            stroke * 0.8f,
-        )
-        drawLine(
-            tint,
-            Offset(size.width - paneInset, stroke),
-            Offset(size.width - paneInset, size.height - stroke),
-            stroke * 0.8f,
-        )
     }
 }

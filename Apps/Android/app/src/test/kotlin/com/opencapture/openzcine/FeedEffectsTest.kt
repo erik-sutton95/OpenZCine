@@ -1,5 +1,12 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.opencine.media.MonitorLUTCube
+import com.opencapture.opencine.media.MonitorPeakingColor
+import com.opencapture.opencine.media.MonitorPeakingSense
+import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -70,69 +77,66 @@ class FeedEffectsTest {
         assertEquals(FeedSplitOrientation.VERTICAL, on.activeSplitComparison)
     }
 
+    /** [tools] on, nothing pinned, the comparison armed with the given axis. */
+    private fun assists(lut: FeedLut, split: FeedSplitOrientation, vararg tools: MonitorAssistTool): NikonAssists {
+        val state = MonitorAssistState(pinnedNames = emptySet())
+        state.syncVisible(tools.toSet())
+        state.setSplitComparison(true, vertical = split == FeedSplitOrientation.VERTICAL)
+        state.syncVisible(tools.toSet())
+        return NikonAssists(state, FeedLutSelection.BuiltIn(lut)) {}
+    }
+
+    private fun NikonAssists.rendered(mode: MonitorDisplayMode, photography: Boolean = false) =
+        feedEffects { shared.rendersLive(it, mode, photography) }
+
     @Test
     fun `clean view drops the comparison with the lut it belongs to`() {
-        val effects =
-            FeedEffects(
-                lut = FeedLutSelection.BuiltIn(FeedLut.MONO),
-                splitComparison = FeedSplitOrientation.HORIZONTAL,
-            )
-        assertEquals(
-            FeedSplitOrientation.HORIZONTAL,
-            renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = false).activeSplitComparison,
-        )
+        val assists = assists(FeedLut.MONO, FeedSplitOrientation.HORIZONTAL, MonitorAssistTool.LUT)
+        assertEquals(FeedSplitOrientation.HORIZONTAL, assists.rendered(MonitorDisplayMode.LIVE).activeSplitComparison)
         // Clean drops an unpinned LUT, and the divider and labels have to leave with it.
-        assertNull(
-            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, emptySet(), photography = false)
-                .activeSplitComparison,
-        )
-        assertEquals(
-            FeedSplitOrientation.HORIZONTAL,
-            renderedFeedEffects(effects, MonitorDisplayMode.CLEAN, setOf(AssistTool.LUT), photography = false)
-                .activeSplitComparison,
-        )
+        assertNull(assists.rendered(MonitorDisplayMode.CLEAN).activeSplitComparison)
+        assists.shared.pinned = setOf(MonitorAssistTool.LUT)
+        assertEquals(FeedSplitOrientation.HORIZONTAL, assists.rendered(MonitorDisplayMode.CLEAN).activeSplitComparison)
     }
 
     @Test
     fun `photography drops a video lut instead of grading an already-display-referred frame`() {
-        // The reported bug: a LUT left on in video survived the flip to photo, so a Log→709 look
-        // landed on the stills live view, which is already display-referred — and the photo
+        // The reported bug: a LUT left on in video survived the flip to photo, so a Log to 709 look
+        // landed on the stills live view, which is already display-referred, and the photo
         // toolbar has no LUT key to switch it off with.
-        val effects =
-            FeedEffects(
-                lut = FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709),
-                splitComparison = FeedSplitOrientation.VERTICAL,
-                peaking = true,
-            )
+        val assists =
+            assists(FeedLut.LOG3G10_709, FeedSplitOrientation.VERTICAL, MonitorAssistTool.LUT, MonitorAssistTool.PEAK)
 
-        val photo = renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = true)
+        val photo = assists.rendered(MonitorDisplayMode.LIVE, photography = true)
         assertNull(photo.lut)
         // The divider and its LOG/LUT labels ride the look, so they leave with it.
         assertNull(photo.activeSplitComparison)
-        // Peaking is an exposure aid photographers do use — dropping the LUT must not take it.
+        // Peaking is an exposure aid photographers do use; dropping the LUT must not take it.
         assertTrue(photo.peaking)
 
         // Nothing is persisted by the filter: video still renders the operator's look untouched.
-        val video = renderedFeedEffects(effects, MonitorDisplayMode.LIVE, emptySet(), photography = false)
-        assertEquals(effects.lut, video.lut)
+        val video = assists.rendered(MonitorDisplayMode.LIVE)
+        assertEquals(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709), video.lut)
         assertEquals(FeedSplitOrientation.VERTICAL, video.activeSplitComparison)
     }
 
     @Test
     fun `photography keeps its own aids and drops only the cinema-only ones`() {
         // One gate for every render path, so the tool table is the single source of truth.
-        for (tool in AssistTool.entries) {
+        val state = MonitorAssistState(pinnedNames = emptySet())
+        state.syncVisible(MonitorAssistTool.entries.toSet())
+        for (tool in MonitorAssistTool.entries) {
+            state.pinned = emptySet()
             assertEquals(
                 tool.appliesToPhotography,
-                assistToolRendersInMode(
-                    tool, MonitorDisplayMode.LIVE, emptySet(), photography = true),
+                state.rendersLive(tool, MonitorDisplayMode.LIVE, photography = true),
                 "photography rendering disagrees with the tool table for $tool",
             )
             // A clean-view pin cannot smuggle a cinema-only tool into the photo feed either.
+            state.pinned = setOf(tool)
             assertEquals(
                 tool.appliesToPhotography,
-                assistToolRendersInMode(
-                    tool, MonitorDisplayMode.CLEAN, setOf(tool), photography = true),
+                state.rendersLive(tool, MonitorDisplayMode.CLEAN, photography = true),
                 "a clean pin overrode the photography filter for $tool",
             )
         }
@@ -151,7 +155,7 @@ class FeedEffectsTest {
     fun `the plan splits only when the base cube is the operator's lut`() {
         val lut = FeedLutSelection.BuiltIn(FeedLut.MONO)
         val split = FeedSplitOrientation.VERTICAL
-        fun plan(effects: FeedEffects, cube: FeedEffectsCube? = testCube()) =
+        fun plan(effects: FeedEffects, cube: MonitorLUTCube? = testCube()) =
             FeedEffectsRenderPlan(
                 effects = effects,
                 configuration = testRenderConfiguration(),
@@ -190,7 +194,7 @@ class FeedEffectsTest {
         assertNull(plan(FeedEffects(lut = lut, splitComparison = split), cube = null).splitComparison)
     }
 
-    private fun testCube(): FeedEffectsCube = FeedEffectsCube(2, ByteArray(2 * 2 * 2 * 4))
+    private fun testCube(): MonitorLUTCube = MonitorLUTCube(2, ByteArray(2 * 2 * 2 * 4))
 
     private fun testRenderConfiguration(): FeedEffectsRenderConfiguration =
         FeedEffectsRenderConfiguration(
@@ -218,5 +222,39 @@ class FeedEffectsTest {
         assertEquals(0, FeedFalseColorScale.STOPS.wireOrdinal)
         assertEquals(1, FeedFalseColorScale.IRE.wireOrdinal)
         assertEquals(2, FeedFalseColorScale.LIMITS.wireOrdinal)
+        // Peaking.Sensitivity / Peaking.Color / Zebra.StripeColor / zebra unit: the shared enum ordinal is the wire value.
+        assertEquals(listOf("LOW", "MED", "HIGH"), MonitorPeakingSense.entries.map { it.name })
+        assertEquals(listOf("WHITE", "BLUE", "RED", "GREEN"), MonitorPeakingColor.entries.map { it.name })
+        assertEquals(listOf("WHITE", "AMBER", "RED", "CYAN", "GREEN"), MonitorZebraPaint.entries.map { it.name })
+        assertEquals(listOf("NATIVE", "IRE"), MonitorZebraUnit.entries.map { it.name })
+    }
+
+    @Test
+    fun `ruler uses common axis words and labels only the applied native look`() {
+        for ((curve, sourceLabel) in listOf(0 to "L3G10", 1 to "N-Log", 2 to "sRGB", 3 to "HLG")) {
+            val reference = FeedFalseColorReference(curve, emptyList(), floatArrayOf())
+            for (scale in FeedFalseColorScale.entries) {
+                val copy = FalseColorReferenceCopy(scale.label, emptyList(), emptyList(), emptyList())
+                for (read709 in listOf(false, true)) {
+                    val values = FalseColorReferencePresentation(scale, reference, read709).referenceValues(copy)
+                    val expectedLabel = if (read709 && curve < 2) "709" else sourceLabel
+                    assertEquals("${scale.label} · $expectedLabel", values.subtitle)
+                    assertEquals(com.opencapture.opencine.cameracontrols.FalseColorReference.axisLabels(scale.sharedScale),
+                        values.axisLabels)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `stop ruler end labels stay inside the shared false colour panel`() {
+        val reference = FeedFalseColorReference(0, emptyList(), floatArrayOf(0f, 0.3f, 0.5f, 0.6f, 0.75f, 1f))
+        val copy = FalseColorReferenceCopy("Stops", listOf("Min", "-3", "18%", "Skin", "+2", "Max"), emptyList(), emptyList())
+        val fractions =
+            FalseColorReferencePresentation(FeedFalseColorScale.STOPS, reference).referenceValues(copy).markers.map { it.fraction }
+        // The shared ruler starts a label 10 dp before its fraction of the 264 dp panel.
+        assertEquals(16.0 / 264, fractions.first(), absoluteTolerance = 1e-9)
+        assertEquals(1 - 16.0 / 264, fractions.last(), absoluteTolerance = 1e-9)
+        assertEquals(listOf(0.3, 0.5, 0.6, 0.75), fractions.subList(1, 5).map { Math.round(it * 100) / 100.0 })
     }
 }

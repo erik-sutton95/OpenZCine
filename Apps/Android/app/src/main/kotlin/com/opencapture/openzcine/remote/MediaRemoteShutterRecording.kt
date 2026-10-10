@@ -1,6 +1,6 @@
 package com.opencapture.openzcine.remote
 
-import com.opencapture.openzcine.core.CameraSession
+import com.opencapture.opencine.nikon.CameraSession
 
 /**
  * Whether the front monitor is in a safe state to claim Android media keys.

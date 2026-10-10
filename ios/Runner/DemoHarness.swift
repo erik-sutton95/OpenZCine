@@ -1,4 +1,7 @@
+import MonitorPresentation
 import Network
+import OpenCineApple
+import OpenZCineCore
 import SwiftUI
 import UIKit
 import os
@@ -17,25 +20,21 @@ enum DemoHarness {
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
     /// first downloaded clip (read in `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
-    /// `ZC_DEMO_SPLIT=vertical|horizontal` stages the 50/50 Log-vs-LUT comparison.
-    static let splitComparison = value("ZC_DEMO_SPLIT")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
     /// `ZC_DEMO_PANEL_TAB` picks the Operator Setup rail tab (link/assist/controls/…).
     static let panelTab = value("ZC_DEMO_PANEL_TAB")
-    /// `ZC_DEMO_WIZARD_EXPANDED=1` seeds the wizard transport card's nested options open —
-    /// expansion is a tap, unreachable headless, and the expanded overflow is what screenshots
+    /// `ZC_DEMO_WIZARD_EXPANDED=1` seeds the wizard transport card's nested options open.
+    /// Expansion is a tap, unreachable headless, and the expanded overflow is what screenshots
     /// must check.
     static let wizardExpanded = flag("ZC_DEMO_WIZARD_EXPANDED")
-    /// `ZC_DEMO_LIVE_GUIDE_STEP=camera|assist|system` opens a deterministic guide card.
-    static let liveGuideStep = value("ZC_DEMO_LIVE_GUIDE_STEP")
     /// `ZC_DEMO_RED_BLOCKED=ap|off` forces the RED download blocked state for screenshots.
     static let forcedRedAvailability = value("ZC_DEMO_RED_BLOCKED")
     /// `ZC_DEMO_OPEN_BUG_REPORT=1` opens the bug-report route chooser for screenshot checks.
     static let openBugReport = flag("ZC_DEMO_OPEN_BUG_REPORT")
-    /// `ZC_DEMO_INTERNET_CONFIRM=support|report|feature` stages the camera-AP confirmation alert.
+    /// `ZC_DEMO_INTERNET_CONFIRM=support|feature` stages the camera-AP confirmation alert.
     static let internetHandoffConfirmation = value("ZC_DEMO_INTERNET_CONFIRM")
-    /// `ZC_DEMO_INTERNET_PROGRESS=support|report|feature` stages the route-waiting overlay.
+    /// `ZC_DEMO_INTERNET_PROGRESS=support|feature` stages the route-waiting overlay.
     static let internetHandoffProgress = value("ZC_DEMO_INTERNET_PROGRESS")
     /// `ZC_DEMO_CPU_FEED=1` forces the old `UIImageView` feed path back, for an A/B against the
     /// default GPU-native renderer. See `FeedRenderMode`.
@@ -45,7 +44,7 @@ enum DemoHarness {
     /// Display settings row switches it live; this is for a launch that has to start there.
     /// See `FeedUpscaleSwitch`.
     static let forcedFeedUpscaler = value("ZC_DEMO_FEED_SCALER").flatMap { raw in
-        FeedUpscaler.allCases.first { $0.rawValue.lowercased().hasPrefix(raw.lowercased()) }
+        MonitorUpscaler.allCases.first { $0.rawValue.lowercased().hasPrefix(raw.lowercased()) }
     }
     /// `ZC_DEMO_SR_STAGE=input` presents the super-resolution model's INPUT buffer instead of its
     /// output, converted back the same way.
@@ -73,9 +72,6 @@ enum DemoHarness {
     static let blockSmoothStrength = value("ZC_DEMO_BLOCK_SMOOTH").flatMap(Double.init)
     static let blockSmoothGateLevels = value("ZC_DEMO_BLOCK_GATE").flatMap(Double.init)
     static let blockDitherLevels = value("ZC_DEMO_BLOCK_DITHER").flatMap(Double.init)
-    /// `ZC_DEMO_CANVAS_SCOPES=1` forces the Canvas reference plots over the Metal trace
-    /// rasterizer — the baseline for pixel-diff look-regression checks.
-    static let canvasScopes = flag("ZC_DEMO_CANVAS_SCOPES")
     /// `ZC_DEMO_WIFI_SCANNER=scan|manual` opens the Wi-Fi credential scanner for screenshots.
     static let cameraWiFiScannerMode = value("ZC_DEMO_WIFI_SCANNER")
     /// `ZC_DEMO_WIFI_OFF=1` makes the camera-AP flows treat the Wi-Fi radio as switched off, so
@@ -433,9 +429,9 @@ enum DemoHarness {
                         case "horizontal": .horizontal
                         default: nil
                         }
-                    model.preferences.splitComparisonEnabled = orientation != nil
+                    model.assist.splitComparison = orientation != nil
                     if let orientation {
-                        model.preferences.splitComparisonOrientation = orientation
+                        model.assist.splitVertical = orientation == .vertical
                     }
                 }
                 if let path = env["ZC_DEMO_RED_ZIP"] {
@@ -481,41 +477,39 @@ enum DemoHarness {
                     model.preferences.portraitFeedAspect = aspect
                 }
                 if let raw = env["ZC_DEMO_PARADE_MODE"],
-                    let mode = AssistConfiguration.Scopes.ParadeMode(rawValue: raw.uppercased())
+                    let mode = MonitorParadeMode(rawValue: raw.uppercased())
                 {
                     // Demo/screenshot affordance: seed the parade lane mode (rgb/yrgb) so the GPU
                     // and CPU parade scopes can be captured in YRGB without a manual toggle.
-                    model.assistConfiguration.scopes.paradeMode = mode
+                    model.scopePanels.parade.options.mode = mode
                 }
                 if let raw = env["ZC_DEMO_WAVE_MODE"],
-                    let mode = AssistConfiguration.Scopes.WaveformMode(
+                    let mode = MonitorWaveformMode(
                         rawValue: raw.capitalized == "Rgb" ? "RGB" : raw.capitalized)
                 {
                     // Demo/screenshot affordance: seed the waveform trace mode (luma/rgb).
-                    model.assistConfiguration.scopes.waveformMode = mode
+                    model.scopePanels.waveform.options.mode = mode
                 }
                 if let raw = env["ZC_DEMO_WAVE_BRIGHTNESS"], let percent = Int(raw) {
-                    // Demo/screenshot affordance: waveform trace brightness percent (0–200).
-                    model.assistConfiguration.scopes.waveformBrightness =
-                        AssistConfiguration.Scopes.clampedBrightness(percent)
+                    // Demo/screenshot affordance: waveform trace brightness percent (0 to 200).
+                    model.scopePanels.waveform.options.brightness =
+                        MonitorWaveformOptions.clampedBrightness(percent)
                 }
                 if let raw = env["ZC_DEMO_VECTOR_ZOOM"],
-                    let zoom = AssistConfiguration.Scopes.VectorscopeZoom(
-                        rawValue: raw.lowercased())
+                    let zoom = MonitorVectorscopeZoom(rawValue: raw.lowercased())
                 {
-                    model.assistConfiguration.scopes.vectorscopeZoom = zoom
+                    model.scopePanels.vectorscope.options.zoom = zoom
                 }
                 if let raw = env["ZC_DEMO_VECTOR_BRIGHTNESS"], let percent = Int(raw) {
-                    model.assistConfiguration.scopes.vectorscopeBrightness =
-                        AssistConfiguration.Scopes.clampedBrightness(percent)
+                    model.scopePanels.vectorscope.options.brightness =
+                        MonitorVectorscopeOptions.clampedBrightness(percent)
                 }
                 if let raw = env["ZC_DEMO_VECTOR_SCALE"], let scale = Double(raw) {
-                    model.assistConfiguration.scopes.vectorscopeScale =
-                        AssistConfiguration.Scopes.clampedScale(scale)
+                    model.scopePanels.vectorscope.setScale(scale)
                 }
                 if env["ZC_DEMO_GUIDES_MASK"] == "1" {
                     // Demo/screenshot affordance: darken outside the selected guide frames.
-                    model.assistConfiguration.guides.maskEnabled = true
+                    model.assist.guideMask = true
                 }
                 if env["ZC_DEMO_UI_MODE"] == "1" {
                     // Demo/screenshot affordance: start in demo UI mode (same as pressing ⌘D).
@@ -525,7 +519,13 @@ enum DemoHarness {
                     let scale = FalseColorScale(rawValue: raw)
                 {
                     // Demo/screenshot affordance: stage the Stops, IRE, or Limits false-colour ruler.
-                    model.assistConfiguration.falseColorScale = scale
+                    model.assist.falseColorScale =
+                        switch scale {
+                        case .stops: .sceneStops
+                        case .video: .stops
+                        case .ire: .ire
+                        case .limits: .limits
+                        }
                 }
                 if let raw = env["ZC_DEMO_PANEL_POS"] {
                     // Demo/screenshot affordance: place floating assist panels at normalized
@@ -535,9 +535,15 @@ enum DemoHarness {
                         guard parts.count == 2 else { continue }
                         let coords = parts[1].split(separator: ",").compactMap { Double($0) }
                         guard coords.count == 2 else { continue }
-                        model.movablePanelPositions[String(parts[0])] = MovablePanelStoredCenter(
-                            center: CGPoint(x: coords[0], y: coords[1]),
-                            in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                        let center = CGPoint(x: coords[0], y: coords[1])
+                        let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
+                        if let tool = NikonScopePanels.legacyPanelIDs[String(parts[0])] {
+                            // The unit square counts as landscape, the slot the demo stages.
+                            model.scopePanels.slot(for: tool).store(center: center, in: unit)
+                        } else {
+                            model.movablePanelPositions[String(parts[0])] =
+                                MovablePanelStoredCenter(center: center, in: unit)
+                        }
                     }
                 }
                 if let raw = env["ZC_DEMO_CLEAN_PIN"] {
@@ -546,7 +552,7 @@ enum DemoHarness {
                     // with exactly one tool kept.
                     for value in raw.split(separator: ",") {
                         if let tool = MonitorAssistTool(rawValue: String(value)) {
-                            model.preferences.cleanViewPinnedTools.insert(tool)
+                            model.assist.cleanViewPinnedTools.insert(tool.selection)
                         }
                     }
                 }
@@ -594,22 +600,20 @@ enum DemoHarness {
                     for value in raw.split(separator: ",") {
                         if let tool = MonitorAssistTool(rawValue: String(value)) {
                             model.setAssist(tool, visible: true)
-                            // Level and de-squeeze also gate on their own enable flag.
-                            if tool == .level { model.assistConfiguration.level.enabled = true }
                             if tool == .desqueeze {
-                                model.assistConfiguration.desqueeze.enabled = true
-                                model.assistConfiguration.desqueeze.ratio = .x2
+                                model.assist.desqueezeFactor = 2
+                                model.assist.desqueezeCustom = false
                             }
                         }
                     }
-                    if model.preferences.visibleAssistTools(for: .liveView).contains(.audioMeters) {
+                    if model.assist.liveTools.contains(.audioMeters) {
                         model.demoSeedAudioMonitor()
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
                     // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
                     // view capture with a pinned scope still gets samples.
                     let scopesOn = MonitorAssistTool.scopeTools.contains {
-                        model.preferences.visibleAssistTools(for: .liveView).contains($0)
+                        model.assist.liveTools.contains($0)
                     }
                     if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
@@ -638,9 +642,9 @@ enum DemoHarness {
                 if let raw = env["ZC_DEMO_PLAYBACK_ASSIST_ON"] {
                     // Demo/screenshot affordance: seed playback view-assist tools (comma-separated
                     // raw values, e.g. "WAVE,PARADE") so clip-player scopes can be captured headless.
-                    model.preferences.playbackVisibleAssistTools.formUnion(
+                    model.assist.playbackVisibleTools.formUnion(
                         raw.split(separator: ",").compactMap {
-                            MonitorAssistTool(rawValue: String($0))
+                            MonitorAssistTool(rawValue: String($0))?.selection
                         })
                 }
                 if env["ZC_DEMO_OPEN_MEDIA"] != nil {
@@ -662,7 +666,7 @@ enum DemoHarness {
                     // the shell is mounted) so the self-dissolving capsule can be captured headlessly.
                     Task { @MainActor in
                         try? await Task.sleep(for: .seconds(0.5))
-                        model.scopeCapNotice += 1
+                        model.showMonitorNotice(model.scopeCapNoticeText)
                     }
                 }
                 if env["ZC_DEMO_FOCUSLOCK"] == "1" { model.focusPointLocked = true }
@@ -701,11 +705,8 @@ enum DemoHarness {
                 if env["ZC_DEMO_PANEL"] == "settings" {
                     // Demo/screenshot affordance: open Operator Setup on launch (tab via
                     // ZC_DEMO_PANEL_TAB).
-                    model.operatorSettingsTab = OperatorSettingsTab.demoLaunchTab
+                    model.operatorSettingsTab = MonitorSettingsTab.demoLaunchTab
                     model.activePanel = .settings
-                }
-                if let step = LiveViewGuideStep.demoValue(liveGuideStep) {
-                    model.forceLiveViewGuide(step)
                 }
                 if env["ZC_DEMO_FOCUSBOX"] == "1" {
                     // Synthetic face-tracking boxes so the overlay is visible without a live camera.
@@ -746,7 +747,7 @@ enum DemoHarness {
                 // home's Settings button would, optionally selecting ZC_DEMO_PANEL_TAB.
                 model.openStandaloneSettings()
                 if let rawTab = env["ZC_DEMO_PANEL_TAB"] {
-                    model.operatorSettingsTab = OperatorSettingsTab.demoLaunchTab(rawTab)
+                    model.operatorSettingsTab = MonitorSettingsTab.demoLaunchTab(rawTab)
                 }
             }
             if openBugReport {
@@ -832,11 +833,11 @@ enum DemoHarness {
             if let raw = env["ZC_DEMO_WIZARD_STEP"], let value = Int(raw),
                 let step = NativeAppModel.FirstPairWizardStep(rawValue: value)
             {
-                // Demo/screenshot affordance: jump the first-pair wizard to a step (raw 0-4) —
-                // steps past permissions are otherwise unreachable headless (they need taps).
+                // Demo/screenshot affordance: jump the first-pair wizard to a step (raw 0-4).
+                // Steps past permissions are otherwise unreachable headless (they need taps).
                 // Pair with ZC_DEMO_WIZARD_TRANSPORT for steps whose content is per-transport.
                 // The pairing flag makes the wizard show even when saved cameras exist
-                // (`shouldShowFirstPairWizard` is pairing-or-empty).
+                // (`shouldShowFirstPairWizard` is the pairing flag only).
                 model.isPairingNewCamera = true
                 model.firstPairWizardStep = step
             }
@@ -873,6 +874,22 @@ enum DemoHarness {
                     host: "192.168.1.1", displayName: "ZR_7005555", transport: "Wi-Fi",
                     onCameraAccessPoint: true, serialNumber: "7005555")
                 model.showSavedCameras()
+            }
+            if env["ZC_DEMO_NEARBY"] == "1" {
+                // A camera on this network that is not saved, and one another device holds.
+                model.nikonPort.demoSightings = [
+                    DiscoveredCamera(ip: "192.168.1.44", name: "Z8_4005555", source: .bonjour),
+                    DiscoveredCamera(
+                        ip: "192.168.1.45", name: "Z6_3001234", source: .heldByAnotherDevice,
+                        heldByDeviceName: "Director's iPad"),
+                ]
+                model.nikonPort.found(model.discoveredCameras)
+            }
+            if let outcome = env["ZC_DEMO_CARD"] {
+                // Stages the shared card on the first saved camera without dialling anything:
+                // "connecting" holds it on its steps, "failed" fails it with the funnel's copy.
+                model.nikonPort.demoOutcome = outcome
+                if let camera = model.cameras.saved.first { model.cameras.connect(camera) }
             }
             if let raw = env["ZC_DEMO_HOTSPOT_CARD"] {
                 // Stages the hotspot-recovery strip on the camera list ("active" / "needed") —
@@ -911,6 +928,49 @@ enum DemoHarness {
                 // Demo/screenshot affordance: the real scanner is normally entered from the
                 // camera-connection flow and needs a physical camera screen to exercise.
                 model.isCameraWiFiScannerPresented = true
+            }
+            if let count = env["ZC_DEMO_MULTICAM"].flatMap(Int.init) {
+                stageMulticam(count: count, env: env, model: model)
+            }
+        }
+
+        /// Demo/screenshot affordance: `ZC_DEMO_MULTICAM=<1-4>` opens the multicam stage with that
+        /// many scripted bodies (`DemoMulticamLink`) running the real pumps, plans and member
+        /// queues. `ZC_DEMO_MULTICAM_LAYOUT=grid` picks Grid; `ZC_DEMO_MULTICAM_REC=1` rolls A.
+        @MainActor private static func stageMulticam(
+            count: Int, env: [String: String], model: NativeAppModel
+        ) {
+            model.beginMulticam()
+            let isos: [UInt32] = [800, 400, 1600, 6400]
+            let batteries: [UInt8] = [87, 60, 35, 15]
+            model.multicam.connect = { record in
+                let index = Int(record.serialNumber?.suffix(1) ?? "") ?? 0
+                return DemoMulticamLink(
+                    serialNumber: record.serialNumber ?? "", iso: isos[index % 4],
+                    battery: batteries[index % 4])
+            }
+            if env["ZC_DEMO_MULTICAM_LAYOUT"] == "grid" { model.multicam.arrangement = .grid }
+            let paths: [CameraPath] = [
+                .usbC, .infrastructure(networkName: "Set"), .phoneHotspot,
+                .infrastructure(networkName: "Set"),
+            ]
+            for index in 0..<min(4, max(0, count)) {
+                let name = ["Wide", "Close", "High", "Roam"][index]
+                model.multicam.add(
+                    PTPIPSavedCameraRecord(
+                        host: index == 0 ? "usb:demo-zr" : "10.0.0.\(20 + index)",
+                        displayName: "ZR_300012\(index)",
+                        transport: paths[index].legacyTransportLabel, lastSeenAt: nil,
+                        presentation: PTPIPSavedCameraPresentation(customName: name),
+                        serialNumber: "300012\(index)", path: paths[index]),
+                    reachable: true)
+            }
+            if env["ZC_DEMO_MULTICAM_REC"] == "1" {
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    guard let first = model.multicam.member(atSlot: 0) else { return }
+                    await model.multicam.run(model.multicam.plan(for: first.id))
+                }
             }
         }
     }

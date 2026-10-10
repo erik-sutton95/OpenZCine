@@ -76,16 +76,12 @@ behavior, or setup, update the matching handbook page in the same PR. Preview it
 
 ## Reporting bugs & requesting features
 
-- **Bugs only** — In **Operator Setup &gt; System &gt; Report a Problem**, choose one of two public
-  GitHub-issue paths:
-  - **Anonymous in-app report** — No GitHub account. You may opt into a privacy-filtered app
-    activity log or user-selected screenshots; both become public with the issue. Screenshot file
-    metadata is removed, but visible content can still identify someone. It cannot receive a
-    private reply.
-  - **Signed-in GitHub issue** — Open [GitHub's bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
-    for richer optional details and attachments. A GitHub account is required.
-  New bugs are automatically labeled `needs-triage`; issues are strictly for bugs. Never put
-  sensitive information in either public path.
+- **Bugs only**: **Operator Setup &gt; System &gt; Report a Problem** (iOS and Android) sends a
+  private report to OpenCapture through Sentry, with optional technical details, photos and a reply
+  email; it goes once the phone has left camera Wi-Fi. You can also open
+  [GitHub's bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) (a GitHub account is
+  required). New issues are automatically labeled `needs-triage`; issues are strictly for bugs.
+  Never put sensitive information in a public issue.
 - **Feature ideas, enhancements & discussions** — Use **GitHub Discussions** (the "Discussions" tab). Start a new discussion in the **Ideas** category. A GitHub account is required, which keeps feature conversations attributable and Issues focused on actionable bugs.
 - **Security vulnerabilities** — Follow [`SECURITY.md`](SECURITY.md). Do **not** open a public issue.
 

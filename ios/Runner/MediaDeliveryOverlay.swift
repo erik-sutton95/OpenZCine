@@ -1,4 +1,9 @@
 import LinkPresentation
+import MonitorPresentation
+import MonitorUI
+import OpenCineAppKit
+import OpenCineFrameIO
+import OpenCineMedia
 import Photos
 import SwiftUI
 import UIKit
@@ -17,6 +22,8 @@ struct MediaDeliveryBeginRequest: Sendable {
     let destination: MediaDeliveryDestination
     let configuration: MediaDeliveryConfiguration
     var postExportAction: MediaDeliveryPostExportAction = .systemShare
+    var capture: NikonMediaDeliveryCapture? = nil
+    var runAdmission: MonitorDeliveryAdmission? = nil
 }
 
 /// Outcome of a delivery run started from the overlay flow.
@@ -28,9 +35,9 @@ enum MediaDeliveryRunOutcome: Sendable {
 }
 
 /// Live progress for the on-clip delivery overlay.
-struct MediaDeliveryOverlayState: Equatable {
+struct MediaDeliveryOverlayState: Equatable, Sendable {
     /// Operator-visible step after export, when the determinate bar would otherwise freeze.
-    enum Phase: Equatable {
+    enum Phase: Equatable, Sendable {
         case working
         case awaitingPhotosAccess
         case savingToPhotos
@@ -100,144 +107,174 @@ struct MediaDeliveryOverlayState: Equatable {
     }
 }
 
-/// App-scoped delivery orchestration — survives navigation; drives global and on-clip overlays.
+/// App-scoped delivery orchestration survives navigation through the shared run owner.
 @MainActor
 @Observable
 final class MediaDeliveryCoordinator {
-    private(set) var overlayState: MediaDeliveryOverlayState?
-    var isExpanded = false
-    var sharePayload: MediaSharePayload?
-    /// Staging directory removed after the share sheet finishes (idempotent cleanup).
-    private(set) var shareStagingCleanupURL: URL?
-    private(set) var completionToast: String?
+    private let lifetime:
+        MonitorDeliveryModel<
+            MediaDeliveryOwnedProgress, MediaDeliveryRunOutcome, MediaDeliveryShareResources
+        >
+    private let execute:
+        @MainActor (
+            MediaDeliveryBeginRequest, NativeAppModel,
+            @escaping @MainActor (MediaDeliveryOverlayState) -> Void
+        ) async -> MediaDeliveryRunOutcome
 
-    private var deliveryTask: Task<Void, Never>?
-    private var activeRequest: MediaDeliveryBeginRequest?
-    private var cancelHandler: (() -> Void)?
-    private var localOverlayDepth = 0
-    /// Guards against stale progress callbacks re-showing the bar after a run finishes.
-    private var activeDeliveryToken = UUID()
+    init(
+        sleep: @escaping @MainActor (Duration) async throws -> Void = {
+            try await Task.sleep(for: $0)
+        },
+        execute:
+            @escaping @MainActor (
+                MediaDeliveryBeginRequest, NativeAppModel,
+                @escaping @MainActor (MediaDeliveryOverlayState) -> Void
+            ) async -> MediaDeliveryRunOutcome = { request, model, progress in
+                await MediaDeliveryRunner.execute(
+                    request: request, model: model, onProgress: progress)
+            }
+    ) {
+        self.execute = execute
+        lifetime = .init(
+            sleep: sleep,
+            releaseShare: { resources in
+                MediaShareStaging.cleanupStaging(at: resources.cleanupURL)
+            })
+    }
 
-    var isActive: Bool { overlayState != nil }
-
-    /// When a media view is visible, it claims the on-clip overlay; otherwise the global pill shows.
-    var showsLocalOverlay: Bool { localOverlayDepth > 0 }
-
+    var overlayState: MediaDeliveryOverlayState? { lifetime.state.progress?.overlay }
+    var currentClipFilename: String? { lifetime.state.progress?.filename }
+    var completionToast: String? { lifetime.state.toast }
+    var isActive: Bool { lifetime.state.running }
+    var showsLocalOverlay: Bool { lifetime.state.showsLocalOverlay }
     var showsGlobalChrome: Bool { isActive && !showsLocalOverlay }
-
-    var currentClipFilename: String? {
-        guard let state = overlayState, let request = activeRequest else { return nil }
-        let index = min(max(state.clipIndex, 1), request.clips.count) - 1
-        guard request.clips.indices.contains(index) else { return nil }
-        return request.clips[index].filename
+    var isExpanded: Bool {
+        get { lifetime.state.expanded }
+        set { lifetime.setExpanded(newValue) }
     }
-
-    func enterLocalOverlayContext() {
-        localOverlayDepth += 1
+    var sharePayload: MediaSharePayload? {
+        lifetime.state.share.map {
+            .init(id: $0.id, urls: $0.payload.urls, metadataText: $0.payload.metadataText)
+        }
     }
-
-    func exitLocalOverlayContext() {
-        localOverlayDepth = max(0, localOverlayDepth - 1)
+    /// A delayed nil setter belongs to the exact sheet built with this binding.
+    var sharePresentation: Binding<MediaSharePayload?> {
+        let presentedID = sharePayload?.id
+        return Binding(
+            get: { self.sharePayload },
+            set: { value in
+                if value == nil, let presentedID { self.clearSharePresentation(id: presentedID) }
+            })
     }
+    func enterLocalOverlayContext() { lifetime.enterLocalOverlayContext() }
+    func exitLocalOverlayContext() { lifetime.exitLocalOverlayContext() }
 
-    /// Starts export/upload work detached from the presenting view's lifecycle.
+    private(set) var capturedRun: MonitorDeliveryRunHandle?
+
     func begin(
-        _ request: MediaDeliveryBeginRequest,
-        model: NativeAppModel,
+        _ request: MediaDeliveryBeginRequest, model: NativeAppModel,
         onCancel: (() -> Void)? = nil,
         onComplete: ((MediaDeliveryRunOutcome) -> Void)? = nil
     ) {
-        deliveryTask?.cancel()
-        let token = UUID()
-        activeDeliveryToken = token
-        activeRequest = request
-        cancelHandler = onCancel
-        isExpanded = false
+        _ = beginCaptured(request, model: model, onCancel: onCancel, onComplete: onComplete)
+    }
 
-        deliveryTask = Task { @MainActor in
-            let outcome = await MediaDeliveryRunner.execute(
-                request: request,
-                model: model
-            ) { [weak self] state in
-                guard let self, self.activeDeliveryToken == token else { return }
-                self.overlayState = state
+    @discardableResult func beginCaptured(
+        _ request: MediaDeliveryBeginRequest, model: NativeAppModel,
+        onCancel: (() -> Void)? = nil,
+        onComplete: ((MediaDeliveryRunOutcome) -> Void)? = nil
+    ) -> MonitorDeliveryRunHandle? {
+        let outgoing = capturedRun
+        let accepted = lifetime.beginCaptured(
+            onCancel: onCancel,
+            onComplete: { outcome in
+                if request.capture?.completionIsCurrent != false { onComplete?(outcome) }
+                return nil
+            },
+            operation: { progress, admission in
+                await outgoing?.cancelAndJoin()
+                guard admission.isCurrent() else { return .init(.failed(message: "Cancelled.")) }
+                var captured = request
+                captured.runAdmission = admission
+                let outcome = await self.execute(captured, model) { overlay in
+                    guard admission.isCurrent(), request.capture?.isCurrent != false else { return }
+                    let index = min(max(overlay.clipIndex, 1), request.clips.count) - 1
+                    let filename =
+                        request.clips.indices.contains(index) ? request.clips[index].filename : nil
+                    progress(.init(overlay: overlay, filename: filename))
+                }
+                guard request.capture?.completionIsCurrent != false else {
+                    if case .share(_, _, let cleanup) = outcome {
+                        MediaShareStaging.cleanupStaging(at: cleanup)
+                    }
+                    return .init(.failed(message: "Cancelled."))
+                }
+                switch outcome {
+                case .share(let urls, let metadataText, let cleanup):
+                    return .init(
+                        outcome,
+                        share: .init(urls: urls, metadataText: metadataText, cleanupURL: cleanup))
+                case .savedToPhotos(let count):
+                    return .init(
+                        outcome, toast: "Saved \(count) \(count == 1 ? "clip" : "clips") to Photos")
+                case .frameio(let summary): return .init(outcome, toast: summary)
+                case .failed(let message): return .init(outcome, toast: message)
+                }
+            })
+        capturedRun = accepted
+        return accepted
+    }
+
+    /// Preflight is a captured run of the same delivery owner, joined before the route leaves.
+    func cacheSelectionForDelivery(
+        _ capture: NikonMediaDeliveryCapture,
+        onStarted: (MonitorDeliveryRunHandle) -> Void
+    ) async throws {
+        let outgoing = capturedRun
+        var cached: MonitorDeliveryCachedOriginals<MediaClip>?
+        let accepted = lifetime.beginCaptured { progress, run in
+            await outgoing?.cancelAndJoin()
+            let admission = MonitorDeliveryAdmission {
+                run.isCurrent() && capture.action.sourceIsCurrent && run.isCurrent()
             }
-            guard activeDeliveryToken == token else { return }
-            finishDeliveryRun(
-                token: token,
-                outcome: outcome,
-                onComplete: onComplete
-            )
-        }
-    }
-
-    func cancel() {
-        activeDeliveryToken = UUID()
-        deliveryTask?.cancel()
-        deliveryTask = nil
-        cancelHandler?()
-        cancelHandler = nil
-        withAnimation(.spring(duration: 0.32)) {
-            overlayState = nil
-            activeRequest = nil
-            isExpanded = false
-        }
-    }
-
-    private func finishDeliveryRun(
-        token: UUID,
-        outcome: MediaDeliveryRunOutcome,
-        onComplete: ((MediaDeliveryRunOutcome) -> Void)?
-    ) {
-        guard activeDeliveryToken == token else { return }
-        activeDeliveryToken = UUID()
-        deliveryTask = nil
-        withAnimation(.spring(duration: 0.32)) {
-            overlayState = nil
-            activeRequest = nil
-            cancelHandler = nil
-            isExpanded = false
-        }
-        onComplete?(outcome)
-        handleOutcome(outcome)
-    }
-
-    func dismissCompletionToast() {
-        completionToast = nil
-    }
-
-    /// Dismisses the share sheet and deletes any cache staging directory.
-    func clearSharePresentation() {
-        let cleanup = shareStagingCleanupURL
-        shareStagingCleanupURL = nil
-        sharePayload = nil
-        MediaShareStaging.cleanupStaging(at: cleanup)
-    }
-
-    private func handleOutcome(_ outcome: MediaDeliveryRunOutcome) {
-        switch outcome {
-        case .share(let urls, let metadataText, let stagingCleanupURL):
-            shareStagingCleanupURL = stagingCleanupURL
-            sharePayload = MediaSharePayload(urls: urls, metadataText: metadataText)
-        case .savedToPhotos(let count):
-            let noun = count == 1 ? "clip" : "clips"
-            showCompletionToast("Saved \(count) \(noun) to Photos")
-        case .frameio(let summary):
-            showCompletionToast(summary)
-        case .failed(let message):
-            showCompletionToast(message)
-        }
-    }
-
-    private func showCompletionToast(_ message: String) {
-        withAnimation { completionToast = message }
-        Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            if completionToast == message {
-                withAnimation { completionToast = nil }
+            cached = await MonitorDeliveryModel<
+                MediaDeliveryOwnedProgress, MediaDeliveryRunOutcome, MediaDeliveryShareResources
+            >.cacheOriginals(
+                records: capture.clips, destination: .remoteUpload, admission: admission,
+                originals: capture.originals, filename: { $0.filename }
+            ) { value in
+                progress(
+                    .init(
+                        overlay: .init(value, postExportAction: .systemShare),
+                        filename: value.filename))
             }
+            return .init(.frameio(summary: ""))
+        }
+        capturedRun = accepted
+        if let accepted { onStarted(accepted) }
+        await accepted?.awaitEnteredCleanup()
+        guard capture.action.sourceIsCurrent, let cached, cached.uncached == 0 else {
+            throw MediaDeliveryError.clipNotCached(
+                capture.clips.first?.filename ?? "Selected clips")
         }
     }
+    func cancel() { withAnimation(.spring(duration: 0.32)) { lifetime.cancel() } }
+    /// The app root owns this lifetime; temporary gallery covers do not close it.
+    func close() { lifetime.close() }
+    func clearSharePresentation(id: UUID? = nil) { lifetime.clearSharePresentation(id: id) }
+    @discardableResult func completeSharePresentation(id: UUID) -> Bool {
+        lifetime.completeSharePresentation(id: id)
+    }
+}
+
+private struct MediaDeliveryOwnedProgress: Sendable {
+    let overlay: MediaDeliveryOverlayState
+    let filename: String?
+}
+private struct MediaDeliveryShareResources: Sendable {
+    let urls: [URL]
+    let metadataText: String?
+    let cleanupURL: URL?
 }
 
 /// Pins delivery chrome below the top safe area (notch / Dynamic Island in landscape).
@@ -301,470 +338,262 @@ struct MediaDeliveryGlobalOverlay: View {
     }
 
     private func compactPill(state: MediaDeliveryOverlayState) -> some View {
-        HStack(spacing: 10) {
-            Button {
+        MonitorMediaDeliveryProgress(
+            value: state.monitorProgressValue,
+            onCancel: { coordinator.cancel() },
+            onExpand: {
                 withAnimation(.spring(duration: 0.28)) { coordinator.isExpanded = true }
-            } label: {
-                HStack(spacing: 10) {
-                    if state.showsBusySpinner {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(LiveDesign.accent)
-                    } else {
-                        Image(systemName: state.destination.systemImage)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(LiveDesign.accent)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(state.statusLine)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(LiveDesign.text)
-                            .lineLimit(1)
-                        if let batchLine = state.batchLine {
-                            Text(batchLine)
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundStyle(LiveDesign.muted)
-                        }
-                    }
-
-                    Spacer(minLength: 4)
-
-                    if !state.isPreparingClip {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(LiveDesign.hairline.opacity(0.55))
-                                Capsule()
-                                    .fill(LiveDesign.accent)
-                                    .frame(width: max(4, geo.size.width * state.overallFraction))
-                            }
-                        }
-                        .frame(width: 44, height: 4)
-                    }
-                }
+            },
+            destinationIcon: {
+                Image(systemName: state.destination.systemImage)
+                    .font(.system(size: 13, weight: .semibold))
             }
-            .buttonStyle(.zcTapTarget)
-
-            Button("Cancel") { coordinator.cancel() }
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        )
         .frame(maxWidth: 420)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(LiveDesign.hairline.opacity(0.65), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 
     private func expandedPanel(state: MediaDeliveryOverlayState) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            MediaDeliveryOverlay(state: state) { coordinator.cancel() }
-
-            if let filename = coordinator.currentClipFilename {
-                HStack(spacing: 6) {
-                    Text("File")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(LiveDesign.muted)
-                    Text(filename)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                }
-            }
-
-            Text("Destination: \(state.destination.title)")
-                .font(.system(size: 11))
-                .foregroundStyle(LiveDesign.muted)
-
-            Button("Collapse") {
+        MonitorMediaDeliveryProgressPanel(
+            value: state.monitorProgressValue,
+            details: .init(
+                filename: coordinator.currentClipFilename, destination: state.destination.title),
+            onCancel: { coordinator.cancel() },
+            onCollapse: {
                 withAnimation(.spring(duration: 0.28)) { coordinator.isExpanded = false }
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(LiveDesign.accent)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
+            },
+            destinationIcon: { EmptyView() }
+        )
         .frame(maxWidth: 420)
     }
 }
 
-/// Semi-transparent progress pill anchored over video or the media grid.
+/// Projects source-owned progress into the common expanded chrome on media surfaces.
 struct MediaDeliveryOverlay: View {
     let state: MediaDeliveryOverlayState
     var onCancel: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 10) {
-                if state.showsBusySpinner {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(LiveDesign.accent)
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    if let batchLine = state.batchLine {
-                        Text(batchLine)
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.muted)
-                    }
-                    Text(state.statusLine)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-
-                Spacer(minLength: 8)
-
-                if let onCancel {
-                    Button("Cancel", action: onCancel)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(LiveDesign.muted)
-                }
-            }
-
-            if !state.isPreparingClip {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(LiveDesign.hairline.opacity(0.55))
-                        Capsule()
-                            .fill(LiveDesign.accent)
-                            .frame(width: max(4, geo.size.width * state.overallFraction))
-                    }
-                }
-                .frame(height: 4)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        MonitorMediaDeliveryProgressPanel(
+            value: state.monitorProgressValue,
+            onCancel: onCancel,
+            destinationIcon: { EmptyView() }
+        )
         .frame(maxWidth: 420)
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .strokeBorder(LiveDesign.hairline.opacity(0.65), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 }
 
-/// Runs delivery after the options popup dismisses; reports progress for overlay binding.
-@MainActor
-enum MediaDeliveryRunner {
+/// Only the native file/account/route recipe. Shared batch owns ordering, progress and cleanup.
+private struct NikonDeliveryArtifact: Sendable {
+    let clip: MediaClip
+    let export: MediaLUT.ExportResult
+}
+
+extension MediaDeliveryOverlayState {
+    init(_ value: MonitorDeliveryBatchProgress, postExportAction: MediaDeliveryPostExportAction) {
+        self.init(
+            destination: value.destination == .nativeShare ? .nativeShare : .frameio,
+            totalClips: value.totalClips, clipIndex: value.clipIndex,
+            clipFraction: value.clipFraction,
+            isCaching: value.isCaching, isSwitchingNetworks: value.isSwitchingNetworks,
+            postExportAction: postExportAction,
+            phase: value.stage == .awaitingPhotosAccess
+                ? .awaitingPhotosAccess : value.stage == .saving ? .savingToPhotos : .working)
+    }
+}
+
+@MainActor enum MediaDeliveryRunner {
     static func execute(
-        request: MediaDeliveryBeginRequest,
-        model: NativeAppModel,
+        request: MediaDeliveryBeginRequest, model: NativeAppModel,
         onProgress: @escaping (MediaDeliveryOverlayState) -> Void
     ) async -> MediaDeliveryRunOutcome {
-        if request.destination == .nativeShare, request.postExportAction == .saveToPhotos {
-            if MediaPhotosSaver.addOnlyStatus == .notDetermined {
-                onProgress(
-                    MediaDeliveryOverlayState(
-                        destination: request.destination,
-                        totalClips: max(request.clips.count, 1),
-                        clipIndex: 1,
-                        clipFraction: 0,
-                        postExportAction: .saveToPhotos,
-                        phase: .awaitingPhotosAccess
-                    ))
+        guard
+            let capture = request.capture
+                ?? NikonMediaDeliveryCapture(model: model, clips: request.clips)
+        else {
+            return .failed(message: "Cancelled.")
+        }
+        let run = request.runAdmission ?? .init { true }
+        let remote = request.destination == .frameio
+        let admission = MonitorDeliveryAdmission {
+            run.isCurrent() && capture.isCurrent && run.isCurrent() && capture.isCurrent
+                && (!remote || capture.account.isCurrent)
+        }
+        let internet: MonitorDeliveryInternetService<FrameioInternetHop.Token?> = .init(
+            needsHop: { model.isOnCameraAccessPoint },
+            begin: {
+                let token = model.beginInternetHopCaptured(admission: {
+                    run.isCurrent() && capture.action.sourceIsCurrent
+                })
+                capture.internetLease = token
+                return token
+            }, owns: { $0.map(model.ownsInternetHop) == true },
+            wait: { token in
+                guard let token else { return false }
+                return await model.waitForInternetPath(captured: token, timeoutSeconds: 30)
+            },
+            restoreEntered: { token in
+                if let token { await model.restoreInternetHop(token) }
+            }, restore: { token in if let token { _ = model.endInternetHopCaptured(token) } })
+        let exporter: MonitorDeliveryExportService<MediaClip, NikonDeliveryArtifact> = .init {
+            clip, progress in
+            let status =
+                capture.store.list(cameraID: clip.cameraID).first { $0.id == clip.id }?
+                .frameioStatus ?? clip.frameioStatus
+            if remote, status == .uploaded, !request.configuration.forceFrameioReupload {
+                return nil
             }
             do {
-                try await MediaPhotosSaver.ensureAuthorized()
+                let exported = try await capture.prepare(
+                    clip, configuration: request.configuration,
+                    admission: admission, progress: progress)
+                return .init(clip: clip, export: exported)
             } catch {
-                return .failed(message: error.localizedDescription)
-            }
-        }
-
-        // Cache on-camera clips first, sequentially (one PTP data channel); clips that still
-        // can't cache (disconnected, no handle) are reported, not silently dropped.
-        let toCache = request.clips.filter { !model.isClipDownloaded($0) }
-        var uncachedCount = 0
-        if !toCache.isEmpty {
-            var caching = MediaDeliveryOverlayState(
-                destination: request.destination,
-                totalClips: toCache.count,
-                clipIndex: 1,
-                clipFraction: 0,
-                isCaching: true
-            )
-            onProgress(caching)
-            for (index, clip) in toCache.enumerated() {
-                if Task.isCancelled {
-                    return .failed(message: "Cancelled.")
-                }
-                caching.clipIndex = index + 1
-                caching.clipFraction = 0
-                onProgress(caching)
-                // streamClip publishes per-clip progress on the model; mirror it onto the
-                // delivery overlay while the download runs.
-                let progressMirror = Task { @MainActor in
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .milliseconds(200))
-                        if let fraction = model.mediaDownloadProgress[clip.id] {
-                            caching.clipFraction = fraction
-                            onProgress(caching)
-                        }
-                    }
-                }
-                let cached = await model.cacheClipFromCamera(clip)
-                progressMirror.cancel()
-                if !cached { uncachedCount += 1 }
-            }
-        }
-
-        let downloadableClips = request.clips.filter { model.isClipDownloaded($0) }
-        let total = downloadableClips.count
-        guard total > 0 else {
-            return .failed(
-                message: uncachedCount > 0
-                    ? "Couldn't cache \(uncachedCount) clip(s) from the camera — check the connection and try again."
-                    : MediaDeliveryError.emptySelection.localizedDescription)
-        }
-
-        var overlay = MediaDeliveryOverlayState(
-            destination: request.destination,
-            totalClips: total,
-            clipIndex: 1,
-            clipFraction: 0,
-            postExportAction: request.postExportAction
-        )
-        onProgress(overlay)
-
-        switch request.destination {
-        case .nativeShare:
-            let result = await model.deliverClipsForShare(
-                downloadableClips, configuration: request.configuration
-            ) { index, _, fraction in
-                overlay.clipIndex = index
-                overlay.clipFraction = fraction
-                onProgress(overlay)
-            }
-            if result.exportedURLs.isEmpty {
-                return .failed(
-                    message: result.failedClips.first?.1 ?? "Nothing to share."
-                )
-            }
-            let metadata =
-                request.configuration.includeMetadata
-                ? model.metadataSummary(for: downloadableClips) : nil
-            var partialParts: [String] = []
-            if !result.failedClips.isEmpty {
-                partialParts.append(
-                    "Prepared \(result.exportedURLs.count); \(result.failedClips.count) failed.")
-            }
-            if uncachedCount > 0 {
-                partialParts.append("\(uncachedCount) clip(s) couldn't be cached from the camera.")
-            }
-            let partialNote: String? =
-                partialParts.isEmpty ? nil : partialParts.joined(separator: " ")
-            let metadataText: String? = [partialNote, metadata].compactMap { $0 }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-                .nilIfEmpty
-
-            switch request.postExportAction {
-            case .saveToPhotos:
-                overlay.phase = .savingToPhotos
-                overlay.clipFraction = max(overlay.clipFraction, 0.9)
-                onProgress(overlay)
-                do {
-                    let count = try await MediaPhotosSaver.saveVideos(at: result.exportedURLs)
-                    return .savedToPhotos(count: count)
-                } catch {
+                if admission.isCurrent() {
                     let ns = error as NSError
+                    let detail = "\(ns.domain) code=\(ns.code) \(ns.localizedDescription)"
                     Logger(subsystem: "OpenZCine", category: "media-export").error(
-                        "save to photos failed: \(ns.domain, privacy: .public) code=\(ns.code) \(ns.localizedDescription, privacy: .public)"
-                    )
-                    return .failed(message: error.localizedDescription)
-                }
-            case .systemShare:
-                do {
-                    let prepared = try MediaShareStaging.prepareForShare(
-                        videoURLs: result.exportedURLs)
-                    return .share(
-                        urls: prepared.urls,
-                        metadataText: metadataText,
-                        stagingCleanupURL: prepared.stagingCleanupURL)
-                } catch {
-                    return .failed(message: error.localizedDescription)
-                }
-            }
-
-        case .frameio:
-            // Camera-AP mode has no internet route: clips are already local (pre-pass above), so
-            // hop off the camera network, upload, and rejoin — same beat as the RED LUT download.
-            // Sign-in and project resolution happen inside the upload path once online.
-            var hopped = false
-            if model.isOnCameraAccessPoint {
-                model.beginInternetHop()
-                hopped = true
-                overlay.isSwitchingNetworks = true
-                onProgress(overlay)
-                let online = await model.waitForInternetPath(timeoutSeconds: 30)
-                overlay.isSwitchingNetworks = false
-                onProgress(overlay)
-                if !online {
-                    model.endInternetHop()
-                    return .failed(
-                        message:
-                            "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi and try again."
+                        "clip failed \(clip.filename, privacy: .public): \(detail, privacy: .public)"
                     )
                 }
+                throw error
             }
-            defer {
-                // Rejoin the camera network once the upload finishes or fails — whether the hop
-                // started here or was handed over by the popup's sign-in/project setup flow.
-                if hopped || model.internetHopActive { model.endInternetHop() }
-            }
-            let result = await model.uploadClipsToFrameio(
-                downloadableClips, configuration: request.configuration
-            ) { index, _, fraction in
-                overlay.clipIndex = index
-                overlay.clipFraction = fraction
-                onProgress(overlay)
-            }
-            var parts: [String] = []
-            if result.uploadedCount > 0 { parts.append("\(result.uploadedCount) uploaded") }
-            if result.skippedCount > 0 { parts.append("\(result.skippedCount) skipped") }
-            if uncachedCount > 0 { parts.append("\(uncachedCount) not cached") }
-            if result.failedClips.isEmpty {
-                let summary = parts.isEmpty ? "Nothing to upload." : parts.joined(separator: ", ")
-                return .frameio(summary: summary)
-            }
-            let summary = (parts + ["\(result.failedClips.count) failed"]).joined(separator: ", ")
-            return .failed(message: summary)
+        }
+        let upload: MonitorDeliveryUploadService<NikonDeliveryArtifact> = .init(
+            progressCaption: "Uploading to Frame.io"
+        ) { artifact, progress in
+            try await model.uploadCapturedFrameio(
+                artifact.clip, source: artifact.export.videoURL,
+                metadata: capture.metadata(artifact.clip, configuration: request.configuration),
+                capture: capture, admission: admission, progress: progress)
+        }
+        let policy = MonitorDeliveryBatchPolicy(
+            behavior: .init(
+                nativeFailures: .continueItems, photosFailures: .continueItems,
+                emptyUploadSucceeds: true, singleUploadFailureUsesDetail: false),
+            nativeSummary: { counts in
+                var parts: [String] = []
+                if counts.failed > 0 {
+                    parts.append("Prepared \(counts.prepared); \(counts.failed) failed.")
+                }
+                if counts.uncached > 0 {
+                    parts.append("\(counts.uncached) clip(s) couldn't be cached from the camera.")
+                }
+                return parts.isEmpty ? nil : parts.joined(separator: " ")
+            },
+            photosFailure: { saved, failed in
+                if saved == 0 || failed > 0 {
+                    return MediaPhotosSaver.SaveError.partialFailure(saved: saved, failed: failed)
+                        .localizedDescription
+                }
+                return nil
+            },
+            cacheFailure: {
+                "Couldn't cache \($0) clip(s) from the camera - check the connection and try again."
+            })
+        let outcome = await MonitorDeliveryModel<
+            MediaDeliveryOwnedProgress, MediaDeliveryRunOutcome, MediaDeliveryShareResources
+        >.runBatch(
+            records: capture.clips, destination: remote ? .remoteUpload : .nativeShare,
+            action: request.postExportAction == .saveToPhotos ? .saveToPhotos : .systemShare,
+            admission: admission, originals: capture.originals, exporter: exporter,
+            share: { artifacts in
+                let prepared = try MediaShareStaging.prepareForShare(
+                    videoURLs: artifacts.map { $0.export.videoURL })
+                return .init(
+                    urls: prepared.urls.enumerated().map { index, url in
+                        .init(
+                            clip: artifacts[index].clip,
+                            export: .init(videoURL: url, metadataURL: nil))
+                    },
+                    cleanup: prepared.stagingCleanupURL.map {
+                        .init(
+                            clip: artifacts[0].clip, export: .init(videoURL: $0, metadataURL: nil))
+                    })
+            },
+            photos: .perItem { artifact in
+                try MediaShareStaging.validateReadableFile(at: artifact.export.videoURL)
+                try await MediaPhotosSaver.saveVideo(at: artifact.export.videoURL)
+                return true
+            },
+            photosAuthorization: .init(
+                isPending: { MediaPhotosSaver.addOnlyStatus == .notDetermined },
+                authorize: { try await MediaPhotosSaver.ensureAuthorized() }),
+            upload: remote ? upload : nil,
+            internet: remote || capture.internetLease != nil ? internet : nil,
+            lease: capture.internetLease.map { Optional($0) }, filename: { $0.filename },
+            artifactFilename: { $0.export.videoURL.lastPathComponent },
+            metadata: {
+                request.configuration.includeMetadata ? model.metadataSummary(for: $0) : nil
+            },
+            noPrepared: { _ in "Nothing to share." }, policy: policy,
+            progress: { value in
+                onProgress(.init(value, postExportAction: request.postExportAction))
+            })
+        switch outcome {
+        case .share(let urls, let text, let cleanup):
+            return .share(
+                urls: urls.map { $0.export.videoURL }, metadataText: text,
+                stagingCleanupURL: cleanup?.export.videoURL)
+        case .savedToPhotos(let count): return .savedToPhotos(count: count)
+        case .uploaded(let summary): return .frameio(summary: summary)
+        case .failed(let message): return .failed(message: message)
         }
     }
 }
 
 // MARK: - Share staging
 
-/// Result of validating and optionally copying exports before handing them to the share sheet.
-struct PreparedMediaShare: Sendable {
-    let urls: [URL]
-    /// Non-nil when videos were copied into a cache folder that must be deleted after sharing.
-    let stagingCleanupURL: URL?
-}
+/// Source directories and native content types over the shared file staging owner.
+typealias PreparedMediaShare = MonitorMediaPreparedShare
 
-/// Validates exported videos and, when needed, copies them into a cache folder for sharing.
 enum MediaShareStaging {
     static let shareableVideoExtensions: Set<String> = ["mp4", "mov", "m4v"]
-
-    enum StagingError: LocalizedError {
-        case fileMissing(String)
-        case fileEmpty(String)
-        case fileUnreadable(String)
-        case noVideos
-        case copyFailed(String, Error)
-
-        var errorDescription: String? {
-            switch self {
-            case .fileMissing(let name): "Couldn't find \(name) to share."
-            case .fileEmpty(let name): "\(name) is empty."
-            case .fileUnreadable(let name): "\(name) isn't readable."
-            case .noVideos: "No video files are ready to share."
-            case .copyFailed(let name, let error):
-                "Couldn't prepare \(name): \(error.localizedDescription)"
-            }
-        }
-    }
+    typealias StagingError = MonitorMediaShareStaging.StagingError
 
     static func isShareableVideo(_ url: URL) -> Bool {
-        shareableVideoExtensions.contains(url.pathExtension.lowercased())
+        MonitorMediaShareStaging.isShareableVideo(url, extensions: shareableVideoExtensions)
     }
 
     static func filterShareableVideos(_ urls: [URL]) -> [URL] {
-        urls.filter(isShareableVideo)
+        MonitorMediaShareStaging.filterShareableVideos(urls, extensions: shareableVideoExtensions)
     }
 
-    /// Maps common export extensions to explicit UTTypes for Launch Services.
+    /// Maps export extensions to the native Launch Services content type.
     static func videoUTType(for url: URL) -> UTType {
         switch url.pathExtension.lowercased() {
         case "mov": .quickTimeMovie
-        case "mp4": .mpeg4Movie
-        case "m4v": .mpeg4Movie
+        case "mp4", "m4v": .mpeg4Movie
         default: .movie
         }
     }
 
     static func validateReadableFile(at url: URL) throws {
-        try validateShareableFile(at: url)
+        try MonitorMediaShareStaging.validateShareableFile(at: url)
     }
 
-    /// Confirms the file exists, is a regular readable file, and has non-zero size.
     static func validateShareableFile(at url: URL) throws {
-        let path = url.path
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw StagingError.fileMissing(url.lastPathComponent)
-        }
-        let values = try url.resourceValues(forKeys: [
-            .fileSizeKey, .isReadableKey, .isRegularFileKey,
-        ])
-        guard values.isRegularFile != false else {
-            throw StagingError.fileMissing(url.lastPathComponent)
-        }
-        if values.isReadable == false {
-            throw StagingError.fileUnreadable(url.lastPathComponent)
-        }
-        let size = values.fileSize ?? 0
-        guard size > 0 else { throw StagingError.fileEmpty(url.lastPathComponent) }
+        try MonitorMediaShareStaging.validateShareableFile(at: url)
     }
 
-    /// Shares stable `Documents/exports` files in place; otherwise copies into a cache staging folder.
     static func prepareForShare(videoURLs: [URL]) throws -> PreparedMediaShare {
-        let videos = filterShareableVideos(videoURLs)
-        guard !videos.isEmpty else { throw StagingError.noVideos }
-
-        if videos.allSatisfy(isStableExportURL) {
-            for url in videos { try validateShareableFile(at: url) }
-            return PreparedMediaShare(urls: videos, stagingCleanupURL: nil)
-        }
-        return try copyToStagingDirectory(videos)
+        try MonitorMediaShareStaging.prepare(
+            videoURLs: videoURLs,
+            exportsDirectory: FileManager.default.urls(
+                for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("exports", isDirectory: true),
+            stagingDirectory: stagingDirectory,
+            shareableExtensions: shareableVideoExtensions, copyBufferBytes: 64 * 1024,
+            checkCancellation: { try Task.checkCancellation() }
+        )
     }
 
     static func cleanupStaging(at url: URL?) {
-        guard let url else { return }
-        try? FileManager.default.removeItem(at: url)
+        MonitorMediaShareStaging.releaseReturnedLease(url)
     }
 
-    private static func exportsDirectoryURL() -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("exports", isDirectory: true)
-    }
-
-    private static func isStableExportURL(_ url: URL) -> Bool {
-        let exportsPath = exportsDirectoryURL().standardizedFileURL.path
-        let candidatePath = url.standardizedFileURL.path
-        return candidatePath.hasPrefix(exportsPath + "/")
-    }
-
-    private static func copyToStagingDirectory(_ videos: [URL]) throws -> PreparedMediaShare {
-        let stagingRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    private static var stagingDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenZCineShare", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
-
-        var staged: [URL] = []
-        for source in videos {
-            try validateShareableFile(at: source)
-            let destination = stagingRoot.appendingPathComponent(source.lastPathComponent)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            do {
-                try FileManager.default.copyItem(at: source, to: destination)
-            } catch {
-                throw StagingError.copyFailed(source.lastPathComponent, error)
-            }
-            try validateShareableFile(at: destination)
-            staged.append(destination)
-        }
-        return PreparedMediaShare(urls: staged, stagingCleanupURL: stagingRoot)
     }
 }
 
@@ -810,7 +639,7 @@ enum MediaPhotosSaver {
         }
     }
 
-    static func saveVideos(at urls: [URL]) async throws -> Int {
+    @MainActor static func saveVideos(at urls: [URL]) async throws -> Int {
         let videos = MediaShareStaging.filterShareableVideos(urls)
         guard !videos.isEmpty else { throw SaveError.noVideos }
 
@@ -822,25 +651,43 @@ enum MediaPhotosSaver {
 
         var saved = 0
         var failed = 0
-        for url in videos {
-            do {
-                try await saveVideo(at: url)
-                saved += 1
-            } catch {
-                failed += 1
-            }
-        }
-
-        if saved == 0 {
-            throw SaveError.partialFailure(saved: 0, failed: max(failed, videos.count))
-        }
-        if failed > 0 {
-            throw SaveError.partialFailure(saved: saved, failed: failed)
-        }
-        return saved
+        typealias Batch = MonitorDeliveryModel<
+            MonitorDeliveryBatchProgress, MonitorDeliveryBatchOutcome<URL>, URL
+        >
+        let outcome = await Batch.runBatch(
+            records: videos, destination: .nativeShare, action: .saveToPhotos,
+            admission: .init { true },
+            originals: .init(available: { _ in true }, acquire: { _ in }, progress: { _ in nil }),
+            exporter: .init { url, _ in url }, share: nil,
+            photos: .perItem { url in
+                do {
+                    try await saveVideo(at: url)
+                    saved += 1
+                    return true
+                } catch {
+                    failed += 1
+                    throw error
+                }
+            },
+            internet: Optional<MonitorDeliveryInternetService<FrameioInternetHop.Token>>.none,
+            filename: { $0.lastPathComponent },
+            policy: .init(
+                behavior: .init(photosFailures: .continueItems),
+                photosFailure: { saved, failed in
+                    saved == 0 || failed > 0
+                        ? SaveError.partialFailure(
+                            saved: saved, failed: max(failed, saved == 0 ? videos.count : 0)
+                        )
+                        .localizedDescription : nil
+                }),
+            progress: { _ in })
+        if case .savedToPhotos(let count) = outcome { return count }
+        if Task.isCancelled { throw CancellationError() }
+        throw SaveError.partialFailure(
+            saved: saved, failed: max(failed, saved == 0 ? videos.count : 0))
     }
 
-    private static func saveVideo(at url: URL) async throws {
+    static func saveVideo(at url: URL) async throws {
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges(
@@ -868,9 +715,14 @@ extension String {
 // MARK: - Share sheet
 
 struct MediaSharePayload: Identifiable {
-    let id = UUID()
+    let id: UUID
     let urls: [URL]
     let metadataText: String?
+    init(id: UUID = UUID(), urls: [URL], metadataText: String?) {
+        self.id = id
+        self.urls = urls
+        self.metadataText = metadataText
+    }
 }
 
 /// Supplies a typed video file via `NSItemProvider` so Launch Services can resolve share targets.
@@ -1011,19 +863,25 @@ struct MediaDeliveryShareSheetModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if enabled {
-            @Bindable var delivery = coordinator
+            let delivery = coordinator
+            let presentedID = delivery.sharePayload?.id
             content
                 .sheet(
-                    item: $delivery.sharePayload,
+                    item: delivery.sharePresentation,
                     onDismiss: {
-                        delivery.clearSharePresentation()
-                        onDismiss?()
+                        if let presentedID, delivery.completeSharePresentation(id: presentedID) {
+                            onDismiss?()
+                        }
                     },
                     content: { payload in
                         MultiShareSheet(
                             urls: payload.urls,
                             metadataText: payload.metadataText,
-                            onFinished: { delivery.clearSharePresentation() }
+                            onFinished: {
+                                if delivery.completeSharePresentation(id: payload.id) {
+                                    onDismiss?()
+                                }
+                            }
                         )
                     }
                 )

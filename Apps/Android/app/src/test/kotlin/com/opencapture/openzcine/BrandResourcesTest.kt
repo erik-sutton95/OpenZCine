@@ -163,11 +163,11 @@ class BrandResourcesTest {
         data class ExpectedLauncher(val size: Int, val sha256: String)
 
         const val CANONICAL_APP_ICON_SHA256 =
-            "5674c7f0280c165f261a7f0c832bb6c72d89ec377ae648d834781f348dc784df"
+            "3ef97441266fe12fd57fa0613845127be80eff6c476abcc557bcfcc5a17a12b0"
         const val CANONICAL_APP_LOGO_SHA256 =
-            "16a4137131b2f79f627a50f64031d38a032eb38e2a0cf3fd0e390d5bd2d30d48"
+            "8d5ca89f9eecdd3162b9788b6fb938eac4396fd5078f0c193953c5c5bfd51e01"
         const val ADAPTIVE_FOREGROUND_SHA256 =
-            "cadd842dd46cce4167a5c6ff87d9ba2ff6b6d375e2c5d9ceb83a9619f79d9fd9"
+            "7d7bf13a0da1e415b4a4983de39f1fece940989beff030caf9ff14b4b8087667"
 
         val LEGACY_LAUNCHERS =
             mapOf(
@@ -175,31 +175,31 @@ class BrandResourcesTest {
                     ExpectedLauncher(
                         size = 48,
                         sha256 =
-                            "2b6ac63211990c536d69834a1bfe8253bf4e810d253394c31213c9ab5fcf162e",
+                            "cd0f1e09a67de0883af446785fc982b59436740892ddba3b9492fdb5f3f7f146",
                     ),
                 "hdpi" to
                     ExpectedLauncher(
                         size = 72,
                         sha256 =
-                            "713fd8e329130e489b1d3fcd034900f9ff17f6d82c97f8b8e83341f732be8b1b",
+                            "bb13714205988447e2a0a03c0544f2a9bd39bf30c2513f51600a446eeb83d46c",
                     ),
                 "xhdpi" to
                     ExpectedLauncher(
                         size = 96,
                         sha256 =
-                            "9b0d64c72cea4a7a3d1b63566e7f47f292e9057394ad2a3367f5a997ee5575f5",
+                            "f442fe31a17bfb0d28fb44d666e62599f5fa8e283b6ffae61934fcc13b1d9bf4",
                     ),
                 "xxhdpi" to
                     ExpectedLauncher(
                         size = 144,
                         sha256 =
-                            "e8e7b2aae40494d5104fbc0d0e1f7839b8a9a082d22b4f6f41bc6338cc61592b",
+                            "425473c9b2e25bedee107ebc1d3bca7047028bf0c9649e3b7e44a395a4c0690b",
                     ),
                 "xxxhdpi" to
                     ExpectedLauncher(
                         size = 192,
                         sha256 =
-                            "bc9a4b8a7c2baaa874b1706cd03f9ea2436c7b1fc14c1f677216794b9f8015cd",
+                            "0040688f9f686d5d96a8a0a09196cf86893a97d5dd5c39bcd6440c6a43e2205c",
                     ),
             )
 
@@ -209,31 +209,31 @@ class BrandResourcesTest {
                     ExpectedLauncher(
                         size = 48,
                         sha256 =
-                            "d8aaab574cc730fc6add64215dd7be4d4c9e3c75704b52c49cbcebfaeeeced5d",
+                            "cd0f1e09a67de0883af446785fc982b59436740892ddba3b9492fdb5f3f7f146",
                     ),
                 "hdpi" to
                     ExpectedLauncher(
                         size = 72,
                         sha256 =
-                            "0ff2860b418b38546e9e6627d87e158b23d41546ed86bf63ca0e10b23067a073",
+                            "bb13714205988447e2a0a03c0544f2a9bd39bf30c2513f51600a446eeb83d46c",
                     ),
                 "xhdpi" to
                     ExpectedLauncher(
                         size = 96,
                         sha256 =
-                            "0d523de01cc22fb2abbc36abf5b98c0c5c820851e13fd9b26edc4107d5635612",
+                            "f442fe31a17bfb0d28fb44d666e62599f5fa8e283b6ffae61934fcc13b1d9bf4",
                     ),
                 "xxhdpi" to
                     ExpectedLauncher(
                         size = 144,
                         sha256 =
-                            "486a604bc32e9b31799b86961600e3cd5e1dabffb9ae519e526d3a8f1750b3f5",
+                            "425473c9b2e25bedee107ebc1d3bca7047028bf0c9649e3b7e44a395a4c0690b",
                     ),
                 "xxxhdpi" to
                     ExpectedLauncher(
                         size = 192,
                         sha256 =
-                            "6eb852523ea1f7721552aa1bfb3bf69bd443a4a3ca71e1be84b8ce943fdc8516",
+                            "0040688f9f686d5d96a8a0a09196cf86893a97d5dd5c39bcd6440c6a43e2205c",
                     ),
             )
 
@@ -243,25 +243,25 @@ class BrandResourcesTest {
                     ExpectedLauncher(
                         size = 128,
                         sha256 =
-                            "f159ce3e65b10d074c83bfa98253abf9d77f3a68588a317fab758d8dab542ff2",
+                            "75131eb01714717765465f26876e19f0503416eb3ba38a77d53dc66504f28134",
                     ),
                 "hdpi" to
                     ExpectedLauncher(
                         size = 192,
                         sha256 =
-                            "97dee875a152217f52fe63f41417271cbe1d8afba28c8be9944683196267528a",
+                            "0040688f9f686d5d96a8a0a09196cf86893a97d5dd5c39bcd6440c6a43e2205c",
                     ),
                 "xhdpi" to
                     ExpectedLauncher(
                         size = 256,
                         sha256 =
-                            "64fd85f34a682d6c46cfa40c97e62bc63ac296ef5fa4ff79e8a5f8ef8697a469",
+                            "14bbedf2fb944444b65d2adb0f96c606d7f3cbd177915b73e158e76ff4f5178c",
                     ),
                 "xxhdpi" to
                     ExpectedLauncher(
                         size = 384,
                         sha256 =
-                            "4b7227009da915b66e1e829f10451ed48e2e94794a5e4c3d42ff3195076c85e5",
+                            "10689347eed6311d21e98be4ba30fe5669576ea260a5bcea5c1218eca8e88a37",
                     ),
                 "xxxhdpi" to
                     ExpectedLauncher(

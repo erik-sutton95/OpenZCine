@@ -1,7 +1,7 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.MFDriveOutcome
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.MFDriveOutcome
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 import kotlin.math.min

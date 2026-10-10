@@ -9,11 +9,14 @@
 "area:protocol":
   - changed-files:
       - any-glob-to-any-file:
-          - "Sources/OpenZCineCore/PT*.swift"
-          - "Sources/OpenZCineCore/*PTP*.swift"
-          - "Sources/OpenZCineCore/Camera*.swift"
-          - "Sources/OpenZCineCore/CameraDiscovery.swift"
-          - "Sources/OpenZCineCore/CameraTransport.swift"
+          # The Nikon PTP wire, properties and session policy live in the OpenCineNikon product
+          # of the OpenCine package (pinned in opencine-pins.txt); these are the app-side transports and facades.
+          - "opencine-pins.txt"
+          - "Sources/OpenZCineCore/OpenCineNikon.swift"
+          - "Sources/OpenZCineAndroidFacade/*PTP*.swift"
+          - "ios/Runner/*PTP*.swift"
+          - "ios/Runner/*CameraTransport.swift"
+          - "ios/Runner/NativeCamera*.swift"
 
 "area:ios":
   - changed-files:
@@ -28,7 +31,7 @@
 "area:live-view":
   - changed-files:
       - any-glob-to-any-file:
-          - "Sources/OpenZCineCore/Live*.swift"
+          - "Sources/OpenZCineAndroidFacade/*LiveView*.swift"
           - "ios/Runner/*Live*.swift"
           - "ios/Runner/Metal*.swift"
           - "ios/Runner/Frame*.swift"
@@ -39,7 +42,6 @@
           - "Sources/OpenZCineCore/*Assist*.swift"
           - "Sources/OpenZCineCore/*Scope*.swift"
           - "Sources/OpenZCineCore/FalseColor.swift"
-          - "Sources/OpenZCineCore/Guides*.swift"
           - "Sources/OpenZCineCore/TrafficLightsMeter.swift"
           - "ios/Runner/*Scope*.swift"
           - "ios/Runner/*Assist*.swift"
@@ -48,8 +50,7 @@
 "area:control":
   - changed-files:
       - any-glob-to-any-file:
-          - "Sources/OpenZCineCore/*Control*.swift"
-          - "Sources/OpenZCineCore/ISOPicker*.swift"
+          - "Sources/OpenZCineAndroidFacade/*Control*.swift"
           - "Sources/OpenZCineCore/Record*.swift"
           - "ios/Runner/*Control*.swift"
 
@@ -60,6 +61,9 @@
           - "Sources/OpenZCineCore/*LUT*.swift"
           - "ios/Runner/Media*.swift"
           - "ios/Runner/*LUT*.swift"
+          # Frame.io delivery; the portable workflow is OpenCineCore's OpenCineFrameIO product.
+          - "ios/Runner/Frameio/**/*"
+          - "Sources/OpenZCineAndroidFacade/FrameioWire.swift"
 
 "area:ui":
   - changed-files:

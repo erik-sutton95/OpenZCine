@@ -2,7 +2,6 @@ package com.opencapture.openzcine.lut
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
@@ -56,13 +55,13 @@ import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioHopAvailability
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import java.io.File
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.res.stringResource
+import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.openzcine.R
 
 /** Canonical RED IPP2 Output Presets page — same URL as iOS RedDownloadView. */
 internal const val RED_IPP2_PRESETS_URL =
@@ -109,7 +108,7 @@ internal fun RedLutDownloadScreen(
         val controller = frameioController
         onDispose {
             if (controller != null && controller.isInternetHopActive) {
-                endInternetHopAfterDismiss(controller)
+                controller.endInternetHopAfterDismiss()
             }
         }
     }
@@ -271,22 +270,6 @@ internal fun RedLutDownloadScreen(
     }
 }
 
-/**
- * Ends a camera-AP internet hop after the RED cover is already gone.
- *
- * Uses a composition-independent scope so work survives [onClose] tearing down
- * [rememberCoroutineScope].
- */
-private fun endInternetHopAfterDismiss(controller: FrameioDeliveryController) {
-    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
-        try {
-            withContext(NonCancellable) { controller.endInternetHop() }
-        } catch (_: Exception) {
-            // Rejoin best-effort; operator already left the RED surface.
-        }
-    }
-}
-
 /** Top-leading close control that stays above WebView hit targets. */
 @Composable
 private fun RedCloseChip(
@@ -308,7 +291,7 @@ private fun RedCloseChip(
                 ),
         contentAlignment = Alignment.Center,
     ) {
-        Text("✕", color = LiveDesign.text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        MonitorIcon(MonitorIcon.X, stringResource(R.string.action_close), Modifier.size(18.dp), LiveDesign.text)
     }
 }
 

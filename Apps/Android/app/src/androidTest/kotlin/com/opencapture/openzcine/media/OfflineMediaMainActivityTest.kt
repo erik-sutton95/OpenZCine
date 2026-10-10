@@ -11,9 +11,12 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
@@ -22,9 +25,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import org.junit.After
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** End-to-end device coverage for opening one completed cache with no camera session. */
 @RunWith(AndroidJUnit4::class)
@@ -58,7 +64,7 @@ class OfflineMediaMainActivityTest {
         savedCameraStore.replace(listOf(record))
 
         val clip =
-            MediaClipRecord(
+            NikonMediaClipRecord(
                 handle = 0xCAFE,
                 storageId = 0x0001_0001,
                 sizeBytes = 4,
@@ -66,7 +72,7 @@ class OfflineMediaMainActivityTest {
                 pixelWidth = 1_920,
                 pixelHeight = 1_080,
                 filename = CACHED_FILENAME,
-                contentKind = MediaContentKind.PLAYABLE_PROXY,
+                contentKind = NikonMediaContentKind.PLAYABLE_PROXY,
                 stillPhoto = null,
             )
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
@@ -101,8 +107,8 @@ class OfflineMediaMainActivityTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
 
-        // iOS openCachedMediaLibrary: intro-card Media Library, not a per-row button.
-        val entry = device.waitForText("Media Library")
+        // The shared cameras header opens the same offline library without a session.
+        val entry = device.waitForCamerasAction("Media library")
         saveDeviceScreenshot("openzcine-android-offline-media-startup.png")
         entry.click()
 
@@ -111,22 +117,18 @@ class OfflineMediaMainActivityTest {
     }
 
     @Test
-    fun clearingStandaloneSettingsStillLeavesMediaLibraryEntryOnIntroCard() {
+    fun clearingStandaloneSettingsStillLeavesMediaLibraryEntryInCamerasHeader() {
         scenario =
             ActivityScenario.launch(
                 Intent(context, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
             )
 
-        assertNotNull(device.waitForText("Media Library"))
-        device.waitForText("Settings").click()
-        val clearAction =
-            device.wait(
-                Until.findObject(By.desc("Clear local media cache")),
-                UI_TIMEOUT_MILLIS,
-            ) ?: throw AssertionError("Timed out waiting for the clear-cache action")
-        clearAction.click()
-        device.waitForText("Clear cache").click()
+        assertNotNull(device.waitForCamerasAction("Media library"))
+        device.waitForCamerasAction("Settings").click()
+        device.waitForText("Operator Setup")
+        device.revealSettingsTab("Storage").click()
+        device.waitForText("Clear").click()
         assertNotNull(
             device.wait(
                 Until.findObject(By.textStartsWith("Removed ")),
@@ -135,14 +137,97 @@ class OfflineMediaMainActivityTest {
         )
 
         device.pressBack()
-        // Intro Media Library remains (iOS always shows it); emptied caches open
-        // an empty offline library instead of hiding the entry point.
-        assertNotNull(device.waitForText("Media Library"))
+        // The common cameras header keeps the entry point after clearing the cache.
+        // Empty caches open an empty offline library.
+        assertNotNull(device.waitForCamerasAction("Media library"))
+    }
+
+    @Test
+    fun actualSharedMediaShellKeepsCategoriesLayoutAndDensityAcrossRotationAndRelaunch() {
+        val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
+        index.saveViewOptions(MediaLibraryViewOptions(source = MediaLibrarySource.LOCAL))
+        try {
+            scenario = ActivityScenario.launch(
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+            device.waitForCamerasAction("Media library").click()
+            device.setOrientationLeft()
+            device.waitForDescription("Show Photos media").click()
+            device.waitForIdle()
+            assertEquals(MediaLibraryCategory.PHOTOS, index.viewOptions(MediaLibrarySource.LOCAL).category)
+            device.waitForDescription("Show Videos media").click()
+            assertNotNull(device.waitForText(CACHED_FILENAME))
+            device.waitForDescription("List view").click()
+            device.waitForIdle()
+            assertEquals(MonitorMediaLayout.LIST, index.viewOptions(MediaLibrarySource.LOCAL).layout)
+            device.waitForDescription("Grid view").click()
+            for ((size, label) in MonitorThumbnailSize.entries.zip(listOf("Small", "Medium", "Large"))) {
+                device.waitForDescription("$label thumbnails").click()
+                device.waitForIdle()
+                assertEquals(size, index.viewOptions(MediaLibrarySource.LOCAL).thumbnailSize)
+            }
+            device.setOrientationNatural()
+            assertNotNull(device.waitForText(CACHED_FILENAME))
+            device.waitForDescription("List view").click()
+            device.waitForIdle()
+            val retained = index.viewOptions(MediaLibrarySource.LOCAL)
+            assertEquals(MediaLibraryCategory.VIDEOS, retained.category)
+            assertEquals(MonitorMediaLayout.LIST, retained.layout)
+            assertEquals(MonitorThumbnailSize.LARGE, retained.thumbnailSize)
+            scenario?.close()
+            scenario = ActivityScenario.launch(
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+            device.waitForCamerasAction("Media library").click()
+            assertNotNull(device.waitForText(CACHED_FILENAME))
+            assertEquals(retained, index.viewOptions(MediaLibrarySource.LOCAL))
+        } finally {
+            device.setOrientationNatural()
+            device.unfreezeRotation()
+        }
     }
 
     private fun UiDevice.waitForText(text: String): UiObject2 =
         wait(Until.findObject(By.text(text)), UI_TIMEOUT_MILLIS)
             ?: throw AssertionError("Timed out waiting for text: $text")
+
+    private fun UiDevice.revealSettingsTab(description: String): UiObject2 {
+        repeat(8) {
+            findObject(By.desc(description))?.let { tab ->
+                val observedBounds = tab.visibleBounds
+                waitForIdle()
+                findObject(By.desc(description))?.let { current ->
+                    if (current.visibleBounds == observedBounds) return current
+                }
+            }
+            val rail = wait(
+                Until.findObject(By.clazz("android.widget.HorizontalScrollView").scrollable(true)),
+                UI_TIMEOUT_MILLIS,
+            ) ?: throw AssertionError("The native settings tab rail is missing")
+            val bounds = rail.visibleBounds
+            val inset = bounds.width() / 10
+            rail.setGestureMargins(inset, 0, inset, 0)
+            // Native scroll holds before releasing its swipe, avoiding residual fling.
+            rail.scroll(Direction.RIGHT, 0.8f, 600)
+            waitForIdle()
+        }
+        return waitForDescription(description)
+    }
+
+    private fun UiDevice.waitForCamerasAction(description: String): UiObject2 {
+        waitForDescription(description)
+        check(wait(Until.gone(By.desc("OpenZCine")), UI_TIMEOUT_MILLIS)) {
+            "The native startup splash still covers the cameras header"
+        }
+        waitForIdle()
+        return waitForDescription(description)
+    }
+
+    private fun UiDevice.waitForDescription(description: String): UiObject2 =
+        wait(Until.findObject(By.desc(description)), UI_TIMEOUT_MILLIS)
+            ?: throw AssertionError("Timed out waiting for description: $description")
 
     private fun SharedPreferences.stringSnapshot(): Map<String, String> =
         all.mapValues { (key, value) ->

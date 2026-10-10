@@ -20,10 +20,11 @@ Instead, the guide's organizing principles map onto the existing tree as follows
 | Core | `Sources/OpenZCineCore` | Portable camera protocol, state machines, business logic |
 | Core tests | `Tests/OpenZCineCoreTests` | Swift Testing suite for the shared core |
 | Shell tests | `ios/RunnerTests` | Swift Testing suite for the iOS shell |
-| Android facade | `Sources/OpenZCineAndroidFacade` | Swift-owned Android sessions and JNI wires |
-| Facade tests | `Tests/OpenZCineAndroidFacadeTests` | Swift tests for Android transport/session wires |
+| Android facade | `Sources/OpenZCineAndroidFacade` | The app's own JNI wires (scopes, feed effects, LUTs, Frame.io); links OpenCine `OpenCineNikonAndroid` (Swift-owned Android sessions and their JNI exports) |
+| Facade tests | `Tests/OpenZCineAndroidFacadeTests` | Swift tests for the app's wires (session tests: OpenCine `OpenCineNikonAndroidTests`) |
 | Android app | `Apps/Android/app` | Compose phone shell, lifecycle, rendering, storage, and adapters |
-| Android API | `Apps/Android/core-api` | Typed Kotlin interface between the app and camera session |
+| Android session | OpenCine `Android/nikon` | Typed Kotlin session interface (`CameraSession`, `LiveFrameSource`) and its Swift-backed implementation |
+| Android API | `Apps/Android/core-api` | Monitor availability and relay lease/encoder types |
 | Wear OS | `Apps/Android/wear`, `Apps/Android/wear-relay` | Wear UI and phone-mediated relay |
 | Android tests | `Apps/Android/*/src/test`, `Apps/Android/*/src/androidTest` | JVM policy tests and device UI tests |
 
@@ -78,8 +79,9 @@ All new code in the iOS shell follows these conventions:
 
 - Jetpack Compose owns UI and app-local presentation state; Kotlin never packs PTP commands or
   invents camera property values.
-- `core-api` defines the typed Kotlin session boundary. `OpenZCineAndroidFacade` owns PTP session
-  serialization, raw protocol values, transport framing, and JNI memory/lifetime rules.
+- OpenCine `:nikon` defines the typed Kotlin session boundary. OpenCine `OpenCineNikonAndroid`
+  (linked into this app's `OpenZCineAndroidFacade` library) owns PTP session serialization, raw
+  protocol values, transport framing, and JNI memory/lifetime rules.
 - Android adapters own NSD, USB Host, permissions, CameraX/ML Kit, Keystore, MediaStore, lifecycle,
   rendering, and platform share surfaces.
 - JVM tests cover pure state/policy. Instrumentation tests cover critical Compose and Android
@@ -100,22 +102,11 @@ environment value.
 The live-view monitor is a single view tree, `MonitorShell(context:)`
 (`ios/Runner/MonitorUnified.swift`), that renders both landscape and portrait from one body —
 there are no separate landscape/portrait shell structs and no feature flag selecting between them.
-`MonitorShell` computes a `MonitorZoneMap` once per layout pass via
-`MonitorZoneLayout.map(...)` (`Sources/OpenZCineCore/MonitorZoneLayout.swift`) and mounts each
-unified module (`MonitorInfoBar`, `MonitorCaptureStrip`, `MonitorAssistStrip`,
-`MonitorSystemCluster`, `MonitorScopes`, plus the shared feed/command/panel views) at the frame
-and style hint the map returns for that zone; a `nil` zone stays unmounted.
-
-`MonitorZoneLayout.map(...)` is a pure **adapter, not a re-derivation**: it delegates to the two
-original layout policies — `MonitorLiveViewModuleLayout.fit(...)` for landscape,
-`MonitorPortraitLayout.zones(...)` for portrait — and normalizes their outputs into one zone
-vocabulary (frame + style hint, e.g. `.infoPill`/`.infoBar`, `.axisHorizontal`/`.axisVertical`,
-`.scopesFloating`/`.scopesStacked`). Both policies remain in the portable core, UI-free and
-unit-tested by their own long-standing suites (500+ tests) plus a golden-parity suite
-(`Tests/OpenZCineCoreTests/MonitorZoneLayoutTests.swift`) that asserts the map's frames equal the
-legacy policies' outputs exactly for a fixture matrix (both orientations, all DISP modes, portrait
-aspect × scope-count combinations). No new layout math was invented to unify the shells — only the
-container/mounting layer changed.
+`MonitorShell` builds the shared OpenCine `FieldMonitorLayout` (the Pocket / Insta Field Monitor
+geometry) once per layout pass from the viewport, safe area, source aspect and portrait fit/fill,
+and hands it to the shared `MonitorScreen`, which places the picture, status, values, assists and
+system controls; the assist palette is placed by `MonitorAssistPaletteLayout.fieldMonitor`. The
+Nikon core keeps only the feed-cutout and chrome-inset facts in `MonitorLayoutPolicy.swift`.
 
 Rotation is a **geometry change under stable view identity**, not a tree swap: `LiveViewShell`
 (`ios/Runner/MonitorExperience.swift`) mounts one `MonitorShell(context:)` with
@@ -124,11 +115,11 @@ new zone frame when `context.isPortrait` flips. There is no `matchedGeometryEffe
 namespace, and no hero-tag plumbing — earlier "rung 2" approximated the morph with matched-geometry
 heroes across two parallel shells; unification replaced that with the real thing.
 
-Android follows the same product model in one Compose `MonitorScreen` tree. It calls the shared
-Swift monitor-zone map through the facade, retains state across configuration changes, and keeps
+Android follows the same product model in one Compose `MonitorScreen` tree. It lays out from the
+shared OpenCine `MonitorLayoutPolicy.fieldMonitor`, retains state across configuration changes, and keeps
 feed, focus, framing, scope, and chrome geometry registered to the same fit/fill content rectangle.
 
-**Portrait monitor v2 (live mode)** is the zone shape `MonitorPortraitLayout.zones(...)` produces:
+**Portrait monitor v2 (live mode)** is the portrait shape of the shared Field Monitor layout:
 a top bar overlaid on the feed, the feed itself (pinch-toggled between `.fit16x9` and a
 center-crop `.fill`), a dynamic scopes region, and a persistent 100pt bottom system bar (a
 `LiveDesign.glass` band that runs to the physical bottom edge, clearing the record button and the
@@ -136,19 +127,17 @@ home-indicator area) — the tile grid (fit) or capture bar (fill) fills whateve
 Clean and command modes keep the pre-v2 structure.
 
 Fit and fill diverge on how scopes render, matched by `OperatorPreferences.scopeActivationOrder`
-(persisted, oldest→newest activation, maintained by `AssistToolActivation.set` for
-`MonitorAssistTool.scopeTools` only):
+(persisted, oldest→newest activation, maintained by `OperatorPreferences.recordScopeActivation`
+from `NativeAppModel.setAssist` for live `MonitorAssistTool.scopeTools` only; which tools are on
+lives in the shared `MonitorAssistState`):
 
 - **Fit** stacks `OperatorPreferences.displayedFitScopes` — the 2 *most recently activated* scope
   tools (re-sorted into canonical order for display), capped regardless of how many are actually
-  active. Below the scopes zone, fit mounts a live-only, chrome-gated horizontal assist toolbar
-  (`MonitorAssistStrip(axis: .horizontal)`, zone `assistStrip`) that sits between the scopes and
-  the tile grid and slides down as the scopes region grows — the toolbar is dormant (zero height)
-  outside `.live` or when `displayChrome.assistToolbarVisible` is off. With ≥2 scopes displayed,
-  `NativeAppModel.scopeCapActive` refuses further scope activations in fit: the blocked toolbar
-  buttons render at ~0.35 opacity (still tappable) and a tap fires a self-dissolving
-  `MonitorToast` ("2 scopes max in fit view — close one or pinch to fill"). Scopes beyond the 2
-  displayed stay active-but-hidden rather than being dropped.
+  active. The assist palette is the shared `MonitorAssistPalette` in the Field Monitor assists
+  slot (`NikonAssistPalette`), chrome-gated by `displayChrome.assistToolbarVisible`. With ≥2
+  scopes displayed, `NativeAppModel.scopeCapActive` refuses further scope activations in fit: a
+  tap on a third scope fires a self-dissolving `MonitorToast` (`scopeCapNoticeText`). Scopes
+  beyond the 2 displayed stay active-but-hidden rather than being dropped.
 - **Fill** mounts the landscape-identical floating `MonitorScopes(.scopesFloating)` panels —
   draggable, resizable, uncapped — over the visible (post-crop) feed region; every active scope
   tool floats, including ones fit was hiding. Pinching between fit and fill destroys no state:
@@ -187,6 +176,8 @@ recognises returning clients without operator intervention.
 Business logic and protocol state live in `Sources/OpenZCineCore`. Platform shells (`ios/Runner`,
 `Apps/Android`) own rendering, UI state, and platform lifecycle. Android reuses the core through
 the Swift SDK for Android and `Sources/OpenZCineAndroidFacade` without duplicating protocol logic.
+The iOS app and Watch app link the `OpenZCineCore` package product (they do not compile core
+sources directly), so each implementation is compiled exactly once.
 
 ### ADR-004 — Flutter Prototype Archived
 
@@ -204,17 +195,18 @@ the next camera event — because iOS exposes USB PTP only through ImageCaptureC
 runs one full transaction per call. Packet-level control is not available over USB on iOS, so the
 shared abstraction cannot sit any lower.
 
-- `ios/Runner/PTPIPTransport.swift` — Wi-Fi implementation: dual TCP sockets, the PTP-IP
+- OpenCine `Sources/OpenCineNikon/PTPIPTransport.swift`: Wi-Fi implementation, dual TCP sockets, the PTP-IP
   Init_Command/Init_Event handshake, and PTP-IP container framing.
-- `ios/Runner/USBCameraTransport.swift` — USB-C implementation: `ICDeviceBrowser` discovery and
+- OpenCine `Sources/OpenCineNikon/USBCameraTransport.swift` (iOS only): USB-C implementation, `ICDeviceBrowser` discovery and
   authorization, PIMA 15740 generic containers (`PTPUSBContainer` in the core) over
   `requestSendPTPCommand`, and `ptpEventHandler` bridged into the event drain.
 - `NativeCameraSession` keeps orchestration only (open/pair/identify, live view, keep-alive) and
   is transport-agnostic.
 - `Apps/Android/app/.../transport` owns Android NSD and USB Host discovery plus raw socket/USB byte
   adapters. It does not build PTP operations locally.
-- `Sources/OpenZCineAndroidFacade` owns Android PTP-IP and USB transaction/session serialization,
-  response validation, event draining, and the narrow JNI records consumed by `core-api`.
+- OpenCine `Sources/OpenCineNikonAndroid` owns Android PTP-IP and USB transaction/session
+  serialization, response validation, event draining, and the narrow JNI records consumed by
+  OpenCine `:nikon`.
 
 USB cameras are identified by stable `usb:<device-id>` host keys in discovery results and saved
 camera records (`transport: "USB-C"`), so startup policies can skip network probing for tethered
@@ -222,28 +214,22 @@ bodies and reconnect them silently on plug-in.
 
 ### ADR-006 — Bug-Report Paths and Relay
 
-Bug reports are intentionally a platform-shell concern, not a portable-core feature. **Report a
-Problem** offers two public GitHub-issue paths: an anonymous in-app form and the signed-in
-[GitHub bug-report form](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml). The anonymous
-form sends the report text the operator supplies plus a small, closed set of app/platform fields.
-It never ships a GitHub credential, installation identifier, raw diagnostics, arbitrary logs,
-camera identity, or network identifier. Operators can explicitly opt into a closed
-privacy-filtered activity snapshot containing lifecycle events and allowlisted error/warning codes,
-or user-selected screenshots. The relay expands incident codes into fixed operational traces; it
-never receives raw runtime stacks, exception messages, paths, addresses, or timestamps. The apps
-re-render selected screenshots with generic filenames and no embedded file metadata; a server-side canonicalizer
-enforces that boundary again. Screenshot pixels may still contain sensitive information, so the UI
-requires a public-sharing warning and review. The signed-in route hands richer optional details and
-attachments directly to GitHub. Local diagnostics remain a separate user-reviewed share flow.
+On iOS and Android, **Report a Problem** opens the problem report form OpenZCine shares with
+OpenPocketCine and OpenInstaCine (OpenCineAppKit on iOS, appkit's `ManualProblemReport` on Android):
+a description, optional technical details (the redacted journal and connect-attempt trace, shown
+before sending), optional photos or screenshots and an optional reply email. The report goes
+privately to OpenCapture through Sentry, not to a public GitHub issue, and sends once the phone has
+left camera Wi-Fi and has internet. Optional automatic crash and error reports (off by default,
+asked once at launch) take the same route. A build without a Sentry DSN (`SENTRY_DSN` on iOS,
+`SENTRY_DSN_ANDROID` on Android, both empty in the repository) shows both as unavailable. The
+Sentry and OkHttp adapters are per-app copies because OpenCine takes no third-party package.
+Bug reports stay a platform-shell concern, not a portable-core feature.
 
-`services/bug-relay` is an independently deployable Cloudflare Worker. It validates the narrow
-wire contract, rate-limits anonymous submissions, makes retries idempotent, and uses a private
-GitHub App installation with only Issues access to create a labelled public issue. Canonical PNG
-screenshots are kept in a private R2 bucket and are exposed only through opaque relay URLs embedded
-in the public issue; no original source image or filename is retained. The GitHub App private key
-remains a Worker secret; neither mobile binary can create an issue directly. The separate
-feature-request links continue to open GitHub Discussions, where accounts remain required for
-attributable conversation.
+`services/bug-relay`, the Cloudflare Worker behind the earlier anonymous public-issue path, has no
+app client now. It validated a narrow wire contract, rate-limited anonymous submissions and used a
+private GitHub App installation with only Issues access to create a labelled public issue. Feature
+requests continue to open GitHub Discussions, where accounts remain required for attributable
+conversation.
 
 ## Deviations from the iOS Dev Guide
 

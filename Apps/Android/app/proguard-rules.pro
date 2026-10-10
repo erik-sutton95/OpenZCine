@@ -1,9 +1,8 @@
 # App-specific R8/ProGuard rules for release builds.
 #
-# Keep the camera-core seam (Apps/Android/core-api) intact. That module is the
-# deliberate public boundary where the shared camera core plugs in (JNI bridge or
-# Kotlin port later); shrinking or renaming its surface would break the seam
-# contract, and reflection/JNI lookups against it must keep working.
+# Keep what is left of the core-api seam (monitor availability, relay lease and
+# encoder profile) intact. The Nikon session contract moved to OpenCine `:nikon`,
+# whose consumer rules keep it and its NikonNative JNI facade.
 -keep class com.opencapture.openzcine.core.** { *; }
 
 # Swift invokes the bridge methods and listener callbacks by their exact JNI
@@ -30,6 +29,6 @@
 # USB-C PTP byte transport is only called from Swift via GetMethodID on
 # writeBulk/readBulk/readEvent/isClosed/close. R8 cannot see those native
 # call sites and otherwise strips the methods as unused, which surfaces as
-# NoSuchMethodError inside sessionConnectUsb on release/minified builds.
--keep class com.opencapture.openzcine.transport.UsbPtpTransport { *; }
--keep class * implements com.opencapture.openzcine.transport.UsbPtpTransport { *; }
+# NoSuchMethodError inside sessionConnectUsb on release/minified builds. The
+# interface moved to OpenCine `:nikon`, whose consumer rules keep it and every
+# implementation (this app's AndroidUsbPtpTransport included).

@@ -4,6 +4,7 @@ import android.util.Log
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import java.util.LinkedHashMap
+import com.opencapture.opencine.media.MonitorLUTCube
 
 private const val TAG = "ZCFeedEffects"
 private const val BUILT_IN_LUT_SIZE = 33
@@ -17,10 +18,31 @@ private const val BUILT_IN_LUT_SIZE = 33
 internal class FeedEffectsRenderPlan(
     val effects: FeedEffects,
     val configuration: FeedEffectsRenderConfiguration,
-    val baseCube: FeedEffectsCube?,
-    val limitsPaintCube: FeedEffectsCube?,
-    val limitsWeightCube: FeedEffectsCube?,
+    val baseCube: MonitorLUTCube?,
+    val limitsPaintCube: MonitorLUTCube?,
+    val limitsWeightCube: MonitorLUTCube?,
 ) {
+    internal val nativePlan: com.opencapture.opencine.media.FeedEffectsRenderPlan by lazy {
+        com.opencapture.opencine.media.FeedEffectsRenderPlan(
+            lutCube = baseCube, falseColorPaint = limitsPaintCube, falseColorWeight = limitsWeightCube,
+            peaking = effects.peaking, peakingColor = configuration.peakingColor,
+            peakingRatioThreshold = configuration.peakingRatioThreshold,
+            peakingNoiseGate = configuration.peakingNoiseGate,
+            zebraHighlightOn = effects.zebra && configuration.highlightEnabled,
+            zebraHighlightCode = configuration.highlightCode,
+            zebraHighlightColor = configuration.highlightColor,
+            zebraMidtoneOn = effects.zebra && configuration.midtoneEnabled,
+            zebraMidtoneCode = configuration.midtoneCode, zebraMidtoneHalf = 5f / 255f,
+            zebraMidtoneColor = configuration.midtoneColor,
+            splitComparison = splitComparison != null,
+            splitVertical = splitComparison == FeedSplitOrientation.VERTICAL,
+            zebraMaskPolicy = com.opencapture.opencine.media.MonitorZebraMaskPolicy(
+                highlightMeasure = com.opencapture.opencine.media.MonitorZebraMaskPolicy.HighlightMeasure.REC709_LUMA,
+                rampBias = 0.0,
+            ),
+        )
+    }
+
     /**
      * The 50/50 Log-vs-LUT comparison to render, or `null`.
      *
@@ -42,23 +64,10 @@ internal class FeedEffectsRenderPlan(
     val falseColorReady: Boolean
         get() =
             when (effects.falseColor) {
-                FeedFalseColorScale.STOPS, FeedFalseColorScale.IRE -> baseCube != null
+                FeedFalseColorScale.STOPS, FeedFalseColorScale.VIDEO, FeedFalseColorScale.IRE -> baseCube != null
                 FeedFalseColorScale.LIMITS -> limitsReady
                 null -> false
             }
-}
-
-/** One validated packed-2D RGBA8 cube from the shared core. */
-internal class FeedEffectsCube(
-    val size: Int,
-    val rgba: ByteArray,
-) {
-    init {
-        require(size in 2..64) { "unsupported feed-effects cube size $size" }
-        require(rgba.size == size * size * size * 4) {
-            "bad feed-effects cube payload for size $size"
-        }
-    }
 }
 
 /** Builds the single shared plan used by every Android GPU backend. */
@@ -101,16 +110,17 @@ internal object FeedEffectsRenderPlanFactory {
         }
         val baseCube = baseCube(effects, renderConfiguration, lutLibrary)
         val limitsActive = effects.falseColor == FeedFalseColorScale.LIMITS
+        val readingCurveOrdinal = renderConfiguration.curveOrdinal + if (effects.falseColorRec709) 4 else 0
         val limitsPaint =
             if (limitsActive) {
                 cachedCube(
                     key =
-                        "limits-paint:${renderConfiguration.curveOrdinal}:" +
+                        "limits-paint:$readingCurveOrdinal:" +
                             renderConfiguration.clipNative.toBits(),
                     size = 64,
                 ) {
                     SwiftCore.bakeFalseColorLimitsPaint(
-                        renderConfiguration.curveOrdinal,
+                        readingCurveOrdinal,
                         renderConfiguration.clipNative,
                     )
                 }
@@ -121,12 +131,12 @@ internal object FeedEffectsRenderPlanFactory {
             if (limitsActive) {
                 cachedCube(
                     key =
-                        "limits-weight:${renderConfiguration.curveOrdinal}:" +
+                        "limits-weight:$readingCurveOrdinal:" +
                             renderConfiguration.clipNative.toBits(),
                     size = 64,
                 ) {
                     SwiftCore.bakeFalseColorLimitsWeight(
-                        renderConfiguration.curveOrdinal,
+                        readingCurveOrdinal,
                         renderConfiguration.clipNative,
                     )
                 }
@@ -162,14 +172,14 @@ internal object FeedEffectsRenderPlanFactory {
                 cameraInput.isoWireValue,
                 cameraInput.baseIso,
                 cameraInput.stillsToneMode,
-                configuration.peakingSensitivity.wireOrdinal,
-                configuration.peakingColor.wireOrdinal,
+                configuration.peakingSensitivity.ordinal,
+                configuration.peakingColor.ordinal,
                 configuration.zebraHighlightEnabled,
                 configuration.zebraHighlightIre,
-                configuration.zebraHighlightColor.wireOrdinal,
+                configuration.zebraHighlightColor.ordinal,
                 configuration.zebraMidtoneEnabled,
                 configuration.zebraMidtoneIre,
-                configuration.zebraMidtoneColor.wireOrdinal,
+                configuration.zebraMidtoneColor.ordinal,
             ),
         ) { "core rejected the effect configuration" }
             .let(FeedEffectsRenderConfiguration::parse)
@@ -178,19 +188,19 @@ internal object FeedEffectsRenderPlanFactory {
         effects: FeedEffects,
         configuration: FeedEffectsRenderConfiguration,
         lutLibrary: AndroidLutLibrary?,
-    ): FeedEffectsCube? {
+    ): MonitorLUTCube? {
         val selection = effects.lut
         val cube =
             when {
                 effects.falseColor != null && effects.falseColor != FeedFalseColorScale.LIMITS ->
                     cachedCube(
                         key =
-                            "false:${effects.falseColor.wireOrdinal}:${configuration.curveOrdinal}:" +
+                            "false:${effects.falseColor.wireOrdinal}:${effects.falseColorRec709}:${configuration.curveOrdinal}:" +
                                 configuration.clipNative.toBits(),
                         size = 64,
                     ) {
                         SwiftCore.bakeFalseColorCube(
-                            effects.falseColor.wireOrdinal,
+                            effects.falseColor.wireOrdinal + if (effects.falseColorRec709) 4 else 0,
                             configuration.curveOrdinal,
                             configuration.clipNative,
                         )
@@ -204,7 +214,7 @@ internal object FeedEffectsRenderPlanFactory {
                     }
                 selection is FeedLutSelection.Stored ->
                     lutLibrary?.packedCube(selection.value)?.let { packed ->
-                        FeedEffectsCube(packed.cubeSize, packed.rgba)
+                        MonitorLUTCube(packed.cubeSize, packed.rgba)
                     }
                 else -> null
             }
@@ -214,8 +224,8 @@ internal object FeedEffectsRenderPlanFactory {
         return cube
     }
 
-    private fun cachedCube(key: String, size: Int, bake: () -> ByteArray?): FeedEffectsCube? =
-        FeedEffectsCubeCache.value(key, bake)?.let { FeedEffectsCube(size, it) }
+    private fun cachedCube(key: String, size: Int, bake: () -> ByteArray?): MonitorLUTCube? =
+        FeedEffectsCubeCache.value(key, bake)?.let { MonitorLUTCube(size, it) }
 }
 
 /** Bounded cache for immutable Swift-baked cube bytes. */

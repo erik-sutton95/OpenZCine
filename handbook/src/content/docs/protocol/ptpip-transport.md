@@ -102,9 +102,9 @@ internally.
 
 | Layer | iOS | Android |
 | --- | --- | --- |
-| Wi-Fi transport | `ios/Runner/PTPIPTransport.swift` (BSD TCP sockets) | Kotlin socket adapter, Swift facade session |
-| USB transport | `ios/Runner/USBCameraTransport.swift` | Android USB Host adapter, Swift facade session |
-| Session orchestration | `NativeCameraSession` | `Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift` |
+| Wi-Fi transport | OpenCine `Sources/OpenCineNikon/PTPIPTransport.swift` (BSD TCP sockets) | Kotlin socket adapter, Swift facade session |
+| USB transport | OpenCine `Sources/OpenCineNikon/USBCameraTransport.swift` | Android USB Host adapter, Swift facade session |
+| Session orchestration | `NativeCameraSession` | OpenCine `Sources/OpenCineNikonAndroid/PTPIPClientSession.swift` |
 
 Kotlin never builds PTP operations. Decisions live in the portable core; see
 [ARCHITECTURE.md](https://github.com/erik-sutton95/OpenZCine/blob/main/docs/ARCHITECTURE.md).

@@ -8,7 +8,12 @@ import android.content.Intent
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
+import com.opencapture.opencine.appkit.diagnostics.ManualProblemReport
+import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportEnvelope
+import com.opencapture.opencine.media.BoundedDiagnosticFormatter
+import com.opencapture.opencine.platform.LocalVPNProbe
 import com.opencapture.openzcine.BuildConfig
+import com.opencapture.openzcine.pairing.looksLikeNikonAccessPointSsid
 import java.io.File
 
 private const val DIAGNOSTICS_AUTHORITY_SUFFIX = ".diagnostics-share"
@@ -90,8 +95,9 @@ internal fun diagnosticExitImportance(importance: Int): DiagnosticExitImportance
  * Process-local coordinator for privacy-bounded diagnostics and operator share reports.
  *
  * This class has no network dependency and performs no telemetry upload. Its
- * only external handoff is an explicit Android share intent for a report the
- * operator can inspect first.
+ * external handoffs are an explicit Android share intent for a report the
+ * operator can inspect first, and the text a problem report includes only when
+ * the operator chooses to.
  */
 internal class AndroidAppDiagnostics private constructor(
     private val context: Context,
@@ -115,13 +121,36 @@ internal class AndroidAppDiagnostics private constructor(
     }
 
     /**
-     * The opt-in anonymous-report activity log, reduced to closed event and incident codes.
-     *
-     * This is intentionally not [createReport]: it has no timestamps, Android
-     * exit summaries, device details, or free-form local diagnostics content.
+     * The problem report's technical details (off until the operator includes them): app,
+     * phone and camera lines, then the closed event codes and the connect trace, bounded to
+     * the report's attachment cap. Only Nikon camera access points stay readable.
      */
-    fun privacyFilteredActivityLog(): List<String> =
-        runCatching { store.privacyFilteredActivityLog() }.getOrDefault(emptyList())
+    fun boundedDiagnosticText(cameraModel: String, phase: String): String {
+        val body =
+            BoundedDiagnosticFormatter.format(
+                environment =
+                    BoundedDiagnosticFormatter.Environment(
+                        product = "OpenZCine",
+                        appVersion = BuildConfig.VERSION_NAME,
+                        appBuild = BuildConfig.VERSION_CODE.toString(),
+                        osName = "Android",
+                        osVersion = Build.VERSION.RELEASE ?: "?",
+                        deviceModel = Build.MODEL ?: "unknown",
+                        cameraFamily = "Nikon Z",
+                        cameraModel = cameraModel,
+                        phase = phase,
+                        vpnActive = runCatching { LocalVPNProbe.isActive(context) }.getOrDefault(false),
+                    ),
+                journal =
+                    runCatching { store.privacyFilteredActivityLog() + store.recentConnectTrace() }
+                        .getOrDefault(emptyList()),
+                exceptions = emptyList(),
+                extras = runCatching { AppDiagnostics.incidents.reportExtras() }.getOrDefault(emptyList()),
+                cap = minOf(ManualProblemReport.ATTACHMENT_MAX_CHARS, BoundedDiagnosticFormatter.CHARACTER_CAP),
+                isSafeNetwork = ::looksLikeNikonAccessPointSsid,
+            )
+        return ManualProblemReportEnvelope.utf8Prefix(body, ManualProblemReport.ATTACHMENT_MAX_BYTES)
+    }
 
     fun createReport(): File? =
         runCatching {

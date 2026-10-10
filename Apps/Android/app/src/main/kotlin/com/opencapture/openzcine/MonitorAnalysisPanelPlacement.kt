@@ -2,8 +2,11 @@ package com.opencapture.openzcine
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.opencapture.openzcine.bridge.MonitorZones
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorScopeStoredCenter
+import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.monitorui.MonitorFieldLayout
+import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.math.max
 import kotlin.math.min
@@ -39,8 +42,8 @@ internal enum class LegacyPanelStore { SCOPES, FALSE_COLOR }
  * geometry.
  */
 internal data class MonitorAnalysisPanelLayout(
-    val viewport: ZoneFrame,
-    val safeBounds: ZoneFrame,
+    val viewport: MonitorRect,
+    val safeBounds: MonitorRect,
 ) {
     init {
         require(viewport.width >= 0f && viewport.height >= 0f) {
@@ -66,10 +69,10 @@ internal data class MonitorAnalysisPanelLayout(
  * The frame uses monitor-zone dp coordinates, matching every [MonitorAnalysisPanelLayout] frame.
  */
 internal fun focusResetButtonBaseFrame(
-    feed: ZoneFrame,
+    feed: MonitorRect,
     isPortrait: Boolean,
     bottomChromeInset: Float,
-): ZoneFrame {
+): MonitorRect {
     val x =
         if (isPortrait) {
             feed.x + feed.width - FOCUS_RESET_PANEL_GAP_DP - FOCUS_RESET_BUTTON_SIZE_DP
@@ -77,7 +80,7 @@ internal fun focusResetButtonBaseFrame(
             feed.x + FOCUS_RESET_PANEL_GAP_DP
         }
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x = x,
             y =
                 feed.y + feed.height -
@@ -99,20 +102,20 @@ internal fun focusResetButtonBaseFrame(
  * assist rail — all of which already own a corner.
  */
 internal fun splitComparisonKeyFrame(
-    feed: ZoneFrame,
+    feed: MonitorRect,
     isPortrait: Boolean,
     bottomChromeInset: Float,
     focusResetMounted: Boolean,
     widthDp: Float,
     heightDp: Float,
-): ZoneFrame {
+): MonitorRect {
     val lane = focusResetButtonBaseFrame(feed, isPortrait, bottomChromeInset)
     val lift = if (focusResetMounted) FOCUS_RESET_BUTTON_SIZE_DP + FOCUS_RESET_PANEL_GAP_DP else 0f
     // Right-aligned in portrait (the lane hugs the trailing edge there), leading-aligned in
     // landscape — so a key wider than the round reset button grows away from the feed edge.
     val x = if (isPortrait) lane.x + lane.width - widthDp else lane.x
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x = x,
             y = lane.y + (FOCUS_RESET_BUTTON_SIZE_DP - heightDp) / 2f - lift,
             width = widthDp,
@@ -131,10 +134,10 @@ internal fun splitComparisonKeyFrame(
  * also mounted above the panels in Compose, so an impossible fully-packed layout remains reachable.
  */
 internal fun focusResetButtonClearFrame(
-    base: ZoneFrame,
-    panelFrames: Collection<ZoneFrame>,
-    bounds: ZoneFrame,
-): ZoneFrame {
+    base: MonitorRect,
+    panelFrames: Collection<MonitorRect>,
+    bounds: MonitorRect,
+): MonitorRect {
     val panels = panelFrames.sortedByDescending { it.y + it.height }
     var frame = clampScopeFrame(base, bounds)
     repeat(FOCUS_RESET_MAX_CLEARANCE_PASSES) {
@@ -153,7 +156,7 @@ internal fun focusResetButtonClearFrame(
     return clampScopeFrame(frame, bounds)
 }
 
-private fun ZoneFrame.intersectsWithGap(other: ZoneFrame, gap: Float): Boolean =
+private fun MonitorRect.intersectsWithGap(other: MonitorRect, gap: Float): Boolean =
     x < other.x + other.width + gap &&
         x + width > other.x - gap &&
         y < other.y + other.height + gap &&
@@ -162,7 +165,6 @@ private fun ZoneFrame.intersectsWithGap(other: ZoneFrame, gap: Float): Boolean =
 /** Actual monitor chrome surfaces mounted beside analysis panels in the current DISP/layout mode. */
 internal data class MonitorAnalysisChromeMounts(
     val assistStrip: Boolean,
-    val assistRail: Boolean,
     val captureStrip: Boolean,
     /**
      * Which landscape rail controls are on screen, or `null` in portrait. One plan instead of the
@@ -185,7 +187,6 @@ internal fun monitorAnalysisChromeMounts(
     val sideMounts =
         MonitorAnalysisChromeMounts(
             assistStrip = false,
-            assistRail = false,
             captureStrip = false,
             landscapeRail = landscapeRail.takeIf { !isPortrait },
         )
@@ -193,27 +194,24 @@ internal fun monitorAnalysisChromeMounts(
     if (isPortrait) {
         return if (isPortraitFill) {
             MonitorAnalysisChromeMounts(
-                assistStrip = false,
-                assistRail = assistToolbarVisible,
+                assistStrip = assistToolbarVisible,
                 captureStrip = cameraValuesVisible,
             )
         } else {
             MonitorAnalysisChromeMounts(
                 assistStrip = assistToolbarVisible,
-                assistRail = false,
                 captureStrip = false,
             )
         }
     }
     return MonitorAnalysisChromeMounts(
         assistStrip = !isClean && assistToolbarVisible,
-        assistRail = false,
         captureStrip = !isClean && cameraValuesVisible,
         landscapeRail = sideMounts.landscapeRail,
     )
 }
 
-/** Normalized app-local centre, independent of pixels, dp density, and orientation. */
+/** A saved normalized centre, independent of pixels, dp density, and orientation. */
 internal data class NormalizedPanelCenter(
     val xFraction: Float,
     val yFraction: Float,
@@ -226,33 +224,6 @@ internal data class NormalizedPanelCenter(
             xFraction = xFraction.coerceIn(0f, 1f),
             yFraction = yFraction.coerceIn(0f, 1f),
         )
-
-    fun frame(size: ZoneFrame, layout: MonitorAnalysisPanelLayout): ZoneFrame {
-        val normalized = reconciled()
-        val centerX = layout.viewport.x + normalized.xFraction * layout.viewport.width
-        val centerY = layout.viewport.y + normalized.yFraction * layout.viewport.height
-        return clampScopeFrame(
-            ZoneFrame(
-                x = centerX - size.width / 2f,
-                y = centerY - size.height / 2f,
-                width = size.width,
-                height = size.height,
-            ),
-            layout.safeBounds,
-        )
-    }
-
-    companion object {
-        fun from(frame: ZoneFrame, viewport: ZoneFrame): NormalizedPanelCenter =
-            NormalizedPanelCenter(
-                xFraction =
-                    (frame.x + frame.width / 2f - viewport.x) /
-                        max(1f, viewport.width),
-                yFraction =
-                    (frame.y + frame.height / 2f - viewport.y) /
-                        max(1f, viewport.height),
-            ).reconciled()
-    }
 }
 
 /**
@@ -264,18 +235,18 @@ internal data class NormalizedPanelCenter(
  * matching the iOS “almost anywhere” free roam while keeping those rails hittable. Top status and
  * bottom assist/capture strips are **not** subtracted from drag bounds (defaults still clear them).
  * Portrait fill uses the mapped feed as its exact viewport, then clears the top bar, capture strip,
- * system rail, and the existing expanded assist-rail footprint.
+ * system rail, and the assist palette's portrait column.
  */
 internal fun monitorAnalysisPanelLayout(
-    zones: MonitorZones,
-    physicalViewport: ZoneFrame,
+    layout: MonitorFieldLayout,
+    physicalViewport: MonitorRect,
     isPortrait: Boolean,
     isPortraitFill: Boolean,
     statusBarVisible: Boolean,
     chromeMounts: MonitorAnalysisChromeMounts,
 ): MonitorAnalysisPanelLayout? {
     if (isPortrait && !isPortraitFill) return null
-    val viewport = if (isPortraitFill) zones.feed else physicalViewport
+    val viewport = if (isPortraitFill) layout.picture else physicalViewport
     var left = viewport.x
     var top = viewport.y
     var right = viewport.x + viewport.width
@@ -284,23 +255,16 @@ internal fun monitorAnalysisPanelLayout(
     if (isPortraitFill) {
         // Portrait fill keeps tighter chrome carving — rails sit on the feed edges.
         if (statusBarVisible) {
-            top = max(top, zones.infoBar.y + zones.infoBar.height + PANEL_CONTROL_CLEARANCE_DP)
+            top = max(top, layout.status.maxY + PANEL_CONTROL_CLEARANCE_DP)
         }
-        if (chromeMounts.assistRail) {
-            val rail =
-                portraitFillAssistRailFrame(
-                    feed = zones.feed,
-                    captureStrip = zones.captureStrip.takeIf { chromeMounts.captureStrip },
-                    expanded = true,
-                )
-            left = max(left, rail.x + rail.width + PANEL_CONTROL_CLEARANCE_DP)
+        // The assist palette's portrait column grows up the leading edge; clear its full width.
+        if (chromeMounts.assistStrip) {
+            left = max(left, layout.assists.maxX + PANEL_CONTROL_CLEARANCE_DP)
         }
         if (chromeMounts.captureStrip) {
-            zones.captureStrip?.let { strip ->
-                bottom = min(bottom, strip.y - PANEL_CONTROL_CLEARANCE_DP)
-            }
+            bottom = min(bottom, layout.values.y - PANEL_CONTROL_CLEARANCE_DP)
         }
-        bottom = min(bottom, zones.systemCluster.y - PANEL_CONTROL_CLEARANCE_DP)
+        bottom = min(bottom, layout.system.y - PANEL_CONTROL_CLEARANCE_DP)
     } else {
         // Landscape: carve only the vertical button rails, and only around the controls that are
         // actually mounted. Top/bottom chrome stays drawable over panels the way iOS does (rails
@@ -308,18 +272,16 @@ internal fun monitorAnalysisPanelLayout(
         val rail = chromeMounts.landscapeRail
         if (rail != null) {
             if (rail.lock) {
-                left = maxOf(left, zones.lock.x + zones.lock.width + PANEL_CONTROL_CLEARANCE_DP)
+                left = maxOf(left, layout.lock.maxX + PANEL_CONTROL_CLEARANCE_DP)
             }
             if (rail.batteries) {
-                zones.batteryCluster?.let {
-                    left = maxOf(left, it.x + it.width + PANEL_CONTROL_CLEARANCE_DP)
-                }
+                left = maxOf(left, layout.gauges.maxX + PANEL_CONTROL_CLEARANCE_DP)
             }
             listOfNotNull(
-                zones.disp.takeIf { rail.disp },
-                zones.record.takeIf { rail.record },
-                zones.media.takeIf { rail.media },
-                zones.settings.takeIf { rail.settings },
+                layout.display.takeIf { rail.disp },
+                layout.record.takeIf { rail.record },
+                layout.media.takeIf { rail.media },
+                layout.settings.takeIf { rail.settings },
             )
                 .minOfOrNull { it.x - PANEL_CONTROL_CLEARANCE_DP }
                 ?.let { right = min(right, it) }
@@ -333,7 +295,7 @@ internal fun monitorAnalysisPanelLayout(
     return MonitorAnalysisPanelLayout(
         viewport = viewport,
         safeBounds =
-            ZoneFrame(
+            MonitorRect(
                 x = safeLeft,
                 y = safeTop,
                 width = safeRight - safeLeft,
@@ -343,11 +305,10 @@ internal fun monitorAnalysisPanelLayout(
 }
 
 /**
- * Versioned app-local placement store for live scopes and the false-colour reference.
- *
- * The first read migrates the two pre-OPE-68 preference files. Complete finite pairs are clamped
- * and copied; partial, non-finite, or type-corrupt pairs are discarded deterministically. A stored
- * centre is never rewritten merely because current chrome forces a temporary presentation clamp.
+ * The live scope and false-colour centres saved before the shared assist state held them: the v2
+ * file and the two pre-OPE-68 files, read once by [movePanelCentres]. A complete finite pair is
+ * reconciled into 0...1; a partial or malformed v2 pair is dropped; an unknown schema fails closed
+ * and keeps its data.
  */
 internal class MonitorAnalysisPanelPlacementStore internal constructor(
     private val preferences: SharedPreferences,
@@ -355,46 +316,29 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
     private val legacyFalseColorPreferences: SharedPreferences? = null,
 ) {
     constructor(context: Context) : this(
-        preferences =
-            context.getSharedPreferences(
-                STORE_NAME,
-                Context.MODE_PRIVATE,
-            ),
-        legacyScopePreferences =
-            context.getSharedPreferences(
-                LEGACY_SCOPE_STORE_NAME,
-                Context.MODE_PRIVATE,
-            ),
+        preferences = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE),
+        legacyScopePreferences = context.getSharedPreferences(LEGACY_SCOPE_STORE_NAME, Context.MODE_PRIVATE),
         legacyFalseColorPreferences =
-            context.getSharedPreferences(
-                LEGACY_FALSE_COLOR_STORE_NAME,
-                Context.MODE_PRIVATE,
-            ),
+            context.getSharedPreferences(LEGACY_FALSE_COLOR_STORE_NAME, Context.MODE_PRIVATE),
     )
 
-    fun resolve(
-        id: MonitorAnalysisPanelID,
-        default: ZoneFrame,
-        layout: MonitorAnalysisPanelLayout,
-    ): ZoneFrame {
-        val stored = load(id) ?: return clampScopeFrame(default, layout.safeBounds)
-        return stored.frame(default, layout)
+    internal fun storedCenter(id: MonitorAnalysisPanelID): NormalizedPanelCenter? {
+        when (schemaState()) {
+            StoreSchema.UNSUPPORTED -> return null
+            StoreSchema.CURRENT -> {
+                val current = readPair(preferences, xKey(id), yKey(id))
+                if (current.state != StoredPairState.ABSENT) {
+                    if (current.value == null) recenter(id)
+                    return current.value?.reconciled()
+                }
+            }
+            StoreSchema.LEGACY -> Unit
+        }
+        val legacy = legacyPreferences(id) ?: return null
+        return readPair(legacy, legacyXKey(id), legacyYKey(id)).value?.reconciled()
     }
 
-    fun save(
-        id: MonitorAnalysisPanelID,
-        frame: ZoneFrame,
-        layout: MonitorAnalysisPanelLayout,
-    ) {
-        val normalized = NormalizedPanelCenter.from(frame, layout.viewport)
-        currentSchemaEditor()
-            .putInt(SCHEMA_KEY, SCHEMA_VERSION)
-            .putFloat(xKey(id), normalized.xFraction)
-            .putFloat(yKey(id), normalized.yFraction)
-            .apply()
-    }
-
-    /** Clears one panel only; all unrelated active and hidden panel positions survive. */
+    /** Clears one panel only; all unrelated panel centres survive. */
     fun recenter(id: MonitorAnalysisPanelID) {
         if (schemaState() != StoreSchema.UNSUPPORTED) {
             preferences.edit().remove(xKey(id)).remove(yKey(id)).apply()
@@ -406,49 +350,6 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
                 .apply()
         }
     }
-
-    internal fun storedCenter(id: MonitorAnalysisPanelID): NormalizedPanelCenter? = load(id)
-
-    private fun load(id: MonitorAnalysisPanelID): NormalizedPanelCenter? {
-        when (schemaState()) {
-            StoreSchema.UNSUPPORTED -> return null
-            StoreSchema.CURRENT -> {
-                val current = readPair(preferences, xKey(id), yKey(id))
-                if (current.state != StoredPairState.ABSENT) {
-                    if (current.value == null) recenter(id)
-                    return current.value?.reconciled()?.also { reconciled ->
-                        if (reconciled != current.value) writeMigrated(id, reconciled)
-                    }
-                }
-            }
-            StoreSchema.LEGACY -> Unit
-        }
-
-        val legacy = legacyPreferences(id) ?: return null
-        val migrated = readPair(legacy, legacyXKey(id), legacyYKey(id))
-        if (migrated.state == StoredPairState.ABSENT) return null
-        legacy.edit().remove(legacyXKey(id)).remove(legacyYKey(id)).apply()
-        val value = migrated.value?.reconciled() ?: return null
-        writeMigrated(id, value)
-        return value
-    }
-
-    private fun writeMigrated(id: MonitorAnalysisPanelID, center: NormalizedPanelCenter) {
-        currentSchemaEditor()
-            .putInt(SCHEMA_KEY, SCHEMA_VERSION)
-            .putFloat(xKey(id), center.xFraction)
-            .putFloat(yKey(id), center.yFraction)
-            .apply()
-    }
-
-    /**
-     * Starts a v2 write transaction. Unknown or stale schemas are cleared only for a deliberate
-     * save or a supported legacy migration; passive resolution never downgrades future data.
-     */
-    private fun currentSchemaEditor(): SharedPreferences.Editor =
-        preferences.edit().also { editor ->
-            if (schemaState() != StoreSchema.CURRENT) editor.clear()
-        }
 
     private fun schemaState(): StoreSchema {
         if (!preferences.contains(SCHEMA_KEY)) return StoreSchema.LEGACY
@@ -516,6 +417,74 @@ internal class MonitorAnalysisPanelPlacementStore internal constructor(
     }
 }
 
+/**
+ * Moves the centres this store saved into the shared assist state once, then clears them here, so a
+ * later launch finds nothing to move. Scope centres were saved on the landscape canvas and fill the
+ * landscape slot; the false-colour key had one centre for landscape and portrait fill, so it fills
+ * both slots. A centre the shared state already holds wins.
+ */
+internal fun MonitorAnalysisPanelPlacementStore.movePanelCentres(into: MonitorAssistState) {
+    ScopeKind.entries.forEach { kind ->
+        val id = kind.monitorAnalysisPanelID()
+        val stored = storedCenter(id) ?: return@forEach
+        into.storeCenterIfAbsent(kind.assistTool, stored.shared(), listOf(false))
+        recenter(id)
+    }
+    storedCenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE)?.let { stored ->
+        into.storeCenterIfAbsent(MonitorAssistTool.FALSE, stored.shared(), listOf(false, true))
+        recenter(MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE)
+    }
+}
+
+/** Moves the live audio meter's one saved centre into both shared slots once, as [movePanelCentres]. */
+internal fun StoredPanelCenter.moveAudioCentre(into: MonitorAssistState) {
+    val stored = load() ?: return
+    into.storeCenterIfAbsent(MonitorAssistTool.AUDIO, stored, listOf(false, true))
+    clear()
+}
+
+private fun MonitorAssistState.storeCenterIfAbsent(
+    tool: MonitorAssistTool,
+    center: MonitorScopeStoredCenter,
+    orientations: List<Boolean>,
+) {
+    orientations.forEach { portrait ->
+        if (centerFor(tool, portrait) == null) storeCenter(tool, center, portrait)
+    }
+}
+
+private fun NormalizedPanelCenter.shared(): MonitorScopeStoredCenter =
+    MonitorScopeStoredCenter(xFraction.toDouble(), yFraction.toDouble())
+
+/**
+ * One panel centre in its own preference file (`<prefix>.centerX`/`.centerY`), normalized to the
+ * panel's viewport: the playback false-colour key and audio meter, and the live audio meter's
+ * pre-shared save.
+ */
+internal class StoredPanelCenter(private val preferences: SharedPreferences, private val prefix: String) {
+    constructor(context: Context, name: String, prefix: String) :
+        this(context.getSharedPreferences(name, Context.MODE_PRIVATE), prefix)
+
+    fun load(): MonitorScopeStoredCenter? {
+        if (!preferences.contains("$prefix.centerX") || !preferences.contains("$prefix.centerY")) return null
+        val x = runCatching { preferences.getFloat("$prefix.centerX", Float.NaN) }.getOrNull() ?: return null
+        val y = runCatching { preferences.getFloat("$prefix.centerY", Float.NaN) }.getOrNull() ?: return null
+        if (!x.isFinite() || !y.isFinite()) return null
+        return MonitorScopeStoredCenter(x.coerceIn(0f, 1f).toDouble(), y.coerceIn(0f, 1f).toDouble())
+    }
+
+    fun save(center: MonitorScopeStoredCenter) {
+        preferences.edit()
+            .putFloat("$prefix.centerX", center.xFraction.toFloat().coerceIn(0f, 1f))
+            .putFloat("$prefix.centerY", center.yFraction.toFloat().coerceIn(0f, 1f))
+            .apply()
+    }
+
+    fun clear() {
+        preferences.edit().remove("$prefix.centerX").remove("$prefix.centerY").apply()
+    }
+}
+
 /** Scope-to-placement identity mapping kept beside the placement policy. */
 internal fun ScopeKind.monitorAnalysisPanelID(): MonitorAnalysisPanelID =
     when (this) {
@@ -524,16 +493,4 @@ internal fun ScopeKind.monitorAnalysisPanelID(): MonitorAnalysisPanelID =
         ScopeKind.HISTOGRAM -> MonitorAnalysisPanelID.HISTOGRAM
         ScopeKind.VECTORSCOPE -> MonitorAnalysisPanelID.VECTORSCOPE
         ScopeKind.TRAFFIC_LIGHTS -> MonitorAnalysisPanelID.TRAFFIC_LIGHTS
-    }
-
-/** Only floating scopes and the false-colour key own placement. Feed-aligned assists never do. */
-internal fun AssistTool.monitorAnalysisPanelID(): MonitorAnalysisPanelID? =
-    when (this) {
-        AssistTool.FALSE -> MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE
-        AssistTool.WAVE -> MonitorAnalysisPanelID.WAVEFORM
-        AssistTool.PARADE -> MonitorAnalysisPanelID.PARADE
-        AssistTool.HISTO -> MonitorAnalysisPanelID.HISTOGRAM
-        AssistTool.VECTOR -> MonitorAnalysisPanelID.VECTORSCOPE
-        AssistTool.LIGHTS -> MonitorAnalysisPanelID.TRAFFIC_LIGHTS
-        else -> null
     }

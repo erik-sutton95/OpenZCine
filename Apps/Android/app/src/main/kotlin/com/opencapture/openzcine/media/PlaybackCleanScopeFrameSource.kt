@@ -50,7 +50,9 @@ internal class PlaybackCleanScopeFrameSource : PlaybackScopeFrameSource {
     }
 
     private fun publish(frame: ReducedScopeFrame) {
-        latest.set(StampedScopeFrame(generation.incrementAndGet(), frame))
+        val revision = generation.incrementAndGet()
+        val owned = ReducedScopeFrame(frame.rgba, frame.width, frame.height, frame.bytesPerRow, revision)
+        latest.set(StampedScopeFrame(revision, owned))
     }
 }
 

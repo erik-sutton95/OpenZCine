@@ -1,8 +1,8 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraControlCapabilities
-import com.opencapture.openzcine.core.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraControlCapabilities
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -59,34 +59,6 @@ class PhotographyPickersTest {
         )
         // Every tile except the caller-supplied WB opens a picker in M.
         assertTrue(tiles.filter { it.kind != MonitorPickerKind.WHITE_BALANCE }.all { it.picker != null })
-    }
-
-    @Test
-    fun `portrait command grid shows the stills strip tile-for-tile, not the movie tiles`() {
-        val settings = settings()
-        val tiles = photographyCommandTiles(settings)
-
-        // The nine stills tiles in fixed order — never the movie RESOLUTION/CODEC/VR grid.
-        assertEquals(
-            listOf("MODE", "ISO", "SHUTTER", "IRIS", "DRIVE", "FOCUS", "WB", "METER", "PROFILE"),
-            tiles.map { it.title },
-        )
-        assertEquals(settings.map { it.value }, tiles.map { it.value })
-        // Fixed order: photography tiles never reorder (iOS CommandPrimaryGrid).
-        assertTrue(tiles.all { it.kind == null })
-    }
-
-    @Test
-    fun `each photography grid tile tap routes back to its own stills picker`() {
-        val settings = settings()
-        val tiles = photographyCommandTiles(settings)
-
-        // A tile carrying a request must resolve — through the same settings the
-        // grid maps against — to the SAME picker kind as the strip cell it mirrors.
-        settings.zip(tiles).forEach { (cell, tile) ->
-            val request = tile.request ?: return@forEach
-            assertEquals(cell.kind, monitorPickerKindForRequest(settings, request))
-        }
     }
 
     @Test
@@ -460,25 +432,6 @@ class PhotographyPickersTest {
         assertEquals("5s", photoTimerLabel(5))
         assertEquals(0, photoTimerSeconds("Off"))
         assertEquals(10, photoTimerSeconds("10s"))
-    }
-
-    @Test
-    fun `photography pins PLAY then EV to the front of the assist rail`() {
-        val tools =
-            listOf(
-                AssistTool.PEAK, AssistTool.ZEBRA, AssistTool.EV, AssistTool.PLAY,
-                AssistTool.HISTO,
-            )
-        assertEquals(
-            listOf(
-                AssistTool.PLAY, AssistTool.EV, AssistTool.PEAK, AssistTool.ZEBRA,
-                AssistTool.HISTO,
-            ),
-            frontPinnedAssistTools(tools, photography = true),
-        )
-        // Cinema never sees the photography-only tool.
-        assertTrue(AssistTool.PLAY.isPhotographyOnly)
-        assertTrue(AssistTool.PLAY.appliesToPhotography)
     }
 
     @Test

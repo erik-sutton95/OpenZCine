@@ -1,0 +1,159 @@
+import OpenCineAppKit
+import OpenCineCore
+import OpenZCineCore
+import Testing
+
+@testable import Runner
+
+/// The Nikon root on the shared `ShellModel`: which cover shows and how a connect and the monitor
+/// treat it. SIMULATED sessions; nothing dials a camera.
+@MainActor
+@Suite("Shell covers")
+struct ShellAdoptionTests {
+    private func camera() -> ConnectedCamera {
+        ConnectedCamera(
+            saved: SavedCamera(
+                id: "SIMULATED-shell", integration: IntegrationID("org.opencapture.nikon-ptp"),
+                advertisedName: "SIMULATED camera", model: "SIMULATED"),
+            session: NikonPictureLifetimeSession())
+    }
+
+    @Test("A fresh launch shows no cover")
+    func launchStartsUncovered() {
+        let model = NativeAppModel()
+        #expect(!model.isStandaloneMediaLibraryPresented && !model.isStandaloneSettingsPresented)
+        #expect(model.shell.cover == nil && model.shell.monitor == nil)
+    }
+
+    @Test("The cameras page's Media and Settings open standalone and close")
+    func standaloneCoversOpenAndClose() {
+        let model = NativeAppModel()
+        model.openCachedMediaLibrary()
+        #expect(model.isStandaloneMediaLibraryPresented && model.mediaBrowserSource == .camera)
+        model.dismissMediaLibrary()
+        #expect(!model.isStandaloneMediaLibraryPresented && !model.isStandaloneSettingsPresented)
+        model.openStandaloneSettings()
+        #expect(model.isStandaloneSettingsPresented && model.operatorSettingsTab == .storage)
+        model.dismissMediaLibrary()
+        #expect(!model.isStandaloneSettingsPresented)
+    }
+
+    /// Intended change (the shared shell): one cover at a time.
+    @Test("Settings opened over Media replaces it")
+    func oneCoverAtATime() {
+        let model = NativeAppModel()
+        model.openCachedMediaLibrary()
+        model.openStandaloneSettings()
+        #expect(model.isStandaloneSettingsPresented)
+        #expect(!model.isStandaloneMediaLibraryPresented)
+    }
+
+    /// Intended change (the shared shell): a connect shows the monitor, never a leftover page.
+    @Test("A connect closes a standalone cover")
+    func connectClosesStandaloneCover() {
+        let model = NativeAppModel()
+        model.openStandaloneSettings()
+        model.shell.present(camera())
+        #expect(!model.isStandaloneSettingsPresented)
+        model.shell.close()
+    }
+
+    @Test("The monitor's Settings and Media are its panels, not standalone covers")
+    func monitorPanelsAreNotStandalone() {
+        let model = NativeAppModel()
+        model.shell.present(camera())
+        model.isMonitorPresented = true
+        for panel in [NativeAppModel.ActivePanel.settings, .media] {
+            model.activePanel = panel
+            #expect(model.shell.cover == (panel == .settings ? .settings : .media))
+            #expect(!model.isStandaloneMediaLibraryPresented)
+            #expect(!model.isStandaloneSettingsPresented)
+            model.activePanel = nil
+            #expect(model.shell.cover == nil)
+        }
+        model.shell.close()
+    }
+
+    @Test("The shell's monitor is the camera monitor while it shows")
+    func shellMonitorFollowsTheCameraMonitor() {
+        let model = NativeAppModel()
+        let session = NikonPictureLifetimeSession()
+        model.shell.present(
+            ConnectedCamera(
+                saved: SavedCamera(
+                    id: "SIMULATED-shell", integration: IntegrationID("org.opencapture.nikon-ptp"),
+                    advertisedName: "SIMULATED camera", model: "SIMULATED"),
+                session: session))
+        model.isMonitorPresented = true
+        #expect(model.shell.monitor != nil)
+        model.isMonitorPresented = false
+        #expect(model.shell.monitor == nil)
+    }
+
+    /// The Frame.io sign-in and the RED LUT download keep their surface through the hop.
+    @Test("An internet hop re-hosts the monitor's panel once the monitor has gone")
+    func hopRehostsThePanel() {
+        for panel in [NativeAppModel.ActivePanel.settings, .media] {
+            let model = NativeAppModel()
+            model.shell.present(camera())
+            model.isMonitorPresented = true
+            model.activePanel = panel
+            model.leaveMonitorForInternetHop(rehostActivePanel: true)
+            #expect(model.shell.monitor == nil && model.activePanel == nil)
+            #expect(model.isStandaloneSettingsPresented == (panel == .settings))
+            #expect(model.isStandaloneMediaLibraryPresented == (panel == .media))
+        }
+        let model = NativeAppModel()
+        model.shell.present(camera())
+        model.isMonitorPresented = true
+        model.activePanel = .settings
+        model.leaveMonitorForInternetHop(rehostActivePanel: false)
+        #expect(model.shell.cover == nil)
+    }
+
+    @Test("A pending common edit shows over the reported value without being written into it")
+    func pendingEditsShowOverTheReport() {
+        let reported = [
+            CameraValue(label: "ISO", value: "800", isSettable: true),
+            CameraValue(label: "WB", value: "5600K", isSettable: true),
+            CameraValue(label: "FOCUS", value: "AF-C", isSettable: true),
+        ]
+        #expect(NativeAppModel.showing([:], over: reported) == reported)
+        let shown = NativeAppModel.showing(
+            [.iso: .iso(.manual(1600)), .whiteBalance: .whiteBalance(.auto)], over: reported)
+        #expect(shown.map(\.value) == ["1600", "Auto", "AF-C"])
+        #expect(shown.map(\.label) == reported.map(\.label))
+    }
+
+    /// Nikon main toasts a refused third live scope in portrait fit view; the monitor notice is
+    /// that toast on the integration.
+    @Test("A third scope in portrait fit view is refused with the cap notice")
+    func scopeCapRefusalShowsItsNotice() {
+        let model = NativeAppModel()
+        let saved = model.preferences
+        let live = model.assist.liveTools
+        defer {
+            for tool in MonitorAssistTool.scopeTools {
+                model.assist.set(tool, visible: live.contains(tool), context: .liveView)
+            }
+            model.preferences = saved
+        }
+        model.isMonitorPresented = true
+        model.monitorIsPortrait = true
+        model.preferences.portraitFeedAspect = .fit16x9
+        for tool in MonitorAssistTool.scopeTools {
+            model.assist.set(tool, visible: false, context: .liveView)
+        }
+        model.setAssist(.waveform, visible: true)
+        model.setAssist(.histogram, visible: true)
+        let trigger = model.monitorNoticeTrigger
+
+        model.setAssist(.parade, visible: true)
+
+        #expect(!model.assist.liveTools.contains(.parade))
+        #expect(model.monitorNotice == model.scopeCapNoticeText)
+        #expect(model.monitorNoticeTrigger == trigger + 1)
+        model.toggleAssist(.vectorscope)
+        #expect(model.monitorNoticeTrigger == trigger + 2)
+    }
+}

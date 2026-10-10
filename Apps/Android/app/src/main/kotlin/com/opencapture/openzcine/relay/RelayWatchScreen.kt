@@ -1,213 +1,44 @@
 package com.opencapture.openzcine.relay
 
 import android.content.res.Configuration
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.text.KeyboardOptions
+import com.opencapture.monitorui.MonitorWatcherConnectionOverlayValue
+import com.opencapture.monitorui.MonitorWatcherConnectionPhase
+import com.opencapture.monitorui.MonitorWatcherControlPlacement
+import com.opencapture.opencine.cameracontrols.MonitorOperatorWatcherOverlay
+import com.opencapture.opencine.cameracontrols.MonitorWatcherConnectionLabels
 import com.opencapture.openzcine.R
 
-/**
- * The watcher's on-glass control key — iOS `WatcherControlKey`, word for word: one pill
- * reflecting the token so the control and its state cannot disagree, centred above the bottom
- * bars on the live view (never inside a settings sheet). Record is NOT a second pill: holding
- * control mounts the monitor's own record button (availability-gated), routed over the relay
- * through the watch session — the iOS shape exactly.
- */
+/** Wire facts/localized content over the common watcher connection and live-surface owners. */
 @Composable
-fun RelayWatchOverlay(
-    ui: RelayWatchUiState,
-    onAskForControl: () -> Unit,
-    onGiveBackControl: () -> Unit,
-    onSubmitPasscode: (String) -> Unit,
-    onRetry: () -> Unit,
-    onLeave: () -> Unit,
-) {
-    BackHandler(onBack = onLeave)
-    // The root Box deliberately carries NO pointer handling: only the pill (and the failure
-    // keys) hit-test, so the monitor chrome underneath stays tappable everywhere else.
-    Box(Modifier.fillMaxSize()) {
-        when (ui.phase) {
-            RelayWatchUiState.Phase.WATCHING ->
-                if (ui.holdsControl || ui.allowsControlRequests) {
-                    WatcherKey(
-                        text =
-                            stringResource(
-                                if (ui.holdsControl) {
-                                    R.string.relay_give_back_control
-                                } else {
-                                    R.string.relay_ask_for_control
-                                }
-                            ),
-                        accented = ui.holdsControl,
-                        onClick = if (ui.holdsControl) onGiveBackControl else onAskForControl,
-                        modifier =
-                            Modifier.align(Alignment.BottomCenter)
-                                .padding(bottom = relayControlKeyBottomInset()),
-                    )
-                }
-            RelayWatchUiState.Phase.CONNECTING ->
-                CenteredNotice(text = stringResource(R.string.relay_watch_connecting))
-            RelayWatchUiState.Phase.FAILED ->
-                Column(
-                    Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        ui.failureReason ?: stringResource(R.string.relay_watch_dropped),
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        WatcherKey(
-                            text = stringResource(R.string.relay_try_again),
-                            accented = true,
-                            onClick = onRetry,
-                        )
-                        WatcherKey(
-                            text = stringResource(R.string.relay_leave),
-                            accented = false,
-                            onClick = onLeave,
-                        )
-                    }
-                }
-            RelayWatchUiState.Phase.DENIED -> Unit
-        }
-        if (ui.phase == RelayWatchUiState.Phase.DENIED && ui.needsPasscode) {
-            var draft by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = onLeave,
-                title = { Text(stringResource(R.string.relay_passcode_title)) },
-                text = {
-                    Column {
-                        Text(
-                            if (ui.passcodeWasWrong) {
-                                stringResource(R.string.relay_passcode_wrong)
-                            } else {
-                                stringResource(R.string.relay_passcode_body)
-                            }
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = draft,
-                            onValueChange = { new ->
-                                draft = new.filter(Char::isDigit).take(4)
-                                if (draft.length == 4) onSubmitPasscode(draft)
-                            },
-                            singleLine = true,
-                            keyboardOptions =
-                                KeyboardOptions(keyboardType = KeyboardType.Number),
-                            label = { Text(stringResource(R.string.relay_passcode_hint)) },
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = { if (draft.length == 4) onSubmitPasscode(draft) },
-                    ) {
-                        Text(stringResource(R.string.action_connect))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = onLeave) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                },
-            )
-        }
+fun RelayWatchOverlay(ui: RelayWatchUiState, onAskForControl: () -> Unit, onGiveBackControl: () -> Unit,
+    onSubmitPasscode: (String) -> Unit, onRetry: () -> Unit, onLeave: () -> Unit) {
+    val phase = when (ui.phase) {
+        RelayWatchUiState.Phase.WATCHING -> MonitorWatcherConnectionPhase.WATCHING
+        RelayWatchUiState.Phase.CONNECTING -> MonitorWatcherConnectionPhase.JOINING
+        RelayWatchUiState.Phase.DENIED -> MonitorWatcherConnectionPhase.DENIED
+        RelayWatchUiState.Phase.FAILED -> MonitorWatcherConnectionPhase.FAILED
     }
+    MonitorOperatorWatcherOverlay(value = MonitorWatcherConnectionOverlayValue(phase = phase,
+        canControl = ui.holdsControl, canRequestControl = ui.allowsControlRequests,
+        needsPasscode = ui.needsPasscode, passcodeWasWrong = ui.passcodeWasWrong,
+        failureReason = ui.failureReason, controlBottomInset = relayControlKeyBottomInset().value.toDouble()),
+        labels = MonitorWatcherConnectionLabels(requestControl = stringResource(R.string.relay_ask_for_control),
+            releaseControl = stringResource(R.string.relay_give_back_control),
+            joining = stringResource(R.string.relay_watch_connecting), failureFallback = stringResource(R.string.relay_watch_dropped),
+            retry = stringResource(R.string.relay_try_again), leave = stringResource(R.string.relay_leave),
+            passcodeTitle = stringResource(R.string.relay_passcode_title), passcodeWrong = stringResource(R.string.relay_passcode_wrong),
+            passcodeBody = stringResource(R.string.relay_passcode_body), passcodeHint = stringResource(R.string.relay_passcode_hint),
+            connect = stringResource(R.string.action_connect), cancel = stringResource(R.string.action_cancel)),
+        onAskForControl = onAskForControl, onGiveBackControl = onGiveBackControl, onSubmitPasscode = onSubmitPasscode,
+        onRetry = onRetry, onLeave = onLeave)
 }
 
-/**
- * Bottom clearance for BOTH on-glass relay keys — this file's watcher ask/give-back and the
- * broadcaster's REVOKE CONTROL pill over its own monitor (MainActivity). One definition because
- * they sit in the same lane on the same chrome: iOS seats both against the assist-strip zone with
- * identical math (`laneTop - keyHeight - 8`, MonitorUnified.swift), and the broadcaster's pill
- * carrying its own fixed 64dp is exactly how it ended up ON the portrait system keys.
- *
- * Landscape: the bottom bars run 14dp inset + 58dp tall and DISP/settings live on the right rail,
- * so 84dp floats the key 12dp above the bars. Portrait: the system bar (lock/DISP/record/media/
- * settings, 100dp, 14dp lift) plus the 58dp assist toolbar own the bottom, so
- * 192 = 100 + 14 + 58 + 12 gap + 8 lane gap.
- *
- * ponytail: fixed lane clearances; anchoring to the live zone map needs the monitor shell to
- * export it.
- */
+/** Broadcaster and watcher keys consume the same common monitor lane. */
 @Composable
-internal fun relayControlKeyBottomInset(): Dp =
-    if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT) {
-        192.dp
-    } else {
-        84.dp
-    }
-
-@Composable
-private fun WatcherKey(
-    text: String,
-    accented: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val accent = Color(0xFFE0A73A)
-    Text(
-        text,
-        color = if (accented) accent else Color.White,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.8.sp,
-        modifier =
-            modifier.background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                .border(
-                    1.dp,
-                    if (accented) accent else Color.White.copy(alpha = 0.25f),
-                    CircleShape,
-                )
-                .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 9.dp),
-    )
-}
-
-@Composable
-private fun CenteredNotice(text: String) {
-    Box(Modifier.fillMaxSize()) {
-        Text(
-            text,
-            color = Color.White.copy(alpha = 0.85f),
-            fontSize = 14.sp,
-            modifier = Modifier.align(Alignment.Center),
-        )
-    }
-}
+internal fun relayControlKeyBottomInset(): Dp = MonitorWatcherControlPlacement.bottomInset(
+    portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT).toFloat().dp

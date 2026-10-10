@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Foundation
+import OpenCineFrameIO
 import UIKit
 
 /// Drives the Adobe IMS OAuth (PKCE) sign-in via `ASWebAuthenticationSession`, exchanges the
@@ -7,9 +8,18 @@ import UIKit
 @MainActor
 final class FrameioAuthCoordinator: NSObject, ASWebAuthenticationPresentationContextProviding {
     private let config: FrameioConfiguration
+    private let transport: (any FrameioHTTPTransport)?
+    private let tokens: (any FrameioTokenStorage)?
     private var session: ASWebAuthenticationSession?
 
-    init(config: FrameioConfiguration) { self.config = config }
+    init(
+        config: FrameioConfiguration, transport: (any FrameioHTTPTransport)? = nil,
+        tokens: (any FrameioTokenStorage)? = nil
+    ) {
+        self.config = config
+        self.transport = transport
+        self.tokens = tokens
+    }
 
     /// Presents the Frame.io login, exchanges the returned code (PKCE), and stores the token.
     func signIn() async throws -> FrameioToken {
@@ -22,14 +32,17 @@ final class FrameioAuthCoordinator: NSObject, ASWebAuthenticationPresentationCon
 
         let callbackURL = try await present(authorizeURL, redirect: redirect)
         let code = try FrameioOAuth.parseRedirect(callbackURL, expectedState: state)
-        let token = try await exchange(
-            FrameioOAuth.tokenExchangeRequest(config: config, code: code, verifier: pkce.verifier))
-        FrameioTokenStore.save(StoredFrameioToken(token: token, receivedAt: Date()))
-        return token
+        // The default-timeout shared session, as before: this runs once, right after sign-in.
+        return try await FrameioClient(
+            config: config,
+            transport: transport ?? FrameioURLSessionTransport(session: .shared),
+            tokens: tokens ?? FrameioTokenStore()
+        )
+        .completeSignIn(code: code, verifier: pkce.verifier)
     }
 
     func signOut() {
-        FrameioTokenStore.clear()
+        FrameioTokenStore().clear()
     }
 
     /// Captures the OAuth redirect in-session. Adobe **Native App** credentials use a custom scheme
@@ -71,15 +84,6 @@ final class FrameioAuthCoordinator: NSObject, ASWebAuthenticationPresentationCon
                 continuation.resume(throwing: FrameioError.notConfigured)
             }
         }
-    }
-
-    private func exchange(_ request: URLRequest) async throws -> FrameioToken {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw FrameioError.http(
-                http.statusCode, String(decoding: data.prefix(500), as: UTF8.self))
-        }
-        return try JSONDecoder().decode(FrameioToken.self, from: data)
     }
 
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession)

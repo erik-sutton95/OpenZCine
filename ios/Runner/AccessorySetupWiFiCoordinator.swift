@@ -1,6 +1,7 @@
 import AccessorySetupKit
 import Foundation
 import NetworkExtension
+import OpenZCineCore
 import UIKit
 import os
 

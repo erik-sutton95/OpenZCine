@@ -169,9 +169,6 @@ internal enum class AndroidDiagnosticEvent(val wireValue: String) {
                 "join.prefix" -> CONNECTION_JOIN_PREFIX
                 else -> null
             }
-
-        /** @deprecated Prefer [fromPhase]; kept for call-site clarity on failure-only paths. */
-        fun fromFailurePhase(phase: String): AndroidDiagnosticEvent? = fromPhase(phase)
     }
 }
 
@@ -260,7 +257,8 @@ internal class DiagnosticEventStore(
 
     /**
      * Appends one already-sanitized connect-attempt line. Stays on the phone until
-     * the operator shares a diagnostics report; never enters the anonymous log.
+     * the operator shares a diagnostics report or includes technical details in a
+     * problem report; never enters the activity log.
      */
     @Synchronized
     fun recordConnectTrace(line: String) {
@@ -295,18 +293,17 @@ internal class DiagnosticEventStore(
     }
 
     /**
-     * Returns the sole activity-log shape allowed in an anonymous report.
+     * Returns the activity-log shape a problem report's technical details carry.
      *
-     * Timestamps, raw local file lines, and every diagnostic-report field are
-     * deliberately left behind. A hand-edited value such as "Bob's iPhone"
-     * cannot enter because [recentEvents] accepts only [AndroidDiagnosticEvent]
-     * wire values. Error and warning values are closed incident codes; the
-     * relay derives their fixed operational traces without receiving raw text.
+     * Timestamps and raw local file lines are deliberately left behind. A
+     * hand-edited value such as "Bob's iPhone" cannot enter because
+     * [recentEvents] accepts only [AndroidDiagnosticEvent] wire values. Error
+     * and warning values are closed incident codes.
      */
     @Synchronized
     fun privacyFilteredActivityLog(): List<String> =
         recentEvents()
-            .takeLast(BugReportAttachmentLimits.MAXIMUM_ACTIVITY_EVENTS)
+            .takeLast(ACTIVITY_LOG_MAXIMUM_EVENTS)
             .map { event -> event.event.wireValue }
 
     private fun bounded(events: List<DiagnosticBreadcrumb>): List<DiagnosticBreadcrumb> {
@@ -360,6 +357,7 @@ internal class DiagnosticEventStore(
         const val DEFAULT_MAXIMUM_EVENT_COUNT: Int = 500
         const val DEFAULT_MAXIMUM_EVENT_BYTES: Int = 256 * 1_024
         const val CONNECT_TRACE_MAXIMUM_LINES: Int = 200
+        const val ACTIVITY_LOG_MAXIMUM_EVENTS: Int = 200
         private const val MINIMUM_EVENT_BYTES: Int = 128
     }
 }

@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
 /**
  * The frame-rate chip's fallback word (iOS `NativeAppRoot.liveFPS`). `connectionMessage` never
@@ -13,16 +14,16 @@ import kotlin.test.assertNull
 class MonitorFeedStateTest {
     @Test
     fun `a healthy stream leaves the measured rate alone`() {
-        assertNull(monitorFeedState(MonitorRecoveryState.Idle, previewRejected = false))
+        assertNull(monitorFeedState(SessionRecoveryUi.Idle, previewRejected = false))
     }
 
     @Test
     fun `every bounded-recovery state reads NO LINK`() {
         for (state in
             listOf(
-                MonitorRecoveryState.Retrying(attempt = 1, maxAttempts = 4),
-                MonitorRecoveryState.WaitingForOperator(attemptsMade = 4),
-                MonitorRecoveryState.PausedAfterRepeatedDrops(drops = 3),
+                SessionRecoveryUi.Retrying(attempt = 1, maxAttempts = 4),
+                SessionRecoveryUi.WaitingForOperator(attemptsMade = 4),
+                SessionRecoveryUi.PausedAfterDrops(drops = 3),
             )
         ) {
             assertEquals(
@@ -37,7 +38,7 @@ class MonitorFeedStateTest {
     fun `a rejected preview on a live session reads RECOV`() {
         assertEquals(
             MonitorFeedState.RECOV,
-            monitorFeedState(MonitorRecoveryState.Idle, previewRejected = true),
+            monitorFeedState(SessionRecoveryUi.Idle, previewRejected = true),
         )
     }
 
@@ -46,7 +47,7 @@ class MonitorFeedStateTest {
         assertEquals(
             MonitorFeedState.NO_LINK,
             monitorFeedState(
-                MonitorRecoveryState.Retrying(attempt = 2, maxAttempts = 4),
+                SessionRecoveryUi.Retrying(attempt = 2, maxAttempts = 4),
                 previewRejected = true,
             ),
         )

@@ -2,6 +2,10 @@ package com.opencapture.openzcine
 
 import android.content.ContentValues
 import android.content.Context
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.nikon.NikonOpenCineSession
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Environment
@@ -22,19 +26,20 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.core.CameraFocusPoint
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.LiveFocusBox
-import com.opencapture.openzcine.core.LiveFocusInfo
-import com.opencapture.openzcine.core.LiveFocusResult
-import com.opencapture.openzcine.core.LiveFrame
-import com.opencapture.openzcine.core.LiveFrameSource
-import com.opencapture.openzcine.settings.LocalDesqueezeOrientation
-import com.opencapture.openzcine.settings.LocalDesqueezeRatio
-import com.opencapture.openzcine.settings.LocalFramingAspectRatio
+import com.opencapture.opencine.nikon.CameraFocusPoint
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveFocusBox
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFocusResult
+import com.opencapture.opencine.nikon.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrameSource
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.opencine.media.MonitorDesqueezeDirection
+import com.opencapture.opencine.media.MonitorDesqueezePreset
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.PortraitFeedAspect
 import java.io.ByteArrayOutputStream
@@ -176,7 +181,7 @@ class FocusFeedComposeTest {
     }
 
     @Test
-    fun secondPointerCancelsDispSwipeAndHandsGestureToPortraitPinch() {
+    fun secondPointerCancelsDispSwipeWithoutChangingPortraitFitPreference() {
         setDeviceRotation(ROTATION_PORTRAIT)
         val session = FocusSession()
         val settings =
@@ -201,9 +206,9 @@ class FocusFeedComposeTest {
             up(0)
         }
 
-        composeRule.waitUntil(5_000) {
-            settings.portraitFeedAspect == PortraitFeedAspect.FILL
-        }
+        // Pinch magnifies the current feed; FIT/FILL remains an explicit operator preference.
+        composeRule.waitForIdle()
+        assertEquals(PortraitFeedAspect.FIT_16_9, settings.portraitFeedAspect)
         assertDisplayMode("Live")
         assertEquals(null, session.lastFocusPoint)
     }
@@ -213,28 +218,27 @@ class FocusFeedComposeTest {
         setDeviceRotation(ROTATION_PORTRAIT)
         try {
             val session = FocusSession()
+            val assists = idleNikonAssists()
             val settings =
                 setMonitor(
                     session,
                     FocusFrameSource(testJpeg()),
                     "focus-feed-ope91-portrait-fill-test",
+                    assists,
                 )
             settings.portraitFeedAspect = PortraitFeedAspect.FILL
-            LocalFramingAspectRatio.entries
-                .filter { it != LocalFramingAspectRatio.RATIO_239 && it in settings.selectedGuideRatios }
-                .forEach(settings::toggleGuideRatioConfiguration)
-            if (LocalFramingAspectRatio.RATIO_239 !in settings.selectedGuideRatios) {
-                settings.toggleGuideRatioConfiguration(LocalFramingAspectRatio.RATIO_239)
+            composeRule.runOnIdle {
+                assists.shared.apply {
+                    selectedGuides = setOf(MonitorGuideAspect.CINEMA)
+                    syncVisible(
+                        setOf(MonitorAssistTool.GUIDES, MonitorAssistTool.GRID, MonitorAssistTool.CROSS, MonitorAssistTool.DESQ),
+                    )
+                    guideMask = true
+                    setGridOption(thirds = true)
+                    selectDesqueezePreset(MonitorDesqueezePreset.X200)
+                    updateDesqueezeDirection(MonitorDesqueezeDirection.HORIZONTAL)
+                }
             }
-            settings.guidesVisible.value = true
-            settings.guideMaskEnabled.value = true
-            settings.localGridVisible.value = true
-            settings.ruleOfThirdsEnabled.value = true
-            settings.centerCrosshairEnabled.value = true
-            settings.desqueezeEnabled.value = true
-            settings.desqueezeRatio = LocalDesqueezeRatio.X200
-            settings.desqueezeOrientation = LocalDesqueezeOrientation.HORIZONTAL
-            settings.levelAssistEnabled.value = false
 
             composeRule.waitUntil(5_000) {
                 composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
@@ -260,6 +264,7 @@ class FocusFeedComposeTest {
         session: CameraSession,
         source: LiveFrameSource,
         preferencesName: String,
+        assists: NikonAssists = idleNikonAssists(),
     ): OperatorSettings {
         check(SwiftCore.isAvailable) { "The device UI pass requires the staged Swift core." }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -268,11 +273,16 @@ class FocusFeedComposeTest {
                 context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE),
             ).also { it.hapticsEnabled.value = false }
         composeRule.setContent {
+            val scope = rememberCoroutineScope()
+            val common = remember(session) { NikonOpenCineSession(session, scope) }
+            val control = remember(common) { MonitorControlModel(scope).also { it.bind(common) } }
             OpenZCineTheme {
                 MonitorScreen(
                     session = session,
+                    commonSession = common,
+                    commonControl = control,
                     frameSource = source,
-                    assist = AssistState(FeedEffects.NONE, null),
+                    assists = assists,
                     operatorSettings = settings,
                     glassTierOverride = "flat",
                 )

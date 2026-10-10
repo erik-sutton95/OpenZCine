@@ -1,7 +1,7 @@
 package com.opencapture.openzcine.frameio
 
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingEnvironment
 import com.opencapture.openzcine.pairing.SavedCameraRecord

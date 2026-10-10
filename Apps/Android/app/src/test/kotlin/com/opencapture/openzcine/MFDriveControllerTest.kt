@@ -1,9 +1,9 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraRecordingState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.MFDriveOutcome
+import com.opencapture.opencine.nikon.CameraRecordingState
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.MFDriveOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -48,7 +48,7 @@ class MFDriveControllerTest {
 
     @Test
     fun `strip seats left of the right system rail, vertically centred`() {
-        val viewport = com.opencapture.openzcine.bridge.ZoneFrame(0f, 0f, 914f, 384f)
+        val viewport = com.opencapture.monitorui.MonitorRect(0f, 0f, 914f, 384f)
 
         val frame = mfDriveStripFrame(viewport, rightRailLeading = 830f)
 

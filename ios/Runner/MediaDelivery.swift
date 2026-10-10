@@ -1,5 +1,8 @@
 import AVFoundation
 import Foundation
+import OpenCineAppKit
+import OpenCineFrameIO
+import OpenZCineCore
 import os
 
 /// Container format for baked media exports.
@@ -173,89 +176,111 @@ extension NativeAppModel {
         )
     }
 
-    /// Exports or copies each clip, reporting combined progress across the batch.
+    /// Compatibility entry points retain their result and callbacks; ordering is shared.
     func deliverClipsForShare(
-        _ clips: [MediaClip],
-        configuration: MediaDeliveryConfiguration,
+        _ clips: [MediaClip], configuration: MediaDeliveryConfiguration,
         onProgress: @escaping @MainActor (Int, Int, Double) -> Void
     ) async -> MediaDeliveryBatchResult {
-        var result = MediaDeliveryBatchResult()
-        let total = clips.count
-        guard total > 0 else { return result }
-
-        for (index, clip) in clips.enumerated() {
-            onProgress(index + 1, total, 0)
-            do {
-                let export = try await prepareClipForDelivery(
-                    clip, configuration: configuration
-                ) {
-                    fraction in
-                    Task { @MainActor in onProgress(index + 1, total, fraction) }
-                }
-                await MainActor.run { onProgress(index + 1, total, 1) }
-                result.exportedURLs.append(export.videoURL)
-                if let metadataURL = export.metadataURL {
-                    result.metadataURLs.append(metadataURL)
-                }
-                if configuration.bakeLUT, currentLUTCube() != nil {
-                    setClipExportStatus(.exported, for: clip)
-                }
-            } catch {
-                let ns = error as NSError
-                let detail = "\(ns.domain) code=\(ns.code) \(ns.localizedDescription)"
-                result.failedClips.append((clip, error.localizedDescription))
-                if configuration.bakeLUT { setClipExportStatus(.failed, for: clip) }
-                Logger(subsystem: "OpenZCine", category: "media-export").error(
-                    "clip failed \(clip.filename, privacy: .public): \(detail, privacy: .public)")
-            }
-        }
-        return result
+        await deliverCompatibilityBatch(
+            clips, configuration: configuration, remote: false, onProgress: onProgress)
     }
-
-    /// Uploads clips to Frame.io sequentially; skips already-uploaded clips unless forced.
     func uploadClipsToFrameio(
-        _ clips: [MediaClip],
-        configuration: MediaDeliveryConfiguration,
+        _ clips: [MediaClip], configuration: MediaDeliveryConfiguration,
         onProgress: @escaping @MainActor (Int, Int, Double) -> Void
     ) async -> MediaDeliveryBatchResult {
+        await deliverCompatibilityBatch(
+            clips, configuration: configuration, remote: true, onProgress: onProgress)
+    }
+    private func deliverCompatibilityBatch(
+        _ clips: [MediaClip], configuration: MediaDeliveryConfiguration,
+        remote: Bool, onProgress: @escaping @MainActor (Int, Int, Double) -> Void
+    ) async -> MediaDeliveryBatchResult {
         var result = MediaDeliveryBatchResult()
-        let total = clips.count
-        guard total > 0 else { return result }
-
-        for (index, clip) in clips.enumerated() {
-            let status =
-                mediaClips.first { $0.id == clip.id }?.frameioStatus ?? clip.frameioStatus
-            if status == .uploaded, !configuration.forceFrameioReupload {
-                result.skippedCount += 1
-                onProgress(index + 1, total, 1)
-                continue
-            }
-            if !isClipDownloaded(clip) {
-                result.failedClips.append(
-                    (clip, MediaDeliveryError.clipNotCached(clip.filename).localizedDescription))
-                continue
-            }
-
-            onProgress(index + 1, total, 0)
-            let filename = deliveryFilename(for: clip, configuration: configuration)
-            let options = MediaDeliveryUploadOptions(
-                filename: filename,
-                bakeLUT: configuration.bakeLUT,
-                cube: configuration.bakeLUT ? currentLUTCube() : nil,
-                metadata: deliveryMetadata(for: clip, configuration: configuration),
-                forceReupload: configuration.forceFrameioReupload
-            )
-            await uploadClipToFrameio(clip, options: options) { fraction in
-                Task { @MainActor in onProgress(index + 1, total, fraction) }
-            }
-            if let error = frameioUploadError {
-                frameioUploadError = nil
-                result.failedClips.append((clip, error))
-            } else {
-                result.uploadedCount += 1
-            }
-            onProgress(index + 1, total, 1)
-        }
+        guard !clips.isEmpty, let capture = NikonMediaDeliveryCapture(model: self, clips: clips)
+        else { return result }
+        let admission = MonitorDeliveryAdmission { capture.isCurrent }
+        var remoteCapture: NikonMediaDeliveryCapture?
+        let records = clips.enumerated().map { (index: $0.offset, clip: $0.element) }
+        typealias Batch = MonitorDeliveryModel<
+            MonitorDeliveryBatchProgress, MonitorDeliveryBatchOutcome<URL>, URL
+        >
+        _ = await Batch.runBatch(
+            records: records, destination: remote ? .remoteUpload : .nativeShare,
+            action: .systemShare, admission: admission,
+            originals: .init(available: { _ in true }, acquire: { _ in }, progress: { _ in nil }),
+            exporter: .init {
+                record, progress -> (clip: MediaClip, export: MediaLUT.ExportResult)? in
+                let clip = record.clip
+                let status =
+                    capture.store.list(cameraID: clip.cameraID).first { $0.id == clip.id }?
+                    .frameioStatus ?? clip.frameioStatus
+                if remote, status == .uploaded, !configuration.forceFrameioReupload {
+                    result.skippedCount += 1
+                    onProgress(record.index + 1, clips.count, 1)
+                    return nil
+                }
+                do {
+                    let exported = try await capture.prepare(
+                        clip, configuration: configuration, admission: admission, progress: progress
+                    )
+                    if !remote {
+                        result.exportedURLs.append(exported.videoURL)
+                        if let metadata = exported.metadataURL {
+                            result.metadataURLs.append(metadata)
+                        }
+                    }
+                    return (clip: clip, export: exported)
+                } catch {
+                    result.failedClips.append((clip, error.localizedDescription))
+                    if admission.isCurrent() {
+                        let ns = error as NSError
+                        let detail = "\(ns.domain) code=\(ns.code) \(ns.localizedDescription)"
+                        Logger(subsystem: "OpenZCine", category: "media-export").error(
+                            "clip failed \(clip.filename, privacy: .public): \(detail, privacy: .public)"
+                        )
+                    }
+                    throw error
+                }
+            }, share: { .init(urls: $0) }, photos: nil,
+            upload: remote
+                ? .init { artifact, progress in
+                    do {
+                        if remoteCapture == nil {
+                            if !self.isFrameioConnected { try await self.connectFrameio() }
+                            guard admission.isCurrent() else { throw CancellationError() }
+                            remoteCapture = NikonMediaDeliveryCapture(
+                                model: self, clips: clips,
+                                action: capture.action)
+                        }
+                        guard let remoteCapture, admission.isCurrent(),
+                            remoteCapture.account.isCurrent
+                        else { throw CancellationError() }
+                        if self.frameioUser == nil {
+                            let user = try? await remoteCapture.frameioClient(admission: admission)
+                                .currentUser()
+                            guard admission.isCurrent(), remoteCapture.account.isCurrent
+                            else { throw CancellationError() }
+                            self.frameioUser = user
+                        }
+                        try await self.uploadCapturedFrameio(
+                            artifact.clip, source: artifact.export.videoURL,
+                            metadata: capture.metadata(artifact.clip, configuration: configuration),
+                            capture: remoteCapture, admission: admission, progress: progress)
+                        result.uploadedCount += 1
+                    } catch {
+                        result.failedClips.append((artifact.clip, error.localizedDescription))
+                        throw error
+                    }
+                } : nil,
+            internet: Optional<MonitorDeliveryInternetService<FrameioInternetHop.Token>>.none,
+            filename: { $0.clip.filename },
+            policy: .init(
+                behavior: .init(
+                    nativeFailures: .continueItems,
+                    emptyUploadSucceeds: true, singleUploadFailureUsesDetail: false)),
+            progress: { value in
+                onProgress(value.clipIndex, value.totalClips, value.clipFraction)
+            })
         return result
     }
 

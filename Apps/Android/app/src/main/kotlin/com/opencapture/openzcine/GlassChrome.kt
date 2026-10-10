@@ -183,7 +183,7 @@ val LocalMonitorGlass = compositionLocalOf<MonitorGlass?> { null }
  * Surface over the frosted backdrop for FULL glass (outer frames / bars).
  * Kept darker to match iOS `Glass.regular` panels.
  */
-private val GlassSurfaceTint = Color(0.105f, 0.092f, 0.073f, 0.56f)
+private val GlassSurfaceTint = Color(26 / 255f, 27 / 255f, 28 / 255f, 0.56f)
 
 /**
  * Nested chips inside a glass panel (top-bar STBY / resolution / codec / FPS).
@@ -191,7 +191,7 @@ private val GlassSurfaceTint = Color(0.105f, 0.092f, 0.073f, 0.56f)
  * so chips must stay lighter than the frame. 0.74 with surface 0.56 made pills
  * too dark — ease chips only.
  */
-private val ChipGlassFill = Color(0.105f, 0.092f, 0.073f, 0.48f)
+private val ChipGlassFill = Color(26 / 255f, 27 / 255f, 28 / 255f, 0.48f)
 
 /**
  * Specular edge highlight for FULL glass. Tuned on device: mid was faint, 2×
@@ -299,22 +299,3 @@ fun MonitorGlassBudgetLoop(glass: MonitorGlass) {
         }
     }
 }
-
-/**
- * Feed content-rect helper retained for glass-era layout tests (analysis
- * placement still uses the same fit/fill math as the old grab pass).
- */
-internal fun glassBackdropContentRect(
-    feedWidth: Float,
-    feedHeight: Float,
-    sourceWidth: Int,
-    sourceHeight: Int,
-    aspectFill: Boolean,
-): LiveFeedContentRect? =
-    liveFeedContentRect(
-        containerWidth = feedWidth,
-        containerHeight = feedHeight,
-        sourceWidth = sourceWidth,
-        sourceHeight = sourceHeight,
-        aspectFill = aspectFill,
-    )

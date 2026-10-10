@@ -57,7 +57,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
-          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|Sources/CJNI/|scripts/android-|scripts/verify-android-|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
+          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|scripts/android-|scripts/verify-android-|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
             if ! grep -Fxq 'Apps/Android/distribution/whatsnew/whatsnew-en-US' <<< "$changed_files"; then
               echo "Update Apps/Android/distribution/whatsnew/whatsnew-en-US with plain-language changes for Play testers." >&2
               exit 1
@@ -127,6 +127,7 @@ jobs:
               - 'Tests/**'
               - 'ios/**'
               - 'Package.swift'
+              - 'opencine-pins.txt'
               - '.swift-format'
               - 'scripts/add-*.rb'
               - 'scripts/ios-*.sh'
@@ -137,8 +138,8 @@ jobs:
               - 'Apps/Android/**'
               - 'Sources/OpenZCineCore/**'
               - 'Sources/OpenZCineAndroidFacade/**'
-              - 'Sources/CJNI/**'
               - 'Package.swift'
+              - 'opencine-pins.txt'
               - 'Package.resolved'
               - 'scripts/android-*.sh'
               - 'scripts/verify-android-*.sh'
@@ -171,6 +172,12 @@ jobs:
           xcode-version: latest-stable
       - name: Install native tooling
         run: brew install just swift-format || true
+      # Candidate (OpenCine CORE-02 + MEDIA-01): Package.swift (OpenCineMedia, OpenCineNikon) and
+      # ios/Runner.xcodeproj (OpenCineCore + OpenCineMedia) take the OpenCine checkout at
+      # ../OpenCine, pinned by SHA in opencine-pins.txt. Works only once that repository is
+      # published. Delete when the app pins it by url + version.
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
       - name: Run native checks
         run: just native-check
 
@@ -218,6 +225,12 @@ jobs:
           java-version: "21"
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      # Candidate (OpenCine CORE-02 + MEDIA-01): Apps/Android/settings.gradle.kts includes
+      # ../../../OpenCine/Android and the Swift Android core stages OpenCineMedia and
+      # OpenCineNikon (VENDOR-02) from ../OpenCine, a sibling checkout pinned by SHA in
+      # opencine-pins.txt.
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
 
       # Swift 6.3.3 plus its matching Android SDK. The action configures the
       # NDK sysroot; Gradle then cross-compiles the arm64-v8a core itself.

@@ -31,6 +31,15 @@ struct ThermalLoadPolicyTests {
         #expect(ThermalTier.serious < ThermalTier.critical)
     }
 
+    @Test func multicamShedsOnlyNonProgram() {
+        let base = 1.0 / 24.0
+        #expect(ThermalTier.critical.multicamPollInterval(isProgram: true, base: base) == base)
+        #expect(
+            ThermalTier.critical.multicamPollInterval(isProgram: false, base: base)
+                == ThermalTier.critical.sheddingInterval(base: base))
+        #expect(ThermalTier.nominal.multicamPollInterval(isProgram: false, base: base) == base)
+    }
+
     @Test func feedStaysReadableAtCritical() {
         // Encodes the floor invariant: even at critical, the feed must stay >= 10 fps and the scopes
         // (dense 1/8 s base, worst case) >= 4 Hz. Bumping a multiplier past that fails here.

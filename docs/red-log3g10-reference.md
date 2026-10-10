@@ -79,10 +79,12 @@ requires a **color-space transform** from RWG plus an output transform / tone ma
 publishes 3×3 matrices between RWG and Rec.709 (and Rec.2020, ACES AP0). OpenZCine's generated
 RWG/Log3G10→Rec.709 monitor LUTs follow that path in `MonitorLUT` / `LUTLibrary`.
 
-False colour intentionally measures the **incoming log signal before a display LUT**. It decodes
-each channel first and then forms scene-linear luminance using RED's published RWG→XYZ Y row
-(`[0.286694, 0.842979, −0.129673]`). Applying Rec.709 weights directly to Log3G10-encoded RGB is
-mathematically invalid because both the transfer function and source gamut are wrong at that point.
+CineStop measures the incoming scene signal before the creative display LUT. Nikon's source
+adapter decodes each channel and forms scene-linear luminance using RED's published RWG→XYZ Y row
+(`[0.286694, 0.842979, −0.129673]`). Encoded RGB weighted directly is a different measurement from
+this scene-linear source-gamut luminance. Video, IRE and Limits use the shared monitor-signal
+reading instead; their optional 709 reading uses the built-in monitor look, independently of the
+selected creative LUT.
 
 ## REDWideGamutRGB (brief)
 
@@ -117,13 +119,14 @@ OpenZCine separates five layers that must not be conflated:
 4. **Normalized raw-scope IRE** — waveform, histogram, zebra, and traffic-light logic expand the
    useful encoded interval from transfer-function black to the camera's current clipping warning
    across 0–100. This remains a full-range raw/log ruler, distinct from broadcast/legal IRE.
-5. **False-colour monitor IRE** — decoded scene luminance passes through OpenZCine's generated
-   display transform. It fixes 18% grey at 42 IRE and the current clip at 100 before applying the
-   RED Video Mode-style categories.
+5. **False-colour monitor reading**: OpenCineMedia owns the CineStop, Video, IRE and Limits
+   categories. CineStop reads scene stops; the other scales classify the shared monitor-signal
+   reading in LOG or, when an official look exists, 709. There is no separate forced 42-IRE
+   middle-grey transform for these categories.
 
 | Anchor | RED Log3G10 spec | OpenZCine (`ExposureToneCurve.redLog3G10`) | Notes |
 | --- | --- | --- | --- |
-| 18% mid grey | Encoded **`1/3`** (linear `0.18`) | Signal IRE **≈33.3** (native **≈85**); raw-scope IRE **≈39.4** at ISO 800; false-colour monitor IRE **42** | Raw-scope placement follows available headroom; false colour uses a fixed display anchor |
+| 18% mid grey | Encoded **`1/3`** (linear `0.18`) | Signal IRE **≈33.3** (native **≈85**); raw-scope IRE **≈39.4** at ISO 800; CineStop **0 stops** | Raw-scope placement follows available headroom; Video/IRE readings depend on LOG/709 |
 | Encoding ceiling | Encoded **`1.0`** at linear **184.32** | Not used as clip — would be native **255** | Container top; real highlights clip earlier |
 | Practical highlight clip | ISO-dependent sensor clip | Native **145…215** depending on base circuit and metadata ISO; normalized **100%** | Nikon's 3D-LUT-off warning table, not Log3G10 `1.0` |
 | Shadow / toe floor | Linear `0.000` → encoded `0.09155` (native ≈23) | Signal IRE **9.16**; normalized **0%** | Derived from `encode(0.0)`, not hand-tuned |
@@ -173,7 +176,7 @@ recommends approximately **85 ±5** for R3D NE middle grey and **95 ±5** for N-
 match the respective 8-bit-equivalent codes (about 85 and 93), while the camera waveform describes
 the same patches as roughly 33% and 35%. Treating “zebra 95” as “95 IRE” is therefore a unit error.
 
-### Z-stop placement
+### CineStop source adapter
 
 `ExposureScale.signalNative(zStop:curve:)` encodes `0.18 × 2^stop` through the selected published
 curve. `FalseColorMap` performs the inverse per pixel: decode RGB, form source-gamut luminance, then
@@ -182,29 +185,14 @@ than an app-defined IRE threshold.
 
 ### False-colour bands
 
-The three modes classify different physical quantities:
+All four choices use OpenCineMedia's canonical bands and feathering through the Nikon source
+adapter (`FalseColorMap`); they share the monitor menu and defaults with Pocket and Insta:
 
-- **ZC Stops:** sparse, one-third-stop exposure landmarks inspired by the supplied RED ONE Build 20
-  reference, but with an independently tuned palette and OpenZCine naming. RED's official notes
-  define the landmark meanings and state that other picture values remain luminance-only:
-
-  | Scene exposure | ZC colour | Meaning |
-  | --- | --- | --- |
-  | Below −5⅚ | Purple | Minimum exposure, centred around −6 |
-  | −3 ± ⅙ | Teal | Three stops under 18% grey |
-  | 0 ± ⅙ | Green | 18% grey reference |
-  | +1 ± ⅙ | Pink | Skin reference; +1 is OpenZCine's explicit assumption |
-  | +2 ± ⅙ | Straw | Two stops over 18% grey |
-  | M−⅔ ± ⅙ | Yellow | Two-thirds of a stop below mapped maximum |
-  | M−⅓ ± ⅙ | Orange | One-third of a stop below mapped maximum |
-  | M−⅙ and above | Red | Mapped maximum exposure |
-
-  `M = log2(decoded camera clip / 0.18)`, so the final warnings follow the active Log3G10 or N-Log
-  clipping code rather than pretending that +6 is universal. Unmarked values use tone-mapped
-  greyscale. Coloured landmarks retain 40% luminance detail rather than becoming flat fields.
-- **IRE:** published RED Video Mode integer categories applied to OpenZCine's curve-aware monitor
-  IRE. RED publishes the following ranges, but not normative RGB coordinates or feathering values;
-  OpenZCine therefore uses an independently tuned, muted palette and smooth transitions:
+- **CineStop:** complete exposure zones around 18% grey: −2, −1, 0, +1 and +2 stops, with flat
+  shadow/highlight grey, crush and a camera-calibrated clip shelf. This replaces the sparse
+  one-third-stop ZC Stops ramp and its luminance-detail blend. The saved `Stops` key still selects
+  CineStop. Native ordinals remain CineStop 0, IRE 1 and Limits 2; Video is appended as 3.
+- **Video:** the nine canonical monitor-signal categories. The published Video Mode ranges remain:
 
   | IRE | Colour family | Exposure meaning |
   | --- | --- | --- |
@@ -218,35 +206,22 @@ The three modes classify different physical quantities:
   | 96–98 | Orange | Immediate pre-clip warning |
   | 99–100 | Red | Highlight clip |
 
-- **Limits:** four OpenZCine extreme warnings only — purple at 0–4, blue at 5–9, yellow at 94–98,
-  and red at 99–100. Pixels between those ranges retain their original encoded RGB colour. This is
-  deliberately not labelled RED Exposure Mode: it keeps the earlier OpenZCine requirement for both
-  near-limit and terminal-limit warnings over the untouched image.
+- **IRE:** six canonical zones: BDL, NBDL, 18%MG, MG+1, 80%WC and 95%WC. This is distinct from
+  Video's nine categories; unpainted gaps are monochrome monitor-signal values.
+- **Limits:** four extreme warnings at 0–4, 5–9, 94–98 and 99–100. Unpainted pixels preserve the
+  normal underlying image and selected creative look. This is not labelled RED Exposure Mode.
 
-In the compact iOS reference key, IRE and Limits bands occupy their true proportional positions on
-a 0–100 ruler. ZC Stops places its sparse landmarks on a −6-to-mapped-maximum stop ruler. Neutral
-gaps progress from shadow to highlight grey; the key layout does not alter classification math.
+LOG reads the source signal. 709 reads the built-in Rec.709 monitor look when the source has one;
+this choice does not select or depend on the creative LUT. Without an official look (currently
+sRGB/HLG), the reading remains on the source and the reference retains its actual transfer label.
+CineStop keeps scene exposure in both choices; 709 changes its clipping reference. The compact key
+uses the common labels and proportional signal bands or the calibrated scene-stop ruler.
 
-For all three modes, RGB is first decoded through the codec-selected transfer function, then reduced
-to scene-linear luminance in the matching source gamut: REDWideGamutRGB coefficients for Log3G10,
-and BT.2020/N-Gamut coefficients for N-Log. ZC Stops calculates `log2(Y / 0.18)` directly.
-
-IRE and Limits feed `Y` through `MonitorDisplayToneMap`, the same original anchored shoulder used by
-the generated monitor LUT. The false-colour instance derives scene white from the camera's current
-clip code, solves its two anchors exactly, and applies the inverse BT.1886 EOTF:
-
-```text
-18% scene grey → 42 monitor IRE
-current camera clip → 100 monitor IRE
-```
-
-This avoids treating an encoded Log3G10 or N-Log percentage as display IRE. It also means the same
-scene patch enters the same false-colour category on both curves. Unpainted ZC Stops and IRE values
-use tone-mapped monitor luminance as greyscale; unpainted Limits values retain source colour.
-
-ZC Stops feathers each boundary by ±0.05 stop, leaving a solid centre inside every one-third-stop
-landmark. IRE and Limits use ±0.5 IRE smoothstep feathers, so adjacent categories blend and isolated
-categories fade cleanly without erasing RED's narrow single-IRE blue reference.
+Nikon's CineStop adapter retains per-channel source decoding and source-gamut luminance. Pocket's
+encoded-luma path is a different source measurement; common options and palettes do not promise
+identical RGB classification between them. The existing Nikon HLG diffuse-white rounding and
+camera clip assumptions also remain explicit calibration limits. Video, IRE and Limits use the
+shared signal lattice; canonical Media owns categorical colours, gaps and smooth transitions.
 
 There is no persisted manual signal override. R3D NE is unambiguously Log3G10. Nikon documents that
 N-RAW and ProRes RAW can instead use SDR, however, and the current PTP snapshot does not yet expose a
@@ -254,22 +229,28 @@ decoded tone-mode property. Consequently the non-R3D log-monitoring path is vali
 camera is actually set to N-Log; wiring the body-enumerated tone property is a required protocol
 follow-up before claiming automatic SDR/N-Log discrimination.
 
-RED's documented Video Mode runs on the processed monitor/video path. OpenZCine adapts its published
-IRE categories to the generated, clip-calibrated monitor transform so raw/log demo and live feeds
-remain comparable; this is not a claim of bit-exact RED camera output.
+RED's documented Video Mode runs on the processed monitor/video path. The shared monitor adapts
+its published categories to the selected LOG/709 reading and source calibration; this is not a
+claim of bit-exact RED camera output.
 
 The iOS renderer supplies camera JPEG components to Core Image as unmanaged code data, preventing
-the framework's normal sRGB-to-linear input conversion from moving thresholds. All three scales use
-a cached 64³ GPU colour cube generated from the same pure mapping code, keeping live view and
-playback transitions consistent.
+the framework's normal sRGB-to-linear input conversion from moving thresholds. All four scales use
+cached 64³ cubes; Limits uses paint and weight cubes over the normal image. Live rendering uses the
+live-source mapping, while video playback uses the playback mapping and its reference calibration.
+
+Mirror options select horizontal and vertical axes independently (horizontal selected by default,
+vertical off), applied only when the tool is visible. Both axes transform presentation and inverse
+focus mapping, leaving raw scopes and recordings unmirrored. Waveform/parade brightness uses the
+common gain: 100% is unity and 200% doubles it. This replaces Nikon's quarter-strength gain; equal
+settings do not establish equal physical trace density across native backends.
 
 ## Code cross-references
 
 | Module | Path | Role |
 | --- | --- | --- |
 | Log curve math, ISO warning tables, normalized mapping, Z-stops | [`Sources/OpenZCineCore/ExposureScale.swift`](../Sources/OpenZCineCore/ExposureScale.swift) | `ExposureToneCurve`, `R3DNEHighlightWarning`, `ExposureSignalMapping` |
-| Shared display/IRE tone map | [`Sources/OpenZCineCore/MonitorDisplayToneMap.swift`](../Sources/OpenZCineCore/MonitorDisplayToneMap.swift) | Exact 18%-grey and current-clip monitor anchors |
-| False-colour bands and cube LUT | [`Sources/OpenZCineCore/FalseColor.swift`](../Sources/OpenZCineCore/FalseColor.swift) | Curve selection, source-linear luminance, stop/IRE bands |
+| Source display tone map | [`Sources/OpenZCineCore/MonitorDisplayToneMap.swift`](../Sources/OpenZCineCore/MonitorDisplayToneMap.swift) | Source-derived display fallback, separate from canonical false-colour categories |
+| False-colour source adapter and cubes | [`Sources/OpenZCineCore/FalseColor.swift`](../Sources/OpenZCineCore/FalseColor.swift) | Source-linear CineStop adapter; canonical `OpenCineMedia.LiveColorScience` bands and `MonitorFalseColorLattice` |
 | iOS false-colour rendering | [`ios/Runner/ImageEffectsCompositor.swift`](../ios/Runner/ImageEffectsCompositor.swift) | Cached cube application across live, playback, and demo feeds |
 | Histogram traffic lights / crush floor | [`Sources/OpenZCineCore/ScopeSampler.swift`](../Sources/OpenZCineCore/ScopeSampler.swift) | Crush/clip edge detection on the reference scale |
 | Traffic Lights meter | [`Sources/OpenZCineCore/TrafficLightsMeter.swift`](../Sources/OpenZCineCore/TrafficLightsMeter.swift) | Per-channel goal-post readout |

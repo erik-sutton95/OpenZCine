@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineMedia
 
 /// Rec.709 / broadcast studio-swing black and white code values (8-bit), kept as named reference
 /// points for tests and any future studio-swing (non-log) feed. On the Log3G10 live-view / R3D feed
@@ -32,9 +33,7 @@ public enum ExposureToneCurve: String, CaseIterable, Codable, Sendable, Identifi
     /// REDWideGamutRGB/Log3G10. The fallback is N-Log for the ZR log-monitoring path; callers that
     /// can report SDR explicitly must gate log assists before using this helper.
     public static func forCameraCodec(_ codec: String) -> ExposureToneCurve {
-        let upper = codec.uppercased()
-        if upper.contains("R3D") || upper.contains("LOG3G10") { return .redLog3G10 }
-        return .nikonNLog
+        PTPCameraPropertyDecoders.isRedLog3G10Codec(codec) ? .redLog3G10 : .nikonNLog
     }
 
     /// Returns a curve only when the supplied signal label positively identifies its transfer
@@ -329,56 +328,11 @@ public enum ExposureScale {
     }
 }
 
-// MARK: - Log decode/encode for Z-stop placement (matches ``MonitorLUT`` transfer functions)
+// MARK: - Log decode/encode for Z-stop placement
 
-enum Log3G10 {
-    static func decode(_ encoded: Double) -> Double {
-        let x = encoded
-        let a = 0.224282
-        let b = 155.975327
-        let c = 0.01
-        let g = 15.1927
-        return x < 0 ? (x / g) - c : (pow(10.0, x / a) - 1.0) / b - c
-    }
-
-    static func encode(_ linear: Double) -> Double {
-        let b = 155.975327
-        let c = 0.01
-        let g = 15.1927
-        let a = 0.224282
-        if linear <= -c { return (linear + c) * g }
-        return a * log10((linear + c) * b + 1.0)
-    }
-}
-
-enum NLog {
-    static func decode(_ codeValue: Double) -> Double {
-        let code = codeValue * 1023
-        return code < 452 ? pow(code / 650, 3.0) - 0.0075 : exp((code - 619) / 150)
-    }
-
-    static func encode(_ linear: Double) -> Double {
-        if linear < 0.328 {
-            return 650 * pow(max(0, linear + 0.0075), 1.0 / 3.0) / 1023
-        }
-        return (150 * log(linear) + 619) / 1023
-    }
-}
-
-/// IEC 61966-2-1 sRGB transfer function. Display-referred: linear 1.0 == display white, and
-/// values above it clip (the JPEG preview carries no highlight headroom). 18% grey encodes to
-/// ≈0.4614 (native ≈118).
-enum SRGB {
-    static func decode(_ encoded: Double) -> Double {
-        let e = min(1, max(0, encoded))
-        return e <= 0.04045 ? e / 12.92 : pow((e + 0.055) / 1.055, 2.4)
-    }
-
-    static func encode(_ linear: Double) -> Double {
-        let l = min(1, max(0, linear))
-        return l <= 0.003_130_8 ? 12.92 * l : 1.055 * pow(l, 1.0 / 2.4) - 0.055
-    }
-}
+// N-Log, Log3G10 and sRGB are OpenCineMedia's (`NLog`, `Log3G10`, `SRGB`, the curves behind
+// `MonitorTransfer.nlog`, `.log3G10` and `.srgb`). HLG stays here: its BT.2408 diffuse white is
+// the rounded 0.26496, not the shared `.hdr`'s computed value.
 
 /// ITU-R BT.2100 HLG OETF (ARIB STD-B67). The curve API's `linearLight` contract is scene
 /// reflectance (1.0 == diffuse white), so values are scaled onto the HLG scene-linear axis per

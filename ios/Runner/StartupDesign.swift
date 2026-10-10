@@ -1,4 +1,9 @@
 import AVFoundation
+import MonitorPresentation
+import MonitorUI
+import OpenCineAppKit
+import OpenCineApple
+import OpenZCineCore
 import SwiftUI
 
 /// Maps technical connection/discovery status strings to operator-friendly copy for startup screens.
@@ -67,129 +72,6 @@ enum StartupConnectionCopy {
         return trimmed
     }
 
-    static func friendlyStatusTitle(
-        for connection: NativeAppModel.ConnectionState, isDiscovering: Bool
-    ) -> String {
-        switch connection {
-        case .disconnected:
-            return isDiscovering ? "Looking" : "Ready"
-        case .scanning:
-            return "Looking"
-        case .pairing:
-            return "Pairing"
-        case .reconnecting:
-            return "Reconnecting"
-        case .preparingLiveView:
-            return "Reading"
-        case .connected:
-            return "Connected"
-        }
-    }
-}
-
-enum StartupColors {
-    static let background = Color(red: 0.114, green: 0.094, blue: 0.075)
-    static let surface = Color(red: 0.086, green: 0.075, blue: 0.059)
-    static let tile = Color(red: 0.141, green: 0.122, blue: 0.102)
-    static let control = Color(red: 0.173, green: 0.149, blue: 0.125)
-    static let ink = Color(red: 0.949, green: 0.925, blue: 0.886)
-    static let muted = Color(red: 0.655, green: 0.612, blue: 0.553)
-    static let dim = Color(red: 0.490, green: 0.447, blue: 0.392)
-    static let border = Color.white
-    static let card = surface.opacity(0.58)
-    static let accent = Color(red: 0.878, green: 0.655, blue: 0.227)
-    static let ready = Color(red: 0.247, green: 0.710, blue: 0.416)
-    static let destructive = Color(red: 0.930, green: 0.267, blue: 0.267)
-    static let darkText = Color(red: 0.110, green: 0.086, blue: 0.047)
-
-    /// Cinematic page backdrop for the connection screens: a warm near-black base with a soft glow
-    /// from the upper area that falls off toward the edges (matches the setup mockup).
-    static var backdrop: some View {
-        ZStack {
-            Color(red: 0.055, green: 0.045, blue: 0.034)
-            RadialGradient(
-                colors: [
-                    Color(red: 0.132, green: 0.108, blue: 0.082),
-                    Color(red: 0.055, green: 0.045, blue: 0.034).opacity(0),
-                ],
-                center: UnitPoint(x: 0.5, y: 0.24),
-                startRadius: 8,
-                endRadius: 760
-            )
-        }
-    }
-}
-
-struct StartupHeader: View {
-    @Environment(\.openURL) private var openURL
-
-    var title: String = "Connection setup"
-    let statusTitle: String
-    let isBusy: Bool
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 11) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("OPENZCINE")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .tracking(1.3)
-                    .foregroundStyle(StartupColors.muted)
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text(title)
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
-                        .foregroundStyle(StartupColors.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    legalLink("Privacy", path: "privacy")
-                    legalLink("Terms", path: "terms")
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                Text(statusTitle)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(statusColor)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(StartupColors.surface.opacity(0.50), in: Capsule())
-            .overlay(Capsule().stroke(statusColor.opacity(0.40), lineWidth: 1))
-        }
-    }
-
-    /// Quiet utility text link to a policy page on openzcine.app — deliberately dimmer than the
-    /// title so it never competes with it.
-    private func legalLink(_ label: String, path: String) -> some View {
-        Button(label) {
-            guard let url = URL(string: "https://openzcine.app/\(path)") else { return }
-            openURL(url)
-        }
-        .font(.system(size: 11, weight: .medium, design: .rounded))
-        .foregroundStyle(StartupColors.dim)
-        .lineLimit(1)
-        .fixedSize()
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Open the OpenZCine \(label) page")
-    }
-
-    private var statusColor: Color {
-        if isBusy
-            || [
-                "Looking", "Pairing", "Reconnecting", "Starting", "Reading", "Discovering",
-                "Preparing",
-            ]
-            .contains(statusTitle)
-        {
-            return StartupColors.accent
-        }
-        return StartupColors.ready
-    }
 }
 
 /// Minimal inline state shown while the post-connect property burst and first
@@ -204,7 +86,7 @@ struct StartupPreparingLiveView: View {
             HStack(spacing: 14) {
                 ProgressView()
                     .controlSize(.regular)
-                    .tint(StartupColors.accent)
+                    .tint(MonitorTheme.accent)
                 StartupIconSquare(systemName: "camera.aperture", size: 48)
             }
 
@@ -215,7 +97,7 @@ struct StartupPreparingLiveView: View {
                         : model.userFacingConnectionMessage
                 )
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
+                .foregroundStyle(MonitorTheme.text)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -236,905 +118,6 @@ struct StartupPreparingLiveView: View {
     }
 }
 
-struct StartupSavedCamerasView: View {
-    @Environment(NativeAppModel.self) private var model
-    let compact: Bool
-    let contentLayout: StartupContentLayout
-
-    var body: some View {
-        // Split on actual available width, not the shared `compact` mode (which reads iPhone
-        // landscape as single-column): two columns whenever the width can hold them.
-        GeometryReader { proxy in
-            let twoColumn = proxy.size.width >= 640
-            Group {
-                if twoColumn {
-                    HStack(alignment: .top, spacing: 16) {
-                        introCard(hugsContent: false)
-                            .frame(width: max(288, proxy.size.width * 0.36))
-                            .frame(maxHeight: .infinity)
-                        cameraListCard
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 14) {
-                        // Hugging intro: the landscape Spacer makes the card height-greedy, which
-                        // stacked stole half the screen from the camera list as a dead band.
-                        introCard(hugsContent: true)
-                        cameraListCard
-                            .frame(maxHeight: .infinity)
-                    }
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-        }
-    }
-
-    private func introCard(hugsContent: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Your cameras.")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text(
-                "Tap a saved camera to reconnect. Recovery help stays on the row that needs it."
-            )
-            .font(.system(size: 13, weight: .regular, design: .rounded))
-            .foregroundStyle(StartupColors.muted)
-            .lineSpacing(2)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 10)
-
-            if hugsContent {
-                Color.clear.frame(height: 16)  // stacked: hug, give the camera list the height
-            } else {
-                Spacer(minLength: 12)  // two-column: fill the column, pin buttons to the bottom
-            }
-
-            VStack(spacing: 10) {
-                Button {
-                    model.startFirstPairWizard()
-                } label: {
-                    Text("Pair new camera")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(StartupFilledButtonStyle())
-                .disabled(isBusy)
-
-                StartupMediaLibraryButton(compact: true, disabled: isBusy)
-
-                // Settings work without a camera — Frame.io sign-in and cache live in Storage.
-                Button {
-                    model.openStandaloneSettings()
-                } label: {
-                    Label("Settings", systemImage: "gearshape")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(StartupQuietButtonStyle())
-                .disabled(isBusy)
-            }
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(cardBackground)
-    }
-
-    private var cameraListCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("CAMERA LIST")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .tracking(1.4)
-                .foregroundStyle(StartupColors.muted)
-            Text("Tap a camera to connect")
-                .font(.system(size: 25, weight: .bold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
-                .padding(.top, 6)
-
-            // Indicators off: the system scroll bar draws INSIDE the padded content and ran
-            // straight over the card borders; the wizard's scroller already hides it and leans
-            // on fadeOverflowBottom to signal overflow.
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    // One ROW per body: records stay one-per-path on disk, and the serial
-                    // stamped at connect groups them here (see SavedCameraPathGroups).
-                    let pathGroups = SavedCameraPathGroups.group(model.savedCameras)
-                    ForEach(pathGroups.indices, id: \.self) { index in
-                        let group = pathGroups[index]
-                        let availabilityFor = { (record: PTPIPSavedCameraRecord) in
-                            SavedCameraAvailabilityPolicy.resolve(
-                                camera: record,
-                                discoveredCameras: model.discoveredCameras,
-                                connectedHost: model.connectedIdentity?.host,
-                                onCameraAccessPoint: model.isOnCameraAccessPointNetwork,
-                                hotspotSubnetBases:
-                                    NativeNetworkInterfaceSnapshot
-                                    .hotspotSubnetBases()
-                            )
-                        }
-                        if let active = SavedCameraPathGroups.activePath(
-                            in: group, availability: availabilityFor)
-                        {
-                            StartupCameraListRow(
-                                camera: active,
-                                availability: availabilityFor(active),
-                                isBusy: isBusy,
-                                // The hotspot-recovery state belongs to the hotspot PATH, not
-                                // the body: only when that path is the active one does the row
-                                // wear it — the strip above explains it either way.
-                                isRecoveryTarget: hotspotPrompt?.camera.host == active.host,
-                                paths: group,
-                                availabilityFor: availabilityFor
-                            )
-                            .environment(model)
-                        }
-                    }
-                    if model.savedCameras.isEmpty {
-                        Text("No cameras saved yet — Pair new camera walks you through it.")
-                            .font(.system(size: 12, weight: .regular, design: .rounded))
-                            .foregroundStyle(StartupColors.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    nearbyBroadcasts
-                }
-                .padding(.top, 16)
-                .padding(.bottom, 4)
-            }
-            // Pull down to rescan: one awaited discovery pass (rows keep their last state while
-            // it runs), then the background loop resumes.
-            .refreshable {
-                await model.refreshCameraDiscovery()
-            }
-            .fadeOverflowBottom()
-        }
-        .padding(22)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(cardBackground)
-    }
-
-    /// Devices already holding a camera and sharing what they see.
-    ///
-    /// Listed beside the cameras rather than behind a separate flow, because to the operator it is
-    /// the same question — which picture do I want on this screen. The camera itself serves one
-    /// device, so joining a broadcast is what a second screen does instead of connecting.
-    @ViewBuilder private var nearbyBroadcasts: some View {
-        // A device with saved cameras only sees this section once a broadcast exists; a device
-        // with none is here BECAUSE of broadcasts, so the section stays mounted with an honest
-        // placeholder — browsing runs the whole time this screen is up.
-        if !model.visibleRelayBroadcasts.isEmpty || model.savedCameras.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("NEARBY BROADCASTS")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .tracking(1.4)
-                    .foregroundStyle(StartupColors.muted)
-                    .padding(.top, 6)
-                if model.networkFiltersDiscovery {
-                    // Proven, not guessed: a device answered the app's direct check while the
-                    // network's own discovery never delivered it (multicast/mDNS filtered —
-                    // UniFi "Multicast Filtering" and multicast minimum-rate settings are the
-                    // field examples). Devices below were found directly and stay joinable.
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(StartupColors.accent)
-                        Text(
-                            "This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router."
-                        )
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(StartupColors.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        StartupColors.accent.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 14)
-                    )
-                }
-                if model.visibleRelayBroadcasts.isEmpty {
-                    HStack(spacing: 8) {
-                        Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(StartupColors.muted)
-                        Text(
-                            "None yet — start Share This Feed on the device holding the camera."
-                        )
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(StartupColors.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        StartupColors.tile.opacity(0.25),
-                        in: RoundedRectangle(cornerRadius: 14)
-                    )
-                }
-                ForEach(model.visibleRelayBroadcasts) { host in
-                    Button {
-                        model.joinRelay(host)
-                    } label: {
-                        HStack(spacing: 11) {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(StartupColors.accent)
-                                .frame(width: 34, height: 34)
-                                .background(
-                                    StartupColors.accent.opacity(0.12),
-                                    in: RoundedRectangle(cornerRadius: 9))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(host.name)
-                                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                                    .foregroundStyle(StartupColors.ink)
-                                Text("Watch this device's feed")
-                                    .font(.system(size: 11, weight: .regular, design: .rounded))
-                                    .foregroundStyle(StartupColors.muted)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            StartupColors.tile.opacity(0.4),
-                            in: RoundedRectangle(cornerRadius: 14)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
-                    }
-                    .buttonStyle(.zcTapTarget)
-                    .disabled(isBusy)
-                }
-            }
-        }
-    }
-
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(StartupColors.card)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(StartupColors.border.opacity(0.08), lineWidth: 1)
-            )
-    }
-
-    private var isBusy: Bool {
-        model.isStartupActionLocked
-    }
-
-    private var hotspotPrompt: (camera: PTPIPSavedCameraRecord, bridgeIsActive: Bool)? {
-        switch model.startupRecoveryPrompt {
-        case .none:
-            return nil
-        case .enableIPhoneHotspot(let camera):
-            return (camera, false)
-        case .waitForIPhoneHotspotCamera(let camera):
-            return (camera, true)
-        }
-    }
-}
-
-enum StartupCameraColorOption: String, CaseIterable, Identifiable {
-    case amber
-    case green
-    case blue
-    case red
-    case violet
-    case white
-
-    var id: String { rawValue }
-
-    static func resolve(_ rawValue: String?) -> StartupCameraColorOption {
-        rawValue.flatMap(StartupCameraColorOption.init(rawValue:)) ?? .amber
-    }
-
-    var title: String {
-        switch self {
-        case .amber: "Amber"
-        case .green: "Green"
-        case .blue: "Blue"
-        case .red: "Red"
-        case .violet: "Violet"
-        case .white: "White"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .amber:
-            return StartupColors.accent
-        case .green:
-            return StartupColors.ready
-        case .blue:
-            return Color(red: 0.294, green: 0.624, blue: 0.969)
-        case .red:
-            return StartupColors.destructive
-        case .violet:
-            return Color(red: 0.675, green: 0.506, blue: 0.945)
-        case .white:
-            return StartupColors.ink
-        }
-    }
-}
-
-enum StartupCameraIconOption: String, CaseIterable, Identifiable {
-    case viewfinder
-    case camera
-    case video
-    case a
-    case b
-    case c
-
-    var id: String { rawValue }
-
-    static func resolve(_ rawValue: String?) -> StartupCameraIconOption {
-        rawValue.flatMap(StartupCameraIconOption.init(rawValue:)) ?? .viewfinder
-    }
-
-    var title: String {
-        switch self {
-        case .viewfinder: "Viewfinder"
-        case .camera: "Camera"
-        case .video: "Video"
-        case .a: "A"
-        case .b: "B"
-        case .c: "C"
-        }
-    }
-
-    var systemName: String? {
-        switch self {
-        case .viewfinder:
-            return "viewfinder"
-        case .camera:
-            return "camera"
-        case .video:
-            return "video"
-        case .a, .b, .c:
-            return nil
-        }
-    }
-}
-
-struct StartupCameraIconSquare: View {
-    let option: StartupCameraIconOption
-    var size: CGFloat = 56
-    var cornerRadius: CGFloat = DesignTokens.cornerRadius
-    var tint: Color
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(StartupColors.tile)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius).stroke(
-                    tint.opacity(0.52), lineWidth: 1.2)
-            )
-            .overlay {
-                if let systemName = option.systemName {
-                    Image(systemName: systemName)
-                        .font(.system(size: max(16, size * 0.38), weight: .medium))
-                        .foregroundStyle(tint)
-                } else {
-                    Text(option.title)
-                        .font(.system(size: max(18, size * 0.42), weight: .bold, design: .rounded))
-                        .foregroundStyle(tint)
-                }
-            }
-            .frame(width: size, height: size)
-    }
-}
-
-/// One rich row in the landscape camera list: identity + transport/SSID/last-connected detail,
-/// a status pill, and a Connect/Reconnect action. Edit/remove live in a long-press menu.
-struct StartupCameraListRow: View {
-    @Environment(NativeAppModel.self) private var model
-    @State private var isDeleteConfirmationPresented = false
-    @State private var isRenamePresented = false
-    @State private var isAddSetupPresented = false
-    @State private var renameText = ""
-    let camera: PTPIPSavedCameraRecord
-    let availability: SavedCameraAvailability
-    let isBusy: Bool
-    var isRecoveryTarget: Bool = false
-    /// Every saved path of this body (the active one included), most recently seen first.
-    /// One record = one path; with a single path the row reads exactly as it always has.
-    var paths: [PTPIPSavedCameraRecord] = []
-    /// The setup whose name is being edited, and the text field's contents. Separate from the
-    /// camera rename above: that one names the BODY and lands on every path.
-    @State private var renamingSetup: PTPIPSavedCameraRecord?
-    @State private var setupNameText = ""
-    /// Availability resolver for sibling paths — the list owns discovery state.
-    var availabilityFor: ((PTPIPSavedCameraRecord) -> SavedCameraAvailability)? = nil
-
-    private var allPaths: [PTPIPSavedCameraRecord] { paths.isEmpty ? [camera] : paths }
-
-    /// Squarer than the pills elsewhere in this list, on purpose: these read as segmented TABS
-    /// the operator picks between, not as status chips that merely report something.
-    private static let setupTabCornerRadius: CGFloat = 10
-
-    var body: some View {
-        // Ticks once a second so the card-scan state (pill %, dimmed Preparing… button, subtitle)
-        // stays live between discovery passes — the scan progresses outside observable state.
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .center, spacing: 8) {
-                    Text(title)
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        .foregroundStyle(StartupColors.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    statusPill
-                    connectButton
-                    optionsMenu
-                }
-                Text(subtitle)
-                    .font(.system(size: 13, weight: .regular, design: .rounded))
-                    .foregroundStyle(StartupColors.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                // One body, several ways in: a chip per saved setup, availability dot on each.
-                // The row's title, pill and Connect follow the ACTIVE setup; a chip tap
-                // connects over that specific one, and "+" adds a setup this camera doesn't
-                // have yet. Always visible — a single chip names the one saved path at a
-                // glance, and the add chip is how the second one gets made. Scrolls sideways
-                // rather than truncating: four chips don't fit a portrait phone row.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        ForEach(allPaths) { path in
-                            pathChip(path)
-                        }
-                        addSetupChip
-                    }
-                }
-                .padding(.top, 4)
-            }
-        }
-        .padding(.horizontal, 16)
-        // The setup tabs are the row's primary control now, so the card breathes a little more
-        // around them — the extra height is the tabs' own, not padding for its own sake.
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StartupColors.tile.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14).stroke(borderColor, lineWidth: 1)
-        )
-        .contextMenu { menuActions }
-        .alert("Remove camera?", isPresented: $isDeleteConfirmationPresented) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove", role: .destructive) {
-                // Remove means the CAMERA — every saved path goes with it. Per-path removal
-                // lives in the menu's Forget a Path.
-                for path in allPaths {
-                    model.forgetPairing(host: path.host)
-                }
-            }
-        } message: {
-            Text(removalMessage)
-        }
-        .alert("Rename camera", isPresented: $isRenamePresented) {
-            TextField("Name", text: $renameText)
-            Button("Cancel", role: .cancel) {}
-            Button("Save") { commitRename() }
-        } message: {
-            Text("Give this camera a name you'll recognize.")
-        }
-        .alert(
-            "Rename setup",
-            isPresented: Binding(
-                get: { renamingSetup != nil },
-                set: { if !$0 { renamingSetup = nil } })
-        ) {
-            TextField("Name", text: $setupNameText)
-            Button("Cancel", role: .cancel) { renamingSetup = nil }
-            Button("Save") { commitSetupRename() }
-        } message: {
-            // The network, not the number: "which one is this" is the question a person renaming
-            // a setup is actually holding, and the chip deliberately does not answer it.
-            Text(setupRenameMessage)
-        }
-    }
-
-    private var setupRenameMessage: String {
-        guard let renamingSetup else { return "" }
-        guard let network = SavedCameraPathGroups.networkQualifier(for: renamingSetup) else {
-            return "Name this setup so you can tell it apart at a glance."
-        }
-        return "This one is on \(network). Name it so you can tell it apart at a glance."
-    }
-
-    private func commitSetupRename() {
-        guard let renamingSetup else { return }
-        model.updateSavedCameraSetupName(setup: renamingSetup, name: setupNameText)
-        self.renamingSetup = nil
-    }
-
-    @ViewBuilder private var menuActions: some View {
-        Button {
-            renameText = camera.presentation?.customName ?? ""
-            isRenamePresented = true
-        } label: {
-            Label("Rename", systemImage: "pencil")
-        }
-        if allPaths.count > 1 {
-            // A camera can hold several Wi-Fi setups now, and "Wi-Fi (2)" is a placeholder, not a
-            // name. The operator knows which is the studio and which is the van; this is where
-            // they say so, and the chip wears it from then on.
-            Menu {
-                ForEach(allPaths) { path in
-                    Button {
-                        renamingSetup = path
-                        setupNameText = path.setupName ?? ""
-                    } label: {
-                        Label(
-                            SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths),
-                            systemImage: "pencil")
-                    }
-                }
-            } label: {
-                Label("Rename a Setup", systemImage: "tag")
-            }
-            Menu {
-                ForEach(allPaths) { path in
-                    Button(role: .destructive) {
-                        model.forgetPairing(host: path.host)
-                    } label: {
-                        Label(
-                            "Forget \(SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths))",
-                            systemImage: "minus.circle")
-                    }
-                }
-            } label: {
-                Label("Forget a Path", systemImage: "point.3.connected.trianglepath.dotted")
-            }
-        }
-        Button(role: .destructive) {
-            isDeleteConfirmationPresented = true
-        } label: {
-            Label("Remove", systemImage: "trash")
-        }
-    }
-
-    private func commitRename() {
-        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The name belongs to the CAMERA, so it lands on every saved path — otherwise a body
-        // renamed on the hotspot path would answer to its bare name when cabled.
-        for path in allPaths {
-            model.updateSavedCameraPresentation(
-                camera: path,
-                customName: trimmed.isEmpty ? nil : trimmed,
-                borderColor: path.presentation?.borderColor,
-                icon: path.presentation?.icon
-            )
-        }
-    }
-
-    private func connect() {
-        connect(camera, availability: availability)
-    }
-
-    private func connect(
-        _ record: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
-    ) {
-        // Both branches carry the tapped record: a path chip is a statement about WHICH setup to
-        // use, and dialling a discovered address without it left the connect to re-derive the
-        // setup from the host — which cannot tell one body's setups apart when they share one.
-        switch availability {
-        case .available(let discoveredCamera):
-            model.connectToCamera(discoveredCamera, setup: record)
-        case .connected, .offline:
-            model.connectSavedCamera(record)
-        }
-    }
-
-    private func pathChip(_ path: PTPIPSavedCameraRecord) -> some View {
-        let pathAvailability = availabilityFor?(path) ?? .offline
-        let isActive = path.id == camera.id
-        return Button {
-            connect(path, availability: pathAvailability)
-        } label: {
-            HStack(spacing: 6) {
-                setupTabDot(for: path, availability: pathAvailability)
-                Text(SavedCameraPathGroups.pathChipLabel(for: path, in: allPaths))
-                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(isActive ? StartupColors.ink : StartupColors.muted)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(
-                StartupColors.control.opacity(isActive ? 0.8 : 0.45),
-                in: RoundedRectangle(cornerRadius: Self.setupTabCornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Self.setupTabCornerRadius).stroke(
-                    isActive
-                        ? StartupColors.accent.opacity(0.45)
-                        : StartupColors.border.opacity(0.12),
-                    lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(isBusy)
-        // ponytail: no manual "default setup" star — the row's Connect already prefers
-        // connected > discovered > most recent, which picks the reachable setup better than a
-        // static flag would. Add the flag only if operators ask for a pinned choice.
-        .contextMenu {
-            if allPaths.count > 1 {
-                Button(role: .destructive) {
-                    model.forgetPairing(host: path.host)
-                } label: {
-                    Label(
-                        "Forget \(SavedCameraPathGroups.pathLabel(for: path)) Setup",
-                        systemImage: "minus.circle")
-                }
-            }
-        }
-    }
-
-    /// The kinds this camera could still be set up for. HDMI capture is a video source, not a
-    /// saved camera setup, so it is not offered here.
-    private var missingSetupKinds: [CameraPath.Kind] {
-        let saved = Set(allPaths.compactMap(\.pathKind))
-        // HDMI capture is iPad-only — `AVCaptureDeviceTypeExternal` is UVC-on-iPad, so offering
-        // it on a phone would be offering something the hardware cannot do.
-        var kinds: [CameraPath.Kind] = [.usbC, .cameraAccessPoint, .infrastructure, .phoneHotspot]
-        if UVCVideoSource.isSupportedHardware { kinds.append(.hdmiCapture) }
-        return kinds.filter { kind in
-            // Router stays on offer however many are saved: a camera can live on a studio
-            // network, a home one and a location's, and each is its own setup keyed by the
-            // network's name. Every other kind is singular by definition — the access point is
-            // the camera's own network, the hotspot is this phone, the cable is the cable — so
-            // offering a second one would be offering the row that already exists.
-            kind == .infrastructure || !saved.contains(kind)
-        }
-    }
-
-    @ViewBuilder private var addSetupChip: some View {
-        if !missingSetupKinds.isEmpty {
-            Button {
-                isAddSetupPresented = true
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10.5, weight: .bold))
-                    Text("Add setup")
-                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                }
-                .foregroundStyle(StartupColors.muted)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(
-                    StartupColors.control.opacity(0.25),
-                    in: RoundedRectangle(cornerRadius: Self.setupTabCornerRadius)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Self.setupTabCornerRadius).stroke(
-                        StartupColors.border.opacity(0.2),
-                        style: StrokeStyle(lineWidth: 1, dash: [3, 2.5]))
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(isBusy)
-            .sheet(
-                isPresented: $isAddSetupPresented,
-                onDismiss: { model.runPendingAddSetupAction() },
-                content: {
-                    StartupAddSetupSheet(camera: camera, missingKinds: missingSetupKinds)
-                        .environment(model)
-                })
-        }
-    }
-
-    /// A camera-AP setup we hold credentials for, while this device is not on that network.
-    ///
-    /// It is neither reachable nor dead, and iOS cannot tell us which: there is no API to scan for
-    /// a network by name (`NEHotspotNetwork` reports only the network already joined), so "is the
-    /// camera powered on" is unanswerable from here. What IS certain is that tapping it offers the
-    /// join, because the SSID resolves and the key is saved. A plain dark dot claimed the opposite
-    /// and read as a broken tab — the more so now that an AP setup only lights on its own fixed
-    /// address, which makes dark its normal resting state.
-    private func isReadyToJoin(
-        _ path: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
-    ) -> Bool {
-        guard path.path?.kind == .cameraAccessPoint, case .offline = availability else {
-            return false
-        }
-        return CameraWiFiJoinPolicy.resolvedSSID(savedCamera: path, discoveredCamera: nil) != nil
-    }
-
-    /// Hollow, not filled: a ring says "this can be done" where a filled dot says "this is so".
-    @ViewBuilder private func setupTabDot(
-        for path: PTPIPSavedCameraRecord, availability: SavedCameraAvailability
-    ) -> some View {
-        if isReadyToJoin(path, availability: availability) {
-            Circle()
-                .strokeBorder(StartupColors.accent.opacity(0.9), lineWidth: 1.6)
-                .frame(width: 7, height: 7)
-        } else {
-            Circle()
-                .fill(chipDotColor(for: availability))
-                .frame(width: 7, height: 7)
-        }
-    }
-
-    private func chipDotColor(for availability: SavedCameraAvailability) -> Color {
-        switch availability {
-        case .connected, .available: return StartupColors.ready
-        case .offline: return StartupColors.dim
-        }
-    }
-
-    /// True while the plugged-in camera's card scan is still running — the window where a tap
-    /// would sit in "Reading the camera's card…" instead of connecting instantly.
-    private var isPreparingCard: Bool {
-        if let usbScan { return !usbScan.ready }
-        return false
-    }
-
-    @ViewBuilder private var connectButton: some View {
-        // While the card scan runs, the button dims and says so — but stays tappable: a scan that
-        // silently failed would otherwise strand the row disabled forever, and an early tap still
-        // works (the progress sheet narrates the remaining scan).
-        if isPrimary, !isPreparingCard {
-            Button {
-                connect()
-            } label: {
-                Text(buttonLabel).fixedSize()
-            }
-            .buttonStyle(StartupFilledButtonStyle())
-            .disabled(isBusy)
-        } else {
-            Button {
-                connect()
-            } label: {
-                Text(isPreparingCard ? "Preparing…" : buttonLabel).fixedSize()
-            }
-            .buttonStyle(StartupOutlineButtonStyle())
-            .opacity(isPreparingCard ? 0.55 : 1)
-            .disabled(isBusy)
-        }
-    }
-
-    private var statusPill: some View {
-        Text(statusText)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(statusColor)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .overlay(Capsule().stroke(statusColor.opacity(0.5), lineWidth: 1))
-    }
-
-    /// USB card-scan state for this row's discovered camera; nil for Wi-Fi rows or once absent.
-    private var usbScan: (ready: Bool, percent: Int)? {
-        guard case .available(let discovered) = availability else { return nil }
-        return model.usbCardScan(for: discovered)
-    }
-
-    /// Discoverable rename / remove, mirroring the long-press context menu.
-    private var optionsMenu: some View {
-        Menu {
-            menuActions
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(StartupColors.muted)
-                .frame(width: 30, height: 30)
-                .contentShape(Rectangle())
-        }
-        .accessibilityLabel("Camera options")
-    }
-
-    private var isPrimary: Bool {
-        if isRecoveryTarget { return false }
-        switch availability {
-        case .available, .connected: return true
-        case .offline: return false
-        }
-    }
-
-    private var buttonLabel: String { isRecoveryTarget ? "Reconnect" : "Connect" }
-
-    private var removalMessage: String {
-        allPaths.count > 1
-            ? "Remove \(camera.displayTitle) and its \(allPaths.count) saved paths "
-                + "from this iPhone."
-            : "Remove \(camera.displayTitle) from saved cameras on this iPhone."
-    }
-
-    /// The armed add-setup watch, when it targets this body.
-    private var armedSetupKind: CameraPath.Kind? {
-        guard let intent = model.pendingSetupIntent,
-            intent.anchor.displayTitle.localizedCaseInsensitiveCompare(camera.displayTitle)
-                == .orderedSame
-        else { return nil }
-        return intent.kind
-    }
-
-    private var statusText: String {
-        if isRecoveryTarget { return "Waiting for hotspot" }
-        switch armedSetupKind {
-        case .usbC: return "Waiting for cable"
-        case .infrastructure: return "Watching this network"
-        case .phoneHotspot: return "Waiting for hotspot"
-        default: break
-        }
-        switch availability {
-        case .connected: return "Connected"
-        case .available:
-            if let usbScan {
-                return usbScan.ready ? "Ready" : "Preparing card… \(usbScan.percent)%"
-            }
-            return "Online"
-        case .offline: return "Offline"
-        }
-    }
-
-    private var statusColor: Color {
-        if isRecoveryTarget { return StartupColors.accent }
-        if armedSetupKind != nil { return StartupColors.accent }
-        switch availability {
-        case .connected, .available:
-            if let usbScan, !usbScan.ready { return StartupColors.accent }
-            return StartupColors.ready
-        case .offline: return StartupColors.dim
-        }
-    }
-
-    private var borderColor: Color {
-        if isRecoveryTarget { return StartupColors.accent.opacity(0.35) }
-        switch availability {
-        case .connected, .available: return StartupColors.ready.opacity(0.28)
-        case .offline: return StartupColors.border.opacity(0.08)
-        }
-    }
-
-    private var title: String {
-        let base = ConnectionProgressCopy.resolveDisplayName(
-            rawName: camera.displayName, savedCamera: nil)
-        // Any path's custom name titles the group — a rename made while on the hotspot path
-        // must not vanish when the cable path is the active one.
-        let custom =
-            allPaths.lazy
-            .compactMap {
-                $0.presentation?.customName?.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            .first { !$0.isEmpty } ?? ""
-        return custom.isEmpty ? base : "\(base) · \(custom)"
-    }
-
-    private var subtitle: String {
-        if isPreparingCard {
-            return "USB-C · getting the card ready — connect will be instant once it's done"
-        }
-        var parts: [String] = []
-        if camera.isUSBTransport {
-            parts.append("USB-C")
-            parts.append("connect cable to wake the session")
-        } else {
-            parts.append(SavedCameraPathGroups.pathLabel(for: camera))
-            // The SSID belongs on the AP setup only — a router row wearing a derived NIKON_…
-            // name is the display face of the old cross-path confusion.
-            if camera.path?.kind == .cameraAccessPoint,
-                let ssid = CameraWiFiSSID.resolve(for: camera)
-            {
-                parts.append(ssid)
-            }
-            parts.append(lastConnectedText)
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private var lastConnectedText: String {
-        guard let lastSeenAt = camera.lastSeenAt else { return "saved profile" }
-        let seconds = max(0, Date().timeIntervalSince(lastSeenAt))
-        if seconds < 86_400 { return "last connected today" }
-        if seconds < 172_800 { return "last connected yesterday" }
-        return "last connected \(Int(seconds / 86_400))d ago"
-    }
-}
-
 /// "+ Add setup" on a saved camera: a mini-wizard scoped to THIS camera, offering only the
 /// path kinds it doesn't have yet. Nothing here re-runs first pair — records write themselves
 /// at the next connect, stamped with the declared path; this sheet only prepares the way
@@ -1144,18 +127,21 @@ struct StartupAddSetupSheet: View {
     @Environment(\.dismiss) private var dismiss
     let camera: PTPIPSavedCameraRecord
     let missingKinds: [CameraPath.Kind]
+    /// The shared flow's add-route (SHELL-02): a reachable path connects now, an unreachable one
+    /// is watched for, and either way the camera's card shows the attempt.
+    let addRoute: (CameraPath.Kind) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Add a setup · \(camera.displayTitle)")
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
+                .foregroundStyle(MonitorTheme.text)
             Text(
                 "One camera, several ways to reach it. Pick how this rig runs; the setup "
                     + "saves itself the first time you connect that way."
             )
             .font(.system(size: 13, weight: .regular, design: .rounded))
-            .foregroundStyle(StartupColors.muted)
+            .foregroundStyle(MonitorTheme.muted)
             ScrollView {
                 VStack(spacing: 10) {
                     ForEach(missingKinds, id: \.self) { kind in
@@ -1167,7 +153,7 @@ struct StartupAddSetupSheet: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(StartupColors.background)
+        .background(MonitorTheme.background)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
@@ -1176,16 +162,16 @@ struct StartupAddSetupSheet: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon(for: kind))
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(StartupColors.accent)
+                .foregroundStyle(MonitorTheme.accent)
                 .frame(width: 30, height: 30)
-                .background(StartupColors.control.opacity(0.5), in: Circle())
+                .background(MonitorTheme.raised.opacity(0.5), in: Circle())
             VStack(alignment: .leading, spacing: 4) {
                 Text(title(for: kind))
                     .font(.system(size: 14.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
+                    .foregroundStyle(MonitorTheme.text)
                 Text(guidance(for: kind))
                     .font(.system(size: 12.5, weight: .regular, design: .rounded))
-                    .foregroundStyle(StartupColors.muted)
+                    .foregroundStyle(MonitorTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
                 // Every row DOES something — a "+ Add setup" that only explains is a dead
                 // end. Try-now-else-watch: connect immediately when the path is already
@@ -1196,7 +182,7 @@ struct StartupAddSetupSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(12)
-        .background(StartupColors.tile.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+        .background(MonitorTheme.raised.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
     }
 
     /// The discovered camera that would satisfy this kind RIGHT NOW, if any.
@@ -1252,39 +238,11 @@ struct StartupAddSetupSheet: View {
                     model.pendingAddSetupAction = { [weak model] in
                         model?.beginAddCameraAPSetup(for: camera)
                     }
-                case .usbC, .infrastructure:
-                    if let match {
-                        // Connecting over this path IS adding the setup — the record saves
-                        // itself with the declared path at establishment.
-                        model.pendingAddSetupAction = { [weak model] in
-                            model?.connectToCamera(match)
-                        }
-                    } else {
-                        // No match yet: ARM the watch — the first discovery on this path
-                        // auto-connects (the row shows it waiting). A button that only
-                        // dismissed here is what made add-setup feel dead.
-                        // The watch gets a VISIBLE card from the tap (Cancel disarms). Without
-                        // one, the later auto-fulfillment read as the whole flow "doing stuff in
-                        // the background" — and any card presented at fulfillment could land
-                        // mid-sheet-dismissal and be dropped. USB-C was the last kind still
-                        // arming silently, which is why "Connect When Plugged In" did nothing
-                        // visible: the watch WAS armed, it just never said so.
-                        model.pendingSetupIntent = .init(anchor: camera, kind: kind)
-                        model.pendingAddSetupAction = { [weak model] in
-                            model?.presentSetupWatchProgress(for: camera, kind: kind)
-                        }
-                        Task { await model.refreshCameraDiscovery() }
-                    }
-                case .phoneHotspot:
-                    // Same shape as the Router watch, and for the same reason: arming alone
-                    // dismissed the sheet onto an unchanged camera list, so the button read as
-                    // dead. The camera can only join a hotspot the operator turns on, so the
-                    // card is also the only place that instruction gets said.
-                    model.pendingSetupIntent = .init(anchor: camera, kind: kind)
-                    model.pendingAddSetupAction = { [weak model] in
-                        model?.presentSetupWatchProgress(for: camera, kind: .phoneHotspot)
-                    }
-                    Task { await model.refreshCameraDiscovery() }
+                case .usbC, .infrastructure, .phoneHotspot:
+                    // Connecting over this path IS adding the setup: the record saves itself
+                    // with the declared path at establishment. Not reachable yet, the attempt
+                    // watches for it (the first discovery on this path connects).
+                    addRoute(kind)
                 case .hdmiCapture:
                     // Picture-only and no PTP control, so there is nothing to watch FOR — the
                     // dongle either has a signal or it doesn't. Start the capture session
@@ -1298,10 +256,10 @@ struct StartupAddSetupSheet: View {
             } label: {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
+                    .foregroundStyle(MonitorTheme.text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(StartupColors.accent.opacity(0.35), in: Capsule())
+                    .background(MonitorTheme.accent.opacity(0.35), in: Capsule())
             }
             .buttonStyle(.plain)
         }
@@ -1353,369 +311,28 @@ struct StartupAddSetupSheet: View {
     }
 }
 
-struct StartupSavedCameraEditorSheet: View {
-    @Environment(NativeAppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let camera: PTPIPSavedCameraRecord
-    @State private var customName: String
-    @State private var selectedColor: StartupCameraColorOption
-    @State private var selectedIcon: StartupCameraIconOption
-
-    init(camera: PTPIPSavedCameraRecord) {
-        self.camera = camera
-        _customName = State(initialValue: camera.presentation?.customName ?? "")
-        _selectedColor = State(
-            initialValue: StartupCameraColorOption.resolve(camera.presentation?.borderColor)
-        )
-        _selectedIcon = State(
-            initialValue: StartupCameraIconOption.resolve(camera.presentation?.icon))
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            let layout = StartupSavedCameraEditorLayout.fit(
-                viewportWidth: Double(proxy.size.width),
-                viewportHeight: Double(proxy.size.height),
-                safeArea: proxy.monitorEdgeInsets
-            )
-
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        header
-                        nameEditor
-                        colorPicker
-                        iconPicker
-                    }
-                    .padding(.horizontal, CGFloat(layout.horizontalPadding))
-                    .padding(.top, CGFloat(layout.verticalPadding))
-                    .padding(.bottom, 16)
-                    .frame(maxWidth: CGFloat(layout.maxContentWidth), alignment: .leading)
-                    .frame(maxWidth: .infinity)
-                }
-
-                actions
-                    .padding(.horizontal, CGFloat(layout.horizontalPadding))
-                    .padding(.top, 12)
-                    .padding(.bottom, CGFloat(layout.verticalPadding))
-                    .frame(maxWidth: CGFloat(layout.maxContentWidth))
-                    .frame(maxWidth: .infinity)
-                    .background(StartupColors.background)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-        }
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
-        .background(StartupColors.background)
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Camera identity")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
-            Text(camera.displayName)
-                .font(.system(size: 12, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .lineLimit(1)
-        }
-    }
-
-    private var nameEditor: some View {
-        HStack(alignment: .top, spacing: 22) {
-            StartupCameraIconSquare(
-                option: selectedIcon,
-                size: 72,
-                tint: selectedColor.color
-            )
-
-            VStack(alignment: .leading, spacing: 9) {
-                Text("Display name")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(StartupColors.muted)
-                TextField(camera.displayName, text: $customName)
-                    .textInputAutocapitalization(.words)
-                    .disableAutocorrection(true)
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
-                    .padding(.horizontal, 13)
-                    .frame(height: 42)
-                    .background(
-                        StartupColors.control,
-                        in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                            .stroke(StartupColors.border.opacity(0.12), lineWidth: 1)
-                    )
-
-                Button("Use camera name") {
-                    customName = ""
-                }
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-            }
-        }
-    }
-
-    private var colorPicker: some View {
-        optionSection(title: "Border color") {
-            HStack(spacing: 10) {
-                ForEach(StartupCameraColorOption.allCases) { option in
-                    colorButton(option)
-                }
-            }
-        }
-    }
-
-    private var iconPicker: some View {
-        optionSection(title: "Icon") {
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
-                spacing: 10
-            ) {
-                ForEach(StartupCameraIconOption.allCases) { option in
-                    iconButton(option)
-                }
-            }
-        }
-    }
-
-    private var actions: some View {
-        HStack(spacing: 12) {
-            Button {
-                dismiss()
-            } label: {
-                Text("Cancel")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(StartupOutlineButtonStyle())
-
-            Button {
-                model.updateSavedCameraPresentation(
-                    camera: camera,
-                    customName: customName,
-                    borderColor: selectedColor.rawValue,
-                    icon: selectedIcon.rawValue
-                )
-                dismiss()
-            } label: {
-                Text("Save")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(StartupFilledButtonStyle())
-        }
-    }
-
-    private func colorButton(_ option: StartupCameraColorOption) -> some View {
-        Button {
-            selectedColor = option
-        } label: {
-            Circle()
-                .fill(option.color)
-                .frame(width: 28, height: 28)
-                .overlay(
-                    Circle().stroke(
-                        StartupColors.ink.opacity(selectedColor == option ? 0.92 : 0.18),
-                        lineWidth: selectedColor == option ? 2 : 1
-                    )
-                )
-                .overlay {
-                    if selectedColor == option {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(
-                                option == .white ? StartupColors.background : StartupColors.ink)
-                    }
-                }
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(option.title)
-    }
-
-    private func iconButton(_ option: StartupCameraIconOption) -> some View {
-        Button {
-            selectedIcon = option
-        } label: {
-            HStack(spacing: 9) {
-                StartupCameraIconSquare(
-                    option: option,
-                    size: 34,
-                    tint: selectedColor.color
-                )
-                Text(option.title)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 48)
-            .background(
-                StartupColors.control.opacity(selectedIcon == option ? 1.0 : 0.54),
-                in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                    .stroke(
-                        selectedIcon == option
-                            ? selectedColor.color.opacity(0.70)
-                            : StartupColors.border.opacity(0.08),
-                        lineWidth: selectedIcon == option ? 1.5 : 1
-                    )
-            )
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    @ViewBuilder
-    private func optionSection<Content: View>(
-        title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-            content()
-        }
-    }
-}
-
-/// Typography and spacing tuned so the first-pair wizard fits in landscape without scrolling.
+/// Typography for the wizard rows Nikon still draws (the permission rows), per startup profile.
 struct WizardCompactStyle: Sendable {
-    let progressSpacing: CGFloat
-    let stepContentSpacing: CGFloat
-    let sectionSpacing: CGFloat
-    let titleFontSize: CGFloat
-    let bodyFontSize: CGFloat
     let checklistFontSize: CGFloat
     let checklistDetailFontSize: CGFloat
-    let checklistSpacing: CGFloat
-    let transportCardSpacing: CGFloat
-    let transportRowMinHeight: CGFloat
-    let useTransportSplitLayout: Bool
-    let useInstructionSplitLayout: Bool
-    let useDualDeviceColumns: Bool
-    let introColumnFraction: CGFloat
-    let footerSpacing: CGFloat
-    let footerActionSpacing: CGFloat
     let isTight: Bool
 
-    /// Builds wizard chrome for the active startup layout profile. The app is landscape-locked, so
-    /// every landscape profile uses bounded vertical layout with tight height budgeting.
     static func make(profile: StartupLayoutProfile) -> WizardCompactStyle {
         switch profile {
         case .compactPortrait:
-            return WizardCompactStyle(
-                progressSpacing: 4,
-                stepContentSpacing: 6,
-                sectionSpacing: 6,
-                titleFontSize: 19,
-                bodyFontSize: 11,
-                checklistFontSize: 11,
-                checklistDetailFontSize: 10,
-                checklistSpacing: 4,
-                transportCardSpacing: 5,
-                transportRowMinHeight: 52,
-                useTransportSplitLayout: false,
-                useInstructionSplitLayout: false,
-                useDualDeviceColumns: false,
-                introColumnFraction: 0.38,
-                footerSpacing: 2,
-                footerActionSpacing: 8,
-                isTight: true
-            )
+            WizardCompactStyle(
+                checklistFontSize: 11, checklistDetailFontSize: 10, isTight: true)
         case .compactLandscape:
-            return WizardCompactStyle(
-                progressSpacing: 4,
-                stepContentSpacing: 6,
-                sectionSpacing: 6,
-                titleFontSize: 18,
-                bodyFontSize: 12,
-                checklistFontSize: 13,
-                checklistDetailFontSize: 12,
-                checklistSpacing: 3,
-                transportCardSpacing: 5,
-                transportRowMinHeight: 48,
-                useTransportSplitLayout: true,
-                useInstructionSplitLayout: true,
-                useDualDeviceColumns: true,
-                introColumnFraction: 0.34,
-                footerSpacing: 2,
-                footerActionSpacing: 8,
-                isTight: true
-            )
+            WizardCompactStyle(
+                checklistFontSize: 13, checklistDetailFontSize: 12, isTight: true)
         case .regularLandscape:
-            return WizardCompactStyle(
-                progressSpacing: 6,
-                stepContentSpacing: 8,
-                sectionSpacing: 8,
-                titleFontSize: 21,
-                bodyFontSize: 13,
-                checklistFontSize: 14,
-                checklistDetailFontSize: 13,
-                checklistSpacing: 4,
-                transportCardSpacing: 6,
-                transportRowMinHeight: 56,
-                useTransportSplitLayout: true,
-                useInstructionSplitLayout: true,
-                useDualDeviceColumns: false,
-                introColumnFraction: 0.36,
-                footerSpacing: 4,
-                footerActionSpacing: 10,
-                isTight: true
-            )
+            WizardCompactStyle(
+                checklistFontSize: 14, checklistDetailFontSize: 13, isTight: true)
         case .wideLandscape:
-            return WizardCompactStyle(
-                progressSpacing: 8,
-                stepContentSpacing: 10,
-                sectionSpacing: 10,
-                titleFontSize: 23,
-                bodyFontSize: 14,
-                checklistFontSize: 15,
-                checklistDetailFontSize: 14,
-                checklistSpacing: 5,
-                transportCardSpacing: 8,
-                transportRowMinHeight: 62,
-                useTransportSplitLayout: true,
-                useInstructionSplitLayout: true,
-                useDualDeviceColumns: false,
-                introColumnFraction: 0.38,
-                footerSpacing: 4,
-                footerActionSpacing: 12,
-                isTight: false
-            )
+            WizardCompactStyle(
+                checklistFontSize: 15, checklistDetailFontSize: 14, isTight: false)
         }
     }
-}
-
-/// Device label used in wizard network instructions.
-enum StartupWizardDevice: String, Sendable {
-    case camera
-    case iPhone
-
-    var title: String {
-        switch self {
-        case .camera: "On camera"
-        case .iPhone: "On iPhone"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .camera: "camera.aperture"
-        case .iPhone: "iphone"
-        }
-    }
-}
-
-/// One numbered item in the shared camera-menu checklist (step 2).
-/// Device-specific instructions for the network step, branched by transport method.
-struct StartupWizardDeviceSection: Identifiable, Sendable {
-    let id: String
-    let device: StartupWizardDevice
-    let steps: [String]
 }
 
 enum StartupWizardContent {
@@ -1763,24 +380,22 @@ enum StartupWizardContent {
     static func networkSections(
         for transport: NativeAppModel.FirstPairTransportMethod,
         tight: Bool
-    ) -> [StartupWizardDeviceSection] {
+    ) -> [CameraPairingInstruction] {
         switch transport {
         case .cameraAccessPoint:
             return [
-                StartupWizardDeviceSection(
-                    id: "camera-ap-camera",
-                    device: .camera,
-                    steps: tight
+                CameraPairingInstruction(
+                    title: "On camera", icon: .camera,
+                    lines: tight
                         ? ["Keep the SSID & key screen visible"]
                         : [
                             "Leave the camera on its Direct connection screen",
                             "It shows the network SSID and key",
                         ]
                 ),
-                StartupWizardDeviceSection(
-                    id: "camera-ap-iphone",
-                    device: .iPhone,
-                    steps: tight
+                CameraPairingInstruction(
+                    title: "On iPhone", icon: .phone,
+                    lines: tight
                         ? ["Tap Connect my camera, then scan the SSID & key to join"]
                         : [
                             "Tap Connect my camera below",
@@ -1792,10 +407,9 @@ enum StartupWizardContent {
             // Single full-width card keeps the ZR menu path one line per step (side-by-side
             // halves overflowed). The iPhone hotspot step lives in the subtitle.
             return [
-                StartupWizardDeviceSection(
-                    id: "hotspot-camera",
-                    device: .camera,
-                    steps: [
+                CameraPairingInstruction(
+                    title: "On camera", icon: .camera,
+                    lines: [
                         "Connect to computer → Network settings",
                         "Create Profile → name your profile",
                         "Search for Wi‑Fi network → Join your iPhone hotspot",
@@ -1805,10 +419,9 @@ enum StartupWizardContent {
             ]
         case .usbC:
             return [
-                StartupWizardDeviceSection(
-                    id: "usb-camera",
-                    device: .camera,
-                    steps: tight
+                CameraPairingInstruction(
+                    title: "On camera", icon: .camera,
+                    lines: tight
                         ? [
                             "Plug the camera into this device with USB-C",
                             "Confirm any connection prompt on the camera",
@@ -1818,10 +431,9 @@ enum StartupWizardContent {
                             "If the camera shows a connection prompt, confirm it",
                         ]
                 ),
-                StartupWizardDeviceSection(
-                    id: "usb-iphone",
-                    device: .iPhone,
-                    steps: tight
+                CameraPairingInstruction(
+                    title: "On iPhone", icon: .phone,
+                    lines: tight
                         ? ["Tap Allow when iOS asks for camera access"]
                         : [
                             "iOS asks to allow OpenZCine to access the camera the first time — tap Allow",
@@ -1833,18 +445,16 @@ enum StartupWizardContent {
             // The app joins nothing here — both devices are already on someone else's network —
             // so this step is a check, not an action.
             return [
-                StartupWizardDeviceSection(
-                    id: "router-camera",
-                    device: .camera,
-                    steps: [
+                CameraPairingInstruction(
+                    title: "On camera", icon: .camera,
+                    lines: [
                         "Confirm the camera joined the network",
                         "IP address → Obtain automatically",
                     ]
                 ),
-                StartupWizardDeviceSection(
-                    id: "router-iphone",
-                    device: .iPhone,
-                    steps: tight
+                CameraPairingInstruction(
+                    title: "On iPhone", icon: .phone,
+                    lines: tight
                         ? ["Be on the same network, then find your camera"]
                         : [
                             "Check this device is on that same network",
@@ -1883,355 +493,276 @@ enum StartupWizardContent {
             return ""  // Unreachable — HDMI has no network step.
         }
     }
-}
 
-/// Prepare-step instructions as spacious numbered cards (one sentence each), matching the first-run
-/// mockup. Sized for the short landscape height — no scrolling.
-struct StartupWizardPrepareCards: View {
-    let steps: [String]
-    let style: WizardCompactStyle
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: style.isTight ? 6 : 10) {
-            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                HStack(alignment: .top, spacing: style.isTight ? 10 : 12) {
-                    Text("\(index + 1)")
-                        .font(
-                            .system(size: style.isTight ? 12 : 13, weight: .bold, design: .rounded)
-                        )
-                        .foregroundStyle(StartupColors.accent)
-                        .frame(width: style.isTight ? 24 : 30, height: style.isTight ? 24 : 30)
-                        .background(
-                            StartupColors.accent.opacity(0.12),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(StartupColors.accent.opacity(0.45), lineWidth: 1)
-                        )
-
-                    Text(step)
-                        .font(
-                            .system(
-                                size: style.checklistFontSize + 1, weight: .medium, design: .rounded
-                            )
-                        )
-                        .foregroundStyle(StartupColors.ink)
-                        .lineSpacing(1)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, style.isTight ? 12 : 16)
-                .padding(.vertical, style.isTight ? 9 : 15)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    StartupColors.card,
-                    in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                        .stroke(StartupColors.border.opacity(0.10), lineWidth: 1)
-                )
-            }
+    /// Nearby cameras as rows for the discovery step; the selected camera is the primary row.
+    static func discoveryDevices(_ cameras: [DiscoveredCamera], selectedID: String?)
+        -> [CameraListItem]
+    {
+        cameras.map { camera in
+            CameraListItem(
+                id: camera.id, name: camera.displayName,
+                // The holder replaces "nearby" rather than joining it: on this row the question
+                // is not where the camera is, it is who has it.
+                subtitle: camera.heldByLabel ?? "\(camera.source.pairingLabel) · nearby",
+                status: "", actionTitle: "", isPrimary: camera.id == selectedID)
         }
     }
-}
 
-struct StartupWizardDeviceInstructionCard: View {
-    let section: StartupWizardDeviceSection
-    let style: WizardCompactStyle
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: style.isTight ? 6 : 8) {
-            HStack(spacing: 8) {
-                Image(systemName: section.device.systemImage)
-                    .font(.system(size: style.isTight ? 13 : 15, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
-                Text(section.device.title)
-                    .font(.system(size: style.isTight ? 11 : 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(StartupColors.ink)
-                Spacer(minLength: 0)
-            }
-
-            VStack(alignment: .leading, spacing: style.checklistSpacing) {
-                ForEach(Array(section.steps.enumerated()), id: \.offset) { index, step in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("\(index + 1)")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundStyle(StartupColors.muted)
-                            .frame(width: 14, alignment: .trailing)
-                            .padding(.top, 1)
-                        Text(step)
-                            .font(
-                                .system(
-                                    size: style.checklistFontSize, weight: .medium,
-                                    design: .rounded)
-                            )
-                            .foregroundStyle(StartupColors.ink)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, style.isTight ? 10 : 14)
-        .padding(.vertical, style.isTight ? 10 : 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            StartupColors.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                .stroke(StartupColors.border.opacity(0.10), lineWidth: 1)
-        )
-    }
-}
-
-struct StartupWizardInfoBanner: View {
-    let text: String
-    let style: WizardCompactStyle
-
-    var body: some View {
-        HStack(alignment: .top, spacing: style.isTight ? 8 : 10) {
-            Image(systemName: "info.circle.fill")
-                .font(.system(size: style.isTight ? 12 : 14, weight: .semibold))
-                .foregroundStyle(StartupColors.accent)
-            Text(text)
-                .font(
-                    .system(size: style.checklistDetailFontSize, weight: .regular, design: .rounded)
+    /// What the discovery step is waiting for while it has found nothing, in the terms of the path
+    /// the operator picked (`transport` only knows Wi-Fi versus USB, and three different Wi-Fi
+    /// paths reach this step expecting three different things to happen next).
+    static func discoveryWaiting(
+        transport: NativeAppModel.DiscoveryTransportFilter,
+        pairingMethod: NativeAppModel.FirstPairTransportMethod,
+        usbAuthorizationDenied: Bool
+    ) -> (title: String, hint: String) {
+        if transport == .usbC {
+            // iOS denied USB camera control: nothing can ever appear until it's re-allowed, so the
+            // Settings recovery leads instead of cable guidance.
+            if usbAuthorizationDenied {
+                return (
+                    "USB camera access is off",
+                    "Allow camera connections for OpenZCine in Settings ▸ Privacy & Security, then plug the camera back in."
                 )
-                .foregroundStyle(StartupColors.muted)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
+            }
+            // A USB-C-to-Lightning cable wires this phone as the device end; the camera can only
+            // enumerate through Apple's host-mode adapter.
+            if DeviceUSBConnector.current == .lightning {
+                return (
+                    "Lightning needs the camera adapter",
+                    "Connect the camera through Apple's Lightning to USB camera adapter — a plain USB-C to Lightning cable can't host it."
+                )
+            }
+            return (
+                "Waiting for camera on USB-C",
+                "Plug the camera into this device with a USB-C cable."
+            )
         }
-        .padding(.horizontal, style.isTight ? 10 : 12)
-        .padding(.vertical, style.isTight ? 8 : 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            StartupColors.surface.opacity(0.72),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                .stroke(StartupColors.accent.opacity(0.28), lineWidth: 1)
-        )
+        switch pairingMethod {
+        case .wiFiNetwork:
+            // Nothing to join from here: both ends are already somebody else's guests, so the one
+            // thing worth showing is WHICH network this device is searching. The SSID would read
+            // better; iOS refuses it often enough that the subnet, which always answers, is the
+            // honest choice.
+            guard let network = NativeNetworkInterfaceSnapshot.currentScanSubnetLabel() else {
+                return (
+                    "Looking on your network", "The camera appears once it's on this same network."
+                )
+            }
+            return (
+                "Looking on your network", "Searching \(network) — the camera has to be on it too."
+            )
+        case .phoneHotspot:
+            // The direction matters: the CAMERA joins this phone, the phone joins nothing.
+            return (
+                "Waiting for the camera", "Waiting for the camera to join this phone's hotspot."
+            )
+        case .cameraAccessPoint:
+            // Reachable when a saved AP setup sends the operator back through discovery.
+            return ("Looking for cameras", "Waiting for the camera's own network.")
+        default:
+            return ("Looking for cameras", "Waiting for the camera to appear.")
+        }
     }
 }
 
 struct StartupFirstPairWizardView: View {
     @Environment(NativeAppModel.self) private var model
-    let compact: Bool
+    @Environment(\.openURL) private var openURL
     let isBusy: Bool
     let contentLayout: StartupContentLayout
-
-    // Owned here (not inside the step) so the shell's Continue can gate on it — the operator must
-    // grant the required permissions before leaving the permissions step.
+    var safeArea = EdgeInsets()
     @State private var permissions = StartupPermissionsCoordinator()
-    @State private var isPreparingDiagnostics = false
-    @State private var diagnosticsShareItem: DiagnosticsShareItem?
-    @State private var diagnosticsErrorMessage: String?
+    /// The attached capture device (HDMI path). The dongle is very often plugged in *after* landing
+    /// on the step, so the readout follows the hardware rather than the step's first look.
+    @State private var captureDeviceName: String? = UVCVideoSource.attachedDeviceName
 
     private var style: WizardCompactStyle {
         WizardCompactStyle.make(profile: contentLayout.profile)
     }
-
-    private var showsFooter: Bool {
-        // Transport is chosen by tapping a card (selects + advances in one), so it needs no footer.
-        // Discovery gets a footer too now — for a Back button consistent with the other steps.
-        step != .chooseTransport
-    }
-
     private var step: NativeAppModel.FirstPairWizardStep { model.firstPairWizardStep }
-
-    private var wizardStepCount: Int { model.firstPairWizardStepCount() }
-
-    private var wizardDisplayStepNumber: Int {
-        model.firstPairWizardDisplayStepNumber(for: step)
+    private var transport: NativeAppModel.FirstPairTransportMethod {
+        model.firstPairTransportMethod
     }
 
+    /// The wizard on the shared pair page (SHELL-02): its steps in the rail, each step's copy,
+    /// instructions, cameras and checks as page values; only the permission rows and the transport
+    /// cards are drawn here. A connect it starts shows its progress in the same page.
     var body: some View {
-        GeometryReader { geo in
-            if geo.size.width >= 640 {
-                HStack(alignment: .top, spacing: 16) {
-                    // Scrolls on short screens: the intro's fixed content (title, progress,
-                    // footer, buttons) outgrows small devices and clipped the buttons off the
-                    // bottom. Viewport-min-height keeps taller screens pixel-identical.
-                    ScrollView(showsIndicators: false) {
-                        introCard
-                            .frame(minHeight: geo.size.height)
-                    }
-                    .fadeOverflowBottom()
-                    // Narrower intro column → wider step card, so content (esp. the 3 transport
-                    // cards) wraps less and doesn't crowd the bottom edge.
-                    .frame(width: max(236, geo.size.width * 0.28))
-                    .frame(maxHeight: .infinity)
-                    stepCard
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    portraitIntroHeader
-                    StartupWizardProgress(
-                        currentStep: wizardDisplayStepNumber,
-                        totalSteps: wizardStepCount,
-                        compact: true
-                    )
-                    stepCard
-                        .frame(maxHeight: .infinity)
-                }
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        PairScreen(
+            model: model.cameras, safeArea: safeArea,
+            onDone: { model.showSavedCameras() },
+            onDiagnostics: { model.shareDiagnostics() },
+            onReportProblem: { model.isBugReportPresented = true },
+            onWatchFeed: { model.showSavedCameras() },
+            pairingFlow: model.showsAppConnectProgress
+                ? NikonConnectFlow(model: model).flow(
+                    steps: railSteps, current: railSteps.count - 1)
+                : IntegrationPairingFlow(
+                    presentation: presentation,
+                    onSelect: { id in
+                        if let camera = model.pairingDiscoveryCandidates.first(where: {
+                            $0.id == id
+                        }) {
+                            model.selectDiscoveredCamera(camera)
+                        }
+                    },
+                    onPrimary: primary,
+                    onBack: {
+                        if model.firstPairWizardCanRetreat(from: step) {
+                            model.retreatFirstPairWizard()
+                        } else {
+                            model.showSavedCameras()
+                        }
+                    },
+                    content: AnyView(stepBody)),
+            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
+            onTerms: { openURL(SupportLinkCatalog.terms) }
+        )
+        .onReceive(
+            NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)
+        ) { _ in captureDeviceName = UVCVideoSource.attachedDeviceName }
+        .onReceive(
+            NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)
+        ) { _ in captureDeviceName = UVCVideoSource.attachedDeviceName }
+        .onChange(of: step) { _, _ in captureDeviceName = UVCVideoSource.attachedDeviceName }
+    }
+
+    private var railSteps: [CameraPairingStep] {
+        NativeAppModel.FirstPairWizardStep.sequence(
+            transport: model.firstPairTransportMethod,
+            skipsPermissions: model.firstPairWizardSkipsPermissions
+        ).map { CameraPairingStep($0.title, "") }
+    }
+
+    private var presentation: CameraPairingPresentation {
+        let steps = NativeAppModel.FirstPairWizardStep.sequence(
+            transport: transport,
+            skipsPermissions: model.firstPairWizardSkipsPermissions)
+        // Transport is chosen by tapping a card; discovery advances by connecting to a found
+        // camera; camera access point ends at the network step, whose button opens the scanner.
+        let primary =
+            step != .chooseTransport
+            && (!step.isFinalStep(for: transport)
+                || (step == .connectNetwork && transport == .cameraAccessPoint))
+        var page = CameraPairingPresentation(
+            steps: steps.map { CameraPairingStep($0.title, "") },
+            currentStep: steps.firstIndex(of: step) ?? 0,
+            title: stepTitle, body: "", target: "Nikon Z", hint: "",
+            primaryAction: primary
+                ? (step == .connectNetwork ? "Connect my camera" : "Continue") : nil,
+            // The operator can't leave the permissions step until the required permissions are
+            // granted: the camera can't be reached without them.
+            primaryActionEnabled: !isBusy
+                && (step != .permissions || permissions.allRequiredGranted),
+            backAction: model.firstPairWizardCanRetreat(from: step) ? "Back" : "Your cameras")
+        switch step {
+        case .permissions, .chooseTransport:
+            break
+        case .prepareCamera:
+            page.instructions = [
+                CameraPairingInstruction(
+                    title: "Before you connect", icon: .camera,
+                    lines: StartupWizardContent.preparationSteps(for: transport))
+            ]
+        case .connectNetwork:
+            page.body = StartupWizardContent.networkSubtitle(for: transport, tight: style.isTight)
+            page.instructions = StartupWizardContent.networkSections(
+                for: transport, tight: style.isTight)
+        case .discoverAndPair where transport == .hdmiCapture:
+            captureDeviceStep(&page)
+        case .discoverAndPair:
+            discoveryStep(&page)
+        }
+        return page
+    }
+
+    /// HDMI has no camera to find: the capture device is either attached or it isn't, and the
+    /// answer comes from AVFoundation immediately rather than from a scan. So the step reports
+    /// that and starts the monitor instead of listing cameras.
+    private func captureDeviceStep(_ page: inout CameraPairingPresentation) {
+        let supported = UVCVideoSource.isSupportedHardware
+        let ready = supported && captureDeviceName != nil
+        page.body =
+            "The camera isn't contacted on this path — nothing is sent to it, so exposure, focus and record stay on the body. Connect over Wi‑Fi as well if you want to control it from here."
+        page.checks = [
+            CameraPairingCheck(
+                title: ready
+                    ? "Capture device ready"
+                    : supported ? "Waiting for the capture device" : "Needs an iPad",
+                subtitle: captureDeviceDetail(supported: supported),
+                state: ready ? .complete : supported ? .active : .waiting,
+                stateLabel: ready ? "READY" : supported ? "WAITING" : "IPAD ONLY")
+        ]
+        page.primaryAction = "Start monitoring"
+        page.primaryActionEnabled = supported
+    }
+
+    private func captureDeviceDetail(supported: Bool) -> String {
+        guard supported else {
+            return
+                "iOS doesn't expose USB capture devices to apps — this path works on iPad. Use USB‑C or Wi‑Fi on this device."
+        }
+        if let captureDeviceName {
+            return "\(captureDeviceName) — connect the camera's HDMI output to it and start."
+        }
+        #if DEBUG
+            // The Debug-only phone experiment: without this, a phone that enumerates nothing looks
+            // identical to an iPad with the cable unplugged, and the result would be unreadable.
+            if !UVCVideoSource.isDocumentedHardware {
+                return
+                    "Debug build: this device isn't documented to expose USB capture devices, so it will most likely find nothing. Plug one in and see."
             }
+        #endif
+        return "Connect the capture device to this iPad, then the camera's HDMI output into it."
+    }
+
+    /// Nearby cameras for Phone Hotspot, USB-C and the set's network: tap one to select it, then
+    /// pair or connect. While nothing is found the page says what the search is waiting for, in the
+    /// terms of the path the operator picked.
+    private func discoveryStep(_ page: inout CameraPairingPresentation) {
+        let candidates = model.pairingDiscoveryCandidates
+        let selected = model.selectedPairingDiscoveryCamera
+        page.devices = StartupWizardContent.discoveryDevices(candidates, selectedID: selected?.id)
+        if candidates.isEmpty {
+            let denied = model.isUSBControlAuthorizationDenied
+            let waiting = StartupWizardContent.discoveryWaiting(
+                transport: model.discoveryTransportFilter, pairingMethod: transport,
+                usbAuthorizationDenied: denied)
+            page.emptyTitle = waiting.title
+            // A diagnosis the moment the search has one. "The camera appears once it's on this
+            // network" is honest only while nothing is known; once a sweep has proved the subnet
+            // silent, or busy with nothing serving PTP, the waiting line withholds the one thing
+            // the operator could act on.
+            page.body = model.infrastructureMissCopy ?? waiting.hint
+            // Nothing can appear until USB access is allowed again, so nothing is "searching".
+            page.progress = denied && model.discoveryTransportFilter == .usbC ? nil : "Searching"
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .sheet(item: $diagnosticsShareItem) { item in
-            DiagnosticsShareSheet(url: item.url)
-        }
-        .alert(
-            "Couldn’t Share Diagnostics",
-            isPresented: Binding(
-                get: { diagnosticsErrorMessage != nil },
-                set: { if !$0 { diagnosticsErrorMessage = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(diagnosticsErrorMessage ?? "Please try again.")
+        let action = StartupDiscoveryPrimaryAction.resolve(
+            hasSelectedCamera: selected != nil, isBusy: isBusy,
+            isKnownCamera: model.selectedPairingCameraIsKnown)
+        if let title = action.title {
+            page.primaryAction = title
+            page.primaryActionEnabled = action.isEnabled
+        } else if candidates.isEmpty, model.showsJoinCameraWiFiAction {
+            page.primaryAction = model.joinCameraWiFiButtonTitle
+            page.primaryActionEnabled = !isBusy
         }
     }
 
-    // MARK: - Left column: goal + progress
-
-    private var introCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("FIRST RUN")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .tracking(1.4)
-                .foregroundStyle(StartupColors.muted)
-            Text("Pair your camera.")
-                .font(.system(size: 32, weight: .bold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
-                .lineLimit(2)
-                .minimumScaleFactor(0.7)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 10)
-            Text("We'll walk you through it — your camera is connected in about a minute.")
-                .font(.system(size: 13, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 12)
-
-            Spacer(minLength: 16)
-
-            StartupWizardProgress(
-                currentStep: wizardDisplayStepNumber,
-                totalSteps: wizardStepCount,
-                compact: true
-            )
-            // Escape hatch when pairing an additional camera over an existing library — otherwise
-            // the wizard (now the sole pairing surface) would be a dead end for returning operators.
-            if !model.savedCameras.isEmpty {
-                yourCamerasButton
-                    .padding(.top, 12)
-            }
-
-            shareDiagnosticsButton
-                .padding(.top, 12)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(StartupCardBackground())
-    }
-
-    /// Wizard-exit affordance in the outline button style. Padding lives on the LABEL: the style
-    /// has no horizontal insets, so a `.fixedSize()` button otherwise clips against the border.
-    private var yourCamerasButton: some View {
-        Button {
-            model.showSavedCameras()
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 12, weight: .semibold))
-                Image(systemName: "camera")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("Your cameras")
-            }
-            .lineLimit(1)
-            .padding(.horizontal, 14)
-        }
-        .buttonStyle(StartupWizardOutlineButtonStyle())
-        .fixedSize()
-    }
-
-    /// Local diagnostics handoff for operators who cannot complete any connect path.
-    private var shareDiagnosticsButton: some View {
-        Button {
-            prepareDiagnosticsReport()
-        } label: {
-            Text(isPreparingDiagnostics ? "Preparing…" : "Share diagnostics")
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(StartupColors.accent)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-        .disabled(isPreparingDiagnostics)
-        .accessibilityLabel("Share diagnostics")
-        .accessibilityHint("Creates a local report you can review and send for support")
-    }
-
-    private func prepareDiagnosticsReport() {
-        guard !isPreparingDiagnostics else { return }
-        isPreparingDiagnostics = true
-        Task {
-            defer { isPreparingDiagnostics = false }
-            do {
-                diagnosticsShareItem = DiagnosticsShareItem(
-                    url: try await AppDiagnostics.shared.makeReport())
-            } catch {
-                diagnosticsErrorMessage = error.localizedDescription
-            }
+    private func primary() {
+        switch step {
+        case .discoverAndPair where transport == .hdmiCapture:
+            model.startHDMIMonitorSession()
+        case .discoverAndPair where model.selectedPairingDiscoveryCamera != nil:
+            model.connectSelectedCamera()
+        case .discoverAndPair:
+            model.joinCameraWiFiFromDiscovery()
+        default:
+            model.advanceFirstPairWizard()
         }
     }
 
-    /// Compact intro for the stacked (portrait) wizard — keeps the walkthrough framing and the
-    /// escape back to the saved-cameras home that the two-column intro card provides.
-    private var portraitIntroHeader: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("FIRST RUN")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .tracking(1.4)
-                        .foregroundStyle(StartupColors.muted)
-                    Text("Pair your camera.")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(StartupColors.ink)
-                        .padding(.top, 4)
-                }
-                Spacer(minLength: 12)
-                if !model.savedCameras.isEmpty {
-                    yourCamerasButton
-                }
-            }
-            Text("We'll walk you through it — your camera is connected in about a minute.")
-                .font(.system(size: 12, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 6)
-            shareDiagnosticsButton
-                .padding(.top, 8)
-        }
-    }
-
-    /// The step heading, in the terms of the path the operator actually chose.
-    ///
-    /// The generic titles describe the SHAPE of the wizard, not what any one path does in it, and
-    /// on three of the five that reads as a different instruction from the one on screen: "Set up
-    /// the network" over a cable, over a step whose whole content is "check you are both already
-    /// on the same network", or over "turn on your hotspot". HDMI already had an override here
-    /// because "Find and pair" misdescribed a step that finds nothing and pairs with nothing; the
-    /// same was true elsewhere and only that one case had been noticed.
     private var stepTitle: String {
         switch (step, model.firstPairTransportMethod) {
         case (.prepareCamera, .hdmiCapture):
@@ -2256,39 +787,8 @@ struct StartupFirstPairWizardView: View {
         }
     }
 
-    // MARK: - Right column: current step
-
-    private var stepCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("STEP \(wizardDisplayStepNumber) OF \(wizardStepCount)")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .tracking(1.4)
-                .foregroundStyle(StartupColors.muted)
-            Text(stepTitle)
-                .font(.system(size: style.titleFontSize + 2, weight: .bold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
-                .padding(.top, 6)
-
-            stepBody
-                .padding(.top, style.isTight ? 8 : 12)
-                // Light steps (permissions) center vertically in landscape, where the slack is a
-                // thin band. Portrait's slack is huge — centering strands the content mid-card,
-                // so it stays top-aligned and the slack pools above the pinned footer.
-                .frame(
-                    maxWidth: .infinity, maxHeight: .infinity,
-                    alignment: step == .permissions
-                        && contentLayout.profile != .compactPortrait ? .leading : .topLeading)
-
-            if showsFooter {
-                stepNav
-                    .padding(.top, style.isTight ? 10 : 14)
-            }
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(StartupCardBackground())
-    }
-
+    /// The permission rows and the transport cards act on their own taps, so they stay views; every
+    /// other step is page values.
     @ViewBuilder
     private var stepBody: some View {
         switch step {
@@ -2297,24 +797,8 @@ struct StartupFirstPairWizardView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         case .chooseTransport:
             transportCards
-        case .prepareCamera:
-            // Numbered instruction cards (mockup style). The shell supplies the heading and nav.
-            StartupWizardPrepareCards(
-                steps: StartupWizardContent.preparationSteps(for: model.firstPairTransportMethod),
-                style: style
-            )
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        case .connectNetwork:
-            StartupWizardNetworkStep(style: style).environment(model)
-        case .discoverAndPair:
-            // HDMI has no camera to find: the capture device is either attached or it isn't, so
-            // this step reports its state and starts the monitor rather than listing cameras.
-            if model.firstPairTransportMethod == .hdmiCapture {
-                StartupWizardHDMICaptureStep().environment(model)
-            } else {
-                StartupDiscoveryView(isBusy: isBusy)
-                    .environment(model)
-            }
+        case .prepareCamera, .connectNetwork, .discoverAndPair:
+            EmptyView()
         }
     }
 
@@ -2332,33 +816,9 @@ struct StartupFirstPairWizardView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        if style.useTransportSplitLayout {
-            // Expandable cards outgrow the fixed landscape budget the moment a nested choice
-            // opens, which pushed the list link off-screen. The step scrolls instead — with the
-            // viewport as its minimum height, so the closed state keeps today's full-height
-            // card layout pixel for pixel.
-            GeometryReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(alignment: .top, spacing: 12) { cards }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        wizardCameraListLink
-                    }
-                    .frame(minHeight: proxy.size.height)
-                }
-                .fadeOverflowBottom()
-            }
-        } else {
-            // Scrolls: with the portrait intro header above the card, three stacked cards can
-            // exceed the remaining height on phones — the last card must never clip dead.
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    cards
-                    wizardCameraListLink
-                }
-            }
-            .fadeOverflowBottom()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        VStack(spacing: 12) {
+            cards
+            wizardCameraListLink
         }
     }
 
@@ -2374,125 +834,45 @@ struct StartupFirstPairWizardView: View {
             HStack(spacing: 8) {
                 Image(systemName: "dot.radiowaves.left.and.right")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(StartupColors.accent)
+                    .foregroundStyle(MonitorTheme.accent)
                 Text("Watching another device?")
                     .font(.system(size: 13, weight: .regular, design: .rounded))
-                    .foregroundStyle(StartupColors.muted)
+                    .foregroundStyle(MonitorTheme.muted)
                 Text("Open the camera list")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(StartupColors.accent)
+                    .foregroundStyle(MonitorTheme.accent)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(StartupColors.muted)
+                    .foregroundStyle(MonitorTheme.muted)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(
-                StartupColors.tile.opacity(0.4),
+                MonitorTheme.raised.opacity(0.4),
                 in: RoundedRectangle(cornerRadius: 12)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1))
         }
-        .buttonStyle(.zcTapTarget)
+        .buttonStyle(.monitorTapTarget)
     }
 
-    private var stepNav: some View {
-        // Compact 40pt button styles keep the footer short enough for the tallest step to clear
-        // the bottom edge in landscape; bounded widths keep "Connect my camera" on one line.
-        HStack(spacing: 10) {
-            if model.firstPairWizardCanRetreat(from: step) {
-                Button {
-                    model.retreatFirstPairWizard()
-                } label: {
-                    Label("Back", systemImage: "chevron.left")
-                        .lineLimit(1)
-                }
-                .buttonStyle(StartupWizardOutlineButtonStyle())
-                .frame(width: 116)
-            }
-
-            Spacer(minLength: 0)
-
-            // Discovery advances by connecting to a found camera, so it shows no primary button.
-            // Camera Access Point ends at connectNetwork — the primary button opens the scanner.
-            if !step.isFinalStep(for: model.firstPairTransportMethod)
-                || (step == .connectNetwork && model.firstPairTransportMethod == .cameraAccessPoint)
-            {
-                Button {
-                    model.advanceFirstPairWizard()
-                } label: {
-                    Text(primaryWizardActionTitle)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-                .buttonStyle(StartupWizardFilledButtonStyle())
-                .frame(maxWidth: 220)
-                // The operator can't leave the permissions step until the required permissions are
-                // granted — we can't reach the camera without them.
-                .disabled(step == .permissions && !permissions.allRequiredGranted)
-            }
-        }
-    }
-
-    private var primaryWizardActionTitle: String {
-        step == .connectNetwork ? "Connect my camera" : "Continue"
-    }
 }
 
-/// Fades out the bottom edge of a vertical scroll viewport while more content lies below the
-/// fold — the "there's more" affordance (Android: `Modifier.fadeOverflowBottom`). Apply to the
-/// `ScrollView` itself.
-struct StartupOverflowFade: ViewModifier {
-    var fadeHeight: CGFloat
-    @State private var canScrollFurther = false
-
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
-            content
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.contentSize.height - geometry.containerSize.height
-                        - geometry.contentOffset.y > 2
-                } action: { _, more in
-                    canScrollFurther = more
-                }
-                .mask(
-                    VStack(spacing: 0) {
-                        Color.black
-                        LinearGradient(
-                            colors: [.black, canScrollFurther ? .clear : .black],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                        .frame(height: fadeHeight)
-                    }
-                )
-                .animation(.easeInOut(duration: 0.18), value: canScrollFurther)
-        } else {
-            // Pre-18 systems can't observe scroll geometry cheaply (same trade-off as the assist
-            // toolbar); skip the affordance rather than fade a bottom that may not overflow.
-            content
+extension DiscoverySource {
+    /// Where a found camera was seen, for its row on the discovery step.
+    fileprivate var pairingLabel: String {
+        switch self {
+        case .bonjour, .subnetProbe, .liveness: "Wi-Fi"
+        case .manual: "Manual"
+        case .usb: "USB-C"
+        // The holder's name is what this row is for, and it replaces the transport label: the
+        // camera is on Wi-Fi either way, and that is not the fact standing between the operator
+        // and a picture.
+        case .heldByAnotherDevice: "In use"
         }
-    }
-}
-
-extension View {
-    /// See `StartupOverflowFade`.
-    func fadeOverflowBottom(height: CGFloat = 28) -> some View {
-        modifier(StartupOverflowFade(fadeHeight: height))
-    }
-}
-
-/// Shared rounded card surface for the two-column startup screens.
-struct StartupCardBackground: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(StartupColors.card)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(StartupColors.border.opacity(0.08), lineWidth: 1)
-            )
     }
 }
 
@@ -2540,12 +920,12 @@ struct StartupWizardTransportCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(StartupColors.tile.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+        .background(MonitorTheme.raised.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)
                 .stroke(
                     showsOptions
-                        ? StartupColors.accent.opacity(0.45) : StartupColors.border.opacity(0.1),
+                        ? MonitorTheme.accent.opacity(0.45) : Color.white.opacity(0.1),
                     lineWidth: 1)
         )
     }
@@ -2555,26 +935,26 @@ struct StartupWizardTransportCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Image(systemName: iconName)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(StartupColors.accent)
+                .foregroundStyle(MonitorTheme.accent)
                 .frame(width: 34, height: 34)
                 .background(
-                    StartupColors.accent.opacity(0.12),
+                    MonitorTheme.accent.opacity(0.12),
                     in: RoundedRectangle(cornerRadius: 9)
                 )
                 .padding(.bottom, 10)
             Text(card.title)
                 .font(.system(size: 15, weight: .bold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
+                .foregroundStyle(MonitorTheme.text)
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(headline)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(StartupColors.accent)
+                .foregroundStyle(MonitorTheme.accent)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 4)
-                .background(StartupColors.accent.opacity(0.15), in: Capsule())
+                .background(MonitorTheme.accent.opacity(0.15), in: Capsule())
                 .fixedSize()
                 .padding(.top, 8)
         }
@@ -2584,9 +964,9 @@ struct StartupWizardTransportCard: View {
     private var tradeoffs: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(pros, id: \.self) { pro in
-                tradeoffRow(symbol: "plus", color: StartupColors.ready, text: pro)
+                tradeoffRow(symbol: "plus", color: MonitorTheme.linkHealthColor(.stable), text: pro)
             }
-            tradeoffRow(symbol: "minus", color: StartupColors.dim, text: con)
+            tradeoffRow(symbol: "minus", color: MonitorTheme.faint, text: con)
         }
     }
 
@@ -2604,24 +984,24 @@ struct StartupWizardTransportCard: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(option.optionTitle)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(StartupColors.ink)
+                                .foregroundStyle(MonitorTheme.text)
                             Text(optionCaption(option))
                                 .font(.system(size: 10, weight: .regular, design: .rounded))
-                                .foregroundStyle(StartupColors.muted)
+                                .foregroundStyle(MonitorTheme.muted)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .multilineTextAlignment(.leading)
                         }
                         Spacer(minLength: 0)
                     }
-                    .foregroundStyle(StartupColors.accent)
+                    .foregroundStyle(MonitorTheme.accent)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 7)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
-                        StartupColors.accent.opacity(0.1),
+                        MonitorTheme.accent.opacity(0.1),
                         in: RoundedRectangle(cornerRadius: 9))
                 }
-                .buttonStyle(.zcTapTarget)
+                .buttonStyle(.monitorTapTarget)
             }
         }
     }
@@ -2650,7 +1030,7 @@ struct StartupWizardTransportCard: View {
                 .padding(.top, 3)
             Text(text)
                 .font(.system(size: 12, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
+                .foregroundStyle(MonitorTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -2691,497 +1071,15 @@ struct StartupWizardTransportCard: View {
     }
 }
 
-/// The HDMI path's final step: is the capture device there, and start monitoring.
-///
-/// It replaces the camera list because there is nothing on a network to look for — a capture
-/// device is attached or it is not, and the answer arrives from AVFoundation immediately rather
-/// than from a scan.
-struct StartupWizardHDMICaptureStep: View {
-    @Environment(NativeAppModel.self) private var model
-    @State private var attachedDeviceName: String? = UVCVideoSource.attachedDeviceName
-
-    private var isSupported: Bool { UVCVideoSource.isSupportedHardware }
-    private var isReady: Bool { isSupported && attachedDeviceName != nil }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 11) {
-                Image(systemName: isReady ? "checkmark.circle.fill" : "display")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(isReady ? StartupColors.ready : StartupColors.accent)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        (isReady ? StartupColors.ready : StartupColors.accent).opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 9))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(isReady ? "Capture device ready" : statusTitle)
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(StartupColors.ink)
-                    Text(statusDetail)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(StartupColors.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(13)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(StartupColors.tile.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(StartupColors.border.opacity(0.1), lineWidth: 1))
-
-            Text(
-                "The camera isn't contacted on this path — nothing is sent to it, so exposure, focus and record stay on the body. Connect over Wi‑Fi as well if you want to control it from here."
-            )
-            .font(.system(size: 11, weight: .regular, design: .rounded))
-            .foregroundStyle(StartupColors.dim)
-            .fixedSize(horizontal: false, vertical: true)
-
-            Button("Start monitoring") { model.startHDMIMonitorSession() }
-                .buttonStyle(StartupWizardFilledButtonStyle())
-                .disabled(!isSupported)
-                .frame(maxWidth: 240)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // The dongle is very often plugged in *after* landing here, so the readout follows the
-        // hardware rather than reporting whatever was true when the step opened.
-        .onReceive(
-            NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)
-        ) { _ in attachedDeviceName = UVCVideoSource.attachedDeviceName }
-        .onReceive(
-            NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)
-        ) { _ in attachedDeviceName = UVCVideoSource.attachedDeviceName }
-        .onAppear { attachedDeviceName = UVCVideoSource.attachedDeviceName }
-    }
-
-    private var statusTitle: String {
-        isSupported ? "Waiting for the capture device" : "Needs an iPad"
-    }
-
-    private var statusDetail: String {
-        guard isSupported else {
-            return
-                "iOS doesn't expose USB capture devices to apps — this path works on iPad. Use USB‑C or Wi‑Fi on this device."
-        }
-        if let attachedDeviceName {
-            return "\(attachedDeviceName) — connect the camera's HDMI output to it and start."
-        }
-        #if DEBUG
-            // The Debug-only phone experiment: without this, a phone that enumerates nothing looks
-            // identical to an iPad with the cable unplugged, and the result would be unreadable.
-            if !UVCVideoSource.isDocumentedHardware {
-                return
-                    "Debug build: this device isn't documented to expose USB capture devices, so it will most likely find nothing. Plug one in and see."
-            }
-        #endif
-        return "Connect the capture device to this iPad, then the camera's HDMI output into it."
-    }
-}
-
-struct StartupWizardProgress: View {
-    let currentStep: Int
-    let totalSteps: Int
-    var spacing: CGFloat = 10
-    var compact = false
-
-    var body: some View {
-        if compact {
-            VStack(alignment: .leading, spacing: spacing) {
-                HStack(spacing: 6) {
-                    Text("Setup")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(StartupColors.muted)
-                    Spacer(minLength: 0)
-                    Text("Step \(currentStep) of \(totalSteps)")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(StartupColors.dim)
-                }
-                HStack(spacing: 4) {
-                    ForEach(1...totalSteps, id: \.self) { step in
-                        Capsule()
-                            .fill(
-                                step <= currentStep
-                                    ? StartupColors.accent : StartupColors.control.opacity(0.55)
-                            )
-                            .frame(height: 3)
-                            .overlay {
-                                if step > currentStep {
-                                    Capsule().stroke(
-                                        StartupColors.border.opacity(0.08), lineWidth: 1)
-                                }
-                            }
-                    }
-                }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: spacing) {
-                Text("Set up your first camera")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(StartupColors.muted)
-                HStack(spacing: 8) {
-                    ForEach(1...totalSteps, id: \.self) { step in
-                        Capsule()
-                            .fill(
-                                step <= currentStep
-                                    ? StartupColors.accent : StartupColors.control.opacity(0.55)
-                            )
-                            .frame(height: 4)
-                            .overlay {
-                                if step > currentStep {
-                                    Capsule().stroke(
-                                        StartupColors.border.opacity(0.08), lineWidth: 1)
-                                }
-                            }
-                    }
-                }
-                Text("Step \(currentStep) of \(totalSteps)")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(StartupColors.dim)
-            }
-        }
-    }
-}
-
-struct StartupWizardNetworkStep: View {
-    @Environment(NativeAppModel.self) private var model
-    let style: WizardCompactStyle
-
-    private var transport: NativeAppModel.FirstPairTransportMethod {
-        model.firstPairTransportMethod
-    }
-
-    private var deviceSections: [StartupWizardDeviceSection] {
-        StartupWizardContent.networkSections(for: transport, tight: style.isTight)
-    }
-
-    var body: some View {
-        // The wizard shell already renders "STEP n OF m" + the step title — no repeated intro
-        // here (it double-rendered and overlapped). Just the subtitle, then the instructions.
-        VStack(alignment: .leading, spacing: style.sectionSpacing) {
-            Text(StartupWizardContent.networkSubtitle(for: transport, tight: style.isTight))
-                .font(.system(size: style.bodyFontSize, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            networkInstructions
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    @ViewBuilder
-    private var networkInstructions: some View {
-        if style.useDualDeviceColumns, deviceSections.count > 1 {
-            HStack(alignment: .top, spacing: style.transportCardSpacing) {
-                ForEach(deviceSections) { section in
-                    StartupWizardDeviceInstructionCard(section: section, style: style)
-                }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: style.sectionSpacing) {
-                ForEach(deviceSections) { section in
-                    StartupWizardDeviceInstructionCard(section: section, style: style)
-                }
-            }
-        }
-    }
-}
-
-/// The wizard's discover-and-pair step: a compact, single-column list of nearby cameras.
-/// This is only ever embedded in the first-pair wizard for Phone Hotspot and USB‑C — the wizard
-/// shell supplies the step heading and the Back button, so this renders just the controls.
-struct StartupDiscoveryView: View {
-    @Environment(NativeAppModel.self) private var model
-    let isBusy: Bool
-
-    var body: some View {
-        discoveryControls
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private var discoveryControls: some View {
-        let pairingCandidates = model.pairingDiscoveryCandidates
-        let selectedPairingCamera = model.selectedPairingDiscoveryCamera
-        let primaryAction = StartupDiscoveryPrimaryAction.resolve(
-            hasSelectedCamera: selectedPairingCamera != nil,
-            isBusy: isBusy,
-            isKnownCamera: model.selectedPairingCameraIsKnown
-        )
-
-        return VStack(spacing: 8) {
-            if pairingCandidates.isEmpty {
-                StartupEmptyDiscoveryCard(
-                    compact: true,
-                    transport: model.discoveryTransportFilter,
-                    pairingMethod: model.firstPairTransportMethod,
-                    usbAuthorizationDenied: model.isUSBControlAuthorizationDenied,
-                    // A diagnosis the moment the search has one. "The camera appears once it's on
-                    // this network" is honest only while nothing is known; once a sweep has proved
-                    // the subnet silent — or busy with nothing serving PTP — the waiting line
-                    // withholds the one thing the operator could act on.
-                    detail: model.infrastructureMissCopy
-                )
-                // Indeterminate "something's happening" line in place of the status text.
-                StartupIndeterminateBar()
-                    .padding(.top, 2)
-                if model.showsJoinCameraWiFiAction {
-                    Button {
-                        model.joinCameraWiFiFromDiscovery()
-                    } label: {
-                        Text(model.joinCameraWiFiButtonTitle)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(StartupFilledButtonStyle())
-                    .disabled(isBusy)
-                }
-            } else {
-                ForEach(pairingCandidates.prefix(2)) { camera in
-                    StartupDiscoveredCameraCard(
-                        camera: camera,
-                        selected: selectedPairingCamera?.id == camera.id,
-                        compact: true
-                    )
-                    .environment(model)
-                }
-            }
-
-            if let title = primaryAction.title {
-                Button {
-                    model.connectSelectedCamera()
-                } label: {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(StartupFilledButtonStyle())
-                .disabled(!primaryAction.isEnabled)
-            }
-        }
-    }
-}
-
-/// A thin accent line whose segment slides back and forth — an indeterminate "working" indicator,
-/// used on the discovery step in place of a status string.
-struct StartupIndeterminateBar: View {
-    @State private var animating = false
-
-    var body: some View {
-        GeometryReader { geo in
-            let trackWidth = geo.size.width
-            let segmentWidth = max(44, trackWidth * 0.32)
-            Capsule()
-                .fill(StartupColors.accent)
-                .frame(width: segmentWidth, height: 3)
-                .offset(x: animating ? trackWidth - segmentWidth : 0)
-                .animation(
-                    .easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: animating)
-        }
-        .frame(height: 3)
-        .frame(maxWidth: .infinity)
-        .background(StartupColors.control.opacity(0.45), in: Capsule())
-        .onAppear { animating = true }
-    }
-}
-
-struct StartupDiscoveredCameraCard: View {
-    @Environment(NativeAppModel.self) private var model
-    let camera: DiscoveredCamera
-    let selected: Bool
-    var compact = false
-
-    var body: some View {
-        Button {
-            model.selectDiscoveredCamera(camera)
-        } label: {
-            HStack(spacing: compact ? 10 : 14) {
-                StartupIconSquare(systemName: "viewfinder", size: compact ? 36 : 48)
-
-                VStack(alignment: .leading, spacing: compact ? 3 : 7) {
-                    Text(camera.displayName)
-                        .font(
-                            .system(
-                                size: compact ? 13 : 15, weight: .semibold, design: .rounded)
-                        )
-                        .foregroundStyle(StartupColors.ink)
-                        .lineLimit(1)
-                    // The holder replaces "nearby" rather than joining it: on this row the
-                    // question is not where the camera is, it is who has it.
-                    Text(camera.heldByLabel ?? "\(sourceLabel(camera.source)) · nearby")
-                        .font(
-                            .system(
-                                size: compact ? 10 : 12, weight: .regular, design: .rounded)
-                        )
-                        .foregroundStyle(StartupColors.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                // A held camera is reachable but not free — the antenna reads as "connect
-                // now", which is the one thing this row cannot promise.
-                Image(systemName: camera.isHeldByAnotherDevice ? "person.fill" : "cellularbars")
-                    .font(.system(size: compact ? 16 : 20, weight: .semibold))
-                    .foregroundStyle(
-                        camera.isHeldByAnotherDevice
-                            ? StartupColors.muted : StartupColors.accent)
-            }
-            .padding(.horizontal, compact ? 12 : 16)
-            .frame(height: compact ? 64 : 84)
-            .background(
-                StartupColors.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                    .stroke(
-                        selected
-                            ? StartupColors.accent.opacity(0.50)
-                            : StartupColors.border.opacity(0.10),
-                        lineWidth: selected ? 2 : 1)
-            )
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    private func sourceLabel(_ source: DiscoverySource) -> String {
-        switch source {
-        case .bonjour, .subnetProbe, .liveness: "Wi-Fi"
-        case .manual: "Manual"
-        case .usb: "USB-C"
-        // The holder's name is what this row is for, and it replaces the transport label — the
-        // camera is on Wi-Fi either way, and that is not the fact standing between the operator
-        // and a picture.
-        case .heldByAnotherDevice: "In use"
-        }
-    }
-}
-
-struct StartupEmptyDiscoveryCard: View {
-    var compact = false
-    var transport: NativeAppModel.DiscoveryTransportFilter = .wiFi
-    /// The path the operator actually chose, which `transport` cannot answer: its whole vocabulary
-    /// is Wi-Fi versus USB, and three different Wi-Fi paths reach this card expecting three
-    /// different things to happen next.
-    var pairingMethod: NativeAppModel.FirstPairTransportMethod = .phoneHotspot
-    /// iOS denied USB camera control — the card leads with the Settings recovery instead of
-    /// cable guidance (nothing can ever appear until it's re-allowed).
-    var usbAuthorizationDenied = false
-    /// Replaces the waiting line when the search has concluded something the operator can act on
-    /// (`InfrastructureDiscovery.operatorCopy`). Nil keeps the per-path guidance below.
-    var detail: String? = nil
-
-    private var isUSB: Bool { transport == .usbC }
-    private var isLightning: Bool { DeviceUSBConnector.current == .lightning }
-
-    private var usbTitle: String {
-        if usbAuthorizationDenied { return "USB camera access is off" }
-        return isLightning ? "Lightning needs the camera adapter" : "Waiting for camera on USB-C"
-    }
-
-    private var usbHint: String {
-        if usbAuthorizationDenied {
-            return
-                "Allow camera connections for OpenZCine in Settings ▸ Privacy & Security, then plug the camera back in."
-        }
-        if isLightning {
-            // A USB-C-to-Lightning cable wires this phone as the device end — the camera can
-            // only enumerate through Apple's host-mode adapter.
-            return
-                "Connect the camera through Apple's Lightning to USB camera adapter — a plain USB-C to Lightning cable can't host it."
-        }
-        return compact
-            ? "Plug the camera into this device with a USB-C cable."
-            : "Plug the camera into this device with a USB-C cable — it appears here the moment it's detected."
-    }
-
-    /// What the operator is waiting for, in the terms of the path they picked.
-    ///
-    /// This used to be one sentence about the phone's hotspot, on the reasoning that the Wi-Fi arm
-    /// could only be the hotspot step — camera-AP pairing ends at the network step, and there was
-    /// no third Wi-Fi path. Router made that false, and the operator who had just been told to put
-    /// both devices on the set's network was then told to wait for the camera to join their phone.
-    private var wiFiTitle: String {
-        switch pairingMethod {
-        case .wiFiNetwork: return "Looking on your network"
-        case .phoneHotspot: return "Waiting for the camera"
-        default: return "Looking for cameras"
-        }
-    }
-
-    private var wiFiHint: String {
-        switch pairingMethod {
-        case .wiFiNetwork:
-            // Nothing to join from here: both ends are already somebody else's guests, so the one
-            // thing worth showing is WHICH network this device is searching. A search that finds
-            // nothing looks the same whether the camera is off, not paired, or simply on another
-            // network — and the operator can only check the last one if the app says which it is
-            // on. The SSID would read better; iOS refuses it often enough that the subnet, which
-            // always answers, is the honest choice.
-            let network = NativeNetworkInterfaceSnapshot.currentScanSubnetLabel()
-            guard let network else {
-                return compact
-                    ? "The camera appears once it's on this same network."
-                    : "Both devices need to be on the same network. The camera appears here a few seconds after it joins."
-            }
-            return compact
-                ? "Searching \(network) — the camera has to be on it too."
-                : "Searching \(network), the network this device is on. The camera appears here a few seconds after it joins that same network."
-        case .phoneHotspot:
-            // The direction matters: the CAMERA joins this phone, the phone joins nothing.
-            return compact
-                ? "Waiting for the camera to join this phone's hotspot."
-                : "The camera appears here a few seconds after it joins this phone's hotspot."
-        case .cameraAccessPoint:
-            // Reachable when a saved AP setup sends the operator back through discovery.
-            return compact
-                ? "Waiting for the camera's own network."
-                : "This device joins the camera's own Wi-Fi — the camera appears once that network is up."
-        default:
-            return compact
-                ? "Waiting for the camera to appear."
-                : "The camera appears here a few seconds after it reaches this device."
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: compact ? 6 : 10) {
-            Image(systemName: isUSB ? "cable.connector" : "dot.radiowaves.left.and.right")
-                .font(.system(size: compact ? 18 : 24, weight: .semibold))
-                .foregroundStyle(StartupColors.accent)
-            Text(isUSB ? usbTitle : wiFiTitle)
-                .font(.system(size: compact ? 13 : 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(StartupColors.ink)
-            Text(detail ?? (isUSB ? usbHint : wiFiHint))
-                .font(.system(size: compact ? 10 : 12, weight: .regular, design: .rounded))
-                .foregroundStyle(StartupColors.muted)
-                .multilineTextAlignment(.center)
-                // A diagnosis runs longer than the waiting line it replaces (the 6 GHz / guest
-                // network one is two clauses) and is the whole reason it is on screen — it gets
-                // the extra rows rather than an ellipsis.
-                .lineLimit(compact ? (detail == nil ? 2 : 4) : nil)
-                .minimumScaleFactor(compact ? 0.85 : 1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, compact ? 12 : 18)
-        .padding(.vertical, compact ? 12 : 24)
-        .background(
-            StartupColors.card, in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
-                StartupColors.border.opacity(0.10), lineWidth: 1))
-    }
-}
-
 struct StartupIconSquare: View {
     let systemName: String
     var size: CGFloat = 56
-    var cornerRadius: CGFloat = DesignTokens.cornerRadius
-    var tint: Color = StartupColors.accent
+    var cornerRadius: CGFloat = MonitorTheme.radius
+    var tint: Color = MonitorTheme.accent
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(StartupColors.tile)
+            .fill(MonitorTheme.raised)
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius).stroke(
                     tint.opacity(0.46), lineWidth: 1)
@@ -3195,143 +1093,23 @@ struct StartupIconSquare: View {
     }
 }
 
-struct StartupMediaLibraryButton: View {
-    @Environment(NativeAppModel.self) private var model
-    var compact = false
-    var disabled = false
-
-    var body: some View {
-        Group {
-            if compact {
-                Button {
-                    model.openCachedMediaLibrary()
-                } label: {
-                    Label("Media Library", systemImage: "film.stack")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(StartupQuietButtonStyle())
-            } else {
-                Button {
-                    model.openCachedMediaLibrary()
-                } label: {
-                    Label("Media Library", systemImage: "film.stack")
-                        .frame(width: 215, alignment: .leading)
-                }
-                .buttonStyle(StartupOutlineButtonStyle())
-            }
-        }
-        .disabled(disabled)
-    }
-}
-
 struct StartupOutlineButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 16, weight: .semibold, design: .rounded))
-            .foregroundStyle(StartupColors.ink)
+            .foregroundStyle(MonitorTheme.text)
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
             .background(
-                StartupColors.control.opacity(configuration.isPressed ? 0.98 : 0.82),
-                in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
+                MonitorTheme.raised.opacity(configuration.isPressed ? 0.98 : 0.82),
+                in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
-                    StartupColors.border.opacity(0.12), lineWidth: 1)
+                RoundedRectangle(cornerRadius: MonitorTheme.radius).stroke(
+                    Color.white.opacity(0.12), lineWidth: 1)
             )
             .opacity(configuration.isPressed ? 0.78 : 1)
-    }
-}
-
-struct StartupFilledButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Label(configuration: configuration)
-    }
-
-    // Nested so it can read `isEnabled` — a disabled filled button must look disabled (dimmed), not
-    // fully lit but unresponsive.
-    private struct Label: View {
-        let configuration: Configuration
-        @Environment(\.isEnabled) private var isEnabled
-
-        var body: some View {
-            configuration.label
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundStyle(StartupColors.darkText)
-                .padding(.horizontal, 22)
-                .padding(.vertical, 14)
-                .background(
-                    StartupColors.accent.opacity(configuration.isPressed ? 0.80 : 1),
-                    in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                )
-                .opacity(isEnabled ? 1 : 0.4)
-        }
-    }
-}
-
-/// Compact wizard footer buttons sized to fit within the fixed footer band.
-struct StartupWizardFilledButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Label(configuration: configuration)
-    }
-
-    // Nested so it can read `isEnabled` — a gated Continue (e.g. permissions step) must look
-    // disabled, not stay fully accent-lit while being inert.
-    private struct Label: View {
-        let configuration: Configuration
-        @Environment(\.isEnabled) private var isEnabled
-
-        var body: some View {
-            configuration.label
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(isEnabled ? StartupColors.darkText : StartupColors.muted)
-                .frame(maxWidth: .infinity)
-                .frame(height: 40)
-                .background(
-                    isEnabled
-                        ? StartupColors.accent.opacity(configuration.isPressed ? 0.80 : 1)
-                        : StartupColors.control.opacity(0.6),
-                    in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-                )
-                .opacity(isEnabled ? 1 : 0.55)
-        }
-    }
-}
-
-struct StartupWizardOutlineButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundStyle(StartupColors.ink)
-            .frame(maxWidth: .infinity)
-            .frame(height: 40)
-            .background(
-                StartupColors.control.opacity(configuration.isPressed ? 0.98 : 0.82),
-                in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
-                    StartupColors.border.opacity(0.12), lineWidth: 1)
-            )
-            .opacity(configuration.isPressed ? 0.78 : 1)
-    }
-}
-
-struct StartupQuietButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(StartupColors.ink)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                StartupColors.control.opacity(configuration.isPressed ? 0.98 : 0.66),
-                in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius).stroke(
-                    StartupColors.border.opacity(0.08), lineWidth: 1))
     }
 }
 

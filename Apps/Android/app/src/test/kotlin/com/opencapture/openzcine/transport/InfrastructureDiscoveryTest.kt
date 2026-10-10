@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.transport
 
+import com.opencapture.opencine.nikon.HostProbeVerdict
+import com.opencapture.opencine.nikon.NikonLocalInterface
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,53 +13,6 @@ import kotlinx.coroutines.test.runTest
  * table, so a network can never mean one diagnosis on iPhone and another on Android.
  */
 class InfrastructureDiscoveryTest {
-    // MARK: - Directed hosts
-
-    @Test
-    fun `directed hosts keep only dialable addresses on a subnet we are standing in`() {
-        val directed =
-            InfrastructureDiscovery.directedHosts(
-                candidates =
-                    listOf(
-                        "192.168.1.246", // on our subnet — keep
-                        "192.168.129.246", // a sibling setup's travel router — drop
-                        "usb:00000030-3030", // a device-id key, never a network peer — drop
-                        "ap:NIKON_ZR_02199", // a pending access-point key — drop
-                        "192.168.1.246", // duplicate — keep one
-                        "", // nothing at all — drop
-                    ),
-                localSubnets = listOf("192.168.1"),
-            )
-
-        assertEquals(listOf("192.168.1.246"), directed)
-    }
-
-    /**
-     * Dialling a sibling setup on another network was a field false-fail: adding a new Wi-Fi setup
-     * armed a watch on the Wi-Fi setup the camera already had, dialled an address on the network
-     * the operator had just left, and reported the failure as the NEW setup's.
-     */
-    @Test
-    fun `a sibling setup on another network is never a directed candidate`() {
-        val directed =
-            InfrastructureDiscovery.directedHosts(
-                candidates = listOf("192.168.129.246"),
-                localSubnets = listOf("192.168.1"),
-            )
-        assertTrue(directed.isEmpty())
-    }
-
-    @Test
-    fun `an excluded host is never dialled`() {
-        val directed =
-            InfrastructureDiscovery.directedHosts(
-                candidates = listOf("192.168.1.246"),
-                localSubnets = listOf("192.168.1"),
-                excluded = setOf("192.168.1.246"),
-            )
-        assertTrue(directed.isEmpty())
-    }
-
     // MARK: - Typed verdicts
 
     /**
@@ -73,11 +28,6 @@ class InfrastructureDiscoveryTest {
             assertEquals(if (verdict.isOccupied) 1 else 0, tally.occupiedCount, "$verdict")
             assertEquals(if (verdict == HostProbeVerdict.OPEN) 1 else 0, tally.openCount, "$verdict")
         }
-        assertTrue(HostProbeVerdict.REFUSED.isOccupied)
-        // A dial the OS refused us, and one that exhausted this device, say nothing about the host.
-        assertFalse(HostProbeVerdict.DENIED.isOccupied)
-        assertFalse(HostProbeVerdict.UNREACHABLE_OTHER.isOccupied)
-        assertFalse(HostProbeVerdict.UNREACHABLE_OTHER.isSilence)
     }
 
     @Test
@@ -245,7 +195,7 @@ class InfrastructureDiscoveryTest {
             verdicts[host] ?: HostProbeVerdict.TIMEOUT
         }
 
-    private val onSubnetOne = listOf(LocalIPv4Interface("wlan0", "192.168.1.146"))
+    private val onSubnetOne = listOf(NikonLocalInterface("wlan0", "192.168.1.146"))
 
     @Test
     fun `a directed host that answers is found without sweeping`() = runTest {
@@ -268,6 +218,27 @@ class InfrastructureDiscoveryTest {
         assertEquals("ZR_6002199", report.cameras.single().name)
         // One dial, not 254: the reconnect case must not pay for a sweep.
         assertEquals(1, dialled)
+    }
+
+    /**
+     * Dialling a sibling setup on another network was a field false-fail: adding a new Wi-Fi setup
+     * armed a watch on the Wi-Fi setup the camera already had, dialled an address on the network
+     * the operator had just left, and reported the failure as the NEW setup's.
+     */
+    @Test
+    fun `a sibling setup on another network is never dialled`() = runTest {
+        val dialledHosts = mutableSetOf<String>()
+        val recording =
+            InfrastructureCameraFinder(log = {}) { host, _ ->
+                dialledHosts.add(host)
+                if (host == "192.168.129.246") HostProbeVerdict.OPEN else HostProbeVerdict.TIMEOUT
+            }
+
+        val report =
+            recording.search(directedCandidates = listOf("192.168.129.246"), interfaces = onSubnetOne)
+
+        assertFalse(report.foundCamera)
+        assertFalse(dialledHosts.contains("192.168.129.246"))
     }
 
     @Test

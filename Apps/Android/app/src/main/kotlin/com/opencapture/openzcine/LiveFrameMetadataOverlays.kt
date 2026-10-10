@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PathMeasure
-import android.graphics.Typeface
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -55,11 +54,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.core.LiveCameraLevel
-import com.opencapture.openzcine.core.LiveFocusBox
-import com.opencapture.openzcine.core.LiveFocusInfo
-import com.opencapture.openzcine.core.LiveFocusResult
+import com.opencapture.monitorui.MonitorLevelDisplay
+import com.opencapture.monitorui.MonitorLevelOverlay
+import com.opencapture.monitorui.MonitorScopeRect
+import com.opencapture.opencine.nikon.LiveCameraLevel
+import com.opencapture.opencine.nikon.LiveFocusBox
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import java.util.Locale
@@ -68,6 +69,8 @@ import kotlin.math.atan2
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import com.opencapture.opencine.runtime.NativeFeedContentRect
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 /** A floating-point feed-local rectangle used by focus and level overlay math. */
 internal data class LiveOverlayRect(
@@ -135,64 +138,21 @@ internal data class DeviceGravityLevel(
     val provenance: DeviceTiltProvenance = DeviceTiltProvenance.GRAVITY_SENSOR,
 )
 
-/** Pixel metrics for the iOS-matched two-axis level gauge. */
-internal data class LiveGaugeMetrics(
-    val landscapeRollLift: Float,
-    val portraitRollLift: Float,
-    val trailingInset: Float,
-    val chromeClearance: Float,
-    val axisSpan: Float,
-    val maxAngleDegrees: Double,
-    val tickStepDegrees: Double,
-    val levelThresholdDegrees: Double,
-    val baselineStrokeWidth: Float,
-    val centerTickHalfLength: Float,
-    val tickHalfLength: Float,
-    val tickStrokeWidth: Float,
-    val beadRadius: Float,
-    val beadStrokeWidth: Float,
-    val chevronGap: Float,
-    val chevronStep: Float,
-    val chevronHalfSize: Float,
-    val chevronStrokeWidth: Float,
-    val readoutOffset: Float,
-    val verticalReadoutOffset: Float,
-    val readoutTextSize: Float,
-)
-
-/** The two track centres for the operator-facing level gauge. */
-internal data class LiveGaugeSeats(
-    val roll: Offset,
-    val pitch: Offset,
-)
-
 /**
- * Seats the gauge against the visible part of the feed, not against an
- * off-screen de-squeezed overhang. The landscape roll track clears the bottom
- * monitor chrome; portrait adds an explicit capture-strip clearance.
+ * The shared gauge's bounds in dp: the visible part of the feed above the bottom chrome that covers
+ * it, so the roll strip clears a capture strip in portrait and the bottom bars in landscape.
  */
-internal fun liveGaugeSeats(
-    feed: LiveOverlayRect,
+internal fun levelGaugeBounds(
     visibleBounds: LiveOverlayRect,
-    isPortrait: Boolean,
     bottomChromeInset: Float,
-    metrics: LiveGaugeMetrics,
-): LiveGaugeSeats {
-    val visible = intersectLiveOverlayRects(feed, visibleBounds) ?: feed
-    val rollLift =
-        if (isPortrait) {
-            metrics.portraitRollLift + maxOf(0f, bottomChromeInset)
-        } else {
-            maxOf(
-                metrics.landscapeRollLift,
-                maxOf(0f, bottomChromeInset) + metrics.beadRadius + metrics.chromeClearance,
-            )
-        }
-    return LiveGaugeSeats(
-        roll = Offset(visible.centerX, visible.bottom - rollLift),
-        pitch = Offset(maxOf(visible.left, visible.right - metrics.trailingInset), visible.centerY),
+    density: Float,
+): MonitorScopeRect =
+    MonitorScopeRect(
+        visibleBounds.left / density,
+        visibleBounds.top / density,
+        visibleBounds.width / density,
+        maxOf(0f, visibleBounds.height - maxOf(0f, bottomChromeInset)) / density,
     )
-}
 
 /**
  * Computes the visual feed rectangle after the monitor's local de-squeeze
@@ -200,7 +160,7 @@ internal fun liveGaugeSeats(
  * rectangle used by [LiveFeedView], never the broader monitor zone map.
  */
 internal fun liveOverlayFeedRect(
-    content: LiveFeedContentRect,
+    content: NativeFeedContentRect,
     horizontalPresentationScale: Float,
     verticalPresentationScale: Float = 1f,
 ): LiveOverlayRect? {
@@ -228,6 +188,7 @@ internal fun liveFocusBoxRect(
     box: LiveFocusBox,
     feed: LiveOverlayRect,
     mirrored: Boolean = false,
+    mirroredVertical: Boolean = false,
 ): LiveOverlayRect? {
     if (
         focus.coordinateWidth <= 0 ||
@@ -246,7 +207,7 @@ internal fun liveFocusBoxRect(
     val centerX = box.centerX * scaleX
     return LiveOverlayRect(
         left = feed.left + (if (mirrored) feed.width - centerX else centerX) - width / 2f,
-        top = feed.top + box.centerY * scaleY - height / 2f,
+        top = feed.top + (if (mirroredVertical) feed.height - box.centerY * scaleY else box.centerY * scaleY) - height / 2f,
         width = width,
         height = height,
     )
@@ -416,7 +377,7 @@ internal fun LiveFrameMetadataOverlay(
             }
         val content =
             with(density) {
-                liveFeedContentRect(
+                nativeFeedContentRect(
                     containerWidth = maxWidth.toPx(),
                     containerHeight = maxHeight.toPx(),
                     sourceWidth = presentationState.sourceWidth,
@@ -444,7 +405,8 @@ internal fun LiveFrameMetadataOverlay(
                     lockProgress = focusLockProgress,
                     alpha = focusBoxAlpha,
                     editModifier = focusBoxEditModifier,
-                    mirrored = configuration.mirrorEnabled,
+                    mirrored = configuration.mirrorsHorizontally,
+                    mirroredVertical = configuration.flipsVertically,
                 )
             }
             if (levelEnabled) {
@@ -493,12 +455,13 @@ private fun CameraFocusOverlay(
     alpha: Float = 1f,
     editModifier: Modifier? = null,
     mirrored: Boolean = false,
+    mirroredVertical: Boolean = false,
 ) {
     if (focus == null || focus.boxes.isEmpty()) return
     val description =
         focus.accessibilityDescription() +
             if (locked) " Focus point position locked in app." else ""
-    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed, mirrored)
+    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed, mirrored, mirroredVertical)
     // The Edit view's outline and badge go on the primary AF box, not the whole feed — a dashed
     // rectangle round the entire image would name nothing.
     if (editModifier != null && primaryRect != null) {
@@ -528,7 +491,7 @@ private fun CameraFocusOverlay(
         var lockLabelSize by remember { mutableStateOf(IntSize.Zero) }
         Canvas(Modifier.fillMaxSize()) {
             focus.boxes.forEachIndexed { index, box ->
-                val rect = liveFocusBoxRect(focus, box, feed, mirrored) ?: return@forEachIndexed
+                val rect = liveFocusBoxRect(focus, box, feed, mirrored, mirroredVertical) ?: return@forEachIndexed
                 val color = focusBoxColor(focus, index)
                 val radius = min(min(rect.width, rect.height) * 0.12f, 7.dp.toPx())
                 drawRoundRect(
@@ -729,55 +692,22 @@ private fun CameraLevelOverlay(
 ) {
     if (reading == null) return
     val density = LocalDensity.current
-    val gaugeMetrics =
-        with(density) {
-            LiveGaugeMetrics(
-                landscapeRollLift = 104.dp.toPx(),
-                portraitRollLift = 30.dp.toPx(),
-                trailingInset = 44.dp.toPx(),
-                chromeClearance = 8.dp.toPx(),
-                axisSpan = 84.dp.toPx(),
-                maxAngleDegrees = 8.0,
-                tickStepDegrees = 2.0,
-                levelThresholdDegrees = 0.6,
-                baselineStrokeWidth = 2.dp.toPx(),
-                centerTickHalfLength = 9.dp.toPx(),
-                tickHalfLength = 5.dp.toPx(),
-                tickStrokeWidth = 1.dp.toPx(),
-                beadRadius = 6.5.dp.toPx(),
-                beadStrokeWidth = 2.dp.toPx(),
-                chevronGap = 16.dp.toPx(),
-                chevronStep = 8.dp.toPx(),
-                chevronHalfSize = 3.dp.toPx(),
-                chevronStrokeWidth = 1.5.dp.toPx(),
-                readoutOffset = 24.dp.toPx(),
-                verticalReadoutOffset = 42.dp.toPx(),
-                readoutTextSize = 11.sp.toPx(),
-            )
-        }
-    val readoutPaint =
-        remember {
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-                textAlign = Paint.Align.CENTER
-            }
-        }
     val description = liveLevelAccessibilityDescription(reading, style)
     Box(Modifier.fillMaxSize().clearAndSetSemantics { contentDescription = description }) {
-        Canvas(Modifier.fillMaxSize()) {
-            when (style) {
-                LocalLevelStyle.HORIZON -> drawHorizonLevel(reading, feed)
-                LocalLevelStyle.GAUGE ->
-                    drawGaugeLevel(
-                        reading = reading,
-                        feed = feed,
-                        visibleBounds = visibleBounds,
-                        isPortrait = isPortrait,
-                        bottomChromeInset = bottomChromeInset,
-                        metrics = gaugeMetrics,
-                        readoutPaint = readoutPaint,
-                    )
-            }
+        when (style) {
+            LocalLevelStyle.HORIZON -> Canvas(Modifier.fillMaxSize()) { drawHorizonLevel(reading, feed) }
+            // The shared two-axis gauge: roll along the bottom, pitch on the trailing side.
+            LocalLevelStyle.GAUGE ->
+                MonitorLevelOverlay(
+                    display = MonitorLevelDisplay.Gauges(reading.rollDegrees, reading.pitchDegrees),
+                    feedDp =
+                        MonitorScopeRect(
+                            feed.left / density.density, feed.top / density.density,
+                            feed.width / density.density, feed.height / density.density,
+                        ),
+                    viewportDp = levelGaugeBounds(visibleBounds, bottomChromeInset, density.density),
+                    portrait = isPortrait,
+                )
         }
         if (reading.source == LiveLevelSource.DEVICE_GRAVITY) {
             androidx.compose.material3.Text(
@@ -890,218 +820,6 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHorizonLevel(
             cap = StrokeCap.Round,
         )
     }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGaugeLevel(
-    reading: LiveLevelReading,
-    feed: LiveOverlayRect,
-    visibleBounds: LiveOverlayRect,
-    isPortrait: Boolean,
-    bottomChromeInset: Float,
-    metrics: LiveGaugeMetrics,
-    readoutPaint: Paint,
-) {
-    val seats =
-        liveGaugeSeats(
-            feed = feed,
-            visibleBounds = visibleBounds,
-            isPortrait = isPortrait,
-            bottomChromeInset = bottomChromeInset,
-            metrics = metrics,
-        )
-    drawGaugeAxis(
-        seat = seats.roll,
-        orientation = GaugeAxisOrientation.HORIZONTAL,
-        value = reading.rollDegrees,
-        metrics = metrics,
-        readoutPaint = readoutPaint,
-    )
-    drawGaugeAxis(
-        seat = seats.pitch,
-        orientation = GaugeAxisOrientation.VERTICAL,
-        value = reading.pitchDegrees,
-        metrics = metrics,
-        readoutPaint = readoutPaint,
-    )
-}
-
-/** Matches the iOS two-axis gauge: roll horizontal, pitch vertical. */
-private enum class GaugeAxisOrientation {
-    HORIZONTAL,
-    VERTICAL,
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGaugeAxis(
-    seat: Offset,
-    orientation: GaugeAxisOrientation,
-    value: Double,
-    metrics: LiveGaugeMetrics,
-    readoutPaint: Paint,
-) {
-    val horizontal = orientation == GaugeAxisOrientation.HORIZONTAL
-    val isLevel = abs(value) < metrics.levelThresholdDegrees
-    val tint = if (isLevel) LiveDesign.good else LiveDesign.accent
-    val beadOffset =
-        (value / metrics.maxAngleDegrees).coerceIn(-1.0, 1.0).toFloat() * metrics.axisSpan
-    val trackStart =
-        if (horizontal) Offset(seat.x - metrics.axisSpan, seat.y) else Offset(seat.x, seat.y - metrics.axisSpan)
-    val trackEnd =
-        if (horizontal) Offset(seat.x + metrics.axisSpan, seat.y) else Offset(seat.x, seat.y + metrics.axisSpan)
-    drawLine(
-        color = Color.White.copy(alpha = 0.22f),
-        start = trackStart,
-        end = trackEnd,
-        strokeWidth = metrics.baselineStrokeWidth,
-    )
-
-    var degrees = -metrics.maxAngleDegrees
-    while (degrees <= metrics.maxAngleDegrees + 0.001) {
-        val offset = (degrees / metrics.maxAngleDegrees).toFloat() * metrics.axisSpan
-        val isCentre = abs(degrees) < 0.001
-        val half = if (isCentre) metrics.centerTickHalfLength else metrics.tickHalfLength
-        val tickCenter = if (horizontal) Offset(seat.x + offset, seat.y) else Offset(seat.x, seat.y - offset)
-        val tickStart = if (horizontal) Offset(tickCenter.x, tickCenter.y - half) else Offset(tickCenter.x - half, tickCenter.y)
-        val tickEnd = if (horizontal) Offset(tickCenter.x, tickCenter.y + half) else Offset(tickCenter.x + half, tickCenter.y)
-        drawLine(
-            color = Color.White.copy(alpha = if (isCentre) 0.75f else 0.34f),
-            start = tickStart,
-            end = tickEnd,
-            strokeWidth = if (isCentre) metrics.baselineStrokeWidth else metrics.tickStrokeWidth,
-        )
-        degrees += metrics.tickStepDegrees
-    }
-
-    val bead = if (horizontal) Offset(seat.x + beadOffset, seat.y) else Offset(seat.x, seat.y - beadOffset)
-    drawCircle(color = tint, radius = metrics.beadRadius, center = bead)
-    drawCircle(
-        color = Color.Black.copy(alpha = 0.45f),
-        radius = metrics.beadRadius,
-        center = bead,
-        style = Stroke(metrics.beadStrokeWidth),
-    )
-    if (!isLevel) {
-        drawGaugeChevrons(
-            bead = bead,
-            orientation = orientation,
-            value = value,
-            metrics = metrics,
-        )
-    }
-    drawGaugeReadout(
-        seat = seat,
-        orientation = orientation,
-        value = value,
-        isLevel = isLevel,
-        metrics = metrics,
-        paint = readoutPaint,
-    )
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGaugeChevrons(
-    bead: Offset,
-    orientation: GaugeAxisOrientation,
-    value: Double,
-    metrics: LiveGaugeMetrics,
-) {
-    val horizontal = orientation == GaugeAxisOrientation.HORIZONTAL
-    val sign = if (value > 0.0) 1f else -1f
-    val urgency =
-        when (abs(value)) {
-            in 0.0..<metrics.maxAngleDegrees / 3.0 -> 1
-            in metrics.maxAngleDegrees / 3.0..<metrics.maxAngleDegrees * 2.0 / 3.0 -> 2
-            else -> 3
-        }
-    val anchor =
-        if (horizontal) {
-            Offset(bead.x - sign * metrics.chevronGap, bead.y)
-        } else {
-            Offset(bead.x, bead.y + sign * metrics.chevronGap)
-        }
-    repeat(urgency) { index ->
-        val centre =
-            if (horizontal) {
-                Offset(anchor.x - sign * index * metrics.chevronStep, anchor.y)
-            } else {
-                Offset(anchor.x, anchor.y + sign * index * metrics.chevronStep)
-            }
-        drawGaugeChevron(
-            center = centre,
-            orientation = orientation,
-            pointsTowardNegative = value > 0.0,
-            color = LiveDesign.accent.copy(alpha = 1f - index * 0.22f),
-            metrics = metrics,
-        )
-    }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGaugeChevron(
-    center: Offset,
-    orientation: GaugeAxisOrientation,
-    pointsTowardNegative: Boolean,
-    color: Color,
-    metrics: LiveGaugeMetrics,
-) {
-    val half = metrics.chevronHalfSize
-    val (start, middle, end) =
-        when (orientation) {
-            GaugeAxisOrientation.HORIZONTAL ->
-                if (pointsTowardNegative) {
-                    Triple(
-                        Offset(center.x + half, center.y - half),
-                        Offset(center.x - half, center.y),
-                        Offset(center.x + half, center.y + half),
-                    )
-                } else {
-                    Triple(
-                        Offset(center.x - half, center.y - half),
-                        Offset(center.x + half, center.y),
-                        Offset(center.x - half, center.y + half),
-                    )
-                }
-            GaugeAxisOrientation.VERTICAL ->
-                if (pointsTowardNegative) {
-                    Triple(
-                        Offset(center.x - half, center.y + half),
-                        Offset(center.x, center.y - half),
-                        Offset(center.x + half, center.y + half),
-                    )
-                } else {
-                    Triple(
-                        Offset(center.x - half, center.y - half),
-                        Offset(center.x, center.y + half),
-                        Offset(center.x + half, center.y - half),
-                    )
-                }
-        }
-    drawLine(color = color, start = start, end = middle, strokeWidth = metrics.chevronStrokeWidth)
-    drawLine(color = color, start = middle, end = end, strokeWidth = metrics.chevronStrokeWidth)
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGaugeReadout(
-    seat: Offset,
-    orientation: GaugeAxisOrientation,
-    value: Double,
-    isLevel: Boolean,
-    metrics: LiveGaugeMetrics,
-    paint: Paint,
-) {
-    val shown = if (abs(value) < 0.05) 0.0 else value
-    val centre =
-        if (orientation == GaugeAxisOrientation.HORIZONTAL) {
-            Offset(seat.x, seat.y - metrics.readoutOffset)
-        } else {
-            Offset(seat.x - metrics.verticalReadoutOffset, seat.y)
-        }
-    paint.color = (if (isLevel) LiveDesign.good else LiveDesign.text.copy(alpha = 0.85f)).toArgb()
-    paint.textSize = metrics.readoutTextSize
-    paint.textAlign = Paint.Align.CENTER
-    val baseline = centre.y - (paint.ascent() + paint.descent()) / 2f
-    drawContext.canvas.nativeCanvas.drawText(
-        String.format(Locale.US, "%+.1f°", shown),
-        centre.x,
-        baseline,
-        paint,
-    )
 }
 
 @Composable

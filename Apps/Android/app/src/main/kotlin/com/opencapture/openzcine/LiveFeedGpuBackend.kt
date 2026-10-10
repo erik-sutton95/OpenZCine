@@ -6,6 +6,9 @@ import android.os.Build
 import android.util.Log
 import android.view.SurfaceView
 import android.view.View
+import com.opencapture.opencine.runtime.MonitorBitmapVulkanSession
+import com.opencapture.opencine.media.MonitorZebraMaskPolicy
+import com.opencapture.openpocketcine.feed.OpcVulkan
 
 private const val TAG = "ZCLiveFeedGpu"
 
@@ -27,7 +30,7 @@ internal interface LiveFeedGpuBackend {
 
     fun detach(view: View)
 
-    fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean)
+    fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean = false)
 
     fun submitFrame(frame: Bitmap)
 
@@ -93,11 +96,8 @@ internal object LiveFeedGpuBackendFactory {
         if (!vulkanProbed) {
             vulkanProbed = true
             vulkanAvailable =
-                runCatching {
-                    System.loadLibrary("openzcine_live_feed_vk")
-                    VulkanLiveFeedNative.nativeInitAssets(appContext.assets)
-                    VulkanLiveFeedNative.isAvailable()
-                }.getOrDefault(false)
+                runCatching { OpcVulkan.isAvailable && OpcVulkan.nativeProbeBitmap() }
+                    .getOrDefault(false)
             Log.i(TAG, "Vulkan native available=$vulkanAvailable")
         }
         return vulkanAvailable
@@ -132,20 +132,22 @@ internal class GlesLiveFeedBackend : LiveFeedGpuBackend {
     private var uploadedPlan: FeedEffectsRenderPlan? = null
     private var uploadedAspectFill = false
     private var uploadedMirrored = false
+    private var uploadedMirroredVertical = false
 
-    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) {
+    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean) {
         // Same per-recomposition storm as the Vulkan path — see the note on its own `uploadedPlan`.
         // Cheaper per call here, but a texture re-upload per frame is still a texture re-upload per
         // frame, and the two backends must not drift on when they consider a plan new.
         if (plan === uploadedPlan && aspectFill == uploadedAspectFill &&
-            mirrored == uploadedMirrored
+            mirrored == uploadedMirrored && mirroredVertical == uploadedMirroredVertical
         ) {
             return
         }
         uploadedPlan = plan
         uploadedAspectFill = aspectFill
         uploadedMirrored = mirrored
-        if (plan != null) state.update(plan, aspectFill, mirrored) else state.clear()
+        uploadedMirroredVertical = mirroredVertical
+        if (plan != null) state.update(plan, aspectFill, mirrored, mirroredVertical) else state.clear()
     }
 
     override fun submitFrame(frame: Bitmap) {
@@ -169,225 +171,21 @@ internal class GlesLiveFeedBackend : LiveFeedGpuBackend {
     }
 }
 
-/**
- * Vulkan swapchain present path. JNI implementation lives in
- * `src/main/cpp/live_feed_vk/`. Falls back is handled by the factory.
- */
+/** Source/backend selection over the existing shared Bitmap native picture owner. */
 internal class VulkanLiveFeedBackend(
     private val appContext: Context,
 ) : LiveFeedGpuBackend {
-    private val session = VulkanLiveFeedNative.createSession()
-    private var surfaceView: SurfaceView? = null
-    private var disposed = false
-
+    private val native = MonitorBitmapVulkanSession { Log.e(TAG, it) }
     override val kind: LiveFeedGpuBackend.Kind = LiveFeedGpuBackend.Kind.VULKAN
-
-    @Volatile
-    override var renderFailed: Boolean = false
-        private set
-
-    init {
-        check(session != 0L) { "Vulkan session create failed" }
-    }
-
-    override fun createView(context: Context): View {
-        val view = SurfaceView(context)
-        view.holder.addCallback(
-            object : android.view.SurfaceHolder.Callback {
-                override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                    if (disposed) return
-                    if (!VulkanLiveFeedNative.attachSurface(session, holder.surface)) {
-                        renderFailed = true
-                        Log.e(TAG, "Vulkan attachSurface failed")
-                    }
-                }
-
-                override fun surfaceChanged(
-                    holder: android.view.SurfaceHolder,
-                    format: Int,
-                    width: Int,
-                    height: Int,
-                ) {
-                    if (disposed) return
-                    VulkanLiveFeedNative.resize(session, width, height)
-                }
-
-                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
-                    if (disposed) return
-                    VulkanLiveFeedNative.detachSurface(session)
-                }
-            },
-        )
-        surfaceView = view
-        return view
-    }
-
-    override fun attach(view: View) {
-        // Surface callbacks own attach; keep for interface symmetry.
-        forgetUploadedPlan()
-    }
-
-    override fun detach(view: View) {
-        forgetUploadedPlan()
-        if (!disposed) VulkanLiveFeedNative.detachSurface(session)
-    }
-
-    /**
-     * Drops the upload memo.
-     *
-     * The memo is only sound while the GPU still HOLDS what it was last told, so every transition
-     * that can take those textures away has to forget it — a surface torn down and rebuilt, a
-     * resume after the app was backgrounded. Getting this wrong is not a slow feed, it is an
-     * ungraded one: the plan would be skipped as "already uploaded" against a device that no
-     * longer has it.
-     */
-    private fun forgetUploadedPlan() {
-        uploadedPlan = null
-    }
-
-    /**
-     * The plan last handed to the GPU, so an unchanged one is not uploaded again.
-     *
-     * `updatePlan` is called from a Compose `SideEffect` and from `AndroidView(update =)`, both of
-     * which run after EVERY recomposition — and the monitor recomposes at feed rate, because the
-     * AF boxes, the audio levels and the timecode all publish per frame. So this ran 25-30 times a
-     * second while saying the same thing every time, and on the Vulkan path saying it costs three
-     * full `vkQueueWaitIdle` queue drains (a 33³ LUT and two 64³ LIMITS cubes) taken under the
-     * same lock the frame present needs. The picture was waiting on re-uploads of bytes that had
-     * not changed since the operator last touched a control.
-     *
-     * Identity, not value: the plan is built once into a `remember`ed state and only reassigned
-     * when it genuinely changes, so the reference IS the change signal — and comparing megabytes
-     * of cube on every recomposition would just be a cheaper version of the same waste.
-     */
-    private var uploadedPlan: FeedEffectsRenderPlan? = null
-    private var uploadedAspectFill = false
-    private var uploadedMirrored = false
-
-    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean) {
-        if (disposed) return
-        if (plan === uploadedPlan && aspectFill == uploadedAspectFill &&
-            mirrored == uploadedMirrored
-        ) {
-            return
-        }
-        uploadedPlan = plan
-        uploadedAspectFill = aspectFill
-        uploadedMirrored = mirrored
-        if (plan == null) {
-            VulkanLiveFeedNative.clearPlan(session)
-            return
-        }
-        // Upload Swift-baked cube + uniforms into the native grade pass.
-        val ok =
-            VulkanLiveFeedNative.setPlan(
-                session,
-                plan.baseCube?.size ?: 0,
-                plan.baseCube?.rgba,
-                plan.limitsPaintCube?.size ?: 0,
-                plan.limitsPaintCube?.rgba,
-                plan.limitsWeightCube?.size ?: 0,
-                plan.limitsWeightCube?.rgba,
-                plan.limitsReady,
-                plan.effects.peaking,
-                plan.configuration.peakingColor,
-                plan.configuration.deLogCurve,
-                plan.configuration.peakingRatioThreshold,
-                plan.configuration.peakingNoiseGate,
-                plan.effects.zebra && plan.configuration.highlightEnabled,
-                plan.configuration.highlightCode,
-                plan.configuration.highlightColor,
-                plan.effects.zebra && plan.configuration.midtoneEnabled,
-                plan.configuration.midtoneCode,
-                plan.configuration.midtoneColor,
-                aspectFill,
-                mirrored,
-                plan.splitComparison != null,
-                plan.splitComparison == FeedSplitOrientation.VERTICAL,
-            )
-        if (!ok) {
-            renderFailed = true
-            Log.e(TAG, "Vulkan setPlan failed")
-        }
-    }
-
-    override fun submitFrame(frame: Bitmap) {
-        if (disposed || renderFailed) return
-        if (!VulkanLiveFeedNative.submitBitmap(session, frame)) {
-            renderFailed = true
-            Log.e(TAG, "Vulkan submitBitmap failed")
-        }
-    }
-
-    override fun clearFrame() {
-        if (!disposed) VulkanLiveFeedNative.clearFrame(session)
-    }
-
-    override fun resume() {
-        if (!disposed) VulkanLiveFeedNative.resume(session)
-    }
-
-    override fun pause() {
-        if (!disposed) VulkanLiveFeedNative.pause(session)
-    }
-
-    override fun dispose() {
-        if (disposed) return
-        disposed = true
-        VulkanLiveFeedNative.destroySession(session)
-        surfaceView = null
-    }
-}
-
-/** JNI surface for [libopenzcine_live_feed_vk.so]. */
-internal object VulkanLiveFeedNative {
-    external fun nativeInitAssets(assets: android.content.res.AssetManager)
-
-    external fun isAvailable(): Boolean
-
-    external fun createSession(): Long
-
-    external fun destroySession(session: Long)
-
-    external fun attachSurface(session: Long, surface: android.view.Surface): Boolean
-
-    external fun detachSurface(session: Long)
-
-    external fun resize(session: Long, width: Int, height: Int)
-
-    external fun resume(session: Long)
-
-    external fun pause(session: Long)
-
-    external fun clearFrame(session: Long)
-
-    external fun clearPlan(session: Long)
-
-    external fun submitBitmap(session: Long, bitmap: Bitmap): Boolean
-
-    external fun setPlan(
-        session: Long,
-        lutSize: Int,
-        lutRgba: ByteArray?,
-        limitsPaintSize: Int,
-        limitsPaintRgba: ByteArray?,
-        limitsWeightSize: Int,
-        limitsWeightRgba: ByteArray?,
-        limitsOn: Boolean,
-        peakingOn: Boolean,
-        peakingColor: FloatArray,
-        deLogCurve: FloatArray,
-        peakingRatioThreshold: Float,
-        peakingNoiseGate: Float,
-        zebraHighlightOn: Boolean,
-        zebraHighlight: Float,
-        zebraHighlightColor: FloatArray,
-        zebraMidtoneOn: Boolean,
-        zebraMidtone: Float,
-        zebraMidtoneColor: FloatArray,
-        aspectFill: Boolean,
-        mirrored: Boolean,
-        splitOn: Boolean,
-        splitVertical: Boolean,
-    ): Boolean
+    override val renderFailed: Boolean get() = native.failed
+    override fun createView(context: Context): View = native.createView(context)
+    override fun attach(view: View) = native.attach(view)
+    override fun detach(view: View) = native.detach(view)
+    override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean) =
+        native.updatePlan(plan?.nativePlan, aspectFill, mirrored, mirroredVertical)
+    override fun submitFrame(frame: Bitmap) = native.submit(frame)
+    override fun clearFrame() = native.clearFrame()
+    override fun resume() = native.resume()
+    override fun pause() = native.pause()
+    override fun dispose() = native.close()
 }

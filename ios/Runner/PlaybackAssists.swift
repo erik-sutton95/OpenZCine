@@ -1,272 +1,254 @@
 import AVFoundation
-import Accelerate
-import MediaToolbox
 import OSLog
-import os
+import Observation
+import OpenCineAppKit
+import OpenCineApple
+import OpenCineMedia
+import OpenZCineCore
 
 private let playbackAudioLogger = Logger(subsystem: "OpenZCine", category: "media-playback-audio")
 
-/// Configures `AVAudioSession` for in-app clip playback so audio plays through the mute switch.
-enum MediaPlaybackAudioSession {
-    /// Activates `.playback` (like YouTube and other media apps).
-    static func activateForPlayback() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playback, mode: .moviePlayback)
-            try session.setActive(true)
-        } catch {
-            playbackAudioLogger.error(
-                "Failed to activate playback audio session: \(error.localizedDescription, privacy: .public)"
-            )
+/// The measured source axis and selected monitor cube travel with each derivation.
+struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
+    let trafficLightsCrushClip: MonitorCrushClipCompensation
+    let mapping: ExposureSignalMapping
+    let vectorscopeCube: CubeLUT?
+
+    var transfer: MonitorTransfer {
+        switch mapping.curve {
+        case .redLog3G10: .log3G10
+        case .nikonNLog: .nlog
+        case .srgb: .srgb
+        case .hlg: .hdr
         }
     }
 
-    /// Releases the playback session when clip playback ends.
-    static func deactivateAfterPlayback() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setActive(false, options: .notifyOthersOnDeactivation)
-        } catch {
-            playbackAudioLogger.error(
-                "Failed to deactivate playback audio session: \(error.localizedDescription, privacy: .public)"
-            )
-        }
+    func bundle(samples: ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
+        var result = ScopeAssistSampling.bundle(
+            samples: samples,
+            trafficLightsCrushClip: trafficLightsCrushClip, mapping: mapping,
+            vectorscopeCube: vectorscopeCube, previous: previous)
+        result.transfer = transfer
+        result.levelAxis = mapping.scopeLevelAxis
+        return result
     }
 }
 
-/// Polls scope samples produced by ``MediaLUT/PlaybackEffectsBox`` during clip playback.
-///
-/// Scopes must read the compositor *source* frame (pre-LUT / pre-false-colour), matching live view.
-/// `AVPlayerItemVideoOutput` reflects the graded presentation, so sampling is done inside the
-/// composition handler and exposed through the effects box.
-@MainActor
-final class PlaybackScopeController {
-    private var sampleTask: Task<Void, Never>?
-    private var lastPublishedRevision: UInt64?
-
-    func startPolling(
-        effectsBox: MediaLUT.PlaybackEffectsBox,
-        isActive: @escaping @MainActor () -> Bool,
-        onSamples: @escaping @MainActor (ScopeSamples) async -> Void
+/// Attaches Nikon's AVVideoComposition and audio tap to the one retained native item.
+/// The shared scope session owns the read/derive loop; this adapter supplies calibrated values
+/// and samples from the compositor source, before the display look and false color.
+@MainActor @Observable final class NikonPlaybackAssistAdapter: MonitorPlaybackAssistService {
+    private(set) var audioLevels: MonitorAudioMeterLevels?
+    let scopes = MonitorPlaybackScopeSession<NikonPlaybackScopeConfiguration>(
+        cadence: .milliseconds(84)
     ) {
-        sampleTask?.cancel()
-        lastPublishedRevision = nil
-        sampleTask = Task { @MainActor in
-            while !Task.isCancelled {
-                if isActive() {
-                    let snapshot = effectsBox.readScopeSnapshot()
-                    if snapshot.revision != lastPublishedRevision {
-                        lastPublishedRevision = snapshot.revision
-                        await onSamples(snapshot.samples)
-                    }
+        samples, configuration, previous in
+        await Task.detached(priority: .utility) {
+            configuration.bundle(samples: samples, previous: previous)
+        }.value
+    }
+    @ObservationIgnored private weak var model: NativeAppModel?
+    @ObservationIgnored private let native: NikonPlaybackNativePort
+    @ObservationIgnored private let audio: MonitorPlaybackAudioSession.Lease
+    @ObservationIgnored private let box = MediaLUT.PlaybackEffectsBox()
+    @ObservationIgnored private let meter = MonitorPlaybackAudioMeterRuntime { status in
+        playbackAudioLogger.error("MTAudioProcessingTapCreate failed: \(status)")
+    }
+    @ObservationIgnored private weak var installed: AVPlayerItem?
+    @ObservationIgnored private var token: MonitorPlaybackItemToken?
+    @ObservationIgnored private var admission: (@MainActor () -> Bool)?
+    @ObservationIgnored private var revision = UUID()
+    @ObservationIgnored private var request = UUID()
+    @ObservationIgnored private var scopesVisible = false
+    @ObservationIgnored private var audioVisible = false
+    @ObservationIgnored private var polling = false
+    @ObservationIgnored private var activated = false
+    @ObservationIgnored private var closed = false
+
+    var scopeBundle: ScopeAssistBundle {
+        var value = scopes.bundle
+        if value.levelAxis == nil, let model {
+            let mapping = model.playbackExposureSignalMapping
+            value.levelAxis = mapping.scopeLevelAxis
+            value.transfer =
+                NikonPlaybackScopeConfiguration(
+                    trafficLightsCrushClip: model.assist.crushClipCompensation,
+                    mapping: mapping, vectorscopeCube: nil
+                ).transfer
+            value.clipByte = Int(mapping.clipNative.rounded())
+        }
+        return value
+    }
+
+    convenience init(model: NativeAppModel, native: NikonPlaybackNativePort) {
+        self.init(model: model, native: native, audioSession: model.playbackAudioSession)
+    }
+
+    init(
+        model: NativeAppModel, native: NikonPlaybackNativePort,
+        audioSession: MonitorPlaybackAudioSession
+    ) {
+        self.model = model
+        self.native = native
+        audio = audioSession.makeLease(
+            onFailure: { failure in
+                switch failure {
+                case .activation(let message):
+                    playbackAudioLogger.error(
+                        "Failed to activate playback audio session: \(message, privacy: .public)")
+                case .deactivation(let message):
+                    playbackAudioLogger.error(
+                        "Failed to deactivate playback audio session: \(message, privacy: .public)")
                 }
-                try? await Task.sleep(for: .milliseconds(84))
-            }
-        }
-    }
-
-    func stop() {
-        sampleTask?.cancel()
-        sampleTask = nil
-        lastPublishedRevision = nil
-    }
-}
-
-// MARK: - Playback audio metering
-
-/// Lock-guarded per-channel linear peak accumulator shared between the `MTAudioProcessingTap`
-/// render-thread callbacks and the main-actor polling loop. The tap's C callbacks touch nothing
-/// but this box (retained via the tap's storage) — no MainActor state crosses that boundary.
-final class AudioLevelTapBox: @unchecked Sendable {
-    /// Processing format captured by the tap's `prepare` callback (float32 check + interleaving).
-    private struct State {
-        var leftPeak: Float = 0
-        var rightPeak: Float = 0
-        var isFloat32 = false
-        var isInterleaved = false
-        var channelCount = 0
-    }
-
-    private let state = OSAllocatedUnfairLock(initialState: State())
-
-    func setFormat(_ description: AudioStreamBasicDescription) {
-        state.withLock {
-            $0.isFloat32 =
-                description.mFormatID == kAudioFormatLinearPCM
-                && description.mFormatFlags & kAudioFormatFlagIsFloat != 0
-                && description.mBitsPerChannel == 32
-            $0.isInterleaved = description.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0
-            $0.channelCount = Int(description.mChannelsPerFrame)
-        }
-    }
-
-    var format: (isFloat32: Bool, isInterleaved: Bool, channelCount: Int) {
-        state.withLock { ($0.isFloat32, $0.isInterleaved, $0.channelCount) }
-    }
-
-    func ingest(left: Float, right: Float) {
-        state.withLock {
-            $0.leftPeak = max($0.leftPeak, left)
-            $0.rightPeak = max($0.rightPeak, right)
-        }
-    }
-
-    /// Returns and clears the loudest linear amplitudes observed since the previous read.
-    func readAndReset() -> (left: Float, right: Float) {
-        state.withLock { current in
-            let peaks = (current.leftPeak, current.rightPeak)
-            current.leftPeak = 0
-            current.rightPeak = 0
-            return peaks
-        }
-    }
-}
-
-/// Creates the audio-mix tap that meters playback levels. Isolated in a nonisolated enum so the
-/// C-function-pointer callbacks can never infer actor isolation or capture context — they reach
-/// the shared `AudioLevelTapBox` exclusively through the tap's storage pointer.
-enum AudioLevelTapFactory {
-    /// Builds an `MTAudioProcessingTap` that passes source audio through untouched while recording
-    /// per-channel peak amplitudes into `box`. Returns `nil` if tap creation fails (playback then
-    /// simply runs unmetered).
-    static func makeTap(box: AudioLevelTapBox) -> MTAudioProcessingTap? {
-        var callbacks = MTAudioProcessingTapCallbacks(
-            version: kMTAudioProcessingTapCallbacksVersion_0,
-            clientInfo: UnsafeMutableRawPointer(Unmanaged.passRetained(box).toOpaque()),
-            init: { _, clientInfo, tapStorageOut in
-                tapStorageOut.pointee = clientInfo
             },
-            finalize: { tap in
-                // Balances the `passRetained` above — AVFoundation calls this exactly once when
-                // the mix releases the tap, so the box cannot leak or dangle across clip switches.
-                Unmanaged<AudioLevelTapBox>.fromOpaque(MTAudioProcessingTapGetStorage(tap))
-                    .release()
-            },
-            prepare: { tap, _, processingFormat in
-                Unmanaged<AudioLevelTapBox>.fromOpaque(MTAudioProcessingTapGetStorage(tap))
-                    .takeUnretainedValue()
-                    .setFormat(processingFormat.pointee)
-            },
-            unprepare: nil,
-            process: { tap, numberFrames, _, bufferListInOut, numberFramesOut, flagsOut in
-                // Pull source audio through unchanged — metering must never alter the output.
-                let status = MTAudioProcessingTapGetSourceAudio(
-                    tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
-                guard status == noErr else { return }
-                let box = Unmanaged<AudioLevelTapBox>
-                    .fromOpaque(MTAudioProcessingTapGetStorage(tap))
-                    .takeUnretainedValue()
-                let format = box.format
-                guard format.isFloat32 else { return }
-                let buffers = UnsafeMutableAudioBufferListPointer(bufferListInOut)
-                var left: Float = 0
-                var right: Float = 0
-                if format.isInterleaved, let buffer = buffers.first, let data = buffer.mData {
-                    let channels = max(1, format.channelCount)
-                    let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
-                    let frames = sampleCount / channels
-                    guard frames > 0 else { return }
-                    let samples = data.assumingMemoryBound(to: Float.self)
-                    vDSP_maxmgv(samples, vDSP_Stride(channels), &left, vDSP_Length(frames))
-                    if channels > 1 {
-                        vDSP_maxmgv(
-                            samples + 1, vDSP_Stride(channels), &right, vDSP_Length(frames))
-                    } else {
-                        right = left
-                    }
-                } else {
-                    // Deinterleaved: one buffer per channel (AVPlayer's canonical tap format).
-                    for (index, buffer) in buffers.enumerated() where index < 2 {
-                        guard let data = buffer.mData else { continue }
-                        let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
-                        guard count > 0 else { continue }
-                        var peak: Float = 0
-                        vDSP_maxmgv(
-                            data.assumingMemoryBound(to: Float.self), 1, &peak,
-                            vDSP_Length(count))
-                        if index == 0 { left = peak } else { right = peak }
-                    }
-                    if buffers.count < 2 { right = left }
-                }
-                box.ingest(left: left, right: right)
+            onReleased: { [weak model] in
+                model?.setMediaPlaybackOwnsAudioSession(false)
+            })
+        native.beforeItemRetirement = { [weak self] in self?.retireNativeItem() }
+        native.afterItemInstallation = { [weak self] item in self?.install(item) }
+    }
+
+    func activate() {
+        guard !closed, !activated else { return }
+        activated = true
+        audio.activate { [weak model] in
+            model?.setMediaPlaybackOwnsAudioSession(true)
+        }
+    }
+
+    func synchronize(
+        item: MonitorPlaybackItemToken, effects: MonitorFrameEffects,
+        audioVisible: Bool, outputMuted: Bool, ifCurrent: @escaping @MainActor () -> Bool
+    ) {
+        guard !closed else { return }
+        request = UUID()
+        let invocation = request
+        let before = revision
+        guard ifCurrent(), !closed, request == invocation, revision == before else { return }
+        if token != item { revision = UUID() }
+        let captured = revision
+        token = item
+        admission = ifCurrent
+        self.audioVisible = audioVisible
+        scopesVisible = effects.needsScopes
+        activate()
+        guard current(item, revision: captured, request: invocation) else { return }
+        if let nativeItem = native.player.currentItem, installed !== nativeItem {
+            install(nativeItem)
+        }
+        guard current(item, revision: captured, request: invocation), let model else { return }
+        let resolved = model.resolvedPlaybackEffects()
+        guard current(item, revision: captured, request: invocation) else { return }
+        let changed = box.set(effects: resolved)
+        if changed, native.player.rate == 0, let nativeItem = installed,
+            native.player.currentItem === nativeItem, nativeItem.videoComposition != nil
+        {
+            nativeItem.videoComposition = box.makeVideoComposition(for: nativeItem.asset)
+        }
+        guard current(item, revision: captured, request: invocation) else { return }
+        synchronizeSamples(item: item, revision: captured)
+    }
+
+    private func install(_ item: AVPlayerItem) {
+        guard !closed, let token, native.player.currentItem === item,
+            current(token, revision: revision), let model
+        else { return }
+        let captured = revision
+        if installed !== item {
+            meter.stopPolling()
+            polling = false
+            meter.detach(from: installed)
+            audioLevels = nil
+            guard current(token, revision: captured), native.player.currentItem === item else {
+                return
             }
-        )
-        var tap: MTAudioProcessingTap?
-        let status = MTAudioProcessingTapCreate(
-            kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
-        guard status == noErr, let tap else {
-            // Creation failed before AVFoundation took ownership — `finalize` will never run, so
-            // release the retained box here to balance `passRetained`.
-            Unmanaged.passUnretained(box).release()
-            playbackAudioLogger.error("MTAudioProcessingTapCreate failed: \(status)")
-            return nil
-        }
-        return tap
-    }
-}
-
-/// Installs an audio-level tap on each playback item and polls it into `AudioMeterLevels` for the
-/// playback audio-meters panel. Attach/detach follow the player-item lifecycle; polling follows the
-/// tool toggle. Ballistics (attack/decay/peak-hold) are `AudioMeterBallistics` in the core.
-@MainActor
-final class PlaybackAudioMeterController {
-    private let box = AudioLevelTapBox()
-    private var pollTask: Task<Void, Never>?
-    private var attachGeneration = 0
-
-    /// Builds an audio mix tapping the item's first audio track and installs it. Async (track
-    /// loading) and generation-guarded so a superseded clip can't install onto a stale item.
-    func attach(to item: AVPlayerItem) {
-        attachGeneration += 1
-        let generation = attachGeneration
-        Task { @MainActor [weak self, weak item] in
-            guard let self, let item else { return }
-            guard let track = try? await item.asset.loadTracks(withMediaType: .audio).first
-            else { return }
-            guard generation == self.attachGeneration else { return }
-            guard let tap = AudioLevelTapFactory.makeTap(box: self.box) else { return }
-            let parameters = AVMutableAudioMixInputParameters(track: track)
-            parameters.audioTapProcessor = tap
-            let mix = AVMutableAudioMix()
-            mix.inputParameters = [parameters]
-            item.audioMix = mix
-        }
-    }
-
-    /// Removes the tap before the item tears down (releasing an item with a live tap is the
-    /// classic MTAudioProcessingTap crash), and invalidates any in-flight attach.
-    func detach(from item: AVPlayerItem?) {
-        attachGeneration += 1
-        item?.audioMix = nil
-        _ = box.readAndReset()
-    }
-
-    /// Starts publishing ballistics-smoothed levels ~24 Hz. Restarts cleanly if already polling.
-    func startPolling(onLevels: @escaping @MainActor (AudioMeterLevels) -> Void) {
-        pollTask?.cancel()
-        pollTask = Task { @MainActor [box] in
-            var levels = AudioMeterLevels.silent
-            var lastTick = CFAbsoluteTimeGetCurrent()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(42))
-                if Task.isCancelled { return }
-                let now = CFAbsoluteTimeGetCurrent()
-                let dt = now - lastTick
-                lastTick = now
-                let peaks = box.readAndReset()
-                levels = AudioMeterLevels(
-                    left: AudioMeterBallistics.step(
-                        levels.left, peakLinear: Double(peaks.left), dt: dt),
-                    right: AudioMeterBallistics.step(
-                        levels.right, peakLinear: Double(peaks.right), dt: dt))
-                onLevels(levels)
+            installed = item
+            if DemoHarness.mediaLUT { model.setAssist(.lut, visible: true) }
+            guard current(token, revision: captured), native.player.currentItem === item else {
+                return
             }
+            _ = box.set(effects: model.resolvedPlaybackEffects())
+            guard current(token, revision: captured), native.player.currentItem === item else {
+                return
+            }
+            item.videoComposition = box.makeVideoComposition(for: item.asset)
+            meter.attach(to: item)
+        }
+        synchronizeSamples(item: token, revision: captured)
+    }
+
+    private func synchronizeSamples(item: MonitorPlaybackItemToken, revision captured: UUID) {
+        guard current(item, revision: captured), let model else { return }
+        let configuration = NikonPlaybackScopeConfiguration(
+            trafficLightsCrushClip: model.assist.crushClipCompensation,
+            mapping: model.playbackExposureSignalMapping,
+            vectorscopeCube: model.vectorscopeMonitorCube(
+                visibleTools: model.assist.playbackTools,
+                curve: model.playbackExposureSignalMapping.curve))
+        guard current(item, revision: captured) else { return }
+        box.setScopesActive(scopesVisible)
+        scopes.synchronize(
+            item: item, enabled: scopesVisible, configuration: configuration,
+            read: { [weak self] in
+                guard let self, self.current(item, revision: captured),
+                    let installed = self.installed, self.native.player.currentItem === installed
+                else { return nil }
+                let snapshot = self.box.readScopeSnapshot()
+                return .init(revision: snapshot.revision, samples: snapshot.samples)
+            }, ifCurrent: { [weak self] in self?.current(item, revision: captured) == true })
+        guard current(item, revision: captured) else { return }
+        // The tap reads the source audio independently of output mute and conform playback.
+        if audioVisible && !polling {
+            polling = true
+            meter.startPolling { [weak self] levels in
+                guard let self, self.polling, self.current(item, revision: captured) else { return }
+                self.audioLevels = levels
+            }
+        } else if !audioVisible {
+            polling = false
+            meter.stopPolling()
+            audioLevels = nil
         }
     }
 
-    func stopPolling() {
-        pollTask?.cancel()
-        pollTask = nil
+    private func current(
+        _ item: MonitorPlaybackItemToken, revision captured: UUID, request expected: UUID? = nil
+    ) -> Bool {
+        guard !closed, revision == captured, token == item, native.token == item,
+            expected == nil || request == expected, let admission
+        else { return false }
+        let admitted = admission()
+        return admitted && !closed && revision == captured && token == item && native.token == item
+            && (expected == nil || request == expected)
+    }
+
+    private func retireNativeItem() {
+        let previous = token
+        revision = UUID()
+        request = UUID()
+        token = nil
+        admission = nil
+        box.invalidateScopeComposition()
+        box.setScopesActive(false)
+        if let previous { scopes.retire(item: previous) }
+        polling = false
+        meter.stopPolling()
+        meter.detach(from: installed)
+        installed = nil
+        audioLevels = nil
+    }
+
+    func close() {
+        guard !closed else { return }
+        closed = true
+        retireNativeItem()
+        scopes.close()
+        meter.close()
+        native.beforeItemRetirement = nil
+        native.afterItemInstallation = nil
+        if activated {
+            audio.close()
+        }
     }
 }
 

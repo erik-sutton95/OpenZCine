@@ -1,4 +1,6 @@
 import Foundation
+import OpenCineMedia
+import OpenZCineCore
 import os
 
 /// Media library diagnostics (Media page cache). Filter Console for subsystem `OpenZCine`, category
@@ -119,37 +121,6 @@ enum MediaCategoryTab: String, CaseIterable, Identifiable, Sendable {
     case favorites = "Favorites"
 
     var id: String { rawValue }
-
-    var systemImage: String {
-        switch self {
-        case .all: "square.grid.2x2"
-        case .videos: "film.stack"
-        case .photos: "photo.on.rectangle.angled"
-        case .favorites: "star"
-        }
-    }
-}
-
-/// Primary layout for the Media browser main column.
-enum MediaBrowserLayout: String, CaseIterable, Codable, Sendable, Identifiable {
-    case grid
-    case list
-
-    var id: String { rawValue }
-
-    var toggleIcon: String {
-        switch self {
-        case .grid: "list.bullet"
-        case .list: "square.grid.2x2"
-        }
-    }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .grid: "List view"
-        case .list: "Grid view"
-        }
-    }
 }
 
 /// Persisted clip ordering for the Media browser grid.
@@ -159,17 +130,6 @@ enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
     case name
     /// Highest camera star first — clusters favorited/rated shots at the top for culling.
     case rating
-
-    var menuLabel: String {
-        switch self {
-        case .newest: "Newest"
-        case .oldest: "Oldest"
-        case .name: "Name"
-        case .rating: "Rating"
-        }
-    }
-
-    var pillLabel: String { "SORT" }
 
     var next: MediaSortOrder {
         switch self {
@@ -190,14 +150,6 @@ extension MediaFormatChip {
 }
 
 extension MediaClip {
-    /// The per-object facts the shared chip derivation needs.
-    var filterItem: MediaFilterItem {
-        MediaFilterItem(
-            filename: filename,
-            pixelWidth: pixelWidth,
-            sourcePixelWidth: sourcePixelWidth,
-            captureDate: captureDate)
-    }
 
     /// Inferred from filename — videos are playable proxies; stills use `MediaClipFilename.isPhoto`.
     var mediaKind: MediaKind {
@@ -205,8 +157,8 @@ extension MediaClip {
     }
 
     /// Best-effort resolution bucket: R3D source dimensions when linked, else proxy pixels, then filename.
-    var resolutionBucket: MediaResolutionBucket? {
-        MediaResolutionBucket.classify(
+    var resolutionBucket: NikonMediaResolutionBucket? {
+        NikonMediaResolutionBucket.classify(
             filename: filename,
             pixelWidth: pixelWidth,
             sourcePixelWidth: sourcePixelWidth)
@@ -222,24 +174,11 @@ extension MediaClip {
         MediaClipFilename.formatChip(for: filename) == .nef
     }
 
-    /// True for JPEG stills — the display side of a RAW+JPEG pair (NEF has no quicklook-decodable
-    /// full preview, so the JPEG carries the grid cell and opens the viewer).
-    var isJPEGPhoto: Bool {
-        MediaClipFilename.formatChip(for: filename) == .jpeg
-    }
-
     /// Favorited for the Media page: the local heart OR any camera star (≥1). Rating writes
     /// (viewer + instant playback) mirror the body's star into `starRating`, so a shot starred
     /// during the shoot lands under the Favorites tab without a per-cell camera round-trip.
     var isFavorited: Bool {
         isFavorite || (starRating ?? 0) >= 1
-    }
-
-    /// Same-shot pair identity: bucket + storage slot + case-insensitive stem. The slot is part of
-    /// the key on purpose — split recording writes RAW and JPEG to different cards, and those must
-    /// stay separate items.
-    var rawPairKey: String {
-        "\(cameraID)/\(storageID.map(String.init) ?? "-")/\(MediaClipFilename.stem(of: filename))"
     }
 
     /// This clip as a burst-detection frame: capture identity plus a format/dimensions signature
@@ -300,9 +239,9 @@ enum MediaClipFormatting {
 enum MediaBrowserFilterMetrics {
     static func activeCount(
         formatFilters: Set<MediaFormatChip>,
-        resolutionFilters: Set<MediaResolutionBucket>,
-        photoSizeFilters: Set<MediaPhotoSizeClass>,
-        dateWindow: MediaDateWindow?,
+        resolutionFilters: Set<NikonMediaResolutionBucket>,
+        photoSizeFilters: Set<NikonMediaPhotoSizeClass>,
+        dateWindow: NikonMediaDateWindow?,
         storageSlotFilter: UInt32?
     ) -> Int {
         formatFilters.count + resolutionFilters.count + photoSizeFilters.count
@@ -312,44 +251,7 @@ enum MediaBrowserFilterMetrics {
 
 enum MediaClipSorting {
     static func sort(_ clips: [MediaClip], order: MediaSortOrder) -> [MediaClip] {
-        switch order {
-        case .newest:
-            return clips.sorted { lhs, rhs in
-                let lk = sortKey(lhs)
-                let rk = sortKey(rhs)
-                if lk != rk { return lk > rk }
-                return lhs.filename.localizedCaseInsensitiveCompare(rhs.filename)
-                    == .orderedDescending
-            }
-        case .oldest:
-            return clips.sorted { lhs, rhs in
-                let lk = sortKey(lhs)
-                let rk = sortKey(rhs)
-                if lk != rk { return lk < rk }
-                return lhs.filename.localizedCaseInsensitiveCompare(rhs.filename)
-                    == .orderedAscending
-            }
-        case .name:
-            return clips.sorted {
-                $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending
-            }
-        case .rating:
-            // Rating desc, newest as tiebreak so equal-star shots keep the familiar order.
-            return clips.sorted { lhs, rhs in
-                let ls = lhs.starRating ?? 0
-                let rs = rhs.starRating ?? 0
-                if ls != rs { return ls > rs }
-                let lk = sortKey(lhs)
-                let rk = sortKey(rhs)
-                if lk != rk { return lk > rk }
-                return lhs.filename.localizedCaseInsensitiveCompare(rhs.filename)
-                    == .orderedDescending
-            }
-        }
-    }
-
-    private static func sortKey(_ clip: MediaClip) -> String {
-        clip.captureDate.isEmpty ? clip.filename : clip.captureDate
+        NikonAppGalleryProjection.sorted(clips, order: order)
     }
 }
 
@@ -709,6 +611,31 @@ struct MediaClipStore {
 
     private func indexURL(cameraID: String) -> URL {
         directory(for: cameraID).appendingPathComponent("index.json")
+    }
+
+    /// Exact catalog-byte access for the shared library owner. Paths and JSON schema stay local.
+    func catalogBytes(cameraID: String) throws -> Data? {
+        let url = indexURL(cameraID: cameraID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url)
+    }
+
+    func writeCatalogBytes(_ bytes: Data, cameraID: String, ifCurrent: () -> Bool) throws {
+        let dir = directory(for: cameraID)
+        guard ifCurrent() else { throw MediaServiceError.retired }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard ifCurrent() else { throw MediaServiceError.retired }
+        try bytes.write(to: indexURL(cameraID: cameraID), options: .atomic)
+    }
+
+    static func decodeCatalogBytes(_ bytes: Data) throws -> [MediaClip] {
+        try JSONDecoder().decode([MediaClip].self, from: bytes).filter {
+            MediaClipFilename.safeCameraBasename($0.filename) != nil
+        }
+    }
+
+    static func encodeCatalogBytes(_ clips: [MediaClip]) throws -> Data {
+        try JSONEncoder().encode(clips)
     }
 
     private func loadIndex(cameraID: String) -> [MediaClip] {

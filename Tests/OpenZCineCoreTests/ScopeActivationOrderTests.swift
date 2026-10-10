@@ -5,54 +5,34 @@ import Testing
 @Suite struct ScopeActivationOrderTests {
     @Test func activationAppendsInOrder() {
         var prefs = OperatorPreferences()
-        var config = AssistConfiguration()
-        AssistToolActivation.set(
-            .parade, visible: true, preferences: &prefs, configuration: &config)
-        AssistToolActivation.set(
-            .waveform, visible: true, preferences: &prefs, configuration: &config)
-        AssistToolActivation.set(
-            .histogram, visible: true, preferences: &prefs, configuration: &config)
+        prefs.recordScopeActivation(.parade, on: true)
+        prefs.recordScopeActivation(.waveform, on: true)
+        prefs.recordScopeActivation(.histogram, on: true)
         #expect(prefs.scopeActivationOrder == [.parade, .waveform, .histogram])
     }
 
     @Test func deactivationRemoves() {
         var prefs = OperatorPreferences()
-        var config = AssistConfiguration()
         for tool in [MonitorAssistTool.parade, .waveform] {
-            AssistToolActivation.set(
-                tool, visible: true, preferences: &prefs, configuration: &config)
+            prefs.recordScopeActivation(tool, on: true)
         }
-        AssistToolActivation.set(
-            .parade, visible: false, preferences: &prefs, configuration: &config)
+        prefs.recordScopeActivation(.parade, on: false)
         #expect(prefs.scopeActivationOrder == [.waveform])
     }
 
     @Test func reactivationMovesToNewest() {
         var prefs = OperatorPreferences()
-        var config = AssistConfiguration()
         for tool in [MonitorAssistTool.parade, .waveform] {
-            AssistToolActivation.set(
-                tool, visible: true, preferences: &prefs, configuration: &config)
+            prefs.recordScopeActivation(tool, on: true)
         }
-        AssistToolActivation.set(
-            .parade, visible: true, preferences: &prefs, configuration: &config)
+        prefs.recordScopeActivation(.parade, on: true)
         #expect(prefs.scopeActivationOrder == [.waveform, .parade])
     }
 
     @Test func nonScopeToolsNeverRecorded() {
         var prefs = OperatorPreferences()
-        var config = AssistConfiguration()
-        AssistToolActivation.set(.zebra, visible: true, preferences: &prefs, configuration: &config)
-        AssistToolActivation.set(.grid, visible: true, preferences: &prefs, configuration: &config)
-        #expect(prefs.scopeActivationOrder.isEmpty)
-    }
-
-    @Test func playbackContextDoesNotTouchOrder() {
-        var prefs = OperatorPreferences()
-        var config = AssistConfiguration()
-        AssistToolActivation.set(
-            .waveform, visible: true, context: .playback,
-            preferences: &prefs, configuration: &config)
+        prefs.recordScopeActivation(.zebra, on: true)
+        prefs.recordScopeActivation(.grid, on: true)
         #expect(prefs.scopeActivationOrder.isEmpty)
     }
 
@@ -60,36 +40,33 @@ import Testing
 
     @Test func displayedFitScopesPicksTwoMostRecentInCanonicalOrder() {
         var prefs = OperatorPreferences()
-        var config = AssistConfiguration()
-        for tool in [MonitorAssistTool.waveform, .parade, .histogram] {
-            AssistToolActivation.set(
-                tool, visible: true, preferences: &prefs, configuration: &config)
-        }
+        let on: [MonitorAssistTool] = [.waveform, .parade, .histogram]
+        for tool in on { prefs.recordScopeActivation(tool, on: true) }
         // Order is [.waveform, .parade, .histogram]; two most recent = {.parade, .histogram},
         // re-sorted into canonical order.
-        #expect(prefs.displayedFitScopes == [.parade, .histogram])
+        #expect(prefs.displayedFitScopes(on: Set(on)) == [.parade, .histogram])
     }
 
     @Test func displayedFitScopesFallsBackToCanonicalPrefixWhenOrderEmpty() {
         var prefs = OperatorPreferences()
-        // Pre-migration payload: active scopes but no recorded order.
-        prefs.liveViewVisibleAssistTools = [.waveform, .parade, .histogram]
+        // Migrated install: active scopes but no recorded order.
         prefs.scopeActivationOrder = []
-        #expect(prefs.displayedFitScopes == [.waveform, .parade])
+        #expect(
+            prefs.displayedFitScopes(on: [.waveform, .parade, .histogram]) == [.waveform, .parade])
     }
 
     @Test func deactivatingDisplayedScopePromotesRememberedOne() {
         var prefs = OperatorPreferences()
-        var config = AssistConfiguration()
+        var on: Set<MonitorAssistTool> = []
         for tool in [MonitorAssistTool.waveform, .parade, .histogram] {
-            AssistToolActivation.set(
-                tool, visible: true, preferences: &prefs, configuration: &config)
+            on.insert(tool)
+            prefs.recordScopeActivation(tool, on: true)
         }
         // Displayed = [.parade, .histogram]; .waveform is remembered.
-        #expect(prefs.displayedFitScopes == [.parade, .histogram])
-        AssistToolActivation.set(
-            .histogram, visible: false, preferences: &prefs, configuration: &config)
+        #expect(prefs.displayedFitScopes(on: on) == [.parade, .histogram])
+        on.remove(.histogram)
+        prefs.recordScopeActivation(.histogram, on: false)
         // .waveform (remembered) now rejoins the display alongside .parade, canonical order.
-        #expect(prefs.displayedFitScopes == [.waveform, .parade])
+        #expect(prefs.displayedFitScopes(on: on) == [.waveform, .parade])
     }
 }

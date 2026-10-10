@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Multicam** (iOS + Android): the grid button on Your cameras opens a stage of four tiles;
+  add up to four bodies over USB-C, a router or the phone's hotspot (a camera's own access point
+  cannot join). Grid or Center stage, name, battery, timecode and record tally on every tile,
+  ISO and white balance of the selected camera, and one Record for all. Each camera reports its
+  own result ("2 of 3 rolling. C didn't start."), and nothing is stopped because another camera
+  failed. A tile opens that camera's full Live View on its open link; Return to Multicam hands it
+  back. Built on the shared OpenCine multicam engine and monitor UI.
 - **Share This Feed** (iOS + Android): broadcast the monitor to other devices on set and watch
   another device's, with per-watcher scopes and LUTs, an optional passcode, and camera-control
   handoff — one holder at a time, requested on the broadcaster's own screen, and control now
@@ -92,6 +99,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Record confirmation runs the start or stop you confirmed** (iOS): answering "Start
+  recording?" or "Stop recording?" used to recompute the toggle, so a take started or stopped on
+  the body while the prompt was open was inverted. Every record entry point (button,
+  confirmation, Apple Watch, Bluetooth remote, relay viewer) now resolves once to an explicit
+  start or stop, and a target the camera already reports is not sent again.
+- **A refused record puts the button back** (iOS): when the camera refuses a record (no card,
+  card full), Record returns to the state the camera reports.
+- **Android commands reach their own camera**: every session call is addressed to its connection
+  owner, so a stale or unknown connection gets no session instead of falling through to the
+  last-connected camera. Media browse, playback, transfer and delivery name that owner too.
+- **Frame.io stays signed in across token refreshes** (iOS): when Adobe IMS refreshes an access
+  token without returning a new refresh token, the app keeps the one it has instead of dropping
+  it and asking for a new sign-in at the next expiry. A Frame.io account, folder or file ID with
+  a path or query character is now refused before any request is sent. The Frame.io workflow is
+  now the shared OpenCineFrameIO one; the saved sign-in (keychain item `OpenZCine.frameio`) is
+  unchanged, so nobody has to log in again.
+- **FPS readout after a stale frame** (iOS): an out-of-order or repeated frame timestamp no
+  longer rewinds the frame-rate window, so the next frame cannot report a bogus interval (the
+  sampler is now the shared OpenCineMedia one).
 - **Android USB reconnect no longer fails the attempt that unwedged the pipe.** A
   dead first bulk-out (`USB wrote -1 of 12 bytes`, the GetDeviceInfo command) already
   issued a PTP Device Reset, but still returned failure so every reconnect showed
@@ -288,6 +314,24 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Your cameras and pairing on the shared OpenCine pages** (iOS + Android): one card per camera
+  with a chip per setup, connect progress, prompts and failures on the card (Try again, Take over
+  a camera another device holds, Share diagnostics), and NEARBY cameras on this network. The
+  pairing wizard and the app's own connects run on the shared pair page instead of a full-screen
+  card. Saved setups, Wi-Fi keys and pairings carry over, and an older build still reads them.
+- **ISO, white balance and record go through one camera session** (iOS + Android), shared with
+  the other OpenCine apps. Requested and reported values are kept apart, each write is confirmed
+  by reading the camera back, and record is an explicit start or stop that waits for the camera's
+  report and times out without inventing state. A value the camera parked on (Auto ISO at 51200,
+  for example) stays writable when leaving Auto.
+- **Record from Apple Watch or a Bluetooth shutter is refused while a watcher holds camera
+  control** (iOS). These presses used to go through.
+- **HDMI capture on iPad** renders a frame only when the monitor takes it, off the main thread,
+  and drops frames from a capture device that was unplugged or swapped. No visible change
+  intended.
+- The Nikon PTP wire, properties and session policy (OpenCineNikon), LUT parsing, the frame-rate
+  sampler and the HDMI capture source now come from the shared OpenCine package. The Runner
+  and Watch link the `OpenZCineCore` product instead of compiling its sources.
 - A weak or congested wireless link now degrades the picture instead of dropping the session,
   on both platforms; the Android live path also sheds several per-frame costs (GPU re-uploads,
   redundant copies, background-priority decode) and holds Wi-Fi in low-latency mode during a

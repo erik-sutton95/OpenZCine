@@ -224,12 +224,11 @@ Contributions are welcome.
 
 - Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, code standards, and how
   to report bugs vs. request features.
-- **Report a Problem** offers two public-issue paths: an anonymous in-app report with no GitHub
-  account (optional privacy-filtered activity events and user-selected, metadata-stripped
-  screenshots), or a [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
-  with richer optional details. Both paths are public.
-- Before enabling that flow in a release, follow the secret-free GitHub App and Cloudflare
-  provisioning steps in [`services/bug-relay/README.md`](services/bug-relay/README.md).
+- **Report a Problem** (iOS and Android) is the problem report form shared with OpenPocketCine: it
+  sends your description, an optional reply email, technical details only if you include them, and
+  photos privately to OpenCapture through Sentry. Automatic error reports are a separate opt-in,
+  off by default. Neither app calls the anonymous relay in
+  [`services/bug-relay`](services/bug-relay/README.md) any more.
 - Ideas and questions go in **GitHub Discussions** (an account is required):
   [Ideas](https://github.com/erik-sutton95/OpenZCine/discussions/categories/ideas-feature-requests) and
   [Q&A](https://github.com/erik-sutton95/OpenZCine/discussions/categories/q-a).

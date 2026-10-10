@@ -92,12 +92,13 @@ Business logic stays in `OpenZCineCore`. Android does not duplicate protocol
 logic:
 
 1. Portable Swift core (no SwiftUI, UIKit or Android imports).
-2. `OpenZCineAndroidFacade`: Swift-owned PTP-IP and USB session serialization,
-   response validation, event draining, and a narrow JNI boundary.
+2. OpenCine `OpenCineNikonAndroid` (linked into `OpenZCineAndroidFacade`):
+   Swift-owned PTP-IP and USB session serialization, response validation, event
+   draining, and a narrow JNI boundary (Kotlin `NikonNative`).
 3. The Swift SDK for Android cross-compiles the core for arm64-v8a. Toolchain
    pin: Swift **6.3.3**.
-4. Kotlin `core-api` defines the typed session boundary. Kotlin never packs PTP
-   commands or invents camera property values.
+4. OpenCine's Kotlin `:nikon` module defines the typed session boundary. Kotlin
+   never packs PTP commands or invents camera property values.
 
 Control writes: the facade encodes and confirms natively; Kotlin does not
 second-guess success after a successful apply. See

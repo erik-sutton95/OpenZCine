@@ -47,6 +47,14 @@ class CameraDiscoveryTest {
     }
 
     @Test
+    fun `a held camera names its holder and an unheld one says nothing`() {
+        val held = DiscoveredCamera("ZR_1234", "192.168.1.7", 15740, heldByDeviceName = "Pixel 9")
+        assertEquals("In use by Pixel 9", held.heldByLabel)
+        assertEquals(null, DiscoveredCamera("ZR_1234", "192.168.1.7", 15740).heldByLabel)
+        assertEquals(null, held.copy(heldByDeviceName = " ").heldByLabel)
+    }
+
+    @Test
     fun `accepts the private IPv4 ranges supported by iOS discovery`() {
         // 10/8 included on purpose: set and travel routers commonly hand out 10.x, and the
         // shared core scans it — excluding it here made such cameras Android-invisible.

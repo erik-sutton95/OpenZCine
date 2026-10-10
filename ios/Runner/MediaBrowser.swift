@@ -1,5 +1,13 @@
 import AVFoundation
 import ImageIO
+import MonitorPresentation
+import MonitorUI
+import OSLog
+import OpenCineAppKit
+import OpenCineApple
+import OpenCineCameraControls
+import OpenCineMedia
+import OpenZCineCore
 import SwiftUI
 import UIKit
 
@@ -102,58 +110,6 @@ enum MediaCellThumbnailCache {
 
 // MARK: - Browser
 
-/// Grid density for the Media browser — smaller cells show more clips per row.
-enum MediaThumbnailSize: String, CaseIterable, Codable, Sendable, Identifiable {
-    case small
-    case medium
-    case large
-
-    var id: String { rawValue }
-
-    /// Adaptive `GridItem` minimum cell width for this preset.
-    var gridMinimum: CGFloat {
-        switch self {
-        case .small: 148
-        case .medium: 210
-        case .large: 280
-        }
-    }
-
-    /// Adaptive `GridItem` maximum cell width for this preset.
-    var gridMaximum: CGFloat {
-        switch self {
-        case .small: 200
-        case .medium: 300
-        case .large: 380
-        }
-    }
-
-    var segmentLabel: String {
-        switch self {
-        case .small: "S"
-        case .medium: "M"
-        case .large: "L"
-        }
-    }
-
-    /// Square icon size for the sidebar density control — visual hierarchy without text labels.
-    var gridIconSize: CGFloat {
-        switch self {
-        case .small: 9
-        case .medium: 12
-        case .large: 15
-        }
-    }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .small: "Small thumbnails"
-        case .medium: "Medium thumbnails"
-        case .large: "Large thumbnails"
-        }
-    }
-}
-
 /// Geometry for a media popup panel anchored to its trigger button.
 ///
 /// The preferred width is a *preference, not a promise*: a 400pt panel cannot fit a 393pt phone,
@@ -218,1223 +174,289 @@ struct MediaPopupPlacement: Equatable {
     }
 }
 
-/// Full-screen Media page: sidebar navigation, filter popup, and a clip grid with progressive
-/// on-camera playback when a clip is opened.
+/// Source composition for the complete shared catalog; card, RAW and delivery facts stay typed.
 struct MediaBrowserView: View {
-    var safeArea: MonitorEdgeInsets = .zero
+    var safeArea: MonitorEdgeInsets? = nil
     @Environment(NativeAppModel.self) private var model
+    @Environment(\.monitorWindowGeometry) private var windowGeometry
     @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
-    @State private var playingClip: MediaClip?
-    @State private var viewingPhoto: MediaClip?
-    /// The representative of a burst series whose members are being browsed (Manage series view).
-    @State private var seriesRepresentative: MediaClip?
-    /// Transient explanation shown when a proxy-less R3D master is tapped.
-    @State private var masterNotice: String?
-    @State private var masterNoticeDismissTask: Task<Void, Never>?
-    @State private var isSelecting = false
-    @State private var selectedClipIDs: Set<String> = []
-    @State private var isBatchDeleteConfirmPresented = false
-    /// Realised grid cells' frames in ``MediaGridSpace`` — the sweep-select hit-test registry.
-    @State private var cellFrames: [String: CGRect] = [:]
-    /// Set by the post-hop share resume: the player opens with its share popup already on this
-    /// destination. Cleared when the player dismisses.
+    @State private var playing: MonitorMediaGalleryOpen<MediaClip>?
+    @State private var photo: MonitorMediaGalleryOpen<MediaClip>?
+    @State private var series: MonitorMediaGalleryOpen<MediaClip>?
     @State private var resumeShareDestination: MediaDeliveryDestination?
     @State private var deliveryRequest: MediaDeliveryRequest?
-    @State private var deliveryAnchorFrame: CGRect = .zero
-    @State private var isFilterPopupPresented = false
-    @State private var filterButtonFrame: CGRect = .zero
-
-    private let sidebarWidth: CGFloat = 172
-
-    private var gridColumns: [GridItem] {
-        [
-            GridItem(
-                .adaptive(
-                    minimum: model.mediaThumbnailSize.gridMinimum,
-                    maximum: model.mediaThumbnailSize.gridMaximum
-                ),
-                spacing: 16
-            )
-        ]
-    }
-
-    private var displayedClips: [MediaClip] { model.filteredMediaClips }
-
-    private var selectedClips: [MediaClip] {
-        // A selected burst cell stands for its whole series — expand so delete/share act on
-        // every frame, not just the representative (Erik: "delete only removed 1 of the burst").
-        model.burstExpanded(displayedClips.filter { selectedClipIDs.contains($0.id) })
-    }
-
-    private var headerTitle: String {
-        switch model.mediaCategoryTab {
-        case .all: return "All clips"
-        case .videos: return "Videos"
-        case .photos: return "Photos"
-        case .favorites: return "Favorites"
-        }
-    }
-
-    private var headerItemCountLabel: String {
-        if model.mediaFetchInProgress {
-            return model.mediaFetchListedCount == 0
-                ? "Scanning…"
-                : "Listing… \(model.mediaFetchListedCount) found"
-        }
-        let count = displayedClips.count
-        return "\(count) item\(count == 1 ? "" : "s")"
-    }
+    @State private var deliveryAdmission: NikonMediaLibraryAction?
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            LiveDesign.background
-
-            GeometryReader { proxy in
-                let portrait = proxy.size.height > proxy.size.width
-
-                Group {
-                    if portrait {
-                        VStack(alignment: .leading, spacing: 8) {
-                            categoryStrip
-                            mainHeader
-                            gridContent
-                                // Band lives in the bottom safe area: rows scroll under it
-                                // (visible through the fade) and the last row can always clear it.
-                                .safeAreaInset(edge: .bottom, spacing: 0) {
-                                    portraitGridControlsBand
-                                }
-                        }
-                    } else {
-                        HStack(alignment: .top, spacing: 16) {
-                            sidebar
-                                .frame(width: sidebarWidth)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                mainHeader
-                                gridContent
-                            }
-                            .frame(
-                                maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, max(CGFloat(safeArea.top) + 6, 16))
-                .padding(.leading, max(CGFloat(safeArea.leading) + 6, portrait ? 16 : 64))
-                .padding(.trailing, max(CGFloat(safeArea.trailing) + 6, 20))
-                .padding(.bottom, max(CGFloat(safeArea.bottom) + 4, 14))
-            }
-
-            if let deliveryToast = deliveryCoordinator.completionToast,
-                deliveryCoordinator.showsLocalOverlay
-            {
-                VStack {
-                    Spacer()
-                    Text(deliveryToast)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(LiveDesign.text)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .liquidGlass(in: Capsule(), interactive: false)
-                        .padding(.bottom, max(CGFloat(safeArea.bottom) + 80, 96))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(.opacity)
-                .zIndex(5)
-            }
-
-            if isFilterPopupPresented {
-                filterPopupOverlay
-            }
-
-            if let progress = model.mediaDeletionProgress {
-                MediaDeletionProgressOverlay(progress: progress)
-                    .transition(.opacity)
-                    .zIndex(6)
-            }
-
-            if let deliveryRequest {
-                deliveryPopupOverlay(clips: deliveryRequest.clips)
-            }
-
-            if deliveryCoordinator.showsLocalOverlay,
-                let deliveryOverlay = deliveryCoordinator.overlayState
-            {
-                MediaDeliveryTopAnchor(horizontalPadding: 24) {
-                    MediaDeliveryOverlay(state: deliveryOverlay) {
-                        deliveryCoordinator.cancel()
-                    }
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .zIndex(50)
-            }
-
-            CloseButton(size: 37)
-                .padding(.leading, 16)
-                .padding(.top, max(CGFloat(safeArea.top) + 6, 22))
-        }
-        .ignoresSafeArea()
-        .overlay(alignment: .bottom) {
-            if let masterNotice {
-                Text(masterNotice)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(LiveDesign.text)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .liquidGlass(in: Capsule())
-                    .padding(.bottom, 24)
-                    .transition(.opacity)
-            }
-        }
-        .onAppear {
-            model.refreshMediaClips()
-            if let resumeClips = model.pendingHopShareResumeClips {
-                // Resume where the Frame.io setup hop interrupted: one cached clip reopens in the
-                // player with the share popup on the Frame.io step; anything else reopens the
-                // share popup over the grid. Continuation, not a restart.
-                model.pendingHopShareResumeClips = nil
-                if resumeClips.count == 1, let clip = resumeClips.first,
-                    model.isClipDownloaded(clip)
-                {
-                    resumeShareDestination = .frameio
-                    open(clip)
-                } else if !resumeClips.isEmpty {
-                    deliveryRequest = MediaDeliveryRequest(
-                        clips: resumeClips, preferredDestination: .frameio)
-                }
-            }
-            if !model.isStandaloneMediaLibraryPresented,
-                model.mediaBrowserSource == .iPhone, !model.hasLocalMediaClips
-            {
-                model.mediaBrowserSource = .camera
-            }
-            Task { await model.refreshMediaStorageSlots() }
-            if model.isConnected, model.mediaBrowserSource == .camera {
-                model.scheduleFetchClipsFromCamera()
-            }
-            if DemoHarness.openMediaAction == "play" {
-                playingClip = displayedClips.first { model.isClipDownloaded($0) }
-            }
-        }
-        .fullScreenCover(item: $playingClip, onDismiss: { resumeShareDestination = nil }) { clip in
-            MediaPlayerView(
-                clips: displayedClips,
-                startingAt: clip,
-                initialShareDestination: resumeShareDestination
-            )
-            .environment(model)
-            .environment(deliveryCoordinator)
-        }
-        .fullScreenCover(item: $viewingPhoto) { clip in
-            MediaPhotoViewer(clip: clip).environment(model)
-        }
-        .fullScreenCover(item: $seriesRepresentative) { clip in
-            MediaBurstSeriesView(representative: clip).environment(model)
-        }
-        .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
-        .animation(.easeInOut(duration: 0.2), value: model.mediaThumbnailSize)
-        .animation(.easeInOut(duration: 0.2), value: model.mediaBrowserLayout)
-        .animation(.easeInOut(duration: 0.2), value: showsThumbnailSizeControl)
-        .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
-        .onDisappear { deliveryCoordinator.exitLocalOverlayContext() }
-        .mediaDeliveryShareSheet(enabled: playingClip == nil)
-    }
-
-    /// Preferred, not guaranteed — see ``MediaPopupPlacement``.
-    private let filterPopupWidth: CGFloat = 400
-
-    private var filterPopupOverlay: some View {
-        GeometryReader { proxy in
-            // Recomputed every layout pass, so rotation and iPad window resizes re-place the
-            // panel instead of reusing the geometry it opened with.
-            let place = MediaPopupPlacement.below(
-                anchor: filterButtonFrame,
-                host: proxy.frame(in: .global),
-                safeArea: safeArea,
-                preferredWidth: filterPopupWidth,
-                minimumHeight: 180
-            )
-
-            ZStack(alignment: .topLeading) {
-                Color.black.opacity(0.18)
-                    .ignoresSafeArea()
-                    .onTapGesture { isFilterPopupPresented = false }
-
-                MediaFilterPopup {
-                    isFilterPopupPresented = false
-                }
-                .environment(model)
-                .frame(width: place.width)
-                .frame(maxHeight: place.maxHeight, alignment: .top)
-                .offset(x: place.x, y: place.y)
-            }
-        }
-        .ignoresSafeArea()
-    }
-
-    private func deliveryPopupOverlay(clips: [MediaClip]) -> some View {
-        MediaDeliveryPopupOverlay(
-            clips: clips,
-            anchorFrame: deliveryAnchorFrame,
-            placement: .belowAnchor,
-            preferredDestination: deliveryRequest?.preferredDestination,
-            safeArea: safeArea,
-            onBeginDelivery: { request in
-                deliveryRequest = nil
-                startDelivery(request)
-            }
-        ) {
-            deliveryRequest = nil
-        }
-        .environment(model)
-    }
-
-    private func startDelivery(_ request: MediaDeliveryBeginRequest) {
-        deliveryCoordinator.begin(request, model: model)
-    }
-
-    private var showsThumbnailSizeControl: Bool {
-        !deliveryCoordinator.isActive && deliveryRequest == nil && !isSelecting
-    }
-
-    /// Layout metrics for sidebar grid controls — sized to fit the 172pt sidebar without clipping.
-    private enum SidebarGridControlMetrics {
-        static let buttonSize: CGFloat = 37
-        static let buttonSpacing: CGFloat = 4
-        static let capsuleHorizontalPadding: CGFloat = 6
-        static let capsuleVerticalPadding: CGFloat = 6
-        static let buttonCornerRadius = DesignTokens.cornerRadius
-        static let toggleIconSize: CGFloat = 14
-    }
-
-    /// Portrait's bottom band: the same layout-toggle + thumbnail-size capsule the landscape
-    /// sidebar carries, floating on a fade so grid rows visibly scroll away beneath it.
-    private var portraitGridControlsBand: some View {
-        ZStack(alignment: .bottom) {
-            LinearGradient(
-                colors: [LiveDesign.background.opacity(0), LiveDesign.background.opacity(0.94)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .allowsHitTesting(false)
-            sidebarGridControls
-                .padding(.bottom, 4)
-        }
-        .frame(height: 84)
-        .frame(maxWidth: .infinity)
-    }
-
-    private var sidebarGridControls: some View {
-        HStack(spacing: SidebarGridControlMetrics.buttonSpacing) {
-            layoutToggleButton
-
-            ForEach(MediaThumbnailSize.allCases) { size in
-                thumbnailSizeButton(size)
-            }
-        }
-        .padding(.horizontal, SidebarGridControlMetrics.capsuleHorizontalPadding)
-        .padding(.vertical, SidebarGridControlMetrics.capsuleVerticalPadding)
-        .liquidGlass(in: Capsule(), interactive: false)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Media layout and thumbnail size")
-    }
-
-    private var layoutToggleButton: some View {
-        Button {
-            model.mediaBrowserLayout = model.mediaBrowserLayout == .grid ? .list : .grid
-        } label: {
-            Image(systemName: model.mediaBrowserLayout.toggleIcon)
-                .font(.system(size: SidebarGridControlMetrics.toggleIconSize, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-                .frame(
-                    width: SidebarGridControlMetrics.buttonSize,
-                    height: SidebarGridControlMetrics.buttonSize
-                )
-                .background(
-                    LiveDesign.glassBright,
-                    in: RoundedRectangle(
-                        cornerRadius: SidebarGridControlMetrics.buttonCornerRadius,
-                        style: .continuous
-                    )
-                )
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(model.mediaBrowserLayout.accessibilityLabel)
-    }
-
-    private func thumbnailSizeButton(_ size: MediaThumbnailSize) -> some View {
-        let active = model.mediaThumbnailSize == size
-        return Button {
-            model.mediaThumbnailSize = size
-        } label: {
-            Image(systemName: "square.fill")
-                .font(.system(size: size.gridIconSize, weight: .bold))
-                .foregroundStyle(active ? LiveDesign.accent : LiveDesign.muted)
-                .frame(
-                    width: SidebarGridControlMetrics.buttonSize,
-                    height: SidebarGridControlMetrics.buttonSize
-                )
-                .background(
-                    active ? LiveDesign.accentDim : Color.clear,
-                    in: RoundedRectangle(
-                        cornerRadius: SidebarGridControlMetrics.buttonCornerRadius,
-                        style: .continuous
-                    )
-                )
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(size.accessibilityLabel)
-        .accessibilityAddTraits(active ? .isSelected : [])
-    }
-
-    // MARK: - Sidebar
-
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            categoryTabs
-
-            if model.mediaBrowserSource == .camera, !model.mediaStorageSlots.isEmpty {
-                storageCards
-            }
-
-            Spacer(minLength: 0)
-
-            if showsThumbnailSizeControl {
-                sidebarGridControls
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-        }
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if isSelecting {
-                exitSelectionMode()
-            }
-        }
-    }
-
-    private var categoryTabs: some View {
-        VStack(spacing: 4) {
-            ForEach(MediaCategoryTab.allCases) { tab in
-                categoryTabButton(tab)
-            }
-        }
-        .padding(4)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-            interactive: false)
-    }
-
-    /// Horizontal category strip for portrait: the same tab buttons the sidebar's ``categoryTabs``
-    /// renders, laid out in a scrollable row above the header instead of a vertical rail.
-    private var categoryStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(MediaCategoryTab.allCases) { tab in
-                    // The strip scrolls — never let a pill truncate its label ("Vide…").
-                    categoryTabButton(tab)
-                        .fixedSize()
-                }
-            }
-            .padding(4)
-        }
-        // Glass on the SCROLL VIEW, not its content: glass-on-content made the bar as wide as
-        // every pill and it ran dead off the trailing edge.
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-            interactive: false
-        )
-        // Inset past the root's floating CloseButton, which overlays this corner in portrait
-        // (landscape clears it via the 64pt sidebar leading floor instead).
-        .padding(.leading, 45)
-    }
-
-    /// A single category tab button — shared by the vertical sidebar (``categoryTabs``) and the
-    /// horizontal portrait strip (``categoryStrip``).
-    private func categoryTabButton(_ tab: MediaCategoryTab) -> some View {
-        let active = model.mediaCategoryTab == tab
-        return Button {
-            model.mediaCategoryTab = tab
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: tab.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 16)
-                Text(tab.rawValue)
-                    .font(.system(size: 12, weight: active ? .semibold : .medium))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(active ? LiveDesign.accent : LiveDesign.muted)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                active ? LiveDesign.accentDim : Color.clear,
-                in: RoundedRectangle(
-                    cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    private var storageCards: some View {
-        VStack(spacing: 8) {
-            ForEach(model.mediaStorageSlots) { slot in
-                let active = model.mediaStorageSlotFilter == slot.storageID
-                Button {
-                    if active {
-                        model.mediaStorageSlotFilter = nil
-                    } else {
-                        model.mediaStorageSlotFilter = slot.storageID
-                    }
-                } label: {
-                    MediaStorageCard(slot: slot, isActive: active, compact: true)
-                }
-                .buttonStyle(.zcTapTarget)
-            }
-        }
-    }
-
-    // MARK: - Main column
-
-    private var mainHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if isSelecting {
-                selectionHeader
-            } else {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("MULTIMEDIA")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .kerning(0.8)
-                            .foregroundStyle(LiveDesign.muted)
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(headerTitle)
-                                .font(.system(size: 26, weight: .semibold))
-                                .foregroundStyle(LiveDesign.text)
-                            Text("·")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(LiveDesign.faint)
-                            if model.mediaFetchInProgress {
-                                HStack(spacing: 6) {
-                                    ProgressView().controlSize(.small).tint(LiveDesign.muted)
-                                    Text(headerItemCountLabel)
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(LiveDesign.muted)
-                                }
-                            } else {
-                                Text(headerItemCountLabel)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(LiveDesign.muted)
-                            }
-                        }
-                    }
-
-                    Spacer(minLength: 8)
-
-                    HStack(alignment: .center, spacing: 8) {
-                        if model.mediaBrowserSource == .camera {
-                            refreshButton
-                        }
-                        filterButton
-                        sortButton
-                    }
-                    // Both pills keep their intrinsic width; the title absorbs any squeeze. The
-                    // active-filter badge used to steal the difference from these two, wrapping
-                    // the label to "FILTE / R" and clipping SORT to "SO…" on a 393pt phone.
-                    .fixedSize()
-                }
-
-                if let streamingClip = displayedClips.first(where: { model.isClipStreaming($0) }),
-                    let progress = model.mediaDownloadProgress[streamingClip.id]
-                {
-                    clipCacheHeaderBar(filename: streamingClip.filename, progress: progress)
-                }
-            }
-        }
-    }
-
-    private var selectionHeader: some View {
-        HStack(spacing: 12) {
-            CloseButton(action: { exitSelectionMode() }, size: 37)
-            Text("\(selectedClipIDs.count) selected")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-            Spacer(minLength: 8)
-            Button {
-                isBatchDeleteConfirmPresented = true
-            } label: {
-                Label("Delete", systemImage: "trash")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(selectedClipIDs.isEmpty ? LiveDesign.faint : Color.red)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-            }
-            .buttonStyle(.zcTapTarget)
-            .disabled(selectedClipIDs.isEmpty)
-            .confirmationDialog(
-                // Context-aware: pair/master/backup notes appear only when this selection
-                // actually pulls those companions in (videos never see stills wording).
-                model.deletionConfirmMessage(for: selectedClips),
-                isPresented: $isBatchDeleteConfirmPresented,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    let clips = selectedClips
-                    Task {
-                        _ = await model.deleteMediaClips(clips)
-                        exitSelectionMode()
-                    }
-                }
-            }
-            Button {
-                deliveryRequest = MediaDeliveryRequest(clips: selectedClips)
-            } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(
-                        selectedClipIDs.isEmpty ? LiveDesign.faint : LiveDesign.accent
-                    )
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(
-                        selectedClipIDs.isEmpty ? Color.clear : LiveDesign.accentDim,
-                        in: Capsule()
-                    )
-                    .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-            }
-            .buttonStyle(.zcTapTarget)
-            .disabled(selectedClipIDs.isEmpty)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { deliveryAnchorFrame = proxy.frame(in: .global) }
-                        .onChange(of: proxy.frame(in: .global)) { _, frame in
-                            deliveryAnchorFrame = frame
-                        }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var gridContent: some View {
-        if displayedClips.isEmpty {
-            if model.mediaFetchInProgress {
-                listingState
-            } else {
-                emptyState
-            }
-        } else if model.mediaBrowserLayout == .list {
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(displayedClips) { clip in
-                        MediaClipListRow(
+        ZStack {
+            if let library = model.mediaLibrary {
+                let projection = model.mediaGalleryProjection
+                MonitorOperatorCatalogScreen(
+                    library: library, brand: "OpenZCine", safeArea: resolvedSafeArea,
+                    sourceAvailable: model.isConnected, operations: operations,
+                    presentation: model.mediaGalleryPresentation(projection), navigation: navigate,
+                    sourceFilter: model.applyMediaGalleryFilter,
+                    managesVisibility: false,
+                    deletionDetail: { progress in
+                        progress.total > progress.selectedCount
+                            ? "\(progress.completed) of \(progress.total) files · incl. RAW + copies"
+                            : nil
+                    },
+                    facts: { record in
+                        .init(
+                            resolution: record.payload.resolutionBucket?.rawValue,
+                            byteCount: record.payload.sizeBytes > 0
+                                ? record.payload.sizeBytes : nil,
+                            durationSeconds: nil, dateKey: nil, colorLabel: nil,
+                            progress: model.isClipStreaming(record.payload)
+                                ? model.mediaDownloadProgress[record.payload.id] : nil)
+                    },
+                    cell: { record, context in
+                        let clip = record.payload
+                        let downloaded = model.isClipDownloaded(clip)
+                        let raw = model.rawSibling(of: clip) != nil
+                        return MediaClipCellPresentation.item(
                             clip: clip,
-                            isDownloaded: model.isClipDownloaded(clip),
-                            localURL: model.clipLocalURL(clip),
-                            thumbnailURL: model.clipThumbnailURL(clip),
+                            detail: context.list
+                                ? MediaClipCellPresentation.metadataLine(
+                                    clip,
+                                    hasRawSibling: raw, duration: context.duration,
+                                    isDownloaded: downloaded) : "",
+                            isDownloaded: downloaded,
                             cacheProgress: model.mediaDownloadProgress[clip.id]
                                 ?? model.clipBufferedFraction(clip),
-                            isStreaming: model.isClipStreaming(clip),
-                            hasRawSibling: model.rawSibling(of: clip) != nil,
-                            isSelecting: isSelecting,
-                            isSelected: selectedClipIDs.contains(clip.id),
-                            onOpen: { open(clip) },
-                            onBeginSelection: { beginSelection(with: clip) },
-                            onToggleSelection: { toggleSelection(clip) },
-                            onToggleFavorite: { model.toggleClipFavorite(clip) }
-                        )
-                        .environment(model)
+                            isStreaming: model.isClipStreaming(clip), hasRawSibling: raw,
+                            burstCount: projection.series(for: clip)?.count,
+                            duration: context.duration,
+                            list: context.list, selecting: context.selecting)
+                    }, begin: begin, refresh: model.refreshCameraMediaInventory,
+                    close: model.dismissMediaLibrary, open: open,
+                    share: { records, token in
+                        guard library.isCurrent(token),
+                            let admission = model.captureMediaLibraryAction(records.map(\.payload)),
+                            admission.isCurrent
+                        else { return }
+                        guard
+                            let capture = NikonMediaDeliveryCapture(
+                                model: model, clips: records.map(\.payload), action: admission),
+                            library.isCurrent(token), capture.isCurrent
+                        else { return }
+                        deliveryAdmission = admission
+                        deliveryRequest = .init(clips: capture.clips, capture: capture)
                     }
+                ) { request in
+                    let clip = request.record.payload
+                    MediaClipThumbnail(
+                        clip: clip, list: request.list,
+                        isDownloaded: model.isClipDownloaded(clip),
+                        localURL: model.clipLocalURL(clip),
+                        thumbnailURL: model.clipThumbnailURL(clip),
+                        needsDuration: request.resolvedDuration == nil,
+                        onDuration: { if request.isCurrent() { request.duration($0) } })
                 }
-                .padding(.bottom, 24)
-            }
-        } else {
-            // PLAIN ScrollView on purpose: a `.scrollPosition`-tracked host re-rendered the grid
-            // every frame mid-gesture. Sweep edge auto-scroll instead drives `contentOffset`
-            // directly via `MediaSweepSelectGesture` (UIKit recogniser + CADisplayLink).
-            ScrollView { gridCells }
-        }
-    }
-
-    private var gridCells: some View {
-        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 4) {
-            ForEach(displayedClips) { clip in
-                MediaClipCell(
-                    clip: clip,
-                    isDownloaded: model.isClipDownloaded(clip),
-                    localURL: model.clipLocalURL(clip),
-                    thumbnailURL: model.clipThumbnailURL(clip),
-                    cacheProgress: model.mediaDownloadProgress[clip.id]
-                        ?? model.clipBufferedFraction(clip),
-                    isStreaming: model.isClipStreaming(clip),
-                    hasRawSibling: model.rawSibling(of: clip) != nil,
-                    burstCount: model.burstSeries(for: clip)?.count,
-                    isSelecting: isSelecting,
-                    isSelected: selectedClipIDs.contains(clip.id),
-                    onOpen: { open(clip) },
-                    onBeginSelection: { beginSelection(with: clip) },
-                    onToggleSelection: { toggleSelection(clip) },
-                    onToggleFavorite: { model.toggleClipFavorite(clip) }
+            } else {
+                ProgressView().tint(MonitorTheme.muted).frame(
+                    maxWidth: .infinity, maxHeight: .infinity
                 )
-                .background(
-                    GeometryReader { geo in
-                        // Emit only while selecting: during plain browsing each lazily-realised
-                        // cell would churn the preference tree. Cells re-render when `isSelecting`
-                        // flips, so entering selection re-emits every frame.
-                        Color.clear.preference(
-                            key: MediaCellFramesKey.self,
-                            value: isSelecting
-                                ? [clip.id: geo.frame(in: .named(MediaGridSpace.name))] : [:]
-                        )
-                    }
-                )
+                .background(MonitorTheme.canvas).onAppear { model.refreshMediaClips() }
             }
+            deliveryOverlays
         }
-        .padding(.bottom, 24)
-        // Named space on the grid CONTENT, not the ScrollView: content-space cell frames are
-        // static while scrolling, so the preference only fires on real layout changes — measuring
-        // in scroll space re-rendered the whole browser every scrolled frame.
-        .coordinateSpace(name: MediaGridSpace.name)
-        // Photos-style sweep multi-select with edge auto-scroll; see `MediaSweepSelectGesture`.
-        // Inert outside selection mode.
-        .background(
-            MediaSweepSelectGesture(
-                orderedIDs: displayedClips.map(\.id),
-                cellFrames: cellFrames,
-                isActive: isSelecting,
-                selectedIDs: $selectedClipIDs
+        .ignoresSafeArea().observeMonitorWindowGeometry()
+        .fullScreenCover(item: $playing, onDismiss: { resumeShareDestination = nil }) { request in
+            MediaPlayerView(
+                clips: request.playlist.map(\.payload), startingAt: request.record.payload,
+                initialShareDestination: resumeShareDestination, opening: request
             )
-        )
-        // Track cell frames only while selecting: otherwise each lazy cell realisation would
-        // write state and re-render the browser mid-scroll. Entering selection mode re-renders
-        // the cells, which re-emits the preference and fills the registry on the spot.
-        .onPreferenceChange(MediaCellFramesKey.self) { frames in
-            if isSelecting { cellFrames = frames }
+            .environment(model).environment(deliveryCoordinator)
         }
+        .fullScreenCover(item: $photo) { request in
+            MediaPhotoViewer(clip: request.record.payload, opening: request).environment(model)
+        }
+        .fullScreenCover(item: $series) { request in
+            MediaBurstSeriesView(opening: request).environment(model)
+        }
+        .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
+        .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
+        .onDisappear { deliveryCoordinator.exitLocalOverlayContext() }
+        .mediaDeliveryShareSheet(enabled: playing == nil)
     }
 
-    private var sortButton: some View {
-        MediaActionPill(
-            icon: "arrow.up.arrow.down",
-            title: model.mediaSortOrder.pillLabel,
-            isActive: false
-        ) {
-            model.cycleMediaSortOrder()
+    private var operations: MonitorMediaGalleryOperations<MediaClip> {
+        .init(
+            download: { record in
+                guard let action = model.captureMediaLibraryAction([record.payload]),
+                    action.isCurrent
+                else { return }
+                _ = await model.cacheClipFromCamera(record.payload)
+            }, favorite: { record in model.toggleClipFavorite(record.payload) },
+            acceptedDeletion: .init(
+                capture: { records in model.captureMediaDeletionAuthority(records.map(\.payload)) },
+                perform: { records, authority in
+                    _ = await model.deleteMediaClips(
+                        records.map(\.payload), deleteLocation: nil, admitted: authority)
+                }),
+            access: { record in
+                .init(
+                    download: model.isConnected && record.payload.handle != nil
+                        && !model.isClipDownloaded(record.payload),
+                    share: true, delete: true)
+            }, deletionMessage: { model.deletionConfirmMessage(for: $0.map(\.payload)) },
+            openNotice: { record in
+                MediaClipFilename.isR3D(record.payload.filename)
+                    ? "R3D master - no playable proxy was found for this clip." : nil
+            })
+    }
+    private func navigate(_ action: MonitorMediaGalleryNavigation) {
+        switch action {
+        case .category(let id):
+            if let tab = MediaCategoryTab(rawValue: id) { model.mediaCategoryTab = tab }
+        case .layout(let value): model.mediaBrowserLayout = value
+        case .thumbnailSize(let value): model.mediaThumbnailSize = value
+        case .cycleSort: model.cycleMediaSortOrder()
         }
     }
-
-    /// Authoritative re-enumeration on demand (#296): the camera's inventory is the truth, and
-    /// after a card format the operator wants a way to say "ask it again" without reconnecting.
-    /// Refresh probes reused PTP handles so a recycled generation cannot keep stale filenames.
-    private var refreshButton: some View {
-        Button {
-            model.refreshCameraMediaInventory()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("REFRESH")
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-            }
-            .foregroundStyle(LiveDesign.muted)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-            .opacity(model.mediaFetchInProgress ? 0.5 : 1)
-        }
-        .buttonStyle(.zcTapTarget)
-        .disabled(model.mediaFetchInProgress)
-        .accessibilityLabel("Refresh camera media")
-    }
-
-    private var filterButton: some View {
-        Button {
-            isFilterPopupPresented.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("FILTER")
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                if model.mediaActiveFilterCount > 0 {
-                    Text("\(model.mediaActiveFilterCount)")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LiveDesign.background)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(LiveDesign.accent, in: Capsule())
-                }
-            }
-            .foregroundStyle(
-                model.mediaActiveFilterCount > 0 ? LiveDesign.accent : LiveDesign.muted
-            )
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                model.mediaActiveFilterCount > 0 ? LiveDesign.accentDim : Color.clear,
-                in: Capsule()
-            )
-            .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { filterButtonFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        filterButtonFrame = frame
-                    }
-            }
-        }
-    }
-
-    private func clipCacheHeaderBar(filename: String, progress: Double) -> some View {
-        HStack(spacing: 10) {
-            ProgressView(value: progress)
-                .tint(LiveDesign.accent)
-                .frame(maxWidth: 120)
-            Text("CACHING \(filename) \(Int(progress * 100))%")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.muted)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .liquidGlass(in: Capsule(), interactive: false)
-    }
-
-    private func exitSelectionMode() {
-        isSelecting = false
-        selectedClipIDs.removeAll()
-    }
-
-    private func beginSelection(with clip: MediaClip) {
-        guard !isSelecting else { return }
-        isSelecting = true
-        selectedClipIDs = [clip.id]
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-    }
-
-    private func toggleSelection(_ clip: MediaClip) {
-        if selectedClipIDs.contains(clip.id) {
-            selectedClipIDs.remove(clip.id)
-        } else {
-            selectedClipIDs.insert(clip.id)
-        }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "film.stack")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(LiveDesign.faint)
-            Text(emptyStateTitle)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(LiveDesign.muted)
-            if let subtitle = emptyStateSubtitle {
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(LiveDesign.faint)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyStateTitle: String {
-        if !model.isConnected {
-            return model.hasCachedMediaClips
-                ? "No clips match these filters"
-                : "No downloaded clips"
-        }
-        return "No clips yet"
-    }
-
-    private var emptyStateSubtitle: String? {
-        if !model.isConnected {
-            return model.hasCachedMediaClips
-                ? "Try clearing filters or switching tabs."
-                : "Download clips while connected to watch them offline."
-        }
-        return "Clips appear here as they're discovered on the card."
-    }
-
-    private var listingState: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.large)
-                .tint(LiveDesign.muted)
-            Text("Listing clips on camera…")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(LiveDesign.muted)
-            Text(
-                model.mediaFetchListedCount == 0
-                    ? "Querying card storage…"
-                    : "\(model.mediaFetchListedCount) clip\(model.mediaFetchListedCount == 1 ? "" : "s") found so far"
-            )
-            .font(.system(size: 12))
-            .foregroundStyle(LiveDesign.faint)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func open(_ clip: MediaClip) {
-        if isSelecting {
-            toggleSelection(clip)
-            return
-        }
-        // A burst representative opens the series view (its other frames are hidden in the grid).
+    private func open(_ request: MonitorMediaGalleryOpen<MediaClip>) {
+        guard model.mediaLibrary?.isCurrent(request.admission) == true else { return }
+        let clip = request.record.payload
         if model.burstSeries(for: clip) != nil {
-            seriesRepresentative = clip
-            return
-        }
-        if clip.mediaKind == .photo {
-            viewingPhoto = clip
-            return
-        }
-        // An R3D master only reaches the grid when no same-stem proxy was found on the
-        // card; the player cannot decode it, so explain instead of opening a dead player.
-        if MediaClipFilename.isR3D(clip.filename) {
-            showMasterNotice("R3D master — no playable proxy was found for this clip.")
-            return
-        }
-        playingClip = clip
-    }
-
-    private func showMasterNotice(_ message: String) {
-        withAnimation { masterNotice = message }
-        masterNoticeDismissTask?.cancel()
-        masterNoticeDismissTask = Task {
-            try? await Task.sleep(for: .seconds(2.6))
-            guard !Task.isCancelled else { return }
-            withAnimation { masterNotice = nil }
+            series = request
+        } else if clip.mediaKind == .photo {
+            photo = request
+        } else {
+            playing = request
         }
     }
-}
-
-// MARK: - Browser chrome
-
-/// Compact glass filter panel — mirrors live-view `AssistPanel` styling, anchored near the
-/// header Filter button instead of a full-screen sheet.
-private struct MediaFilterPopup: View {
-    @Environment(NativeAppModel.self) private var model
-    let onClose: () -> Void
-
-    /// Two chips where they fit, one where they do not. `.adaptive` is SwiftUI's own column
-    /// collapse, so the narrow case needs no width plumbed into the popup. 150 is chosen to stay
-    /// two-up at the full 400pt panel (120 gave three) and to drop to one column only below a
-    /// ~350pt viewport, where two chips no longer hold a usable width.
-    private let filterChipColumns = [GridItem(.adaptive(minimum: 150), spacing: 5)]
-
-    var body: some View {
-        GlassPanel(
-            padding: EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
-        ) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label {
-                        Text("Filters")
-                    } icon: {
-                        Image(systemName: "line.3.horizontal.decrease")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .font(.system(size: 12, weight: .bold, design: .default))
-                    .kerning(1)
-                    .textCase(.uppercase)
-                    .foregroundStyle(LiveDesign.text)
-                    Spacer()
-                    CloseButton(action: onClose, size: 26)
-                }
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        let options = model.mediaFilterOptions
-
-                        if !options.formats.isEmpty {
-                            filterSection(title: "FORMAT") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.formats, id: \.self) { format in
-                                        MediaFilterChip(
-                                            title: format.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaFormatFilters.contains(format)
-                                        ) {
-                                            model.toggleMediaFormatFilter(format)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !options.resolutions.isEmpty {
-                            filterSection(title: "RESOLUTION") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.resolutions, id: \.self) { bucket in
-                                        MediaFilterChip(
-                                            title: bucket.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaResolutionFilters.contains(bucket)
-                                        ) {
-                                            model.toggleMediaResolutionFilter(bucket)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !options.photoSizes.isEmpty {
-                            filterSection(title: "SIZE") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.photoSizes, id: \.self) { size in
-                                        MediaFilterChip(
-                                            title: size.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaPhotoSizeFilters.contains(size)
-                                        ) {
-                                            model.toggleMediaPhotoSizeFilter(size)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !options.dateWindows.isEmpty {
-                            filterSection(title: "DATE") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(options.dateWindows, id: \.self) { window in
-                                        MediaFilterChip(
-                                            title: window.rawValue,
-                                            expands: true,
-                                            isActive: model.mediaDateWindow == window
-                                        ) {
-                                            model.toggleMediaDateWindow(window)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        let hasStorageSection =
-                            model.mediaBrowserSource == .camera && !model.mediaStorageSlots.isEmpty
-                        if options.isEmpty, !hasStorageSection {
-                            Text("Nothing in this tab to filter by.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(LiveDesign.faint)
-                                .padding(.vertical, 2)
-                        }
-
-                        if hasStorageSection {
-                            filterSection(title: "STORAGE") {
-                                LazyVGrid(columns: filterChipColumns, spacing: 5) {
-                                    ForEach(model.mediaStorageSlots) { slot in
-                                        let active = model.mediaStorageSlotFilter == slot.storageID
-                                        MediaFilterChip(
-                                            title: "SLOT \(slot.slotNumber)",
-                                            icon: "sdcard.fill",
-                                            expands: true,
-                                            isActive: active
-                                        ) {
-                                            if active {
-                                                model.mediaStorageSlotFilter = nil
-                                            } else {
-                                                model.mediaStorageSlotFilter = slot.storageID
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if model.mediaActiveFilterCount > 0 {
-                            Button("Clear all filters") {
-                                model.clearMediaFilters()
-                            }
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.accent)
-                            .padding(.top, 2)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+    private func begin() {
+        if let pending = model.pendingMediaDelivery {
+            let captured = pending.take()
+            model.pendingMediaDelivery = nil
+            if let captured {
+                deliveryAdmission = captured.action
+                deliveryRequest = .init(
+                    clips: captured.clips, preferredDestination: .frameio, capture: captured)
+            }
+        }
+        model.refreshMediaClips()
+        if let resume = model.pendingHopShareResumeClips {
+            model.pendingHopShareResumeClips = nil
+            let records =
+                model.mediaLibrary?.records.filter { row in
+                    resume.contains { $0.id == row.payload.id }
+                } ?? []
+            if resume.count == 1, let record = records.first,
+                model.isClipDownloaded(record.payload), let library = model.mediaLibrary
+            {
+                resumeShareDestination = .frameio
+                open(.init(record: record, playlist: records, admission: library.actionToken))
+            } else if !resume.isEmpty, let action = model.captureMediaLibraryAction(resume),
+                action.isCurrent
+            {
+                if let captured = NikonMediaDeliveryCapture(
+                    model: model, clips: resume, action: action)
+                {
+                    deliveryAdmission = action
+                    deliveryRequest = .init(
+                        clips: captured.clips, preferredDestination: .frameio, capture: captured)
                 }
             }
-            .frame(maxHeight: .infinity, alignment: .top)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {}
-    }
-
-    private func filterSection<Content: View>(
-        title: String, @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(LiveDesign.muted)
-            content()
+        if !model.isStandaloneMediaLibraryPresented, model.mediaBrowserSource == .iPhone,
+            !model.hasLocalMediaClips
+        {
+            model.mediaBrowserSource = .camera
+        }
+        Task { await model.refreshMediaStorageSlots() }
+        if model.isConnected, model.mediaBrowserSource == .camera {
+            model.scheduleFetchClipsFromCamera()
+        }
+        if DemoHarness.openMediaAction == "play", let library = model.mediaLibrary,
+            let record = library.records.first(where: { model.isClipDownloaded($0.payload) })
+        {
+            open(.init(record: record, playlist: library.records, admission: library.actionToken))
         }
     }
-}
-
-private struct MediaActionPill: View {
-    let icon: String
-    let title: String
-    var isActive: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                isActive ? LiveDesign.accentDim : Color.clear,
-                in: Capsule()
-            )
-            .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-}
-
-private struct MediaFilterChip: View {
-    let title: String
-    var icon: String? = nil
-    var expands = false
-    let isActive: Bool
-    let action: () -> Void
-
-    private let minHeight: CGFloat = 30
-    private let horizontalPadding: CGFloat = 8
-    private let verticalPadding: CGFloat = 5
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                Text(title)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-            }
-            .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
-            .frame(maxWidth: expands ? .infinity : nil)
-            .frame(minHeight: minHeight)
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
-            .background(
-                isActive ? LiveDesign.accentDim : LiveDesign.glassBright,
-                in: Capsule()
-            )
-            .overlay(
-                Capsule().stroke(
-                    isActive ? LiveDesign.accent.opacity(0.45) : LiveDesign.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-}
-
-private struct MediaStorageCard: View {
-    let slot: MediaStorageSlotDisplay
-    var isActive: Bool
-    var compact: Bool = false
-
-    var body: some View {
-        HStack(spacing: compact ? 8 : 10) {
-            Image(systemName: "sdcard.fill")
-                .font(.system(size: compact ? 14 : 18, weight: .semibold))
-                .foregroundStyle(LiveDesign.accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(
-                    compact
-                        ? "Slot \(slot.slotNumber)" : "\(slot.cameraName) [Slot \(slot.slotNumber)]"
+    @ViewBuilder private var deliveryOverlays: some View {
+        if let toast = deliveryCoordinator.completionToast, deliveryCoordinator.showsLocalOverlay {
+            VStack {
+                Spacer()
+                Text(toast).font(MonitorTheme.font(13, weight: .medium)).foregroundStyle(
+                    MonitorTheme.text
                 )
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(1)
-                Text(slot.summaryLine)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(LiveDesign.muted)
-            }
-            Spacer(minLength: 0)
+                .multilineTextAlignment(.center).padding(.horizontal, 16).padding(.vertical, 10)
+                .liquidGlass(in: Capsule(), interactive: false).padding(
+                    .bottom, max(CGFloat(safeArea?.bottom ?? 0) + 80, 96))
+            }.frame(maxWidth: .infinity, maxHeight: .infinity).transition(.opacity).zIndex(5)
         }
-        .padding(.horizontal, compact ? 10 : 14)
-        .padding(.vertical, compact ? 10 : 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            isActive ? LiveDesign.accentDim : LiveDesign.surface.opacity(0.55),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .stroke(
-                    isActive ? LiveDesign.accent.opacity(0.5) : LiveDesign.hairline, lineWidth: 1)
-        )
+        if let request = deliveryRequest {
+            MediaDeliveryPopupOverlay(
+                clips: request.clips, anchorFrame: .zero, placement: .aboveAnchor,
+                preferredDestination: request.preferredDestination, safeArea: safeArea ?? .zero,
+                capture: request.capture,
+                onBeginDelivery: { value in
+                    guard let capture = value.capture, capture === request.capture,
+                        capture.isCurrent
+                    else { return }
+                    if deliveryRequest?.id == request.id {
+                        deliveryRequest = nil
+                        deliveryAdmission = nil
+                    }
+                    deliveryCoordinator.beginCaptured(value, model: model)
+                },
+                onDismiss: {
+                    if deliveryRequest?.id == request.id {
+                        deliveryRequest = nil
+                        deliveryAdmission = nil
+                    }
+                }
+            )
+            .environment(model)
+        }
+        if deliveryCoordinator.showsLocalOverlay, let state = deliveryCoordinator.overlayState {
+            MediaDeliveryTopAnchor(horizontalPadding: 24) {
+                MediaDeliveryOverlay(state: state, onCancel: { deliveryCoordinator.cancel() })
+            }.transition(.move(edge: .top).combined(with: .opacity)).zIndex(50)
+        }
+    }
+    private var resolvedSafeArea: EdgeInsets {
+        if let safeArea {
+            return .init(
+                top: CGFloat(safeArea.top), leading: CGFloat(safeArea.leading),
+                bottom: CGFloat(safeArea.bottom), trailing: CGFloat(safeArea.trailing))
+        }
+        return windowGeometry.validSize == nil ? EdgeInsets() : windowGeometry.safeArea
     }
 }
 
-// MARK: - Clip chrome
-
-/// Favorite control with a 44pt hit target so edge taps register reliably inside scroll rows/cells.
-private struct MediaClipFavoriteButton: View {
-    let isFavorite: Bool
-    var iconSize: CGFloat = 13
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: isFavorite ? "star.fill" : "star")
-                .font(.system(size: iconSize))
-                .foregroundStyle(isFavorite ? LiveDesign.accent : LiveDesign.faint)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+/// Source-derived catalog facts. The shared catalog never inspects camera handles or cache URLs.
+enum MediaClipCellPresentation {
+    static func item(
+        clip: MediaClip, detail: String, isDownloaded: Bool, cacheProgress: Double?,
+        isStreaming: Bool, hasRawSibling: Bool, burstCount: Int? = nil, duration: String?,
+        list: Bool, selecting: Bool, permissions: MonitorMediaPermissions = []
+    ) -> MonitorMediaItem {
+        let photo = clip.mediaKind == .photo
+        let caption = cacheProgress.map { progress in
+            let percent = "\(Int(progress * 100))%"
+            return !list && isStreaming ? "CACHING \(percent)" : percent
         }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(isFavorite ? "Remove from favorites" : "Add to favorites")
-        .zIndex(1)
+        let shownDuration = list || photo || selecting || cacheProgress != nil ? nil : duration
+        return MonitorMediaItem(
+            id: clip.id, filename: clip.filename, metadata: detail, duration: shownDuration ?? "",
+            availability: isDownloaded ? .original : .camera, progress: cacheProgress,
+            favorite: clip.isFavorite, photo: photo, permissions: permissions,
+            burstCount: list || selecting ? nil : burstCount,
+            mediaBadge: !list && photo && hasRawSibling && !selecting && cacheProgress == nil
+                ? "RAW+J" : nil,
+            completionBadge: !list && !photo && isDownloaded && cacheProgress == nil
+                && clip.exportStatus == .exported ? "EXPORTED" : nil,
+            transferCaption: caption)
     }
-}
 
-// MARK: - Grid cell
-
-/// Compact list row for the Media browser — thumbnail, filename, and metadata in one line.
-private struct MediaClipListRow: View {
-    let clip: MediaClip
-    let isDownloaded: Bool
-    let localURL: URL?
-    let thumbnailURL: URL?
-    let cacheProgress: Double?
-    let isStreaming: Bool
-    /// A same-stem RAW rides behind this JPEG — the row shows one item for the pair.
-    var hasRawSibling: Bool = false
-    var isSelecting: Bool = false
-    var isSelected: Bool = false
-    let onOpen: () -> Void
-    var onBeginSelection: (() -> Void)?
-    var onToggleSelection: (() -> Void)?
-    let onToggleFavorite: () -> Void
-
-    @Environment(NativeAppModel.self) private var model
-    @State private var thumbnail: UIImage?
-    @State private var durationLabel: String?
-
-    private var isPhoto: Bool { clip.mediaKind == .photo }
-
-    private var metadataLine: String {
+    /// The list row's detail: resolution, RAW pairing, size and duration, or where it lives.
+    static func metadataLine(
+        _ clip: MediaClip, hasRawSibling: Bool, duration: String?, isDownloaded: Bool
+    ) -> String {
         var parts: [String] = []
         if let bucket = clip.resolutionBucket {
             parts.append(bucket.rawValue)
@@ -1445,136 +467,56 @@ private struct MediaClipListRow: View {
         if clip.sizeBytes > 0 {
             parts.append(MediaClipFormatting.byteLabel(clip.sizeBytes))
         }
-        if let durationLabel, !isPhoto {
-            parts.append(durationLabel)
+        if let duration, clip.mediaKind != .photo {
+            parts.append(duration)
         }
         if parts.isEmpty {
             return isDownloaded ? "Cached" : "On camera"
         }
         return parts.joined(separator: " · ")
     }
+}
+
+// MARK: - Source artwork
+
+/// A catalog cell's artwork. Thumbnail and duration loading stay app-owned; the duration goes
+/// back to the browser, which hands it to the shared cell.
+private struct MediaClipThumbnail: View {
+    let clip: MediaClip
+    let list: Bool
+    let isDownloaded: Bool
+    let localURL: URL?
+    let thumbnailURL: URL?
+    let needsDuration: Bool
+    let onDuration: (String) -> Void
+
+    @Environment(NativeAppModel.self) private var model
+    @State private var thumbnail: UIImage?
+
+    private var isPhoto: Bool { clip.mediaKind == .photo }
 
     var body: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 12) {
-                listThumbnail
-                    .frame(width: 96, height: 54)
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(
-                            cornerRadius: DesignTokens.cornerRadius, style: .continuous
-                        )
-                        .strokeBorder(LiveDesign.hairline, lineWidth: 1)
-                    )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(clip.filename)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                    Text(metadataLine)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(LiveDesign.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 4)
-
-                if isSelecting {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22, weight: .semibold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(
-                            isSelected ? Color.white : Color.white.opacity(0.92),
-                            isSelected ? LiveDesign.accent : Color.black.opacity(0.45)
-                        )
-                }
+        ZStack {
+            LiveDesign.surface
+            if let thumbnail {
+                Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: isPhoto ? "photo" : "film")
+                    .font(.system(size: list ? 20 : 28, weight: .light))
+                    .foregroundStyle(LiveDesign.faint)
             }
-            .contentShape(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .onTapGesture {
-                if isSelecting {
-                    onToggleSelection?()
-                } else {
-                    onOpen()
-                }
-            }
-
-            if !isSelecting {
-                MediaClipFavoriteButton(
-                    isFavorite: clip.isFavorite,
-                    iconSize: 14,
-                    action: onToggleFavorite
-                )
-            }
-        }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 8)
-        .background(
-            isSelected ? LiveDesign.accentDim.opacity(0.55) : LiveDesign.surface.opacity(0.45),
-            in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                .stroke(
-                    isSelected ? LiveDesign.accent.opacity(0.45) : LiveDesign.hairline, lineWidth: 1
-                )
-        )
-        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous))
-        .onLongPressGesture(minimumDuration: 0.4) {
-            guard !isSelecting else { return }
-            onBeginSelection?()
         }
         // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
         .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
             await loadThumbnail()
             await loadDuration()
         }
-        // The `.task` cancels its in-flight load on disappear; the decoded thumbnail stays —
-        // `MediaCellThumbnailCache` bounds memory, so reappearing cells skip the disk re-decode.
-        .onDisappear {
-            durationLabel = nil
-        }
-    }
-
-    @ViewBuilder private var listThumbnail: some View {
-        ZStack {
-            LiveDesign.surface
-            if let thumbnail {
-                Image(uiImage: thumbnail)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Image(systemName: isPhoto ? "photo" : "film")
-                    .font(.system(size: 20, weight: .light))
-                    .foregroundStyle(LiveDesign.faint)
-            }
-            if let cacheProgress {
-                ZStack {
-                    Color.black.opacity(0.45)
-                    Text("\(Int(cacheProgress * 100))%")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LiveDesign.text)
-                }
-            } else if !isDownloaded {
-                ZStack {
-                    Color.black.opacity(0.35)
-                    Image(systemName: isPhoto ? "photo.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(LiveDesign.text.opacity(0.9))
-                }
-            }
-        }
     }
 
     private func loadThumbnail() async {
         // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
-        let cacheKey = "\(clip.id)#list#o\(clip.exifOrientation ?? 0)" as NSString
+        let variant = list ? "list" : "grid"
+        let cacheKey = "\(clip.id)#\(variant)#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
             thumbnail = cached
             return
@@ -1583,11 +525,12 @@ private struct MediaClipListRow: View {
             MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
             thumbnail = image
         }
+        let thumbPixels = list ? 480 : 640
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
             // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
             // stands in so portrait shots render upright.
             if let image = await MediaCellImageLoader.shared.downsampled(
-                data: data, maxPixelSize: 480, fallbackOrientation: clip.exifOrientation)
+                data: data, maxPixelSize: thumbPixels, fallbackOrientation: clip.exifOrientation)
             {
                 present(image)
                 return
@@ -1608,16 +551,19 @@ private struct MediaClipListRow: View {
             if let cachedURL = model.clipThumbnailURL(clip),
                 let data = try? Data(contentsOf: cachedURL),
                 let image = await MediaCellImageLoader.shared.downsampled(
-                    data: data, maxPixelSize: 480, fallbackOrientation: clip.exifOrientation)
+                    data: data, maxPixelSize: thumbPixels,
+                    fallbackOrientation: clip.exifOrientation)
             {
                 present(image)
+                return
             }
         }
         guard isDownloaded, !isPhoto, let localURL else { return }
         let asset = AVURLAsset(url: localURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 320, height: 320)
+        let framePixels: CGFloat = list ? 320 : 600
+        generator.maximumSize = CGSize(width: framePixels, height: framePixels)
         let time = CMTime(seconds: 0.2, preferredTimescale: 600)
         if let cgImage = try? await generator.image(at: time).image {
             present(UIImage(cgImage: cgImage))
@@ -1625,254 +571,14 @@ private struct MediaClipListRow: View {
     }
 
     private func loadDuration() async {
-        guard !isPhoto else { return }
-        guard durationLabel == nil else { return }
-        guard isDownloaded, let localURL else { return }
+        guard !isPhoto, needsDuration, isDownloaded, let localURL else { return }
         let asset = AVURLAsset(url: localURL)
         if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
-            durationLabel = MediaClipFormatting.durationLabel(seconds: duration.seconds)
+            onDuration(MediaClipFormatting.durationLabel(seconds: duration.seconds))
         }
     }
 }
 
-/// Named coordinate space for the media grid — cell frames and sweep-drag locations must share
-/// one space for hit-testing.
-enum MediaGridSpace {
-    static let name = "mediaGrid"
-}
-
-extension UIView {
-    /// Nearest ancestor `UIScrollView` (the one SwiftUI creates for the enclosing `ScrollView`).
-    fileprivate var mediaEnclosingScrollView: UIScrollView? {
-        var candidate = superview
-        while let view = candidate {
-            if let scrollView = view as? UIScrollView { return scrollView }
-            candidate = view.superview
-        }
-        return nil
-    }
-}
-
-/// Photos-style one-finger sweep multi-select with edge auto-scroll. iOS 17 has no
-/// `UIGestureRecognizerRepresentable`, so a zero-size `UIViewRepresentable` probe walks up to the
-/// enclosing `UIScrollView` and attaches a short-press `UILongPressGestureRecognizer`:
-///
-/// - The hold disambiguates sweep from scroll — a quick drag never trips it, so scrolling stays
-///   native; only a deliberate press-then-drag arms selection.
-/// - `.began` locks scrolling and anchors on the pressed cell, whose state fixes the paint mode.
-/// - `.changed` range-paints `[anchor…current]` over the pre-sweep snapshot, so dragging back
-///   un-paints.
-/// - A `CADisplayLink` auto-scrolls in the top/bottom edge band (speed ramps with depth),
-///   re-hit-testing the finger each frame; rounded offset steps avoid sub-pixel shimmer.
-/// - Every terminal state restores scrolling and stops the loop.
-///
-/// Enabled only in selection mode — completely inert during plain browse.
-private struct MediaSweepSelectGesture: UIViewRepresentable {
-    /// Clip ids in display order — the range paint works on indices, not geometry.
-    let orderedIDs: [String]
-    /// Cell hit-test registry (``MediaGridSpace`` == the scroll view's content coordinate space).
-    let cellFrames: [String: CGRect]
-    /// Selection mode gate; the recognizer is disabled otherwise.
-    let isActive: Bool
-    @Binding var selectedIDs: Set<String>
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.isUserInteractionEnabled = false
-        view.backgroundColor = .clear
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.orderedIDs = orderedIDs
-        coordinator.cellFrames = cellFrames
-        coordinator.readSelection = { selectedIDs }
-        coordinator.writeSelection = { selectedIDs = $0 }
-        coordinator.isActive = isActive
-        // The enclosing UIScrollView isn't in the hierarchy during the first layout pass — defer
-        // the superview walk one run-loop cycle (the SwiftUI-Introspect technique).
-        DispatchQueue.main.async { coordinator.attachIfNeeded(probe: uiView) }
-    }
-
-    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-        coordinator.detach()
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var orderedIDs: [String] = []
-        var cellFrames: [String: CGRect] = [:]
-        var readSelection: () -> Set<String> = { [] }
-        var writeSelection: (Set<String>) -> Void = { _ in }
-        var isActive = false {
-            didSet { recognizer?.isEnabled = isActive }
-        }
-
-        private weak var scrollView: UIScrollView?
-        private var recognizer: UILongPressGestureRecognizer?
-        private var displayLink: CADisplayLink?
-        private var autoScrollSpeed: CGFloat = 0
-
-        private var anchorIndex: Int?
-        private var paintSelect = true
-        private var snapshot: Set<String> = []
-        private var lastRange: ClosedRange<Int>?
-
-        private let edgeBand: CGFloat = 90
-        private let maxScrollSpeed: CGFloat = 620  // points/sec at the very edge
-
-        func attachIfNeeded(probe: UIView) {
-            guard recognizer == nil, let scrollView = probe.mediaEnclosingScrollView else { return }
-            self.scrollView = scrollView
-            let press = UILongPressGestureRecognizer(target: self, action: #selector(handle(_:)))
-            press.minimumPressDuration = 0.18
-            press.allowableMovement = 40
-            press.cancelsTouchesInView = false
-            press.delegate = self
-            press.isEnabled = isActive
-            scrollView.addGestureRecognizer(press)
-            recognizer = press
-        }
-
-        func detach() {
-            stopAutoScroll()
-            if let recognizer, let scrollView { scrollView.removeGestureRecognizer(recognizer) }
-            recognizer = nil
-        }
-
-        @objc private func handle(_ gesture: UILongPressGestureRecognizer) {
-            guard isActive, let scrollView else { return }
-            switch gesture.state {
-            case .began:
-                scrollView.isScrollEnabled = false
-                snapshot = readSelection()
-                lastRange = nil
-                if let index = index(atContentPoint: gesture.location(in: scrollView)) {
-                    anchorIndex = index
-                    paintSelect = !snapshot.contains(orderedIDs[index])
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    paint(to: index)
-                } else {
-                    anchorIndex = nil
-                }
-            case .changed:
-                let content = gesture.location(in: scrollView)
-                if let index = index(atContentPoint: content) { paint(to: index) }
-                updateAutoScroll(viewportY: content.y - scrollView.contentOffset.y)
-            case .ended, .cancelled, .failed:
-                stopAutoScroll()
-                scrollView.isScrollEnabled = true
-                anchorIndex = nil
-                lastRange = nil
-            default:
-                break
-            }
-        }
-
-        private func index(atContentPoint point: CGPoint) -> Int? {
-            guard let id = cellFrames.first(where: { $0.value.contains(point) })?.key else {
-                return nil
-            }
-            return orderedIDs.firstIndex(of: id)
-        }
-
-        /// Selection = snapshot with the contiguous `[anchor…current]` range painted, so shrinking
-        /// the range reverts the trailing cells to their pre-sweep state (Photos "swipe back").
-        private func paint(to currentIndex: Int) {
-            guard let anchor = anchorIndex else { return }
-            let range = min(anchor, currentIndex)...max(anchor, currentIndex)
-            guard range != lastRange else { return }
-            lastRange = range
-            var selection = snapshot
-            for index in range where index < orderedIDs.count {
-                if paintSelect {
-                    selection.insert(orderedIDs[index])
-                } else {
-                    selection.remove(orderedIDs[index])
-                }
-            }
-            writeSelection(selection)
-            UISelectionFeedbackGenerator().selectionChanged()
-        }
-
-        private func updateAutoScroll(viewportY: CGFloat) {
-            guard let scrollView else { return }
-            let height = scrollView.bounds.height
-            if viewportY < edgeBand {
-                autoScrollSpeed = -maxScrollSpeed * min(1, (edgeBand - viewportY) / edgeBand)
-                startAutoScroll()
-            } else if viewportY > height - edgeBand {
-                autoScrollSpeed =
-                    maxScrollSpeed * min(1, (viewportY - (height - edgeBand)) / edgeBand)
-                startAutoScroll()
-            } else {
-                stopAutoScroll()
-            }
-        }
-
-        private func startAutoScroll() {
-            guard displayLink == nil else { return }
-            let link = CADisplayLink(target: self, selector: #selector(step(_:)))
-            link.add(to: .main, forMode: .common)
-            displayLink = link
-        }
-
-        private func stopAutoScroll() {
-            displayLink?.invalidate()
-            displayLink = nil
-        }
-
-        @objc private func step(_ link: CADisplayLink) {
-            guard let scrollView, let recognizer else {
-                stopAutoScroll()
-                return
-            }
-            var offset = scrollView.contentOffset
-            let minY = -scrollView.adjustedContentInset.top
-            let maxY =
-                max(scrollView.contentSize.height, scrollView.bounds.height)
-                - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
-            // Frame-rate independent + rounded so integer offset steps don't shimmer the tracked cell.
-            let delta = (autoScrollSpeed * CGFloat(link.duration)).rounded()
-            let target = min(max(offset.y + delta, minY), maxY)
-            guard target != offset.y else {
-                stopAutoScroll()
-                return
-            }
-            offset.y = target
-            scrollView.setContentOffset(offset, animated: false)
-            // The finger is fixed but content moved — its location in content space is now a new cell.
-            if let index = index(atContentPoint: recognizer.location(in: scrollView)) {
-                paint(to: index)
-            }
-        }
-
-        // Coexist with the scroll pan; the hold + `isScrollEnabled` toggle do the real arbitration.
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
-        ) -> Bool { true }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            isActive
-        }
-    }
-}
-
-/// Realised grid cells' frames, keyed by clip id, in ``MediaGridSpace``.
-private struct MediaCellFramesKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
-    }
-}
-
-/// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
-/// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
-/// action. A series that loses frames until one remains degrades back to a normal grid cell.
 /// A centred, non-interactive progress card shown while a batch delete runs — the grid holds
 /// steady behind it and refreshes once when the deletion finishes.
 private struct MediaDeletionProgressOverlay: View {
@@ -1913,13 +619,20 @@ private struct MediaDeletionProgressOverlay: View {
     }
 }
 
+/// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
+/// share / single-frame delete via the photo viewer) and a destructive "delete the whole set"
+/// action. A series that loses frames until one remains degrades back to a normal grid cell.
 private struct MediaBurstSeriesView: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let representative: MediaClip
+    let opening: MonitorMediaGalleryOpen<MediaClip>
+    private var representative: MediaClip { opening.record.payload }
     @State private var members: [MediaClip] = []
+    @State private var records: [MonitorMediaRecord<MediaClip>] = []
     @State private var selectedID: String?
-    @State private var confirmDeleteAll = false
+    @State private var library: MonitorMediaLibraryModel<MediaClip>?
+    @State private var returnAdmission: MonitorMediaLibraryActionToken?
+    @State private var pageRevision = UUID()
 
     private var selected: MediaClip? {
         members.first { $0.id == selectedID } ?? members.first
@@ -1928,16 +641,20 @@ private struct MediaBurstSeriesView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let selected {
+            if let selected, let record = records.first(where: { $0.payload.id == selected.id }) {
                 // The selected frame reuses the full photo viewer — streaming decode, zoom,
                 // rating, RAW toggle, share, and single-frame delete all keep working.
                 // Recreated per frame (`.id`) so its per-clip state and stream reset cleanly.
                 MediaPhotoViewer(
                     clip: selected,
-                    onDeleteAll: { confirmDeleteAll = true },
-                    onDeleted: { advanceAfterDeletion(of: selected) }
+                    opening: .init(
+                        record: record, playlist: records,
+                        admission: returnAdmission ?? opening.admission),
+                    collection: members,
+                    onSelected: { selectedID = $0.id },
+                    onDeletedReturning: { advanceAfterDeletion(of: selected, admission: $0) }
                 )
-                .id(selected.id)
+                .id("\(selected.id)#\(pageRevision.uuidString)")
             }
             // Delete-all runs over this fullScreenCover, so the progress bar mounts here too
             // (the browser-level overlay is behind the cover).
@@ -1947,451 +664,82 @@ private struct MediaBurstSeriesView: View {
                     .zIndex(6)
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            // The scrubber sits above the home indicator via the safe-area inset; the viewer's
-            // rating row stacks above it automatically (its chrome respects the inset edge).
-            if let selected, members.count > 1 {
-                BurstFilmstrip(
-                    members: members,
-                    selectedID: selected.id,
-                    onSelect: { selectedID = $0 }
-                )
-            }
-        }
         .statusBarHidden()
         .onAppear {
+            guard let library = model.mediaLibrary, library.isCurrent(opening.admission) else {
+                dismiss()
+                return
+            }
+            self.library = library
             members = model.burstMembers(of: representative)
+            records = members.compactMap { member in
+                library.records.first { $0.payload.id == member.id }
+            }
             selectedID = members.first?.id
         }
-        .confirmationDialog(
-            "Delete this burst of \(members.count) frames?",
-            isPresented: $confirmDeleteAll, titleVisibility: .visible
-        ) {
-            Button("Delete \(members.count) frames", role: .destructive) {
-                let targets = members
-                Task {
-                    _ = await model.deleteMediaClips(targets)
-                    dismiss()
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(burstDeleteAllMessage)
-        }
-    }
-
-    /// Names what delete-all actually removes — the cross-card/pair notes appear only when
-    /// the plan really pulls those companions in.
-    private var burstDeleteAllMessage: String {
-        var message = "This removes every frame in the series from the card."
-        let plan = model.deletionPlan(for: members)
-        if plan.pairCount > 0 {
-            message += " Both the RAW and JPEG files of each pair are removed."
-        }
-        if plan.backupCount > 0 {
-            message += " The backup copies on the other card are removed too."
-        }
-        message += " This can't be undone."
-        return message
     }
 
     /// Drops the deleted frame from the strip and shows its neighbour; a series that empties
     /// (or degrades to nothing worth paging) closes back to the grid.
-    private func advanceAfterDeletion(of clip: MediaClip) {
+    private func advanceAfterDeletion(of clip: MediaClip, admission: MonitorMediaLibraryActionToken)
+    {
+        guard let library, model.mediaLibrary === library, library.isCurrent(admission) else {
+            return
+        }
         let index = members.firstIndex { $0.id == clip.id } ?? 0
-        members.removeAll { $0.id == clip.id }
+        let survivors = model.burstMembers(of: representative)
+        guard model.mediaLibrary === library, library.isCurrent(admission) else { return }
+        returnAdmission = admission
+        members = survivors
+        records = survivors.compactMap { member in
+            library.records.first { $0.payload.id == member.id }
+        }
         guard !members.isEmpty else {
             dismiss()
             return
         }
         selectedID = members[min(index, members.count - 1)].id
-    }
-}
-
-/// iPhone-Photos-style burst scrubber: dragging scrolls the strip with the centered thumb
-/// highlighting live; the displayed frame commits when the scroll SETTLES, not on every
-/// intermediate frame. The full viewer is heavy (it re-streams the frame), so committing on
-/// every thumb that passes center used to recreate it dozens of times per drag — the lag and
-/// "Preparing image…" storm Erik saw. Tapping a thumb jumps to it immediately.
-private struct BurstFilmstrip: View {
-    let members: [MediaClip]
-    let selectedID: String
-    let onSelect: (String) -> Void
-    /// The thumb currently under the centre line — drives the live highlight only, NOT the
-    /// heavy viewer (which commits when the scrub settles).
-    @State private var scrolledID: String?
-    /// Debounces the commit so the frame lands once the scrub stops, not on every thumb that
-    /// crosses centre. Cancelled on each intermediate move.
-    @State private var commitTask: Task<Void, Never>?
-
-    /// Widest a thumb gets (selected). Half of it is subtracted from the side inset so the
-    /// first/last frame can sit dead-centre.
-    private static let maxThumbWidth: CGFloat = 46
-
-    var body: some View {
-        GeometryReader { proxy in
-            // Enough leading/trailing space that ANY thumb — including the first and last —
-            // can scroll to the centre anchor (was a fixed 130, far too little on a wide
-            // landscape screen, so the edge frames were unreachable by scrubbing).
-            let sideInset = max(0, proxy.size.width / 2 - Self.maxThumbWidth / 2)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 4) {
-                    ForEach(members) { member in
-                        FilmstripThumb(
-                            clip: member, isSelected: member.id == (scrolledID ?? selectedID)
-                        )
-                        .onTapGesture { onSelect(member.id) }
-                        .id(member.id)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .scrollPosition(id: $scrolledID, anchor: .center)
-            .scrollTargetBehavior(.viewAligned)
-            .contentMargins(.horizontal, sideInset, for: .scrollContent)
-        }
-        .frame(height: 56)
-        .onAppear { scrolledID = selectedID }
-        // Commit the displayed frame only after the scrub settles (~140ms idle): the heavy
-        // viewer re-streams each frame, so committing on every thumb that crosses centre was
-        // the lag + "Preparing image…" storm. Each intermediate move cancels the prior commit.
-        .onChange(of: scrolledID) { _, newValue in
-            commitTask?.cancel()
-            guard let newValue, newValue != selectedID else { return }
-            commitTask = Task {
-                try? await Task.sleep(for: .milliseconds(140))
-                guard !Task.isCancelled else { return }
-                onSelect(newValue)
-            }
-        }
-        .onChange(of: selectedID) { _, newValue in
-            // External selection (tap, deletion advance) re-centres the strip; a settle-commit
-            // already has scrolledID == newValue, so this no-ops for scrubs.
-            guard scrolledID != newValue else { return }
-            withAnimation(.easeOut(duration: 0.2)) { scrolledID = newValue }
-        }
-        .padding(.vertical, 4)
+        pageRevision = UUID()
     }
 }
 
 /// One scrubber thumb — the camera thumbnail at strip size, widened when selected (Photos
 /// style). Fetches the thumb from the body when it isn't cached yet.
-private struct FilmstripThumb: View {
-    let clip: MediaClip
-    let isSelected: Bool
+private struct NikonStripThumbnail: View {
+    let request: MonitorMediaPictureRequest<MediaClip>
     @Environment(NativeAppModel.self) private var model
     @State private var image: UIImage?
-
+    private var clip: MediaClip { request.record.payload }
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 4, style: .continuous).fill(LiveDesign.surface)
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            }
-        }
-        .frame(width: isSelected ? 46 : 30, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .strokeBorder(
-                    isSelected ? LiveDesign.accent : Color.clear, lineWidth: 1.5)
-        )
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-        .task(id: clip.id) { await load() }
+            Rectangle().fill(MonitorTheme.surface)
+            if let image { Image(uiImage: image).resizable().aspectRatio(contentMode: .fill) }
+        }.task(id: clip.id) { await load() }
     }
-
     private func load() async {
+        guard request.isCurrent() else { return }
         let cacheKey = "\(clip.id)#strip#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
-            image = cached
+            if request.isCurrent() { image = cached }
             return
         }
         func decodeCachedThumb() async -> UIImage? {
-            guard let url = model.clipThumbnailURL(clip) else { return nil }
+            guard request.isCurrent(), let url = model.clipThumbnailURL(clip) else { return nil }
             return await MediaCellImageLoader.shared.downsampled(
-                at: url, maxPixelSize: 120, fallbackOrientation: clip.exifOrientation)
+                at: url, maxPixelSize: 120,
+                fallbackOrientation: clip.exifOrientation)
         }
         var loaded = await decodeCachedThumb()
+        guard request.isCurrent() else { return }
         if loaded == nil, clip.handle != nil {
             await model.ensureThumbnail(for: clip)
+            guard request.isCurrent() else { return }
             loaded = await decodeCachedThumb()
         }
+        guard request.isCurrent() else { return }
         if let loaded {
             MediaCellThumbnailCache.shared.setObject(loaded, forKey: cacheKey)
             image = loaded
-        }
-    }
-}
-
-private struct MediaClipCell: View {
-    let clip: MediaClip
-    let isDownloaded: Bool
-    let localURL: URL?
-    let thumbnailURL: URL?
-    /// Live stream or partial on-disk cache fraction (0…1); primary download progress display.
-    let cacheProgress: Double?
-    let isStreaming: Bool
-    /// A same-stem RAW rides behind this JPEG — the cell shows one item for the pair.
-    var hasRawSibling: Bool = false
-    /// Frame count when this cell represents a burst series (nil for an ordinary clip).
-    var burstCount: Int?
-    var isSelecting: Bool = false
-    var isSelected: Bool = false
-    let onOpen: () -> Void
-    var onBeginSelection: (() -> Void)?
-    var onToggleSelection: (() -> Void)?
-    let onToggleFavorite: () -> Void
-
-    @Environment(NativeAppModel.self) private var model
-    @State private var thumbnail: UIImage?
-    @State private var durationLabel: String?
-
-    private var isPhoto: Bool { clip.mediaKind == .photo }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ZStack {
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                    .fill(LiveDesign.surface)
-                if let thumbnail {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Image(systemName: isPhoto ? "photo" : "film")
-                        .font(.system(size: 28, weight: .light))
-                        .foregroundStyle(LiveDesign.faint)
-                }
-                overlay
-            }
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-            .clipShape(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                    .strokeBorder(LiveDesign.hairline, lineWidth: 1)
-            )
-            .overlay(alignment: .bottomTrailing) {
-                let badge = isPhoto ? (hasRawSibling ? "RAW+J" : nil) : durationLabel
-                if let badge, cacheProgress == nil, !isSelecting {
-                    Text(badge)
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LiveDesign.text)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4)
-                        )
-                        .padding(8)
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                if isSelecting {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 24, weight: .semibold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(
-                            isSelected ? Color.white : Color.white.opacity(0.92),
-                            isSelected ? LiveDesign.accent : Color.black.opacity(0.45)
-                        )
-                        .padding(8)
-                        .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 1)
-                }
-            }
-            .overlay(alignment: .topLeading) {
-                // Burst series: one cell stands for the run, badged with its frame count (like
-                // the body's series card). Tapping the cell opens the series view.
-                if let burstCount, !isSelecting {
-                    HStack(spacing: 2) {
-                        Image(systemName: "square.stack.3d.up.fill").font(.system(size: 9))
-                        Text("\(burstCount)")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    }
-                    .foregroundStyle(LiveDesign.text)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 4))
-                    .padding(8)
-                }
-            }
-            .contentShape(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .onTapGesture {
-                if isSelecting {
-                    onToggleSelection?()
-                } else {
-                    onOpen()
-                }
-            }
-            // Plain long-press ENTERS selection mode (and picks this cell). Once selecting, the
-            // press-and-drag sweep + edge auto-scroll is owned by the grid-level UIKit recogniser
-            // (`MediaSweepSelectGesture`), which only arms in selection mode — keeping cell touches
-            // scroll-safe during plain browsing.
-            .onLongPressGesture(minimumDuration: 0.4) {
-                guard !isSelecting else { return }
-                onBeginSelection?()
-            }
-
-            HStack(spacing: 6) {
-                Text(clip.filename)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(LiveDesign.text)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                MediaClipFavoriteButton(
-                    isFavorite: clip.isFavorite,
-                    action: onToggleFavorite
-                )
-            }
-        }
-        // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
-        .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
-            await loadThumbnail()
-            await loadDuration()
-        }
-        // The `.task` cancels its in-flight load on disappear; the decoded thumbnail stays —
-        // `MediaCellThumbnailCache` bounds memory, so reappearing cells skip the disk re-decode.
-        .onDisappear {
-            durationLabel = nil
-        }
-    }
-
-    @ViewBuilder private var overlay: some View {
-        if let cacheProgress {
-            ZStack {
-                Color.black.opacity(0.45)
-                VStack(spacing: 6) {
-                    if isStreaming {
-                        Text("CACHING \(Int(cacheProgress * 100))%")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.text)
-                    } else {
-                        Text("\(Int(cacheProgress * 100))%")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.text)
-                    }
-                    ProgressView(value: cacheProgress)
-                        .tint(LiveDesign.accent)
-                        .frame(width: 120)
-                }
-            }
-            .overlay(alignment: .bottom) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(LiveDesign.accent.opacity(0.25))
-                        Capsule()
-                            .fill(LiveDesign.accent)
-                            .frame(width: max(4, geo.size.width * cacheProgress))
-                    }
-                }
-                .frame(height: 3)
-            }
-        } else if isPhoto {
-            if !isDownloaded {
-                ZStack {
-                    Color.black.opacity(0.35)
-                    VStack(spacing: 4) {
-                        Image(systemName: "photo.circle.fill").font(.system(size: 26))
-                        Text("On camera").font(.system(size: 10, weight: .semibold))
-                    }
-                    .foregroundStyle(LiveDesign.text)
-                }
-            }
-        } else if !isDownloaded {
-            ZStack {
-                Color.black.opacity(0.35)
-                VStack(spacing: 4) {
-                    Image(systemName: "play.circle.fill").font(.system(size: 26))
-                    Text("On camera").font(.system(size: 10, weight: .semibold))
-                }
-                .foregroundStyle(LiveDesign.text)
-            }
-        } else {
-            VStack {
-                Spacer()
-                HStack {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(LiveDesign.text.opacity(0.9))
-                        .padding(8)
-                    Spacer()
-                    if clip.exportStatus == .exported {
-                        Image(systemName: "square.and.arrow.up.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(LiveDesign.good)
-                            .padding(8)
-                    }
-                }
-            }
-        }
-    }
-
-    private func loadThumbnail() async {
-        // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
-        let cacheKey = "\(clip.id)#grid#o\(clip.exifOrientation ?? 0)" as NSString
-        if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
-            thumbnail = cached
-            return
-        }
-        func present(_ image: UIImage) {
-            MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
-            thumbnail = image
-        }
-        if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
-            // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
-            // stands in so portrait shots render upright.
-            if let image = await MediaCellImageLoader.shared.downsampled(
-                data: data, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
-            {
-                present(image)
-                return
-            }
-            // Self-heal: a cached thumb that doesn't decode would re-fail (and spam ImageIO
-            // errors) on every cell realisation. Deletes only the cached thumb, never the media.
-            try? FileManager.default.removeItem(at: thumbnailURL)
-        }
-        if isPhoto, isDownloaded, let localURL,
-            let image = await MediaCellImageLoader.shared.downsampled(
-                at: localURL, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
-        {
-            present(image)
-            return
-        }
-        if !isDownloaded, clip.handle != nil {
-            await model.ensureThumbnail(for: clip)
-            if let cachedURL = model.clipThumbnailURL(clip),
-                let data = try? Data(contentsOf: cachedURL),
-                let image = await MediaCellImageLoader.shared.downsampled(
-                    data: data, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
-            {
-                present(image)
-                return
-            }
-        }
-        guard isDownloaded, !isPhoto, let localURL else { return }
-        let asset = AVURLAsset(url: localURL)
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 600, height: 600)
-        let time = CMTime(seconds: 0.2, preferredTimescale: 600)
-        if let cgImage = try? await generator.image(at: time).image {
-            present(UIImage(cgImage: cgImage))
-        }
-    }
-
-    private func loadDuration() async {
-        guard !isPhoto else { return }
-        guard durationLabel == nil else { return }
-        guard isDownloaded, let localURL else { return }
-        let asset = AVURLAsset(url: localURL)
-        if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
-            durationLabel = MediaClipFormatting.durationLabel(seconds: duration.seconds)
         }
     }
 }
@@ -2400,371 +748,234 @@ private struct MediaClipCell: View {
 
 /// Full-screen still viewer for camera JPEG/RAW/HEIF — streams the object from the card when
 /// needed. Same-stem RAW+JPEG pairs open on the JPEG with a JPG ⇄ RAW toggle beside Share.
+@MainActor private struct NikonPhotoContext {
+    let library: MonitorMediaLibraryModel<MediaClip>
+    let record: MonitorMediaRecord<MediaClip>
+    let admission: MonitorMediaLibraryActionToken
+    let variants: [MonitorMediaPictureVariant<MediaClip>]
+    let collection: [MonitorMediaRecord<MediaClip>]
+    let action: NikonMediaLibraryAction?
+}
+
 struct MediaPhotoViewer: View {
     let clip: MediaClip
-    /// Burst-series hosting: shows a "Delete all" action for the whole set in the top bar.
-    var onDeleteAll: (() -> Void)? = nil
-    /// Burst-series hosting: called after a single-frame delete instead of dismissing, so the
-    /// series view can advance to the neighbouring frame.
+    var opening: MonitorMediaGalleryOpen<MediaClip>? = nil
+    var collection: [MediaClip] = []
     var onDeleted: (() -> Void)? = nil
+    var onSelected: ((MediaClip) -> Void)? = nil
+    var onDeletedReturning: ((MonitorMediaLibraryActionToken) -> Void)? = nil
     @Environment(NativeAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-
-    @State private var image: UIImage?
-    @State private var isLoading = true
-    @State private var loadTask: Task<Void, Never>?
-    @State private var zoom = AnchoredPinchZoom()
+    @State private var context: NikonPhotoContext?
+    @State private var shareURL: URL?
     @State private var isSharePresented = false
-    @State private var isPreparingShare = false
-    @State private var isDeleteConfirmPresented = false
-    /// Camera-read star rating; nil until loaded (or unreachable — row hidden).
-    @State private var ratingStars: Int?
-    /// Transient message shown when the body refuses a rating write (with its response code).
-    @State private var ratingToast: String?
-    /// RAW side of the JPG/RAW toggle is active (paired stills only).
-    @State private var showingRaw = false
-
-    /// The same-stem RAW behind this JPEG's grid item (nil for unpaired stills — no toggle).
-    private var rawSibling: MediaClip? { model.rawSibling(of: clip) }
-
-    /// The file the viewer currently loads, names, and shares — the JPEG or its RAW sibling.
-    private var displayClip: MediaClip { showingRaw ? (rawSibling ?? clip) : clip }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            if let image {
-                GeometryReader { geo in
-                    Image(uiImage: image)
-                        .resizable()
-                        // Anamorphic stills are judged at their intended geometry; the file is
-                        // never touched. `nil` (de-squeeze off) means the image's own ratio.
-                        .aspectRatio(
-                            desqueezedAspectRatio(
-                                image.size, model.assistConfiguration.desqueeze),
-                            contentMode: .fit
-                        )
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .scaleEffect(zoom.scale)
-                        .offset(zoom.offset)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            SimultaneousGesture(
-                                pinchGesture(size: geo.size), panGesture(size: geo.size)))
-                }
-                .ignoresSafeArea()
-            } else if isLoading {
-                VStack(spacing: 12) {
-                    ProgressView().tint(LiveDesign.accent)
-                    Text(loadingMessage)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(LiveDesign.muted)
-                }
-            }
-
-            VStack {
-                HStack {
-                    Button {
-                        dismiss()
-                    } label: {
-                        CircleIconButton(systemName: "xmark", size: 34)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.zcTapTarget)
-                    Text(displayClip.filename)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(LiveDesign.text)
-                        .lineLimit(1)
-                    Spacer()
-                    if rawSibling != nil {
-                        sideToggle
-                    }
-                    if let onDeleteAll {
-                        Button(action: onDeleteAll) {
-                            HStack(spacing: 5) {
-                                Image(systemName: "trash")
-                                Text("Delete all")
-                            }
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .liquidGlass(in: Capsule(), interactive: true)
-                        }
-                        .buttonStyle(.zcTapTarget)
-                    }
-                    deleteButton
-                    shareButton
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                Spacer()
-                VStack(spacing: 10) {
-                    if let ratingToast {
-                        Text(ratingToast)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(LiveDesign.text)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 16).padding(.vertical, 10)
-                            .liquidGlass(in: Capsule(), interactive: true)
-                            .padding(.horizontal, 24)
-                            .transition(.opacity)
-                    }
-                    if let stars = ratingStars {
-                        StarRatingRow(stars: stars) { target in
-                            let previous = ratingStars
-                            ratingStars = target
-                            Task {
-                                // The camera stays source of truth (the model confirms by
-                                // readback). A refusal shows the body's response code rather
-                                // than silently rolling the star back.
-                                switch await model.setMediaStarRating(target, for: clip) {
-                                case .confirmed(let confirmed):
-                                    ratingStars = confirmed
-                                case .refused(_, let message):
-                                    ratingStars = previous
-                                    showRatingToast(message)
-                                case .offline:
-                                    ratingStars = previous
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(.bottom, 18)
+        Group {
+            if let context {
+                MonitorOperatorPhotoScreen(
+                    library: context.library, record: context.record,
+                    admission: context.admission, assist: model.assist, loaders: loaders,
+                    operations: operations,
+                    haptics: .init(isEnabled: { [weak model] in
+                        model?.preferences.hapticsEnabled == true
+                    }),
+                    coverPresented: isSharePresented, variants: context.variants,
+                    rating: rating,
+                    sharing: .init(readiness: { [weak model] request in
+                        guard request.isCurrent(), let model else { return .unavailable }
+                        return model.isClipDownloaded(request.record.payload) ? .ready : .waiting
+                    }), collection: context.collection,
+                    selectRecord: onSelected.map { selected in
+                        { record in selected(record.payload) }
+                    },
+                    collectionThumbnail: { request in
+                        AnyView(NikonStripThumbnail(request: request).environment(model))
+                    },
+                    sourceCurrent: { context.action?.sourceIsCurrent != false },
+                    close: { dismiss() },
+                    deleted: { if let onDeleted { onDeleted() } else { dismiss() } },
+                    share: { request in
+                        guard request.isCurrent(),
+                            let url = model.clipLocalURL(request.record.payload)
+                        else { return }
+                        shareURL = url
+                        isSharePresented = true
+                    }, deletedReturning: onDeletedReturning)
+            } else {
+                ProgressView().tint(MonitorTheme.accent).frame(
+                    maxWidth: .infinity, maxHeight: .infinity
+                )
+                .background(.black)
             }
         }
-        .statusBarHidden()
-        .onAppear {
-            loadTask = Task { await loadImage() }
-            Task { ratingStars = await model.mediaStarRating(for: clip) }
-        }
-        .onDisappear {
-            loadTask?.cancel()
-            loadTask = nil
-            model.cancelClipStream()
-            image = nil
+        .task {
+            guard context == nil else { return }
+            guard let library = model.mediaLibrary else {
+                dismiss()
+                return
+            }
+            let admission = opening?.admission ?? library.actionToken
+            guard library.isCurrent(admission),
+                let record = opening?.record
+                    ?? library.records.first(where: { $0.payload.id == clip.id })
+            else {
+                dismiss()
+                return
+            }
+            let raw = model.rawSibling(of: clip).flatMap { raw in
+                library.records.first { $0.payload.id == raw.id }
+            }
+            let variants =
+                raw.map {
+                    [
+                        MonitorMediaPictureVariant(label: "JPG", record: record),
+                        .init(label: "RAW", record: $0),
+                    ]
+                } ?? []
+            let members = collection.compactMap { member in
+                library.records.first { $0.payload.id == member.id }
+            }
+            context = .init(
+                library: library, record: record, admission: admission,
+                variants: variants, collection: members,
+                action: model.captureMediaLibraryAction(
+                    [clip] + (raw.map { [$0.payload] } ?? []) + collection))
         }
         .sheet(isPresented: $isSharePresented) {
-            if let url = model.clipLocalURL(displayClip) {
-                MultiShareSheet(urls: [url], metadataText: nil) {
-                    isSharePresented = false
+            if let shareURL {
+                MultiShareSheet(urls: [shareURL], metadataText: nil) { isSharePresented = false }
+            }
+        }
+    }
+    private var operations: MonitorMediaGalleryOperations<MediaClip> {
+        .init(
+            favorite: { record in model.toggleClipFavorite(record.payload) },
+            acceptedDeletion: .init(
+                capture: { rows in model.captureMediaDeletionAuthority(rows.map(\.payload)) },
+                perform: { rows, authority in
+                    _ = await model.deleteMediaClips(
+                        rows.map(\.payload), deleteLocation: nil, admitted: authority)
+                }), access: { _ in .init(share: true, delete: true) },
+            deletionMessage: { rows in
+                if rows.count > 1, !collection.isEmpty {
+                    return burstDeletionMessage(rows.map(\.payload))
                 }
-            }
-        }
+                return model.deletionConfirmMessage(for: rows.map(\.payload))
+            })
     }
-
-    /// Deletes the shot from the camera card (both sides of a RAW+JPEG pair) after a
-    /// destructive confirmation, then closes the viewer.
-    private var deleteButton: some View {
-        Button {
-            isDeleteConfirmPresented = true
-        } label: {
-            CircleIconButton(systemName: "trash", size: 34)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.zcTapTarget)
-        .confirmationDialog(
-            model.deletionConfirmMessage(for: [clip]),
-            isPresented: $isDeleteConfirmPresented,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                Task {
-                    _ = await model.deleteMediaClips([clip])
-                    if let onDeleted {
-                        onDeleted()  // burst hosting advances to the neighbouring frame
-                    } else {
-                        dismiss()
-                    }
+    private var rating: MonitorMediaPictureRatingService<MediaClip> {
+        .init(
+            levels: [1, 2, 3, 4, 5],
+            read: { [weak model] request in
+                guard request.isCurrent(), let model else { return nil }
+                return await model.mediaStarRating(for: request.record.payload)
+            },
+            commit: { [weak model] target, request in
+                guard request.isCurrent(), let model else { return .unavailable }
+                switch await model.setMediaStarRating(target, for: request.record.payload) {
+                case .confirmed(let value): return .confirmed(value)
+                case .refused(_, let message): return .refused(message)
+                case .offline: return .unavailable
                 }
-            }
-        }
+            })
     }
-
-    /// Shares the currently-viewed side of the still (JPEG/HEIF/NEF alike) once its camera
-    /// download completes — the share sheet covers AirDrop, Files, and Save Image.
-    private var shareButton: some View {
-        Button {
-            guard !isPreparingShare else { return }
-            let target = displayClip
-            if model.isClipDownloaded(target) {
-                isSharePresented = true
-            } else {
-                isPreparingShare = true
-                Task {
-                    // The viewer already streams the full file; wait for it to land.
-                    while !Task.isCancelled, !model.isClipDownloaded(target) {
-                        try? await Task.sleep(for: .milliseconds(300))
-                    }
-                    isPreparingShare = false
-                    if model.isClipDownloaded(target) { isSharePresented = true }
+    private var loaders: MonitorMediaPictureLoaders<MediaClip, UIImage> {
+        .init(
+            preview: { [weak model] request in
+                guard request.isCurrent(),
+                    let url = model?.clipThumbnailURL(request.record.payload),
+                    let data = try? Data(contentsOf: url)
+                else { return nil }
+                return UIImage(data: data)
+            },
+            cached: { [weak model] request in
+                guard request.isCurrent(), let model, model.isClipDownloaded(request.record.payload)
+                else { return nil }
+                return await NikonPhotoDecode.complete(request, model: model)
+            },
+            progressive: { [weak model] publication in
+                guard publication.isCurrent, let model else { return nil }
+                let ticket = model.startClipStream(publication.request.record.payload)
+                let result = await NikonPhotoDecode.progressive(publication, model: model)
+                if let ticket {
+                    model.cancelClipStream(ticket)
+                    await ticket.task.value
                 }
-            }
-        } label: {
-            if isPreparingShare {
-                ProgressView()
-                    .tint(LiveDesign.accent)
-                    .frame(width: 34, height: 34)
-            } else {
-                CircleIconButton(systemName: "square.and.arrow.up", size: 34)
-                    .contentShape(Circle())
-            }
+                return publication.isCurrent ? result : nil
+            })
+    }
+    private func burstDeletionMessage(_ targets: [MediaClip]) -> String {
+        let plan = model.deletionPlan(for: targets)
+        var message =
+            "Delete this burst of \(targets.count) frames? This removes every frame in the series from the card."
+        if plan.pairCount > 0 {
+            message += " Both the RAW and JPEG files of each pair are removed."
         }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Share photo")
-    }
-
-    /// Compact JPG ⇄ RAW switch for a same-stem pair — mirrors the browser pill chrome.
-    private var sideToggle: some View {
-        HStack(spacing: 2) {
-            sideSegment("JPG", isActive: !showingRaw) { showSide(raw: false) }
-            sideSegment("RAW", isActive: showingRaw) { showSide(raw: true) }
+        if plan.backupCount > 0 {
+            message += " The backup copies on the other card are removed too."
         }
-        .padding(2)
-        .background(Color.black.opacity(0.35), in: Capsule())
-        .overlay(Capsule().stroke(LiveDesign.hairline, lineWidth: 1))
-        .accessibilityLabel("Photo format")
-        .accessibilityValue(showingRaw ? "RAW" : "JPG")
+        return message + " This can't be undone."
     }
+}
 
-    private func sideSegment(
-        _ title: String, isActive: Bool, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(isActive ? LiveDesign.accent : LiveDesign.muted)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(isActive ? LiveDesign.accentDim : Color.clear, in: Capsule())
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    /// Switches the viewer to the other side of the pair and loads/streams that file.
-    private func showSide(raw: Bool) {
-        guard showingRaw != raw else { return }
-        showingRaw = raw
-        loadTask?.cancel()
-        model.cancelClipStream()
-        loadTask = Task { await loadImage() }
-    }
-
-    /// Briefly shows a rating-write refusal (with the body's response code) above the star row.
-    private func showRatingToast(_ message: String) {
-        withAnimation { ratingToast = message }
-        Task {
-            try? await Task.sleep(for: .seconds(4))
-            withAnimation { ratingToast = nil }
-        }
-    }
-
-    private var loadingMessage: String {
-        if model.mediaDownloadProgress[displayClip.id] != nil {
-            return "Loading from camera…"
-        }
-        return "Preparing image…"
-    }
-
-    private func pinchGesture(size: CGSize) -> some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                zoom.pinchChanged(
-                    magnification: value.magnification, startAnchor: value.startAnchor,
-                    size: size)
-            }
-            .onEnded { _ in
-                withAnimation(.easeOut(duration: 0.2)) { zoom.endGesture(size: size) }
-            }
-    }
-
-    private func panGesture(size: CGSize) -> some Gesture {
-        DragGesture()
-            .onChanged { value in zoom.panChanged(translation: value.translation) }
-            .onEnded { _ in
-                withAnimation(.easeOut(duration: 0.2)) { zoom.endGesture(size: size) }
-            }
-    }
-
-    private func loadImage() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        // Pair toggle keeps the current frame up while the other side streams — the pair shares
-        // one stem thumbnail, and swapping it in would downgrade an already-decoded image.
-        if image == nil, let thumbURL = model.clipThumbnailURL(displayClip),
-            let data = try? Data(contentsOf: thumbURL),
-            let thumb = UIImage(data: data)
-        {
-            await MainActor.run { image = thumb }
-        }
-
-        if model.isClipDownloaded(displayClip) {
-            await loadFromDisk()
-            return
-        }
-
-        model.startClipStream(displayClip)
-        // Incremental decode of the growing file. Brute-force `UIImage(contentsOfFile:)` per
-        // tick sprayed Console: format sniffing fails until the header lands ("could not find
-        // plugin"), every partial decode logs a JFIF-incomplete warning, and each tick re-decoded
-        // from byte zero. The incremental source keeps the parse state, and attempts are gated
-        // to a meaningful chunk of fresh bytes.
+/// Bounded ImageIO/native-file port. The shared picture owner owns load/variant/publication lifetime.
+@MainActor private enum NikonPhotoDecode {
+    static func progressive(
+        _ publication: MonitorMediaPicturePublication<MediaClip, UIImage>, model: NativeAppModel
+    ) async -> UIImage? {
+        let request = publication.request
+        let target = request.record.payload
         let incremental = CGImageSourceCreateIncremental(
             [kCGImageSourceShouldCache: false] as CFDictionary)
         var deliveredBytes = 0
         var lastAttemptBytes = 0
-        while !Task.isCancelled {
-            if model.isClipDownloaded(displayClip) {
-                await loadFromDisk()
-                return
-            }
-            guard let url = model.clipLocalURL(displayClip) else { return }
-            if let data = try? Data(contentsOf: url), data.count > deliveredBytes {
+        while !Task.isCancelled, request.isCurrent() {
+            if model.isClipDownloaded(target) { return await complete(request, model: model) }
+            publication.publish(
+                status: .init(
+                    message: model.mediaDownloadProgress[target.id] == nil
+                        ? "Preparing image…" : "Loading from camera…"))
+            guard let url = model.clipLocalURL(target) else { return nil }
+            let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }
+                .value
+            guard !Task.isCancelled, request.isCurrent() else { return nil }
+            if let data, data.count > deliveredBytes {
                 deliveredBytes = data.count
                 CGImageSourceUpdateData(incremental, data as CFData, false)
                 if deliveredBytes >= 262_144, deliveredBytes - lastAttemptBytes >= 1_000_000,
-                    let partial = Self.partialImage(from: incremental)
+                    let partial = partialImage(from: incremental)
                 {
                     lastAttemptBytes = deliveredBytes
-                    await MainActor.run { image = partial }
+                    publication.publish(partial)
                 }
             }
             try? await Task.sleep(for: .milliseconds(600))
         }
+        return nil
     }
-
-    /// The decodable top portion of a partially streamed still, EXIF orientation applied.
+    static func complete(_ request: MonitorMediaPictureRequest<MediaClip>, model: NativeAppModel)
+        async -> UIImage?
+    {
+        guard request.isCurrent(), let url = model.clipLocalURL(request.record.payload),
+            let image = await MediaCellImageLoader.shared.downsampled(at: url, maxPixelSize: 4096),
+            request.isCurrent()
+        else { return nil }
+        model.resolveEXIFOrientation(for: request.record.payload, at: url)
+        return request.isCurrent() ? image : nil
+    }
     private static func partialImage(from source: CGImageSource) -> UIImage? {
         guard CGImageSourceGetCount(source) > 0,
             let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
         var orientation = UIImage.Orientation.up
-        if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
-            as? [CFString: Any],
+        if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
             let raw = properties[kCGImagePropertyOrientation] as? UInt32,
             let exif = CGImagePropertyOrientation(rawValue: raw)
         {
             orientation = UIImage.Orientation(exif)
         }
         return UIImage(cgImage: cgImage, scale: 1, orientation: orientation)
-    }
-
-    private func loadFromDisk() async {
-        guard let url = model.clipLocalURL(displayClip) else { return }
-        // Display-sized decode: a full-resolution still would allocate a decode surface far
-        // beyond what any zoom shows (the IOSurface failures in Console).
-        // ponytail: 4096 long edge ≈ 3× zoom headroom on phone screens; raise if deep
-        // pinch-zoom ever needs more.
-        guard
-            let loaded = await MediaCellImageLoader.shared.downsampled(
-                at: url, maxPixelSize: 4096)
-        else { return }
-        // The full file always carries the orientation header — learn it once so the grid's
-        // (possibly EXIF-stripped) camera thumbnails render upright from here on.
-        model.resolveEXIFOrientation(for: displayClip, at: url)
-        await MainActor.run { image = loaded }
     }
 }
 
@@ -2786,1876 +997,288 @@ extension UIImage.Orientation {
 
 // MARK: - Player
 
-private struct PlaybackScopeDerivationConfiguration: Equatable, Sendable {
-    let trafficLightsCrushClip: AssistConfiguration.CrushClipCompensation
-    let mapping: ExposureSignalMapping
-    let vectorscopeCube: CubeLUT?
-
-    func bundle(samples: ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
-        ScopeAssistSampling.bundle(
-            samples: samples,
-            trafficLightsCrushClip: trafficLightsCrushClip,
-            mapping: mapping,
-            vectorscopeCube: vectorscopeCube,
-            previous: previous)
-    }
-}
-
-/// Full-screen AVPlayer with LiveDesign controls: play/pause, ±15s, mute, view-assist, favorite,
-/// Five-star rating row on glass: tap a star to set the count, tap the active count to
-/// clear. Optimistic — the caller writes to the camera and rolls back on failure.
-struct StarRatingRow: View {
-    let stars: Int
-    let onSelect: (Int) -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ForEach(1...5, id: \.self) { star in
-                Button {
-                    onSelect(star == stars ? 0 : star)
-                } label: {
-                    Image(systemName: star <= stars ? "star.fill" : "star")
-                        .font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(star <= stars ? LiveDesign.accent : LiveDesign.muted)
-                }
-                .buttonStyle(.zcTapTarget)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .liquidGlass(in: Capsule())
-    }
-}
-
-/// Pinch/pan zoom that stays anchored under the fingers: the content point beneath the
-/// pinch centroid is held fixed as the scale changes (the system Photos feel), instead of
-/// growing from the view centre and drifting away from the gesture. The transform contract
-/// is `.scaleEffect(scale)` (centre-anchored) followed by `.offset(offset)`; a content
-/// point p renders at `p·scale + offset`, so holding centroid c means
-/// `offset' = c − (c − offset)·(scale'/scale)`.
-struct AnchoredPinchZoom {
-    static let maxScale: CGFloat = 4
-
-    private(set) var scale: CGFloat = 1
-    private(set) var offset: CGSize = .zero
-    private var committedScale: CGFloat = 1
-    private var committedOffset: CGSize = .zero
-
-    var isZoomed: Bool { scale > 1.001 }
-
-    /// One pinch update. `startAnchor` is the gesture's centroid as a UnitPoint in the
-    /// container the transform runs in; `size` is that container's size.
-    mutating func pinchChanged(magnification: CGFloat, startAnchor: UnitPoint, size: CGSize) {
-        let target = min(Self.maxScale, max(1, committedScale * magnification))
-        guard committedScale > 0 else { return }
-        let ratio = target / committedScale
-        let centroid = CGSize(
-            width: (startAnchor.x - 0.5) * size.width,
-            height: (startAnchor.y - 0.5) * size.height)
-        offset = CGSize(
-            width: centroid.width - (centroid.width - committedOffset.width) * ratio,
-            height: centroid.height - (centroid.height - committedOffset.height) * ratio)
-        scale = target
-    }
-
-    mutating func panChanged(translation: CGSize) {
-        guard isZoomed else { return }
-        offset = CGSize(
-            width: committedOffset.width + translation.width,
-            height: committedOffset.height + translation.height)
-    }
-
-    /// Commits the gesture: snaps back to 1× when nearly there, otherwise clamps the pan so
-    /// the content keeps covering the container. Call inside `withAnimation` for the snap.
-    mutating func endGesture(size: CGSize) {
-        if scale < 1.05 {
-            reset()
-            return
-        }
-        let maxX = size.width * (scale - 1) / 2
-        let maxY = size.height * (scale - 1) / 2
-        offset = CGSize(
-            width: min(maxX, max(-maxX, offset.width)),
-            height: min(maxY, max(-maxY, offset.height)))
-        committedScale = scale
-        committedOffset = offset
-    }
-
-    mutating func reset() {
-        self = AnchoredPinchZoom()
-    }
-}
-
-/// share (native or Frame.io), side arrows for clip navigation, pinch-to-zoom on the video,
-/// single-tap on the frame to play/pause (with a transient transport flash), long-press drag to
-/// scrub, and restart at end-of-clip.
+/// Composes one shared player with the actual gallery request and bounded Nikon integration services.
 struct MediaPlayerView: View {
     let clips: [MediaClip]
-    @State private var activeClip: MediaClip
+    private let startingClip: MediaClip
+    private let opening: MonitorMediaGalleryOpen<MediaClip>?
     @Environment(NativeAppModel.self) private var model
     @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
     @Environment(\.dismiss) private var dismiss
-
-    /// Convenience alias for the clip currently playing.
-    private var clip: MediaClip { activeClip }
-
-    @State private var player = AVPlayer()
-    @State private var isPlaying = true
-    @State private var isMuted = false
-    @State private var currentTime: Double = 0
-    @State private var duration: Double = 0
-    /// What we managed to learn about the clip's capture rate; drives whether conform is offered.
-    @State private var conformSource = ConformPreview.Source()
-    /// The selected conform target, or nil for real-time playback (the default, always).
-    @State private var conformTarget: Double?
-    /// Whether the star-rating shade is open. Deliberately NOT reset per clip: the operator opened
-    /// it to rate a run of shots, so it stays open across them until it is closed again.
-    @State private var ratingShadeOpen = DemoHarness.ratingShade == "open"
-    @State private var timeObserver: Any?
-    @State private var endObserver: NSObjectProtocol?
-    @State private var reachedEnd = false
-    @State private var isScrubbing = false
-    @State private var scrubTime: Double = 0
-    @State private var wasPlayingBeforeScrub = false
-    @State private var lastScrubSeekTime: CFAbsoluteTime = 0
-
-    private let scrubSeekThrottle: CFAbsoluteTime = 0.075
-    private let scrubSeekTolerance = CMTime(seconds: 0.1, preferredTimescale: 600)
-
-    @State private var isClipReady = false
-    @State private var streamPollTask: Task<Void, Never>?
-    @State private var chromeVisible = !DemoHarness.playbackCleanView
-    @State private var assistMode = false
-    @State private var assistOptionsTool: MonitorAssistTool?
-    @State private var playbackBarFrame: CGRect = .zero
-    @State private var playbackAssistToolbarFrame: CGRect = .zero
-    @State private var playbackAssistPanelRevealed = false
-
-    @State private var isFavorite = false
-    @State private var exportState: ExportStatus = .none
+    @State private var context: NikonOperatorPlaybackContext?
     @State private var deliveryPresentation: MediaDeliveryPresentation?
-    @State private var shareButtonFrame: CGRect = .zero
-    @State private var wasPlayingBeforeDelivery = false
-    @State private var toastMessage: String?
-
-    @State private var videoDisplaySize = CGSize(width: 16, height: 9)
-    @State private var playbackScopeAssist: ScopeAssistBundle = .empty
-    @State private var playbackScopeController = PlaybackScopeController()
-    @State private var playbackAudioLevels = AudioMeterLevels.silent
-    @State private var audioMeterController = PlaybackAudioMeterController()
-    @State private var clipSlideEdge: Edge = .trailing
-    @State private var playbackEffectsBox = MediaLUT.PlaybackEffectsBox()
-    /// Bumps on each clip load so async asset probes cannot apply to a replaced clip.
-    @State private var playerLoadGeneration = 0
-    /// Invalidates detached scope derivations whenever polling is restarted or stopped.
-    @State private var playbackScopePollingGeneration = 0
-    @State private var zoom = AnchoredPinchZoom()
-    /// Camera-read star rating for the active clip; nil until loaded (or unreachable).
-    @State private var playerRatingStars: Int?
-    /// The letterboxed video frame's size, captured where the gestures attach so the pinch
-    /// anchor maps into the same space the zoom transform runs in.
-    @State private var zoomContainerSize: CGSize = .zero
-    /// Suppresses play/pause tap recognition after pinch, pan, or frame scrub so those gestures do not toggle transport.
-    @State private var suppressNextPlaybackTap = false
-    /// Brief play/pause symbol shown centered on the video after a frame tap toggles transport.
-    @State private var playbackFlashSymbol: String?
-    @State private var playbackFlashVisible = false
-    @State private var playbackFlashTask: Task<Void, Never>?
-    /// Long-press horizontal scrub on the letterboxed video frame (distinct from bottom-bar scrubber).
-    @State private var isFrameScrubbing = false
-    @State private var frameScrubOriginTime: Double = 0
-    @State private var frameScrubVideoWidth: CGFloat = 0
-    @State private var frameScrubPending = false
-
-    private enum PlaybackZoom {
-        static let minScale: CGFloat = 1
-        static let maxScale: CGFloat = 4
-    }
-
-    // (Zoom state lives in `AnchoredPinchZoom`, shared with the photo viewer.)
-
-    private enum PlaybackFlash {
-        static let fadeIn: Double = 0.12
-        static let hold: Double = 0.55
-        static let fadeOut: Double = 0.22
-    }
-
-    private enum FrameScrub {
-        static let longPressDuration: Double = 0.35
-    }
+    @State private var shareButtonFrame = CGRect.zero
 
     init(
-        clips: [MediaClip],
-        startingAt clip: MediaClip,
-        initialShareDestination: MediaDeliveryDestination? = nil
+        clips: [MediaClip], startingAt clip: MediaClip,
+        initialShareDestination: MediaDeliveryDestination? = nil,
+        opening: MonitorMediaGalleryOpen<MediaClip>? = nil
     ) {
         self.clips = clips
-        _activeClip = State(initialValue: clip)
-        // Post-hop resume: open with the share popup already on the given destination.
+        startingClip = clip
+        self.opening = opening
         if let initialShareDestination {
             _deliveryPresentation = State(
-                initialValue: MediaDeliveryPresentation(
-                    clip: clip, preferredDestination: initialShareDestination))
+                initialValue: .init(clip: clip, preferredDestination: initialShareDestination))
         }
     }
-
-    private var currentClipIndex: Int? {
-        clips.firstIndex { $0.id == activeClip.id }
-    }
-
-    private var canGoToPreviousClip: Bool {
-        guard let index = currentClipIndex else { return false }
-        return index > 0
-    }
-
-    private var canGoToNextClip: Bool {
-        guard let index = currentClipIndex else { return false }
-        return index < clips.count - 1
-    }
-
-    private var showsClipNavigation: Bool {
-        clips.count > 1
-    }
-
-    private var playbackScopesActive: Bool {
-        let visible = model.preferences.playbackVisibleAssistTools
-        return visible.contains(.waveform) || visible.contains(.parade)
-            || visible.contains(.histogram) || visible.contains(.trafficLights)
-            || visible.contains(.vectorscope)
-    }
-
-    private var playbackAudioMetersActive: Bool {
-        model.preferences.playbackVisibleAssistTools.contains(.audioMeters)
-    }
-
-    /// Playback de-squeeze uses the shared factor, gated by playback-visible tools.
-    private var playbackDesqueeze: AssistConfiguration.Desqueeze {
-        var config = model.assistConfiguration.desqueeze
-        config.enabled = model.preferences.playbackVisibleAssistTools.contains(.desqueeze)
-        return config
-    }
-
-    private var playbackScopeDerivationConfiguration: PlaybackScopeDerivationConfiguration {
-        let scopes = model.assistConfiguration.scopes
-        // Playback scopes measure source/log on the same anchored axis as live view; clips don't
-        // persist a per-clip tone mode yet, so the mapping follows current camera state. The
-        // vectorscope reads the monitor image through the look the player bakes (LUT tool + LUT).
-        return PlaybackScopeDerivationConfiguration(
-            trafficLightsCrushClip: scopes.crushClipCompensation,
-            mapping: model.playbackExposureSignalMapping,
-            vectorscopeCube: model.vectorscopeMonitorCube(
-                visibleTools: model.preferences.playbackVisibleAssistTools,
-                curve: model.playbackExposureSignalMapping.curve))
+    private var player: MonitorMediaPlaybackModel<MediaClip, String>? { context?.media.playback }
+    private var playing: Bool { player?.reportedPlaying ?? player?.playRequested ?? false }
+    private var covered: Bool {
+        deliveryPresentation != nil || deliveryCoordinator.isActive
+            || deliveryCoordinator.sharePayload != nil
     }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-
-            GeometryReader { geo in
-                let container = CGRect(origin: .zero, size: geo.size)
-                let videoRect = aspectFitRect(videoSize: videoDisplaySize, in: container)
-
-                ZStack {
-                    PlayerLayerView(player: player)
-                        // Match live view: de-squeeze the raster, then apply pinch zoom.
-                        .scaleEffect(desqueezeScale(playbackDesqueeze), anchor: .center)
-                        .scaleEffect(zoom.scale)
-                        .offset(zoom.offset)
-                }
-                .frame(width: videoRect.width, height: videoRect.height)
-                .clipped()
-                .position(x: videoRect.midX, y: videoRect.midY)
-                .allowsHitTesting(false)
-                .id(activeClip.id)
-                .transition(
-                    .asymmetric(
-                        insertion: .move(edge: clipSlideEdge),
-                        removal: .move(edge: clipSlideEdge == .trailing ? .leading : .trailing)
-                    )
-                )
-
-                FeedAlignedAssists(
-                    clean: false, feed: videoRect, excludeTools: [.level], usePlaybackContext: true
-                )
-                .frame(width: geo.size.width, height: geo.size.height)
-
-                Color.clear
-                    .frame(width: videoRect.width, height: videoRect.height)
-                    .position(x: videoRect.midX, y: videoRect.midY)
-                    .contentShape(Rectangle())
-                    .onAppear {
-                        frameScrubVideoWidth = videoRect.width
-                        zoomContainerSize = videoRect.size
-                    }
-                    .onChange(of: videoRect.width) { _, width in
-                        frameScrubVideoWidth = width
-                        zoomContainerSize = videoRect.size
-                    }
-                    .gesture(playbackVideoGesture)
-                    .simultaneousGesture(playbackFrameTapGesture)
-                    .simultaneousGesture(playbackFrameScrubGesture)
-
-                playbackTransportFlashOverlay(in: videoRect)
-                playbackFrameScrubOverlay(in: videoRect)
-
-                if playbackScopesActive || playbackAudioMetersActive {
-                    PlaybackAssistOverlayModule(
-                        scopeAssist: playbackScopeAssist, videoRect: videoRect,
-                        audioLevels: playbackAudioLevels
-                    )
-                    .frame(width: geo.size.width, height: geo.size.height)
-                }
-
-                if showsClipNavigation {
-                    clipNavigationArrows(in: videoRect)
-                }
+            if let context {
+                sharedPlayer(context)
+            } else {
+                Color.black.overlay { ProgressView().tint(MonitorTheme.accent) }
             }
-            .ignoresSafeArea()
-
-            if deliveryCoordinator.showsLocalOverlay,
-                let deliveryOverlay = deliveryCoordinator.overlayState
-            {
-                MediaDeliveryTopAnchor(horizontalPadding: 24) {
-                    MediaDeliveryOverlay(state: deliveryOverlay) {
-                        deliveryCoordinator.cancel()
-                    }
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .zIndex(50)
-            }
-
-            if !isClipReady {
-                clipLoadingOverlay
-            }
-
-            VStack {
-                if chromeVisible {
-                    // Handle sits on the top bar's own row, centred between the title and the
-                    // favourite button — the row's middle was dead space.
-                    ZStack {
-                        topBar
-                        if ratingShadeMounts {
-                            ratingShadeHandle
-                        }
-                    }
-                    if ratingShadeOpen, ratingShadeMounts {
-                        ratingStarRow
-                    }
-                }
-                Spacer()
-                if chromeVisible, let toastMessage { toastView(toastMessage) }
-                if chromeVisible { bottomBar }
-                if !chromeVisible {
-                    // The one control clean view keeps. Every other affordance is hidden, but the
-                    // way back cannot be: the swipe restores it for operators who know the
-                    // gesture, and this is here for everyone who does not.
-                    HStack {
-                        Spacer()
-                        restoreChromeButton
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .allowsHitTesting(true)
-            .zIndex(2)
-            .animation(.spring(duration: 0.32), value: chromeVisible)
-            .task(id: activeClip.id) {
-                playerRatingStars = await model.mediaStarRating(for: activeClip)
-            }
-
-            if let deliveryContext = deliveryPresentation {
-                MediaDeliveryPopupOverlay(
-                    clips: [deliveryContext.clip],
-                    anchorFrame: shareButtonFrame,
-                    placement: .aboveAnchor,
-                    preferredDestination: deliveryContext.preferredDestination,
-                    onBeginDelivery: { request in
-                        deliveryPresentation = nil
-                        startDelivery(request)
-                    }
-                ) {
-                    closeDeliveryPopup()
-                }
-                .environment(model)
-                .zIndex(3)
-            }
-
-            if let tool = assistOptionsTool {
-                playbackAssistOptionsOverlay(tool: tool)
-                    .zIndex(4)
-            }
+            deliveryOverlays
         }
-        .animation(.easeInOut(duration: 0.28), value: activeClip.id)
-        .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
-        .statusBarHidden()
-        .onAppear {
-            appear()
-            model.isMediaPlaybackActive = isPlaying
-            deliveryCoordinator.enterLocalOverlayContext()
+        .task {
+            guard context == nil, let library = model.mediaLibrary else { return }
+            let request: MonitorMediaGalleryOpen<MediaClip>
+            if let opening {
+                request = opening
+            } else {
+                guard
+                    let record = library.records.first(where: { $0.payload.id == startingClip.id })
+                else {
+                    dismiss()
+                    return
+                }
+                let ids = Set(clips.map(\.id))
+                request = .init(
+                    record: record,
+                    playlist: library.records.filter { ids.contains($0.payload.id) },
+                    admission: library.actionToken)
+            }
+            guard
+                let created = NikonOperatorPlaybackContext(
+                    model: model, initial: request,
+                    captureDeliveryCleanup: {
+                        let outgoing = deliveryCoordinator.capturedRun
+                        return { await outgoing?.cancelAndJoin() }
+                    })
+            else {
+                dismiss()
+                return
+            }
+            context = created
         }
+        .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
         .onDisappear {
-            disappear()
             model.isMediaPlaybackActive = false
             deliveryCoordinator.exitLocalOverlayContext()
         }
-        .onChange(of: isPlaying) { _, playing in
-            model.isMediaPlaybackActive = playing
-        }
-        .onChange(of: model.preferences.playbackVisibleAssistTools) { _, _ in
-            updatePlaybackEffects()
-            syncPlaybackScopeSampling()
-            syncPlaybackAudioMetering()
-        }
-        .onChange(of: model.assistConfiguration) { _, _ in
-            updatePlaybackEffects()
-        }
-        .onChange(of: model.assistConfiguration.scopes.crushClipCompensation) { _, _ in
-            restartPlaybackScopeSampling()
-        }
-        .mediaDeliveryShareSheet(onDismiss: resumePlaybackIfNeeded)
+        .onChange(of: playing) { _, value in model.isMediaPlaybackActive = value }
+        .onChange(of: model.playbackImageEffects) { _, _ in synchronizeNativeFacts() }
+        .onChange(of: model.playbackExposureSignalMapping) { _, _ in synchronizeNativeFacts() }
+        .onChange(of: model.assist.crushClipCompensation) { _, _ in synchronizeNativeFacts() }
+        .mediaDeliveryShareSheet()
     }
 
-    /// Mirrors live-monitor `PanelHost.bottomAssistBody` — glass popup anchored above the playback bar.
-    private func playbackAssistOptionsOverlay(tool: MonitorAssistTool) -> some View {
-        PlaybackAssistOptionsOverlay(
-            tool: tool,
-            anchorToolbarFrame: playbackAssistToolbarFrame,
-            isRevealed: playbackAssistPanelRevealed,
-            onBackdropTap: dismissPlaybackAssistOptions,
-            onClose: dismissPlaybackAssistOptions
-        )
-        .environment(model)
-    }
-
-    private func presentPlaybackAssistOptions(_ tool: MonitorAssistTool) {
-        playbackAssistPanelRevealed = false
-        assistOptionsTool = tool
-        schedulePlaybackAssistReveal()
-    }
-
-    private func dismissPlaybackAssistOptions() {
-        assistOptionsTool = nil
-    }
-
-    /// Same slide-up curve as live-monitor assist popups (`NativeAppModel.panelRevealCurve`).
-    private func schedulePlaybackAssistReveal() {
-        Task { @MainActor in
-            await Task.yield()
-            guard assistOptionsTool != nil else { return }
-            withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.20)) {
-                playbackAssistPanelRevealed = true
-            }
-        }
-    }
-
-    private func startDelivery(_ request: MediaDeliveryBeginRequest) {
-        deliveryCoordinator.begin(
-            request,
-            model: model,
-            onCancel: { resumePlaybackIfNeeded() },
-            onComplete: { outcome in
-                exportState =
-                    model.mediaClips.first { $0.id == activeClip.id }?.exportStatus
-                    ?? activeClip.exportStatus
-                switch outcome {
-                case .frameio(let summary):
-                    resumePlaybackIfNeeded()
-                    showToast(summary)
-                case .savedToPhotos:
-                    resumePlaybackIfNeeded()
-                case .failed(let message):
-                    resumePlaybackIfNeeded()
-                    showToast(message)
-                case .share:
-                    // Keep playback paused until the share sheet dismisses.
-                    break
-                }
-            }
-        )
-    }
-
-    private func resumePlaybackIfNeeded() {
-        if wasPlayingBeforeDelivery {
-            startPlayback()
-            isPlaying = true
-            wasPlayingBeforeDelivery = false
-        }
-    }
-
-    private func closeDeliveryPopup() {
-        deliveryPresentation = nil
-        exportState =
-            model.mediaClips.first { $0.id == activeClip.id }?.exportStatus
-            ?? activeClip.exportStatus
-        resumePlaybackIfNeeded()
-    }
-
-    private var playbackVideoGesture: some Gesture {
-        SimultaneousGesture(
-            SimultaneousGesture(playbackMagnificationGesture, playbackPanGesture),
-            chromeSwipeGesture
-        )
-    }
-
-    /// Single-tap on the letterboxed video frame — must be simultaneous with pinch/pan so drags still win.
-    private var playbackFrameTapGesture: some Gesture {
-        TapGesture()
-            .onEnded {
-                handlePlaybackFrameTap()
-            }
-    }
-
-    /// Long-press then horizontal drag on the video frame to scrub the timeline in-place.
-    private var playbackFrameScrubGesture: some Gesture {
-        LongPressGesture(minimumDuration: FrameScrub.longPressDuration)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .onChanged { value in
-                guard isClipReady, deliveryPresentation == nil, assistOptionsTool == nil else {
-                    return
-                }
-                guard !zoom.isZoomed else { return }
-
-                switch value {
-                case .first(true):
-                    frameScrubPending = true
-                case .second(true, let drag?):
-                    if frameScrubPending {
-                        beginFrameScrub()
-                        frameScrubPending = false
-                    }
-                    guard isFrameScrubbing else { return }
-                    updateFrameScrub(horizontalDelta: drag.translation.width)
-                default:
-                    break
-                }
-            }
-            .onEnded { _ in
-                frameScrubPending = false
-                if isFrameScrubbing {
-                    endFrameScrub()
-                }
-            }
-    }
-
-    @ViewBuilder
-    private func playbackTransportFlashOverlay(in videoRect: CGRect) -> some View {
-        if playbackFlashSymbol != nil {
-            Image(systemName: playbackFlashSymbol ?? "play.fill")
-                .font(.system(size: 48, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-                .shadow(color: .black.opacity(0.5), radius: 10, y: 3)
-                .overlay {
-                    Image(systemName: playbackFlashSymbol ?? "play.fill")
-                        .font(.system(size: 48, weight: .semibold))
-                        .foregroundStyle(LiveDesign.accent.opacity(0.28))
-                        .blendMode(.overlay)
-                }
-                .opacity(playbackFlashVisible ? 1 : 0)
-                .scaleEffect(playbackFlashVisible ? 1 : 0.86)
-                .animation(.easeOut(duration: PlaybackFlash.fadeIn), value: playbackFlashVisible)
-                .position(x: videoRect.midX, y: videoRect.midY)
-                .allowsHitTesting(false)
-                .zIndex(2)
-        }
-    }
-
-    @ViewBuilder
-    private func playbackFrameScrubOverlay(in videoRect: CGRect) -> some View {
-        if isFrameScrubbing, duration > 0 {
-            let fraction = min(1, max(0, scrubTime / duration))
-            let barWidth = max(0, videoRect.width - 32)
-            VStack(spacing: 10) {
-                Text(timeLabel(scrubTime))
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text)
-                    .shadow(color: .black.opacity(0.55), radius: 6, y: 2)
-                Text("/ \(timeLabel(duration))")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(LiveDesign.muted)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .liquidGlass(in: Capsule(), interactive: false)
-            .position(x: videoRect.midX, y: videoRect.midY)
-            .allowsHitTesting(false)
-            .transition(.opacity.combined(with: .scale(scale: 0.94)))
-            .zIndex(2)
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(LiveDesign.hairline)
-                    .frame(width: barWidth, height: 3)
-                Capsule()
-                    .fill(LiveDesign.accent)
-                    .frame(width: max(3, barWidth * fraction), height: 3)
-            }
-            .position(x: videoRect.midX, y: videoRect.maxY - 18)
-            .allowsHitTesting(false)
-            .zIndex(2)
-        }
-    }
-
-    private var chromeSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 28)
-            .onEnded { value in
-                guard !isFrameScrubbing else { return }
-                let dy = value.translation.height
-                guard abs(dy) > abs(value.translation.width) + 8, abs(dy) > 44 else { return }
-                if dy < 0 {
-                    restoreChrome()
-                } else {
-                    // The gesture is for operators who already know it; no hint.
-                    withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
-                }
-            }
-    }
-
-    private var playbackMagnificationGesture: some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                if abs(value.magnification - 1) > 0.02 {
-                    suppressNextPlaybackTap = true
-                    frameScrubPending = false
-                }
-                zoom.pinchChanged(
-                    magnification: value.magnification, startAnchor: value.startAnchor,
-                    size: zoomContainerSize)
-            }
-            .onEnded { _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    zoom.endGesture(size: zoomContainerSize)
-                }
-            }
-    }
-
-    private var playbackPanGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                guard zoom.isZoomed else { return }
-                if hypot(value.translation.width, value.translation.height) > 8 {
-                    suppressNextPlaybackTap = true
-                    frameScrubPending = false
-                }
-                zoom.panChanged(translation: value.translation)
-            }
-            .onEnded { _ in
-                guard zoom.isZoomed else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    zoom.endGesture(size: zoomContainerSize)
-                }
-            }
-    }
-
-    @ViewBuilder
-    private func clipNavigationArrows(in videoRect: CGRect) -> some View {
-        if canGoToPreviousClip {
-            Button {
-                goToAdjacentClip(offset: -1)
-            } label: {
-                clipNavigationArrowButton(systemName: "chevron.left")
-            }
-            .buttonStyle(.zcTapTarget)
-            .position(x: videoRect.minX + 22, y: videoRect.midY)
-            .accessibilityLabel("Previous clip")
-        }
-
-        if canGoToNextClip {
-            Button {
-                goToAdjacentClip(offset: 1)
-            } label: {
-                clipNavigationArrowButton(systemName: "chevron.right")
-            }
-            .buttonStyle(.zcTapTarget)
-            .position(x: videoRect.maxX - 22, y: videoRect.midY)
-            .accessibilityLabel("Next clip")
-        }
-    }
-
-    private func clipNavigationArrowButton(systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(LiveDesign.accent)
-            .frame(width: 32, height: 32)
-            .liquidGlass(in: Circle(), interactive: true)
-    }
-
-    private func resetPlaybackZoom() {
-        zoom.reset()
-    }
-
-    private func goToAdjacentClip(offset: Int) {
-        guard let index = currentClipIndex else { return }
-        let targetIndex = index + offset
-        guard clips.indices.contains(targetIndex) else {
-            UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-            return
-        }
-        clipSlideEdge = offset > 0 ? .trailing : .leading
-        navigateToClip(clips[targetIndex])
-    }
-
-    private func navigateToClip(_ clip: MediaClip) {
-        guard clip.id != activeClip.id else { return }
-        streamPollTask?.cancel()
-        streamPollTask = nil
-        model.cancelClipStream()
-        teardownPlayer()
-        resetPlaybackZoom()
-
-        currentTime = 0
-        duration = 0
-        scrubTime = 0
-        isScrubbing = false
-        isFrameScrubbing = false
-        frameScrubPending = false
-        playbackFlashTask?.cancel()
-        playbackFlashTask = nil
-        playbackFlashSymbol = nil
-        playbackFlashVisible = false
-        isPlaying = true
-        reachedEnd = false
-        isClipReady = false
-
-        withAnimation(.easeInOut(duration: 0.28)) {
-            activeClip = clip
-        }
-        loadActiveClip()
-    }
-
-    private var clipLoadingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.72)
-            VStack(spacing: 12) {
-                ProgressView().tint(LiveDesign.accent)
-                Text(loadingMessage)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(LiveDesign.muted)
-            }
-            .padding(24)
-            .liquidGlass(
-                in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius), interactive: false)
-        }
-        .ignoresSafeArea()
-        .zIndex(2)
-    }
-
-    private var loadingMessage: String {
-        if model.mediaDownloadProgress[activeClip.id] != nil {
-            return "Buffering from camera…"
-        }
-        return "Preparing playback…"
-    }
-
-    // MARK: Top bar (close · name · favorite)
-
-    private var topBar: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                CircleIconButton(systemName: "chevron.left", size: 34)
-            }
-            .buttonStyle(.zcTapTarget)
-            Text(activeClip.filename)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-            Spacer()
-            Button {
-                model.toggleClipFavorite(activeClip)
-                isFavorite.toggle()
-            } label: {
-                Image(systemName: isFavorite ? "star.fill" : "star")
-                    .font(.system(size: 17))
-                    .foregroundStyle(isFavorite ? LiveDesign.accent : LiveDesign.text)
-                    .frame(width: 34, height: 34)
-                    .liquidGlass(in: Circle(), interactive: true)
-            }
-            .buttonStyle(.zcTapTarget)
-        }
-    }
-
-    // MARK: Bottom bar (playback transport or inline view-assist)
-
-    /// Compact playback chrome — primary controls use 44pt hit targets via `ZCTapTargetButtonStyle`.
-    ///
-    /// Sized so the full transport row fits the narrowest supported width. It grew to eight
-    /// controls when the conform preview landed and silently overflowed: an HStack of fixed-size
-    /// children does not compress, so the row widened the whole chrome stack and pushed the TOP
-    /// bar's back and favourite buttons off both screen edges. Visual size only — `.zcTapTarget`
-    /// keeps every hit target at 44pt regardless.
-    enum PlaybackChrome {
-        static let barPaddingH: CGFloat = 10
-        static let barPaddingV: CGFloat = 9
-        static let transportRowSpacing: CGFloat = 5
-        static let scrubberRowSpacing: CGFloat = 5
-        static let transportButtonSize = CGSize(width: 38, height: 36)
-        static let actionButtonSize = CGSize(width: 32, height: 36)
-        static let transportIconSize: CGFloat = 18
-        static let primaryTransportIconSize: CGFloat = 22
-        static let actionIconSize: CGFloat = 16
-
-        /// Narrowest screen the app ships on (iPhone SE class), in points. The row is checked
-        /// against this in `RunnerTests` so the next control added here fails a test rather than
-        /// silently shoving the top bar off the screen.
-        static let narrowestScreenWidth: CGFloat = 375
-        /// Horizontal padding the chrome stack applies outside the bar.
-        static let chromeHorizontalPadding: CGFloat = 16
-
-        /// Width the transport row needs: three transport buttons, five actions, the gaps between
-        /// them, the bar's own padding, and the minimum spacer.
-        static func transportRowWidth(
-            transportCount: Int = 3, actionCount: Int = 5, minimumSpacer: CGFloat = 6
-        ) -> CGFloat {
-            let buttons =
-                transportButtonSize.width * CGFloat(transportCount)
-                + actionButtonSize.width * CGFloat(actionCount)
-            let gaps = transportRowSpacing * CGFloat(transportCount + actionCount - 1)
-            return buttons + gaps + barPaddingH * 2 + minimumSpacer
-        }
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 8) {
-            if assistMode {
-                assistModeBar
-            } else {
-                playbackTransportBar
-            }
-        }
-        .padding(.horizontal, PlaybackChrome.barPaddingH)
-        .padding(.vertical, PlaybackChrome.barPaddingV)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous),
-            interactive: false
-        )
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { playbackBarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        playbackBarFrame = frame
-                    }
-            }
-        }
-        .animation(.spring(duration: 0.32), value: assistMode)
-    }
-
-    private var playbackTransportBar: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: PlaybackChrome.scrubberRowSpacing) {
-                Text(conformedLabel(isScrubbing ? scrubTime : currentTime))
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(LiveDesign.muted)
-                    .frame(width: 40, alignment: .leading)
-                PlaybackScrubber(
-                    progress: isScrubbing ? scrubTime : currentTime,
-                    duration: duration,
-                    bufferedFraction: model.clipBufferedFraction(activeClip),
-                    onScrubbingChanged: { scrubbing in
-                        if scrubbing {
-                            if !isScrubbing {
-                                wasPlayingBeforeScrub = isPlaying
-                                scrubTime = currentTime
-                                player.pause()
-                            }
-                            isScrubbing = true
-                        } else {
-                            isScrubbing = false
-                        }
-                    },
-                    onProgressChange: { time in
-                        scrubTime = time
-                        clearEndStateIfSeeking(to: time)
-                        let now = CFAbsoluteTimeGetCurrent()
-                        if now - lastScrubSeekTime >= scrubSeekThrottle {
-                            lastScrubSeekTime = now
-                            player.seek(
-                                to: CMTime(seconds: time, preferredTimescale: 600),
-                                toleranceBefore: scrubSeekTolerance,
-                                toleranceAfter: scrubSeekTolerance)
-                        }
-                    },
-                    onSeek: { time in
-                        player.seek(
-                            to: CMTime(seconds: time, preferredTimescale: 600),
-                            toleranceBefore: .zero, toleranceAfter: .zero)
-                        currentTime = time
-                        scrubTime = time
-                        isScrubbing = false
-                        clearEndStateIfSeeking(to: time)
-                        if wasPlayingBeforeScrub {
-                            startPlayback()
-                            isPlaying = true
-                        }
-                    }
-                )
-                Text(conformedLabel(duration))
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(LiveDesign.muted)
-                    .frame(width: 40, alignment: .trailing)
-            }
-
-            HStack(spacing: PlaybackChrome.transportRowSpacing) {
-                transportButton("gobackward.15") { seek(by: -15) }
-                if reachedEnd {
-                    transportButton(
-                        "arrow.counterclockwise", size: PlaybackChrome.primaryTransportIconSize
-                    ) {
-                        restartPlayback()
-                    }
-                } else {
-                    transportButton(
-                        isPlaying ? "pause.fill" : "play.fill",
-                        size: PlaybackChrome.primaryTransportIconSize
-                    ) {
-                        togglePlay()
-                    }
-                }
-                transportButton("goforward.15") { seek(by: 15) }
-
-                Spacer(minLength: 6)
-
-                actionToggle("speaker.slash.fill", "speaker.wave.2.fill", on: isMuted) {
-                    toggleMute()
-                }
-                conformButton
-                cleanViewButton
-                viewAssistButton
-                shareButton
-            }
-        }
-    }
-
-    private var assistModeBar: some View {
-        HStack(spacing: 6) {
-            playbackAssistToolbar
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(0)
-            viewAssistButton
-                .layoutPriority(1)
-        }
-    }
-
-    /// Playback drops the live-only tools. The horizon needs a camera to read, and magnification is
-    /// driven by an on-feed key playback does not mount — offering it here would be a switch with
-    /// nothing behind it.
-    private var visiblePlaybackToolbarTools: [MonitorAssistTool] {
-        model.preferences.assistToolbarOrder.filter {
-            $0 != .level && $0 != .magnification
-                && model.preferences.isAssistToolbarButtonVisible($0)
-        }
-    }
-
-    /// Same assist toolbar row as the live monitor: tap toggles, long-press opens options.
-    private var playbackAssistToolbar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(
-                    Array(visiblePlaybackToolbarTools.enumerated()),
-                    id: \.element.id
-                ) { index, tool in
-                    if index > 0 && index.isMultiple(of: 3) {
-                        Rectangle()
-                            .fill(LiveDesign.hairlineStrong)
-                            .frame(width: 1, height: 22)
-                            .padding(.horizontal, 3)
-                    }
-                    AssistToolButtonRow(tool: tool, context: .playback) { tool in
-                        presentPlaybackAssistOptions(tool)
-                    }
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { playbackAssistToolbarFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        playbackAssistToolbarFrame = frame
-                    }
-            }
-        }
-    }
-
-    /// Conform preview: play a high-frame-rate clip at the rate the edit will conform it to.
-    ///
-    /// Real time is the default and always the first item — this is a preview transform, and the
-    /// menu should never leave an operator unsure whether they are looking at the clip or at an
-    /// interpretation of it. When the clip cannot be conformed the control states WHY rather than
-    /// vanishing, because a missing control reads as a missing feature.
-    private var conformButton: some View {
-        let availability = ConformPreview.availability(for: conformSource)
-        let rate = conformSource.captureRate ?? 0
-        return Menu {
-            // A Picker, not hand-rolled rows. The previous version passed an EMPTY SF Symbol name
-            // for unselected items, which is the ragged gap down the left of the menu; a Picker
-            // gets the platform's own selection treatment for free and stays legible.
-            Picker(ConformPreview.menuHeader(captureRate: rate), selection: $conformTarget) {
-                Text("Real time").tag(Double?.none)
-                ForEach(availability.targets, id: \.self) { target in
-                    // Target and speed only — the source rate is in the section header rather than
-                    // repeated on every row, which is what wrapped each row onto two lines.
-                    Text(ConformPreview.targetLabel(captureRate: rate, targetRate: target))
-                        .tag(Double?.some(target))
-                }
-            }
-            .pickerStyle(.inline)
-            if let reason = availability.unavailableReason {
-                Section { Text(reason) }
-            } else if conformTarget != nil {
-                Section { Text(ConformPreview.audioLabel) }
-            }
-        } label: {
-            Image(systemName: "timelapse")
-                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
-                .foregroundStyle(
-                    conformTarget != nil
-                        ? LiveDesign.accent
-                        : (availability.isAvailable ? LiveDesign.text : LiveDesign.faint)
-                )
-                .frame(
-                    width: PlaybackChrome.actionButtonSize.width,
-                    height: PlaybackChrome.actionButtonSize.height
-                )
-                .background(
-                    conformTarget != nil ? LiveDesign.accentDim : Color.clear,
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-                    interactive: true)
-        }
-        .disabled(!availability.isAvailable)
-        .accessibilityLabel("Conform preview")
-        .onChange(of: conformTarget) { _, _ in
-            applyMute()
-            if isPlaying { startPlayback() }
-        }
-    }
-
-    /// Star rating, pulled down from the top edge and left there until pushed back up.
-    ///
-    /// It used to sit above the transport, where it cost a permanent band of picture for a control
-    /// that is only wanted while actually rating. Up here it is out of the frame's way, and closed
-    /// it costs a handle.
-    ///
-    /// The handle is not decoration. A pull-down nobody knows about is the same mistake the
-    /// clean-view button exists to correct, so the shade always shows where to grab it — and the
-    /// handle is a tap target too, since a tap is easier than a drag on a moving picture.
-    /// The star row itself, revealed by dragging the handle down.
-    @ViewBuilder
-    private var ratingStarRow: some View {
-        // Written to the card — the camera stays source of truth (the model confirms by readback).
-        // A refusal surfaces the body's response code rather than rolling back silently.
-        StarRatingRow(stars: playerRatingStars ?? 0) { target in
-            let previous = playerRatingStars
-            playerRatingStars = target
-            let clip = activeClip
-            Task {
-                switch await model.setMediaStarRating(target, for: clip) {
-                case .confirmed(let confirmed):
-                    playerRatingStars = confirmed
-                case .refused(_, let message):
-                    playerRatingStars = previous
-                    showToast(message)
-                case .offline:
-                    playerRatingStars = previous
-                    showToast("Connect the camera to rate this clip")
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .liquidGlass(in: Capsule(), interactive: false)
-        .padding(.top, 4)
-        .transition(.move(edge: .top).combined(with: .opacity))
-    }
-
-    /// Nothing at all without a camera-read rating: nil means the clip has no handle or there is no
-    /// session, so the rating could not be written either and the handle would advertise a control
-    /// that cannot work.
-    private var ratingShadeMounts: Bool {
-        playerRatingStars != nil || DemoHarness.ratingShade != nil
-    }
-
-    /// Tap toggles it. A bare chevron says "something is under here" without saying what; the
-    /// star makes it self-describing.
-    ///
-    /// The drag it used to want is gone: pulling a shade down over a moving picture is fussy on a
-    /// handheld rig, and the one gesture that has to stay reliable here is the scrub.
-    private var ratingShadeHandle: some View {
-        Button {
-            withAnimation(.spring(duration: 0.28)) { ratingShadeOpen.toggle() }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "star.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                Image(systemName: ratingShadeOpen ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(LiveDesign.muted)
-            .frame(width: 52, height: 20)
-            .liquidGlass(in: Capsule(), interactive: true)
-            .opacity(0.9)
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel(ratingShadeOpen ? "Hide star rating" : "Show star rating")
-    }
-
-    /// The only control clean view keeps: it brings everything else back.
-    ///
-    /// Deliberately dimmed and small — it has to be findable without competing with the picture,
-    /// which is the whole reason the operator hid the rest.
-    private var restoreChromeButton: some View {
-        Button {
-            restoreChrome()
-        } label: {
-            Image(systemName: "arrow.down.right.and.arrow.up.left")
-                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
-                .foregroundStyle(LiveDesign.text.opacity(0.75))
-                .frame(
-                    width: PlaybackChrome.actionButtonSize.width,
-                    height: PlaybackChrome.actionButtonSize.height
-                )
-                .liquidGlass(in: Circle(), interactive: true)
-                .opacity(0.85)
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Show playback controls")
-    }
-
-    /// Hides every non-critical control, leaving the frame alone.
-    ///
-    /// The swipe-down gesture has always done this, but an undisclosed gesture is indistinguishable
-    /// from a missing feature — so the capability gets a control you can see. The gesture stays for
-    /// operators who already know it.
-    private var cleanViewButton: some View {
-        Button {
-            enterCleanView()
-        } label: {
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
-                .foregroundStyle(LiveDesign.text)
-                .frame(
-                    width: PlaybackChrome.actionButtonSize.width,
-                    height: PlaybackChrome.actionButtonSize.height
-                )
-                .contentShape(
-                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-                    interactive: true)
-        }
-        .buttonStyle(.zcTapTarget)
-        .accessibilityLabel("Hide playback controls")
-        .accessibilityHint("A restore control stays in the corner")
-    }
-
-    private var viewAssistButton: some View {
-        let anyAssistOn = !model.preferences.playbackVisibleAssistTools.isEmpty
-        let highlighted = assistMode || anyAssistOn
-        return Button {
-            withAnimation(.spring(duration: 0.32)) {
-                assistMode.toggle()
-            }
-        } label: {
-            Image(systemName: "camera.viewfinder")
-                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
-                .foregroundStyle(highlighted ? LiveDesign.accent : LiveDesign.text)
-                .frame(
-                    width: PlaybackChrome.actionButtonSize.width,
-                    height: PlaybackChrome.actionButtonSize.height
-                )
-                .background(
-                    assistMode ? LiveDesign.accentDim : Color.clear,
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .contentShape(
-                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-                    interactive: true)
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    private var shareButton: some View {
-        Button {
-            wasPlayingBeforeDelivery = isPlaying
-            if isPlaying {
-                player.pause()
-                isPlaying = false
-            }
-            deliveryPresentation = MediaDeliveryPresentation(clip: activeClip)
-        } label: {
-            Image(
-                systemName: exportState == .exported
-                    ? "square.and.arrow.up.fill" : "square.and.arrow.up"
-            )
-            .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
-            .foregroundStyle(
-                canShareActiveClip ? LiveDesign.text : LiveDesign.faint
-            )
-            .frame(
-                width: PlaybackChrome.actionButtonSize.width,
-                height: PlaybackChrome.actionButtonSize.height
-            )
-            .contentShape(
-                RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-            )
-            .liquidGlass(
-                in: RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-                interactive: true)
-        }
-        .buttonStyle(.zcTapTarget)
-        .disabled(!canShareActiveClip)
-        .accessibilityLabel("Share")
-        .background {
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { shareButtonFrame = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        shareButtonFrame = frame
-                    }
-            }
-        }
-    }
-
-    /// Cached clips are ready now; on-camera clips are ready once the camera can cache them.
-    private var canShareActiveClip: Bool {
-        MediaDeliveryEligibility.canDeliver(
-            clipIsLocal: model.isClipDownloaded(activeClip),
-            cameraConnected: model.isConnected)
-    }
-
-    private func transportButton(
-        _ systemName: String,
-        size: CGFloat = PlaybackChrome.transportIconSize,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: size, weight: .medium))
-                .foregroundStyle(LiveDesign.text)
-                .frame(
-                    width: PlaybackChrome.transportButtonSize.width,
-                    height: PlaybackChrome.transportButtonSize.height
-                )
-                .contentShape(
-                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-                    interactive: true)
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    private func actionButton(_ systemName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
-                .foregroundStyle(LiveDesign.text)
-                .frame(
-                    width: PlaybackChrome.actionButtonSize.width,
-                    height: PlaybackChrome.actionButtonSize.height
-                )
-                .contentShape(
-                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-                    interactive: true)
-        }
-        .buttonStyle(.zcTapTarget)
-    }
-
-    private func actionToggle(
-        _ onName: String, _ offName: String, on: Bool, enabled: Bool = true,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: on ? onName : offName)
-                .font(.system(size: PlaybackChrome.actionIconSize, weight: .medium))
-                .foregroundStyle(
-                    enabled ? (on ? LiveDesign.accent : LiveDesign.text) : LiveDesign.faint
-                )
-                .frame(
-                    width: PlaybackChrome.actionButtonSize.width,
-                    height: PlaybackChrome.actionButtonSize.height
-                )
-                .contentShape(
-                    RoundedRectangle(cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .background(
-                    on ? LiveDesign.accentDim : Color.clear,
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous)
-                )
-                .liquidGlass(
-                    in: RoundedRectangle(
-                        cornerRadius: DesignTokens.cornerRadius, style: .continuous),
-                    interactive: true)
-        }
-        .buttonStyle(.zcTapTarget)
-        .disabled(!enabled)
-    }
-
-    private func toastView(_ message: String) -> some View {
-        Text(message)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(LiveDesign.text)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .liquidGlass(in: Capsule(), interactive: true)
-            .padding(.bottom, 8)
-            .transition(.opacity)
-    }
-
-    // MARK: Actions
-
-    private func appear() {
-        // Stop the shutter before playback changes the process-wide AVAudioSession category.
-        model.setMediaPlaybackOwnsAudioSession(true)
-        MediaPlaybackAudioSession.activateForPlayback()
-        loadActiveClip()
-    }
-
-    private func loadActiveClip() {
-        isFavorite = activeClip.isFavorite
-        exportState = activeClip.exportStatus
-        isClipReady = model.isClipDownloaded(activeClip)
-
-        if isClipReady {
-            loadPlayerItem()
-        } else {
-            model.startClipStream(activeClip)
-            streamPollTask?.cancel()
-            streamPollTask = Task { @MainActor in
-                await pollUntilPlayable()
-            }
-        }
-    }
-
-    private func disappear() {
-        streamPollTask?.cancel()
-        streamPollTask = nil
-        playbackFlashTask?.cancel()
-        playbackFlashTask = nil
-        model.cancelClipStream()
-        teardownPlayer()
-        MediaPlaybackAudioSession.deactivateAfterPlayback()
-        model.setMediaPlaybackOwnsAudioSession(false)
-    }
-
-    /// Polls the growing local cache until AVFoundation can open the clip, or the download completes.
-    @MainActor
-    private func pollUntilPlayable() async {
-        let clipID = activeClip.id
-        guard let url = model.clipLocalURL(activeClip) else { return }
-        let assetOptions = [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        var probeAsset: AVURLAsset?
-        defer { probeAsset?.cancelLoading() }
-        while !Task.isCancelled, !isClipReady {
-            guard activeClip.id == clipID else { return }
-            if model.isClipDownloaded(activeClip) {
-                isClipReady = true
-                loadPlayerItem()
-                return
-            }
-            if FileManager.default.fileExists(atPath: url.path) {
-                if probeAsset == nil {
-                    probeAsset = AVURLAsset(url: url, options: assetOptions)
-                }
-                if let probeAsset, await isAssetPlayable(probeAsset) {
-                    isClipReady = true
-                    loadPlayerItem()
-                    return
-                }
-                // A growing partial file can make the first probe on a reused asset look
-                // permanently unplayable; discard and recreate on the next pass.
-                probeAsset?.cancelLoading()
-                probeAsset = nil
-            }
-            try? await Task.sleep(for: .milliseconds(400))
-        }
-    }
-
-    private func isAssetPlayable(_ asset: AVURLAsset) async -> Bool {
-        // Partial cache may not expose final duration yet; isPlayable is enough to start.
-        (try? await asset.load(.isPlayable)) == true
-    }
-
-    private func loadPlayerItem() {
-        teardownPlayer()
-        playerLoadGeneration += 1
-        let generation = playerLoadGeneration
-        reachedEnd = false
-        guard let url = model.clipLocalURL(activeClip) else { return }
-        let asset = AVURLAsset(
-            url: url,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
-        )
-        let item = AVPlayerItem(asset: asset)
-        player.replaceCurrentItem(with: item)
-        observePlaybackEnd(for: item)
-        player.automaticallyWaitsToMinimizeStalling = false
-        player.isMuted = isMuted || conformTarget != nil
-        playbackScopeController.stop()
-        syncPlaybackScopeSampling()
-        Task {
-            if let size = await loadVideoDisplaySize(from: asset) {
-                guard generation == playerLoadGeneration else { return }
-                videoDisplaySize = size
-            }
-        }
-        conformTarget = nil
-        conformSource = ConformPreview.Source()
-        Task {
-            let probed = await loadConformSource(from: asset)
-            guard generation == playerLoadGeneration else { return }
-            conformSource = probed
-        }
-        let interval = CMTime(seconds: isScrubbing ? 0.05 : 0.2, preferredTimescale: 600)
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            Task { @MainActor in
-                guard !isScrubbing else { return }
-                currentTime = time.seconds
-                if let dur = player.currentItem?.duration.seconds, dur.isFinite { duration = dur }
-            }
-        }
-        if DemoHarness.mediaLUT {
-            model.setAssist(.lut, visible: true)
-        }
-        attachPlaybackVideoComposition(to: item)
-        // Tap installs per item regardless of the tool toggle (uniform lifecycle, passthrough
-        // audio, negligible cost); polling below follows the toggle.
-        audioMeterController.attach(to: item)
-        syncPlaybackAudioMetering()
-        startPlayback()
-        isPlaying = true
-    }
-
-    /// What the asset can tell us about how it was shot.
-    ///
-    /// The container's nominal rate is all a proxy MP4 carries, so that is the capture rate here —
-    /// with one guard. If the track's own minimum frame duration disagrees with that nominal rate,
-    /// the file is not constant-rate and no single conform factor is correct, so it is marked
-    /// variable and the feature refuses rather than showing a plausible wrong speed.
-    ///
-    /// `isAlreadyConformed` stays false: a file the camera already conformed reports its PLAYBACK
-    /// rate here with nothing generic to distinguish it, so detecting it needs vendor metadata off
-    /// a real high-frame-rate recording. Until that is confirmed on hardware the honest position is
-    /// that we cannot tell, which means an in-camera slow-motion clip would be offered a conform it
-    /// should not be. [verify-on-HW]
-    private func loadConformSource(from asset: AVURLAsset) async -> ConformPreview.Source {
-        guard let track = try? await asset.loadTracks(withMediaType: .video).first else {
-            return ConformPreview.Source()
-        }
-        guard let nominal = try? await track.load(.nominalFrameRate), nominal.isFinite, nominal > 0
-        else { return ConformPreview.Source() }
-        let rate = Double(nominal)
-        guard let minimum = try? await track.load(.minFrameDuration), minimum.isValid,
-            minimum.seconds > 0
-        else {
-            // No per-frame timing to cross-check against; take the nominal rate at face value.
-            return ConformPreview.Source(captureRate: rate)
-        }
-        // A constant-rate track's shortest frame is 1/rate. Anything materially shorter means the
-        // clip runs faster somewhere than its nominal rate claims.
-        let impliedPeak = 1 / minimum.seconds
-        let varies = impliedPeak > rate * 1.05
-        return ConformPreview.Source(captureRate: rate, isVariableFrameRate: varies)
-    }
-
-    private func teardownPlayer() {
-        playbackScopeController.stop()
-        playbackEffectsBox.invalidateScopeComposition()
-        syncPlaybackScopeSampling(active: false)
-        // Drop the audio mix before the item goes away — releasing an item with a live tap crashes.
-        audioMeterController.stopPolling()
-        audioMeterController.detach(from: player.currentItem)
-        playbackAudioLevels = .silent
-        removeEndObserver()
-        if let observer = timeObserver {
-            player.removeTimeObserver(observer)
-            timeObserver = nil
-        }
-        player.pause()
-        if let item = player.currentItem {
-            item.videoComposition = nil
-            (item.asset as? AVURLAsset)?.cancelLoading()
-        }
-        player.replaceCurrentItem(with: nil)
-        playbackScopeAssist = .empty
-    }
-
-    private func observePlaybackEnd(for item: AVPlayerItem) {
-        removeEndObserver()
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { _ in
-            Task { @MainActor in
-                reachedEnd = true
-                isPlaying = false
-                if let dur = player.currentItem?.duration.seconds, dur.isFinite {
-                    currentTime = dur
-                }
-            }
-        }
-    }
-
-    private func removeEndObserver() {
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-            self.endObserver = nil
-        }
-    }
-
-    /// Clears end-of-clip state when the user seeks away from the tail.
-    private func clearEndStateIfSeeking(to time: Double) {
-        guard duration > 0 else { return }
-        if time < duration - 0.25 {
-            reachedEnd = false
-        }
-    }
-
-    private func syncPlaybackScopeSampling(active: Bool? = nil) {
-        playbackScopePollingGeneration &+= 1
-        let pollingGeneration = playbackScopePollingGeneration
-        let scopesOn = active ?? playbackScopesActive
-        playbackEffectsBox.setScopesActive(scopesOn)
-        playbackScopeController.stop()
-        guard scopesOn else {
-            playbackScopeAssist = .empty
-            return
-        }
-        playbackScopeController.startPolling(
-            effectsBox: playbackEffectsBox,
-            isActive: { [model] in
-                let visible = model.preferences.playbackVisibleAssistTools
-                return visible.contains(.waveform) || visible.contains(.parade)
-                    || visible.contains(.histogram) || visible.contains(.trafficLights)
-                    || visible.contains(.vectorscope)
-            },
-            onSamples: { samples in
-                let configuration = playbackScopeDerivationConfiguration
-                let clipID = activeClip.id
-                let loadGeneration = playerLoadGeneration
-                let previous = playbackScopeAssist
-                let bundle = await Task.detached(priority: .utility) {
-                    configuration.bundle(samples: samples, previous: previous)
-                }.value
-                guard !Task.isCancelled,
-                    pollingGeneration == playbackScopePollingGeneration,
-                    loadGeneration == playerLoadGeneration,
-                    clipID == activeClip.id,
-                    player.currentItem != nil,
-                    configuration == playbackScopeDerivationConfiguration
+    private func sharedPlayer(_ context: NikonOperatorPlaybackContext) -> some View {
+        @Bindable var model = model
+        let menus = NikonAssistMenuAdapter(model: model, compact: false, context: .playback)
+        return MonitorOperatorPlaybackScreen(
+            model: context.media, initial: context.initial,
+            assist: model.assist, stores: model.scopePanels.playbackStores, looks: .signal,
+            palette: LiveDesign.self,
+            haptics: .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }
+            ),
+            usage: $model.assistToolUsage, cacheOriginal: false, deliveryPresented: covered,
+            operations: operations, source: sourceValues,
+            nativeAssists: { owner in context.media.playback === owner ? context.assists : nil },
+            readScopes: { context.assists?.scopeBundle ?? .empty },
+            close: { closeAfterEnteredCleanup(context) },
+            share: { record in
+                guard let owner = context.media.playback, context.media.isCurrent(owner.token),
+                    access(record).share == true
                 else { return }
-                playbackScopeAssist = bundle
-            }
-        )
+                guard
+                    let capture = NikonMediaDeliveryCapture(model: model, clips: [record.payload]),
+                    context.media.isCurrent(owner.token), capture.isCurrent
+                else { return }
+                deliveryPresentation = .init(clip: record.payload, capture: capture)
+            }, onShareButtonFrame: { shareButtonFrame = $0 },
+            initialRatingShadeOpen: DemoHarness.ratingShade == "open",
+            signalOptions: .init(
+                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                reference: menus.falseColorReference),
+            availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
+            initialChromeVisible: !DemoHarness.playbackCleanView, loopAvailable: false,
+            paradeIntensityScale: 1,
+            picture: { owner, _ in
+                if let native = context.native, context.media.playback === owner {
+                    PlayerLayerView(
+                        player: native.player,
+                        qualificationItemToken: { [weak owner] in
+                            guard let owner, owner.isActive, owner.ready else { return nil }
+                            return owner.token
+                        }
+                    )
+                    .aspectRatio(nativePictureAspect(owner), contentMode: .fill)
+                    .scaleEffect(desqueezeScale(model.playbackDesqueeze))
+                } else {
+                    Color.black
+                }
+            }, preview: { _ in EmptyView() }, lookMenu: { LUTPickerContent().environment(model) })
     }
 
-    private func restartPlaybackScopeSampling() {
-        syncPlaybackScopeSampling()
-    }
-
-    /// Starts/stops the audio-meter polling loop to match the tool toggle (the tap itself stays
-    /// installed for the item's lifetime — it is passthrough and effectively free when unpolled).
-    private func syncPlaybackAudioMetering() {
-        guard playbackAudioMetersActive else {
-            audioMeterController.stopPolling()
-            playbackAudioLevels = .silent
-            return
-        }
-        audioMeterController.startPolling { levels in
-            playbackAudioLevels = levels
-        }
-    }
-
-    private func togglePlay() {
-        isPlaying.toggle()
-        isPlaying ? startPlayback() : player.pause()
-    }
-
-    /// Real seconds shown on the conformed timeline: a 6 s clip at 40% reads 15 s.
-    private func conformedLabel(_ seconds: Double) -> String {
-        timeLabel(ConformPreview.conformedDuration(sourceSeconds: seconds, speed: conformSpeed))
-    }
-
-    /// Playback rate for the active conform, or 1 in real time.
-    private var conformSpeed: Double {
-        guard let target = conformTarget, let rate = conformSource.captureRate else { return 1 }
-        return ConformPreview.speed(captureRate: rate, targetRate: target)
-    }
-
-    /// Starts playback at the conform rate. Setting a non-zero `rate` IS play, so this replaces
-    /// `player.play()` everywhere — calling `play()` would snap back to 1x and silently drop the
-    /// conform the operator selected.
-    private func startPlayback() {
-        player.rate = Float(conformSpeed)
-    }
-
-    /// Tap on the video frame toggles transport; at end-of-clip restarts from the beginning.
-    private func handlePlaybackFrameTap() {
-        // Decision in `PlaybackFrameTap` so it can be tested; the view only performs it.
-        guard isClipReady else { return }
-        guard deliveryPresentation == nil, assistOptionsTool == nil else { return }
-        guard !isFrameScrubbing else { return }
-        if suppressNextPlaybackTap {
-            suppressNextPlaybackTap = false
-            return
-        }
-        switch PlaybackFrameTap.action(chromeVisible: chromeVisible, reachedEnd: reachedEnd) {
-        case .restartPlayback:
-            restartPlayback()
-            showPlaybackFlash(symbol: "play.fill")
-        case .toggleTransport:
-            let willPlay = !isPlaying
-            togglePlay()
-            showPlaybackFlash(symbol: willPlay ? "play.fill" : "pause.fill")
-        }
-    }
-
-    private func showPlaybackFlash(symbol: String) {
-        playbackFlashTask?.cancel()
-        playbackFlashSymbol = symbol
-        withAnimation(.easeOut(duration: PlaybackFlash.fadeIn)) {
-            playbackFlashVisible = true
-        }
-        playbackFlashTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(PlaybackFlash.hold))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: PlaybackFlash.fadeOut)) {
-                playbackFlashVisible = false
-            }
-            try? await Task.sleep(for: .seconds(PlaybackFlash.fadeOut))
-            guard !Task.isCancelled else { return }
-            playbackFlashSymbol = nil
-        }
-    }
-
-    private func beginFrameScrub() {
-        wasPlayingBeforeScrub = isPlaying
-        frameScrubOriginTime = currentTime
-        scrubTime = currentTime
-        isScrubbing = true
-        isFrameScrubbing = true
-        player.pause()
-        isPlaying = false
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-    }
-
-    private func updateFrameScrub(horizontalDelta: CGFloat) {
-        guard duration > 0, frameScrubVideoWidth > 0 else { return }
-        let deltaTime = Double(horizontalDelta / frameScrubVideoWidth) * duration
-        let time = max(0, min(duration, frameScrubOriginTime + deltaTime))
-        scrubTime = time
-        clearEndStateIfSeeking(to: time)
-        let now = CFAbsoluteTimeGetCurrent()
-        if now - lastScrubSeekTime >= scrubSeekThrottle {
-            lastScrubSeekTime = now
-            player.seek(
-                to: CMTime(seconds: time, preferredTimescale: 600),
-                toleranceBefore: scrubSeekTolerance,
-                toleranceAfter: scrubSeekTolerance)
-        }
-    }
-
-    private func endFrameScrub() {
-        guard isFrameScrubbing else { return }
-        player.seek(
-            to: CMTime(seconds: scrubTime, preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero)
-        currentTime = scrubTime
-        isScrubbing = false
-        isFrameScrubbing = false
-        clearEndStateIfSeeking(to: scrubTime)
-        if wasPlayingBeforeScrub {
-            startPlayback()
-            isPlaying = true
-        }
-        suppressNextPlaybackTap = true
-    }
-
-    private func restartPlayback() {
-        reachedEnd = false
-        currentTime = 0
-        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-        startPlayback()
-        isPlaying = true
-    }
-
-    private func seek(by seconds: Double) {
-        let target = max(0, min(duration, currentTime + seconds))
-        clearEndStateIfSeeking(to: target)
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
-    }
-
-    private func toggleMute() {
-        isMuted.toggle()
-        applyMute()
-    }
-
-    /// A conform preview forces silence regardless of the mute toggle, so unmuting during one
-    /// cannot produce audio at the wrong speed.
-    private func applyMute() {
-        player.isMuted = isMuted || conformTarget != nil
-    }
-
-    /// Installs one `AVVideoComposition` per clip; assist toggles only mutate `playbackEffectsBox`.
-    private func attachPlaybackVideoComposition(to item: AVPlayerItem) {
-        updatePlaybackEffects()
-        item.videoComposition = playbackEffectsBox.makeVideoComposition(for: item.asset)
-    }
-
-    /// Pushes current view-assist effects into the live composition box. While playing the next
-    /// decoded frame picks them up; while paused a fresh composition instance is required to force
-    /// a re-render (a zero-tolerance same-time seek is optimized away and cannot serve as a nudge).
-    private func updatePlaybackEffects() {
-        let changed = playbackEffectsBox.set(effects: model.resolvedPlaybackEffects())
-        guard changed, player.rate == 0, let item = player.currentItem,
-            item.videoComposition != nil
+    private func closeAfterEnteredCleanup(_ captured: NikonOperatorPlaybackContext) {
+        guard context === captured,
+            let finish = captured.captureCloseCleanup(run: deliveryCoordinator.capturedRun)
         else { return }
-        item.videoComposition = playbackEffectsBox.makeVideoComposition(for: item.asset)
-    }
-
-    /// Hides the chrome and says how to get it back. The hint is shown every time the BUTTON is
-    /// used rather than once ever: it costs nothing to re-read, it is self-limiting (only the
-    /// button raises it, and only the operator who wanted clean view presses that), and a
-    /// once-ever tutorial is forgotten long before the one time it is needed.
-    private func enterCleanView() {
-        withAnimation(.spring(duration: 0.32)) { chromeVisible = false }
-    }
-
-    private func restoreChrome() {
-        withAnimation(.spring(duration: 0.32)) { chromeVisible = true }
-    }
-
-    private func showToast(_ message: String) {
-        withAnimation { toastMessage = message }
-        Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            withAnimation { toastMessage = nil }
+        Task { @MainActor in
+            let completed = await finish()
+            guard completed, context === captured else { return }
+            dismiss()
         }
     }
 
-    private func timeLabel(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "00:00" }
-        let total = Int(seconds.rounded())
-        return String(format: "%02d:%02d", total / 60, total % 60)
+    private func nativePictureAspect(_ owner: MonitorMediaPlaybackModel<MediaClip, String>)
+        -> CGFloat
+    {
+        let width = owner.metadata.width ?? 16
+        let height = owner.metadata.height ?? 9
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return 16 / 9 }
+        return CGFloat(width / height)
+    }
+
+    private func access(_ record: MonitorMediaRecord<MediaClip>) -> MonitorMediaGalleryAccess {
+        .init(
+            download: model.isConnected && record.payload.handle != nil
+                && !model.isClipDownloaded(record.payload),
+            share: MediaDeliveryEligibility.canDeliver(
+                clipIsLocal: model.isClipDownloaded(record.payload),
+                cameraConnected: model.isConnected))
+    }
+    private var operations: MonitorOperatorPlaybackOperations<MediaClip, String> {
+        .init(
+            favorite: { record in model.toggleClipFavorite(record.payload) }, access: access,
+            rating: .init(
+                levels: [1, 2, 3, 4, 5], noticeDuration: .seconds(4),
+                unavailableMessage: "Connect the camera to rate this clip",
+                read: { [weak model] request in
+                    guard request.isCurrent, let model else { return nil }
+                    return await model.mediaStarRating(for: request.record.payload)
+                },
+                commit: { [weak model] target, request in
+                    guard request.isCurrent, let model else { return .unavailable }
+                    switch await model.setMediaStarRating(target, for: request.record.payload) {
+                    case .confirmed(let value): return .confirmed(value)
+                    case .refused(_, let message): return .refused(message)
+                    case .offline: return .unavailable
+                    }
+                }))
+    }
+    private func sourceValues(_ record: MonitorMediaRecord<MediaClip>)
+        -> MonitorPlaybackSourceValues
+    {
+        let clip = record.payload
+        let mapping = model.playbackExposureSignalMapping
+        var rows: [MonitorPlaybackMetadataValue] = []
+        if let master = clip.linkedR3DFilename { rows.append(.init("Master", master)) }
+        if let storage = clip.storageID { rows.append(.init("Storage", String(storage))) }
+        return .init(
+            availability: model.isClipDownloaded(clip) ? .original : .camera,
+            progress: model.mediaDownloadProgress[clip.id],
+            buffered: model.clipBufferedFraction(clip),
+            colorLabel: mapping.curve.rawValue,
+            transfer: NikonPlaybackScopeConfiguration(
+                trafficLightsCrushClip: model.assist.crushClipCompensation, mapping: mapping,
+                vectorscopeCube: nil
+            ).transfer, clipByte: Int(mapping.clipNative.rounded()),
+            metadata: rows, clockStyle: .roundedMinutesSeconds)
+    }
+    private func synchronizeNativeFacts() {
+        guard let context, let player = context.media.playback,
+            context.media.isCurrent(player.token)
+        else { return }
+        let token = player.token
+        context.assists?.synchronize(
+            item: token, effects: model.assist.playbackEffects,
+            audioVisible: model.assist.isPlaybackVisible(.audioMeters),
+            outputMuted: player.muted || player.conformTarget != nil,
+            ifCurrent: { context.media.isCurrent(token) })
+    }
+
+    @ViewBuilder private var deliveryOverlays: some View {
+        if let toast = deliveryCoordinator.completionToast, deliveryCoordinator.showsLocalOverlay {
+            VStack {
+                Spacer()
+                Text(toast).font(MonitorTheme.font(13, weight: .medium))
+                    .foregroundStyle(MonitorTheme.text).multilineTextAlignment(.center)
+                    .padding(.horizontal, 16).padding(.vertical, 10).liquidGlass(
+                        in: Capsule(), interactive: false
+                    )
+                    .padding(.bottom, 96)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity).transition(.opacity).zIndex(5)
+        }
+        if deliveryCoordinator.showsLocalOverlay, let state = deliveryCoordinator.overlayState {
+            MediaDeliveryTopAnchor(horizontalPadding: 24) {
+                MediaDeliveryOverlay(state: state) { deliveryCoordinator.cancel() }
+            }.transition(.move(edge: .top).combined(with: .opacity)).zIndex(50)
+        }
+        if let request = deliveryPresentation {
+            MediaDeliveryPopupOverlay(
+                clips: [request.clip], anchorFrame: shareButtonFrame,
+                placement: .aboveAnchor, preferredDestination: request.preferredDestination,
+                capture: request.capture,
+                onBeginDelivery: { value in
+                    guard let capture = value.capture, capture.isCurrent,
+                        request.capture == nil || capture === request.capture
+                    else { return }
+                    if deliveryPresentation?.id == request.id { deliveryPresentation = nil }
+                    deliveryCoordinator.beginCaptured(value, model: model)
+                },
+                onDismiss: {
+                    if deliveryPresentation?.id == request.id { deliveryPresentation = nil }
+                }
+            )
+            .environment(model).zIndex(3)
+        }
     }
 }
 
 // MARK: - Supporting views
 
-/// Draggable playback timeline — drag to scrub in real time, release for a precise seek.
-private struct PlaybackScrubber: View {
-    let progress: Double
-    let duration: Double
-    /// Cached byte fraction (0…1) mapped along clip duration; `nil` hides the buffer layer.
-    let bufferedFraction: Double?
-    let onScrubbingChanged: (Bool) -> Void
-    let onProgressChange: (Double) -> Void
-    let onSeek: (Double) -> Void
-
-    @State private var isDragging = false
-
-    private var fraction: Double {
-        guard duration > 0 else { return 0 }
-        return min(1, max(0, progress / duration))
-    }
-
-    private var bufferFraction: Double {
-        guard let bufferedFraction else { return 0 }
-        return min(1, max(0, bufferedFraction))
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            let trackHeight: CGFloat = 3
-            let thumbSize: CGFloat = 12
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(LiveDesign.hairline)
-                    .frame(height: trackHeight)
-                if bufferFraction > 0 {
-                    Capsule()
-                        .fill(LiveDesign.accent.opacity(0.32))
-                        .frame(
-                            width: max(trackHeight, geo.size.width * bufferFraction),
-                            height: trackHeight)
-                }
-                Capsule()
-                    .fill(LiveDesign.accent)
-                    .frame(width: max(trackHeight, geo.size.width * fraction), height: trackHeight)
-                Circle()
-                    .fill(LiveDesign.accent)
-                    .frame(width: thumbSize, height: thumbSize)
-                    .offset(x: max(0, geo.size.width * fraction - thumbSize / 2))
-            }
-            .frame(maxHeight: .infinity, alignment: .center)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            onScrubbingChanged(true)
-                        }
-                        let f = fraction(at: value.location.x, width: geo.size.width)
-                        onProgressChange(f * duration)
-                    }
-                    .onEnded { value in
-                        let f = fraction(at: value.location.x, width: geo.size.width)
-                        onSeek(f * duration)
-                        isDragging = false
-                        onScrubbingChanged(false)
-                    }
-            )
-        }
-        .frame(height: 22)
-    }
-
-    private func fraction(at x: CGFloat, width: CGFloat) -> Double {
-        guard width > 0 else { return 0 }
-        return Double(min(1, max(0, x / width)))
-    }
-}
-
 /// Hosts an `AVPlayerLayer` with no native transport chrome, so the LiveDesign controls are the UI.
 private struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
+    var qualificationItemToken: (@MainActor () -> MonitorPlaybackItemToken?)? = nil
 
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
         view.isUserInteractionEnabled = false
         view.playerLayer.player = player
         view.playerLayer.videoGravity = .resizeAspect
+        view.accessibilityIdentifier = "monitor.native.picture"
+        let qualificationItemToken = qualificationItemToken
+        view.qualificationProbe = MonitorNativeQualificationProbe.install(in: view) {
+            [weak view, weak player] in
+            guard let view, let player else { return nil }
+            return .playback(
+                player: player, layer: view.playerLayer,
+                itemToken: qualificationItemToken?())
+        }
         return view
     }
 
     func updateUIView(_ uiView: PlayerHostView, context: Context) {
         uiView.isUserInteractionEnabled = false
         uiView.playerLayer.player = player
+        let qualificationItemToken = qualificationItemToken
+        uiView.qualificationProbe?.snapshot = { [weak uiView, weak player] in
+            guard let uiView, let player else { return nil }
+            return .playback(
+                player: player, layer: uiView.playerLayer,
+                itemToken: qualificationItemToken?())
+        }
     }
 
     static func dismantleUIView(_ uiView: PlayerHostView, coordinator: ()) {
@@ -4666,30 +1289,6 @@ private struct PlayerLayerView: UIViewRepresentable {
         override class var layerClass: AnyClass { AVPlayerLayer.self }
         // SAFETY: layerClass is AVPlayerLayer, so this cast always succeeds.
         var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    }
-}
-
-// MARK: - Supporting views
-
-/// What a tap on the playback frame means.
-///
-/// Lifted out of the view so the rule below is covered by a test. It cannot be checked by driving
-/// the simulator — synthetic input does not reach this app — so the alternative to a test is
-/// reading the gesture code and hoping.
-enum PlaybackFrameTap: Equatable {
-    case restartPlayback
-    case toggleTransport
-
-    /// The tap means the same thing whether the chrome is up or hidden — play, pause, or restart
-    /// at the end of a clip. Hiding the controls must not take transport away from the picture.
-    ///
-    /// Two earlier attempts got this wrong. The first spent the tap on restoring the chrome, to
-    /// guarantee the clean-view button could not strand anyone — built on a false premise, since
-    /// swipe-up already restored it. The second kept the tap but flashed a hint teaching the
-    /// gesture, which is still a transient answer to a question the operator may ask at any time.
-    /// A small restore control that stays on screen answers it permanently and costs one glyph, so
-    /// the tap is free to mean what it always meant.
-    static func action(chromeVisible: Bool, reachedEnd: Bool) -> PlaybackFrameTap {
-        reachedEnd ? .restartPlayback : .toggleTransport
+        var qualificationProbe: MonitorNativeQualificationProbe?
     }
 }

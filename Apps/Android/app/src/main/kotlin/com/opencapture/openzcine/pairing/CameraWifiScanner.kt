@@ -21,6 +21,7 @@ import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,6 +72,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -89,6 +91,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import com.opencapture.opencine.nikon.NikonNative
 
 /** JNI payload separator shared with `AndroidCameraWiFiScreenParserWire` in Swift. */
 internal const val CAMERA_WIFI_CREDENTIAL_WIRE_SEPARATOR: Char = '\u001F'
@@ -102,7 +105,7 @@ internal fun interface CameraWifiTranscriptParser {
 /** Production [CameraWifiTranscriptParser] — no camera credential policy exists in Kotlin. */
 internal object SwiftCameraWifiTranscriptParser : CameraWifiTranscriptParser {
     override fun parse(transcript: String): String? =
-        if (SwiftCore.isAvailable) SwiftCore.parseCameraWifiScreen(transcript) else null
+        if (SwiftCore.isAvailable) NikonNative.parseCameraWifiScreen(transcript) else null
 }
 
 /** The manual-entry twin of [CameraWifiTranscriptParser], same shared-core authority. */
@@ -114,7 +117,7 @@ internal fun interface CameraWifiManualParser {
 /** Production [CameraWifiManualParser] — validation stays in Swift, as it does on iOS. */
 internal object SwiftCameraWifiManualParser : CameraWifiManualParser {
     override fun parse(ssid: String, key: String): String? =
-        if (SwiftCore.isAvailable) SwiftCore.manualCameraWifiCredentials(ssid, key) else null
+        if (SwiftCore.isAvailable) NikonNative.manualCameraWifiCredentials(ssid, key) else null
 }
 
 /** Validates typed Connection-wizard details into a candidate, or null when incomplete. */
@@ -791,7 +794,7 @@ internal fun cameraWifiScannerFailure(fault: CameraWifiRecognizerFault): CameraW
  *
  * The category and the exception's own stack are exactly what a beta tester can
  * pull with `adb logcat -s OpenZCineWifiScan`; the closed breadcrumb the caller
- * raises is what reaches an anonymous report.
+ * raises is what reaches a diagnostics or problem report.
  */
 internal fun logCameraWifiRecognizerFault(stage: String, cause: Throwable) {
     // A diagnostic must never be able to take the scanner down with it (and
@@ -1080,3 +1083,43 @@ private tailrec fun Context.findActivity(): Activity? =
         is ContextWrapper -> baseContext.findActivity()
         else -> null
     }
+
+/** The scanner card's light palette (the iOS scanner card's colors). */
+internal object PopupColors {
+    val card = Color.White
+    val title = Color(0xFF111111)
+    val detail = Color(0xFF7A7A80)
+    val field = Color(0xFFF2F2F7)
+    val actionBlue = Color(0xFF0A7AFF)
+    val cancelFill = Color(0xFFEDEDF0)
+    val failure = Color(0xFFFF3B30)
+    val scrim = Color.Black.copy(alpha = 0.45f)
+}
+
+@Composable
+internal fun PopupFilledButton(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth()
+            .height(50.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PopupColors.actionBlue)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+internal fun PopupCancelButton(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth()
+            .height(50.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PopupColors.cancelFill)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = PopupColors.actionBlue, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    }
+}

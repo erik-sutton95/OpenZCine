@@ -35,6 +35,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Shared monitor UI resources (OpenCine)
+
+- **Used for:** the shared monitor UI the apps take from OpenCine (MonitorUI on iOS, monitor-ui on
+  Android), today the multicam stage and the brand theme
+- **Sora** typeface: SIL Open Font License 1.1, Copyright 2019 The Sora Project Authors
+- **Lucide** HUD icons: ISC, Copyright 2026 Lucide Icons and Contributors; Feather-derived glyphs
+  also MIT, Copyright 2013-present Cole Bemis
+- **View Assist glyphs:** Tabler-derived paths, MIT, Copyright (c) 2020-2026 Paweł Kuna
+- **License texts:** shipped inside the shared UI bundles (`OFL-Sora.txt`, the Lucide
+  `LICENSE.txt`, `LICENSE-Tabler.txt`) and reproduced in OpenCine's `THIRD-PARTY-NOTICES.md`
+
 ## "R3D NE Monitor" built-in look — contributed by Wang Yuehua
 
 - **Contributor:** Wang Yuehua, credited in the app's LUT picker beside the look itself

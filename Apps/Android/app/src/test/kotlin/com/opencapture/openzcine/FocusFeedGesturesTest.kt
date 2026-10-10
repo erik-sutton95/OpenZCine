@@ -1,15 +1,20 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.LiveFocusBox
-import com.opencapture.openzcine.core.LiveFocusInfo
-import com.opencapture.openzcine.core.LiveFocusResult
+import com.opencapture.monitorui.MonitorFocusGestureState as FocusFeedGestureState
+import com.opencapture.monitorui.MonitorFocusGestureEvent as FocusFeedGestureEvent
+
+import com.opencapture.monitorui.MonitorRect
+import com.opencapture.opencine.nikon.LiveFocusBox
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.runtime.NativeFeedContentRect
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class FocusFeedGesturesTest {
     @Test
@@ -41,7 +46,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `landscape fit maps exact inclusive edges and rejects letterbox input`() {
-        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        val content = nativeFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
         requireNotNull(content)
         val geometry =
             focusFeedGeometry(
@@ -72,7 +77,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `mirrored feed folds the tap back into the camera's unflipped space`() {
-        val content = liveFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
+        val content = nativeFeedContentRect(1_000f, 1_000f, 1_920, 1_080)
         requireNotNull(content)
         fun geometry(mirrored: Boolean) =
             requireNotNull(
@@ -108,18 +113,13 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `photo full-height frame maps corner and band-edge taps in range`() {
-        // The photography feed container IS the letterboxed 3:2 image
-        // (photographyFeedFrame): container aspect == source aspect, so the
-        // content rect fills the box exactly and every corner maps inclusive.
-        val container = photographyFeedFrame(
-            cinemaFeed = ZoneFrame(59f, 0f, 683f, 384f),
-            viewport = ZoneFrame(0f, 0f, 914f, 384f),
-            imageArea = "FX",
-            leadingLaneTrailing = 136f,
-            trailingLaneLeading = 844f,
-        )
+        // The photography feed container IS the letterboxed 3:2 image: FX at the full 384
+        // viewport height, centred between the side lanes at 136 and 844. Container
+        // aspect == source aspect, so the content rect fills the box exactly and every
+        // corner maps inclusive.
+        val container = MonitorRect(202f, 0f, 576f, 384f)
         val content =
-            liveFeedContentRect(container.width, container.height, 5_760, 3_840)
+            nativeFeedContentRect(container.width, container.height, 5_760, 3_840)
         requireNotNull(content)
         val geometry =
             focusFeedGeometry(
@@ -164,9 +164,9 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `portrait fill maps the visible crop against the full offscreen feed`() {
-        val content = liveFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true)
+        val content = nativeFeedContentRect(400f, 600f, 1_920, 1_080, aspectFill = true)
         requireNotNull(content)
-        assertEquals(LiveFeedContentRect(left = -333, top = 0, width = 1_067, height = 600), content)
+        assertEquals(NativeFeedContentRect(left = -333, top = 0, width = 1_067, height = 600), content)
         val geometry =
             focusFeedGeometry(
                 content = content,
@@ -193,7 +193,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `horizontal and vertical desqueeze use the full presented rectangle`() {
-        val content = LiveFeedContentRect(left = 0, top = 0, width = 800, height = 800)
+        val content = NativeFeedContentRect(left = 0, top = 0, width = 800, height = 800)
         val geometry =
             focusFeedGeometry(
                 content = content,
@@ -223,7 +223,7 @@ class FocusFeedGesturesTest {
     fun `clipped viewport only limits hit testing and never renormalizes the visible slice`() {
         val geometry =
             focusFeedGeometry(
-                content = LiveFeedContentRect(left = -200, top = -100, width = 1_200, height = 800),
+                content = NativeFeedContentRect(left = -200, top = -100, width = 1_200, height = 800),
                 horizontalPresentationScale = 1f,
                 viewport = LiveOverlayRect(0f, 0f, 600f, 400f),
                 coordinateWidth = 1_200,
@@ -248,7 +248,7 @@ class FocusFeedGesturesTest {
     fun `coordinate mapping rounds half up and clamps both endpoints`() {
         val geometry =
             focusFeedGeometry(
-                content = LiveFeedContentRect(0, 0, 100, 100),
+                content = NativeFeedContentRect(0, 0, 100, 100),
                 horizontalPresentationScale = 1f,
                 viewport = LiveOverlayRect(0f, 0f, 100f, 100f),
                 coordinateWidth = 3,
@@ -265,7 +265,7 @@ class FocusFeedGesturesTest {
 
     @Test
     fun `missing AF dimensions preserve display geometry but never invent focus coordinates`() {
-        val content = LiveFeedContentRect(0, 0, 100, 100)
+        val content = NativeFeedContentRect(0, 0, 100, 100)
         val viewport = LiveOverlayRect(0f, 0f, 100f, 100f)
 
         val noWidth =
@@ -730,7 +730,7 @@ class FocusFeedGesturesTest {
     ): FocusFeedGestureContext {
         val geometry =
             focusFeedGeometry(
-                content = LiveFeedContentRect(0, 0, 100, 100),
+                content = NativeFeedContentRect(0, 0, 100, 100),
                 horizontalPresentationScale = 1f,
                 viewport = LiveOverlayRect(0f, 0f, 100f, 100f),
                 coordinateWidth = coordinateWidth,
@@ -765,4 +765,27 @@ class FocusFeedGesturesTest {
     }
 
     private fun point(x: Float, y: Float): FocusFeedPixelPoint = FocusFeedPixelPoint(x, y)
+
+    @Test
+    fun `both mirror axes align camera boxes and inverse AF taps through desqueeze`() {
+        val focus = LiveFocusInfo(coordinateWidth = 1_000, coordinateHeight = 1_000,
+            result = LiveFocusResult.FOCUSED, subjectDetectionActive = false, trackingAFActive = false,
+            selectedBoxIndex = 0, boxes = listOf(LiveFocusBox(750, 250, 100, 200)))
+        val geometry = requireNotNull(focusFeedGeometry(
+            content = NativeFeedContentRect(0, 0, 800, 400),
+            horizontalPresentationScale = 0.5f, verticalPresentationScale = 1f,
+            viewport = LiveOverlayRect(0f, 0f, 800f, 400f),
+            coordinateWidth = 1_000, coordinateHeight = 1_000, generation = 5,
+            mirrored = true, mirroredVertical = true))
+        assertEquals(LiveOverlayRect(200f, 0f, 400f, 400f), geometry.presentedFeed)
+        val drawn = requireNotNull(liveFocusBoxRect(focus, focus.boxes.first(),
+            geometry.presentedFeed, mirrored = true, mirroredVertical = true))
+        assertEquals(LiveOverlayRect(280f, 260f, 40f, 80f), drawn)
+        assertEquals(FocusFeedCoordinate(749, 250),
+            geometry.cameraCoordinateAt(FocusFeedPixelPoint(drawn.centerX, drawn.centerY)))
+        assertEquals(FocusFeedCoordinate(999, 999),
+            geometry.cameraCoordinateAt(FocusFeedPixelPoint(200f, 0f)))
+        assertNull(geometry.cameraCoordinateAt(FocusFeedPixelPoint(199f, 300f)))
+    }
+
 }

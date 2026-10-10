@@ -19,6 +19,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.LiveAudioMeterLevels
 
 class PlaybackAudioMeterCoordinatorTest {
     @Test
@@ -107,6 +108,9 @@ class PlaybackAudioMeterCoordinatorTest {
             )
         val job = launch { coordinator.poll() }
         runCurrent()
+        // A malformed native-result fixture starts from actual measured PCM silence.
+        processor.queueInput(pcm16(0, 0))
+        processor.output
 
         nowNanos = 1_000_000L
         advanceTimeBy(1L)
@@ -118,6 +122,107 @@ class PlaybackAudioMeterCoordinatorTest {
         runCurrent()
         assertEquals(listOf(0, 0), priorSizes)
         assertNotNull(coordinator.levels.value)
+        job.cancelAndJoin()
+    }
+
+    @Test
+    fun `unmeasured PCM is absent and never invokes native ballistics`() = runTest {
+        var calls = 0
+        val coordinator = PlaybackAudioMeterCoordinator(
+            audioProcessor = configuredProcessor(),
+            stepper = PlaybackAudioMeterStepper { _, _, _, _ ->
+                calls += 1
+                floatArrayOf(-60f, -60f, 0f, -60f, -60f, 0f)
+            },
+            monotonicNanos = { 0L },
+            pollIntervalMillis = 1L,
+        )
+        val job = launch { coordinator.poll() }
+        runCurrent()
+        advanceTimeBy(2L)
+        runCurrent()
+        assertEquals(0, calls)
+        assertNull(coordinator.levels.value)
+        job.cancelAndJoin()
+    }
+
+    @Test
+    fun `source replacement resets JNI peak hold while actual silence stays known`() = runTest {
+        val processor = configuredProcessor()
+        val priorSizes = mutableListOf<Int>()
+        val coordinator = PlaybackAudioMeterCoordinator(
+            audioProcessor = processor,
+            stepper = PlaybackAudioMeterStepper { previous, _, _, _ ->
+                priorSizes += previous.size
+                floatArrayOf(-60f, -60f, 0f, -60f, -60f, 0f)
+            },
+            monotonicNanos = { 0L },
+            pollIntervalMillis = 1L,
+        )
+        val job = launch { coordinator.poll() }
+        runCurrent()
+        processor.queueInput(pcm16(0, 0))
+        processor.output
+        advanceTimeBy(1L)
+        runCurrent()
+        assertNotNull(coordinator.levels.value)
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        advanceTimeBy(1L)
+        runCurrent()
+        assertNull(coordinator.levels.value)
+        processor.queueInput(pcm16(0, 0))
+        processor.output
+        advanceTimeBy(1L)
+        runCurrent()
+        assertNotNull(coordinator.levels.value)
+        assertEquals(listOf(0, 0), priorSizes)
+        coordinator.close()
+        advanceTimeBy(1L)
+        runCurrent()
+        assertNull(coordinator.levels.value)
+        job.cancelAndJoin()
+    }
+
+    @Test
+    fun `flush during native step refuses retired result and preserves successor audio`() = runTest {
+        val processor = configuredProcessor()
+        val calls = mutableListOf<StepCall>()
+        val coordinator = PlaybackAudioMeterCoordinator(
+            audioProcessor = processor,
+            stepper = PlaybackAudioMeterStepper { previous, left, right, dt ->
+                calls += StepCall(previous.copyOf(), left, right, dt)
+                if (calls.size == 1) {
+                    // Deterministic replacement exactly between drain and native-result publication.
+                    processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+                    processor.queueInput(pcm16(4_096, 8_192))
+                    processor.output
+                    floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f)
+                } else {
+                    floatArrayOf(-18f, -18f, 0f, -12f, -12f, 0f)
+                }
+            },
+            monotonicNanos = { 0L },
+            pollIntervalMillis = 1L,
+        )
+        val job = launch { coordinator.poll() }
+        runCurrent()
+        processor.queueInput(pcm16(-32_768, -32_768))
+        processor.output
+        advanceTimeBy(1L)
+        runCurrent()
+        assertEquals(1, calls.size)
+        assertEquals(1f, calls[0].left)
+        assertNull(coordinator.levels.value)
+
+        advanceTimeBy(1L)
+        runCurrent()
+        assertEquals(2, calls.size)
+        assertEquals(0, calls[1].previous.size)
+        assertEquals(0.125f, calls[1].left)
+        assertEquals(0.25f, calls[1].right)
+        val successor = assertNotNull(coordinator.levels.value)
+        assertEquals(-18.0, successor.left.levelDb)
+        assertEquals(-12.0, successor.right.levelDb)
         job.cancelAndJoin()
     }
 

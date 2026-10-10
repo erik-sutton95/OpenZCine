@@ -1,6 +1,6 @@
-// Pure-JVM camera-core seam. No Android dependencies allowed in this module:
-// it is the boundary where either the Swift core (via JNI) or a Kotlin port
-// of OpenZCineCore plugs in later.
+// Pure-JVM monitor and relay types (monitor data availability, relay control lease, relay
+// encoder profile). No Android dependencies allowed in this module. The camera session contract
+// that used to live here moved to OpenCine's `com.opencapture.opencine:nikon` (SHELL-04).
 plugins {
     alias(libs.plugins.kotlin.jvm)
 }
@@ -19,6 +19,7 @@ kotlin {
 }
 
 dependencies {
+    api("com.opencapture.opencine:relay:0.1.0-SNAPSHOT")
     api(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.kotlin.test)

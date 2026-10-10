@@ -1,3 +1,4 @@
+import OpenZCineCore
 import Testing
 
 @testable import Runner
@@ -33,6 +34,26 @@ struct RelayRecordControlTests {
 
         model.confirmRecordToggle()
         #expect(model.pendingRecordConfirmation == nil, "the answer is consumed, not left pending")
+    }
+
+    /// The answer runs the target the prompt asked about. It used to recompute `!isRecording` on
+    /// confirm, so a take the camera started while "Start recording?" was up was stopped by the
+    /// operator's "Start" (and the reverse for "Stop").
+    @MainActor
+    @Test("Confirming runs the asked target even when the camera changed state meanwhile")
+    func confirmedTargetIsHonored() {
+        let model = NativeAppModel()
+        model.preferences = OperatorPreferences.defaults
+        model.isDemoSession = true
+
+        model.toggleRecording()
+        #expect(model.pendingRecordConfirmation == true)
+        // The take starts on the body while the prompt is still up.
+        model.isRecording = true
+        model.confirmRecordToggle()
+
+        #expect(model.isRecording, "the confirmed start must not become a stop")
+        #expect(model.pendingRecordConfirmation == nil)
     }
 
     /// The other half of the same rule, from the local side: a press on a device that would have to

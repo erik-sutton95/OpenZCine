@@ -1,56 +1,6 @@
 package com.opencapture.openzcine.transport
 
-/**
- * What a single dial at one host actually did.
- *
- * Twin of the shared core's `HostProbeVerdict`. On iOS this was a `String` passed between the
- * transport, two sweeps and the tally, and it drifted — a verdict nobody emitted was counted as
- * occupancy while running out of file descriptors counted as evidence the network was fine. A
- * miscounted verdict is not cosmetic: it is what the operator is told to go and do next.
- */
-public enum class HostProbeVerdict {
-    /** TCP accepted. Something is serving this port. */
-    OPEN,
-
-    /** RST. A host is there and is not serving this port — a router, a laptop, a TV. */
-    REFUSED,
-
-    /** No answer inside the budget. Nobody holds the address, or nothing can reach it. */
-    TIMEOUT,
-
-    /** No route to the host — on-link and unanswered at the link layer. */
-    NO_ROUTE,
-
-    /** No route to that network at all. */
-    NO_NETWORK,
-
-    /** The OS refused us the dial; says nothing about the host. */
-    DENIED,
-
-    /** Anything else, including running out of descriptors. Never evidence about the host. */
-    UNREACHABLE_OTHER,
-    ;
-
-    /**
-     * Whether SOMETHING holds this address.
-     *
-     * Only an answer proves occupancy. A refusal is an answer; silence and a denied dial are not.
-     */
-    public val isOccupied: Boolean
-        get() =
-            when (this) {
-                OPEN, REFUSED -> true
-                TIMEOUT, NO_ROUTE, NO_NETWORK, DENIED, UNREACHABLE_OTHER -> false
-            }
-
-    /** Whether this verdict is the network declining to carry us, rather than a quiet host. */
-    public val isSilence: Boolean
-        get() =
-            when (this) {
-                TIMEOUT, NO_ROUTE, NO_NETWORK -> true
-                OPEN, REFUSED, DENIED, UNREACHABLE_OTHER -> false
-            }
-}
+import com.opencapture.opencine.nikon.HostProbeVerdict
 
 /** Whether an infrastructure (same-LAN Wi‑Fi) search is allowed to run sockets. */
 public sealed interface InfrastructurePreflight {
@@ -177,9 +127,6 @@ public data class InfrastructureSearchReport(
     val cameras: List<DiscoveredCamera> = emptyList(),
     val miss: InfrastructureMissReason? = null,
     val occupiedHosts: List<String> = emptyList(),
-    val openPtpHosts: List<String> = emptyList(),
-    val localSubnets: List<String> = emptyList(),
-    val directedHosts: List<String> = emptyList(),
 ) {
     public val foundCamera: Boolean
         get() = cameras.isNotEmpty()
@@ -191,55 +138,9 @@ public data class InfrastructureSearchReport(
  * No sockets. The platform finder executes probes; this decides what the outcomes mean and how
  * patient a directed dial should be. Twin of the shared core's `InfrastructureDiscovery`; both are
  * tested against the same table, so a network can never mean one diagnosis on iPhone and another
- * on Android. Change one, change both.
- *
- * The budgets are not guesses. An idle ZR on Wi‑Fi answers a dial in ~1.0–1.2 s, measured on
- * hardware 2026-08-04, because its radio is in power-save and listens only on its beacon cadence.
- * Anything shorter measures the app's patience rather than the camera's presence.
+ * on Android. Change one, change both. The dial budgets are `NikonDiscovery`'s.
  */
 public object InfrastructureDiscovery {
-    /** How many times a directed (known) host is dialled before giving up that address. */
-    public const val DIRECTED_ATTEMPT_COUNT: Int = 3
-
-    /** Per-attempt connect budget for a directed host (ms). */
-    public const val DIRECTED_TIMEOUT_MILLIS: Int = 2_000
-
-    /** Blind mute-scan budget per host (ms) — measured power-save answer time plus margin. */
-    public const val BLIND_SWEEP_TIMEOUT_MILLIS: Int = 1_500
-
-    /** Concurrent mute dials in the occupancy sweep. */
-    public const val SWEEP_CONCURRENCY: Int = 48
-
-    /** How many full local-/24 occupancy passes before declaring a miss. */
-    public const val LOCAL_SWEEP_PASSES: Int = 2
-
-    /**
-     * Hosts worth a patient directed probe: candidates filtered to the current local subnets.
-     *
-     * A sibling setup on another network — a portable travel router left in the saved list — must
-     * not be dialled while adding a new Wi‑Fi setup. Dialling it is not a shortcut to the new
-     * setup, it is a connect to somewhere else that fails and reads as the new setup failing.
-     */
-    public fun directedHosts(
-        candidates: List<String>,
-        localSubnets: List<String>,
-        excluded: Set<String> = emptySet(),
-    ): List<String> {
-        val subnets = localSubnets.toSet()
-        val seen = mutableSetOf<String>()
-        val output = mutableListOf<String>()
-        for (raw in candidates) {
-            val host = raw.trim()
-            if (!CameraDiscovery.isDialableHost(host)) continue
-            if (host in excluded || host in seen) continue
-            val base = CameraDiscovery.subnetBase(host) ?: continue
-            if (base !in subnets) continue
-            seen.add(host)
-            output.add(host)
-        }
-        return output
-    }
-
     /** Classify an empty (or preflight-failed) infrastructure search. */
     public fun classifyMiss(
         preflight: InfrastructurePreflight,

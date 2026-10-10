@@ -101,7 +101,7 @@ class DiagnosticEventStoreTest {
     }
 
     @Test
-    fun `anonymous activity log retains only closed event names without timestamps or device text`() {
+    fun `activity log retains only closed event names without timestamps or device text`() {
         val file = temporaryEventFile()
         file.parentFile?.mkdirs()
         file.writeText(
@@ -117,14 +117,15 @@ class DiagnosticEventStoreTest {
         assertEquals(listOf("app.launched", "live-view.started"), activityLog)
         assertFalse(activityLog.joinToString().contains("Bob's iPhone"))
         assertFalse(activityLog.any { it.contains('|') || it.any(Char::isDigit) })
-        assertTrue(isPrivacyFilteredActivityLog(activityLog))
+        assertTrue(activityLog.size <= DiagnosticEventStore.ACTIVITY_LOG_MAXIMUM_EVENTS)
+        assertTrue(activityLog.all { AndroidDiagnosticEvent.fromWireValue(it) != null })
     }
 
     @Test
     fun `closed failure phases become privacy-safe incident codes`() {
         assertEquals(
             AndroidDiagnosticEvent.CONNECTION_FAILED,
-            AndroidDiagnosticEvent.fromFailurePhase("failed"),
+            AndroidDiagnosticEvent.fromPhase("failed"),
         )
         assertEquals(
             AndroidDiagnosticEvent.CONNECTION_USB_FAILED,
@@ -148,13 +149,13 @@ class DiagnosticEventStoreTest {
         )
         assertEquals(
             AndroidDiagnosticEvent.CONNECTION_EVENT_CHANNEL_ENDED,
-            AndroidDiagnosticEvent.fromFailurePhase("eventChannelEnded"),
+            AndroidDiagnosticEvent.fromPhase("eventChannelEnded"),
         )
         assertEquals(
             AndroidDiagnosticEvent.LIVE_VIEW_STALLED,
-            AndroidDiagnosticEvent.fromFailurePhase("liveViewStalled"),
+            AndroidDiagnosticEvent.fromPhase("liveViewStalled"),
         )
-        assertEquals(null, AndroidDiagnosticEvent.fromFailurePhase("Bob's iPhone"))
+        assertEquals(null, AndroidDiagnosticEvent.fromPhase("Bob's iPhone"))
         assertEquals(null, AndroidDiagnosticEvent.fromPhase("ssid=SECRET"))
     }
 
@@ -193,7 +194,7 @@ class DiagnosticEventStoreTest {
     }
 
     @Test
-    fun `connect trace stays out of the anonymous activity log`() {
+    fun `connect trace stays out of the activity log`() {
         val file = temporaryEventFile()
         val store = DiagnosticEventStore(file, nowMillis = { 1_000 })
         store.record(AndroidDiagnosticEvent.CONNECTION_CONNECTED)

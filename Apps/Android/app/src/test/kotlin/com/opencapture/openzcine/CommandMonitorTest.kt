@@ -1,16 +1,16 @@
 package com.opencapture.openzcine
 
 import androidx.compose.ui.geometry.Offset
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraControlCapabilities
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
-import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraShutterMode
-import com.opencapture.openzcine.core.CameraStorageStatus
-import com.opencapture.openzcine.core.CameraTemperatureStatus
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.CameraControlCapabilities
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraShutterMode
+import com.opencapture.opencine.nikon.CameraStorageStatus
+import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -821,5 +821,35 @@ class CommandMonitorTest {
 
         store.save(moved)
         assertEquals(moved, CommandTileOrderStore(preferences).load())
+    }
+
+    @Test
+    fun `a command tile is one ladder tab and tint uses the shared pad`() {
+        val iso = commandLadderPresentation(
+            CommandControlRequest(
+                title = "ISO",
+                control = CameraControl.ISO,
+                currentValue = "800",
+                options = listOf("400", "800"),
+            ),
+            subtitle = "Current: 800",
+        )
+        assertEquals("ISO", iso.title)
+        assertEquals("Current: 800", iso.subtitle)
+        val tab = iso.tabs.single()
+        assertEquals(CameraControl.ISO, tab.key)
+        assertEquals(listOf("400", "800"), tab.ladder.values)
+        assertFalse(tab.applyOnActivate)
+        assertNull(tab.tint)
+
+        val tint = commandLadderPresentation(
+            CommandControlRequest(
+                title = "TINT",
+                control = CameraControl.WHITE_BALANCE_TINT,
+                currentValue = "Neutral",
+                options = listOf("Neutral"),
+            ),
+        )
+        assertEquals(WhiteBalanceTintGrid.cellRange, tint.tabs.single().tint?.range)
     }
 }

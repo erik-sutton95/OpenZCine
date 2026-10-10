@@ -40,8 +40,8 @@ internal fun selectedPlaybackVideoColorMode(tracks: Tracks): PlaybackVideoColorM
 /**
  * The selected video track's frame rate, or null when the demuxer never established one.
  *
- * Feeds the conform preview's capture rate. Null is meaningful: `ConformPreview` refuses rather
- * than conforming against a guess, because a preview at the wrong speed is worse than none.
+ * Feeds the conform preview's capture rate. Null is meaningful: `MonitorConformPreview` refuses
+ * rather than conforming against a guess, because a preview at the wrong speed is worse than none.
  */
 internal fun selectedPlaybackVideoFrameRate(tracks: Tracks): Float? {
     for (group in tracks.groups) {

@@ -1,38 +1,16 @@
 import Foundation
 
-/// A `.cube` LUT stored in the app's library — an imported file (or, later, a downloaded one).
-public struct StoredLUT: Equatable, Sendable, Identifiable {
-    /// On-disk file name, e.g. `MyLook.cube`.
-    public let fileName: String
+// The shared stored-LUT value and folder index, re-exported so the Runner and tests keep importing
+// OpenZCineCore only. The RED default pick and preset naming below stay Nikon's.
+@_exported import enum OpenCineMedia.CustomLUTIndex
+@_exported import struct OpenCineMedia.StoredCustomLUT
 
-    public init(fileName: String) {
-        self.fileName = fileName
-    }
-
-    /// Human-readable label — the file name without its `.cube` extension.
-    public var displayName: String {
-        fileName.lowercased().hasSuffix(".cube") ? String(fileName.dropLast(5)) : fileName
-    }
-
-    public var id: String { fileName }
-}
-
-/// Pure indexing for a LUT library directory. The file I/O itself is the shell's job (storage is
-/// platform-owned); turning a directory's file names into a sorted, filtered `StoredLUT` list is
-/// portable and testable here.
+/// RED download policy for the LUT library: the default IPP2 preset of a freshly imported set.
 public enum LUTLibraryIndex {
-    /// Keeps only `.cube` entries and sorts them case-insensitively by file name.
-    public static func stored(fromFileNames names: [String]) -> [StoredLUT] {
-        names
-            .filter { $0.lowercased().hasSuffix(".cube") }
-            .sorted { $0.lowercased() < $1.lowercased() }
-            .map { StoredLUT(fileName: $0) }
-    }
-
     /// A sensible default from a freshly-imported RED set: REC.709, medium contrast, soft highlight
     /// rolloff — the canonical monitor look — then progressively looser fallbacks.
-    public static func defaultRedLUT(from luts: [StoredLUT]) -> StoredLUT? {
-        func has(_ lut: StoredLUT, _ needle: String) -> Bool {
+    public static func defaultRedLUT(from luts: [StoredCustomLUT]) -> StoredCustomLUT? {
+        func has(_ lut: StoredCustomLUT, _ needle: String) -> Bool {
             lut.fileName.uppercased().contains(needle)
         }
         let rec709 = luts.filter { has($0, "REC709") || has($0, "REC.709") }

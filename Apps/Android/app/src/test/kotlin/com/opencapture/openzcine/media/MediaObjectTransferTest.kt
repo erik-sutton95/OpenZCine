@@ -1,5 +1,9 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.bridge.SwiftCore
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
@@ -7,9 +11,41 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.NikonNative
 
 /** Regression coverage for the one generic cache listener used by clips and stills. */
 class MediaObjectTransferTest {
+    @Test
+    fun `production media bridges without a connection owner never reach any camera`() {
+        // No owner means no camera session: nothing may fall through to another body's card.
+        val bridge = SwiftCoreMediaObjectTransferBridge(connectionOwner = null)
+        var failure: String? = null
+        bridge.startMediaTransfer(
+            handle = 1,
+            reportedSize = 4,
+            resumeOffset = 0,
+            listener =
+                object : NikonNative.MediaTransferListener {
+                    override fun onStarted(totalBytes: Long) = error("unowned transfer started")
+
+                    override fun onChunk(offset: Long, bytes: ByteArray): Boolean =
+                        error("unowned transfer delivered a chunk")
+
+                    override fun onCompleted(totalBytes: Long) = error("unowned transfer completed")
+
+                    override fun onStopped(cachedBytes: Long) = error("unowned transfer stopped")
+
+                    override fun onFailed(message: String) {
+                        failure = message
+                    }
+                },
+        )
+
+        assertEquals(-1L, bridge.resolveMediaSize(handle = 1, reportedSize = 4))
+        assertEquals("Not connected to a camera.", failure)
+        bridge.stopMediaTransfer()
+    }
+
     @Test
     fun `proxy and still share one generic transfer bridge and validated cache listener`() {
         val root = createTempDirectory("openzcine-object-transfer")
@@ -21,14 +57,14 @@ class MediaObjectTransferTest {
                 mediaRecord(
                     handle = 0x1001,
                     filename = "C0001.MOV",
-                    contentKind = MediaContentKind.PLAYABLE_PROXY,
+                    contentKind = NikonMediaContentKind.PLAYABLE_PROXY,
                 )
             val still =
                 mediaRecord(
                     handle = 0x1008,
                     filename = "DSC_0007.JPG",
-                    contentKind = MediaContentKind.STILL_PHOTO,
-                    stillPhoto = StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE),
+                    contentKind = NikonMediaContentKind.STILL_PHOTO,
+                    stillPhoto = NikonStillPhotoClassification("JPEG", NikonStillPreviewStrategy.PROGRESSIVE),
                 )
 
             val proxyResult =
@@ -76,7 +112,7 @@ class MediaObjectTransferTest {
                 mediaRecord(
                     handle = 0x2001,
                     filename = "OFFLINE.MOV",
-                    contentKind = MediaContentKind.PLAYABLE_PROXY,
+                    contentKind = NikonMediaContentKind.PLAYABLE_PROXY,
                 )
             val identity = MediaCacheObjectIdentity(clip)
             val complete = cacheStore.openEntry("camera", identity, clip.sizeBytes)
@@ -131,7 +167,7 @@ class MediaObjectTransferTest {
                 mediaRecord(
                     handle = 0x3001,
                     filename = "LARGE.MOV",
-                    contentKind = MediaContentKind.PLAYABLE_PROXY,
+                    contentKind = NikonMediaContentKind.PLAYABLE_PROXY,
                 ).copy(sizeBytes = 0xFFFF_FFFFL)
             index.rememberCameraListing("camera", listOf(reported))
             val cacheStore = MediaCacheStore(root)
@@ -186,10 +222,10 @@ class MediaObjectTransferTest {
     private fun mediaRecord(
         handle: Long,
         filename: String,
-        contentKind: MediaContentKind,
-        stillPhoto: StillPhotoClassification? = null,
-    ): MediaClipRecord =
-        MediaClipRecord(
+        contentKind: NikonMediaContentKind,
+        stillPhoto: NikonStillPhotoClassification? = null,
+    ): NikonMediaClipRecord =
+        NikonMediaClipRecord(
             handle = handle,
             storageId = 0x0001_0001,
             sizeBytes = 4,
@@ -211,7 +247,7 @@ class MediaObjectTransferTest {
             handle: Int,
             reportedSize: Long,
             resumeOffset: Long,
-            listener: SwiftCore.MediaTransferListener,
+            listener: NikonNative.MediaTransferListener,
         ) {
             started += StartedTransfer(handle, resumeOffset)
             listener.onStarted(reportedSize)
@@ -233,7 +269,7 @@ class MediaObjectTransferTest {
             handle: Int,
             reportedSize: Long,
             resumeOffset: Long,
-            listener: SwiftCore.MediaTransferListener,
+            listener: NikonNative.MediaTransferListener,
         ) = error("A disconnected cache must never start a camera transfer.")
     }
 
@@ -247,7 +283,7 @@ class MediaObjectTransferTest {
             handle: Int,
             reportedSize: Long,
             resumeOffset: Long,
-            listener: SwiftCore.MediaTransferListener,
+            listener: NikonNative.MediaTransferListener,
         ) {
             listener.onStarted(resolvedSize)
             check(listener.onChunk(resumeOffset, ByteArray(resolvedSize.toInt()) { 1 }))

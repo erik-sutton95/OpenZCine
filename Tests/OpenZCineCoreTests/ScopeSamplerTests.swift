@@ -1,5 +1,7 @@
 import Testing
 
+import enum OpenCineMedia.MonitorCrushClipCompensation
+
 @testable import OpenZCineCore
 
 @Suite("Scope sampler")
@@ -176,7 +178,7 @@ struct ScopeSamplerTests {
 
     @Test("Crush/clip compensation maps quarter-stop options to pixel fractions")
     func crushClipCompensationStops() {
-        let expected: [(AssistConfiguration.CrushClipCompensation, Double)] = [
+        let expected: [(MonitorCrushClipCompensation, Double)] = [
             (.zero, 0.0), (.quarter, 0.25), (.half, 0.5), (.threeQuarter, 0.75), (.one, 1.0),
         ]
         for (compensation, stops) in expected {
@@ -207,7 +209,7 @@ struct ScopeSamplerTests {
         let natives = [16, 40, 55, 128, 200, 255]
         let points = natives.enumerated().map { index, native in
             ScopePoint(
-                xRatio: Double(index) / Double(natives.count), red: UInt8(native),
+                xRatio: Double(index) / Double(natives.count), yRatio: 0, red: UInt8(native),
                 green: UInt8(native), blue: UInt8(native), luma: UInt8(native))
         }
         let median = ScopeSampler.medianWaveformLevel(

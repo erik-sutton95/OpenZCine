@@ -1,6 +1,5 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.settings.normalizedZebraEntry
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -14,13 +13,14 @@ class ExposureAssistWireTest {
     ): FloatArray {
         val segmentCount =
             when (scale) {
-                FeedFalseColorScale.STOPS -> 8
-                FeedFalseColorScale.IRE -> 9
+                FeedFalseColorScale.STOPS -> 9
+                FeedFalseColorScale.VIDEO -> 9
+                FeedFalseColorScale.IRE -> 6
                 FeedFalseColorScale.LIMITS -> 4
             }
         val markers =
             if (scale == FeedFalseColorScale.STOPS) {
-                listOf(0.02f, 0.2f, 0.4f, 0.6f, 0.8f, 0.98f)
+                listOf(0.02f, 0.2f, 0.3f, 0.4f, 0.6f, 0.8f, 0.98f)
             } else {
                 emptyList()
             }
@@ -133,9 +133,9 @@ class ExposureAssistWireTest {
                 expectedCurveOrdinal = 0,
             )
         assertEquals(0, reference.curveOrdinal)
-        assertEquals(8, reference.segments.size)
-        assertEquals(0.125f, reference.segments[1].lowerFraction)
-        assertEquals(6, reference.stopMarkerFractions.size)
+        assertEquals(9, reference.segments.size)
+        assertEquals(1f / 9, reference.segments[1].lowerFraction)
+        assertEquals(7, reference.stopMarkerFractions.size)
 
         val ire =
             FeedFalseColorReference.parse(
@@ -143,8 +143,23 @@ class ExposureAssistWireTest {
                 FeedFalseColorScale.IRE,
                 expectedCurveOrdinal = 1,
             )
-        assertEquals(9, ire.segments.size)
+        assertEquals(6, ire.segments.size)
         assertTrue(ire.stopMarkerFractions.isEmpty())
+
+        val video = FeedFalseColorReference.parse(
+            falseColorReferencePayload(FeedFalseColorScale.VIDEO),
+            FeedFalseColorScale.VIDEO,
+            expectedCurveOrdinal = 0,
+        )
+        assertEquals(9, video.segments.size)
+        assertTrue(video.stopMarkerFractions.isEmpty())
+        assertFailsWith<IllegalArgumentException> {
+            FeedFalseColorReference.parse(
+                falseColorReferencePayload(FeedFalseColorScale.VIDEO),
+                FeedFalseColorScale.IRE,
+                expectedCurveOrdinal = 0,
+            )
+        }
 
         assertFailsWith<IllegalArgumentException> {
             FeedFalseColorReference.parse(
@@ -183,20 +198,10 @@ class ExposureAssistWireTest {
         }
         assertFailsWith<IllegalArgumentException> {
             FeedFalseColorReference.parse(
-                payload.copyOf().also { it[45] = 0.01f },
+                payload.copyOf().also { it[50] = 0.01f },
                 FeedFalseColorScale.STOPS,
                 expectedCurveOrdinal = 0,
             )
         }
-    }
-
-    @Test
-    fun `zebra direct entry clamps the complete native and IRE ranges`() {
-        assertEquals(255, normalizedZebraEntry("255", 255))
-        assertEquals(255, normalizedZebraEntry("999", 255))
-        assertEquals(0, normalizedZebraEntry("0", 100))
-        assertEquals(8, normalizedZebraEntry("008", 100))
-        assertEquals(null, normalizedZebraEntry("", 100))
-        assertEquals(null, normalizedZebraEntry("not-a-number", 100))
     }
 }

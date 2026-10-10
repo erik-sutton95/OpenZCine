@@ -1,67 +1,25 @@
 package com.opencapture.openzcine.wear
 
-/**
- * Tracks whether a watch snapshot is fresh enough to represent the foreground
- * phone monitor. Capability reachability deliberately does not affect this
- * value: an installed/reachable phone app is not evidence of live camera UI.
- */
-internal class WatchRelayFreshness(
-    private val maximumAgeMillis: Long,
-) {
-    private var acceptedAtMillis: Long? = null
+import com.opencapture.opencine.relay.RelayWatchFrameSequence
+import com.opencapture.opencine.relay.RelayWatchFreshness
+import com.opencapture.opencine.relay.RelayWatchPendingCommand
+import java.util.UUID
+import kotlin.math.ceil
 
-    init {
-        require(maximumAgeMillis > 0L)
-    }
-
-    /** Records an authoritative state snapshot arrival. */
-    fun accept(atMillis: Long) {
-        acceptedAtMillis = atMillis
-    }
-
-    /** Clears any old snapshot during stop, resume, or explicit invalidation. */
-    fun clear() {
-        acceptedAtMillis = null
-    }
-
-    /** True only while a state snapshot remains within the required age. */
-    fun isFresh(atMillis: Long): Boolean =
-        acceptedAtMillis?.let { acceptedAt ->
-            val ageMillis = atMillis - acceptedAt
-            ageMillis >= 0L && ageMillis < maximumAgeMillis
-        } == true
-
-    /** Delay until the current snapshot expires, or null when none exists. */
-    fun remainingMillis(atMillis: Long): Long? =
-        acceptedAtMillis?.let { acceptedAt ->
-            val ageMillis = (atMillis - acceptedAt).coerceAtLeast(0L)
-            (maximumAgeMillis - ageMillis).coerceAtLeast(0L)
-        }
+/** Original pure selectors over the shared lifetime values; actual receiver supplies real source. */
+internal class WatchRelayFreshness(maximumAgeMillis: Long) {
+    private val owner = RelayWatchFreshness(maximumAgeMillis / 1_000.0)
+    fun accept(atMillis: Long) = owner.accept(atMillis / 1_000.0)
+    fun clear() = owner.clear()
+    fun isFresh(atMillis: Long) = owner.isFresh(atMillis / 1_000.0)
+    fun remainingMillis(atMillis: Long) = owner.remainingSeconds(atMillis / 1_000.0)?.let { ceil(it * 1_000).toLong() }
 }
-
-/** Exact phone-node/request pair for the one outstanding record command. */
-internal data class PendingWearCommand(
-    val nodeID: String,
-    val requestID: Long,
-) {
-    /** A result must originate from the same phone node and request path. */
-    fun matches(nodeID: String, requestID: Long): Boolean =
-        this.nodeID == nodeID && this.requestID == requestID
+internal data class PendingWearCommand(val nodeID: String, val requestID: Long) {
+    private val owner = RelayWatchPendingCommand(nodeID, requestID, UUID.randomUUID())
+    fun matches(nodeID: String, requestID: Long) = owner.matches(nodeID, requestID, owner.source)
 }
-
-/** Drops an older in-flight preview that arrives after a newer relay token. */
 internal class LatestWearFrameSequence {
-    private var latestRequestID = 0L
-
-    /** True only when [requestID] advances the current foreground sequence. */
-    fun accept(requestID: Long): Boolean {
-        if (requestID <= latestRequestID) return false
-        latestRequestID = requestID
-        return true
-    }
-
-    /** Starts a new foreground presentation with no retained ordering state. */
-    fun clear() {
-        latestRequestID = 0L
-    }
+    private val owner = RelayWatchFrameSequence()
+    fun accept(requestID: Long) = owner.accept(requestID)
+    fun clear() = owner.clear()
 }

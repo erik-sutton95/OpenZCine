@@ -44,12 +44,6 @@ fun frameioValue(property: String, environment: String): String =
 
 val frameioClientID = frameioValue("frameio.clientId", "FRAMEIO_CLIENT_ID")
 val frameioRedirectURI = frameioValue("frameio.redirectUri", "FRAMEIO_REDIRECT_URI")
-// The anonymous-report relay is public by design: GitHub App credentials stay
-// server-side. Builds may override the URL for a reviewed staging relay, but a
-// fresh clone always targets the production endpoint.
-val bugReportEndpoint =
-    (findProperty("bugReport.endpoint") as? String)
-        ?: "https://reports.openzcine.app/v1/bug-reports"
 val frameioRedirect = runCatching { URI(frameioRedirectURI) }.getOrNull()
 val configuredFrameioScheme = frameioRedirect?.scheme?.takeIf { scheme ->
     scheme.matches(Regex("[A-Za-z][A-Za-z0-9+.-]*"))
@@ -83,7 +77,7 @@ val keystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")
 
 android {
     namespace = "com.opencapture.openzcine"
-    compileSdk = 36
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "com.opencapture.openzcine"
@@ -104,27 +98,15 @@ android {
             "FRAMEIO_REDIRECT_SCHEME",
             quotedBuildConfig(frameioRedirectScheme),
         )
-        buildConfigField("String", "BUG_REPORT_ENDPOINT", quotedBuildConfig(bugReportEndpoint))
+        // Empty unless a build supplies one (below); without a DSN no report can be sent.
+        buildConfigField("String", "SENTRY_DSN_ANDROID", "\"\"")
 
         ndk {
             abiFilters += supportedAndroidAbi
         }
 
-        externalNativeBuild {
-            cmake {
-                // Static STL avoids clashing with Swift runtime's libc++_shared.so.
-                cppFlags += listOf("-std=c++17", "-fno-exceptions", "-fno-rtti")
-                arguments += listOf("-DANDROID_STL=c++_static")
-            }
-        }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/live_feed_vk/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 
     signingConfigs {
         if (keystorePath != null) {
@@ -219,6 +201,24 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
         fileTree(repositoryRoot) {
             include("Package.swift", "Package.resolved", "Sources/**")
         },
+        // The root Package.swift takes these from the sibling OpenCine checkout: OpenCineMedia
+        // (and OpenCineCore, which it depends on), OpenCineFrameIO (the Frame.io facade),
+        // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it),
+        // OpenCineNikonAndroid (the PTP-IP / USB session layer and NikonNative's JNI exports)
+        // and OpenCineJNISupport (+ the OpenCineJNI header), so a package edit must restage the core.
+        fileTree(repositoryRoot.resolve("../OpenCine")) {
+            include(
+                "Package.swift",
+                "Sources/OpenCineMedia/**",
+                "Sources/OpenCineCore/**",
+                "Sources/OpenCineFrameIO/**",
+                "Sources/OpenCineNikon/**",
+                "Sources/OpenCineNikonAndroid/**",
+                "Sources/OpenCineJNISupport/**",
+                "Sources/OpenCineJNI/**",
+                "scripts/android-stage-swift-core.sh",
+            )
+        },
         stageSwiftCoreScript,
     )
     inputs.property("swiftExecutable", providers.environmentVariable("SWIFT_EXECUTABLE").orElse("auto"))
@@ -273,17 +273,34 @@ val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibr
     )
 }
 
-// Kyant backdrop 2.0 AAR metadata requires compileSdk 37; we stay on 36 until
-// the project SDK is upgraded. Disable only the AAR metadata gate so the rest
-// of the AGP graph still runs.
-afterEvaluate {
-    tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }
-        .configureEach { enabled = false }
-}
-
 dependencies {
     implementation(project(":core-api"))
+    // OpenCine common camera contracts (CORE-02 candidate, composite build; see settings).
+    implementation(libs.opencine.core)
+    // Shared Compose monitor UI and the multicam engine from the same OpenCine build.
+    implementation(libs.opencine.monitor.ui)
+    implementation(libs.opencine.multicam)
+    // The Nikon session (PTP-IP / USB PTP over the Swift layer), its contract and NikonNative.
+    implementation(libs.opencine.nikon)
+    // The shared cameras page, connection model and saved-camera document (SHELL-02).
+    implementation(libs.opencine.appkit)
+    // The shared capture sheets (LadderSheet) over the camera vocabulary.
+    implementation(libs.opencine.camera.controls)
+    // Shared prepared PCM sampling and decoded-audio source lifetime.
+    implementation(libs.opencine.native.runtime)
+    // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.
+    implementation(libs.opencine.vulkan)
+    // Keystore sealing for the camera Wi-Fi keys.
+    implementation(libs.opencine.platform)
     implementation(project(":wear-relay"))
+    // Shared transport owners; hardware camera sessions stay in the Nikon integration.
+    implementation("com.opencapture.opencine:relay:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:relay-runtime:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:watch-runtime:0.1.0-SNAPSHOT")
+    implementation("com.opencapture.opencine:nikon-wire:0.1.0-SNAPSHOT")
+    // Sentry adapters for the shared problem report and reliability reporting (as Pocket).
+    implementation(libs.okhttp)
+    implementation(libs.sentry.android)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -297,7 +314,7 @@ dependencies {
     implementation(libs.compose.material.icons.extended)
     // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
     implementation(libs.kyant.backdrop)
-    // Capsule shape used by the catalog LiquidSlider (runtime of backdrop; compile-visible here).
+    // Runtime of backdrop, pinned here.
     implementation(libs.kyant.shapes)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.effect)
@@ -322,6 +339,44 @@ dependencies {
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+    // Retired donor renderer for exact Vulkan pixel parity; test APK only.
+    androidTestImplementation(project(":frozen-vulkan-donor"))
 
     debugImplementation(libs.compose.ui.test.manifest)
+}
+
+// Non-empty SENTRY_DSN_ANDROID wins; otherwise optional ignored repo-root properties (as Pocket).
+val sentryDsnAndroidField =
+    providers.environmentVariable("SENTRY_DSN_ANDROID")
+        .orElse("")
+        .zip(
+            providers.of(LocalReliabilityDsnValueSource::class.java) {
+                parameters.propertiesFile.set(repositoryRoot.resolve(".local/reliability.properties"))
+            },
+        ) { env, file ->
+            val raw = env.trim().ifEmpty { file.trim() }
+            val escaped = raw.replace("\\", "\\\\").replace("\"", "\\\"")
+            com.android.build.api.variant.BuildConfigField("String", "\"$escaped\"", "optional Sentry Android DSN")
+        }
+
+androidComponents {
+    onVariants { variant -> variant.buildConfigFields?.put("SENTRY_DSN_ANDROID", sentryDsnAndroidField) }
+}
+
+abstract class LocalReliabilityDsnValueSource :
+    ValueSource<String, LocalReliabilityDsnValueSource.Params> {
+    interface Params : ValueSourceParameters {
+        @get:org.gradle.api.tasks.Optional
+        @get:InputFile
+        @get:PathSensitive(PathSensitivity.NONE)
+        val propertiesFile: RegularFileProperty
+    }
+
+    override fun obtain(): String {
+        val file = parameters.propertiesFile.orNull?.asFile ?: return ""
+        if (!file.isFile) return ""
+        val props = Properties()
+        file.inputStream().use { props.load(it) }
+        return props.getProperty("SENTRY_DSN_ANDROID")?.trim().orEmpty()
+    }
 }

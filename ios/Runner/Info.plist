@@ -5,6 +5,8 @@
 	<!-- Frame.io integration. Client ID, redirect URI, and URL scheme come from the gitignored
 	     Frameio.local.xcconfig via FRAMEIO_* build settings (see docs/frameio-setup.md). Adobe
 	     assigns a unique Native App redirect per credential — copy it exactly from the console. -->
+	<key>SentryDSN</key>
+	<string>$(SENTRY_DSN)</string>
 	<key>FrameioClientID</key>
 	<string>$(FRAMEIO_CLIENT_ID)</string>
 	<key>FrameioRedirectURI</key>
@@ -83,18 +85,6 @@
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
-		<key>UISceneConfigurations</key>
-		<dict>
-			<key>UIWindowSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneConfigurationName</key>
-					<string>Default Configuration</string>
-					<key>UISceneDelegateClassName</key>
-					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-				</dict>
-			</array>
-		</dict>
 	</dict>
 	<!-- iPhone: Portrait + LandscapeRight ONLY, by design — the monitor chrome is laid out for
 	     one landscape side (interface LandscapeRight = device rotated left, island on the left);

@@ -1,9 +1,11 @@
 package com.opencapture.openzcine.relay
 
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.LiveAudioMeterChannel
-import com.opencapture.openzcine.core.LiveAudioMeterLevels
-import com.opencapture.openzcine.core.LiveFeedRotation
+import com.opencapture.opencine.nikonwire.MonitorRelayWire
+
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.LiveAudioMeterChannel
+import com.opencapture.opencine.nikon.LiveAudioMeterLevels
+import com.opencapture.opencine.nikon.LiveFeedRotation
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

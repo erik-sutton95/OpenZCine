@@ -50,6 +50,7 @@ jobs:
               - 'Tests/**'
               - 'Apps/Android/**'
               - 'Package.swift'
+              - 'opencine-pins.txt'
               - '.swift-format'
               - 'scripts/android-*.sh'
               - 'scripts/verify-android-*.sh'
@@ -86,6 +87,12 @@ jobs:
 
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      # Candidate (OpenCine CORE-02 + MEDIA-01): OpenCineCore (Gradle), OpenCineMedia and
+      # OpenCineNikon (VENDOR-02, Swift Android core) from ../OpenCine, pinned in
+      # opencine-pins.txt. Delete when the app takes
+      # the published Maven coordinate and SwiftPM url + version.
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
 
       # Keep the Play artifact on the exact Swift Android SDK/toolchain that
       # CI uses. Gradle stages the arm64-v8a core into build output itself.
@@ -157,6 +164,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Optional: without it this build cannot send problem or automatic error reports.
+          SENTRY_DSN_ANDROID: ${{ secrets.SENTRY_DSN_ANDROID }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
           SWIFT_ANDROID_SDK_ID: swift-6.3.3-RELEASE_android
         run: ./gradlew :app:verifyReleaseNativeLibraries :wear:verifyWearReleaseArtifact "-PversionCode=$VERSION_CODE"

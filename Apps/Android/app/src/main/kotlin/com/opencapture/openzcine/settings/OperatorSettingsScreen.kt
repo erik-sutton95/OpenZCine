@@ -1,52 +1,60 @@
 package com.opencapture.openzcine.settings
 
+import com.opencapture.monitorui.settings.MonitorAccountState
+import com.opencapture.monitorui.settings.MonitorSettingsInlineRow
+import com.opencapture.monitorui.settings.MonitorSettingsValueText
+import com.opencapture.monitorui.settings.MonitorSettingsSegmented
+import com.opencapture.monitorui.settings.MonitorSettingsChoices
+import com.opencapture.monitorui.settings.MonitorSettingsActionPill
+import com.opencapture.monitorui.settings.MonitorConnectionSettings
+import com.opencapture.monitorui.MonitorLinkHealth
+import com.opencapture.monitorui.settings.MonitorLinkHealthScale
+import com.opencapture.monitorui.settings.MonitorSupportAction
+import com.opencapture.monitorui.settings.MonitorSupportSettings
+import com.opencapture.opencine.appkit.diagnostics.settingsStatus
+import com.opencapture.openzcine.NikonAssists
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.opencine.cameracontrols.*
+import com.opencapture.opencine.appkit.MonitorSettingsCacheIdentity
+import com.opencapture.opencine.appkit.MonitorSettingsCacheSource
+import com.opencapture.opencine.appkit.MonitorSettingsAccountActions
+import com.opencapture.opencine.appkit.MonitorSettingsAccountModel
+import com.opencapture.opencine.appkit.MonitorSettingsInternetLease
+import com.opencapture.opencine.appkit.MonitorSettingsInternetCleanup
+import com.opencapture.monitorui.settings.MonitorDisplayChoice
+import com.opencapture.monitorui.settings.MonitorAssistSettingsSection
+import java.util.UUID
 import com.opencapture.openzcine.performOperatorHaptic
-
+import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
+import com.opencapture.monitorui.settings.MonitorOperatorSafetySettings
+import com.opencapture.monitorui.settings.MonitorInputOrientationSettings
+import com.opencapture.monitorui.settings.MonitorAppInformationSettings
+import com.opencapture.monitorui.settings.MonitorCacheSettings
+import com.opencapture.monitorui.settings.MonitorProjectLegalSettings
+import com.opencapture.monitorui.settings.MonitorSettingsPage
+import com.opencapture.monitorui.settings.MonitorSettingsRowCard
+import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
+import com.opencapture.monitorui.settings.MonitorSettingsTab
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.net.Uri
-import android.os.Build
 import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
-import androidx.annotation.StringRes
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,133 +62,56 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
-import com.opencapture.openzcine.AndroidThermalTier
 import com.opencapture.openzcine.BuildConfig
 import com.opencapture.openzcine.R
-import com.opencapture.openzcine.AssistState
-import com.opencapture.openzcine.AssistTool
-import com.opencapture.openzcine.titleResource
-import com.opencapture.openzcine.ChromeShape
 import com.opencapture.openzcine.ExposureAssistCameraInput
-import com.opencapture.openzcine.FeedPeakingColor
-import com.opencapture.openzcine.FeedPeakingSensitivity
-import com.opencapture.openzcine.FeedZebraStripeColor
-import com.opencapture.openzcine.FeedZebraUnit
 import com.opencapture.openzcine.LiveDesign
-import com.opencapture.openzcine.LiveViewGuideController
 import com.opencapture.openzcine.prefersPhotographyChrome
-import com.opencapture.openzcine.zebraEditorValue
-import com.opencapture.openzcine.zebraMonitorPercent
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
-import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.bridge.SwiftCoreLiveFrameSource
-import com.opencapture.openzcine.bridge.SwiftLiveViewPreviewState
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraTemperatureStatus
-import com.opencapture.openzcine.FeedFalseColorScale
-import com.opencapture.openzcine.labelResource
-import com.opencapture.openzcine.FeedLut
-import com.opencapture.openzcine.glass
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.frameio.FrameioConnectionState
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioNetworkState
-import com.opencapture.openzcine.diagnostics.BugReportPathChooser
-import com.opencapture.openzcine.diagnostics.BugReportScreen
-import com.opencapture.openzcine.diagnostics.BugReportSubmitter
+import com.opencapture.openzcine.diagnostics.AppDiagnostics
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.relay.RelayCameraSession
 import com.opencapture.openzcine.relay.RelayWatchUiState
-import com.opencapture.openzcine.rememberAndroidThermalTier
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.floor
-import kotlin.math.roundToInt
-
-/**
- * Operator Setup rail tabs — 1:1 with the iOS `OperatorSettingsTab` set
- * (Link / View Assist / Controls / Display / Storage / System). The Link tab
- * binds to the active Android session; every other tab exposes the same
- * operator controls as the iOS baseline.
- */
-public enum class OperatorSettingsTab(
-    @StringRes public val titleResource: Int,
-    @StringRes public val compactTitleResource: Int,
-    @StringRes public val railSubtitleResource: Int,
-    @StringRes public val subtitleResource: Int,
-    @StringRes public val pillResource: Int,
-) {
-    LINK(R.string.settings_tab_link, R.string.settings_tab_link, R.string.settings_rail_connection, R.string.settings_subtitle_link, R.string.settings_pill_live),
-    SHARING(R.string.settings_tab_sharing, R.string.settings_tab_sharing, R.string.settings_rail_sharing, R.string.settings_subtitle_sharing, R.string.settings_pill_sharing),
-    ASSIST(R.string.settings_tab_assist, R.string.settings_tab_assist_compact, R.string.settings_rail_assist, R.string.settings_subtitle_assist, R.string.settings_pill_assist),
-    CONTROLS(R.string.settings_tab_controls, R.string.settings_tab_controls, R.string.settings_rail_controls, R.string.settings_subtitle_controls, R.string.settings_pill_touch),
-    DISPLAY(R.string.settings_tab_display, R.string.settings_tab_display, R.string.settings_rail_display, R.string.settings_subtitle_display, R.string.settings_pill_visibility),
-    STORAGE(R.string.settings_tab_storage, R.string.settings_tab_storage, R.string.settings_rail_storage, R.string.settings_subtitle_storage, R.string.settings_pill_storage),
-    SYSTEM(R.string.settings_tab_system, R.string.settings_tab_system, R.string.settings_rail_system, R.string.settings_subtitle_system, R.string.settings_pill_app),
-}
-
-private enum class BugReportDestination {
-    CHOOSER,
-    ANONYMOUS,
-}
 
 /**
  * Whether an internet-backed Operator Setup action has to leave the camera's access point first
  * (iOS `requestInternetDestination`, MonitorPanels.swift:4755).
  *
- * The in-app bug report and the Adobe sign-in both transact from THIS process, and the process
- * is bound to a Wi-Fi network that has no internet at all — so they cannot reach anything until
- * the consented hop runs. External links are unaffected: the browser is a different process and
+ * The Adobe sign-in transacts from THIS process, and the process is bound to a Wi-Fi network
+ * that has no internet at all, so it cannot reach anything until the consented hop runs. External links are unaffected: the browser is a different process and
  * never sees our binding.
  */
 internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolean =
@@ -190,7 +121,7 @@ internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolea
  * The full-screen Operator Settings surface — a 1:1 structural port of the
  * iOS `OperatorSettingsPanel` (ios/Runner/MonitorPanels.swift): floating close
  * button, eyebrow/title header with the live tile, vertical tab rail, and a
- * rounded content pane per tab. [assistState] is the monitor toolbar's state,
+ * rounded content pane per tab. [assists] is the monitor's assist state,
  * so view-assist changes apply immediately and persist through one seam.
  *
  * [session] is null for standalone startup settings. That state never creates
@@ -201,33 +132,26 @@ internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolea
 @Composable
 internal fun OperatorSettingsScreen(
     session: CameraSession?,
-    assistState: AssistState,
+    assists: NikonAssists,
     settings: OperatorSettings,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
     linkHealth: AndroidLinkHealthMonitor? = null,
-    liveViewSource: SwiftCoreLiveFrameSource? = null,
     activeTransportLabel: String? = null,
     onDisconnect: (() -> Unit)? = null,
-    onReconnect: (() -> Unit)? = null,
     systemSettingsActions: SystemSettingsActions,
-    bugReportSubmitter: BugReportSubmitter,
-    bugReportActivityLogProvider: () -> List<String> = { emptyList() },
-    liveViewGuideController: LiveViewGuideController,
-    onShowGuideNow: (() -> Unit)? = null,
-    onShowGuideOnNextRealFrame: () -> Unit,
+    onReportProblem: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
-    initialTab: OperatorSettingsTab = OperatorSettingsTab.LINK,
+    initialTab: MonitorSettingsTab = MonitorSettingsTab.LINK,
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
     relaySharingEnabled: Boolean = false,
     onRelayShareToggle: ((Boolean) -> Unit)? = null,
     /** Watch-session state, for the Link tab's "Held By" readout (iOS `linkRows`). */
     relayWatchUi: RelayWatchUiState? = null,
+    accountModel: MonitorSettingsAccountModel? = null,
+    accountCurrent: (() -> Boolean)? = null,
     onClose: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val scopeLimitMessage = stringResource(R.string.settings_scope_limit)
-    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
     val cameraInput =
         remember(
@@ -259,2411 +183,221 @@ internal fun OperatorSettingsScreen(
             feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
-    val toggleAssist: (AssistTool) -> Unit = { tool ->
-        val hapticsEnabled = settings.hapticsEnabled.value
-        val maximumScopes = if (session != null && isPortrait) 2 else null
-        val changed = assistState.toggle(tool, maximumActiveScopes = maximumScopes)
-        if (!changed) {
-            Toast.makeText(
-                context,
-                scopeLimitMessage,
-                Toast.LENGTH_SHORT,
-            ).show()
-        } else if (hapticsEnabled) {
-            feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
-        }
-    }
     val emitHaptic: () -> Unit = {
         if (settings.hapticsEnabled.value) {
             feedbackView.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
         }
     }
-    var selectedTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
-    var bugReportDestination by remember { mutableStateOf<BugReportDestination?>(null) }
-    val panelScope = rememberCoroutineScope()
-    // Whether this phone is still process-bound to the camera's no-internet AP. The Storage tab
-    // reads it too, but Report a Problem is on System, so refresh once for the whole surface.
-    LaunchedEffect(frameioController) { frameioController?.refresh() }
-    // The camera rejoin runs when Operator Setup is dismissed, not when the report or the Adobe
-    // browser round trip ends: both outlive the row that started the hop (iOS re-hosts the
-    // panel as a standalone cover for the same reason — MonitorPanels.swift:4919-4943).
-    DisposableEffect(frameioController) {
-        onDispose {
-            val controller = frameioController
-            if (controller != null && controller.isInternetHopActive) {
-                endInternetHopAfterDismiss(controller)
-            }
-        }
-    }
-    var pendingReportHop by remember { mutableStateOf(false) }
-    var reportHopBusy by remember { mutableStateOf(false) }
-    var hopFailureMessage by remember { mutableStateOf<String?>(null) }
-    val hopFailureFallback = stringResource(R.string.settings_hop_failed_message)
-    // iOS `requestInternetDestination(.reportProblem)`: consent, hop, then the report.
-    val requestReportProblem: () -> Unit = {
-        if (!reportHopBusy) {
-            if (settingsActionNeedsInternetHop(frameioController?.networkState)) {
-                pendingReportHop = true
-            } else {
-                bugReportDestination = BugReportDestination.CHOOSER
-            }
-        }
-    }
-
-    when (bugReportDestination) {
-        BugReportDestination.CHOOSER ->
-            BugReportPathChooser(
-                onChooseAnonymous = { bugReportDestination = BugReportDestination.ANONYMOUS },
-                onContinueWithGitHub = systemSettingsActions::openGitHubBugReport,
-                onClose = { bugReportDestination = null },
-            )
-        BugReportDestination.ANONYMOUS ->
-            BugReportScreen(
-                submitter = bugReportSubmitter,
-                activityLogProvider = bugReportActivityLogProvider,
-                onOpenSecurityAdvisory = systemSettingsActions::openSecurityAdvisory,
-                onClose = { bugReportDestination = null },
-            )
-        null ->
-            BoxWithConstraints(
-            Modifier.fillMaxSize()
-                .background(LiveDesign.background)
-                // A hit-testable node at the root keeps every pointer event on
-                // this surface — without it, taps between rows would fall through
-                // to the monitor chrome's buttons underneath (Compose siblings
-                // below stay hit-testable wherever the overlay itself has no
-                // pointer node).
-                .pointerInput(Unit) { detectTapGestures {} }
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-        ) {
-            val compact = maxWidth < 600.dp
-            Column(
-                Modifier.fillMaxSize()
-                    .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // The floating PanelCloseButton overlays this row's leading corner
-                // (the iOS iPad clearance fix — `closeButtonClearance`): inset the
-                // header to start beside it, (16 + 37 + 8) − 16dp of panel padding.
-                SettingsHeader(session, linkHealth, compact, onDisconnect = onDisconnect)
-                if (compact) {
-                    SettingsTabStrip(selectedTab, onSelect = { selectedTab = it })
-                    SettingsContentPane(
-                        selectedTab,
-                        session,
-                        relaySharing,
-                        relaySharingEnabled,
-                        onRelayShareToggle,
-                        relayWatchUi,
-                        settings,
-                        assistState,
-                        mediaCacheStore,
-                        frameioController,
-                        cameraInput,
-                        linkHealth,
-                        liveViewSource,
-                        activeTransportLabel,
-                        onDisconnect,
-                        onReconnect,
-                        systemSettingsActions,
-                        liveViewGuideController,
-                        onShowGuideNow,
-                        onShowGuideOnNextRealFrame,
-                        onCompletedMediaCacheCleared,
-                        onSettingToggle = toggleSetting,
-                        onAssistToggle = toggleAssist,
-                        onInteraction = emitHaptic,
-                        compact = true,
-                        onReportProblem = requestReportProblem,
-                        onClose = onClose,
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
-                    Row(
-                        Modifier.fillMaxWidth().weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        SettingsTabRail(selectedTab, onSelect = { selectedTab = it })
-                        SettingsContentPane(
-                            selectedTab,
-                            session,
-                            relaySharing,
-                            relaySharingEnabled,
-                            onRelayShareToggle,
-                            relayWatchUi,
-                            settings,
-                            assistState,
-                            mediaCacheStore,
-                            frameioController,
-                            cameraInput,
-                            linkHealth,
-                            liveViewSource,
-                            activeTransportLabel,
-                            onDisconnect,
-                            onReconnect,
-                            systemSettingsActions,
-                            liveViewGuideController,
-                            onShowGuideNow,
-                            onShowGuideOnNextRealFrame,
-                            onCompletedMediaCacheCleared,
-                            onSettingToggle = toggleSetting,
-                            onAssistToggle = toggleAssist,
-                            onInteraction = emitHaptic,
-                            compact = false,
-                            onReportProblem = requestReportProblem,
-                            onClose = onClose,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-            }
-            // Floats in the very top-left corner, outside the layout flow, at the
-            // iOS metrics (leading 16, top 22).
-            Box(Modifier.padding(start = 16.dp, top = 22.dp)) { PanelCloseButton(onClick = onClose) }
-        }
-    }
-
-    // iOS "Leave camera Wi-Fi?" (MonitorPanels.swift:3910-3925) — consent first, hop second,
-    // report third. Declining leaves the camera session exactly as it was.
-    if (pendingReportHop) {
-        val controller = frameioController
-        AlertDialog(
-            onDismissRequest = { pendingReportHop = false },
-            title = { Text(stringResource(R.string.settings_report_hop_title)) },
-            text = { Text(stringResource(R.string.settings_report_hop_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingReportHop = false
-                        if (controller == null) {
-                            hopFailureMessage = hopFailureFallback
-                        } else {
-                            reportHopBusy = true
-                            panelScope.launch {
-                                val online =
-                                    try {
-                                        controller.beginInternetHop()
-                                    } catch (_: Exception) {
-                                        false
-                                    }
-                                reportHopBusy = false
-                                if (online) {
-                                    bugReportDestination = BugReportDestination.CHOOSER
-                                } else {
-                                    hopFailureMessage =
-                                        controller.errorMessage ?: hopFailureFallback
-                                }
-                            }
-                        }
-                    },
-                ) {
-                    Text(stringResource(R.string.action_continue))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingReportHop = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-    // Leaving an AP and waiting for a validated route takes seconds, not milliseconds. Without
-    // this the Report pill looks dead and gets tapped again.
-    if (reportHopBusy) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text(stringResource(R.string.frameio_switching_networks)) },
-            text = { Text(stringResource(R.string.settings_hop_progress_message)) },
-            confirmButton = {},
-        )
-    }
-    hopFailureMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = { hopFailureMessage = null },
-            title = { Text(stringResource(R.string.settings_hop_failed_title)) },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { hopFailureMessage = null }) {
-                    Text(stringResource(R.string.action_ok))
-                }
-            },
-        )
-    }
-}
-
-/**
- * Rejoins the camera after a consented internet hop, from a scope that outlives this
- * composition — the operator has already dismissed the surface that started it.
- *
- * ponytail: same three lines as lut/RedLutDownloadScreen.kt's `endInternetHopAfterDismiss`,
- * which is private to that file. Hoist one copy if a third caller appears.
- */
-private fun endInternetHopAfterDismiss(controller: FrameioDeliveryController) {
-    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
-        try {
-            withContext(NonCancellable) { controller.endInternetHop() }
-        } catch (_: Exception) {
-            // Best-effort rejoin; the operator has already left the settings surface.
-        }
-    }
-}
-
-/** Eyebrow + title with the live tile pinned trailing (iOS `settingsTop`). */
-@Composable
-private fun SettingsHeader(
-    session: CameraSession?,
-    linkHealth: AndroidLinkHealthMonitor?,
-    compact: Boolean,
-    onDisconnect: (() -> Unit)? = null,
-) {
-    // Disconnect rides beside the link tile (iOS `settingsTop`): a session-level action
-    // belongs with the session's status, not inside the Link tab.
-    val state by (session?.state
-        ?: remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) })
-        .collectAsState()
-    val disconnect = onDisconnect.takeIf { state is CameraSessionState.Connected }
-    if (compact) {
-        Column(
-            Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 45.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SettingsTitle()
-                Spacer(Modifier.weight(1f))
-                disconnect?.let {
-                    SettingsActionPill(
-                        stringResource(R.string.action_disconnect),
-                        icon = Icons.Filled.LinkOff,
-                        tint = LiveDesign.rec,
-                        background = LiveDesign.rec.copy(alpha = 0.16f),
-                    ) {
-                        it()
-                    }
-                }
-            }
-            SettingsLiveTile(session, linkHealth, Modifier.fillMaxWidth(), expanded = true)
-        }
-    } else {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 45.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            SettingsTitle()
-            Spacer(Modifier.weight(1f))
-            // The pill and the link tile share one intrinsic-height row (iOS `settingsTop`):
-            // destructive red, broken-link glyph, and the pill fills the tile's height.
-            Row(Modifier.height(IntrinsicSize.Min)) {
-                disconnect?.let {
-                    SettingsActionPill(
-                        stringResource(R.string.action_disconnect),
-                        icon = Icons.Filled.LinkOff,
-                        tint = LiveDesign.rec,
-                        background = LiveDesign.rec.copy(alpha = 0.16f),
-                        modifier = Modifier.fillMaxHeight(),
-                    ) {
-                        it()
-                    }
-                    Spacer(Modifier.width(10.dp))
-                }
-                SettingsLiveTile(session, linkHealth, expanded = false)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsTitle(modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(
-            stringResource(R.string.settings_brand),
-            color = LiveDesign.accent,
-            fontSize = 9.5.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp,
-        )
-        Text(
-            stringResource(R.string.settings_title),
-            style = chromeStyle(24f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-        )
-    }
-}
-
-/** Link-state tile: status dot, title/detail, meter bars (iOS `SettingsLiveTile`). */
-@Composable
-private fun SettingsLiveTile(
-    session: CameraSession?,
-    linkHealth: AndroidLinkHealthMonitor?,
-    modifier: Modifier = Modifier,
-    expanded: Boolean,
-) {
-    val disconnectedState = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
-    val state by (session?.state ?: disconnectedState).collectAsState()
-    val standalone = session == null
-    val linked = state is CameraSessionState.Connected
-    val health = linkHealth?.presentation ?: LinkHealthPresentation()
-    val tint =
-        when {
-            !linked -> LiveDesign.faint
-            health.signalBars >= 3 -> LiveDesign.good
-            health.signalBars == 2 -> LiveDesign.accent
-            else -> LiveDesign.rec
-        }
-    val detail =
-        if (standalone) {
-            stringResource(R.string.settings_local_only)
-        } else {
-            when (val current = state) {
-                is CameraSessionState.Connected ->
-                    health.detail.ifBlank {
-                        stringResource(
-                            R.string.settings_connected_detail,
-                            current.identity.name,
-                            "PTP-IP",
-                        )
-                    }
-                CameraSessionState.Connecting -> stringResource(R.string.camera_connecting_short)
-                CameraSessionState.Disconnected -> stringResource(R.string.camera_none)
-            }
-        }
-    Row(
-        modifier.background(LiveDesign.surface, ChromeShape)
-            .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).background(tint, CircleShape))
-        Column(
-            if (expanded) Modifier.weight(1f) else Modifier.widthIn(max = 180.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                stringResource(
-                    if (linked) R.string.settings_active_link
-                    else if (standalone) R.string.settings_local_setup
-                    else R.string.settings_no_link,
-                ),
-                style = chromeStyle(12f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-            )
-            Text(
-                detail,
-                style = chromeStyle(10.5f, FontWeight.Medium, mono = true),
-                color = LiveDesign.muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
-            repeat(4) { index ->
-                Box(
-                    Modifier.size(width = 3.dp, height = (6 + index * 3).dp)
-                        .background(
-                            if (index < health.signalBars) tint.copy(alpha = 0.52f + index * 0.12f)
-                            else LiveDesign.hairline,
-                            CircleShape,
-                        )
-                )
-            }
-        }
-    }
-}
-
-/**
- * Horizontal tab selector used when the landscape rail cannot fit — the same
- * tab buttons as the vertical rail (iOS `settingsTabStrip`), scrolled when the
- * strip is wider than the screen.
- */
-@Composable
-private fun SettingsTabStrip(
-    selected: OperatorSettingsTab,
-    onSelect: (OperatorSettingsTab) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth()
-            .glass(ChromeShape)
-            .horizontalScroll(rememberScrollState())
-            .padding(6.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        OperatorSettingsTab.entries.forEach { tab ->
-            Box(Modifier.width(146.dp)) {
-                SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
-            }
-        }
-    }
-}
-
-/** Vertical tab rail, 146dp wide on full-height glass (iOS `settingsRail`). */
-@Composable
-private fun SettingsTabRail(
-    selected: OperatorSettingsTab,
-    onSelect: (OperatorSettingsTab) -> Unit,
-) {
-    Column(
-        Modifier.width(146.dp).fillMaxHeight().glass(ChromeShape).padding(6.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        // Every tab, always — iOS `OperatorSettingsTab.allCases`. Hiding Sharing when no
-        // broadcast controller is attached put the watcher passcode, broadcast priority and
-        // control policy out of reach in exactly the two places an operator sets them up:
-        // standalone setup before a shoot, and a watcher looking for why it cannot re-share.
-        OperatorSettingsTab.entries.forEach { tab ->
-            SettingsTabButton(tab, active = tab == selected, onClick = { onSelect(tab) })
-        }
-    }
-}
-
-/** One rail tab: accent capsule + title over subtitle (iOS `settingsTabButton`). */
-@Composable
-private fun SettingsTabButton(tab: OperatorSettingsTab, active: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .height(43.dp)
-            .background(if (active) LiveDesign.surface else LiveDesign.surface.copy(alpha = 0f), ChromeShape)
-            .settingsClickable(role = Role.Tab, onClick = onClick)
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(width = 6.dp, height = 26.dp)
-                .background(
-                    if (active) LiveDesign.accent else LiveDesign.accent.copy(alpha = 0f),
-                    CircleShape,
-                )
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                stringResource(tab.titleResource),
-                style = chromeStyle(13f, FontWeight.SemiBold),
-                color = if (active) LiveDesign.text else LiveDesign.muted,
-                maxLines = 1,
-            )
-            Text(
-                stringResource(tab.railSubtitleResource),
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.faint,
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-/** Rounded content pane: tab title/subtitle + pill header over scrolling rows. */
-@Composable
-private fun SettingsContentPane(
-    tab: OperatorSettingsTab,
-    session: CameraSession?,
-    relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
-    relaySharingEnabled: Boolean,
-    onRelayShareToggle: ((Boolean) -> Unit)?,
-    relayWatchUi: RelayWatchUiState?,
-    settings: OperatorSettings,
-    assistState: AssistState,
-    mediaCacheStore: MediaCacheStore,
-    frameioController: FrameioDeliveryController?,
-    cameraInput: ExposureAssistCameraInput,
-    linkHealth: AndroidLinkHealthMonitor?,
-    liveViewSource: SwiftCoreLiveFrameSource?,
-    activeTransportLabel: String?,
-    onDisconnect: (() -> Unit)?,
-    onReconnect: (() -> Unit)?,
-    systemSettingsActions: SystemSettingsActions,
-    liveViewGuideController: LiveViewGuideController,
-    onShowGuideNow: (() -> Unit)?,
-    onShowGuideOnNextRealFrame: () -> Unit,
-    onCompletedMediaCacheCleared: () -> Unit,
-    onSettingToggle: (OperatorSettings.Toggle) -> Unit,
-    onAssistToggle: (AssistTool) -> Unit,
-    onInteraction: () -> Unit,
-    compact: Boolean,
-    onReportProblem: () -> Unit,
-    /** Dismisses Operator Setup — the Edit view is the monitor, so the panel steps aside. */
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(
-        modifier
-            .fillMaxSize()
-            .background(LiveDesign.surface, ChromeShape)
-            .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .padding(12.dp),
-    ) {
-        // A landscape phone exposes only about 250dp of pane height once the
-        // top chrome and safe areas are accounted for. Keep the selected
-        // Storage card complete in that window rather than leaving its clear
-        // result half-hidden below a scroll edge.
-        val condensed = maxHeight < 300.dp
-        // Which capture side the body is actually in — the Display tab opens on that layout.
-        val paneCameraProperties =
-            if (session == null) null else session.cameraProperties.collectAsState().value
-        val liveCaptureMode =
-            if (paneCameraProperties != null && prefersPhotographyChrome(paneCameraProperties)) {
-                CaptureLayoutMode.PHOTO
-            } else {
-                CaptureLayoutMode.VIDEO
-            }
-        Column(
-            Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(if (condensed) 6.dp else 10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(
-                        stringResource(tab.titleResource),
-                        style = chromeStyle(if (condensed) 21f else 24f, FontWeight.SemiBold),
-                        color = LiveDesign.text,
-                    )
-                    if (!condensed) {
-                        Text(
-                            stringResource(tab.subtitleResource),
-                            style = chromeStyle(12.5f, FontWeight.Normal),
-                            color = LiveDesign.muted,
-                            maxLines = 2,
-                        )
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                Text(
-                    stringResource(tab.pillResource),
-                    color = LiveDesign.accent,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.6.sp,
-                    modifier =
-                        Modifier.border(1.dp, LiveDesign.accentDim, CircleShape)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                )
-            }
-            // Fresh scroll position per tab. ponytail: iOS persists per-tab
-            // offsets across panel dismissal; add if the rows ever grow that long.
-            key(tab) {
-                val scrollState = rememberScrollState()
-                var viewportBounds by remember { mutableStateOf<Rect?>(null) }
-                Box(
-                    Modifier.fillMaxSize()
-                        .onGloballyPositioned { viewportBounds = it.boundsInRoot() },
-                ) {
-                    Column(
-                        Modifier.fillMaxSize().verticalScroll(scrollState),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        when (tab) {
-                            OperatorSettingsTab.SHARING ->
-                                SharingRows(
-                                    session = session,
-                                    sharing = relaySharing,
-                                    settings = settings,
-                                    enabled = relaySharingEnabled,
-                                    onShareToggle = onRelayShareToggle,
-                                    onInteraction = onInteraction,
-                                )
-                            OperatorSettingsTab.LINK ->
-                                LinkRows(
-                                    session = session,
-                                    settings = settings,
-                                    linkHealth = linkHealth,
-                                    liveViewSource = liveViewSource,
-                                    activeTransportLabel = activeTransportLabel,
-                                    relayWatchUi = relayWatchUi,
-                                    onDisconnect = onDisconnect,
-                                    onReconnect = onReconnect,
-                                    onInteraction = onInteraction,
-                                )
-                            OperatorSettingsTab.ASSIST ->
-                                AssistRows(
-                                    settings,
-                                    assistState,
-                                    cameraInput,
-                                    onSettingToggle,
-                                    onAssistToggle,
-                                    onInteraction,
-                                )
-                            OperatorSettingsTab.CONTROLS -> ControlsRows(settings, onSettingToggle)
-                            OperatorSettingsTab.DISPLAY ->
-                                DisplayRows(
-                                    settings,
-                                    compact,
-                                    onSettingToggle,
-                                    onInteraction,
-                                    scrollState,
-                                    viewportBounds,
-                                    liveCaptureMode = liveCaptureMode,
-                                    onEditView = { mode ->
-                                        // The Edit view IS the monitor, so Operator Setup steps
-                                        // aside for it.
-                                        settings.beginChromeEditing(mode)
-                                        onClose()
-                                    },
-                                )
-                            OperatorSettingsTab.STORAGE ->
-                                StorageRows(
-                                    mediaCacheStore,
-                                    frameioController,
-                                    condensed,
-                                    onCompletedMediaCacheCleared,
-                                )
-                            OperatorSettingsTab.SYSTEM ->
-                                SystemRows(
-                                    actions = systemSettingsActions,
-                                    onReportProblem = onReportProblem,
-                                    guideController = liveViewGuideController,
-                                    onShowGuideNow = onShowGuideNow,
-                                    onShowGuideOnNextRealFrame = onShowGuideOnNextRealFrame,
-                                )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Sharing tab — 1:1 with iOS `sharingRows`: enable, watcher count, 4-digit watcher passcode,
- * control-requests policy, and the live control rows (requested / held-by with Take Back).
- *
- * The tab is always present, exactly like iOS. A watcher gets the one row explaining that
- * sharing happens on the broadcasting device (re-sharing would stack a second encode and a
- * second hop on everyone downstream); standalone setup gets the same passcode / priority /
- * control-policy rows, because those are preferences an operator sets up BEFORE a shoot, and
- * the broadcast reads them the moment it starts.
- */
-@Composable
-private fun SharingRows(
-    session: CameraSession?,
-    sharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
-    settings: OperatorSettings,
-    enabled: Boolean,
-    onShareToggle: ((Boolean) -> Unit)?,
-    onInteraction: () -> Unit,
-) {
-    // Watching another device's broadcast: the only surface that owns a RelayCameraSession
-    // (relay/RelayWatchController.kt). iOS keys the same branch off `videoSource == .relay`.
-    if (session is RelayCameraSession) {
-        val state by session.state.collectAsState()
-        SettingsRowCard {
-            SettingsInlineRow(
-                title = stringResource(R.string.sharing_watching),
-                help = stringResource(R.string.help_sharing_watcher),
-                showTopDivider = false,
-            ) {
-                SettingsValueText(
-                    (state as? CameraSessionState.Connected)?.identity?.name
-                        ?: stringResource(R.string.camera_none),
-                )
-            }
-        }
-        return
-    }
-    val ui = if (sharing == null) null else sharing.ui.collectAsState().value
-    var passcodeDraft by remember { mutableStateOf(settings.relayWatcherPasscode.value) }
-    SettingsRowCard {
-        if (sharing == null) {
-            SettingsInlineRow(
-                title = stringResource(R.string.sharing_share_this_feed),
-                help = stringResource(R.string.help_sharing_share_feed),
-                showTopDivider = false,
-            ) {
-                SettingsValueText(stringResource(R.string.sharing_share_unavailable))
-            }
-        } else {
-            SettingsSwitchRow(
-                stringResource(R.string.sharing_share_this_feed),
-                isOn = enabled,
-                help = stringResource(R.string.help_sharing_share_feed),
-                showTopDivider = false,
-            ) {
-                onShareToggle?.invoke(!enabled)
-                onInteraction()
-            }
-        }
-        // A listener that cannot bind is silent otherwise: the switch springs straight back
-        // (the shell assigns `relaySharingEnabled = start(...)`) and the operator is left with
-        // a control that refuses to move. The sentence comes from the host itself
-        // (relay/MonitorRelayHost.kt "Couldn't start sharing: …"), which is what iOS shows on
-        // the monitor (MonitorRelayLink.swift:314 → NativeAppRoot.swift:1295). The controller
-        // clears it on the next start/stop, so it never outlives the attempt it explains.
-        ui?.failureReason?.let { reason ->
-            Text(
-                reason,
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.rec,
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
-        }
-        if (ui != null) {
-            SettingsInlineRow(
-                title = stringResource(R.string.sharing_watching),
-                help = stringResource(R.string.help_sharing_watching),
-            ) {
-                SettingsValueText(stringResource(R.string.sharing_watching_count, ui.watcherCount))
-            }
-        }
-        // Between Watching and the passcode, exactly where the iOS Sharing panel puts it. The
-        // option words come from the shared core rather than a string resource, so the two shells
-        // cannot end up offering differently-named stances.
-        SettingsInlineRow(
-            title = stringResource(R.string.sharing_broadcast_priority),
-            help = stringResource(R.string.help_sharing_priority),
-        ) {
-            val profile =
-                com.opencapture.openzcine.core.RelayEncoderProfile.fromWireValue(
-                    settings.relayEncoderProfile.value
-                )
-            SettingsSegmented(
-                options =
-                    com.opencapture.openzcine.core.RelayEncoderProfile.entries.map { it.title },
-                selected = profile.title,
-            ) { value ->
-                val picked =
-                    com.opencapture.openzcine.core.RelayEncoderProfile.entries.firstOrNull {
-                        it.title == value
-                    } ?: return@SettingsSegmented
-                settings.relayEncoderProfile.value = picked.wireValue
-                sharing?.encoderProfile = picked
-                onInteraction()
-            }
-        }
-        SettingsInlineRow(
-            title = stringResource(R.string.sharing_watcher_passcode),
-            help = stringResource(R.string.help_sharing_passcode),
-        ) {
-            BasicTextField(
-                value = passcodeDraft,
-                onValueChange = { new ->
-                    passcodeDraft = new.filter(Char::isDigit).take(4)
-                    // Applies live to NEW joins, exactly like iOS; watchers already in keep
-                    // their access until they leave. A cleared field means open.
-                    if (passcodeDraft.length == 4 || passcodeDraft.isEmpty()) {
-                        settings.relayWatcherPasscode.value = passcodeDraft
-                        sharing?.watcherPasscode = passcodeDraft
-                    }
-                },
-                textStyle =
-                    LocalTextStyle.current.copy(
-                        color = LiveDesign.text,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.End,
-                    ),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.width(96.dp),
-            )
-        }
-        SettingsSwitchRow(
-            stringResource(R.string.sharing_control_requests),
-            isOn = settings.relayAllowsControlRequests.value,
-            help = stringResource(R.string.help_sharing_control_requests),
-        ) {
-            settings.relayAllowsControlRequests.toggle()
-            sharing?.allowsControlRequests = settings.relayAllowsControlRequests.value
-            onInteraction()
-        }
-        ui?.pendingControlRequestName?.let {
-            SettingsInlineRow(
-                title = stringResource(R.string.sharing_control_requested),
-                help = stringResource(R.string.help_sharing_control_requested),
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SettingsActionPill(stringResource(R.string.sharing_decline)) {
-                        sharing?.declinePendingControl()
-                    }
-                    SettingsActionPill(stringResource(R.string.sharing_grant)) {
-                        sharing?.grantPendingControl()
-                    }
-                }
-            }
-        }
-        ui?.controlHolderName?.let { holder ->
-            SettingsInlineRow(
-                title = stringResource(R.string.sharing_control_held_by),
-                help = stringResource(R.string.help_sharing_camera_control),
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SettingsValueText(holder)
-                    SettingsActionPill(stringResource(R.string.sharing_take_back)) {
-                        sharing?.reclaimControl()
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Link tab — 1:1 with iOS `linkRows`: dash-scale health meter, then one row card
- * with transport, the watcher's control readout, stream preset and Quality bias.
- */
-@Composable
-private fun LinkRows(
-    session: CameraSession?,
-    settings: OperatorSettings,
-    linkHealth: AndroidLinkHealthMonitor?,
-    liveViewSource: SwiftCoreLiveFrameSource?,
-    activeTransportLabel: String?,
-    relayWatchUi: RelayWatchUiState?,
-    onDisconnect: (() -> Unit)?,
-    onReconnect: (() -> Unit)?,
-    onInteraction: () -> Unit,
-) {
-    // liveViewSource is accepted for call-site parity; iOS Link no longer surfaces
-    // preview-apply diagnostics in this tab.
-    @Suppress("UNUSED_PARAMETER")
-    val unusedLiveViewSource = liveViewSource
-    val disconnectedState = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
-    val state by (session?.state ?: disconnectedState).collectAsState()
-    val linked = state is CameraSessionState.Connected
-    val health = linkHealth?.presentation ?: LinkHealthPresentation()
-    val scoreBand =
-        when {
-            health.score >= 80 -> "Stable"
-            health.score >= 50 -> "Watch"
-            else -> "Poor"
-        }
-    val healthCaption =
-        if (session == null || !linked) {
-            health.detail.ifBlank { stringResource(R.string.settings_link_no_camera_caption) }
-        } else {
-            val detail = health.detail.ifBlank { stringResource(R.string.settings_active_link) }
-            "$detail · $scoreBand"
-        }
-    val transportValue =
-        when {
-            session == null && activeTransportLabel == null ->
-                stringResource(R.string.settings_transport_not_connected)
-            !linked -> stringResource(R.string.settings_transport_not_connected)
-            else ->
-                stringResource(
-                    R.string.settings_transport_active,
-                    activeTransportLabel ?: "Wi-Fi",
-                )
-        }
-    SettingsDashScale(
-        title = stringResource(R.string.settings_link_health),
-        caption = healthCaption,
-        score = if (linked) health.score else 0,
-    )
-
-    SettingsRowCard {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_current_transport),
-            help = stringResource(R.string.help_link_transport),
-            showTopDivider = false,
-        ) {
-            SettingsValueText(transportValue)
-        }
-        // A watcher drives nothing until the broadcaster hands over the token, so the Link tab
-        // says who is holding it (iOS `linkRows`, videoSource == .relay). The ask/give-back
-        // itself stays on the live view, not in a settings sheet.
-        if (session is RelayCameraSession) {
-            SettingsInlineRow(
-                title = stringResource(R.string.sharing_control_held_by),
-                help = stringResource(R.string.help_link_held_by),
-            ) {
-                SettingsValueText(
-                    when {
-                        relayWatchUi == null -> stringResource(R.string.settings_control_broadcaster)
-                        relayWatchUi.holdsControl -> stringResource(R.string.settings_control_this_device)
-                        else ->
-                            relayWatchUi.controlHolderName
-                                ?: stringResource(R.string.settings_control_broadcaster)
-                    },
-                )
-            }
-        }
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_stream_preset),
-            help = stringResource(R.string.help_link_stream_preset),
-        ) {
-            Row(
-                Modifier.selectableGroup(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                LiveViewStreamPreset.entries.forEach { preset ->
-                    AssistChoice(
-                        label = preset.label,
-                        selected = settings.streamPreset == preset,
-                    ) {
-                        settings.streamPreset = preset
-                        onInteraction()
-                    }
-                }
-            }
-        }
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_quality_bias),
-            help = stringResource(R.string.help_link_quality_bias),
-        ) {
-            Row(
-                Modifier.selectableGroup(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                LiveViewQualityBias.entries.forEach { bias ->
-                    AssistChoice(
-                        label = stringResource(bias.settingsLabelResource),
-                        selected = settings.qualityBias == bias,
-                    ) {
-                        settings.qualityBias = bias
-                        onInteraction()
-                    }
-                }
-            }
-        }
-        // "Health Threshold" (which rendered the stream-preset word "Balanced" under a health
-        // label) and a hardcoded "Reconnect Window · 4 sec" used to sit here. iOS has neither,
-        // and neither read anything or set anything — a readout of a number nothing consults.
-    }
-
-    // What this device does to the picture after the camera has sent it — iOS `linkRows`' third
-    // card. Both rows are announcements rather than controls: iOS runs them on VideoToolbox, and
-    // the Android counterpart (Play services' Media Enhancement API) is researched but not built.
-    // See docs/android-feed-enhancement.md. Shown on every device because a promise, unlike an
-    // option, does not have to be gated on what the hardware can run.
-    SettingsRowCard(title = stringResource(R.string.settings_processing)) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_feed_upscaler),
-            help = stringResource(R.string.help_link_feed_upscaler),
-            showTopDivider = false,
-        ) {
-            SettingsValueText(stringResource(R.string.settings_coming_soon))
-        }
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_feed_noise_reduction),
-            help = stringResource(R.string.help_link_feed_noise_reduction),
-        ) {
-            SettingsValueText(stringResource(R.string.settings_coming_soon))
-        }
-    }
-}
-
-/**
- * View Assist tab — 1:1 with iOS `ViewAssistSettingsRows`: eight per-tool cards
- * (False Color, Zebra, Waveform, Parade, Histogram, Vectorscope, Peaking,
- * Traffic Lights). Landscape uses the same two-column masonry reading order;
- * portrait is a single full-width column. Tool on/off and LUT library stay on
- * the monitor toolbar popups, matching iOS.
- */
-@Composable
-private fun AssistRows(
-    settings: OperatorSettings,
-    assistState: AssistState,
-    cameraInput: ExposureAssistCameraInput,
-    onSettingToggle: (OperatorSettings.Toggle) -> Unit,
-    onAssistToggle: (AssistTool) -> Unit,
-    onInteraction: () -> Unit,
-) {
-    @Suppress("UNUSED_PARAMETER")
-    val unusedSettingToggle = onSettingToggle
-    val imageEffectsAvailable = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
-    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
-
-    @Composable
-    fun FalseColorCard() {
-        if (!imageEffectsAvailable) {
-            SettingsRowCard(title = stringResource(R.string.settings_false_color)) {
-                SettingsInlineRow(
-                    title = stringResource(R.string.settings_image_processing),
-                    showTopDivider = false,
-                    stacked = true,
-                ) {
-                    SettingsValueText(stringResource(R.string.settings_image_processing_unavailable))
-                }
-            }
-            return
-        }
-        val configuration = settings.feedEffectsConfiguration
-        SettingsRowCard(
-            title = stringResource(R.string.settings_false_color),
-            onReset = {
-                assistState.resetFalseColorSelection()
-                settings.resetFalseColorConfiguration()
-                onInteraction()
-            },
-        ) {
-            SettingsInlineRow(
-                title = stringResource(R.string.settings_scale),
-                showTopDivider = false,
-                stacked = true,
-            ) {
-                SettingsSegmented(
-                    options = FeedFalseColorScale.entries.map { it.label },
-                    selected = assistState.selectedFalseColorScale.label,
-                ) { label ->
-                    FeedFalseColorScale.entries.firstOrNull { it.label == label }?.let { scale ->
-                        assistState.selectFalseColorScale(scale)
-                        onInteraction()
-                    }
-                }
-            }
-            SettingsSwitchRow(
-                stringResource(R.string.settings_reference_display),
-                isOn = configuration.falseColorReferenceEnabled,
-                stacked = true,
-            ) {
-                val enabled = !configuration.falseColorReferenceEnabled
-                settings.feedEffectsConfiguration =
-                    configuration.copy(falseColorReferenceEnabled = enabled)
-                if (enabled && !assistState.isOn(AssistTool.FALSE)) {
-                    onAssistToggle(AssistTool.FALSE)
-                } else {
-                    onInteraction()
-                }
-            }
-        }
-    }
-
-    @Composable
-    fun PeakingCard() {
-        if (!imageEffectsAvailable) return
-        PeakingSettingsRows(settings, onInteraction)
-    }
-
-    @Composable
-    fun ZebraCard() {
-        if (!imageEffectsAvailable) return
-        ZebraSettingsRows(settings, cameraInput, onInteraction)
-    }
-
-    if (isPortrait) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FalseColorCard()
-            ZebraCard()
-            WaveformSettingsCard(settings, onInteraction)
-            ParadeSettingsCard(settings, onInteraction)
-            HistogramSettingsCard(settings, onInteraction)
-            VectorscopeSettingsCard(settings, onInteraction)
-            PeakingCard()
-            TrafficLightsSettingsCard(settings, onInteraction)
-        }
-    } else {
-        // iOS masonry: left = odd cards (FC, Waveform, Histogram, Peaking),
-        // right = even (Zebra, Parade, Vectorscope, Traffic Lights).
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FalseColorCard()
-                WaveformSettingsCard(settings, onInteraction)
-                HistogramSettingsCard(settings, onInteraction)
-                PeakingCard()
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ZebraCard()
-                ParadeSettingsCard(settings, onInteraction)
-                VectorscopeSettingsCard(settings, onInteraction)
-                TrafficLightsSettingsCard(settings, onInteraction)
-            }
-        }
-    }
-}
-
-private val imageEffectTools: Set<AssistTool> =
-    setOf(AssistTool.LUT, AssistTool.PEAK, AssistTool.FALSE, AssistTool.ZEBRA)
-
-@Composable
-private fun feedLutLabel(lut: FeedLut): String =
-    stringResource(
-        when (lut) {
-            FeedLut.LOG3G10_709 -> R.string.lut_log_709
-            FeedLut.NLOG_709 -> R.string.lut_nlog_709
-            FeedLut.MONO -> R.string.lut_mono
-            FeedLut.R3D_NE_MONITOR -> R.string.lut_r3d_ne_monitor
-        },
-    )
-
-@Composable
-private fun peakingSensitivityLabel(value: FeedPeakingSensitivity): String =
-    stringResource(
-        when (value) {
-            FeedPeakingSensitivity.LOW -> R.string.peaking_low
-            FeedPeakingSensitivity.MEDIUM -> R.string.peaking_medium
-            FeedPeakingSensitivity.HIGH -> R.string.peaking_high
-        },
-    )
-
-@Composable
-private fun peakingColorLabel(value: FeedPeakingColor): String =
-    stringResource(
-        when (value) {
-            FeedPeakingColor.WHITE -> R.string.color_white
-            FeedPeakingColor.BLUE -> R.string.color_blue
-            FeedPeakingColor.RED -> R.string.color_red
-            FeedPeakingColor.GREEN -> R.string.color_green
-        },
-    )
-
-@Composable
-private fun zebraColorLabel(value: FeedZebraStripeColor): String =
-    stringResource(
-        when (value) {
-            FeedZebraStripeColor.WHITE -> R.string.color_white
-            FeedZebraStripeColor.AMBER -> R.string.color_amber
-            FeedZebraStripeColor.RED -> R.string.color_red
-            FeedZebraStripeColor.CYAN -> R.string.color_cyan
-            FeedZebraStripeColor.GREEN -> R.string.color_green
-        },
-    )
-
-/** iOS peaking rows: segmented sensitivity + colour dots (not text chips). */
-@Composable
-private fun PeakingSettingsRows(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.feedEffectsConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_peaking),
-        onReset = {
-            settings.resetPeakingConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_sensitivity),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = FeedPeakingSensitivity.entries.map { it.label },
-                selected = configuration.peakingSensitivity.label,
-            ) { label ->
-                FeedPeakingSensitivity.entries.firstOrNull { it.label == label }?.let { sensitivity ->
-                    settings.feedEffectsConfiguration =
-                        configuration.copy(peakingSensitivity = sensitivity)
-                    onInteraction()
-                }
-            }
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_color), stacked = true) {
-            SettingsColorDots(
-                dots = SettingsPalette.peaking,
-                selectedName = configuration.peakingColor.label,
-            ) { name ->
-                FeedPeakingColor.entries.firstOrNull { it.label == name }?.let { color ->
-                    settings.feedEffectsConfiguration = configuration.copy(peakingColor = color)
-                    onInteraction()
-                }
-            }
-        }
-    }
-}
-
-/** iOS zebra: units segmented + compact zone rows (switch + number + colour dots). */
-@Composable
-private fun ZebraSettingsRows(
-    settings: OperatorSettings,
-    cameraInput: ExposureAssistCameraInput,
-    onInteraction: () -> Unit,
-) {
-    val configuration = settings.feedEffectsConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_zebra),
-        onReset = {
-            settings.resetZebraConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_units),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = FeedZebraUnit.entries.map { it.label },
-                selected = configuration.zebraUnit.label,
-            ) { label ->
-                FeedZebraUnit.entries.firstOrNull { it.label == label }?.let { unit ->
-                    settings.feedEffectsConfiguration = configuration.copy(zebraUnit = unit)
-                    onInteraction()
-                }
-            }
-        }
-        ZebraZoneRow(
-            title = stringResource(R.string.settings_highlight),
-            enabled = configuration.zebraHighlightEnabled,
-            onEnabledToggle = {
-                settings.feedEffectsConfiguration =
-                    configuration.copy(zebraHighlightEnabled = !configuration.zebraHighlightEnabled)
-                onInteraction()
-            },
-            cameraInput = cameraInput,
-            unit = configuration.zebraUnit,
-            monitorPercent = configuration.zebraHighlightIre,
-            onThreshold = { percent ->
-                settings.feedEffectsConfiguration = configuration.copy(zebraHighlightIre = percent)
-                onInteraction()
-            },
-            palette = SettingsPalette.highlight,
-            selectedColor = configuration.zebraHighlightColor.label,
-            onColor = { name ->
-                FeedZebraStripeColor.entries.firstOrNull { it.label == name }?.let { color ->
-                    settings.feedEffectsConfiguration =
-                        configuration.copy(zebraHighlightColor = color)
-                    onInteraction()
-                }
-            },
-        )
-        ZebraZoneRow(
-            title = stringResource(R.string.settings_midtone),
-            enabled = configuration.zebraMidtoneEnabled,
-            onEnabledToggle = {
-                settings.feedEffectsConfiguration =
-                    configuration.copy(zebraMidtoneEnabled = !configuration.zebraMidtoneEnabled)
-                onInteraction()
-            },
-            cameraInput = cameraInput,
-            unit = configuration.zebraUnit,
-            monitorPercent = configuration.zebraMidtoneIre,
-            onThreshold = { percent ->
-                settings.feedEffectsConfiguration = configuration.copy(zebraMidtoneIre = percent)
-                onInteraction()
-            },
-            palette = SettingsPalette.midtone,
-            selectedColor = configuration.zebraMidtoneColor.label,
-            onColor = { name ->
-                FeedZebraStripeColor.entries.firstOrNull { it.label == name }?.let { color ->
-                    settings.feedEffectsConfiguration =
-                        configuration.copy(zebraMidtoneColor = color)
-                    onInteraction()
-                }
-            },
-        )
-    }
-}
-
-/**
- * iOS `zebraZoneRow` (compact): title stacked above switch + number field + colour
- * dots on one control row.
- */
-@Composable
-private fun ZebraZoneRow(
-    title: String,
-    enabled: Boolean,
-    onEnabledToggle: () -> Unit,
-    cameraInput: ExposureAssistCameraInput,
-    unit: FeedZebraUnit,
-    monitorPercent: Float,
-    onThreshold: (Float) -> Unit,
-    palette: List<SettingsColorDot>,
-    selectedColor: String,
-    onColor: (String) -> Unit,
-) {
-    val editorValue =
-        remember(cameraInput, unit, monitorPercent) {
-            zebraEditorValue(cameraInput, unit, monitorPercent)
-        }
-    val maximum = if (unit == FeedZebraUnit.NATIVE) 255 else 100
-    SettingsInlineRow(title = title, stacked = true) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.settingsClickable(role = Role.Switch, onClick = onEnabledToggle)) {
-                SettingsSwitchGraphic(isOn = enabled)
-            }
-            if (editorValue != null) {
-                SettingsNumberField(
-                    value = editorValue.roundToInt().coerceIn(0, maximum),
-                    maximum = maximum,
-                ) { value ->
-                    zebraMonitorPercent(cameraInput, unit, value.toFloat())?.let(onThreshold)
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            SettingsColorDots(
-                dots = palette,
-                selectedName = selectedColor,
-                compact = true,
-                onSelect = onColor,
-            )
-        }
-    }
-}
-
-/** Digits-only direct entry with the same closed-range clamp as iOS. */
-internal fun normalizedZebraEntry(raw: String, maximum: Int): Int? =
-    raw.toIntOrNull()?.coerceIn(0, maximum)
-
-/** Canvas-only scope controls. Each option below has a corresponding render/sampler path. */
-/** Waveform card — iOS segmented mode, percent slider, guide switches. */
-@Composable
-private fun WaveformSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.scopeAssistConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_waveform),
-        onReset = {
-            settings.resetWaveformConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_mode),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = ScopeWaveformMode.entries.map { it.label },
-                selected = configuration.waveformMode.label,
-            ) { label ->
-                ScopeWaveformMode.entries.firstOrNull { it.label == label }?.let { mode ->
-                    settings.scopeAssistConfiguration = configuration.copy(waveformMode = mode)
-                    onInteraction()
-                }
-            }
-        }
-        ScopeBrightnessRow(
-            brightness = configuration.waveformBrightness,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(waveformBrightness = value)
-                onInteraction()
-            },
-        )
-        ScopeGuideRows(
-            guides = configuration.waveformGuides,
-            onChange = { guides ->
-                settings.scopeAssistConfiguration = configuration.copy(waveformGuides = guides)
-                onInteraction()
-            },
-        )
-    }
-}
-
-/** Parade card — iOS segmented mode, percent slider, guide switches. */
-@Composable
-private fun ParadeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.scopeAssistConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_parade),
-        onReset = {
-            settings.resetParadeConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_mode),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = ScopeParadeMode.entries.map { it.label },
-                selected = configuration.paradeMode.label,
-            ) { label ->
-                ScopeParadeMode.entries.firstOrNull { it.label == label }?.let { mode ->
-                    settings.scopeAssistConfiguration = configuration.copy(paradeMode = mode)
-                    onInteraction()
-                }
-            }
-        }
-        ScopeBrightnessRow(
-            brightness = configuration.paradeBrightness,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(paradeBrightness = value)
-                onInteraction()
-            },
-        )
-        ScopeGuideRows(
-            guides = configuration.paradeGuides,
-            onChange = { guides ->
-                settings.scopeAssistConfiguration = configuration.copy(paradeGuides = guides)
-                onInteraction()
-            },
-        )
-    }
-}
-
-/** Vectorscope card — iOS trace zoom + brightness slider. */
-@Composable
-private fun VectorscopeSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    val configuration = settings.scopeAssistConfiguration
-    SettingsRowCard(
-        title = stringResource(R.string.settings_vectorscope),
-        onReset = {
-            settings.resetVectorscopeConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_trace_zoom),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            SettingsSegmented(
-                options = ScopeVectorscopeZoom.entries.map { it.label },
-                selected = configuration.vectorscopeZoom.label,
-            ) { label ->
-                ScopeVectorscopeZoom.entries.firstOrNull { it.label == label }?.let { zoom ->
-                    settings.scopeAssistConfiguration = configuration.copy(vectorscopeZoom = zoom)
-                    onInteraction()
-                }
-            }
-        }
-        ScopeBrightnessRow(
-            brightness = configuration.vectorscopeBrightness,
-            onSelect = { value ->
-                settings.scopeAssistConfiguration = configuration.copy(vectorscopeBrightness = value)
-                onInteraction()
-            },
-        )
-    }
-}
-
-/**
- * Histogram card — iOS: Traffic Lights switch + Crush/Clip Compensation (panel
- * scale is not an operator-setup control on iOS).
- */
-@Composable
-private fun HistogramSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(
-        title = stringResource(R.string.settings_histogram),
-        onReset = {
-            settings.resetHistogramConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsSwitchRow(
-            stringResource(R.string.settings_traffic_lights),
-            isOn = settings.histogramTrafficLightsEnabled.value,
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            settings.histogramTrafficLightsEnabled.toggle()
-            onInteraction()
-        }
-        SettingsInlineRow(title = stringResource(R.string.settings_crush_clip), stacked = true) {
-            CrushClipSegmentedControl(
-                selected = settings.scopeCrushClipCompensation,
-                onSelect = { compensation ->
-                    settings.scopeCrushClipCompensation = compensation
-                    onInteraction()
-                },
-            )
-        }
-    }
-}
-
-/** Traffic Lights card — iOS: Crush/Clip Compensation only (shared with histogram). */
-@Composable
-private fun TrafficLightsSettingsCard(settings: OperatorSettings, onInteraction: () -> Unit) {
-    SettingsRowCard(
-        title = stringResource(R.string.settings_traffic_lights),
-        onReset = {
-            settings.resetTrafficLightsConfiguration()
-            onInteraction()
-        },
-    ) {
-        SettingsInlineRow(
-            title = stringResource(R.string.settings_crush_clip),
-            showTopDivider = false,
-            stacked = true,
-        ) {
-            CrushClipSegmentedControl(
-                selected = settings.scopeCrushClipCompensation,
-                onSelect = { compensation ->
-                    settings.scopeCrushClipCompensation = compensation
-                    onInteraction()
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun CrushClipSegmentedControl(
-    selected: ScopeCrushClipCompensation,
-    onSelect: (ScopeCrushClipCompensation) -> Unit,
-) {
-    SettingsCrushClipSegmented(
-        options = ScopeCrushClipCompensation.entries.map { it.label to it.compactLabel },
-        selectedLabel = selected.label,
-    ) { label ->
-        ScopeCrushClipCompensation.entries.firstOrNull { it.label == label }?.let(onSelect)
-    }
-}
-
-@Composable
-private fun ScopeBrightnessRow(brightness: Int, onSelect: (Int) -> Unit) {
-    SettingsInlineRow(title = stringResource(R.string.settings_brightness), stacked = true) {
-        SettingsPercentSlider(
-            value = brightness,
-            range =
-                ScopeAssistConfiguration.MIN_BRIGHTNESS..ScopeAssistConfiguration.MAX_BRIGHTNESS,
-            onChange = onSelect,
-        )
-    }
-}
-
-@Composable
-private fun ScopeGuideRows(guides: ScopeGuideLines, onChange: (ScopeGuideLines) -> Unit) {
-    SettingsSwitchRow(
-        stringResource(R.string.settings_safe_border_clip),
-        isOn = guides.clip,
-        stacked = true,
-    ) {
-        onChange(guides.copy(clip = !guides.clip))
-    }
-    SettingsSwitchRow(
-        stringResource(R.string.settings_safe_border_crush),
-        isOn = guides.crush,
-        stacked = true,
-    ) {
-        onChange(guides.copy(crush = !guides.crush))
-    }
-    SettingsSwitchRow(
-        stringResource(R.string.settings_middle_gray),
-        isOn = guides.middle,
-        stacked = true,
-    ) {
-        onChange(guides.copy(middle = !guides.middle))
-    }
-}
-
-/** Controls whose effects stay wholly within the Android shell. */
-@Composable
-private fun ControlsRows(
-    settings: OperatorSettings,
-    onToggle: (OperatorSettings.Toggle) -> Unit,
-) {
-    // iOS Controls is one switch card: Record Confirmation, Bluetooth Remote
-    // Shutter, Haptics, Keep Screen Awake, Auto-Rotate Feed. The one caption below is
-    // Android-only, for an Android-only behaviour (see the comment on it).
-    SettingsRowCard {
-        SettingsSwitchRow(
-            stringResource(R.string.settings_record_confirmation),
-            isOn = settings.recordConfirmationEnabled.value,
-            showTopDivider = false,
-        ) { onToggle(settings.recordConfirmationEnabled) }
-        SettingsSwitchRow(
-            stringResource(R.string.settings_media_remote),
-            isOn = settings.mediaRemoteShutterEnabled.value,
-        ) { onToggle(settings.mediaRemoteShutterEnabled) }
-        // Visible, not behind a "?", and shown whether the switch is on or off: Android cannot
-        // tell a Bluetooth remote's key press from the phone's own, so arming this arms Volume
-        // Up/Down and Play/Pause as record toggles. That is a decision an operator has to be
-        // able to make BEFORE flipping the switch — otherwise they find out by stopping a take
-        // with the volume key. iOS has no such caveat, so it carries no such line.
-        Text(
-            stringResource(R.string.settings_media_remote_caption),
-            style = chromeStyle(10.5f, FontWeight.Normal),
-            color = LiveDesign.muted,
-            modifier = Modifier.padding(bottom = 6.dp),
-        )
-        SettingsSwitchRow(stringResource(R.string.settings_haptics), isOn = settings.hapticsEnabled.value) {
-            onToggle(settings.hapticsEnabled)
-        }
-        SettingsSwitchRow(stringResource(R.string.settings_keep_awake), isOn = settings.keepScreenAwake.value) {
-            onToggle(settings.keepScreenAwake)
-        }
-        SettingsSwitchRow(
-            stringResource(R.string.settings_auto_rotate_feed),
-            isOn = settings.autoRotateFeedEnabled.value,
-            help = stringResource(R.string.help_controls_auto_rotate_feed),
-        ) {
-            onToggle(settings.autoRotateFeedEnabled)
-        }
-    }
-}
-
-/** Maps a vertical settings drag to a clamped row index. */
-internal fun settingsReorderIndex(pointerY: Float, rowHeight: Float, itemCount: Int): Int {
-    require(rowHeight > 0f && itemCount > 0) { "settings reorder list must contain positive rows" }
-    return floor(pointerY / rowHeight).toInt().coerceIn(0, itemCount - 1)
-}
-
-/** Only the trailing handle lane can begin a settings reorder. */
-internal fun settingsReorderGripHit(
-    pointerX: Float,
-    containerWidth: Float,
-    gripWidth: Float,
-): Boolean {
-    require(containerWidth >= 0f && gripWidth > 0f) { "settings reorder grip must be positive" }
-    return pointerX >= (containerWidth - gripWidth).coerceAtLeast(0f) &&
-        pointerX <= containerWidth
-}
-
-/** Signed per-frame parent-scroll step while a reorder finger rides a viewport edge. */
-internal fun settingsReorderAutoScrollDelta(
-    pointerRootY: Float,
-    viewportTop: Float,
-    viewportBottom: Float,
-    edgeThreshold: Float,
-    maximumStep: Float,
-): Float {
-    require(viewportBottom >= viewportTop && edgeThreshold > 0f && maximumStep >= 0f) {
-        "settings reorder viewport must be valid"
-    }
-    val topDistance = pointerRootY - viewportTop
-    if (topDistance < edgeThreshold) {
-        return -maximumStep * ((edgeThreshold - topDistance) / edgeThreshold).coerceIn(0f, 1f)
-    }
-    val bottomDistance = viewportBottom - pointerRootY
-    if (bottomDistance < edgeThreshold) {
-        return maximumStep * ((edgeThreshold - bottomDistance) / edgeThreshold).coerceIn(0f, 1f)
-    }
-    return 0f
-}
-
-/** Direct-drag assist order with a TalkBack-equivalent move action on every handle. */
-@Composable
-internal fun AssistToolbarOrderList(
-    settings: OperatorSettings,
-    onInteraction: () -> Unit,
-    parentScrollState: ScrollState? = null,
-    viewportBounds: Rect? = null,
-) {
-    val tools = settings.assistToolbarOrder
-    val latestTools by rememberUpdatedState(tools)
-    val latestOnInteraction by rememberUpdatedState(onInteraction)
-    var draggingTool by remember { mutableStateOf<AssistTool?>(null) }
-    var dragPosition by remember { mutableStateOf(Offset.Zero) }
-    var dragRootY by remember { mutableStateOf<Float?>(null) }
-    var listBounds by remember { mutableStateOf<Rect?>(null) }
-    val rowHeight = 50.dp
-    val gripWidth = 48.dp
-    val density = LocalDensity.current
-    val rowHeightPx = with(density) { rowHeight.toPx() }
-    val gripWidthPx = with(density) { gripWidth.toPx() }
-    val edgeThresholdPx = with(density) { 48.dp.toPx() }
-    val maximumScrollStepPx = with(density) { 12.dp.toPx() }
-
-    LaunchedEffect(draggingTool, dragRootY, viewportBounds, parentScrollState) {
-        val scrollState = parentScrollState ?: return@LaunchedEffect
-        val rootY = dragRootY ?: return@LaunchedEffect
-        val viewport = viewportBounds ?: return@LaunchedEffect
-        while (draggingTool != null) {
-            val delta =
-                settingsReorderAutoScrollDelta(
-                    pointerRootY = rootY,
-                    viewportTop = viewport.top,
-                    viewportBottom = viewport.bottom,
-                    edgeThreshold = edgeThresholdPx,
-                    maximumStep = maximumScrollStepPx,
-                )
-            if (delta == 0f) return@LaunchedEffect
-            scrollState.scrollBy(delta)
-            delay(16)
-            val tool = draggingTool ?: return@LaunchedEffect
-            val bounds = listBounds ?: continue
-            val current = latestTools
-            if (current.isNotEmpty()) {
-                val target = settingsReorderIndex(rootY - bounds.top, rowHeightPx, current.size)
-                if (current.indexOf(tool) != target) {
-                    settings.moveAssistToolbarTool(tool, target)
-                }
-            }
-        }
-    }
-
-    BoxWithConstraints(
-        Modifier.fillMaxWidth()
-            .height(rowHeight * tools.size)
-            .onGloballyPositioned { listBounds = it.boundsInRoot() }
-            .pointerInput(Unit) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { start ->
-                        if (settingsReorderGripHit(start.x, size.width.toFloat(), gripWidthPx)) {
-                            val current = latestTools
-                            if (current.isNotEmpty()) {
-                                val index = settingsReorderIndex(start.y, rowHeightPx, current.size)
-                                draggingTool = current[index]
-                                dragPosition = start
-                                dragRootY = listBounds?.top?.plus(start.y)
-                                latestOnInteraction()
-                            }
-                        }
-                    },
-                    onDrag = { change, _ ->
-                        val tool = draggingTool
-                        if (tool != null) {
-                            change.consume()
-                            dragPosition = change.position
-                            dragRootY = listBounds?.top?.plus(change.position.y)
-                            val current = latestTools
-                            if (current.isNotEmpty()) {
-                                val target =
-                                    settingsReorderIndex(
-                                        change.position.y,
-                                        rowHeightPx,
-                                        current.size,
-                                    )
-                                if (current.indexOf(tool) != target) {
-                                    settings.moveAssistToolbarTool(tool, target)
-                                }
-                            }
-                        }
-                    },
-                    onDragEnd = {
-                        draggingTool = null
-                        dragRootY = null
-                    },
-                    onDragCancel = {
-                        draggingTool = null
-                        dragRootY = null
-                    },
-                )
-            },
-    ) {
-        val listHeightPx = constraints.maxHeight.toFloat()
-        tools.forEachIndexed { index, tool ->
-            key(tool) {
-                val toolTitle = stringResource(tool.titleResource())
-                val moveEarlier = stringResource(R.string.settings_move_earlier, toolTitle)
-                val moveLater = stringResource(R.string.settings_move_later, toolTitle)
-                val positionDescription = stringResource(R.string.settings_position, index + 1)
-                val positionLabel = stringResource(R.string.settings_position_number, index + 1)
-                val visibilityDescription =
-                    stringResource(R.string.settings_toolbar_visibility, toolTitle)
-                val visibilityState =
-                    stringResource(
-                        if (settings.isAssistToolbarToolVisible(tool)) R.string.status_visible
-                        else R.string.status_hidden,
-                    )
-                val reorderDescription =
-                    stringResource(R.string.settings_reorder_position, toolTitle, index + 1)
-                val dragging = tool == draggingTool
-                val y =
-                    if (dragging) {
-                        (dragPosition.y - rowHeightPx / 2f)
-                            .coerceIn(0f, (listHeightPx - rowHeightPx).coerceAtLeast(0f))
-                    } else {
-                        index * rowHeightPx
-                    }
-                val accessibilityActions =
-                    buildList {
-                        if (index > 0) {
-                            add(
-                                CustomAccessibilityAction(moveEarlier) {
-                                    settings.moveAssistToolbarTool(tool, index - 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                        if (index < tools.lastIndex) {
-                            add(
-                                CustomAccessibilityAction(moveLater) {
-                                    settings.moveAssistToolbarTool(tool, index + 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                    }
-                Column(
-                    Modifier.offset { IntOffset(0, y.roundToInt()) }
-                        .fillMaxWidth()
-                        .height(rowHeight)
-                        .graphicsLayer {
-                            scaleX = if (dragging) 1.02f else 1f
-                            scaleY = if (dragging) 1.02f else 1f
-                            shadowElevation = if (dragging) 12.dp.toPx() else 0f
-                            shape = ChromeShape
-                        }
-                        .zIndex(if (dragging) 1f else 0f)
-                        .background(if (dragging) LiveDesign.surface else androidx.compose.ui.graphics.Color.Transparent),
-                ) {
-                    if (index != 0) {
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(22.dp)
-                                .background(LiveDesign.surface, CircleShape)
-                                .semantics { contentDescription = positionDescription },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                positionLabel,
-                                style = chromeStyle(9f, FontWeight.Medium, mono = true),
-                                color = LiveDesign.muted,
-                            )
-                        }
-                        Text(
-                            toolTitle,
-                            style = chromeStyle(12.5f, FontWeight.SemiBold),
-                            color =
-                                if (settings.isAssistToolbarToolVisible(tool)) {
-                                    LiveDesign.text
-                                } else {
-                                    LiveDesign.muted
-                                },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (tool == AssistTool.LUT) {
-                            SettingsValueText(stringResource(R.string.settings_pinned))
-                        } else {
-                            Box(
-                                Modifier.settingsClickable(role = Role.Switch) {
-                                    settings.toggleAssistToolbarToolVisibility(tool)
-                                    onInteraction()
-                                }.semantics {
-                                    contentDescription = visibilityDescription
-                                    stateDescription = visibilityState
-                                },
-                            ) {
-                                SettingsSwitchGraphic(settings.isAssistToolbarToolVisible(tool))
-                            }
-                        }
-                        Box(
-                            Modifier.width(gripWidth)
-                                .fillMaxHeight()
-                                .semantics {
-                                    contentDescription = reorderDescription
-                                    customActions = accessibilityActions
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Canvas(Modifier.size(18.dp, 14.dp)) {
-                                val stroke = 1.6.dp.toPx()
-                                listOf(2f, 7f, 12f).forEach { yOffset ->
-                                    drawLine(
-                                        LiveDesign.faint,
-                                        Offset(1.dp.toPx(), yOffset.dp.toPx()),
-                                        Offset(size.width - 1.dp.toPx(), yOffset.dp.toPx()),
-                                        strokeWidth = stroke,
-                                        cap = StrokeCap.Round,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Direct-drag DISP order with an equivalent TalkBack move action. */
-@Composable
-internal fun DisplayModeOrderList(
-    settings: OperatorSettings,
-    onInteraction: () -> Unit,
-) {
-    val modes = settings.displayModeOrder
-    val latestModes by rememberUpdatedState(modes)
-    var draggingMode by remember { mutableStateOf<MonitorDisplayMode?>(null) }
-    var dragPosition by remember { mutableStateOf(Offset.Zero) }
-    val rowHeight = 50.dp
-    val gripWidth = 48.dp
-    val density = LocalDensity.current
-    val rowHeightPx = with(density) { rowHeight.toPx() }
-    val gripWidthPx = with(density) { gripWidth.toPx() }
-
-    BoxWithConstraints(
-        Modifier.fillMaxWidth()
-            .height(rowHeight * modes.size)
-            .pointerInput(Unit) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { start ->
-                        if (settingsReorderGripHit(start.x, size.width.toFloat(), gripWidthPx)) {
-                            val current = latestModes
-                            if (current.isNotEmpty()) {
-                                draggingMode =
-                                    current[
-                                        settingsReorderIndex(
-                                            start.y,
-                                            rowHeightPx,
-                                            current.size,
-                                        )
-                                    ]
-                                dragPosition = start
-                                onInteraction()
-                            }
-                        }
-                    },
-                    onDrag = { change, _ ->
-                        val mode = draggingMode
-                        if (mode != null) {
-                            change.consume()
-                            dragPosition = change.position
-                            val current = latestModes
-                            if (current.isNotEmpty()) {
-                                val target =
-                                    settingsReorderIndex(
-                                        change.position.y,
-                                        rowHeightPx,
-                                        current.size,
-                                    )
-                                if (current.indexOf(mode) != target) {
-                                    settings.moveDisplayMode(mode, target)
-                                }
-                            }
-                        }
-                    },
-                    onDragEnd = { draggingMode = null },
-                    onDragCancel = { draggingMode = null },
-                )
-            },
-    ) {
-        val listHeightPx = constraints.maxHeight.toFloat()
-        modes.forEachIndexed { index, mode ->
-            key(mode) {
-                val modeLabel = stringResource(mode.labelResource())
-                val moveEarlier = stringResource(R.string.settings_move_earlier, modeLabel)
-                val moveLater = stringResource(R.string.settings_move_later, modeLabel)
-                val positionDescription = stringResource(R.string.settings_position, index + 1)
-                val positionLabel = stringResource(R.string.settings_position_number, index + 1)
-                val includeDescription =
-                    stringResource(R.string.settings_disp_include, modeLabel)
-                val reorderDescription =
-                    stringResource(R.string.settings_reorder_position, modeLabel, index + 1)
-                val enabled = mode in settings.enabledDisplayModes
-                val enabledState =
-                    stringResource(
-                        if (enabled) R.string.status_enabled else R.string.status_disabled,
-                    )
-                val dragging = mode == draggingMode
-                val y =
-                    if (dragging) {
-                        (dragPosition.y - rowHeightPx / 2f)
-                            .coerceIn(0f, (listHeightPx - rowHeightPx).coerceAtLeast(0f))
-                    } else {
-                        index * rowHeightPx
-                    }
-                val accessibilityActions =
-                    buildList {
-                        if (index > 0) {
-                            add(
-                                CustomAccessibilityAction(moveEarlier) {
-                                    settings.moveDisplayMode(mode, index - 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                        if (index < modes.lastIndex) {
-                            add(
-                                CustomAccessibilityAction(moveLater) {
-                                    settings.moveDisplayMode(mode, index + 1)
-                                    onInteraction()
-                                    true
-                                },
-                            )
-                        }
-                    }
-                Column(
-                    Modifier.offset { IntOffset(0, y.roundToInt()) }
-                        .fillMaxWidth()
-                        .height(rowHeight)
-                        .graphicsLayer {
-                            scaleX = if (dragging) 1.02f else 1f
-                            scaleY = if (dragging) 1.02f else 1f
-                            shadowElevation = if (dragging) 12.dp.toPx() else 0f
-                            shape = ChromeShape
-                        }
-                        .zIndex(if (dragging) 1f else 0f)
-                        .background(
-                            if (dragging) LiveDesign.surface else androidx.compose.ui.graphics.Color.Transparent,
-                        ),
-                ) {
-                    if (index != 0) {
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(22.dp)
-                                .background(LiveDesign.surface, CircleShape)
-                                .semantics { contentDescription = positionDescription },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                positionLabel,
-                                style = chromeStyle(9f, FontWeight.Medium, mono = true),
-                                color = LiveDesign.muted,
-                            )
-                        }
-                        Text(
-                            modeLabel,
-                            style = chromeStyle(12.5f, FontWeight.SemiBold),
-                            color = if (enabled) LiveDesign.text else LiveDesign.muted,
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Box(
-                            Modifier.settingsClickable(role = Role.Switch) {
-                                if (settings.toggleDisplayMode(mode)) onInteraction()
-                            }.semantics {
-                                contentDescription = includeDescription
-                                stateDescription = enabledState
-                            },
-                        ) {
-                            SettingsSwitchGraphic(enabled)
-                        }
-                        Box(
-                            Modifier.width(gripWidth)
-                                .fillMaxHeight()
-                                .semantics {
-                                    contentDescription = reorderDescription
-                                    customActions = accessibilityActions
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Canvas(Modifier.size(18.dp, 14.dp)) {
-                                val stroke = 1.6.dp.toPx()
-                                listOf(2f, 7f, 12f).forEach { yOffset ->
-                                    drawLine(
-                                        LiveDesign.faint,
-                                        Offset(1.dp.toPx(), yOffset.dp.toPx()),
-                                        Offset(size.width - 1.dp.toPx(), yOffset.dp.toPx()),
-                                        strokeWidth = stroke,
-                                        cap = StrokeCap.Round,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Display tab. Every exposed toggle maps to Android monitor chrome rather
- * than merely recording an intent for a later shell pass.
- */
-@Composable
-private fun DisplayRows(
-    settings: OperatorSettings,
-    compact: Boolean,
-    onToggle: (OperatorSettings.Toggle) -> Unit,
-    onInteraction: () -> Unit,
-    parentScrollState: ScrollState,
-    viewportBounds: Rect?,
-    liveCaptureMode: CaptureLayoutMode,
-    onEditView: (MonitorDisplayMode) -> Unit,
-) {
-    // One card per DISP mode: each mode owns what it shows, and each opens on tap. Collapsed, the
-    // whole tab is four short rows instead of ~50 controls in one scroll (iOS `displayRows`).
-    //
-    // Video and photo keep separate layouts, and the switch for that is ONE segmented control at
-    // the top — six stacked DISP cards would double the longest tab in the app to express one bit.
-    var expandedSection by rememberSaveable { mutableStateOf<MonitorDisplayMode?>(null) }
-    var pickedCapture by rememberSaveable { mutableStateOf<CaptureLayoutMode?>(null) }
-    val capture = pickedCapture ?: liveCaptureMode
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_layout_for),
-        caption = stringResource(R.string.settings_layout_for_help),
-        captionMaxLines = 3,
-    ) {
-        SettingsSegmented(
-            options = CaptureLayoutMode.entries.map { it.title },
-            selected = capture.title,
-        ) { value ->
-            CaptureLayoutMode.entries.firstOrNull { it.title == value }?.let {
-                pickedCapture = it
-                onInteraction()
-            }
-        }
-    }
-    MonitorDisplayMode.entries.forEach { mode ->
-        SettingsGroupCard(
-            title = "DISP ${mode.ordinal + 1} · ${stringResource(mode.labelResource())}",
-            caption = stringResource(dispSectionCaption(mode)),
-            onReset = {
-                settings.resetChromeVisibility(mode, capture)
-                onInteraction()
-            },
-            // The caption IS the mode's explanation here — never let it truncate.
-            captionMaxLines = Int.MAX_VALUE,
-            expanded = expandedSection == mode,
-            onExpandToggle = {
-                expandedSection = if (expandedSection == mode) null else mode
-                onInteraction()
-            },
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // Command is a fixed dashboard grid, not the live chrome — there is no live view
-                // to place badges on, so it gets the plain list. So does the capture side the body
-                // is not currently in: badges belong on the real thing, not on a stand-in.
-                if (mode == MonitorDisplayMode.COMMAND || capture != liveCaptureMode) {
-                    if (mode != MonitorDisplayMode.COMMAND) {
-                        Text(
-                            stringResource(
-                                R.string.settings_layout_for_other_side,
-                                capture.title.lowercase(),
-                            ),
-                            style = chromeStyle(11f, FontWeight.SemiBold),
-                            color = LiveDesign.muted,
-                        )
-                    }
-                    DisplayToggleGrid(
-                        compact = compact,
-                        entries =
-                            ChromeSection.configurableIn(mode).map { section ->
-                                val toggle = settings.chrome(mode, capture)[section]
-                                DisplayToggleEntry(section.title, toggle.value) {
-                                    onToggle(toggle)
-                                }
-                            },
-                    )
-                } else {
-                    SettingsActionPill(
-                        title = stringResource(R.string.settings_edit_view),
-                        onClick = { onEditView(mode) },
-                    )
-                    // The status-bar cells. iOS nests their badges inside the deck pill in the Edit
-                    // view; here they stay a grid, because a 26dp badge inside a 28dp pill on a
-                    // phone-density Compose deck is not a reliable touch target.
-                    Text(
-                        stringResource(R.string.settings_live_readouts),
-                        style = chromeStyle(11f, FontWeight.SemiBold),
-                        color = LiveDesign.muted,
-                    )
-                    DisplayToggleGrid(
-                        compact = compact,
-                        entries =
-                            ChromeSection.statusBarReadouts.map { section ->
-                                val toggle = settings.chrome(mode, capture)[section]
-                                DisplayToggleEntry(section.title, toggle.value) { onToggle(toggle) }
-                            },
-                    )
-                    if (mode == MonitorDisplayMode.CLEAN) {
-                        Text(
-                            stringResource(R.string.settings_clean_view_tools),
-                            style = chromeStyle(11f, FontWeight.SemiBold),
-                            color = LiveDesign.muted,
-                        )
-                        DisplayToggleGrid(
-                            compact = compact,
-                            entries =
-                                // Canonical tool order, not the operator's toolbar order — the
-                                // keep list should not reshuffle itself under them when they drag
-                                // the toolbar (iOS `CleanViewPinStrip`).
-                                AssistTool.entries.map { tool ->
-                                    val title = stringResource(tool.titleResource())
-                                    DisplayToggleEntry(title, settings.isPinnedToCleanView(tool)) {
-                                        settings.toggleCleanViewPin(tool)
-                                        onInteraction()
-                                    }
-                                },
-                        )
-                    } else {
-                        Text(
-                            stringResource(R.string.settings_assist_toolbar_caption),
-                            style = chromeStyle(11f, FontWeight.SemiBold),
-                            color = LiveDesign.muted,
-                        )
-                        AssistToolbarOrderList(
-                            settings = settings,
-                            onInteraction = onInteraction,
-                            parentScrollState = parentScrollState,
-                            viewportBounds = viewportBounds,
-                        )
-                    }
-                }
-            }
-        }
-    }
-    SettingsGroupCard(
-        title = stringResource(R.string.settings_disp_order),
-        caption = stringResource(R.string.settings_disp_order_caption),
-        onReset = {
-            settings.resetDisplayModePreferences()
-            onInteraction()
-        },
-    ) {
-        DisplayModeOrderList(settings, onInteraction)
-    }
-}
-
-@StringRes
-private fun dispSectionCaption(mode: MonitorDisplayMode): Int =
-    when (mode) {
-        MonitorDisplayMode.LIVE -> R.string.settings_disp_live_caption
-        MonitorDisplayMode.CLEAN -> R.string.settings_disp_clean_caption
-        MonitorDisplayMode.COMMAND -> R.string.settings_disp_command_caption
-    }
-
-private const val FOUR_COLUMN_DISPLAY_TOGGLE_MIN_WIDTH_DP: Float = 480f
-
-/** Number of switch columns that fit without compressing a label or switch. */
-internal fun displayToggleGridColumnCount(compact: Boolean, availableWidthDp: Float): Int {
-    require(availableWidthDp >= 0f) { "display toggle width must not be negative" }
-    return if (compact || availableWidthDp < FOUR_COLUMN_DISPLAY_TOGGLE_MIN_WIDTH_DP) 2 else 4
-}
-
-private data class DisplayToggleEntry(
-    val title: String,
-    val isOn: Boolean,
-    val onToggle: () -> Unit,
-)
-
-/** Responsive 4-up/2-by-2 switch grid for the narrow post-tab-rail pane. */
-@Composable
-private fun DisplayToggleGrid(
-    compact: Boolean,
-    entries: List<DisplayToggleEntry>,
-    twoColumnOrder: List<Int>? = null,
-) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val columns = displayToggleGridColumnCount(compact, maxWidth.value)
-        val orderedEntries =
-            if (columns == 2 && twoColumnOrder != null) {
-                twoColumnOrder.map(entries::get)
-            } else {
-                entries
-            }
-        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            orderedEntries.chunked(columns).forEach { rowEntries ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    rowEntries.forEach { entry ->
-                        DisplayToggleItem(
-                            entry.title,
-                            isOn = entry.isOn,
-                            modifier = Modifier.weight(1f),
-                            onToggle = entry.onToggle,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Compact active/inactive choice chip shared by the local image-assist settings. */
-@Composable
-private fun AssistChoice(label: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        style = chromeStyle(10f, FontWeight.SemiBold, mono = true),
-        color = if (selected) LiveDesign.accent else LiveDesign.muted,
-        maxLines = 1,
-        modifier =
-            Modifier
-                .background(
-                    if (selected) LiveDesign.accentDim else LiveDesign.background.copy(alpha = 0.38f),
-                    ChromeShape,
-                )
-                .border(1.dp, if (selected) LiveDesign.accentDim else LiveDesign.hairline, ChromeShape)
-                .settingsClickable(role = Role.RadioButton, onClick = onClick)
-                .padding(horizontal = 6.dp, vertical = 5.dp),
-    )
-}
-
-/** Local progressive-media cache controls, available before a camera connects. */
-@Composable
-private fun StorageRows(
-    mediaCacheStore: MediaCacheStore,
-    frameioController: FrameioDeliveryController?,
-    condensed: Boolean,
-    onCompletedMediaCacheCleared: () -> Unit,
-) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val scope = rememberCoroutineScope()
+    val accountScope = rememberCoroutineScope()
+    val retainedAccount = accountModel ?: remember { MonitorSettingsAccountModel(accountScope) }
+    var localAccountCurrent by remember(retainedAccount) { mutableStateOf(true) }
+    DisposableEffect(retainedAccount, accountModel) {
+        onDispose {
+            localAccountCurrent = false
+            if (accountModel == null) retainedAccount.retire()
+        }
+    }
+    val closeOwned: () -> Unit = { retainedAccount.retire(); onClose() }
+    val disconnected = remember { MutableStateFlow<CameraSessionState>(CameraSessionState.Disconnected) }
+    val state by (session?.state ?: disconnected).collectAsState()
+    val linked = state is CameraSessionState.Connected
+    val health = linkHealth?.presentation
+    val phase = when (val current = state) {
+        is CameraSessionState.Connected -> health?.detail?.takeIf { it.isNotBlank() }
+            ?: "${current.identity.name} · ${activeTransportLabel ?: "Wi-Fi"}"
+        CameraSessionState.Connecting -> stringResource(R.string.camera_connecting_short)
+        CameraSessionState.Disconnected -> stringResource(R.string.settings_local_only)
+    }
+    val cacheOwner = remember(mediaCacheStore, session) { UUID.randomUUID() }
+    var cacheCurrent by remember(cacheOwner) { mutableStateOf(true) }
+    var clearReceipt by remember(cacheOwner) { mutableStateOf<String?>(null) }
     val storageState = remember(mediaCacheStore) { MediaCacheSettingsState(mediaCacheStore) }
-    var snapshot by remember(mediaCacheStore) { mutableStateOf<MediaCacheStorageSnapshot?>(null) }
-    var loadFailure by remember(mediaCacheStore) { mutableStateOf<String?>(null) }
-    var clearing by remember { mutableStateOf(false) }
-
-    LaunchedEffect(storageState) {
-        try {
-            snapshot = withContext(Dispatchers.IO) { storageState.refresh() }
-            loadFailure = null
-        } catch (error: Exception) {
-            loadFailure = error.message ?: resources.getString(R.string.cache_read_failed)
-        }
-    }
-
-    // iOS order: Frame.io first, then one Local Media Cache / Clear Cache card.
-    frameioController?.let { controller ->
-        FrameioStorageRows(controller, condensed)
-    }
-    fun clearNow() {
-        clearing = true
-        loadFailure = null
-        scope.launch {
-            try {
-                snapshot = withContext(Dispatchers.IO) { storageState.clearCompleted() }
+    DisposableEffect(cacheOwner) { onDispose { cacheCurrent = false } }
+    val cacheSource = MonitorSettingsCacheSource(
+        MonitorSettingsCacheIdentity(mediaCacheStore.rootDirectory.toString(), cacheOwner.toString()), 0,
+        isCurrent = { cacheCurrent },
+        count = { withContext(Dispatchers.IO) { storageState.refresh().usage.totalBytes } },
+        clear = {
+            val result = withContext(Dispatchers.IO) { storageState.clearCompleted() }
+            if (cacheCurrent) {
+                clearReceipt = result.clearResult?.let { clearResultLabel(context, it) }
                 onCompletedMediaCacheCleared()
-            } catch (error: Exception) {
-                loadFailure = error.message ?: resources.getString(R.string.cache_clear_failed)
-            } finally {
-                clearing = false
             }
-        }
+        },
+        clearSummary = { clearReceipt },
+    )
+    val captureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties))
+        CaptureLayoutMode.PHOTO else CaptureLayoutMode.VIDEO
+    val display = rememberNikonBorrowedDisplay(settings, assists.shared, toggleSetting, emitHaptic,
+        captureMode, onEditView = { mode -> settings.beginChromeEditing(mode); closeOwned() })
+    val unavailable = stringResource(R.string.settings_image_processing_unavailable)
+    val assistSections = listOf(MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA, MonitorAssistTool.WAVE,
+        MonitorAssistTool.PARADE, MonitorAssistTool.HISTO, MonitorAssistTool.VECTOR, MonitorAssistTool.PEAK,
+        MonitorAssistTool.LIGHTS).mapNotNull { tool ->
+        if (tool == MonitorAssistTool.FALSE && !nikonImageProcessingAvailable)
+            MonitorAssistSettingsSection.Unavailable(tool, unavailable)
+        else nikonAssistSection(tool, assists.shared, cameraInput, emitHaptic)
     }
-    SettingsRowCard {
-        if (condensed) {
-            CondensedStorageRow(
-                title = stringResource(R.string.cache_cached_media),
-                help = stringResource(R.string.help_storage_cache),
-                showTopDivider = false,
-            ) {
-                SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
-            }
-            CondensedStorageRow(
-                title = stringResource(R.string.cache_clear),
-                help = stringResource(R.string.help_storage_clear_cache),
-            ) {
-                StorageClearAction(clearing, ::clearNow)
-            }
-        } else {
-            SettingsInlineRow(
-                title = stringResource(R.string.cache_cached_media),
-                help = stringResource(R.string.help_storage_cache),
-                showTopDivider = false,
-            ) {
-                SettingsValueText(cacheSizeLabel(context, snapshot?.usage?.totalBytes))
-            }
-            // Same label as iOS, deliberately different scope, so the help says so: this
-            // clears COMPLETED entries and leaves a transfer that is still running alone
-            // (MediaCacheStore.clearCompletedEntries). iOS clears the lot.
-            SettingsInlineRow(
-                title = stringResource(R.string.cache_clear),
-                help = stringResource(R.string.help_storage_clear_cache),
-            ) {
-                StorageClearAction(clearing, ::clearNow)
-            }
-        }
-        snapshot?.clearResult?.let { result ->
-            Text(
-                clearResultLabel(context, result),
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.good,
-            )
-        }
-        loadFailure?.let { message ->
-            Text(
-                message,
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.accent,
-            )
-        }
+    val healthCaption = if (!linked) {
+        health?.detail?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_link_no_camera_caption)
+    } else {
+        val detail = health?.detail?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_active_link)
+        health?.score?.let { "$detail · ${MonitorLinkHealth.band(it).label}" } ?: detail
     }
+    val transportValue = if (!linked) stringResource(R.string.settings_transport_not_connected)
+        else stringResource(R.string.settings_transport_active, activeTransportLabel ?: "Wi-Fi")
+    val link = MonitorSettingsLinkSource(transportValue, stringResource(R.string.help_link_transport),
+        when (state) {
+            is CameraSessionState.Connected -> "Connected"
+            CameraSessionState.Connecting -> "Connecting"
+            CameraSessionState.Disconnected -> "Disconnected"
+        }, "The current connection state reported by this device.",
+        stringResource(R.string.settings_link_health), healthCaption, if (linked) health?.score else null,
+        choices = listOf(
+            MonitorSettingsChoiceSource(stringResource(R.string.settings_stream_preset),
+                stringResource(R.string.help_link_stream_preset),
+                LiveViewStreamPreset.entries.map { MonitorDisplayChoice(it.name, it.label) }, settings.streamPreset.name,
+                select = { id -> LiveViewStreamPreset.entries.firstOrNull { it.name == id }?.let {
+                    settings.streamPreset = it; emitHaptic()
+                } }),
+            MonitorSettingsChoiceSource(stringResource(R.string.settings_quality_bias),
+                stringResource(R.string.help_link_quality_bias),
+                LiveViewQualityBias.entries.map { MonitorDisplayChoice(it.name, resources.getString(it.settingsLabelResource)) },
+                settings.qualityBias.name, select = { id -> LiveViewQualityBias.entries.firstOrNull { it.name == id }?.let {
+                    settings.qualityBias = it; emitHaptic()
+                } }),
+        ),
+        controlHolder = if (session is RelayCameraSession) MonitorSettingsReadoutSource(
+            stringResource(R.string.sharing_control_held_by), stringResource(R.string.help_link_held_by),
+            when {
+                relayWatchUi == null -> stringResource(R.string.settings_control_broadcaster)
+                relayWatchUi.holdsControl -> stringResource(R.string.settings_control_this_device)
+                else -> relayWatchUi.controlHolderName ?: stringResource(R.string.settings_control_broadcaster)
+            }) else null,
+        processingTitle = stringResource(R.string.settings_processing),
+        processing = listOf(
+            MonitorSettingsReadoutSource(stringResource(R.string.settings_feed_upscaler),
+                stringResource(R.string.help_link_feed_upscaler), stringResource(R.string.settings_coming_soon)),
+            MonitorSettingsReadoutSource(stringResource(R.string.settings_feed_noise_reduction),
+                stringResource(R.string.help_link_feed_noise_reduction), stringResource(R.string.settings_coming_soon)),
+        ),
+    )
+    val controls = MonitorSettingsControlsSource(settings.recordConfirmationEnabled.value,
+        { settings.recordConfirmationEnabled.value = it }, settings.hapticsEnabled.value,
+        { settings.hapticsEnabled.value = it }, settings.keepScreenAwake.value,
+        { settings.keepScreenAwake.value = it },
+        "Keeps the live monitor or clip playback awake while the app is active.",
+        remoteShutter = settings.mediaRemoteShutterEnabled.value,
+        setRemoteShutter = { settings.mediaRemoteShutterEnabled.value = it },
+        remoteTitle = stringResource(R.string.settings_media_remote),
+        remoteCaption = stringResource(R.string.settings_media_remote_caption),
+        autoRotateFeed = settings.autoRotateFeedEnabled.value,
+        setAutoRotateFeed = { settings.autoRotateFeedEnabled.value = it },
+        rotationTitle = stringResource(R.string.settings_auto_rotate_feed),
+        rotationHelp = stringResource(R.string.help_controls_auto_rotate_feed))
+    val account = frameioController?.let { controller ->
+        accountSource(controller, retainedAccount, accountCurrent ?: { localAccountCurrent })
+    }
+    val configuration = MonitorOperatorSettingsConfiguration("OpenZCine", linked, phase,
+        closeOwned, onDisconnect?.let { disconnect -> { retainedAccount.retire(); disconnect() } }, emitHaptic, link,
+        sharingSource(session, relaySharing, settings, relaySharingEnabled, onRelayShareToggle, emitHaptic),
+        stringResource(R.string.settings_subtitle_sharing), "Broadcast & watchers", assistSections, controls,
+        cache = MonitorSettingsCachePresentation(cacheSource, { cacheSizeLabel(context, it) },
+            stringResource(R.string.status_calculating), stringResource(R.string.cache_read_failed),
+            stringResource(R.string.cache_clear_failed), stringResource(R.string.help_storage_cache),
+            stringResource(R.string.help_storage_clear_cache), LiveDesign.good, confirmClear = false),
+        account = account,
+        support = supportSource(systemSettingsActions, onReportProblem),
+        information = MonitorSettingsInformationSource(stringResource(R.string.system_theme_charcoal), "PTP / PTP-IP",
+            appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+            "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
+            "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
+            "Current OpenZCine build from the native project metadata."),
+    )
+    MonitorOperatorSettingsScreen(configuration, display, initialTab, cacheOwner)
 }
 
-/** Frame.io account entry point; upload project selection lives beside media selection. */
+/** Actual broadcast service observations and admitted native actions. */
 @Composable
-private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed: Boolean) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var hopConfirmVisible by remember { mutableStateOf(false) }
-    var hopBusy by remember { mutableStateOf(false) }
-    LaunchedEffect(controller) { controller.refresh() }
+private fun sharingSource(session: CameraSession?, sharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
+    settings: OperatorSettings, enabled: Boolean, onShareToggle: ((Boolean) -> Unit)?,
+    feedback: () -> Unit): MonitorSettingsSharingSource {
+    val state = if (session is RelayCameraSession) session.state.collectAsState().value else null
+    val ui = sharing?.ui?.collectAsState()?.value
+    val pendingRequest = ui?.pendingControlRequest
+    val profile = com.opencapture.openzcine.core.RelayEncoderProfile.fromWireValue(settings.relayEncoderProfile.value)
+    return MonitorSettingsSharingSource(
+        watching = if (session is RelayCameraSession) MonitorSettingsReadoutSource(
+            stringResource(R.string.sharing_watching), stringResource(R.string.help_sharing_watcher),
+            (state as? CameraSessionState.Connected)?.identity?.name ?: stringResource(R.string.camera_none)) else null,
+        sharingTitle = stringResource(R.string.sharing_share_this_feed), sharingHelp = stringResource(R.string.help_sharing_share_feed),
+        sharing = if (sharing == null) null else enabled, setSharing = if (sharing == null) null else onShareToggle,
+        unavailable = stringResource(R.string.sharing_share_unavailable), failure = ui?.failureReason,
+        watcherCount = ui?.let { MonitorSettingsReadoutSource(stringResource(R.string.sharing_watching),
+            stringResource(R.string.help_sharing_watching), stringResource(R.string.sharing_watching_count, it.watcherCount)) },
+        priority = MonitorSettingsChoiceSource(stringResource(R.string.sharing_broadcast_priority),
+            stringResource(R.string.help_sharing_priority), com.opencapture.openzcine.core.RelayEncoderProfile.entries.map {
+                MonitorDisplayChoice(it.wireValue.toString(), it.title)
+            }, profile.wireValue.toString(), select = { id ->
+                com.opencapture.openzcine.core.RelayEncoderProfile.entries.firstOrNull { it.wireValue.toString() == id }?.let {
+                    settings.relayEncoderProfile.value = it.wireValue; sharing?.encoderProfile = it; feedback()
+                }
+            }, segmented = true),
+        passcodeTitle = stringResource(R.string.sharing_watcher_passcode), passcodeHelp = stringResource(R.string.help_sharing_passcode),
+        passcode = settings.relayWatcherPasscode.value, setPasscode = {
+            settings.relayWatcherPasscode.value = it; sharing?.watcherPasscode = it
+        }, controlRequestsTitle = stringResource(R.string.sharing_control_requests),
+        controlRequestsHelp = stringResource(R.string.help_sharing_control_requests),
+        controlRequests = settings.relayAllowsControlRequests.value, setControlRequests = {
+            settings.relayAllowsControlRequests.value = it; sharing?.allowsControlRequests = it
+        }, pending = ui?.pendingControlRequestName?.let { MonitorSettingsReadoutSource(
+            stringResource(R.string.sharing_control_requested), stringResource(R.string.help_sharing_control_requested), it) },
+        declineTitle = stringResource(R.string.sharing_decline), decline = pendingRequest?.let { captured ->
+            sharing?.let { owner -> { owner.declinePendingControl(captured) } }
+        },
+        grantTitle = stringResource(R.string.sharing_grant), grant = pendingRequest?.let { captured ->
+            sharing?.let { owner -> { owner.grantPendingControl(captured) } }
+        },
+        holder = ui?.controlHolderName?.let { MonitorSettingsReadoutSource(stringResource(R.string.sharing_control_held_by),
+            stringResource(R.string.help_sharing_camera_control), it) },
+        takeBackTitle = stringResource(R.string.sharing_take_back), takeBack = sharing?.let { it::reclaimControl },
+    )
+}
 
+/** OS support/account adapters retain native permissions, consent and actual intents. */
+@Composable
+private fun supportSource(actions: SystemSettingsActions, onReportProblem: () -> Unit): MonitorSettingsSupportSource {
+    val context = LocalContext.current
+    val unavailable = stringResource(R.string.system_action_unavailable)
+    fun runAction(action: () -> Boolean) {
+        if (!action()) Toast.makeText(context, unavailable, Toast.LENGTH_SHORT).show()
+    }
+    var automaticReports by remember { mutableStateOf(AppDiagnostics.reporting.isOptedIn) }
+    val report by AppDiagnostics.manualReport.snapshot.collectAsState()
+    return MonitorSettingsSupportSource(automaticReports, AppDiagnostics.reporting.isAvailable,
+        stringResource(R.string.help_system_automatic_reports), stringResource(R.string.help_system_automatic_reports_unavailable),
+        { automaticReports = it; AppDiagnostics.reporting.setConsent(it) },
+        stringResource(R.string.system_report_problem), stringResource(R.string.help_system_report_problem),
+        stringResource(R.string.action_report), onReportProblem, { runAction(actions::openPrivacy) },
+        report.settingsStatus, if (report.allowsDiscard) ({ AppDiagnostics.manualReport.discard() }) else null,
+        listOf(
+            MonitorSupportAction("support.open", stringResource(R.string.system_support), actionTitle = stringResource(R.string.action_open),
+                accessibilityLabel = stringResource(R.string.system_open_support), action = { runAction(actions::openSupport) }),
+            MonitorSupportAction("support.feature", stringResource(R.string.system_request_feature), actionTitle = stringResource(R.string.action_request),
+                accessibilityLabel = stringResource(R.string.system_request_feature), action = { runAction(actions::requestFeature) }),
+            MonitorSupportAction("support.diagnostics", stringResource(R.string.system_share_diagnostics), actionTitle = stringResource(R.string.action_share),
+                accessibilityLabel = stringResource(R.string.system_share_diagnostics), action = { runAction(actions::shareDiagnostics) }),
+        ), "View the OpenZCine project and contribute on GitHub.", "Read the OpenZCine terms of use.",
+        { runAction(actions::openSource) }, { runAction(actions::openTerms) })
+}
+
+/** Existing native account/route service; the common page owns consent, busy state and card jobs. */
+@Composable
+private fun accountSource(controller: FrameioDeliveryController, model: MonitorSettingsAccountModel,
+    current: () -> Boolean): MonitorSettingsAccountSource {
+    val context = LocalContext.current
     fun beginSignIn() {
         val authorizationURL = controller.beginSignIn() ?: return
         try {
@@ -2672,163 +406,44 @@ private fun FrameioStorageRows(controller: FrameioDeliveryController, condensed:
             controller.signInBrowserUnavailable()
         }
     }
-
-    /**
-     * iOS `signInFrameioOverInternet` (MonitorPanels.swift:4922): Adobe sign-in is an HTTPS
-     * round trip, and the camera AP has no internet — so leave it, wait for a validated route,
-     * and only then hand the authorization URL to a browser. Without this the button called
-     * `beginSignIn`, which failed `requireOnline` and wrote an error string, every time.
-     * The camera rejoin runs when Operator Setup is dismissed, because the browser round trip
-     * (and the redirect back into MainActivity) outlives this row.
-     */
-    fun signInOverInternet() {
-        scope.launch {
-            hopBusy = true
-            val online =
-                try {
-                    controller.beginInternetHop()
-                } catch (_: Exception) {
-                    false
-                }
-            hopBusy = false
-            // A failed hop already left its operator-facing reason in `errorMessage`, which
-            // this card renders under the row.
-            if (online) beginSignIn()
-        }
+    val state = controller.connectionState
+    val label = when (state) {
+        FrameioConnectionState.UNCONFIGURED -> stringResource(R.string.frameio_not_set_up)
+        FrameioConnectionState.SIGNED_OUT -> stringResource(R.string.frameio_not_connected)
+        FrameioConnectionState.AUTHORIZING -> stringResource(R.string.frameio_waiting_signin)
+        FrameioConnectionState.CONNECTED -> stringResource(R.string.status_connected)
+        FrameioConnectionState.ERROR -> stringResource(R.string.status_needs_attention)
     }
-
-    fun requestSignIn() {
-        if (settingsActionNeedsInternetHop(controller.networkState)) {
-            hopConfirmVisible = true
-        } else {
-            beginSignIn()
-        }
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    val unusedCondensed = condensed
-    val connectionLabel =
-        when (controller.connectionState) {
-            FrameioConnectionState.UNCONFIGURED -> stringResource(R.string.status_not_configured)
-            FrameioConnectionState.SIGNED_OUT -> stringResource(R.string.frameio_not_connected)
-            FrameioConnectionState.AUTHORIZING -> stringResource(R.string.frameio_waiting_signin)
-            FrameioConnectionState.CONNECTED -> stringResource(R.string.status_connected)
-            FrameioConnectionState.ERROR -> stringResource(R.string.status_needs_attention)
-        }
-
-    // iOS Storage: single "Frame.io" row with Log out / Sign in / status value.
-    SettingsRowCard {
-        SettingsInlineRow(
-            title = stringResource(R.string.frameio_delivery),
-            help = stringResource(R.string.help_storage_frameio),
-            showTopDivider = false,
-        ) {
-            when {
-                hopBusy -> SettingsValueText(stringResource(R.string.frameio_switching_networks))
-                controller.connectionState == FrameioConnectionState.CONNECTED ->
-                    SettingsLinkAction(stringResource(R.string.action_log_out)) {
-                        controller.disconnect()
-                    }
-                controller.connectionState == FrameioConnectionState.UNCONFIGURED ->
-                    SettingsValueText(stringResource(R.string.frameio_not_set_up))
-                controller.connectionState == FrameioConnectionState.SIGNED_OUT ->
-                    if (settingsActionNeedsInternetHop(controller.networkState)) {
-                        SettingsLinkAction(stringResource(R.string.frameio_sign_in_over_internet)) {
-                            requestSignIn()
-                        }
-                    } else {
-                        SettingsLinkAction(stringResource(R.string.action_sign_in)) { beginSignIn() }
-                    }
-                controller.connectionState == FrameioConnectionState.ERROR ->
-                    SettingsLinkAction(stringResource(R.string.action_try_again)) { requestSignIn() }
-                else -> SettingsValueText(connectionLabel)
+    val needsConsent = settingsActionNeedsInternetHop(controller.networkState)
+    val actions = MonitorSettingsAccountActions(controller, current, needsConsent,
+        connect = { beginSignIn() }, disconnect = controller::disconnect,
+        beginInternet = { admission ->
+            controller.claimInternetHop(admission)?.let { captured ->
+                MonitorSettingsInternetLease(
+                    isCurrent = { controller.ownsInternetHop(captured) },
+                    wait = { controller.waitInternetHop(captured) },
+                    restore = { controller.restoreInternetHopAfterDismiss(captured) },
+                    cleanup = MonitorSettingsInternetCleanup.ON_RETIRE,
+                )
             }
-        }
-        controller.errorMessage?.let { message ->
-            Text(
-                message,
-                style = chromeStyle(10.5f, FontWeight.Normal),
-                color = LiveDesign.accent,
-            )
-        }
-    }
-
-    // iOS "Leave camera Wi-Fi to sign in?" (MonitorPanels.swift:4875-4882): the camera link
-    // drops for the duration, so the operator says yes to that before anything happens.
-    if (hopConfirmVisible) {
-        AlertDialog(
-            onDismissRequest = { hopConfirmVisible = false },
-            title = { Text(stringResource(R.string.frameio_hop_signin_title)) },
-            text = { Text(stringResource(R.string.frameio_hop_signin_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        hopConfirmVisible = false
-                        signInOverInternet()
-                    },
-                ) {
-                    Text(stringResource(R.string.action_sign_in))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { hopConfirmVisible = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-}
-
-/** Short landscape storage row that preserves a 48dp clear-cache target. */
-@Composable
-private fun CondensedStorageRow(
-    title: String,
-    help: String? = null,
-    showTopDivider: Boolean = true,
-    trailing: @Composable () -> Unit,
-) {
-    Column {
-        if (showTopDivider) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(LiveDesign.hairline))
-        }
-        Row(
-            Modifier.fillMaxWidth().height(44.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                title,
-                style = chromeStyle(12.5f, FontWeight.SemiBold),
-                color = LiveDesign.text,
-                maxLines = 1,
-            )
-            help?.let { SettingsHelpBadge(it) }
-            Spacer(Modifier.weight(1f))
-            trailing()
-        }
-    }
-}
-
-/** Accessible destructive-cache action used in regular and short layouts. */
-@Composable
-private fun StorageClearAction(clearing: Boolean, onClick: () -> Unit) {
-    if (clearing) {
-        SettingsValueText(stringResource(R.string.cache_clearing))
-    } else {
-        val description = stringResource(R.string.cache_clear_description)
-        Box(
-            Modifier.size(48.dp)
-                .settingsClickable(role = Role.Button, onClick = onClick)
-                .semantics { contentDescription = description },
-            contentAlignment = Alignment.CenterEnd,
-        ) {
-            Text(
-                stringResource(R.string.action_clear),
-                style = chromeStyle(13f, FontWeight.SemiBold),
-                color = LiveDesign.accent,
-            )
-        }
-    }
+        }, internetFailure = controller.errorMessage)
+    return MonitorSettingsAccountSource(model, actions, controller, stringResource(R.string.frameio_delivery),
+        stringResource(R.string.help_storage_frameio), when (state) {
+            FrameioConnectionState.UNCONFIGURED -> MonitorAccountState.NOT_CONFIGURED
+            FrameioConnectionState.SIGNED_OUT -> MonitorAccountState.SIGNED_OUT
+            FrameioConnectionState.AUTHORIZING -> MonitorAccountState.CONNECTING
+            FrameioConnectionState.CONNECTED -> MonitorAccountState.SIGNED_IN
+            FrameioConnectionState.ERROR -> MonitorAccountState.ATTENTION
+        }, label,
+        stringResource(when {
+            state == FrameioConnectionState.ERROR -> R.string.action_try_again
+            needsConsent -> R.string.frameio_sign_in_over_internet
+            else -> R.string.action_sign_in
+        }), stringResource(R.string.action_log_out), stringResource(R.string.frameio_switching_networks),
+        controller.errorMessage,
+        stringResource(R.string.frameio_hop_signin_title), stringResource(R.string.frameio_hop_signin_message),
+        stringResource(R.string.action_sign_in), stringResource(R.string.action_cancel),
+        controller::refresh)
 }
 
 private fun cacheSizeLabel(context: Context, bytes: Long?): String =
@@ -2853,93 +468,3 @@ private fun clearResultLabel(context: Context, result: MediaCacheClearResult): S
                 cacheSizeLabel(context, result.preservedIncompleteBytes),
             )
     }
-
-/** System tab: native support/share intents, replayable guide, project links, and build data. */
-@Composable
-internal fun SystemRows(
-    actions: SystemSettingsActions,
-    onReportProblem: () -> Unit,
-    guideController: LiveViewGuideController,
-    onShowGuideNow: (() -> Unit)?,
-    onShowGuideOnNextRealFrame: () -> Unit,
-) {
-    val context = LocalContext.current
-    val unavailableMessage = stringResource(R.string.system_action_unavailable)
-    fun runAction(action: () -> Boolean) {
-        if (!action()) {
-            Toast.makeText(
-                context,
-                unavailableMessage,
-                Toast.LENGTH_SHORT,
-            ).show()
-        }
-    }
-
-    // iOS System uses titled SettingsRowCard sections (no captions / no licenses row).
-    SettingsRowCard(title = stringResource(R.string.system_help_feedback)) {
-        SettingsInlineRow(stringResource(R.string.system_support), showTopDivider = false) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_support),
-            ) { runAction(actions::openSupport) }
-        }
-        SettingsInlineRow(stringResource(R.string.system_report_problem)) {
-            SettingsActionPill(stringResource(R.string.action_report)) { onReportProblem() }
-        }
-        SettingsInlineRow(stringResource(R.string.system_request_feature)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_request),
-                stringResource(R.string.system_request_feature),
-            ) {
-                runAction(actions::requestFeature)
-            }
-        }
-        SettingsInlineRow(stringResource(R.string.system_share_diagnostics)) {
-            SettingsActionPill(stringResource(R.string.action_share)) {
-                runAction(actions::shareDiagnostics)
-            }
-        }
-        SettingsInlineRow(stringResource(R.string.system_live_view_guide)) {
-            SettingsActionPill(stringResource(R.string.action_show_again)) {
-                if (onShowGuideNow != null) {
-                    onShowGuideNow()
-                } else {
-                    onShowGuideOnNextRealFrame()
-                }
-            }
-        }
-    }
-
-    SettingsRowCard(title = stringResource(R.string.system_project_legal)) {
-        SettingsInlineRow(stringResource(R.string.system_source_code), showTopDivider = false) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_source_code),
-            ) { runAction(actions::openSource) }
-        }
-        SettingsInlineRow(stringResource(R.string.system_privacy)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_privacy),
-            ) { runAction(actions::openPrivacy) }
-        }
-        SettingsInlineRow(stringResource(R.string.system_terms)) {
-            SettingsLinkAction(
-                stringResource(R.string.action_open),
-                stringResource(R.string.system_open_terms),
-            ) { runAction(actions::openTerms) }
-        }
-    }
-
-    SettingsRowCard(title = stringResource(R.string.system_app_information)) {
-        SettingsInlineRow(stringResource(R.string.system_theme), showTopDivider = false) {
-            SettingsValueText(stringResource(R.string.system_theme_warm_dark))
-        }
-        SettingsInlineRow(stringResource(R.string.system_protocol)) {
-            SettingsValueText("PTP / PTP-IP")
-        }
-        SettingsInlineRow(stringResource(R.string.system_app_version)) {
-            SettingsValueText(appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE))
-        }
-    }
-}

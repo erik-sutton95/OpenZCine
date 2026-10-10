@@ -1,40 +1,17 @@
 package com.opencapture.openzcine.media
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.opencapture.openzcine.LiveDesign
-import com.opencapture.openzcine.chromeClickable
-import com.opencapture.openzcine.chromePressable
-import com.opencapture.openzcine.chromeStyle
-import com.opencapture.openzcine.glass
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
 import java.util.Locale
+import com.opencapture.opencine.nikon.NikonNative
+import com.opencapture.opencine.appkit.LocalOperatorHaptics
+import com.opencapture.monitorui.MonitorConfirmPopup
+import com.opencapture.monitorui.MonitorStarRating
 
 /**
  * Camera-card deletion policy and the star-rating chrome shared by the still
@@ -53,14 +30,14 @@ import java.util.Locale
  * Nikon HEIF went unlisted as a result.) Stills always carry the label — `MediaLibraryState`
  * enforces `contentKind == STILL_PHOTO` iff `stillPhoto != null`, and the cache round-trips it.
  */
-internal val MediaClipRecord.isJpegStill: Boolean
+internal val NikonMediaClipRecord.isJpegStill: Boolean
     get() = formatFilter() == MediaFormatFilter.JPEG
 
 /** True for Nikon RAW stills (iOS `isRawPhoto`) — the tag-along pair side. */
-internal val MediaClipRecord.isRawStill: Boolean
+internal val NikonMediaClipRecord.isRawStill: Boolean
     get() = formatFilter() == MediaFormatFilter.NEF
 
-private val MediaClipRecord.filenameExtension: String
+private val NikonMediaClipRecord.filenameExtension: String
     get() = filename.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.US)
 
 /**
@@ -70,31 +47,15 @@ private val MediaClipRecord.filenameExtension: String
  * separate items. The bucket keeps two cameras' formulaic `DSC_0001` stems
  * apart in the offline multi-camera library.
  */
-internal fun MediaClipRecord.rawPairKey(ownerCameraID: String): String =
+internal fun NikonMediaClipRecord.rawPairKey(ownerCameraID: String): String =
     "$ownerCameraID/$storageId/${filename.substringBeforeLast('.').lowercase(Locale.US)}"
-
-/**
- * This clip as a burst-detection frame (iOS `MediaClip.burstFrame`): capture identity plus a
- * format/dimensions signature, keyed by the object's library id so members map back to records.
- * RAW and JPEG of one shot share the stem so a burst of pairs counts once.
- */
-internal fun MediaClipRecord.burstFrame(ownerCameraID: String): BurstFrame =
-    BurstFrame(
-        id = libraryKey(ownerCameraID),
-        storageId = storageId,
-        handle = handle,
-        captureDate = captureDate,
-        stem = filename.substringBeforeLast('.').lowercase(Locale.US),
-        isRaw = isRawStill,
-        formatKey = "$filenameExtension|${pixelWidth}x$pixelHeight",
-    )
 
 /** The same-shot RAW behind a JPEG's item; null for unpaired stills. */
 internal fun rawSibling(
-    catalog: List<MediaClipRecord>,
-    clip: MediaClipRecord,
-    ownerCameraID: (MediaClipRecord) -> String,
-): MediaClipRecord? {
+    catalog: List<NikonMediaClipRecord>,
+    clip: NikonMediaClipRecord,
+    ownerCameraID: (NikonMediaClipRecord) -> String,
+): NikonMediaClipRecord? {
     if (!clip.isJpegStill) return null
     val pairKey = clip.rawPairKey(ownerCameraID(clip))
     return catalog.firstOrNull { it.isRawStill && it.rawPairKey(ownerCameraID(it)) == pairKey }
@@ -106,14 +67,14 @@ internal fun rawSibling(
  * the JPEG side regardless of the toggle.
  */
 internal fun stillViewerDisplaySide(
-    clip: MediaClipRecord,
-    rawSibling: MediaClipRecord?,
+    clip: NikonMediaClipRecord,
+    rawSibling: NikonMediaClipRecord?,
     showingRaw: Boolean,
-): MediaClipRecord = if (showingRaw) rawSibling ?: clip else clip
+): NikonMediaClipRecord = if (showingRaw) rawSibling ?: clip else clip
 
 private val masterExtensions = setOf("r3d", "nev")
 
-private fun MediaClipRecord.stemLowercase(): String =
+private fun NikonMediaClipRecord.stemLowercase(): String =
     filename.substringBeforeLast('.').lowercase(Locale.US)
 
 /**
@@ -123,10 +84,10 @@ private fun MediaClipRecord.stemLowercase(): String =
  * matches (every undated file would twin). [verify-on-HW: backup-mode capture dates match]
  */
 internal fun crossCardTwins(
-    catalog: List<MediaClipRecord>,
-    clip: MediaClipRecord,
-    ownerCameraID: (MediaClipRecord) -> String,
-): List<MediaClipRecord> {
+    catalog: List<NikonMediaClipRecord>,
+    clip: NikonMediaClipRecord,
+    ownerCameraID: (NikonMediaClipRecord) -> String,
+): List<NikonMediaClipRecord> {
     if (clip.captureDate.isEmpty()) return emptyList()
     val owner = ownerCameraID(clip)
     val stem = clip.stemLowercase()
@@ -143,15 +104,15 @@ internal fun crossCardTwins(
  * hides them behind the proxy, so deleting the proxy must take them along.
  */
 internal fun linkedMasters(
-    catalog: List<MediaClipRecord>,
-    clip: MediaClipRecord,
-    ownerCameraID: (MediaClipRecord) -> String,
-): List<MediaClipRecord> {
-    if (clip.contentKind != MediaContentKind.PLAYABLE_PROXY) return emptyList()
+    catalog: List<NikonMediaClipRecord>,
+    clip: NikonMediaClipRecord,
+    ownerCameraID: (NikonMediaClipRecord) -> String,
+): List<NikonMediaClipRecord> {
+    if (clip.contentKind != NikonMediaContentKind.PLAYABLE_PROXY) return emptyList()
     val owner = ownerCameraID(clip)
     val stem = clip.stemLowercase()
     return catalog.filter {
-        MediaObjectIdentity(it) != MediaObjectIdentity(clip) &&
+        NikonMediaObjectIdentity(it) != NikonMediaObjectIdentity(clip) &&
             it.storageId == clip.storageId &&
             ownerCameraID(it) == owner &&
             it.filenameExtension in masterExtensions &&
@@ -164,7 +125,7 @@ internal fun linkedMasters(
  * from the same expansion so they can never disagree (iOS `DeletionPlan`).
  */
 internal data class DeletionPlan(
-    val targets: List<MediaClipRecord>,
+    val targets: List<NikonMediaClipRecord>,
     /** RAW siblings pulled in behind requested JPEGs. */
     val pairCount: Int,
     /** Same-stem camera masters pulled in behind requested proxies. */
@@ -178,16 +139,16 @@ internal data class DeletionPlan(
  * sibling, its hidden camera master, and the cross-card twins of all of those.
  */
 internal fun deletionPlan(
-    catalog: List<MediaClipRecord>,
-    selection: List<MediaClipRecord>,
-    ownerCameraID: (MediaClipRecord) -> String,
+    catalog: List<NikonMediaClipRecord>,
+    selection: List<NikonMediaClipRecord>,
+    ownerCameraID: (NikonMediaClipRecord) -> String,
 ): DeletionPlan {
-    val targets = LinkedHashMap<MediaObjectIdentity, MediaClipRecord>()
+    val targets = LinkedHashMap<NikonMediaObjectIdentity, NikonMediaClipRecord>()
     var pairs = 0
     var masters = 0
     var backups = 0
-    fun insert(clip: MediaClipRecord): Boolean {
-        val identity = MediaObjectIdentity(clip)
+    fun insert(clip: NikonMediaClipRecord): Boolean {
+        val identity = NikonMediaObjectIdentity(clip)
         if (targets.containsKey(identity)) return false
         targets[identity] = clip
         return true
@@ -215,10 +176,10 @@ internal fun deletionPlan(
  * hidden camera masters, cross-card backup twins), de-duplicated in selection order.
  */
 internal fun cameraDeletionTargets(
-    catalog: List<MediaClipRecord>,
-    selection: List<MediaClipRecord>,
-    ownerCameraID: (MediaClipRecord) -> String,
-): List<MediaClipRecord> = deletionPlan(catalog, selection, ownerCameraID).targets
+    catalog: List<NikonMediaClipRecord>,
+    selection: List<NikonMediaClipRecord>,
+    ownerCameraID: (NikonMediaClipRecord) -> String,
+): List<NikonMediaClipRecord> = deletionPlan(catalog, selection, ownerCameraID).targets
 
 /**
  * Destructive-confirmation copy naming only what this request actually removes: still wording
@@ -226,15 +187,15 @@ internal fun cameraDeletionTargets(
  * when backup twins really exist (iOS `deletionConfirmMessage`).
  */
 internal fun deleteConfirmationMessage(
-    catalog: List<MediaClipRecord>,
-    selection: List<MediaClipRecord>,
-    ownerCameraID: (MediaClipRecord) -> String,
+    catalog: List<NikonMediaClipRecord>,
+    selection: List<NikonMediaClipRecord>,
+    ownerCameraID: (NikonMediaClipRecord) -> String,
 ): String {
     val plan = deletionPlan(catalog, selection, ownerCameraID)
     var message =
         if (selection.size == 1) {
             val only = selection.single()
-            if (only.contentKind == MediaContentKind.STILL_PHOTO) {
+            if (only.contentKind == NikonMediaContentKind.STILL_PHOTO) {
                 "Delete this photo from the camera card?"
             } else {
                 "Delete ${only.filename} from the camera card?"
@@ -250,7 +211,7 @@ internal fun deleteConfirmationMessage(
 
 /**
  * Five-star rating row on glass (iOS `StarRatingRow`): tap a star to set the
- * count, tap the active count to clear. Optimistic — the caller writes to the
+ * count, tap the active count to clear. The caller writes to the
  * camera and rolls back on failure.
  */
 @Composable
@@ -259,39 +220,12 @@ internal fun StarRatingRow(
     modifier: Modifier = Modifier,
     onSelect: (Int) -> Unit,
 ) {
-    Row(
-        modifier
-            // CircleShape renders as a capsule on a wide row, like iOS's Capsule.
-            .glass(CircleShape)
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        (1..5).forEach { star ->
-            val filled = star <= stars
-            // The glyph stays 22 dp; the TOUCH box is 44 dp, matching iOS's `.zcTapTarget`.
-            // It used to be the bare 22 dp icon with 10 dp gaps and no press feedback, so a
-            // near-miss did nothing visible and the rating read as broken — the write path
-            // behind it was always fine.
-            Box(
-                Modifier.size(44.dp)
-                    .semantics { role = Role.Button }
-                    .chromePressable { onSelect(if (star == stars) 0 else star) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    if (filled) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = "Rate $star star${if (star == 1) "" else "s"}",
-                    tint = if (filled) LiveDesign.accent else LiveDesign.muted,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
-    }
+    val haptics = LocalOperatorHaptics.current
+    MonitorStarRating(stars, onSelect, modifier = modifier, selectionFeedback = haptics::selection)
 }
 
 /**
- * The outcome of `SwiftCore.sessionSetObjectRating`, whose packed `Int` return encodes three
+ * The outcome of `NikonNative.sessionSetObjectRating`, whose packed `Int` return encodes three
  * cases: a confirmed 0–5 star count, a state-based refusal carrying the body's wire code, or a
  * generic failure with no code. The camera stays source of truth — a refusal is surfaced with
  * its code, never a silent rollback, and never mirrored into the local favorite index.
@@ -324,8 +258,8 @@ internal fun ratingRefusalMessage(code: Int): String =
 private fun ratingCodeHex(code: Int): String = "0x%04X".format(code)
 
 /**
- * Destructive camera-card deletion confirmation on the media glass style —
- * matching iOS's confirmation dialog rather than a Material alert.
+ * Destructive camera-card deletion confirmation: the shared confirm card in its own window, so it
+ * sits over every overlay and Back dismisses it.
  */
 @Composable
 internal fun MediaDeleteConfirmDialog(
@@ -333,63 +267,14 @@ internal fun MediaDeleteConfirmDialog(
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
-                .chromeClickable(onClick = onDismiss),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                Modifier
-                    .padding(horizontal = 20.dp)
-                    .widthIn(max = 400.dp)
-                    .fillMaxWidth()
-                    .glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp))
-                    .chromeClickable(onClick = {}) // absorb taps so the backdrop doesn't dismiss
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Text(
-                    message,
-                    style = chromeStyle(14f, FontWeight.Medium),
-                    color = LiveDesign.text,
-                )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Cancel",
-                        style = chromeStyle(13f, FontWeight.SemiBold),
-                        color = LiveDesign.muted,
-                        modifier =
-                            Modifier.glass(CircleShape)
-                                .semantics {
-                                    contentDescription = "Cancel deletion"
-                                    role = Role.Button
-                                }.chromeClickable(onClick = onDismiss)
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                    )
-                    Text(
-                        "Delete",
-                        style = chromeStyle(13f, FontWeight.SemiBold),
-                        color = Color(0xFFFF5A54),
-                        modifier =
-                            Modifier.glass(CircleShape)
-                                .semantics {
-                                    contentDescription = "Delete from the camera card"
-                                    role = Role.Button
-                                }.chromeClickable(onClick = onDelete)
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                    )
-                }
-            }
-        }
+    val haptics = LocalOperatorHaptics.current
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        MonitorConfirmPopup(
+            title = message,
+            confirmTitle = "Delete",
+            onDismiss = onDismiss,
+            onConfirm = onDelete,
+            onClickFeedback = { haptics.selection() },
+        )
     }
 }

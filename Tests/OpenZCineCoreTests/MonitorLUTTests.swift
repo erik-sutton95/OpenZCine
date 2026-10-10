@@ -225,66 +225,37 @@ func cubeIsFinite(look: MonitorLUT) {
 
 // MARK: - 50/50 Log vs LUT comparison
 
-@Test func splitComparisonIsOffByDefaultAndOpensVertical() {
-    #expect(!OperatorPreferences.defaults.splitComparisonEnabled)
-    #expect(OperatorPreferences.defaults.splitComparisonOrientation == .vertical)
-}
-
 @Test func splitComparisonNeedsBothThePreferenceAndTheLUTTool() {
-    var preferences = OperatorPreferences.defaults
-    #expect(LUTResolution.splitComparison(visibleTools: [.lut], preferences: preferences) == nil)
-
-    preferences.splitComparisonEnabled = true
-    preferences.splitComparisonOrientation = .horizontal
+    #expect(
+        LUTResolution.splitComparison(visibleTools: [.lut], enabled: false, vertical: true) == nil)
     // No grade on screen means nothing to compare — and no divider or labels either.
     #expect(
-        LUTResolution.splitComparison(visibleTools: [.peaking], preferences: preferences) == nil)
+        LUTResolution.splitComparison(visibleTools: [.peaking], enabled: true, vertical: false)
+            == nil)
     #expect(
-        LUTResolution.splitComparison(visibleTools: [.lut, .peaking], preferences: preferences)
+        LUTResolution.splitComparison(
+            visibleTools: [.lut, .peaking], enabled: true, vertical: false)
             == .horizontal)
-}
-
-@Test func splitComparisonFollowsTheCleanViewPinLikeTheLUTItself() {
-    var preferences = OperatorPreferences.defaults
-    preferences.splitComparisonEnabled = true
-    preferences.liveViewVisibleAssistTools = [.lut]
-    // The stock pins include the LUT; this is about what an UNPINNED tool does in clean, so
-    // start from a bare set rather than from whatever DISP 2 happens to ship with.
-    preferences.cleanViewPinnedTools = []
-
-    let live = MonitorChromePolicy.visibleTools(mode: .live, preferences: preferences)
-    #expect(LUTResolution.splitComparison(visibleTools: live, preferences: preferences) != nil)
-
-    // Clean drops the tool unless pinned, so the comparison leaves with it.
-    let clean = MonitorChromePolicy.visibleTools(mode: .clean, preferences: preferences)
-    #expect(LUTResolution.splitComparison(visibleTools: clean, preferences: preferences) == nil)
-
-    preferences.cleanViewPinnedTools = [.lut]
-    let pinned = MonitorChromePolicy.visibleTools(mode: .clean, preferences: preferences)
-    #expect(LUTResolution.splitComparison(visibleTools: pinned, preferences: preferences) != nil)
 }
 
 @Test func theOnFeedQuickKeySurvivesItsOwnTap() {
     // The key mutes the comparison; if it followed the muted state instead of the armed one, the
     // first tap would remove the only control that undoes it.
-    var preferences = OperatorPreferences.defaults
-    preferences.splitComparisonEnabled = true
     let tools: Set<MonitorAssistTool> = [.lut]
 
     #expect(
-        LUTResolution.splitComparison(visibleTools: tools, preferences: preferences, muted: false)
+        LUTResolution.splitComparison(
+            visibleTools: tools, enabled: true, vertical: true, muted: false)
             == .vertical)
     #expect(
-        LUTResolution.splitComparison(visibleTools: tools, preferences: preferences, muted: true)
+        LUTResolution.splitComparison(
+            visibleTools: tools, enabled: true, vertical: true, muted: true)
             == nil)
-    #expect(LUTResolution.showsSplitComparisonKey(visibleTools: tools, preferences: preferences))
+    #expect(LUTResolution.showsSplitComparisonKey(visibleTools: tools, enabled: true))
 
     // Disarmed from the pop-up, or with no grade on screen, the key goes with the feature.
-    preferences.splitComparisonEnabled = false
-    #expect(!LUTResolution.showsSplitComparisonKey(visibleTools: tools, preferences: preferences))
-    preferences.splitComparisonEnabled = true
-    #expect(
-        !LUTResolution.showsSplitComparisonKey(visibleTools: [.peaking], preferences: preferences))
+    #expect(!LUTResolution.showsSplitComparisonKey(visibleTools: tools, enabled: false))
+    #expect(!LUTResolution.showsSplitComparisonKey(visibleTools: [.peaking], enabled: true))
 }
 
 @Test func splitHalvesTileTheVisibleImageRectAndMeetAtItsCentre() {
@@ -349,39 +320,6 @@ func cubeIsFinite(look: MonitorLUT) {
                     == insideLUTHalf)
         }
     }
-}
-
-@Test func splitComparisonPreferencesRoundTripAndOlderBlobsDecodeToOff() throws {
-    var preferences = OperatorPreferences.defaults
-    preferences.splitComparisonEnabled = true
-    preferences.splitComparisonOrientation = .horizontal
-    let encoded = try JSONEncoder().encode(preferences)
-    let decoded = try JSONDecoder().decode(OperatorPreferences.self, from: encoded)
-    #expect(decoded.splitComparisonEnabled)
-    #expect(decoded.splitComparisonOrientation == .horizontal)
-
-    // A blob written before the feature existed carries neither key.
-    var dict = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-    dict.removeValue(forKey: "splitComparisonEnabled")
-    dict.removeValue(forKey: "splitComparisonOrientation")
-    let migrated = try JSONDecoder().decode(
-        OperatorPreferences.self, from: try JSONSerialization.data(withJSONObject: dict))
-    #expect(!migrated.splitComparisonEnabled)
-    #expect(migrated.splitComparisonOrientation == .vertical)
-}
-
-@Test func splitOrientationSurvivesSwitchingTheComparisonOff() throws {
-    // "Preserve the operator's orientation preference while the feature is enabled" — which only
-    // holds if the two are stored independently rather than collapsed into one tri-state.
-    var preferences = OperatorPreferences.defaults
-    preferences.splitComparisonEnabled = true
-    preferences.splitComparisonOrientation = .horizontal
-    preferences.splitComparisonEnabled = false
-
-    let reloaded = try JSONDecoder().decode(
-        OperatorPreferences.self, from: try JSONEncoder().encode(preferences))
-    #expect(!reloaded.splitComparisonEnabled)
-    #expect(reloaded.splitComparisonOrientation == .horizontal)
 }
 
 /// The movie and stills white balance are different camera settings that decode through the same

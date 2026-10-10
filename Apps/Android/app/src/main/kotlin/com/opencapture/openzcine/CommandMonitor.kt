@@ -3,8 +3,6 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,7 +28,6 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
@@ -40,7 +37,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -61,18 +57,24 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import com.opencapture.openzcine.core.CameraControl
-import com.opencapture.openzcine.core.CameraPropertyRefreshFailure
-import com.opencapture.openzcine.core.CameraPropertyRefreshStatus
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraShutterMode
-import com.opencapture.openzcine.core.CameraTemperatureStatus
-import com.opencapture.openzcine.core.CodecBitDepthOption
-import com.opencapture.openzcine.core.LiveFrameTimecode
-import com.opencapture.openzcine.settings.PanelCloseButton
+import com.opencapture.opencine.cameracontrols.LadderSheet
+import com.opencapture.opencine.cameracontrols.LadderSheetPresentation
+import com.opencapture.opencine.cameracontrols.LadderTab
+import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.vocabulary.CaptureLadder
+import com.opencapture.opencine.vocabulary.CaptureTint
+import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraShutterMode
+import com.opencapture.opencine.nikon.CameraTemperatureStatus
+import com.opencapture.opencine.nikon.CodecBitDepthOption
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import kotlin.math.floor
 import kotlin.math.roundToInt
+import com.opencapture.opencine.nikon.IsoPickerPolicy
+import com.opencapture.opencine.nikon.WbPickerPolicy
 
 /** The stable, persisted tile identifiers used by the DISP 3 primary grid. */
 internal enum class CommandTileKind {
@@ -1129,81 +1131,6 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.STILL_PICTURE_CONTROL -> snapshot.pictureControl == label
     }
 
-/**
- * Optimistic inverse of [cameraPropertyConfirmsSelection] (iOS
- * `cameraPropertySnapshot.applying(property:data:)`): returns the snapshot with the field(s) the
- * operator just picked set to [label], so the monitor tile reflects the pick immediately while the
- * authoritative write + readback confirm lands in the background. Each branch mirrors the matching
- * [cameraPropertyConfirmsSelection] branch one-for-one, so a synthesized value round-trips as
- * confirmed. Anything that can't be cleanly synthesized (an unparsable ISO, a shutter value with
- * no known display circuit) is left untouched — the confirmed refresh still reconciles it.
- */
-internal fun CameraPropertySnapshot.withOptimisticControlValue(
-    control: CameraControl,
-    label: String,
-): CameraPropertySnapshot =
-    when (control) {
-        CameraControl.ISO, CameraControl.STILL_ISO ->
-            label.toLongOrNull()?.let { copy(iso = it) } ?: this
-        CameraControl.ISO_AUTO ->
-            copy(isoAuto = label.equals(IsoPickerPolicy.AUTO_ISO_ON_LABEL, ignoreCase = true))
-        CameraControl.STILL_ISO_AUTO -> copy(isoAuto = label.equals("On", ignoreCase = true))
-        CameraControl.SHUTTER ->
-            when (shutterMode) {
-                CameraShutterMode.ANGLE -> copy(shutterAngle = label)
-                CameraShutterMode.SPEED -> copy(shutterSpeed = label)
-                null -> this
-            }
-        CameraControl.STILL_SHUTTER -> copy(shutterSpeed = label)
-        CameraControl.IRIS, CameraControl.STILL_IRIS -> copy(iris = label)
-        CameraControl.WHITE_BALANCE ->
-            if (label.endsWith("K")) {
-                copy(
-                    whiteBalanceMode = COLOR_TEMPERATURE_MODE,
-                    whiteBalanceKelvin = label.dropLast(1).toIntOrNull() ?: whiteBalanceKelvin,
-                )
-            } else {
-                copy(whiteBalanceMode = label)
-            }
-        CameraControl.WHITE_BALANCE_TINT -> copy(whiteBalanceTint = label)
-        CameraControl.FOCUS_MODE -> copy(focusMode = label)
-        CameraControl.STILL_FOCUS_MODE -> copy(stillFocusMode = label)
-        CameraControl.FOCUS_AREA, CameraControl.STILL_FOCUS_AREA -> copy(focusArea = label)
-        CameraControl.FOCUS_SUBJECT, CameraControl.STILL_FOCUS_SUBJECT -> copy(focusSubject = label)
-        CameraControl.EXPOSURE_MODE -> copy(exposureMode = label)
-        CameraControl.AUDIO_SENSITIVITY -> copy(audioSensitivity = label)
-        CameraControl.AUDIO_INPUT -> copy(audioInput = label)
-        CameraControl.WIND_FILTER -> copy(windFilter = label)
-        CameraControl.ATTENUATOR -> copy(inputAttenuator = label)
-        CameraControl.AUDIO_32_BIT_FLOAT -> copy(audio32BitFloat = label)
-        CameraControl.BASE_ISO -> copy(baseIso = label)
-        CameraControl.SHUTTER_MODE ->
-            when (label) {
-                "Angle" -> copy(shutterMode = CameraShutterMode.ANGLE)
-                "Speed" -> copy(shutterMode = CameraShutterMode.SPEED)
-                else -> this
-            }
-        CameraControl.SHUTTER_LOCK -> copy(shutterLocked = label == "Locked")
-        CameraControl.RESOLUTION_FRAMERATE -> copy(resolutionFrameRate = label)
-        // A bit-depth button writes a variant label ("H.265 10-bit"), which is not a drum row —
-        // resolve it back through the core-supplied table so the drum keeps its row and only the
-        // depth moves. Never by pulling the depth out of the label.
-        CameraControl.CODEC ->
-            controlCapabilities.codecBitDepths.firstOrNull { it.writeValue == label }
-                ?.let { copy(codecSelection = it.codec, codecBitDepth = it.label) }
-                ?: copy(codecSelection = label)
-        CameraControl.VIBRATION_REDUCTION -> copy(vibrationReduction = label)
-        CameraControl.ELECTRONIC_VR -> copy(electronicVr = label)
-        CameraControl.STILL_DRIVE -> copy(stillCaptureMode = label)
-        CameraControl.STILL_METER -> copy(meteringMode = label)
-        CameraControl.STILL_IMAGE_AREA -> copy(imageArea = label)
-        CameraControl.STILL_IMAGE_SIZE -> copy(imageSize = label)
-        CameraControl.STILL_QUALITY -> copy(compression = label)
-        CameraControl.STILL_RAW_COMPRESSION -> copy(rawCompression = label)
-        CameraControl.STILL_USER_MODE_PROGRAM -> copy(userModeProgram = label)
-        CameraControl.STILL_PICTURE_CONTROL -> copy(pictureControl = label)
-    }
-
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
 private const val COLOR_TEMPERATURE_MODE = "Color temp"
 
@@ -1229,168 +1156,11 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
     listOf("R3D NE", "N-RAW", "ProRes RAW HQ", "ProRes 422 HQ", "H.265 10-bit")
 
 /**
- * The DISP 3 command dashboard: camera-backed health and primary controls at
- * left, with an iOS-shaped Image / Focus / Audio / Monitor companion column at
- * right (`ios/Runner/MonitorPanels.swift` CommandMonitor).
- */
-@Composable
-internal fun CommandDashboard(
-    recording: Boolean,
-    timecodeRetention: MonitorTimecodeRetention,
-    /**
-     * The live-view header's timecode status bit. A body that runs no timecode gets no hero
-     * readout — the record chip takes the row back rather than heading the dashboard with a
-     * frozen 00:00:00:00.
-     */
-    showsTimecode: Boolean = true,
-    sessionState: CameraSessionState,
-    presentation: CommandDashboardPresentation,
-    controlsEnabled: Boolean,
-    pendingControl: CameraControl?,
-    onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveTile: (CommandTileKind, Int) -> Unit,
-    onReorderStarted: () -> Unit = {},
-    liveFps: String = presentation.frameRate,
-    signalBars: Int = 0,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(
-            Modifier.weight(2.35f).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RecordChip(recording)
-                // iOS CommandTimecodeReadout: monospaced 60pt, shrinking into whatever the
-                // chip leaves (`minimumScaleFactor(0.78)`) — the hero timecode is a hair too
-                // wide for the column on a 16:9 landscape deck, where the dashboard narrows to
-                // clear the side rail.
-                if (showsTimecode) {
-                    BoxWithConstraints(Modifier.weight(1f)) {
-                        FitScale(maxWidth) {
-                            RetainedCameraTimecodeReadout(
-                                retention = timecodeRetention,
-                                sessionState = sessionState,
-                                sizeSp = 60f,
-                            )
-                        }
-                    }
-                }
-            }
-            CommandHealthStrip(
-                presentation = presentation,
-                liveFps = liveFps,
-                signalBars = signalBars,
-            )
-            CommandGrid(
-                tiles = presentation.tiles,
-                controlsEnabled = controlsEnabled,
-                pendingControl = pendingControl,
-                onOpenControl = onOpenControl,
-                onMoveTile = onMoveTile,
-                onReorderStarted = onReorderStarted,
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            )
-        }
-        // iOS sideWidth = max(160, width * 0.27) ≈ 0.85fr of the 2.35+0.85 split.
-        CommandSideColumn(
-            sections = presentation.sideSections,
-            controlsEnabled = controlsEnabled,
-            pendingControl = pendingControl,
-            onOpenControl = onOpenControl,
-            modifier = Modifier.weight(0.85f).fillMaxHeight(),
-        )
-    }
-}
-
-/**
- * The portrait command surface keeps the system rail outside its viewport and
- * makes every secondary control reachable through one labeled scroll region.
- */
-@Composable
-internal fun PortraitCommandDashboard(
-    presentation: CommandDashboardPresentation,
-    timecodeRetention: MonitorTimecodeRetention,
-    /** As [CommandDashboard]: no body timecode, no hero band — the grid takes the space back. */
-    showsTimecode: Boolean = true,
-    sessionState: CameraSessionState,
-    controlsEnabled: Boolean,
-    pendingControl: CameraControl?,
-    onOpenControl: (CommandControlRequest) -> Unit,
-    onMoveTile: (CommandTileKind, Int) -> Unit,
-    onReorderStarted: () -> Unit = {},
-    modifier: Modifier = Modifier,
-) {
-    CommandDashboardScrollContainer(
-        accessibilityLabel = stringResource(R.string.command_dashboard_description),
-        modifier = modifier.background(LiveDesign.background),
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (showsTimecode) {
-                BoxWithConstraints(
-                    Modifier.fillMaxWidth().height(80.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    FitScale(maxWidth) {
-                        RetainedCameraTimecodeReadout(
-                            retention = timecodeRetention,
-                            sessionState = sessionState,
-                            sizeSp = 52f,
-                        )
-                    }
-                }
-            }
-            CommandGrid(
-                tiles = presentation.tiles,
-                controlsEnabled = controlsEnabled,
-                pendingControl = pendingControl,
-                onOpenControl = onOpenControl,
-                onMoveTile = onMoveTile,
-                onReorderStarted = onReorderStarted,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .height(portraitCommandGridHeightDp(presentation.tiles.size).dp),
-            )
-            CommandSecondarySections(
-                sections = presentation.sideSections,
-                controlsEnabled = controlsEnabled,
-                pendingControl = pendingControl,
-                onOpenControl = onOpenControl,
-                compact = false,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}
-
-/** Hero timecode with the accent frame field (iOS `CommandTimecodeReadout`). */
-@Composable
-internal fun CommandTimecode(
-    timecode: LiveFrameTimecode?,
-    sizeSp: Float,
-    modifier: Modifier = Modifier,
-) {
-    CameraTimecodeReadout(timecode = timecode, sizeSp = sizeSp, modifier = modifier)
-}
-
-/**
  * Camera-derived Temp / Storage / Camera / Lens strip + live FPS chip
  * (iOS `CommandHealthStrip` — no "Read" block; FPS lives in [FpsChip]).
  */
 @Composable
-private fun CommandHealthStrip(
+internal fun CommandHealthStrip(
     presentation: CommandDashboardPresentation,
     liveFps: String,
     signalBars: Int,
@@ -1738,7 +1508,7 @@ internal fun commandTileValueSize(value: String): Float =
 
 /** The compact iOS-shaped Image / Focus / Audio companion column. */
 @Composable
-private fun CommandSideColumn(
+internal fun CommandSideColumn(
     sections: List<CommandSideSectionPresentation>,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
@@ -1762,7 +1532,7 @@ private fun CommandSideColumn(
 
 /** The shared Image / Focus / Audio / Monitor section stack (iOS CommandSideColumn). */
 @Composable
-private fun CommandSecondarySections(
+internal fun CommandSecondarySections(
     sections: List<CommandSideSectionPresentation>,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
@@ -1963,10 +1733,35 @@ private fun CommandSmallTile(
 }
 
 /**
- * Command-mode control surface — same glass drum / tint pad as live pickers
- * (iOS `PickerPanel` dead-centred when `displayMode == .command`), not a
- * Material dialog.
+ * One command tile as a single-tab ladder. Tint uses the shared pad.
+ * The tab does not apply its value when the dialog opens.
  */
+internal fun commandLadderPresentation(
+    request: CommandControlRequest,
+    subtitle: String = request.currentValue,
+): LadderSheetPresentation<CameraControl> {
+    val tint = if (request.control == CameraControl.WHITE_BALANCE_TINT) {
+        val (amber, green) = WhiteBalanceTintGrid.cellsFromLabel(request.currentValue.ifBlank { "Neutral" })
+        CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTintGrid.cellRange)
+    } else {
+        null
+    }
+    return LadderSheetPresentation(
+        title = request.title,
+        subtitle = subtitle,
+        tabs = listOf(
+            LadderTab(
+                label = request.title,
+                key = request.control,
+                ladder = CaptureLadder(current = request.currentValue, values = request.options),
+                applyOnActivate = false,
+                tint = tint,
+            ),
+        ),
+    )
+}
+
+/** Native command ladder; the live composition supplies the common popup chrome. */
 @Composable
 internal fun CommandControlDialog(
     request: CommandControlRequest,
@@ -1975,133 +1770,25 @@ internal fun CommandControlDialog(
     feedback: CommandControlFeedback?,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
+    chromeless: Boolean = false,
 ) {
-    val options = commandControlOptions(request, pendingControl, controlsEnabled)
-    val isTintPad = request.control == CameraControl.WHITE_BALANCE_TINT
-    // Allow dismiss while a write drains — iOS never traps the operator in the panel.
-    BackHandler(onBack = onDismiss)
+    // An in-flight write stays interactive. pendingControl names that write, and it is not a lock.
+    val interactive = controlsEnabled &&
+        commandControlOptions(request, pendingControl, controlsEnabled).all { it.enabled }
+    val subtitle = stringResource(R.string.command_current_value, request.currentValue)
 
-    var revealed by remember(request.control, request.title) { mutableStateOf(false) }
-    LaunchedEffect(request.control, request.title) { revealed = true }
-    val travel = 320.dp
-    val revealOffset by
-        animateDpAsState(
-            targetValue = if (revealed) 0.dp else travel,
-            animationSpec = IosPanelRevealSpec,
-            label = "commandPickerReveal",
-        )
-
-    Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier.fillMaxSize()
-                .chromeClickable(onClick = onDismiss),
-        )
-        Column(
-            modifier =
-                Modifier
-                    .align(Alignment.Center)
-                    .offset(y = revealOffset)
-                    .alpha(if (revealed) 1f else 0f)
-                    .width(420.dp)
-                    .heightIn(max = 360.dp)
-                    // Scene overlay glass (blurs chrome + feed); shape from drawBackdrop.
-                    .overlayGlass(ChromeShape)
-                    .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
-                    .pointerInput(Unit) { detectTapGestures(onTap = {}) }
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    Text(
-                        request.title,
-                        style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
-                        color = LiveDesign.text,
-                        maxLines = 1,
-                    )
-                    Text(
-                        stringResource(R.string.command_current_value, request.currentValue)
-                            .uppercase(),
-                        style =
-                            chromeStyle(11f, FontWeight.SemiBold, mono = true)
-                                .copy(letterSpacing = 1.5.sp),
-                        color = LiveDesign.faint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                        modifier = Modifier.padding(bottom = 2.dp),
-                    )
-                }
-                PanelCloseButton(onClick = onDismiss)
-            }
-            // Errors only — success toasts steal height and iOS stays silent on snap.
-            if (feedback?.isError == true) {
-                Text(
-                    feedback.message,
-                    style = chromeStyle(11f, FontWeight.Medium),
-                    color = LiveDesign.rec,
-                    maxLines = 2,
-                    overflow = TextOverflow.Clip,
-                )
-            }
-            if (!controlsEnabled) {
-                Text(
-                    stringResource(R.string.camera_controls_unavailable),
-                    style = chromeStyle(11f, FontWeight.Medium),
-                    color = LiveDesign.muted,
-                    maxLines = 2,
-                )
-            }
-            // iOS PickerPanel: local selection + lastApplied, seeded once on open.
-            // Never gate settles on request.currentValue — that blocks re-selecting the
-            // value the popup opened on (25→30 works, 30→25 silent until reopen).
-            val openKey = request.control to request.title
-            val labels = options.map { it.label }
-            val seed =
-                labels.firstOrNull { it == request.currentValue }
-                    ?: labels.firstOrNull()
-                    ?: request.currentValue
-            var lastApplied by remember(openKey) { mutableStateOf(seed) }
-            var selection by remember(openKey) { mutableStateOf(seed) }
-            if (isTintPad) {
-                val tintAvailable = options.isNotEmpty()
-                WhiteBalanceTintPad(
-                    currentLabel = lastApplied.ifBlank { "Neutral" },
-                    available = tintAvailable,
-                    interactive = controlsEnabled && tintAvailable,
-                    onCommit = { label ->
-                        if (label != lastApplied) {
-                            lastApplied = label
-                            selection = label
-                            onSelect(label)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            } else {
-                AccentDrumWheel(
-                    options = labels,
-                    selection = selection,
-                    // Stay interactive during in-flight applies (coalesced queue).
-                    interactive = controlsEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                    onSettle = { settled ->
-                        if (settled.isEmpty()) return@AccentDrumWheel
-                        selection = settled
-                        if (settled != lastApplied) {
-                            lastApplied = settled
-                            onSelect(settled)
-                        }
-                    },
-                )
-            }
-        }
-    }
+    LadderSheet(
+        presentation = commandLadderPresentation(request, subtitle),
+        enabled = interactive,
+        onWrite = { write ->
+            if (write.value.isNotBlank()) onSelect(write.value)
+        },
+        onClose = onDismiss,
+        chromeless = chromeless,
+        error = feedback?.takeIf { it.isError }?.message,
+        unavailable = if (interactive) null else stringResource(R.string.camera_controls_unavailable),
+        tintLabel = { tint -> WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta) },
+        tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
+            stringResource(R.string.camera_wb_tint_double_tap_help),
+    )
 }

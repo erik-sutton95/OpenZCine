@@ -25,7 +25,7 @@ Compared with the Android shell:
 - **Camera permission** is used only to read the network name and key from the
   camera's Connection wizard screen, and on iPad to read an HDMI capture device.
 - **Sockets.** PTP-IP runs on two BSD TCP sockets per session
-  (`ios/Runner/PTPIPTransport.swift`). A blocked read cannot be cancelled, so a
+  (OpenCine `Sources/OpenCineNikon/PTPIPTransport.swift`). A blocked read cannot be cancelled, so a
   missed deadline closes the socket and recovery reconnects.
 - **USB-C** goes through ImageCaptureCore (`ICDeviceBrowser`,
   `requestSendPTPCommand`). ImageCaptureCore owns the USB endpoints and often

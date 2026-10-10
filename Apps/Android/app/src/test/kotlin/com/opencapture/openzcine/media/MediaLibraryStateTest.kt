@@ -1,5 +1,11 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonAndroidGalleryProjectionPolicy
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
@@ -18,6 +24,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.monitorui.MonitorMediaLayout
 
 /** JVM coverage for the persisted, core-authorized Android library state. */
 class MediaLibraryStateTest {
@@ -214,17 +222,17 @@ class MediaLibraryStateTest {
     fun `camera listing persists core wire records without reclassifying filenames`() {
         val preferences = MemoryPreferences()
         val index = MediaLibraryIndex(preferences)
-        val still = clip(handle = 12, filename = "OBJECT.DATA", kind = MediaContentKind.STILL_PHOTO)
+        val still = clip(handle = 12, filename = "OBJECT.DATA", kind = NikonMediaContentKind.STILL_PHOTO)
         val proxy =
-            clip(handle = 13, filename = "UNUSUAL.NAME", kind = MediaContentKind.PLAYABLE_PROXY)
+            clip(handle = 13, filename = "UNUSUAL.NAME", kind = NikonMediaContentKind.PLAYABLE_PROXY)
                 .copy(sourcePixelWidth = 6_048, sourcePixelHeight = 3_402)
 
         index.rememberCameraListing("ZR-6001234", listOf(still, proxy))
 
         assertEquals(listOf(proxy, still), index.persistedClips("ZR-6001234"))
-        assertEquals(MediaContentKind.STILL_PHOTO, index.persistedClips("ZR-6001234")[1].contentKind)
+        assertEquals(NikonMediaContentKind.STILL_PHOTO, index.persistedClips("ZR-6001234")[1].contentKind)
         assertEquals(
-            StillPreviewStrategy.PROGRESSIVE,
+            NikonStillPreviewStrategy.PROGRESSIVE,
             index.persistedClips("ZR-6001234")[1].stillPhoto?.previewStrategy,
         )
         assertEquals(6_048, index.persistedClips("ZR-6001234")[0].sourcePixelWidth)
@@ -246,14 +254,14 @@ class MediaLibraryStateTest {
     @Test
     fun `incremental proxy delta removes the paired R3D from persistence`() {
         val index = MediaLibraryIndex(MemoryPreferences())
-        val master = clip(handle = 7, filename = "A001.R3D", kind = MediaContentKind.R3D_MASTER)
+        val master = clip(handle = 7, filename = "A001.R3D", kind = NikonMediaContentKind.R3D_MASTER)
         val proxy = clip(handle = 8, filename = "A001.MP4")
 
         index.rememberCameraListing("camera", listOf(master))
         index.rememberCameraListing(
             cameraID = "camera",
             clips = listOf(proxy),
-            removedObjects = listOf(MediaObjectIdentity(master)),
+            removedObjects = listOf(NikonMediaObjectIdentity(master)),
         )
 
         assertEquals(listOf(proxy), index.persistedClips("camera"))
@@ -329,14 +337,14 @@ class MediaLibraryStateTest {
             clip(
                 handle = 1,
                 filename = "OLD.JPG",
-                kind = MediaContentKind.STILL_PHOTO,
+                kind = NikonMediaContentKind.STILL_PHOTO,
                 captureDate = "20260101T120000",
             )
         val fresh =
             clip(
                 handle = 1,
                 filename = "NEW.JPG",
-                kind = MediaContentKind.STILL_PHOTO,
+                kind = NikonMediaContentKind.STILL_PHOTO,
                 captureDate = "20260818T090000",
             )
         index.rememberCameraListing("camera", listOf(stale))
@@ -437,7 +445,7 @@ class MediaLibraryStateTest {
             val index = MediaLibraryIndex(MemoryPreferences())
             val first = clip(handle = 1, filename = "A001.MOV").copy(sizeBytes = 3)
             val second =
-                clip(handle = 2, filename = "B001.JPG", kind = MediaContentKind.STILL_PHOTO)
+                clip(handle = 2, filename = "B001.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
                     .copy(sizeBytes = 4)
             index.rememberCameraListing("serial-a", listOf(first))
             index.rememberCameraListing("serial-b", listOf(second))
@@ -477,14 +485,14 @@ class MediaLibraryStateTest {
                 handle = 7,
                 filename = "OLDER.R3D",
                 captureDate = "20260701T120000",
-                kind = MediaContentKind.R3D_MASTER,
+                kind = NikonMediaContentKind.R3D_MASTER,
             )
         val currentMaster =
             clip(
                 handle = 7,
                 filename = "A001.R3D",
                 captureDate = "20260715T120000",
-                kind = MediaContentKind.R3D_MASTER,
+                kind = NikonMediaContentKind.R3D_MASTER,
             )
         val proxy = clip(handle = 8, filename = "A001.MP4")
         index.rememberCameraListing("camera", listOf(historical))
@@ -493,7 +501,7 @@ class MediaLibraryStateTest {
         index.rememberCameraListing(
             cameraID = "camera",
             clips = listOf(proxy),
-            removedObjects = listOf(MediaObjectIdentity(currentMaster)),
+            removedObjects = listOf(NikonMediaObjectIdentity(currentMaster)),
         )
 
         assertEquals(listOf(proxy, historical), index.persistedClips("camera"))
@@ -519,7 +527,7 @@ class MediaLibraryStateTest {
     fun `setFavorite mirrors a camera star into the favorite set and clears it at zero`() {
         val preferences = MemoryPreferences()
         val index = MediaLibraryIndex(preferences)
-        val shot = clip(handle = 7, filename = "DSC_0007.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val shot = clip(handle = 7, filename = "DSC_0007.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
 
         // A >= 1-star write favorites the shot; a 0-star write clears it. Offline path — only
         // the local set is touched, no camera involved.
@@ -536,8 +544,8 @@ class MediaLibraryStateTest {
     fun `a shot favorited by a rating write surfaces under the Favorites filter`() {
         val cameraID = "camera"
         val index = MediaLibraryIndex(MemoryPreferences())
-        val rated = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
-        val other = clip(handle = 2, filename = "DSC_0002.JPG", kind = MediaContentKind.STILL_PHOTO)
+        val rated = clip(handle = 1, filename = "DSC_0001.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
+        val other = clip(handle = 2, filename = "DSC_0002.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
 
         val favorites = index.setFavorite(cameraID, rated, favorite = true)
 
@@ -557,8 +565,8 @@ class MediaLibraryStateTest {
     fun `rating a pair favorites the jpeg row and leaves the raw sibling untouched`() {
         val cameraID = "camera"
         val index = MediaLibraryIndex(MemoryPreferences())
-        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
-        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = NikonMediaContentKind.STILL_PHOTO)
 
         val favorites = index.setFavorite(cameraID, jpeg, favorite = true)
 
@@ -569,10 +577,10 @@ class MediaLibraryStateTest {
     @Test
     fun `categories and sort consume shared core actions instead of extensions`() {
         val cameraID = "camera"
-        val proxy = clip(handle = 1, filename = "PHOTO.NEF", kind = MediaContentKind.PLAYABLE_PROXY)
-        val still = clip(handle = 2, filename = "VIDEO.MOV", kind = MediaContentKind.STILL_PHOTO)
-        val master = clip(handle = 3, filename = "MASTER.WHATEVER", kind = MediaContentKind.R3D_MASTER)
-        val unknown = clip(handle = 4, filename = "UNKNOWN.JPG", kind = MediaContentKind.UNSUPPORTED)
+        val proxy = clip(handle = 1, filename = "PHOTO.NEF", kind = NikonMediaContentKind.PLAYABLE_PROXY)
+        val still = clip(handle = 2, filename = "VIDEO.MOV", kind = NikonMediaContentKind.STILL_PHOTO)
+        val master = clip(handle = 3, filename = "MASTER.WHATEVER", kind = NikonMediaContentKind.R3D_MASTER)
+        val unknown = clip(handle = 4, filename = "UNKNOWN.JPG", kind = NikonMediaContentKind.UNSUPPORTED)
         val clips = listOf(proxy, still, master, unknown)
 
         assertEquals(
@@ -610,10 +618,10 @@ class MediaLibraryStateTest {
     @Test
     fun `raw cell collapses into its jpeg pair and one item survives per pair`() {
         val cameraID = "camera"
-        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
-        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = NikonMediaContentKind.STILL_PHOTO)
         val lonelyRaw =
-            clip(handle = 3, filename = "DSC_0002.NEF", kind = MediaContentKind.STILL_PHOTO)
+            clip(handle = 3, filename = "DSC_0002.NEF", kind = NikonMediaContentKind.STILL_PHOTO)
         val clips = listOf(jpeg, raw, lonelyRaw)
 
         // One item per pair: the JPEG carries the cell, the same-shot RAW
@@ -658,8 +666,8 @@ class MediaLibraryStateTest {
 
     @Test
     fun `viewer displays the toggled pair side while identity stays on the jpeg`() {
-        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = MediaContentKind.STILL_PHOTO)
-        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = MediaContentKind.STILL_PHOTO)
+        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
+        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = NikonMediaContentKind.STILL_PHOTO)
 
         assertEquals(jpeg, stillViewerDisplaySide(jpeg, raw, showingRaw = false))
         assertEquals(raw, stillViewerDisplaySide(jpeg, raw, showingRaw = true))
@@ -739,9 +747,9 @@ class MediaLibraryStateTest {
             MediaLibraryViewOptions(
                 source = MediaLibrarySource.LOCAL,
                 category = MediaLibraryCategory.FAVORITES,
-                layout = MediaLibraryLayout.LIST,
+                layout = MonitorMediaLayout.LIST,
                 sortOrder = MediaLibrarySortOrder.NAME,
-                thumbnailSize = MediaThumbnailSize.LARGE,
+                thumbnailSize = MonitorThumbnailSize.LARGE,
             )
 
         MediaLibraryIndex(preferences).saveViewOptions(options)
@@ -845,7 +853,7 @@ class MediaLibraryStateTest {
         // Nikon writes HEIF as `.HIF`; the shared core supplies the HEIF label off the wire.
         val hif = still(3, "DSC_0003.HIF", "HEIF")
 
-        val options = MediaFilterDerivation.options(listOf(jpeg, nef, hif), TODAY)
+        val options = filterOptions(listOf(jpeg, nef, hif), TODAY)
 
         assertEquals(
             listOf(MediaFormatFilter.JPEG, MediaFormatFilter.HEIF, MediaFormatFilter.NEF),
@@ -862,7 +870,7 @@ class MediaLibraryStateTest {
         val mov = clip(1, "A001.MOV").copy(pixelWidth = 6_048)
         val mp4 = clip(2, "A002.MP4").copy(pixelWidth = 1_920)
 
-        val options = MediaFilterDerivation.options(listOf(mov, mp4), TODAY)
+        val options = filterOptions(listOf(mov, mp4), TODAY)
 
         assertEquals(listOf(MediaFormatFilter.MOV, MediaFormatFilter.MP4), options.formats)
         assertEquals(listOf(MediaResolutionFilter.HD, MediaResolutionFilter.SIX_K), options.resolutions)
@@ -877,13 +885,13 @@ class MediaLibraryStateTest {
                 clip(2, "A002.MOV").copy(pixelWidth = 1_920),
             )
 
-        val options = MediaFilterDerivation.options(allMov, TODAY)
+        val options = filterOptions(allMov, TODAY)
 
         // No MP4 is listed, and a MOV chip would select every row — neither filters anything.
         assertTrue(options.formats.isEmpty())
         assertTrue(options.resolutions.isEmpty())
         assertTrue(options.isEmpty)
-        assertTrue(MediaFilterDerivation.options(emptyList(), TODAY).isEmpty)
+        assertTrue(filterOptions(emptyList(), TODAY).isEmpty)
     }
 
     @Test
@@ -898,7 +906,7 @@ class MediaLibraryStateTest {
         assertEquals(MediaPhotoSizeFilter.SMALL, small.photoSizeFilter(widths))
         assertEquals(
             listOf(MediaPhotoSizeFilter.LARGE, MediaPhotoSizeFilter.MEDIUM, MediaPhotoSizeFilter.SMALL),
-            MediaFilterDerivation.options(listOf(large, medium, small), TODAY).photoSizes,
+            filterOptions(listOf(large, medium, small), TODAY).photoSizes,
         )
 
         // The camera reported no dimensions: no SIZE chip is faked.
@@ -908,9 +916,9 @@ class MediaLibraryStateTest {
                 still(5, "DSC_0005.NEF", "NEF").copy(pixelWidth = 0),
             )
         assertNull(unsized.first().photoSizeFilter(unsized.stillPixelWidths()))
-        assertTrue(MediaFilterDerivation.options(unsized, TODAY).photoSizes.isEmpty())
+        assertTrue(filterOptions(unsized, TODAY).photoSizes.isEmpty())
         // One size present partitions nothing.
-        assertTrue(MediaFilterDerivation.options(listOf(large, large.copy(handle = 9)), TODAY).photoSizes.isEmpty())
+        assertTrue(filterOptions(listOf(large, large.copy(handle = 9)), TODAY).photoSizes.isEmpty())
     }
 
     @Test
@@ -925,7 +933,7 @@ class MediaLibraryStateTest {
         val widths = clips.stillPixelWidths()
 
         clips.forEach { assertNull(it.photoSizeFilter(widths)) }
-        assertTrue(MediaFilterDerivation.options(clips, TODAY).photoSizes.isEmpty())
+        assertTrue(filterOptions(clips, TODAY).photoSizes.isEmpty())
     }
 
     @Test
@@ -954,7 +962,7 @@ class MediaLibraryStateTest {
                 MediaDateWindowFilter.LAST_7_DAYS,
                 MediaDateWindowFilter.LAST_30_DAYS,
             ),
-            MediaFilterDerivation.options(spread, TODAY).dateWindows,
+            filterOptions(spread, TODAY).dateWindows,
         )
         // Everything shot today: every window selects every row, so none of them filters.
         val allToday =
@@ -962,7 +970,7 @@ class MediaLibraryStateTest {
                 clip(1, "A001.MOV", captureDate = daysAgo(0)),
                 clip(2, "A002.MP4", captureDate = daysAgo(0)),
             )
-        assertTrue(MediaFilterDerivation.options(allToday, TODAY).dateWindows.isEmpty())
+        assertTrue(filterOptions(allToday, TODAY).dateWindows.isEmpty())
     }
 
     @Test
@@ -977,7 +985,7 @@ class MediaLibraryStateTest {
                 storageId = 11,
             )
 
-        val retained = stale.retainingOfferedChips(MediaFilterDerivation.options(photos, TODAY))
+        val retained = stale.retainingOfferedChips(filterOptions(photos, TODAY))
 
         assertEquals(setOf(MediaFormatFilter.JPEG), retained.formats)
         assertTrue(retained.resolutions.isEmpty())
@@ -990,12 +998,12 @@ class MediaLibraryStateTest {
         handle: Long,
         filename: String,
         formatLabel: String,
-    ): MediaClipRecord =
-        clip(handle, filename, MediaContentKind.STILL_PHOTO)
+    ): NikonMediaClipRecord =
+        clip(handle, filename, NikonMediaContentKind.STILL_PHOTO)
             .copy(
                 pixelWidth = 6_048,
                 pixelHeight = 4_032,
-                stillPhoto = StillPhotoClassification(formatLabel, StillPreviewStrategy.PROGRESSIVE),
+                stillPhoto = NikonStillPhotoClassification(formatLabel, NikonStillPreviewStrategy.PROGRESSIVE),
             )
 
     @Test
@@ -1048,10 +1056,10 @@ class MediaLibraryStateTest {
     private fun clip(
         handle: Long,
         filename: String,
-        kind: MediaContentKind = MediaContentKind.PLAYABLE_PROXY,
+        kind: NikonMediaContentKind = NikonMediaContentKind.PLAYABLE_PROXY,
         captureDate: String = "20260714T101010",
-    ): MediaClipRecord =
-        MediaClipRecord(
+    ): NikonMediaClipRecord =
+        NikonMediaClipRecord(
             handle = handle,
             storageId = 1,
             sizeBytes = 100,
@@ -1062,7 +1070,7 @@ class MediaLibraryStateTest {
             contentKind = kind,
             // Label agrees with the extension, as the listing wire does in production.
             stillPhoto =
-                if (kind == MediaContentKind.STILL_PHOTO) {
+                if (kind == NikonMediaContentKind.STILL_PHOTO) {
                     val label =
                         when (filename.substringAfterLast('.').lowercase()) {
                             "nef", "nrw", "dng" -> "NEF"
@@ -1071,7 +1079,7 @@ class MediaLibraryStateTest {
                             "png" -> "PNG"
                             else -> "JPEG"
                         }
-                    StillPhotoClassification(label, StillPreviewStrategy.PROGRESSIVE)
+                    NikonStillPhotoClassification(label, NikonStillPreviewStrategy.PROGRESSIVE)
                 } else {
                     null
                 },
@@ -1109,3 +1117,18 @@ class MediaLibraryStateTest {
         }
     }
 }
+
+/** The chips the production gallery projection offers for [clips]. */
+private fun filterOptions(clips: List<NikonMediaClipRecord>, today: LocalDate): MediaFilterOptions =
+    NikonAppGalleryProjection(
+        clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MediaLibrarySortOrder.NEWEST, today = today,
+    ).filterOptions
+
+private fun NikonMediaClipRecord.resolutionFilter(): MediaResolutionFilter? =
+    NikonAndroidGalleryProjectionPolicy.resolutionKey(this)?.let { key -> MediaResolutionFilter.entries.first { it.title == key } }
+
+private fun List<NikonMediaClipRecord>.stillPixelWidths(): List<Int> = NikonAndroidGalleryProjectionPolicy.stillWidths(this)
+
+private fun NikonMediaClipRecord.photoSizeFilter(presentWidths: List<Int>): MediaPhotoSizeFilter? =
+    NikonAndroidGalleryProjectionPolicy.photoSizeKey(this, presentWidths)
+        ?.let { key -> MediaPhotoSizeFilter.entries.first { it.title == key } }

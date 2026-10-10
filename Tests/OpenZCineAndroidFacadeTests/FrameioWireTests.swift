@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineFrameIO
 import Testing
 
 @testable import OpenZCineAndroidFacade
@@ -23,8 +24,17 @@ private let androidRedirect = "adobe+android://adobeid/android-client"
     #expect(query["client_id"] == androidClientID)
     #expect(query["redirect_uri"] == androidRedirect)
     #expect(query["state"] == state)
-    #expect(!challenge.isEmpty)
+    #expect(challenge == PKCE.challenge(for: verifier, sha256: frameioSHA256))
     #expect(verifier.count >= 43)
+}
+
+/// RFC 7636 appendix B vector: the SHA-256 the facade injects into OpenCineFrameIO (CryptoKit
+/// on Darwin, swift-crypto on Android) produces the published S256 challenge.
+@Test func androidFrameioWireInjectsRFC7636SHA256() {
+    #expect(
+        PKCE.challenge(
+            for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", sha256: frameioSHA256)
+            == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
 }
 
 @Test func androidFrameioWireRejectsMalformedConfiguration() {

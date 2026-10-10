@@ -10,9 +10,9 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.util.Log
-import com.opencapture.openzcine.core.LiveFrame
-import com.opencapture.openzcine.core.LiveFrameSource
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrameSource
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.roundToInt

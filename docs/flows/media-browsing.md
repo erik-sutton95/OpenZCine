@@ -154,8 +154,8 @@ flowchart TD
   Dimmed backdrop tap closes.
 - **Code:** `MediaBrowser.swift` (`MediaFilterPopup`, `filterPopupOverlay`),
   `NativeAppRoot.mediaFilterOptions` / `clearMediaFilters` / `pruneMediaFiltersToOfferedChips`,
-  `MediaBrowserFilterMetrics`, `Sources/OpenZCineCore/MediaResolutionBucket.swift`
-  (`MediaFilterDerivation`).
+  `MediaBrowserFilterMetrics`, OpenCineNikon `NikonMediaFilterDerivation` (app aliases in
+  `Sources/OpenZCineCore/MediaResolutionBucket.swift`).
 - **Detail:** Chips are **derived from the active tab's listing**, never hardcoded: a chip is
   offered only when it matches at least one listed object **and** excludes at least one, and a row
   with no chip renders no header. That keeps the media kinds apart without a tab parameter —
@@ -344,7 +344,7 @@ flowchart TD
 - **Screen:** White connection progress card (same as first-pair join): re-apply camera network,
   discover, reconnect — triggered when an internet hop ends.
 - **Code:** `NativeAppRoot.endInternetHop` → `runCameraWiFiJoin` (`.hotspotConfigurationOnly`),
-  `WiFiJoinCoordinator.swift`, `ConnectionProgressSheet.swift`.
+  `WiFiJoinCoordinator.swift`, `NikonCamerasFlow.swift` (`NikonConnectFlow`).
 - **Detail:** Uses full join pipeline (not fire-and-forget reapply): up to **3** Wi‑Fi apply retries
   **2 s** apart, subnet confirmation, **45 s** discovery window — same constants as camera-ap-join
   flow. Clears stale `connectedWiFiSSID` on hop start so AP detection does not spin the internet wait.

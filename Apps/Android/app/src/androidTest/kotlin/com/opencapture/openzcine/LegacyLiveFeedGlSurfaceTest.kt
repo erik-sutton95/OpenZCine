@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opencapture.opencine.media.MonitorLUTCube
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
@@ -34,6 +35,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 private const val SCREENSHOT_ARGUMENT = "ope91Screenshots"
 
@@ -124,7 +126,7 @@ class LegacyLiveFeedGlSurfaceTest {
         try {
             val content =
                 requireNotNull(
-                    liveFeedContentRect(
+                    nativeFeedContentRect(
                         output.width.toFloat(),
                         output.height.toFloat(),
                         source.width,
@@ -185,7 +187,7 @@ class LegacyLiveFeedGlSurfaceTest {
         val originalColor = Color.rgb(180, 64, 210)
         val reusedColor = Color.rgb(30, 190, 70)
         val source = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
-        val pool = LegacyLiveFeedFramePool(size = 1)
+        val pool = com.opencapture.opencine.runtime.MonitorBitmapFramePool(size = 1)
         source.eraseColor(originalColor)
         val lease = requireNotNull(pool.copy(source))
         try {
@@ -297,7 +299,7 @@ class LegacyLiveFeedGlSurfaceTest {
             limitsWeightCube = null,
         )
 
-    private fun identityCube(): FeedEffectsCube {
+    private fun identityCube(): MonitorLUTCube {
         val size = 2
         val rgba = ByteArray(size * size * size * 4)
         for (green in 0 until size) {
@@ -311,6 +313,6 @@ class LegacyLiveFeedGlSurfaceTest {
                 }
             }
         }
-        return FeedEffectsCube(size, rgba)
+        return MonitorLUTCube(size, rgba)
     }
 }

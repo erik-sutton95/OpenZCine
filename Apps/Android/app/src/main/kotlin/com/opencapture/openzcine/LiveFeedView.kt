@@ -3,15 +3,14 @@ package com.opencapture.openzcine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.os.Process
-import java.util.concurrent.Executors
-import kotlinx.coroutines.asCoroutineDispatcher
-import android.media.MediaCodecList
+import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
+import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
+import com.opencapture.opencine.runtime.MonitorFrameDecodeWorker
+import com.opencapture.opencine.runtime.MonitorFramePacingStats
+import com.opencapture.opencine.runtime.monitorPumpFramesWithSourceFrame
 import android.os.Build
 import android.util.Log
-import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -34,46 +33,40 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.opencapture.openzcine.bridge.ZoneFrame
+import com.opencapture.monitorui.MonitorFalseColorReference
+import com.opencapture.opencine.cameracontrols.FalseColorReference as CommonFalseColorReference
+import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
+import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
+import com.opencapture.monitorui.MonitorFalseColorReferenceValues
+import com.opencapture.monitorui.MonitorRect
+import com.opencapture.monitorui.MonitorScopePanelSize
+import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.core.LiveCameraLevel
-import com.opencapture.openzcine.core.LiveFocusInfo
-import com.opencapture.openzcine.core.LiveFrame
-import com.opencapture.openzcine.core.LiveFrameSource
+import com.opencapture.opencine.nikon.LiveCameraLevel
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.LiveFrame
+import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 private const val TAG = "ZCLiveFeed"
 
@@ -102,46 +95,6 @@ private const val FALSE_COLOR_REFERENCE_WIDTH = 264f
 private const val FALSE_COLOR_REFERENCE_HEIGHT = 52f
 private const val FALSE_COLOR_REFERENCE_GAP = 10f
 private const val FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE = 14f + LiveDesign.CONTROL_HEIGHT_DP
-
-/** The exact integer destination rectangle used by the feed Canvas. */
-internal data class LiveFeedContentRect(
-    val left: Int,
-    val top: Int,
-    val width: Int,
-    val height: Int,
-)
-
-/**
- * Resolves the same pixel-rounded fit or fill rectangle the feed renderer
- * draws. Feed overlays call this instead of estimating against the monitor
- * zone, which can contain letterbox space or a centre-cropped image.
- */
-internal fun liveFeedContentRect(
-    containerWidth: Float,
-    containerHeight: Float,
-    sourceWidth: Int,
-    sourceHeight: Int,
-    aspectFill: Boolean = false,
-): LiveFeedContentRect? {
-    if (containerWidth <= 0f || containerHeight <= 0f || sourceWidth <= 0 || sourceHeight <= 0) {
-        return null
-    }
-    val scale =
-        if (aspectFill) {
-            max(containerWidth / sourceWidth, containerHeight / sourceHeight)
-        } else {
-            min(containerWidth / sourceWidth, containerHeight / sourceHeight)
-        }
-    val width = (sourceWidth * scale).roundToInt()
-    val height = (sourceHeight * scale).roundToInt()
-    if (width <= 0 || height <= 0) return null
-    return LiveFeedContentRect(
-        left = ((containerWidth - width) / 2f).roundToInt(),
-        top = ((containerHeight - height) / 2f).roundToInt(),
-        width = width,
-        height = height,
-    )
-}
 
 /**
  * Presentation data paired with the bitmap that the feed actually accepted
@@ -276,6 +229,7 @@ private data class FocusGestureGeometrySignature(
 internal data class FalseColorReferencePresentation(
     val scale: FeedFalseColorScale,
     val reference: FeedFalseColorReference,
+    val read709: Boolean = false,
 )
 
 /** Render-success state consumed by the unscaled sibling reference overlay. */
@@ -284,8 +238,8 @@ public class LiveFeedEffectsPresentationState {
     internal var falseColorReference: FalseColorReferencePresentation? by mutableStateOf(null)
         private set
 
-    internal fun present(scale: FeedFalseColorScale, reference: FeedFalseColorReference) {
-        falseColorReference = FalseColorReferencePresentation(scale, reference)
+    internal fun present(scale: FeedFalseColorScale, reference: FeedFalseColorReference, read709: Boolean = false) {
+        falseColorReference = FalseColorReferencePresentation(scale, reference, read709)
     }
 
     internal fun clear() {
@@ -294,14 +248,15 @@ public class LiveFeedEffectsPresentationState {
 }
 
 /**
- * Decodes the live-view JPEG stream into a small ring of reused [Bitmap]s.
+ * The live-view JPEG decode cap, for the shared ring decoder
+ * ([com.opencapture.opencine.runtime.MonitorJpegFrameDecoder]).
  *
  * Decode-path decision (OPE-28 spike), measured on the SM-A127F floor device:
  * - **Chosen: [BitmapFactory.decodeByteArray] + `inBitmap` reuse.** After the
  *   ring fills, the steady state is zero per-frame allocation — the JPEG is
  *   decoded straight into an existing buffer. Sustains the 25 fps stream with
  *   ~2/3 of the frame budget idle on the test device.
- * - **Subsample via [maxLongSide]**: full 1080p texture upload every frame was
+ * - **Subsample via the long-side cap**: full 1080p texture upload every frame was
  *   janking the UI thread on A12-class (gfxinfo ~50 ms draw), so the long side
  *   is capped. That cap was 960 against a 1080p source; against the **1024**-wide
  *   live-view frame it quietly cost a factor of four. `inSampleSize` is
@@ -323,111 +278,11 @@ public class LiveFeedEffectsPresentationState {
  * The ring is 3 deep so the bitmap being decoded into is never the one the
  * RenderThread may still be drawing (current frame + one in flight).
  */
-class JpegFrameDecoder(
-    /**
-     * Maximum long-side pixels for the decoded bitmap. `0` keeps the source
-     * resolution; default [DEFAULT_MAX_LONG_SIDE] matches phone feed size.
-     */
-    private val maxLongSide: Int = DEFAULT_MAX_LONG_SIDE,
-) {
-    private val pool = arrayOfNulls<Bitmap>(3)
-    private var next = 0
-    private val options =
-        BitmapFactory.Options().apply {
-            inMutable = true
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-            // Keep the JPEG's declared color space intact. Forcing sRGB here
-            // would erase wide-gamut/HDR evidence before the fail-closed gate
-            // can reject a source the monitor cubes do not yet support.
-        }
-
-    /** Decodes [jpeg] into the next pooled bitmap; null if the data is invalid. */
-    fun decode(jpeg: ByteArray): Bitmap? {
-        options.inSampleSize = 1
-        if (maxLongSide > 0) {
-            options.inJustDecodeBounds = true
-            options.inBitmap = null
-            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
-            options.inSampleSize =
-                jpegSampleSizeForLongSide(options.outWidth, options.outHeight, maxLongSide)
-            options.inJustDecodeBounds = false
-        }
-        // Prefer pool reuse; IllegalArgumentException resets the ring slot.
-        options.inBitmap = pool[next]
-        val decoded =
-            try {
-                BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
-            } catch (_: IllegalArgumentException) {
-                // Pooled bitmap incompatible (size/sample change) — decode fresh.
-                options.inBitmap = null
-                BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
-            } ?: return null
-        pool[next] = decoded
-        next = (next + 1) % pool.size
-        return decoded
-    }
-
-    companion object {
-        /**
-         * Long-side cap for the decoded feed, set to the live-view frame's own
-         * width so the stream decodes 1:1 instead of falling to the next
-         * power-of-two step.
-         *
-         * `LiveViewImageSize` bounds the frame at XGA (≤1024×768), so 1024 is
-         * the widest the camera can send and this is a no-op guard in the normal
-         * case — it only engages if a body ever streams something larger. The
-         * previous 960 was carried over from a 1080p source and silently halved
-         * every frame (see the decode-path note on [JpegFrameDecoder]).
-         *
-         * Raising this raises per-frame texture upload 4×, back to ~0.59 MP —
-         * still well under the ~2.07 MP 1080p case that caused the original
-         * jank, but the low-RAM + effects path keeps its own tighter cap.
-         */
-        const val DEFAULT_MAX_LONG_SIDE: Int = 1024
-    }
-}
-
-/**
- * The one thread that decodes and presents the live picture.
- *
- * It was running on `Dispatchers.Default`, which is wrong twice over. That pool is shared — the
- * scope pump and the LUT/plan baking run on it too — so the picture queued behind work that could
- * have waited. And its threads sit at default priority while the UI and render threads run at -10,
- * which on a big.LITTLE scheduler is an invitation to park a bursty display-deadline workload on
- * an efficiency core. That placement decision is a vendor one, which makes it a much better
- * explanation for "late on one chipset, fine on another" than any per-byte cost — the bytes are
- * the same on both.
- *
- * One thread on purpose: there is one live feed, decoding is single-image work, and a second
- * decode in flight would reorder frames rather than deliver any sooner.
- */
-private val feedDecodeDispatcher =
-    Executors.newSingleThreadExecutor { runnable ->
-            Thread(
-                {
-                    Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
-                    runnable.run()
-                },
-                "zc-feed-decode",
-            )
-        }
-        .asCoroutineDispatcher()
-
-/** Power-of-two [BitmapFactory.Options.inSampleSize] so long side ≤ [maxLongSide]. */
-internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int): Int {
-    if (maxLongSide <= 0 || width <= 0 || height <= 0) return 1
-    val longSide = maxOf(width, height)
-    var sample = 1
-    // Grow sample until decoded long side is at most maxLongSide.
-    while (longSide / sample > maxLongSide) {
-        sample *= 2
-    }
-    return sample
-}
+const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
 
 /**
  * Renders a [LiveFrameSource] as the monitor feed: decodes off the main
- * thread with latest-wins conflation ([pumpFrames]) and draws the newest
+ * thread with latest-wins conflation ([monitorPumpFramesWithSourceFrame]) and draws the newest
  * frame into the full modifier bounds. [aspectFill] selects the portrait
  * centre-crop path; the default keeps the whole frame visible.
  *
@@ -438,7 +293,7 @@ internal fun jpegSampleSizeForLongSide(width: Int, height: Int, maxLongSide: Int
  * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
  * [onPresentedFrame] observes the exact source [LiveFrame], decoded bitmap,
- * and optional [LiveFramePreviewBaker] accepted for display. The
+ * and optional [MonitorBitmapPreviewBaker] accepted for display. The
  * phone-mediated Wear relay uses this callback rather than collecting [source]
  * itself, so it cannot keep camera live view running while the monitor is
  * hidden or backgrounded. When image assists are visible, the baker reuses the
@@ -467,9 +322,9 @@ fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
-    onPresentedFrame: ((LiveFrame, Bitmap, LiveFramePreviewBaker?) -> Unit)? = null,
+    onPresentedFrame: ((LiveFrame, Bitmap, MonitorBitmapPreviewBaker?) -> Unit)? = null,
     presentationState: LiveFeedPresentationState? = null,
-    effects: FeedEffects = FeedEffectsState.current,
+    effects: FeedEffects,
     configuration: FeedEffectsConfiguration = FeedEffectsConfiguration(),
     cameraInput: ExposureAssistCameraInput = ExposureAssistCameraInput(),
     lutLibrary: AndroidLutLibrary? = null,
@@ -482,6 +337,10 @@ fun LiveFeedView(
      */
     mirrored: Boolean = false,
     preferComposablePresentation: Boolean = false,
+    /** Pauses acquisition without replacing the retained native picture host or held raster. */
+    collectFrames: Boolean = true,
+    /** Vertical display transform; raw frame publication remains in source orientation. */
+    mirroredVertical: Boolean = false,
 ) {
     val applicationContext = LocalContext.current.applicationContext
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
@@ -525,7 +384,7 @@ fun LiveFeedView(
     val colorMode = presentationState?.colorMode ?: fallbackColorMode.value
     var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     // Wear / small preview baker only (not the live monitor path).
-    var previewBaker by remember { mutableStateOf<LiveFramePreviewBaker?>(null) }
+    var previewBaker by remember { mutableStateOf<MonitorBitmapPreviewBaker?>(null) }
     // AGSL grade for the Compose present path (FULL glass). Mid/high devices
     // only — A12 stays on FLAT + GPU SurfaceView.
     var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
@@ -565,7 +424,7 @@ fun LiveFeedView(
         if (nextPlan == null) return@LaunchedEffect
         // Atomic present-path swap: push GPU uniforms first, then Compose state.
         if (!preferComposablePresentation) {
-            gpuBackend.updatePlan(nextPlan, aspectFill, mirrored)
+            gpuBackend.updatePlan(nextPlan, aspectFill, mirrored, mirroredVertical)
         }
         renderPlan = nextPlan
         val nextBaker =
@@ -593,7 +452,7 @@ fun LiveFeedView(
     SideEffect {
         val plan = renderPlan
         if (!preferComposablePresentation && plan != null && !gpuBackend.renderFailed) {
-            gpuBackend.updatePlan(plan, aspectFill, mirrored)
+            gpuBackend.updatePlan(plan, aspectFill, mirrored, mirroredVertical)
         }
     }
     // SurfaceView is a separate buffer — Kyant layerBackdrop cannot sample it.
@@ -616,14 +475,15 @@ fun LiveFeedView(
         falseColorReady,
         effects.falseColor,
         configuration.falseColorReferenceEnabled,
+        effects.falseColorRec709,
         cameraInput,
         effectsPresentationState,
     ) {
         effectsPresentationState?.clear()
         val scale = effects.falseColor?.takeIf { configuration.falseColorReferenceEnabled }
         if (falseColorReady && scale != null) {
-            val reference = withContext(Dispatchers.Default) { resolveFalseColorReference(scale, cameraInput) }
-            if (reference != null) effectsPresentationState?.present(scale, reference)
+            val reference = withContext(Dispatchers.Default) { resolveFalseColorReference(scale, cameraInput, read709 = effects.falseColorRec709) }
+            if (reference != null) effectsPresentationState?.present(scale, reference, effects.falseColorRec709)
         }
     }
     val ownedPreviewBaker = previewBaker
@@ -641,11 +501,13 @@ fun LiveFeedView(
         fallbackFrame.value = null
         fallbackColorMode.value = LiveFeedColorMode.UNKNOWN
         gpuBackend.clearFrame()
+    }
+    LaunchedEffect(source, presentationState, collectFrames) {
+        if (!collectFrames) return@LaunchedEffect
         if (BuildConfig.DEBUG) {
             Log.d(
                 TAG,
-                "hardware MJPEG decoder available: ${LiveFeedMjpegHardware.isAvailable()} " +
-                    "gpuBackend=${gpuBackend.kind} composablePresent=$preferComposablePresentation",
+                "gpuBackend=${gpuBackend.kind} composablePresent=$preferComposablePresentation",
             )
         }
         // Always decode the frame at its native size.
@@ -659,12 +521,16 @@ fun LiveFeedView(
         //
         // The same power-of-two trap already cost this path once, when a 960 cap carried over from
         // a 1080p source halved every frame on every device.
-        val decoder = JpegFrameDecoder(maxLongSide = JpegFrameDecoder.DEFAULT_MAX_LONG_SIDE)
-        val stats = FramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
-        withContext(feedDecodeDispatcher) {
-            pumpFramesWithSourceFrame(
+        val decoder = MonitorJpegFrameDecoder(maxLongSide = LIVE_FEED_MAX_LONG_SIDE)
+        val stats = MonitorFramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
+        val decodeWorker = MonitorFrameDecodeWorker("zc-feed-decode")
+        try {
+            decodeWorker.run { isCurrent ->
+            monitorPumpFramesWithSourceFrame(
                 frames = source.frames,
                 stats = stats,
+                timestampNanos = { it.timestampNanos },
+                isCurrent = isCurrent,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.
                 decode = { frame ->
@@ -695,6 +561,9 @@ fun LiveFeedView(
                     )
                 },
             )
+            }
+        } finally {
+            decodeWorker.close()
         }
     }
 
@@ -702,13 +571,14 @@ fun LiveFeedView(
         AndroidView(
             factory = { context ->
                 gpuBackend.createView(context).also { view ->
+                    view.tag = "monitor.native.picture"
                     gpuBackend.attach(view)
                 }
             },
             modifier = modifier,
             update = {
                 val plan = renderPlan
-                if (plan != null) gpuBackend.updatePlan(plan, aspectFill, mirrored)
+                if (plan != null) gpuBackend.updatePlan(plan, aspectFill, mirrored, mirroredVertical)
             },
             onRelease = { view -> gpuBackend.detach(view) },
         )
@@ -722,7 +592,7 @@ fun LiveFeedView(
                     ?: fallbackFrame.value?.asAndroidBitmap()
                     ?: return@Canvas
             val content =
-                liveFeedContentRect(
+                nativeFeedContentRect(
                     containerWidth = size.width,
                     containerHeight = size.height,
                     sourceWidth = androidBitmap.width,
@@ -763,8 +633,9 @@ fun LiveFeedView(
                     }
                 }
             }
-            if (mirrored) {
-                scale(scaleX = -1f, scaleY = 1f, pivot = pivot) { paintFeed() }
+            if (mirrored || mirroredVertical) {
+                scale(scaleX = if (mirrored) -1f else 1f,
+                    scaleY = if (mirroredVertical) -1f else 1f, pivot = pivot) { paintFeed() }
             } else {
                 paintFeed()
             }
@@ -804,172 +675,61 @@ internal fun LiveFeedColorModeNotice(
 }
 
 /**
- * Unscaled sibling of [LiveFeedView]. Keeping the reference outside the feed's
- * de-squeeze graphics layer preserves its 264×52 iOS footprint and typography.
+ * The false-colour key on the shared movable panel and ruler. The Swift-calibrated bands, stop
+ * markers and curve name arrive as the shared reference values; [stored] and [onStore] keep its
+ * centre (live: the shared assist state; playback: its own preference file). Unscaled sibling of
+ * [LiveFeedView], outside the feed's de-squeeze layer.
  */
 @Composable
 internal fun FalseColorReferenceOverlay(
     effectsState: LiveFeedEffectsPresentationState,
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
-    modifier: Modifier = Modifier,
-    placementStoreName: String = FalseColorReferencePlacementStore.STORE_NAME,
+    feed: MonitorRect,
+    panelLayout: MonitorAnalysisPanelLayout,
+    stored: MonitorScopeStoredCenter?,
+    onStore: (MonitorScopeStoredCenter) -> Unit,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     defaultHorizontalFraction: Float = 0f,
-    panelLayout: MonitorAnalysisPanelLayout? = null,
-    placementStore: MonitorAnalysisPanelPlacementStore? = null,
-    placementRevision: Int = 0,
     hapticsEnabled: Boolean = true,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, ZoneFrame?) -> Unit = { _, _ -> },
+    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
 ) {
     val presentation = effectsState.falseColorReference ?: return
-    val resolvedLayout =
-        panelLayout ?: MonitorAnalysisPanelLayout(viewport = viewport, safeBounds = viewport)
+    if (presentation.reference.segments.isEmpty()) return
     val default =
-        remember(feed, resolvedLayout, bottomChromeClearance, defaultHorizontalFraction) {
+        remember(feed, panelLayout, bottomChromeClearance, defaultHorizontalFraction) {
             controlSafeFalseColorReferenceDefaultFrame(
                 feed = feed,
-                layout = resolvedLayout,
+                layout = panelLayout,
                 bottomChromeClearance = bottomChromeClearance,
                 horizontalFraction = defaultHorizontalFraction,
             )
         }
-    val context = LocalContext.current.applicationContext
-    val legacyStore =
-        remember(context, placementStoreName, placementStore) {
-            placementStore?.let { null }
-                ?: FalseColorReferencePlacementStore(context, placementStoreName)
-        }
-    val panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE
-    fun resolvedFrame(): ZoneFrame =
-        placementStore?.resolve(panelID, default, resolvedLayout)
-            ?: requireNotNull(legacyStore).resolve(default, resolvedLayout.safeBounds)
-
-    fun saveFrame(frame: ZoneFrame) {
-        if (placementStore != null) {
-            placementStore.save(panelID, frame, resolvedLayout)
-        } else {
-            requireNotNull(legacyStore).save(frame, resolvedLayout.safeBounds)
-        }
-    }
-    var frame by
-        remember(default, resolvedLayout, placementRevision) {
-            mutableStateOf(resolvedFrame())
-        }
-    val currentFrameCallback by rememberUpdatedState(onPanelFrameChanged)
-    SideEffect { currentFrameCallback(panelID, frame) }
-    DisposableEffect(panelID) {
-        onDispose { currentFrameCallback(panelID, null) }
-    }
-    var hapticCell by remember { mutableIntStateOf(Int.MIN_VALUE) }
-    val density = LocalDensity.current
-    val view = LocalView.current
-    val referenceDescription = stringResource(R.string.false_color_reference_description)
-    val recenterDescription = stringResource(R.string.false_color_recenter_description)
-    val copy =
-        FalseColorReferenceCopy(
-            title = stringResource(R.string.false_color_title),
-            scale = stringResource(presentation.scale.labelResource()),
-            stopLabels =
-                listOf(
-                    stringResource(R.string.false_color_axis_min),
-                    stringResource(R.string.false_color_axis_minus_three),
-                    stringResource(R.string.false_color_axis_middle_gray),
-                    stringResource(R.string.false_color_axis_skin),
-                    stringResource(R.string.false_color_axis_plus_two),
-                    stringResource(R.string.false_color_axis_max),
-                ),
-            ireLabels =
-                listOf(
-                    stringResource(R.string.false_color_axis_clip_shadows),
-                    stringResource(R.string.false_color_axis_middle_gray),
-                    stringResource(R.string.false_color_axis_skin_high),
-                    stringResource(R.string.false_color_axis_highlights_clip),
-                ),
-            limitsLabels =
-                listOf(
-                    stringResource(R.string.false_color_axis_crushed),
-                    stringResource(R.string.false_color_axis_midtones),
-                    stringResource(R.string.false_color_axis_clipped),
-                ),
-        )
-    var isDragging by remember { mutableStateOf(false) }
-    Canvas(
-        modifier
-            .zone(frame)
-            .zIndex(if (isDragging) 1f else 0f)
-            .graphicsLayer {
-                scaleX = if (isDragging) 1.03f else 1f
-                scaleY = if (isDragging) 1.03f else 1f
-                shadowElevation = if (isDragging) 18.dp.toPx() else 0f
-                shape = ChromeShape
-                clip = true
-                ambientShadowColor = Color.Black.copy(alpha = 0.5f)
-                spotShadowColor = Color.Black.copy(alpha = 0.5f)
-            }
-            .glass(ChromeShape)
-            .semantics {
-                contentDescription = referenceDescription
-                if (placementStore != null) {
-                    customActions =
-                        listOf(
-                            CustomAccessibilityAction(recenterDescription) {
-                                placementStore.recenter(panelID)
-                                frame = clampScopeFrame(default, resolvedLayout.safeBounds)
-                                true
-                            },
-                        )
-                }
-            }
-            .pointerInput(default, resolvedLayout, placementRevision, hapticsEnabled) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = {
-                        isDragging = true
-                        if (hapticsEnabled) {
-                            view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
-                        }
-                    },
-                    onDragEnd = {
-                        isDragging = false
-                        saveFrame(frame)
-                    },
-                    onDragCancel = { isDragging = false },
-                ) { change, dragAmount ->
-                    change.consume()
-                    val snapped =
-                        clampScopeFrame(
-                            snapFalseColorReferenceFrame(
-                                frame.copy(
-                                    x = frame.x + dragAmount.x / density.density,
-                                    y = frame.y + dragAmount.y / density.density,
-                                ),
-                            ),
-                            resolvedLayout.safeBounds,
-                        )
-                    val cell =
-                        ((snapped.x + snapped.width / 2f) / 22f).roundToInt() * 100_000 +
-                            ((snapped.y + snapped.height / 2f) / 22f).roundToInt()
-                    if (cell != hapticCell) {
-                        hapticCell = cell
-                        if (hapticsEnabled) {
-                            view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                        }
-                    }
-                    frame = snapped
-                }
-            },
-    ) {
-        drawFalseColorReference(presentation, copy)
+    val description = stringResource(R.string.false_color_reference_description)
+    val values = presentation.referenceValues(falseColorReferenceCopy(presentation.scale))
+    MovableMonitorPanel(
+        identity = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE.storageKey,
+        base = MonitorScopePanelSize.falseColorReference,
+        panelLayout = panelLayout,
+        stored = stored,
+        onStore = onStore,
+        hapticsEnabled = hapticsEnabled,
+        panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
+        onPanelFrameChanged = onPanelFrameChanged,
+        defaultFrame = default,
+        // The shared ruler draws its own plate.
+        fillPlate = false,
+    ) { modifier ->
+        MonitorFalseColorReference(values, modifier.semantics { contentDescription = description })
     }
 }
 
+
 /** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
 internal fun controlSafeFalseColorReferenceDefaultFrame(
-    feed: ZoneFrame,
+    feed: MonitorRect,
     layout: MonitorAnalysisPanelLayout,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     horizontalFraction: Float = 0f,
-): ZoneFrame =
+): MonitorRect =
     clampScopeFrame(
         falseColorReferenceDefaultFrame(
             feed = feed,
@@ -982,11 +742,11 @@ internal fun controlSafeFalseColorReferenceDefaultFrame(
 
 /** iOS `feedOutsideCenter(.bottomLeading)` translated into the Android zone map. */
 internal fun falseColorReferenceDefaultFrame(
-    feed: ZoneFrame,
-    viewport: ZoneFrame,
+    feed: MonitorRect,
+    viewport: MonitorRect,
     bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
     horizontalFraction: Float = 0f,
-): ZoneFrame {
+): MonitorRect {
     val feedBottom = feed.y + feed.height
     val outsideTop = feedBottom + FALSE_COLOR_REFERENCE_GAP
     val viewportBottom = viewport.y + viewport.height
@@ -1000,7 +760,7 @@ internal fun falseColorReferenceDefaultFrame(
             ) - FALSE_COLOR_REFERENCE_GAP - FALSE_COLOR_REFERENCE_HEIGHT
         }
     return clampScopeFrame(
-        ZoneFrame(
+        MonitorRect(
             x =
                 feed.x +
                     maxOf(0f, feed.width - min(FALSE_COLOR_REFERENCE_WIDTH, feed.width)) *
@@ -1013,149 +773,72 @@ internal fun falseColorReferenceDefaultFrame(
     )
 }
 
-/** Mirrors iOS `MovablePanel`'s fine 4-point position grid. */
-internal fun snapFalseColorReferenceFrame(frame: ZoneFrame): ZoneFrame =
-    frame.copy(
-        x = (frame.x / 4f).roundToInt() * 4f,
-        y = (frame.y / 4f).roundToInt() * 4f,
-    )
-
-/** Persists the normalized centre used by iOS's `MovablePanel(id: "fcref")`. */
-private class FalseColorReferencePlacementStore(context: Context, name: String) {
-    private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
-
-    fun resolve(default: ZoneFrame, bounds: ZoneFrame): ZoneFrame {
-        if (!preferences.contains(CENTER_X_KEY) || !preferences.contains(CENTER_Y_KEY)) return default
-        val normalizedX = preferences.getFloat(CENTER_X_KEY, 0.5f)
-        val normalizedY = preferences.getFloat(CENTER_Y_KEY, 0.5f)
-        if (!normalizedX.isFinite() || !normalizedY.isFinite()) return default
-        return clampScopeFrame(
-            default.copy(
-                x = bounds.x + normalizedX * bounds.width - default.width / 2f,
-                y = bounds.y + normalizedY * bounds.height - default.height / 2f,
-            ),
-            bounds,
-        )
-    }
-
-    fun save(frame: ZoneFrame, bounds: ZoneFrame) {
-        val centerX = (frame.x + frame.width / 2f - bounds.x) / maxOf(1f, bounds.width)
-        val centerY = (frame.y + frame.height / 2f - bounds.y) / maxOf(1f, bounds.height)
-        preferences.edit()
-            .putFloat(CENTER_X_KEY, centerX.coerceIn(0f, 1f))
-            .putFloat(CENTER_Y_KEY, centerY.coerceIn(0f, 1f))
-            .apply()
-    }
-
-    companion object {
-        const val STORE_NAME = "falseColorReferencePlacement"
-        const val CENTER_X_KEY = "fcref.centerX"
-        const val CENTER_Y_KEY = "fcref.centerY"
-    }
-}
-
-/** Draws the Swift-derived palette geometry and camera-aware reference axis. */
-private data class FalseColorReferenceCopy(
-    val title: String,
+/** The ruler's localized words: scale name and axis labels per scale. */
+internal data class FalseColorReferenceCopy(
     val scale: String,
     val stopLabels: List<String>,
     val ireLabels: List<String>,
     val limitsLabels: List<String>,
 )
 
-@androidx.annotation.StringRes
-internal fun FeedFalseColorScale.labelResource(): Int =
-    when (this) {
-        FeedFalseColorScale.STOPS -> R.string.false_color_scale_stops
-        FeedFalseColorScale.IRE -> R.string.false_color_scale_ire
-        FeedFalseColorScale.LIMITS -> R.string.false_color_scale_limits
-    }
+@Composable
+internal fun falseColorReferenceCopy(scale: FeedFalseColorScale): FalseColorReferenceCopy =
+    FalseColorReferenceCopy(
+        scale = scale.label,
+        stopLabels =
+            listOf(
+                stringResource(R.string.false_color_axis_min),
+                "−2",
+                "−1",
+                stringResource(R.string.false_color_axis_middle_gray),
+                "+1",
+                stringResource(R.string.false_color_axis_plus_two),
+                "Clip",
+            ),
+        ireLabels =
+            listOf(
+                stringResource(R.string.false_color_axis_clip_shadows),
+                stringResource(R.string.false_color_axis_middle_gray),
+                stringResource(R.string.false_color_axis_skin_high),
+                stringResource(R.string.false_color_axis_highlights_clip),
+            ),
+        limitsLabels =
+            listOf(
+                stringResource(R.string.false_color_axis_crushed),
+                stringResource(R.string.false_color_axis_midtones),
+                stringResource(R.string.false_color_axis_clipped),
+            ),
+    )
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFalseColorReference(
-    presentation: FalseColorReferencePresentation,
+/** The Swift reference as the shared ruler's values: bands, stop markers (STOPS) or axis words. */
+internal fun FalseColorReferencePresentation.referenceValues(
     copy: FalseColorReferenceCopy,
-) {
-    val reference = presentation.reference
-    if (reference.segments.isEmpty()) return
-    val panelWidth = size.width
-    val panelHeight = size.height
-    if (panelWidth < 120.dp.toPx() || panelHeight < 38.dp.toPx()) return
-    val left = 0f
-    val top = 0f
-    val padding = 7.dp.toPx()
-    val barLeft = left + padding
-    val barTop = top + 21.dp.toPx()
-    val barWidth = panelWidth - padding * 2
-    val barHeight = 8.dp.toPx()
-    val neutral =
-        if (presentation.scale == FeedFalseColorScale.STOPS) {
-            listOf(Color(0.04f, 0.04f, 0.04f), Color(0.86f, 0.86f, 0.86f))
-        } else {
-            listOf(Color(0.54f, 0.54f, 0.54f), Color(0.75f, 0.75f, 0.75f))
-        }
-    clipRect(barLeft, barTop, barLeft + barWidth, barTop + barHeight) {
-        drawRect(
-            brush = Brush.horizontalGradient(neutral, startX = barLeft, endX = barLeft + barWidth),
-            topLeft = Offset(barLeft, barTop),
-            size = Size(barWidth, barHeight),
-        )
-        reference.segments.forEach { segment ->
-            drawRect(
-                color = Color(segment.color[0], segment.color[1], segment.color[2]),
-                topLeft = Offset(barLeft + barWidth * segment.lowerFraction, barTop),
-                size = Size(maxOf(1f, barWidth * (segment.upperFraction - segment.lowerFraction)), barHeight),
-            )
-        }
-    }
-    drawIntoCanvas { canvas ->
-        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
-        }
-        paint.color = LiveDesign.text.toArgb()
-        paint.textSize = 8.5.dp.toPx()
-        paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
-        paint.textAlign = android.graphics.Paint.Align.LEFT
-        canvas.nativeCanvas.drawText(copy.title, barLeft, top + 13.dp.toPx(), paint)
-        paint.color = LiveDesign.muted.toArgb()
-        paint.textSize = 7.5.dp.toPx()
-        paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
-        paint.textAlign = android.graphics.Paint.Align.RIGHT
-        val curve =
-            when (reference.curveOrdinal) {
-                ExposureCurveOrdinals.SRGB -> "sRGB"
-                ExposureCurveOrdinals.HLG -> "HLG"
-                ExposureCurveOrdinals.NIKON_NLOG -> "N-Log"
-                else -> "L3G10"
-            }
-        canvas.nativeCanvas.drawText("${copy.scale} · $curve", left + panelWidth - padding, top + 13.dp.toPx(), paint)
-
-        paint.textSize = 5.5.dp.toPx()
-        paint.textAlign = android.graphics.Paint.Align.CENTER
-        val labels: List<Pair<String, Float>> =
-            if (presentation.scale == FeedFalseColorScale.STOPS) {
-                copy.stopLabels.zip(reference.stopMarkerFractions.toList())
+): MonitorFalseColorReferenceValues {
+    val curve = reference.curveLabel(read709)
+    return MonitorFalseColorReferenceValues(
+        subtitle = "${copy.scale} · $curve",
+        segments =
+            reference.segments.mapIndexed { index, segment ->
+                MonitorFalseColorReferenceSegment(
+                    index,
+                    segment.lowerFraction.toDouble(),
+                    segment.upperFraction.toDouble(),
+                    segment.color[0].toDouble(),
+                    segment.color[1].toDouble(),
+                    segment.color[2].toDouble(),
+                )
+            },
+        markers =
+            if (scale == FeedFalseColorScale.STOPS) {
+                // The shared ruler starts each label 10 dp before its stop and clips at the panel, so the
+                // Min and Max ends (0 and 1) are held 16 dp inside it, where the old ruler aligned them.
+                val edge = 16.0 / MonitorScopePanelSize.falseColorReference.width
+                copy.stopLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
+                    MonitorFalseColorReferenceMarker(index, label, at.toDouble().coerceIn(edge, 1.0 - edge))
+                }
             } else {
-                val axis =
-                    if (presentation.scale == FeedFalseColorScale.IRE) {
-                        copy.ireLabels
-                    } else {
-                        copy.limitsLabels
-                    }
-                axis.mapIndexed { index, label -> label to index.toFloat() / (axis.size - 1) }
-            }
-        labels.forEach { (label, fraction) ->
-            val x = (barLeft + barWidth * fraction).coerceIn(barLeft + 8.dp.toPx(), barLeft + barWidth - 8.dp.toPx())
-            canvas.nativeCanvas.drawText(label, x, top + 44.dp.toPx(), paint)
-        }
-    }
+                emptyList()
+            },
+        axisLabels = CommonFalseColorReference.axisLabels(scale.sharedScale),
+    )
 }
-
-/** Runtime probe: does this SoC expose a hardware MJPEG video decoder? */
-private fun hasMjpegDecoder(): Boolean =
-    MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
-        !info.isEncoder &&
-            info.supportedTypes.any {
-                it.equals("video/mjpeg", ignoreCase = true) ||
-                    it.equals("video/x-motion-jpeg", ignoreCase = true)
-            }
-    }

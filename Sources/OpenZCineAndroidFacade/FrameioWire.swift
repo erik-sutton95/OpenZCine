@@ -1,5 +1,17 @@
 import Foundation
-import OpenZCineCore
+import OpenCineFrameIO
+
+#if !canImport(CryptoKit)
+    import Crypto
+#endif
+
+/// SHA-256 for PKCE. OpenCineFrameIO has no package dependency, so non-Apple builds (the Swift
+/// Android SDK) inject swift-crypto's, which this package already depends on.
+#if canImport(CryptoKit)
+    let frameioSHA256: PKCE.SHA256Digest = PKCE.cryptoKitSHA256
+#else
+    let frameioSHA256: PKCE.SHA256Digest = { Data(SHA256.hash(data: $0)) }
+#endif
 
 /// Android-facing wire over the portable Frame.io OAuth and V4 request policy.
 ///
@@ -51,7 +63,7 @@ public enum AndroidFrameioWire {
         guard let config = configuration(clientID: clientID, redirectURI: redirectURI) else {
             return nil
         }
-        let pkce = PKCE.generate()
+        let pkce = PKCE.generate(sha256: frameioSHA256)
         let state = UUID().uuidString
         let authorizationURL = FrameioOAuth.authorizeURL(config: config, pkce: pkce, state: state)
         return encode(
@@ -86,33 +98,19 @@ public enum AndroidFrameioWire {
         guard let config = configuration(clientID: clientID, redirectURI: redirectURI) else {
             return nil
         }
-        let form: HTTPRequest?
+        let request: FrameioAPIRequest
         switch kind {
         case "exchange":
             guard let code, !code.isEmpty, let verifier, !verifier.isEmpty else { return nil }
-            form = tokenForm(
-                config: config,
-                fields: [
-                    ("grant_type", "authorization_code"),
-                    ("client_id", config.clientID),
-                    ("code", code),
-                    ("code_verifier", verifier),
-                    ("redirect_uri", config.redirectURI),
-                ])
+            request = FrameioOAuth.tokenExchangeRequest(
+                config: config, code: code, verifier: verifier)
         case "refresh":
             guard let refreshToken, !refreshToken.isEmpty else { return nil }
-            form = tokenForm(
-                config: config,
-                fields: [
-                    ("grant_type", "refresh_token"),
-                    ("client_id", config.clientID),
-                    ("refresh_token", refreshToken),
-                ])
+            request = FrameioOAuth.refreshRequest(config: config, refreshToken: refreshToken)
         default:
             return nil
         }
-        guard let form else { return nil }
-        return encode(form)
+        return encode(httpRequest(request))
     }
 
     /// Plans one core-owned Frame.io V4 request. The Android HTTPS adapter
@@ -155,11 +153,7 @@ public enum AndroidFrameioWire {
         } catch {
             return nil
         }
-        return encode(
-            HTTPRequest(
-                url: request.url.absoluteString,
-                method: request.method.rawValue,
-                body: request.body.map { String(decoding: $0, as: UTF8.self) }))
+        return encode(httpRequest(request))
     }
 
     /// Decodes a Frame.io JSON response with the portable model types, then
@@ -208,24 +202,12 @@ public enum AndroidFrameioWire {
         return FrameioConfiguration(clientID: clientID, redirectURI: redirectURI)
     }
 
-    private static func tokenForm(
-        config: FrameioConfiguration, fields: [(String, String)]
-    ) -> HTTPRequest? {
-        guard
-            var components = URLComponents(
-                url: config.tokenEndpoint, resolvingAgainstBaseURL: false)
-        else { return nil }
-        components.queryItems = [URLQueryItem(name: "client_id", value: config.clientID)]
-        guard let url = components.url else { return nil }
-
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        let body = fields.map { key, value in
-            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
-            let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-            return "\(encodedKey)=\(encodedValue)"
-        }.joined(separator: "&")
-        return HTTPRequest(url: url.absoluteString, method: "POST", body: body)
+    /// The JNI wire shape. Kotlin sets content type and bearer itself, so headers stay behind.
+    private static func httpRequest(_ request: FrameioAPIRequest) -> HTTPRequest {
+        HTTPRequest(
+            url: request.url.absoluteString,
+            method: request.method.rawValue,
+            body: request.body.map { String(decoding: $0, as: UTF8.self) })
     }
 
     private static func validatedRedirectURI(_ redirectURI: String) -> URL? {

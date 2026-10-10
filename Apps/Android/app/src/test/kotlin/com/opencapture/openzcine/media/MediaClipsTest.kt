@@ -1,5 +1,10 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaClips
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -17,11 +22,11 @@ class MediaClipsTest {
 
     @Test
     fun `parses records from the facade wire format`() {
-        val clips = MediaClips.parse(wire)
+        val clips = NikonMediaClips.parse(wire)
 
         assertEquals(2, clips.size)
         assertEquals(
-            MediaClipRecord(
+            NikonMediaClipRecord(
                 handle = 4097,
                 storageId = 65537,
                 sizeBytes = 1_284_505_600,
@@ -29,7 +34,7 @@ class MediaClipsTest {
                 pixelWidth = 1920,
                 pixelHeight = 1080,
                 filename = "C0001.MOV",
-                contentKind = MediaContentKind.PLAYABLE_PROXY,
+                contentKind = NikonMediaContentKind.PLAYABLE_PROXY,
                 stillPhoto = null,
                 sourcePixelWidth = 6048,
                 sourcePixelHeight = 3402,
@@ -37,9 +42,9 @@ class MediaClipsTest {
             clips[0],
         )
         assertEquals("DSC_0007.JPG", clips[1].filename)
-        assertEquals(MediaContentKind.STILL_PHOTO, clips[1].contentKind)
+        assertEquals(NikonMediaContentKind.STILL_PHOTO, clips[1].contentKind)
         assertEquals(
-            StillPhotoClassification("JPEG", StillPreviewStrategy.PROGRESSIVE),
+            NikonStillPhotoClassification("JPEG", NikonStillPreviewStrategy.PROGRESSIVE),
             clips[1].stillPhoto,
         )
     }
@@ -47,7 +52,7 @@ class MediaClipsTest {
     @Test
     fun `skips malformed lines instead of failing the listing`() {
         val clips =
-            MediaClips.parse(
+            NikonMediaClips.parse(
                 "not-a-number\t65537\t1\t20260713T101010\t1\t1\t0\t0\t1\tproxy\t\t\tC0001.MOV\n" +
                     "too\tfew\tfields\n" +
                     "\n" +
@@ -61,13 +66,13 @@ class MediaClipsTest {
 
     @Test
     fun `empty wire is an empty card`() {
-        assertTrue(MediaClips.parse("").isEmpty())
+        assertTrue(NikonMediaClips.parse("").isEmpty())
     }
 
     @Test
     fun `rejects unknown core content and still-policy codes`() {
         val clips =
-            MediaClips.parse(
+            NikonMediaClips.parse(
                 "1\t1\t1\t\t0\t0\t0\t0\t0\tfuture\t\t\tUNKNOWN.BIN\n" +
                     "2\t1\t1\t\t0\t0\t0\t0\t0\tstill\tfuture\tJPEG\tUNKNOWN.BIN",
             )
@@ -77,7 +82,7 @@ class MediaClipsTest {
 
     @Test
     fun `labels match the iOS formatting`() {
-        val clips = MediaClips.parse(wire)
+        val clips = NikonMediaClips.parse(wire)
 
         assertEquals("1.3GB · MOV", clips[0].badgeLabel)
         assertEquals("8MB · JPG", clips[1].badgeLabel)
@@ -90,35 +95,35 @@ class MediaClipsTest {
     @Test
     fun `renders only the still policy encoded by the shared core`() {
         val jpeg =
-            MediaClips.parse("1\t1\t1\t\t0\t0\t0\t0\t0\tstill\tprogressive\tJPEG\tCAMERA_OBJECT.001")
+            NikonMediaClips.parse("1\t1\t1\t\t0\t0\t0\t0\t0\tstill\tprogressive\tJPEG\tCAMERA_OBJECT.001")
                 .single()
         val png =
-            MediaClips.parse("2\t1\t1\t\t0\t0\t0\t0\t0\tstill\tprogressive\tPNG\tFRAME.UNKNOWN")
+            NikonMediaClips.parse("2\t1\t1\t\t0\t0\t0\t0\t0\tstill\tprogressive\tPNG\tFRAME.UNKNOWN")
                 .single()
         val heif =
-            MediaClips.parse("3\t1\t1\t\t0\t0\t0\t0\t0\tstill\tcomplete\tHEIF\tSTILL.BIN")
+            NikonMediaClips.parse("3\t1\t1\t\t0\t0\t0\t0\t0\tstill\tcomplete\tHEIF\tSTILL.BIN")
                 .single()
         val raw =
-            MediaClips.parse("4\t1\t1\t\t0\t0\t0\t0\t0\tstill\tthumbnail\tNikon RAW\tOBJECT.DATA")
+            NikonMediaClips.parse("4\t1\t1\t\t0\t0\t0\t0\t0\tstill\tthumbnail\tNikon RAW\tOBJECT.DATA")
                 .single()
-        val r3d = MediaClips.parse("5\t1\t1\t\t0\t0\t0\t0\t0\tr3d\t\t\tA001.R3D").single()
+        val r3d = NikonMediaClips.parse("5\t1\t1\t\t0\t0\t0\t0\t0\tr3d\t\t\tA001.R3D").single()
 
-        assertEquals(MediaContentKind.STILL_PHOTO, jpeg.contentKind)
-        assertEquals(StillPreviewStrategy.PROGRESSIVE, jpeg.stillPhoto?.previewStrategy)
-        assertEquals(MediaContentKind.STILL_PHOTO, png.contentKind)
-        assertEquals(StillPreviewStrategy.PROGRESSIVE, png.stillPhoto?.previewStrategy)
-        assertEquals(MediaContentKind.STILL_PHOTO, heif.contentKind)
-        assertEquals(StillPreviewStrategy.COMPLETE_FILE, heif.stillPhoto?.previewStrategy)
-        assertEquals(MediaContentKind.STILL_PHOTO, raw.contentKind)
-        assertEquals(StillPreviewStrategy.THUMBNAIL_ONLY, raw.stillPhoto?.previewStrategy)
-        assertEquals(MediaContentKind.R3D_MASTER, r3d.contentKind)
+        assertEquals(NikonMediaContentKind.STILL_PHOTO, jpeg.contentKind)
+        assertEquals(NikonStillPreviewStrategy.PROGRESSIVE, jpeg.stillPhoto?.previewStrategy)
+        assertEquals(NikonMediaContentKind.STILL_PHOTO, png.contentKind)
+        assertEquals(NikonStillPreviewStrategy.PROGRESSIVE, png.stillPhoto?.previewStrategy)
+        assertEquals(NikonMediaContentKind.STILL_PHOTO, heif.contentKind)
+        assertEquals(NikonStillPreviewStrategy.COMPLETE_FILE, heif.stillPhoto?.previewStrategy)
+        assertEquals(NikonMediaContentKind.STILL_PHOTO, raw.contentKind)
+        assertEquals(NikonStillPreviewStrategy.THUMBNAIL_ONLY, raw.stillPhoto?.previewStrategy)
+        assertEquals(NikonMediaContentKind.R3D_MASTER, r3d.contentKind)
         assertEquals(null, r3d.stillPhoto)
     }
 
     @Test
     fun `newest first orders by capture date then filename`() {
         val clips =
-            MediaClips.parse(
+            NikonMediaClips.parse(
                 "1\t1\t1\t20260713T101010\t0\t0\t0\t0\t1\tproxy\t\t\tC0001.MOV\n" +
                     "2\t1\t1\t20260714T090000\t0\t0\t0\t0\t1\tproxy\t\t\tA001.MP4\n" +
                     "3\t1\t1\t20260714T090000\t0\t0\t0\t0\t1\tproxy\t\t\tB001.MP4",
@@ -126,7 +131,7 @@ class MediaClipsTest {
 
         assertEquals(
             listOf("B001.MP4", "A001.MP4", "C0001.MOV"),
-            MediaClips.newestFirst(clips).map { it.filename },
+            NikonMediaClips.newestFirst(clips).map { it.filename },
         )
     }
 
@@ -135,5 +140,14 @@ class MediaClipsTest {
         assertEquals("0:00", formatPlaybackTime(-1))
         assertEquals("1:05", formatPlaybackTime(65_999))
         assertEquals("61:01", formatPlaybackTime(3_661_000))
+    }
+
+    @Test
+    fun `partial camera listing is represented as a retryable failure`() {
+        val clip = NikonMediaClips.parse(wire.lines().first()).single()
+
+        val state = incompleteCameraBrowseState(listOf(clip))
+
+        assertEquals("Listing stopped after 1 item. Retry to load the complete library.", state.message)
     }
 }

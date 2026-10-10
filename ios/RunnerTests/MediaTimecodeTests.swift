@@ -1,5 +1,7 @@
 import AVFoundation
 import CoreMedia
+import OpenCineApple
+import OpenZCineCore
 import XCTest
 
 @testable import Runner
@@ -131,9 +133,9 @@ final class MediaTimecodeTests: XCTestCase {
 
         let sourceURL = dir.appendingPathComponent("source.mov")
         try await Self.writeMovieWithTimecode(to: sourceURL)
-        XCTAssertFalse(MediaLUT.mediaDataExtendsPastEndOfFile(at: sourceURL))
-        XCTAssertTrue(MediaLUT.movieHasFinishedHeader(at: sourceURL))
-        XCTAssertNil(MediaLUT.mdatAvailableFraction(at: sourceURL))
+        XCTAssertFalse(MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: sourceURL))
+        XCTAssertTrue(MonitorMovieFile.movieHasFinishedHeader(at: sourceURL))
+        XCTAssertNil(MonitorMovieFile.mdatAvailableFraction(at: sourceURL))
     }
 
     func testTruncatedFastStartProxyExportWritesPlayableFile() async throws {
@@ -148,13 +150,14 @@ final class MediaTimecodeTests: XCTestCase {
         let truncatedURL = dir.appendingPathComponent("truncated.mov")
         try Self.truncateMdatPayload(from: sourceURL, to: truncatedURL, keepFraction: 0.35)
         try XCTSkipUnless(
-            MediaLUT.mediaDataExtendsPastEndOfFile(at: truncatedURL),
+            MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: truncatedURL),
             "fast-start rewrite did not leave moov before a declared-oversize mdat")
-        let fraction = try XCTUnwrap(MediaLUT.mdatAvailableFraction(at: truncatedURL))
+        let fraction = try XCTUnwrap(MonitorMovieFile.mdatAvailableFraction(at: truncatedURL))
         XCTAssertGreaterThan(fraction, 0.1)
         XCTAssertLessThan(fraction, 0.9)
         let header = CMTime(seconds: 10, preferredTimescale: 25_000)
-        let scaled = MediaLUT.scaledProgressDuration(for: truncatedURL, headerDuration: header)
+        let scaled = MonitorMovieFile.scaledProgressDuration(
+            for: truncatedURL, headerDuration: header)
         XCTAssertLessThan(scaled.seconds, header.seconds)
 
         let result = try await MediaLUT.export(
@@ -170,8 +173,8 @@ final class MediaTimecodeTests: XCTestCase {
             (try FileManager.default.attributesOfItem(atPath: result.videoURL.path)[.size]
                 as? UInt64) ?? 0
         XCTAssertGreaterThan(size, 0)
-        XCTAssertTrue(MediaLUT.movieHasFinishedHeader(at: result.videoURL))
-        XCTAssertFalse(MediaLUT.mediaDataExtendsPastEndOfFile(at: result.videoURL))
+        XCTAssertTrue(MonitorMovieFile.movieHasFinishedHeader(at: result.videoURL))
+        XCTAssertFalse(MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: result.videoURL))
     }
 
     func testExportReferenceProxyIfPresent() async throws {
@@ -243,10 +246,19 @@ final class MediaTimecodeTests: XCTestCase {
         }
         writer.startSession(atSourceTime: .zero)
 
+        // Supply the known timecode before video fills writer backpressure: a writer that holds
+        // video back to interleave it with the still-empty timecode track never becomes ready.
+        try await waitUntilReady(timecodeInput, of: writer, "timecode")
+        let sample = try makeTimecodeSample(
+            formatDescription: formatDescription,
+            duration: CMTime(value: CMTimeValue(frameCount), timescale: fps))
+        guard timecodeInput.append(sample) else {
+            throw writer.error ?? NSError(domain: "MediaTimecodeTests", code: -3)
+        }
+        timecodeInput.markAsFinished()
+
         for frame in 0..<frameCount {
-            while !videoInput.isReadyForMoreMediaData {
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            try await waitUntilReady(videoInput, of: writer, "video frame \(frame)")
             let buffer = try makePixelBuffer(from: adaptor)
             guard
                 adaptor.append(
@@ -258,20 +270,29 @@ final class MediaTimecodeTests: XCTestCase {
         }
         videoInput.markAsFinished()
 
-        while !timecodeInput.isReadyForMoreMediaData {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let sample = try makeTimecodeSample(
-            formatDescription: formatDescription,
-            duration: CMTime(value: CMTimeValue(frameCount), timescale: fps))
-        guard timecodeInput.append(sample) else {
-            throw writer.error ?? NSError(domain: "MediaTimecodeTests", code: -3)
-        }
-        timecodeInput.markAsFinished()
-
         await writer.finishWriting()
         guard writer.status == .completed else {
             throw writer.error ?? NSError(domain: "MediaTimecodeTests", code: -4)
+        }
+    }
+
+    /// Fails the fixture with a message instead of hanging the async test when the writer
+    /// never asks for more media.
+    private static func waitUntilReady(
+        _ input: AVAssetWriterInput, of writer: AVAssetWriter, _ label: String
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while !input.isReadyForMoreMediaData {
+            guard writer.status == .writing, ContinuousClock.now < deadline else {
+                throw writer.error
+                    ?? NSError(
+                        domain: "MediaTimecodeTests", code: -7,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "fixture writer never became ready for \(label) (status \(writer.status.rawValue))"
+                        ])
+            }
+            try await Task.sleep(for: .milliseconds(10))
         }
     }
 

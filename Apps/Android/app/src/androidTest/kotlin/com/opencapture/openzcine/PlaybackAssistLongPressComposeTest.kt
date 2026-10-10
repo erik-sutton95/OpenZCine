@@ -2,8 +2,8 @@ package com.opencapture.openzcine
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
@@ -15,7 +15,8 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.opencapture.openzcine.core.CameraControl
+import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.opencine.nikon.CameraControl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -32,40 +33,35 @@ class PlaybackAssistLongPressComposeTest {
 
     @Test
     fun configurableToolLongClickDoesNotToggleAndAudioRemainsTapOnly() {
-        val state = AssistState(FeedEffects.NONE, null)
-        var configured: AssistTool? = null
-        var anchorBounds: Rect? = null
+        val assists = idleNikonAssists()
         composeRule.setContent {
             OpenZCineTheme {
-                AssistToolbar(
-                    state = state,
-                    visibleTools = listOf(AssistTool.WAVE, AssistTool.AUDIO),
-                    hapticsEnabled = false,
-                    onLongPressToolAnchored = { tool, bounds ->
-                        configured = tool
-                        anchorBounds = bounds
-                    },
+                NikonAssistPalette(
+                    listOf(MonitorAssistTool.WAVE, MonitorAssistTool.AUDIO).map(NikonAssistChip::Tool), assists,
+                    playback = true, portrait = false, locked = false,
+                    modifier = Modifier.size(width = 400.dp, height = 58.dp),
                 )
             }
         }
 
         composeRule
-            .onNodeWithContentDescription(AssistTool.WAVE.settingsTitle)
+            .onNodeWithContentDescription(MonitorAssistTool.WAVE.title, substring = true)
             .performSemanticsAction(SemanticsActions.OnLongClick)
         composeRule.runOnIdle {
-            assertEquals(AssistTool.WAVE, configured)
-            assertFalse(state.isOn(AssistTool.WAVE))
-            assertTrue(requireNotNull(anchorBounds).width > 1f)
-            assertTrue(requireNotNull(anchorBounds).height > 1f)
+            assertEquals(MonitorAssistTool.WAVE, assists.shared.configureTool)
+            assertFalse(assists.shared.isPlaybackVisible(MonitorAssistTool.WAVE))
         }
 
         composeRule
-            .onNodeWithContentDescription(AssistTool.WAVE.settingsTitle)
+            .onNodeWithContentDescription(MonitorAssistTool.WAVE.title, substring = true)
             .performClick()
-        composeRule.runOnIdle { assertTrue(state.isOn(AssistTool.WAVE)) }
+        composeRule.runOnIdle {
+            assertTrue(assists.shared.isPlaybackVisible(MonitorAssistTool.WAVE))
+            assertFalse(assists.shared.isOn(MonitorAssistTool.WAVE))
+        }
 
         composeRule
-            .onNodeWithContentDescription(AssistTool.AUDIO.settingsTitle)
+            .onNodeWithContentDescription(MonitorAssistTool.AUDIO.title, substring = true)
             .assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
     }
 

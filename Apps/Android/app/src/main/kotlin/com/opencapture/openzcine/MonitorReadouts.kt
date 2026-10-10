@@ -3,16 +3,15 @@ package com.opencapture.openzcine
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.opencapture.openzcine.core.CameraIdentity
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraSessionState
-import com.opencapture.openzcine.core.CameraStorageStatus
-import com.opencapture.openzcine.core.LiveFrameTimecode
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.CameraStorageStatus
+import com.opencapture.opencine.nikon.LiveFrameTimecode
 import java.util.Locale
 import kotlin.math.ceil
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
-internal const val UNAVAILABLE_TIMECODE = "—:—:—:—"
 
 /** Camera-owned values rendered around Android live view. */
 internal data class MonitorCameraReadouts(
@@ -341,7 +340,7 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
      * A watcher's readouts arrive over the relay already formatted by the host — apply them
      * verbatim (iOS `applyRelayState`). Blank fields keep the last value, like [update].
      */
-    fun applyRelayed(state: com.opencapture.openzcine.relay.MonitorRelayWire.State) {
+    fun applyRelayed(state: com.opencapture.opencine.nikonwire.MonitorRelayWire.State) {
         resolution = state.resolutionFrameRate.monitorValueOrNull() ?: resolution
         codec = state.codec.monitorValueOrNull() ?: codec
         media =
@@ -433,31 +432,18 @@ internal fun fpsChipLabel(rate: Double?, state: MonitorFeedState?): String =
  * first measurable interval.
  */
 internal class MonitorFrameRateSampler {
-    private val intervals = ArrayDeque<Double>()
-    private var lastFrameNanos = 0L
-    private var lastPublishNanos = 0L
+    private val sampler = com.opencapture.opencine.media.FrameRateSampler(
+        windowSize = 30,
+        displayRefreshInterval = 1.0,
+    )
 
     /** Formatted through [fpsChipLabel] so the chip has one definition of a printed rate. */
     var formatted: String by mutableStateOf(fpsChipLabel(rate = null, state = null))
         private set
 
     fun accept(nowNanos: Long) {
-        if (lastFrameNanos != 0L) {
-            val seconds = (nowNanos - lastFrameNanos) / 1e9
-            if (seconds > 0.0) {
-                intervals.addLast(seconds)
-                while (intervals.size > WINDOW) intervals.removeFirst()
-            }
-        }
-        lastFrameNanos = nowNanos
-        if (intervals.isNotEmpty() && nowNanos - lastPublishNanos >= 1_000_000_000L) {
-            lastPublishNanos = nowNanos
-            formatted = fpsChipLabel(rate = intervals.size / intervals.sum(), state = null)
-        }
-    }
-
-    private companion object {
-        const val WINDOW = 30
+        sampler.recordFrame(at = nowNanos / 1e9)
+        formatted = fpsChipLabel(rate = sampler.displayFPS.takeIf { sampler.intervalCount > 0 }, state = null)
     }
 }
 
@@ -479,16 +465,3 @@ internal fun liveViewHeaderTimecode(timecode: LiveFrameTimecode?): LiveFrameTime
             it.frame in 0..255 &&
             (it.on || it.hour != 0 || it.minute != 0 || it.second != 0 || it.frame != 0)
     }
-
-/**
- * Same acceptance as [liveViewHeaderTimecode] — kept as the public name used by
- * chrome / tests for "camera-owned, not synthetic" values.
- */
-internal fun authoritativeTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
-    liveViewHeaderTimecode(timecode)
-
-/** Exact camera timecode label, or the explicit unavailable placeholder. */
-internal fun cameraTimecodeLabel(timecode: LiveFrameTimecode?): String =
-    liveViewHeaderTimecode(timecode)?.let {
-        String.format(Locale.ROOT, "%02d:%02d:%02d:%02d", it.hour, it.minute, it.second, it.frame)
-    } ?: UNAVAILABLE_TIMECODE

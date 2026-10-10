@@ -2,7 +2,6 @@ package com.opencapture.openzcine
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -25,28 +24,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.openzcine.bridge.ZoneFrame
-import com.opencapture.openzcine.core.CameraPropertySnapshot
-import com.opencapture.openzcine.core.CameraStorageStatus
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraStorageStatus
 import java.util.Locale
 import kotlinx.coroutines.delay
 
@@ -342,126 +330,3 @@ internal fun photographyFeedAspect(imageArea: String?): Float =
         // FX / DX / unknown: the 3:2 stills frame.
         else -> 3f / 2f
     }
-
-/**
- * Photography's landscape feed frame (iOS `MonitorFeedLayout.frame(centered:)`):
- * the still image area's shape at the FULL viewport height, letterboxed
- * horizontally and centred between the SIDE lanes only — the lock/battery/rail
- * lane and the right system rail sit on black, while the capture band's glass
- * OVERLAYS the image bottom exactly like iOS. A 16:9 photo frame takes the
- * cinema feed placement.
- */
-// ponytail: the aspect-fit runs Kotlin-side because the reserved side lanes
-// are Android chrome frames the shared core map doesn't model; the core
-// `centered:` math is this fit's no-lane degenerate case.
-internal fun photographyFeedFrame(
-    cinemaFeed: ZoneFrame,
-    viewport: ZoneFrame,
-    imageArea: String?,
-    leadingLaneTrailing: Float,
-    trailingLaneLeading: Float,
-): ZoneFrame {
-    val aspect = photographyFeedAspect(imageArea)
-    if (aspect >= 16f / 9f - 0.001f) return cinemaFeed
-    val boxLeft = maxOf(viewport.x, leadingLaneTrailing)
-    val boxRight = minOf(viewport.x + viewport.width, trailingLaneLeading)
-    val boxWidth = maxOf(0f, boxRight - boxLeft)
-    var height = viewport.height
-    var width = height * aspect
-    if (width > boxWidth) {
-        // Side lanes constrain a wide box (1:1 on short-wide handsets): fit
-        // the width and centre the shorter frame vertically.
-        width = boxWidth
-        height = width / aspect
-    }
-    return ZoneFrame(
-        x = boxLeft + (boxWidth - width) / 2f,
-        y = viewport.y + (viewport.height - height) / 2f,
-        width = width,
-        height = height,
-    )
-}
-
-/**
- * Hosts the photo capture strip in a band slice symmetric about the feed's
- * centre, so `Alignment.Center` lands the strip centred under the centred
- * feed exactly as iOS centres it (never the screen midpoint).
- */
-internal fun photographyStripHostFrame(
-    band: ZoneFrame,
-    feedCenterX: Float,
-): ZoneFrame {
-    val halfSpan =
-        minOf(feedCenterX - band.x, band.x + band.width - feedCenterX)
-            .coerceAtLeast(0f)
-    return ZoneFrame(
-        x = feedCenterX - halfSpan,
-        y = band.y,
-        width = halfSpan * 2f,
-        height = band.height,
-    )
-}
-
-/** SF `photo` stand-in: rounded frame, sun dot, mountain line. */
-@Composable
-internal fun PhotoGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.2.dp.toPx()
-        drawRoundRect(
-            tint,
-            topLeft = Offset(stroke / 2, stroke / 2),
-            size = androidx.compose.ui.geometry.Size(
-                size.width - stroke,
-                size.height - stroke,
-            ),
-            cornerRadius = CornerRadius(size.height * 0.2f),
-            style = Stroke(stroke),
-        )
-        drawCircle(
-            tint,
-            radius = size.height * 0.10f,
-            center = Offset(size.width * 0.30f, size.height * 0.32f),
-        )
-        val mountains =
-            Path().apply {
-                moveTo(size.width * 0.14f, size.height * 0.76f)
-                lineTo(size.width * 0.40f, size.height * 0.42f)
-                lineTo(size.width * 0.56f, size.height * 0.60f)
-                lineTo(size.width * 0.70f, size.height * 0.48f)
-                lineTo(size.width * 0.86f, size.height * 0.76f)
-            }
-        drawPath(
-            mountains,
-            tint,
-            style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
-        )
-    }
-}
-
-/** SF `camera.aperture` stand-in: ring with six blade strokes. */
-@Composable
-internal fun ApertureGlyph(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = 1.2.dp.toPx()
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val radius = size.minDimension / 2f - stroke / 2f
-        drawCircle(tint, radius = radius, center = center, style = Stroke(stroke))
-        repeat(6) { index ->
-            val outerAngle = Math.toRadians(index * 60.0)
-            val innerAngle = Math.toRadians(index * 60.0 + 55.0)
-            val outer =
-                center +
-                    Offset(
-                        kotlin.math.cos(outerAngle).toFloat(),
-                        kotlin.math.sin(outerAngle).toFloat(),
-                    ) * radius
-            val inner =
-                center +
-                    Offset(
-                        kotlin.math.cos(innerAngle).toFloat(),
-                        kotlin.math.sin(innerAngle).toFloat(),
-                    ) * (radius * 0.42f)
-            drawLine(tint, start = outer, end = inner, strokeWidth = stroke, cap = StrokeCap.Round)
-        }
-    }
-}

@@ -1,5 +1,8 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorLayoutPolicy
+import com.opencapture.monitorui.MonitorRect
+import com.opencapture.opencine.appkit.MonitorChromeEditBadgeLayout
 import com.opencapture.openzcine.settings.ChromeSection
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -8,45 +11,44 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Mirrors `editBadgesTakeACornerOfTheirOwnElementAndNeverStackUp` in
- * `Tests/OpenZCineCoreTests/OperatorPreferencesTests.swift` — same boxes, same expectations, so a
- * drift between the two shells' badge placement fails here.
+ * Nikon's sections on the shared badge placement (OpenCine `MonitorChromeEditBadgeLayout`), with the
+ * measured boxes and expectations iOS `RunnerTests` pins on the Swift twin.
  */
 class ChromeEditLayoutTest {
     // Real measured landscape boxes from a 852x393 phone: the four readouts nest inside the status
     // bar, and the rail and camera-value strip sit flush against the screen edges.
     private val boxes =
         listOf(
-            ChromeEditBox(ChromeSection.STATUS_BAR, 69f, 16f, 678f, 42f),
-            ChromeEditBox(ChromeSection.SIDE_RAILS, 763f, 14f, 83f, 289f),
-            ChromeEditBox(ChromeSection.ASSIST_TOOLBAR, 16f, 321f, 344f, 58f),
-            ChromeEditBox(ChromeSection.CAMERA_VALUES, 368f, 321f, 466f, 58f),
-            ChromeEditBox(ChromeSection.LOCK_BUTTON, 16f, 17f, 40f, 40f),
-            ChromeEditBox(ChromeSection.BATTERY_INDICATORS, 8f, 63f, 41f, 35f),
-            ChromeEditBox(ChromeSection.REC_READOUT, 81f, 23f, 67f, 27f),
-            ChromeEditBox(ChromeSection.CODEC_READOUT, 377f, 22f, 98f, 30f),
-            ChromeEditBox(ChromeSection.MEDIA_READOUT, 485f, 22f, 132f, 30f),
-            ChromeEditBox(ChromeSection.FPS_READOUT, 627f, 22f, 108f, 29f),
+            ChromeSection.STATUS_BAR to MonitorRect(69f, 16f, 678f, 42f),
+            ChromeSection.SIDE_RAILS to MonitorRect(763f, 14f, 83f, 289f),
+            ChromeSection.ASSIST_TOOLBAR to MonitorRect(16f, 321f, 344f, 58f),
+            ChromeSection.CAMERA_VALUES to MonitorRect(368f, 321f, 466f, 58f),
+            ChromeSection.LOCK_BUTTON to MonitorRect(16f, 17f, 40f, 40f),
+            ChromeSection.BATTERY_INDICATORS to MonitorRect(8f, 63f, 41f, 35f),
+            ChromeSection.REC_READOUT to MonitorRect(81f, 23f, 67f, 27f),
+            ChromeSection.CODEC_READOUT to MonitorRect(377f, 22f, 98f, 30f),
+            ChromeSection.MEDIA_READOUT to MonitorRect(485f, 22f, 132f, 30f),
+            ChromeSection.FPS_READOUT to MonitorRect(627f, 22f, 108f, 29f),
         )
 
     @Test
     fun `badges take a corner of their own element and never stack up`() {
-        val size = ChromeEditLayout.BADGE_SIZE_DP
-        val placements = ChromeEditLayout.badgeFrames(boxes, 852f, 393f)
+        val size = MonitorChromeEditBadgeLayout.BADGE_SIZE
+        val placements = MonitorChromeEditBadgeLayout.badgeFrames(boxes, 852f, 393f).toMap()
 
         assertEquals(boxes.size, placements.size, "every measured element must get a badge")
         placements.forEach { (section, placement) ->
-            assertTrue(placement.left >= 0f && placement.top >= 0f, "$section badge ran off screen")
+            assertTrue(placement.x >= 0f && placement.y >= 0f, "$section badge ran off screen")
             assertTrue(
-                placement.left + size <= 852f && placement.top + size <= 393f,
+                placement.x + size <= 852f && placement.y + size <= 393f,
                 "$section badge ran off the trailing or bottom edge",
             )
-            val box = boxes.first { it.section == section }
-            val centreX = placement.left + size / 2f
-            val centreY = placement.top + size / 2f
+            val box = boxes.first { it.first == section }.second
+            val centreX = placement.x + size / 2f
+            val centreY = placement.y + size / 2f
             assertTrue(
-                centreX >= box.left - size && centreX <= box.left + box.width + size &&
-                    centreY >= box.top - size && centreY <= box.top + box.height + size,
+                centreX >= box.x - size && centreX <= box.x + box.width + size &&
+                    centreY >= box.y - size && centreY <= box.y + box.height + size,
                 "$section badge drifted away from the element it controls",
             )
         }
@@ -56,9 +58,40 @@ class ChromeEditLayoutTest {
                 val a = all[i]
                 val b = all[j]
                 val apart =
-                    a.left + size <= b.left || b.left + size <= a.left ||
-                        a.top + size <= b.top || b.top + size <= a.top
+                    a.x + size <= b.x || b.x + size <= a.x ||
+                        a.y + size <= b.y || b.y + size <= a.y
                 assertTrue(apart, "two badges overlap at $a and $b")
+            }
+        }
+    }
+
+    @Test
+    fun `portrait status bar and batteries get separate eyes in the host order`() {
+        // Measured on a 411x914 dp portrait phone: the batteries sit in the status bar's top corner.
+        val measured =
+            mapOf(
+                ChromeSection.STATUS_BAR to MonitorRect(8f, 0f, 383.2f, 44.2f),
+                ChromeSection.BATTERY_INDICATORS to MonitorRect(358.1f, 4.2f, 45.3f, 22.1f),
+                ChromeSection.CAMERA_VALUES to MonitorRect(14.1f, 728.8f, 383.2f, 81.5f),
+                ChromeSection.FOCUS_BOX to MonitorRect(100f, 382f, 90.7f, 78.9f),
+            )
+        val size = MonitorChromeEditBadgeLayout.BADGE_SIZE
+        val placements =
+            MonitorChromeEditBadgeLayout.badgeFrames(
+                NikonChromeEditHost.PLACEMENT_ORDER.mapNotNull { section -> measured[section]?.let { section to it } },
+                411.4f,
+                914.3f,
+            )
+        assertEquals(measured.size, placements.size)
+        val all = placements.map { it.second }
+        for (i in all.indices) {
+            for (j in i + 1 until all.size) {
+                val a = all[i]
+                val b = all[j]
+                assertTrue(
+                    a.x + size <= b.x || b.x + size <= a.x || a.y + size <= b.y || b.y + size <= a.y,
+                    "${placements[i].first} and ${placements[j].first} badges overlap",
+                )
             }
         }
     }
@@ -66,15 +99,31 @@ class ChromeEditLayoutTest {
     @Test
     fun `unmeasured elements are skipped`() {
         val placements =
-            ChromeEditLayout.badgeFrames(
+            MonitorChromeEditBadgeLayout.badgeFrames(
                 listOf(
-                    ChromeEditBox(ChromeSection.STATUS_BAR, 0f, 0f, 0f, 0f),
-                    ChromeEditBox(ChromeSection.LOCK_BUTTON, 16f, 17f, 40f, 40f),
+                    ChromeSection.STATUS_BAR to MonitorRect(0f, 0f, 0f, 0f),
+                    ChromeSection.LOCK_BUTTON to MonitorRect(16f, 17f, 40f, 40f),
                 ),
                 852f,
                 393f,
-            )
+            ).toMap()
         assertNull(placements[ChromeSection.STATUS_BAR])
         assertNotNull(placements[ChromeSection.LOCK_BUTTON])
+    }
+
+    @Test
+    fun aCutoutLessPortraitPhoneGetsThePunchHoleBandAboveTheStatusRow() {
+        // The FPS chip and batteries hang from gauges.y; the chip is 27.5 dp tall.
+        fun bandGap(safeTop: Float): Float {
+            val layout = MonitorLayoutPolicy.fieldMonitor(411f, 914f, safeTop = portraitPhoneSafeTop(safeTop, 411f, 914f))
+            return layout.status.y - (layout.gauges.y + 27.5f)
+        }
+        val punchHole = bandGap(52f)
+        assertTrue(punchHole > 0f)
+        assertEquals(punchHole, bandGap(0f), 0.01f)
+        assertEquals(punchHole, bandGap(24f), 0.01f)
+        // Landscape and tablets keep their inset.
+        assertEquals(0f, portraitPhoneSafeTop(0f, 914f, 411f))
+        assertEquals(0f, portraitPhoneSafeTop(0f, 820f, 1180f))
     }
 }

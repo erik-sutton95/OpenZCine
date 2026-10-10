@@ -67,7 +67,7 @@ flowchart TD
 - **Screen:** Light card (scanner-matching): SSID title, read-only monospaced key chip for OCR
   results, source-appropriate verification copy, Connect, Cancel. Wrong OCR ⇒ Cancel + rescan or
   enter the exact details manually.
-- **Code:** `ConnectionProgressSheet.swift` (single light card for ALL phases now).
+- **Code:** `NikonCamerasFlow.swift` (`NikonConnectFlow`: the app's own connect on the shared pair page).
 - 📝 Notes:
 
 ### JOIN-02 — Joining Wi‑Fi

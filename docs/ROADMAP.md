@@ -205,7 +205,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   scopes plus the false-colour reference retain iOS-like direct drag while normalized app-local
   positions reconcile across viewport, orientation, and chrome changes. The shared zone map keeps
   every panel and exterior resize target clear of camera controls and system rails; live quick
-  settings and accessibility expose per-panel recenter actions. Portrait fit retains its fixed,
+  settings and accessibility expose per-panel recenter actions (the scopes have since moved to the
+  shared `MonitorMovableScopePanel`, which has none; only the false-colour key keeps it). Portrait fit retains its fixed,
   recency-selected two-scope stack, and feed-aligned overlays remain immovable. **[VERIFY-ON-HW]**
   Drag, clamp, relaunch, rotate, remove/re-add, and recenter every supported panel in the tightest
   Samsung landscape and portrait-fill states, then inspect all four edges.
@@ -257,6 +258,12 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   and a transfer-backed
   Android still-photo viewer (JPEG/PNG progressive preview; explicit thumbnail fallback for
   unsupported HEIF/RAW decoders). Android playback-assist parity is tracked by OPE-69.
+  The local OpenCine decoded-audio candidate adopts shared Apple tap ownership and Android PCM
+  sampling/source retirement, with portable ballistics shared through the existing JNI wire.
+  Unknown audio stays absent on both platforms. Portable 626, strict, both iOS architectures,
+  actual SIMULATED Apple native 3, Android 964/JNI 73 and debug/release package coexistence checks
+  passed locally. Android actual Media3 playback and physical checks remain untested; this
+  candidate does not complete the remaining playback migration.
 - **Android media-library delivery parity** (OPE-87, in progress): the browser persists small,
   medium, and large grid densities and composes container, resolution, Today, and camera-slot
   filters from authoritative clip metadata. Connected camera browsing also shows every valid card's
@@ -292,17 +299,10 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 - **Camera Wi-Fi pairing & join UX** — DJI-style camera-AP join flow, including local CameraX
   preview and bundled ML Kit scanning; transcripts are parsed only by the shared Swift core, and
   confirmed credentials enter encrypted storage only after a successful join.
-- **In-app bug reporting paths** (OPE-102, in progress) — iOS and Android offer an anonymous
-  report through a small GitHub-App relay or a
-  [signed-in GitHub issue](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml) for richer
-  optional details. Both create labelled public GitHub issues. The anonymous path has optional,
-  user-selected screenshots re-rendered without embedded file metadata and a closed,
-  privacy-filtered app-activity snapshot. Closed error/warning codes expand server-side into fixed
-  operational traces so failure order is visible without uploading raw stacks, exception text,
-  paths, addresses, or timestamps. It never uploads raw diagnostics, arbitrary logs, device
-  names, camera/device identifiers, network identifiers, or original image bytes. Visible screenshot
-  content remains the reporter's responsibility to review. Feature requests remain account-backed
-  GitHub Discussions.
+- **In-app bug reporting paths** (OPE-102, in progress): iOS and Android use OpenCine's shared
+  problem report and opt-in automatic reports, sent privately through Sentry as in OpenPocketCine.
+  The earlier anonymous GitHub-App relay (`services/bug-relay`) has no app client now. Feature
+  requests remain account-backed GitHub Discussions.
 - **External beta diagnostics & support** (in progress) — Apple-native crash diagnostics,
   a user-reviewed local diagnostics share flow, and direct System links for help, feature requests,
   source, privacy, and terms.

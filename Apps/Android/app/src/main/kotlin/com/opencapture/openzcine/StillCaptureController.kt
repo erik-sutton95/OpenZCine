@@ -1,7 +1,7 @@
 package com.opencapture.openzcine
 
-import com.opencapture.openzcine.core.CameraSession
-import com.opencapture.openzcine.core.StillReleasePoll
+import com.opencapture.opencine.nikon.CameraSession
+import com.opencapture.opencine.nikon.StillReleasePoll
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

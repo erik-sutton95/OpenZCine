@@ -33,7 +33,7 @@ data class DiscoveredCamera(
 
     /** What the row says under the name — the holder if there is one, else nothing. */
     val heldByLabel: String?
-        get() = heldByDeviceName?.takeIf(String::isNotBlank)?.let { "In use by \$it" }
+        get() = heldByDeviceName?.takeIf(String::isNotBlank)?.let { "In use by $it" }
 }
 
 /**

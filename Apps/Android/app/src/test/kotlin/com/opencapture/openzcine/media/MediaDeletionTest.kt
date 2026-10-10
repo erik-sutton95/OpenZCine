@@ -1,5 +1,9 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -188,22 +192,22 @@ class MediaDeletionTest {
     }
 
     /** Single-bucket owner used by every camera-source pairing call. */
-    private val oneBucket: (MediaClipRecord) -> String = { "camera" }
+    private val oneBucket: (NikonMediaClipRecord) -> String = { "camera" }
 
     private fun still(
         handle: Long,
         filename: String,
         storageId: Long = 1,
         captureDate: String = "20260714T101010",
-    ): MediaClipRecord {
+    ): NikonMediaClipRecord {
         val kind =
             when (filename.substringAfterLast('.').lowercase()) {
-                "mov", "mp4" -> MediaContentKind.PLAYABLE_PROXY
-                "r3d" -> MediaContentKind.R3D_MASTER
-                "nev" -> MediaContentKind.UNSUPPORTED
-                else -> MediaContentKind.STILL_PHOTO
+                "mov", "mp4" -> NikonMediaContentKind.PLAYABLE_PROXY
+                "r3d" -> NikonMediaContentKind.R3D_MASTER
+                "nev" -> NikonMediaContentKind.UNSUPPORTED
+                else -> NikonMediaContentKind.STILL_PHOTO
             }
-        return MediaClipRecord(
+        return NikonMediaClipRecord(
             handle = handle,
             storageId = storageId,
             sizeBytes = 100,
@@ -217,7 +221,7 @@ class MediaDeletionTest {
             // "JPEG" for every still made the fixture claim a .NEF was a JPEG, which only went
             // unnoticed while the pairing predicates read the extension and ignored the label.
             stillPhoto =
-                if (kind == MediaContentKind.STILL_PHOTO) {
+                if (kind == NikonMediaContentKind.STILL_PHOTO) {
                     val label =
                         when (filename.substringAfterLast('.').lowercase()) {
                             "nef", "nrw", "dng" -> "NEF"
@@ -226,7 +230,7 @@ class MediaDeletionTest {
                             "png" -> "PNG"
                             else -> "JPEG"
                         }
-                    StillPhotoClassification(label, StillPreviewStrategy.PROGRESSIVE)
+                    NikonStillPhotoClassification(label, NikonStillPreviewStrategy.PROGRESSIVE)
                 } else {
                     null
                 },

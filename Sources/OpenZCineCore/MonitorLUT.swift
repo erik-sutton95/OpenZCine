@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineMedia
 
 /// The source categories the LUT picker groups looks under.
 public enum LUTCategory: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
@@ -99,24 +100,12 @@ public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Iden
 
     /// Nikon N-Log (normalized 10-bit code value) → scene-linear reflectance (0.18 == middle grey).
     private static func nLogToLinear(_ codeValue: Float) -> Float {
-        let x = Double(codeValue)
-        let a = 650.0 / 1023.0
-        let c = 150.0 / 1023.0
-        let d = 619.0 / 1023.0
-        let threshold = 452.0 / 1023.0
-        let linear = x < threshold ? pow(x / a, 3.0) - 0.0075 : exp((x - d) / c)
-        return Float(linear)
+        Float(NLog.decode(Double(codeValue)))
     }
 
     /// RED Log3G10 (encoded) → scene-linear (0.18 == middle grey); v2/v3 form with the linear toe.
     private static func log3G10ToLinear(_ encoded: Float) -> Float {
-        let x = Double(encoded)
-        let a = 0.224282
-        let b = 155.975327
-        let c = 0.01
-        let g = 15.1927
-        let linear = x < 0 ? (x / g) - c : (pow(10.0, x / a) - 1.0) / b - c
-        return Float(linear)
+        Float(Log3G10.decode(Double(encoded)))
     }
 
     /// N-Gamut (≡ BT.2020, D65) → Rec.709 linear RGB, row-major 3×3.
@@ -239,20 +228,19 @@ public enum LUTResolution {
     /// Resolved once, here, for the same reason ``active(visibleTools:selected:)`` is: a shell that
     /// tested the preference on its own would eventually show the divider and the half labels over
     /// a frame with no LUT in it, or keep the split alive in a DISP mode that dropped the tool.
-    /// `visibleTools` is already the mode-filtered set (`MonitorChromePolicy.visibleTools`), so
+    /// `visibleTools` is already the mode-filtered set (the shared assist state's clean filter), so
     /// clean view carries the comparison exactly when the operator pinned the LUT into it.
     /// - Parameter muted: the on-feed quick key's session state — see
-    ///   ``showsSplitComparisonKey(visibleTools:preferences:)``. Not a preference: an A/B while
+    ///   ``showsSplitComparisonKey(visibleTools:enabled:)``. Not a preference: an A/B while
     ///   judging a look should not survive the take.
     public static func splitComparison(
         visibleTools: Set<MonitorAssistTool>,
-        preferences: OperatorPreferences,
+        enabled: Bool,
+        vertical: Bool,
         muted: Bool = false
     ) -> SplitComparisonOrientation? {
-        guard preferences.splitComparisonEnabled, !muted, visibleTools.contains(.lut) else {
-            return nil
-        }
-        return preferences.splitComparisonOrientation
+        guard enabled, !muted, visibleTools.contains(.lut) else { return nil }
+        return vertical ? .vertical : .horizontal
     }
 
     /// Whether the on-feed 50/50 quick key mounts.
@@ -263,10 +251,9 @@ public enum LUTResolution {
     /// that undoes it. Like the divider and the labels it rides the LUT tool's own visibility, so
     /// clean view carries it exactly where the operator pinned the tool.
     public static func showsSplitComparisonKey(
-        visibleTools: Set<MonitorAssistTool>,
-        preferences: OperatorPreferences
+        visibleTools: Set<MonitorAssistTool>, enabled: Bool
     ) -> Bool {
-        preferences.splitComparisonEnabled && visibleTools.contains(.lut)
+        enabled && visibleTools.contains(.lut)
     }
 }
 
@@ -288,7 +275,7 @@ public enum SplitComparisonOrientation: String, CaseIterable, Codable, Equatable
 /// **The boundary is the centre of the visible image rectangle**, never the centre of the surface:
 /// letterbox, pillarbox and monitor chrome are all outside it. Every renderer already establishes
 /// that rectangle before the grade runs — iOS bakes a centred crop of the source at the drawable's
-/// aspect (`MetalFeedFrameBaker.bakeSize`), Android sets the GL viewport to `liveFeedContentRect`
+/// aspect (`MonitorFrameBaker.bakeSize`), Android sets the GL viewport to `liveFeedContentRect`
 /// and the Vulkan viewport to the letterboxed content rect — so each one splits in its own feed
 /// space at the halfway line and inherits a correct boundary through fit/fill, de-squeeze, crop
 /// and orientation changes for free. Fit and fill both centre the image, so the halfway line of

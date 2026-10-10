@@ -1,5 +1,9 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
+import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonStillPhotoClassification
+import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
@@ -24,7 +28,7 @@ class MediaShareStagerTest {
             val staged =
                 MediaShareStager(root.resolve("cache")).stage(
                     entry,
-                    clip("C0001.MOV", MediaContentKind.PLAYABLE_PROXY),
+                    clip("C0001.MOV", NikonMediaContentKind.PLAYABLE_PROXY),
                 )
 
             assertEquals("C0001.MOV", staged.displayName)
@@ -76,7 +80,7 @@ class MediaShareStagerTest {
             val staged =
                 MediaShareStager(root.resolve("cache")).stage(
                     entry,
-                    clip("C0003.BIN", MediaContentKind.STILL_PHOTO),
+                    clip("C0003.BIN", NikonMediaContentKind.STILL_PHOTO),
                 )
 
             assertEquals("image/*", staged.mimeType)
@@ -226,7 +230,7 @@ class MediaShareStagerTest {
             val staged =
                 MediaShareStager(root.resolve("cache")).stage(
                     entry,
-                    clip("C0005.M4V", MediaContentKind.PLAYABLE_PROXY),
+                    clip("C0005.M4V", NikonMediaContentKind.PLAYABLE_PROXY),
                 )
 
             val spec = MediaShareIntentSpec.forShare(staged)
@@ -246,12 +250,12 @@ class MediaShareStagerTest {
             val video =
                 stager.stage(
                     completedEntry(root, "C0005A.MOV", byteArrayOf(4, 2)),
-                    clip("C0005A.MOV", MediaContentKind.PLAYABLE_PROXY),
+                    clip("C0005A.MOV", NikonMediaContentKind.PLAYABLE_PROXY),
                 )
             val still =
                 stager.stage(
                     completedEntry(root, "DSC_0007.JPG", byteArrayOf(7, 7)),
-                    clip("DSC_0007.JPG", MediaContentKind.STILL_PHOTO),
+                    clip("DSC_0007.JPG", NikonMediaContentKind.STILL_PHOTO),
                 )
 
             val spec = MediaShareIntentSpec.forShares(listOf(video, still))
@@ -329,8 +333,8 @@ class MediaShareStagerTest {
         return entry
     }
 
-    private fun clip(filename: String, contentKind: MediaContentKind): MediaClipRecord =
-        MediaClipRecord(
+    private fun clip(filename: String, contentKind: NikonMediaContentKind): NikonMediaClipRecord =
+        NikonMediaClipRecord(
             handle = 1,
             storageId = 1,
             sizeBytes = 0,
@@ -340,8 +344,8 @@ class MediaShareStagerTest {
             filename = filename,
             contentKind = contentKind,
             stillPhoto =
-                if (contentKind == MediaContentKind.STILL_PHOTO) {
-                    StillPhotoClassification("Photo", StillPreviewStrategy.COMPLETE_FILE)
+                if (contentKind == NikonMediaContentKind.STILL_PHOTO) {
+                    NikonStillPhotoClassification("Photo", NikonStillPreviewStrategy.COMPLETE_FILE)
                 } else {
                     null
                 },

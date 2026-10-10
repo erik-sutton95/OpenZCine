@@ -15,13 +15,21 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import com.opencapture.opencine.runtime.MonitorMovieExportLut
+import com.opencapture.opencine.runtime.MonitorMovieExportContainer
+import com.opencapture.opencine.runtime.MonitorMovieCodecFactory
+import com.opencapture.opencine.runtime.MonitorMovieCodec
+import com.opencapture.opencine.runtime.MonitorNativeMovieExporter
+import com.opencapture.opencine.runtime.MonitorMovieExportPreparer
+import com.opencapture.opencine.runtime.MonitorMovieExportInput
+import com.opencapture.opencine.runtime.MonitorPreparedMovieExport
+import com.opencapture.opencine.runtime.MonitorLutMovieExporter
+import com.opencapture.opencine.runtime.MonitorMovieExportErrorFactory
+import com.opencapture.opencine.runtime.MonitorMovieExportFailure
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.media.StagedMediaShare
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -29,30 +37,15 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.time.Instant
 import java.util.UUID
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-/** Container chosen for a LUT-baked native or Frame.io export. */
-internal enum class MediaExportContainer(
-    val label: String,
-    val extension: String,
-    val mimeType: String,
-) {
-    MOV("MOV", "mov", "video/quicktime"),
-    MP4("MP4", "mp4", "video/mp4"),
-}
 
 /** One explicit per-run configuration shared by every external media destination. */
 internal data class MediaDeliveryConfiguration(
     val bakeLut: Boolean = false,
-    val exportContainer: MediaExportContainer = MediaExportContainer.MOV,
+    val exportContainer: MonitorMovieExportContainer = MonitorMovieExportContainer.MOV,
     val includeMetadata: Boolean = true,
     val selectedLut: FeedLutSelection? = null,
     val forceFrameioReupload: Boolean = false,
@@ -64,9 +57,6 @@ internal data class MediaDeliveryConfiguration(
     }
 }
 
-/** Compatibility name retained for existing Frame.io call sites and tests. */
-internal typealias FrameioDeliveryOptions = MediaDeliveryConfiguration
-
 /** Non-secret camera/media context retained while a network hop tears down the session. */
 internal data class FrameioArtifactContext(
     val cameraID: String,
@@ -74,21 +64,6 @@ internal data class FrameioArtifactContext(
     val supportsLutBake: Boolean,
     val stableClipIdentity: String = "",
 )
-
-/** One Swift-approved cube ready for Media3's export-only colour effect. */
-internal class FrameioLutPayload(
-    val displayName: String,
-    val cubeSize: Int,
-    val packedRgba: ByteArray,
-) {
-    init {
-        require(cubeSize in 2..64 && packedRgba.size == cubeSize * cubeSize * cubeSize * 4) {
-            "The selected LUT payload is invalid."
-        }
-    }
-
-    override fun toString(): String = "FrameioLutPayload(name=$displayName, pixels=redacted)"
-}
 
 /** Upload-ready output plus the exact look that was actually baked, if any. */
 internal class FrameioPreparedArtifact(
@@ -104,7 +79,7 @@ internal class FrameioPreparedArtifact(
 internal interface FrameioArtifactPreparer {
     suspend fun prepare(
         artifact: FrameioDeliveryArtifact,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
         onProgress: suspend (Double) -> Unit,
     ): FrameioPreparedArtifact
 
@@ -115,7 +90,7 @@ internal interface FrameioArtifactPreparer {
 internal object PassthroughFrameioArtifactPreparer : FrameioArtifactPreparer {
     override suspend fun prepare(
         artifact: FrameioDeliveryArtifact,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
         onProgress: suspend (Double) -> Unit,
     ): FrameioPreparedArtifact {
         if (options.bakeLut) {
@@ -134,26 +109,26 @@ internal object PassthroughFrameioArtifactPreparer : FrameioArtifactPreparer {
 
 /** Resolves only a built-in core cube or revalidated app-private stored selection. */
 internal interface FrameioLutProvider {
-    suspend fun approvedPayload(selection: FeedLutSelection): FrameioLutPayload?
+    suspend fun approvedPayload(selection: FeedLutSelection): MonitorMovieExportLut?
 }
 
 /** Production LUT resolver. Kotlin never parses `.cube` source or invents colour math. */
 internal class AndroidFrameioLutProvider(
     private val library: AndroidLutLibrary,
 ) : FrameioLutProvider {
-    override suspend fun approvedPayload(selection: FeedLutSelection): FrameioLutPayload? =
+    override suspend fun approvedPayload(selection: FeedLutSelection): MonitorMovieExportLut? =
         when (selection) {
             is FeedLutSelection.BuiltIn -> {
                 if (!SwiftCore.isAvailable) return null
                 val packed = SwiftCore.bakeLut(selection.value.wireOrdinal, BUILT_IN_CUBE_SIZE)
                     ?: return null
-                FrameioLutPayload(selection.value.label, BUILT_IN_CUBE_SIZE, packed)
+                MonitorMovieExportLut(selection.value.label, BUILT_IN_CUBE_SIZE, packed)
             }
             is FeedLutSelection.Stored -> {
                 if (!library.prepare(selection.value)) return null
                 val packed = library.packedCube(selection.value) ?: return null
                 val name = library.displayName(selection.value) ?: return null
-                FrameioLutPayload(name, packed.cubeSize, packed.rgba)
+                MonitorMovieExportLut(name, packed.cubeSize, packed.rgba)
             }
         }
 
@@ -167,352 +142,112 @@ internal interface FrameioLutVideoExporter {
     suspend fun export(
         source: Path,
         target: Path,
-        lut: FrameioLutPayload,
+        lut: MonitorMovieExportLut,
         onProgress: suspend (Double) -> Unit,
     )
 }
 
-/**
- * Media3 Transformer export that applies one approved 3D LUT to video frames.
- * The camera/share original remains read-only and audio is retained.
- */
+/** Media3 construction is host-owned; export completion and polling belong to the runtime. */
 internal class AndroidMedia3FrameioLutVideoExporter(
     context: Context,
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
 ) : FrameioLutVideoExporter {
     private val context = context.applicationContext
-
-    override suspend fun export(
-        source: Path,
-        target: Path,
-        lut: FrameioLutPayload,
-        onProgress: suspend (Double) -> Unit,
-    ) = withContext(mainDispatcher) {
-        Files.deleteIfExists(target)
-        val completion = CompletableDeferred<Unit>()
-        // OpenZCine's monitor cubes are authored over electrical/display-
-        // encoded SDR values. Pin Media3's working space explicitly so this
-        // export cannot silently regress to the pre-1.4 linear-SDR default.
-        val videoFrameProcessorFactory =
-            DefaultVideoFrameProcessor.Factory.Builder()
+    private val owner = MonitorNativeMovieExporter(
+        factory = MonitorMovieCodecFactory { source, target, lut, completion ->
+            // Preserve the monitor cube's electrical/display-encoded SDR working space.
+            val videoFrameProcessorFactory = DefaultVideoFrameProcessor.Factory.Builder()
                 .setSdrWorkingColorSpace(DefaultVideoFrameProcessor.WORKING_COLOR_SPACE_ORIGINAL)
                 .build()
-        val transformer =
-            Transformer.Builder(context)
+            val transformer = Transformer.Builder(this.context)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .setVideoFrameProcessorFactory(videoFrameProcessorFactory)
-                .addListener(
-                    object : Transformer.Listener {
-                        override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                            completion.complete(Unit)
-                        }
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        completion.completed()
+                    }
 
-                        override fun onError(
-                            composition: Composition,
-                            exportResult: ExportResult,
-                            exportException: ExportException,
-                        ) {
-                            completion.completeExceptionally(
-                                FrameioDeliveryException(
-                                    "OpenZCine couldn't bake the selected LUT for this clip. " +
-                                        "The source may use a codec or HDR mode this device cannot export safely.",
-                                ),
-                            )
-                        }
-                    },
-                ).build()
-        val effect = SingleColorLut.createFromCube(lut.toMedia3Cube())
-        val item =
-            EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(source.toFile())))
+                    override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                        completion.failed()
+                    }
+                }).build()
+            val effect = SingleColorLut.createFromCube(lut.toArgbCube())
+            val item = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(source.toFile())))
                 .setEffects(Effects(emptyList(), listOf(effect)))
                 .build()
-
-        coroutineScope {
-            transformer.start(item, target.toString())
-            val watchdog = FrameioExportProgressWatchdog(EXPORT_STALL_TIMEOUT_MILLIS)
-            val progressJob =
-                launch {
-                    val holder = ProgressHolder()
-                    while (isActive && !completion.isCompleted) {
-                        if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
-                            watchdog.recordProgress(holder.progress)
-                            onProgress((holder.progress / 100.0).coerceIn(0.0, 1.0))
-                        }
-                        if (watchdog.hasStalled()) {
-                            transformer.cancel()
-                            completion.completeExceptionally(
-                                FrameioDeliveryException(
-                                    "OpenZCine stopped the LUT export because this device's media encoder stopped making progress.",
-                                ),
-                            )
-                        }
-                        delay(PROGRESS_POLL_MILLIS)
-                    }
-                }
-            try {
-                completion.await()
-                onProgress(1.0)
-            } finally {
-                progressJob.cancel()
-                if (!completion.isCompleted) transformer.cancel()
+            object : MonitorMovieCodec {
+                private val progress = ProgressHolder()
+                override fun start() { transformer.start(item, target.toString()) }
+                override fun progressPercent(): Int? =
+                    if (transformer.getProgress(progress) == Transformer.PROGRESS_STATE_AVAILABLE) progress.progress else null
+                override fun cancel() { transformer.cancel() }
             }
-        }
-    }
+        },
+        errors = frameioMovieExportErrors,
+        mainDispatcher = mainDispatcher,
+    )
 
-    private companion object {
-        const val PROGRESS_POLL_MILLIS = 180L
-        const val EXPORT_STALL_TIMEOUT_MILLIS = 180_000L
-    }
+    override suspend fun export(source: Path, target: Path, lut: MonitorMovieExportLut, onProgress: suspend (Double) -> Unit) =
+        owner.export(source, target, lut, onProgress)
 }
 
-/** Monotonic no-progress deadline for device codec/driver stalls. */
-internal class FrameioExportProgressWatchdog(
-    stallTimeoutMillis: Long,
-    private val nanoClock: () -> Long = System::nanoTime,
-) {
-    private val stallTimeoutNanos: Long
-    private var lastProgress = -1
-    private var lastAdvanceNanos: Long
-
-    init {
-        require(stallTimeoutMillis in 1..Long.MAX_VALUE / NANOS_PER_MILLISECOND) {
-            "Export stall timeout must be positive and bounded."
-        }
-        stallTimeoutNanos = stallTimeoutMillis * NANOS_PER_MILLISECOND
-        lastAdvanceNanos = nanoClock()
-    }
-
-    fun recordProgress(progress: Int) {
-        val bounded = progress.coerceIn(0, 100)
-        if (bounded > lastProgress) {
-            lastProgress = bounded
-            lastAdvanceNanos = nanoClock()
-        }
-    }
-
-    fun hasStalled(): Boolean = nanoClock() - lastAdvanceNanos >= stallTimeoutNanos
-
-    private companion object {
-        const val NANOS_PER_MILLISECOND = 1_000_000L
-    }
-}
-
-/** Production preparer for optional, per-delivery LUT-baked MOV or MP4 output. */
+/** Composition supplies the approved LUT, branded filename and existing operator errors. */
 internal class AndroidFrameioArtifactPreparer(
-    private val exportRoot: Path,
+    exportRoot: Path,
     private val lutProvider: FrameioLutProvider,
-    private val exporter: FrameioLutVideoExporter,
-    private val deleteExport: (Path) -> Boolean = Files::deleteIfExists,
+    exporter: FrameioLutVideoExporter,
+    deleteExport: (Path) -> Boolean = Files::deleteIfExists,
 ) : FrameioArtifactPreparer {
+    private val owner = MonitorMovieExportPreparer(
+        exportRoot = exportRoot,
+        exporter = object : MonitorLutMovieExporter {
+            override suspend fun export(source: Path, target: Path, lut: MonitorMovieExportLut, onProgress: suspend (Double) -> Unit) =
+                exporter.export(source, target, lut, onProgress)
+        },
+        errors = frameioMovieExportErrors,
+        ownedFilenamePrefix = "frameio",
+        fallbackFilename = "OpenZCine",
+        deleteExport = deleteExport,
+    )
+
     override suspend fun prepare(
         artifact: FrameioDeliveryArtifact,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
         onProgress: suspend (Double) -> Unit,
     ): FrameioPreparedArtifact {
-        if (!options.bakeLut) {
-            return FrameioPreparedArtifact(artifact.share, artifact.byteCount, null, null)
-        }
-        if (!artifact.context.supportsLutBake) {
-            throw FrameioDeliveryException(
-                "${artifact.share.displayName} isn't a video proxy that can receive a baked LUT.",
-            )
-        }
-        val selection = requireNotNull(options.selectedLut)
-        val lut = lutProvider.approvedPayload(selection)
-            ?: throw FrameioDeliveryException(
-                "The selected LUT is no longer approved for export. Re-select or re-import it and try again.",
-            )
-        withContext(Dispatchers.IO) {
-            Files.createDirectories(exportRoot)
-            pruneOwnedFrameioExports(exportRoot)
-        }
-        val target = exportRoot.resolve("frameio-${UUID.randomUUID()}.${options.exportContainer.extension}")
-        try {
-            exporter.export(artifact.share.file, target, lut, onProgress)
-            val byteCount =
-                withContext(Dispatchers.IO) {
-                    finalizeMediaExportContainer(target, options.exportContainer)
-                    if (!Files.isRegularFile(target) || Files.size(target) <= 0) {
-                        throw FrameioDeliveryException(
-                            "The LUT-baked export did not produce a complete video.",
-                        )
-                    }
-                    // Transformer muxes video and audio only, so the camera's start timecode has
-                    // to be carried across or an NLE can no longer conform this proxy to its
-                    // master. Best effort — never fail a delivery over metadata.
-                    MediaTimecodeTrack.copyTimecodeTrack(artifact.share.file, target)
-                    Files.size(target)
-                }
-            return FrameioPreparedArtifact(
-                share =
-                    StagedMediaShare(
-                        file = target,
-                        displayName = bakedFilename(artifact.share.displayName, options.exportContainer),
-                        mimeType = options.exportContainer.mimeType,
-                    ),
-                byteCount = byteCount,
-                appliedLutName = lut.displayName,
-                transientExport = target,
-            )
-        } catch (error: Throwable) {
-            val cleanupFailure =
-                withContext(NonCancellable + Dispatchers.IO) {
-                    try {
-                        val removed = deleteExport(target)
-                        if (!removed && Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-                            FrameioDeliveryException(
-                                "OpenZCine couldn't remove the incomplete Frame.io export.",
-                            )
-                        } else {
-                            null
-                        }
-                    } catch (cleanupError: Throwable) {
-                        cleanupError
-                    }
-                }
-            cleanupFailure?.let(error::addSuppressed)
-            throw error
-        }
+        val prepared = owner.prepare(
+            input = MonitorMovieExportInput(artifact.share.file, artifact.share.displayName, artifact.share.mimeType, artifact.byteCount, artifact.context.supportsLutBake),
+            bakeLut = options.bakeLut,
+            container = options.exportContainer,
+            approvedLut = { lutProvider.approvedPayload(requireNotNull(options.selectedLut)) },
+            onProgress = onProgress,
+        )
+        val share = if (prepared.transientExport == null) artifact.share else
+            StagedMediaShare(prepared.file, prepared.displayName, prepared.mimeType)
+        return FrameioPreparedArtifact(share, prepared.byteCount, prepared.appliedLutName, prepared.transientExport)
     }
 
-    override suspend fun release(prepared: FrameioPreparedArtifact) {
-        withContext(NonCancellable + Dispatchers.IO) {
-            prepared.transientExport?.let { path ->
-                val removed =
-                    try {
-                        deleteExport(path)
-                    } catch (_: Exception) {
-                        false
-                    }
-                if (!removed && Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-                    throw FrameioDeliveryException(
-                        "OpenZCine couldn't remove the temporary Frame.io export.",
-                    )
-                }
-            }
-        }
-    }
-
-    private fun bakedFilename(original: String, container: MediaExportContainer): String =
-        original.substringBeforeLast('.', missingDelimiterValue = original).ifBlank { "OpenZCine" } +
-            ".${container.extension}"
-}
-
-/**
- * Media3 always emits an ISO-BMFF MP4. Its H.264/AAC box graph is also valid in
- * QuickTime MOV, so MOV delivery rewrites the completed `ftyp` brands instead
- * of merely relabelling an MP4 file. The transient export is the only file
- * opened for writing; the camera/share original remains read-only.
- */
-internal fun finalizeMediaExportContainer(target: Path, container: MediaExportContainer) {
-    if (container == MediaExportContainer.MP4) return
-    if (
-        !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) ||
-            Files.isSymbolicLink(target)
-    ) {
-        throw FrameioDeliveryException("The LUT-baked MOV export is not a complete regular file.")
-    }
-    FileChannel.open(
-        target,
-        StandardOpenOption.READ,
-        StandardOpenOption.WRITE,
-        LinkOption.NOFOLLOW_LINKS,
-    ).use { channel ->
-        val header = ByteBuffer.allocate(QUICKTIME_FTYP_HEADER_BYTES).order(ByteOrder.BIG_ENDIAN)
-        while (header.hasRemaining()) {
-            if (channel.read(header) <= 0) {
-                throw FrameioDeliveryException("The LUT-baked MOV export has an incomplete media header.")
-            }
-        }
-        header.flip()
-        val boxSize = header.int.toLong() and 0xFFFF_FFFFL
-        val boxType = ByteArray(4).also(header::get)
-        if (
-            !boxType.contentEquals(FTYP_BOX_TYPE) ||
-                boxSize < QUICKTIME_FTYP_HEADER_BYTES ||
-                boxSize > channel.size()
-        ) {
-            throw FrameioDeliveryException("The LUT-baked MOV export has an unsupported media header.")
-        }
-        writeFully(channel, QUICKTIME_MAJOR_BRAND_OFFSET, QUICKTIME_BRAND)
-        writeFully(channel, QUICKTIME_COMPATIBLE_BRAND_OFFSET, QUICKTIME_BRAND)
-        channel.force(true)
-    }
-}
-
-private fun writeFully(channel: FileChannel, offset: Long, bytes: ByteArray) {
-    channel.position(offset)
-    val buffer = ByteBuffer.wrap(bytes)
-    while (buffer.hasRemaining()) channel.write(buffer)
-}
-
-private val FTYP_BOX_TYPE = byteArrayOf(0x66, 0x74, 0x79, 0x70)
-private val QUICKTIME_BRAND = byteArrayOf(0x71, 0x74, 0x20, 0x20)
-private const val QUICKTIME_FTYP_HEADER_BYTES = 20
-private const val QUICKTIME_MAJOR_BRAND_OFFSET = 8L
-private const val QUICKTIME_COMPATIBLE_BRAND_OFFSET = 16L
-
-/** Removes only app-owned transient exports by age and a bounded cache budget. */
-internal fun pruneOwnedFrameioExports(
-    root: Path,
-    protected: Set<Path> = emptySet(),
-    nowEpochMillis: Long = System.currentTimeMillis(),
-    maximumAgeMillis: Long = FRAMEIO_EXPORT_MAXIMUM_AGE_MILLIS,
-    maximumBytes: Long = FRAMEIO_EXPORT_MAXIMUM_BYTES,
-) {
-    require(maximumAgeMillis >= 0 && maximumBytes >= 0)
-    if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) return
-    val protectedPaths = protected.map { it.toAbsolutePath().normalize() }.toSet()
-    val candidates =
-        Files.list(root).use { paths ->
-            paths.iterator().asSequence()
-                .filter { path ->
-                    path.fileName.toString().matches(FRAMEIO_EXPORT_FILENAME) &&
-                        Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
-                        !Files.isSymbolicLink(path)
-                }.map { path ->
-                    OwnedFrameioExport(
-                        path = path,
-                        modifiedAt = Files.getLastModifiedTime(path).toMillis(),
-                        sizeBytes = Files.size(path),
-                    )
-                }.sortedBy(OwnedFrameioExport::modifiedAt)
-                .toList()
-        }
-    val surviving = mutableListOf<OwnedFrameioExport>()
-    candidates.forEach { export ->
-        val normalized = export.path.toAbsolutePath().normalize()
-        val expired = nowEpochMillis - export.modifiedAt > maximumAgeMillis
-        if (normalized !in protectedPaths && expired) {
-            Files.deleteIfExists(export.path)
-        } else {
-            surviving += export
-        }
-    }
-    var totalBytes = surviving.sumOf(OwnedFrameioExport::sizeBytes)
-    surviving.forEach { export ->
-        if (totalBytes <= maximumBytes) return@forEach
-        val normalized = export.path.toAbsolutePath().normalize()
-        if (normalized !in protectedPaths && Files.deleteIfExists(export.path)) {
-            totalBytes -= export.sizeBytes
-        }
-    }
-}
-
-private data class OwnedFrameioExport(
-    val path: Path,
-    val modifiedAt: Long,
-    val sizeBytes: Long,
-)
-
-private val FRAMEIO_EXPORT_FILENAME =
-    Regex(
-        "frameio-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" +
-            "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.(mov|mp4)",
+    override suspend fun release(prepared: FrameioPreparedArtifact) = owner.release(
+        MonitorPreparedMovieExport(prepared.share.file, prepared.share.displayName, prepared.share.mimeType, prepared.byteCount, prepared.appliedLutName, prepared.transientExport),
     )
-private const val FRAMEIO_EXPORT_MAXIMUM_AGE_MILLIS = 24L * 60L * 60L * 1_000L
-private const val FRAMEIO_EXPORT_MAXIMUM_BYTES = 2L * 1_024L * 1_024L * 1_024L
+}
+
+private val frameioMovieExportErrors = MonitorMovieExportErrorFactory { reason, filename ->
+    FrameioDeliveryException(when (reason) {
+        MonitorMovieExportFailure.UNSUPPORTED_BAKE -> "$filename isn't a video proxy that can receive a baked LUT."
+        MonitorMovieExportFailure.APPROVED_LUT_UNAVAILABLE -> "The selected LUT is no longer approved for export. Re-select or re-import it and try again."
+        MonitorMovieExportFailure.INCOMPLETE_EXPORT -> "The LUT-baked export did not produce a complete video."
+        MonitorMovieExportFailure.INVALID_MOV_FILE -> "The LUT-baked MOV export is not a complete regular file."
+        MonitorMovieExportFailure.INCOMPLETE_MOV_HEADER -> "The LUT-baked MOV export has an incomplete media header."
+        MonitorMovieExportFailure.UNSUPPORTED_MOV_HEADER -> "The LUT-baked MOV export has an unsupported media header."
+        MonitorMovieExportFailure.CODEC_FAILED -> "OpenZCine couldn't bake the selected LUT for this clip. " +
+            "The source may use a codec or HDR mode this device cannot export safely."
+        MonitorMovieExportFailure.CODEC_STALLED -> "OpenZCine stopped the LUT export because this device's media encoder stopped making progress."
+        MonitorMovieExportFailure.INCOMPLETE_CLEANUP -> "OpenZCine couldn't remove the incomplete Frame.io export."
+        MonitorMovieExportFailure.TEMPORARY_CLEANUP -> "OpenZCine couldn't remove the temporary Frame.io export."
+    })
+}
 
 /** Writes a local sidecar only after Frame.io confirms the upload. */
 internal interface FrameioMetadataSidecarWriter {
@@ -520,7 +255,7 @@ internal interface FrameioMetadataSidecarWriter {
         artifact: FrameioDeliveryArtifact,
         prepared: FrameioPreparedArtifact,
         destination: FrameioDestination,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
     )
 }
 
@@ -529,7 +264,7 @@ internal object NoFrameioMetadataSidecarWriter : FrameioMetadataSidecarWriter {
         artifact: FrameioDeliveryArtifact,
         prepared: FrameioPreparedArtifact,
         destination: FrameioDestination,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
     ) = Unit
 }
 
@@ -612,7 +347,7 @@ internal class AndroidFrameioMetadataSidecarWriter(
         artifact: FrameioDeliveryArtifact,
         prepared: FrameioPreparedArtifact,
         destination: FrameioDestination,
-        options: FrameioDeliveryOptions,
+        options: MediaDeliveryConfiguration,
     ) {
         if (!options.includeMetadata) return
         withContext(Dispatchers.IO) {
@@ -679,18 +414,3 @@ internal class AndroidFrameioMetadataSidecarWriter(
         const val MAXIMUM_SIDECARS = 100
     }
 }
-
-/** Converts Swift's `(x=b*n+r,y=g)` RGBA8 texture order to Media3 `cube[r][g][b]`. */
-internal fun FrameioLutPayload.toMedia3Cube(): Array<Array<IntArray>> =
-    Array(cubeSize) { red ->
-        Array(cubeSize) { green ->
-            IntArray(cubeSize) { blue ->
-                val offset = ((green * cubeSize + blue) * cubeSize + red) * 4
-                val r = packedRgba[offset].toInt() and 0xFF
-                val g = packedRgba[offset + 1].toInt() and 0xFF
-                val b = packedRgba[offset + 2].toInt() and 0xFF
-                val a = packedRgba[offset + 3].toInt() and 0xFF
-                (a shl 24) or (r shl 16) or (g shl 8) or b
-            }
-        }
-    }

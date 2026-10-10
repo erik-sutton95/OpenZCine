@@ -1,6 +1,10 @@
 package com.opencapture.openzcine
 
 import androidx.compose.runtime.Immutable
+import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.opencine.media.MonitorPeakingColor
+import com.opencapture.opencine.media.MonitorPeakingSense
+import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.lut.StoredLutSelection
 
 /**
@@ -43,13 +47,14 @@ sealed interface FeedLutSelection {
 
 /** False-colour scales. [wireOrdinal] mirrors `FeedEffectsWire.bakedFalseColor`. */
 enum class FeedFalseColorScale(val id: String, val wireOrdinal: Int, val label: String) {
-    STOPS("stops", 0, "ZC Stops"),
+    STOPS("stops", 0, "CineStop"),
     IRE("ire", 1, "IRE"),
     /**
      * Crush/clip-only false colour. Unlike STOPS/IRE it composites over the
      * selected monitor look, matching iOS `FalseColorScale.limits`.
      */
-    LIMITS("limits", 2, "Limits");
+    LIMITS("limits", 2, "Limits"),
+    VIDEO("video", 3, "Video");
 
     companion object {
         fun fromId(id: String): FeedFalseColorScale? = entries.firstOrNull { it.id == id }
@@ -95,7 +100,7 @@ internal object ExposureCurveOrdinals {
  * core's `SplitComparisonOrientation`.
  *
  * The boundary is the centre of the **visible image rectangle**, never of the surface: every
- * backend already sets its viewport to the fitted content rect (`liveFeedContentRect` on GLES,
+ * backend already sets its viewport to the fitted content rect (`nativeFeedContentRect` on GLES,
  * the letterbox clamp in `live_feed_vk_renderer.cpp`), so splitting at the halfway line of feed
  * space excludes pillarbox, letterbox and monitor chrome by construction.
  */
@@ -119,59 +124,30 @@ enum class FeedSplitOrientation(val label: String) {
     }
 }
 
-/** iOS `Peaking.Sensitivity`, with ordinals owned by the Swift facade. */
-enum class FeedPeakingSensitivity(val wireOrdinal: Int, val label: String) {
-    LOW(0, "Low"),
-    MEDIUM(1, "Med"),
-    HIGH(2, "High"),
-}
-
-/** iOS `Peaking.Color`, with the actual RGB resolved only by Swift. */
-enum class FeedPeakingColor(val wireOrdinal: Int, val label: String) {
-    WHITE(0, "White"),
-    BLUE(1, "Blue"),
-    RED(2, "Red"),
-    GREEN(3, "Green"),
-}
-
-/** Editor units for the shared-core zebra thresholds. */
-enum class FeedZebraUnit(val wireOrdinal: Int, val label: String) {
-    NATIVE(0, "0-255"),
-    IRE(1, "IRE"),
-}
-
-/** iOS `AssistConfiguration.Zebra.StripeColor`; Swift resolves its RGB value. */
-enum class FeedZebraStripeColor(val wireOrdinal: Int, val label: String) {
-    WHITE(0, "White"),
-    AMBER(1, "Amber"),
-    RED(2, "Red"),
-    CYAN(3, "Cyan"),
-    GREEN(4, "Green"),
-}
-
 /**
  * Persistable operator configuration for image assists. Thresholds remain on
  * the shared core's normalized 0…100 monitor axis even while the UI edits
- * them in native code values; the conversion lives at the Swift wire.
+ * them in native code values; the conversion lives at the Swift wire. The
+ * option enums are the shared ones; their ordinals are the Swift facade's wire values.
  */
 @Immutable
 data class FeedEffectsConfiguration(
     val falseColorReferenceEnabled: Boolean = true,
-    val peakingSensitivity: FeedPeakingSensitivity = FeedPeakingSensitivity.MEDIUM,
-    val peakingColor: FeedPeakingColor = FeedPeakingColor.RED,
-    val zebraUnit: FeedZebraUnit = FeedZebraUnit.IRE,
+    val peakingSensitivity: MonitorPeakingSense = MonitorPeakingSense.MED,
+    val peakingColor: MonitorPeakingColor = MonitorPeakingColor.RED,
+    val zebraUnit: MonitorZebraUnit = MonitorZebraUnit.IRE,
     val zebraHighlightEnabled: Boolean = true,
-    val zebraHighlightIre: Float = 100f,
-    val zebraHighlightColor: FeedZebraStripeColor = FeedZebraStripeColor.WHITE,
+    val zebraHighlightIre: Float = 99f,
+    val zebraHighlightColor: MonitorZebraPaint = MonitorZebraPaint.WHITE,
     val zebraMidtoneEnabled: Boolean = true,
     val zebraMidtoneIre: Float = 55f,
-    val zebraMidtoneColor: FeedZebraStripeColor = FeedZebraStripeColor.AMBER,
+    val zebraMidtoneColor: MonitorZebraPaint = MonitorZebraPaint.AMBER,
 ) {
     /** Keeps corruption or a stale preference from producing an invalid core request. */
     fun normalized(): FeedEffectsConfiguration =
         copy(
             zebraHighlightIre =
-                zebraHighlightIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 100f,
+                zebraHighlightIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 99f,
             zebraMidtoneIre =
                 zebraMidtoneIre.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 55f,
         )
@@ -184,7 +160,7 @@ data class FeedEffectsConfiguration(
  * preserving the active look so disabling False resumes it; LIMITS composites
  * only crush/clip zones over that look.
  *
- * The shared [AssistState] owns this in normal operation. Debug intent extras
+ * The shared [NikonAssists] owns this in normal operation. Debug intent extras
  * (see `DemoHarness`) still seed deterministic sessions: `--es zc.assist
  * lut,falsecolor,peaking,zebra`, plus `--es zc.lut <log3g10|nlog|mono>` and
  * `--es zc.fc.scale <stops|ire|limits>`.
@@ -196,6 +172,7 @@ data class FeedEffects(
     val zebra: Boolean = false,
     /** The operator's 50/50 comparison choice, carried even while there is no LUT to apply it to. */
     val splitComparison: FeedSplitOrientation? = null,
+    val falseColorRec709: Boolean = false,
 ) {
     /**
      * The comparison actually rendered. Derived rather than stored so it can never outlive the
