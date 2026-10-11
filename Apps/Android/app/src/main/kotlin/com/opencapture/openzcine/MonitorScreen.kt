@@ -9,9 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import com.opencapture.monitorui.MonitorAssistTool
-import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -607,6 +605,8 @@ internal fun MonitorScreen(
     // iOS pendingShutterLockState: optimistic lock UI until poll matches the write.
     var optimisticShutterLocked by remember { mutableStateOf<Boolean?>(null) }
     var commonEditor by remember { mutableStateOf<MonitorControlModel.Editor?>(null) }
+    val quickCaptureOwner = remember(session) { NikonCaptureQuickOwner() }
+    DisposableEffect(quickCaptureOwner) { onDispose { quickCaptureOwner.retire() } }
     LaunchedEffect(activeMonitorPickerKind, activeCommandControl?.control) {
         val key = when {
             activeMonitorPickerKind == MonitorPickerKind.ISO || activeCommandControl?.control == CameraControl.ISO -> SettingKey.ISO
@@ -2173,25 +2173,8 @@ internal fun MonitorScreen(
             val field = fieldFor(setting.kind)
             MonitorOperatorLiveReadout(setting.kind.name, field?.title ?: setting.label,
                 if (field != null) field.label else setting.value, field = field,
-                quickEnabled = setting.kind != MonitorPickerKind.SHUTTER,
-                itemModifier = if (setting.kind == MonitorPickerKind.SHUTTER && !isPhotographyMode) {
-                    Modifier.pointerInput(session, sessionState is CameraSessionState.Connected,
-                        commandControlsEnabled, locked, editingThisMode, isMonitorFront) {
-                        awaitEachGesture {
-                            awaitFirstDown()
-                            val captured = commonControl.state.value.snapshot?.let { it.session to it.epoch }
-                            val released = withTimeoutOrNull(450L) { waitForUpOrCancellation() }
-                            if (commonControl.state.value.snapshot?.let { it.session to it.epoch } == captured &&
-                                sessionState is CameraSessionState.Connected && !locked && !editingThisMode && isMonitorFront) {
-                                if (released == null) {
-                                    if (commandControlsEnabled) shutterLongPressToggle()
-                                    waitForUpOrCancellation()
-                                }
-                                else openSharedPicker(MonitorPickerKind.SHUTTER)
-                            }
-                        }
-                    }
-                } else Modifier,
+                quickEnabled = setting.kind != MonitorPickerKind.SHUTTER || isPhotographyMode ||
+                    (effectiveShutterLocked == false && cameraProperties.shutterMode != null),
             )
         }
         val timecode = timecodeRetention.timecodeFor(sessionState)
@@ -2316,7 +2299,52 @@ internal fun MonitorScreen(
             ?: activeCommandControl?.let { request -> MonitorOperatorCameraPanel("command:${request.control.name}",
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
-        MonitorOperatorDescriptorLiveSurface(
+        val headerReadouts = listOf(
+            MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
+                if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else readoutRetention.resolution,
+                ChromeSection.RESOLUTION_READOUT, action = { openSharedPicker(resolutionKind) }),
+            MonitorOperatorLiveReadout(codecKind.name, "Codec",
+                if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else readoutRetention.codec,
+                ChromeSection.CODEC_READOUT, action = { openSharedPicker(codecKind) }))
+        val quickPickers = nativeSettings.mapNotNull { setting -> setting.picker?.let { setting.kind to it } }.toMap() +
+            if (isPhotographyMode) photographyTopPickers else topPillPickers
+        val snapshot = sharedControlState.snapshot
+        val quickCommandsEnabled = commandControlsEnabled && !editingThisMode && isMonitorFront &&
+            lifecycleState.isAtLeast(Lifecycle.State.RESUMED) && pendingCommandControl == null &&
+            (recoveryStateOverride ?: sessionRecoveryState) == SessionRecoveryUi.Idle &&
+            snapshot?.connection == com.opencapture.opencine.core.ConnectionState.Ready &&
+            (snapshot.authority == com.opencapture.opencine.core.ControlAuthority.Owner ||
+                snapshot.authority is com.opencapture.opencine.core.ControlAuthority.Lease)
+        val (captureInputs, nativeQuickReceipts) = nikonCaptureInputs(readouts, headerReadouts, panelValue,
+            quickPickers, cameraProperties, identity, session.reportedRecording.value, quickCommandsEnabled,
+            quickCaptureOwner,
+            columns = if (isPortrait && !fieldLayout.tablet) { if (isPhotographyMode) 5 else 3 } else readouts.size,
+            open = { id -> MonitorPickerKind.entries.firstOrNull { it.name == id }?.let(openSharedPicker) },
+            dismiss = { activeMonitorPickerKind = null; activeCommandControl = null; commandControlFeedback = null },
+            commit = { key, captured, target ->
+                val admission = com.opencapture.opencine.nikon.CameraCommandAdmission(session) {
+                    val latest = commonControl.state.value.snapshot
+                    session.state.value is CameraSessionState.Connected &&
+                        latest?.session == captured.source.camera && latest?.epoch == captured.source.epoch &&
+                        latest?.connection == com.opencapture.opencine.core.ConnectionState.Ready &&
+                        (latest.authority == com.opencapture.opencine.core.ControlAuthority.Owner ||
+                            latest.authority is com.opencapture.opencine.core.ControlAuthority.Lease) &&
+                        captured.admitsReported(session.cameraProperties.value, session.reportedRecording.value, target) &&
+                        quickCaptureOwner.admits(key, captured, target)
+                }
+                recordScope.launch {
+                    try {
+                        session.applyControl(captured.request.control, target, admission)
+                        if (admission.admits(session)) session.refreshProperties()
+                    } catch (error: CameraControlException) {
+                        if (admission.admits(session)) commandControlFeedback = CommandControlFeedback(
+                            appContext.getString(R.string.control_error, captured.request.title,
+                                error.message ?: appContext.getString(R.string.control_change_rejected)), isError = true)
+                    }
+                }
+            })
+        SideEffect { quickCaptureOwner.publish(nativeQuickReceipts) }
+        MonitorOperatorLiveBody(
             control = commonControl, identity = identity,
             current = { captured -> val snapshot = commonControl.state.value.snapshot
                 snapshot?.session == captured.camera && snapshot?.epoch == captured.epoch &&
@@ -2331,19 +2359,12 @@ internal fun MonitorScreen(
             recovering = (recoveryStateOverride ?: sessionRecoveryState) != SessionRecoveryUi.Idle,
             status = MonitorOperatorLiveStatus(commonStatus, !isPhotographyMode && mounts(ChromeSection.TIMECODE_READOUT),
                 !isPhotographyMode && mounts(ChromeSection.REC_READOUT), statusStorage,
-                listOf(MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
-                    if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else readoutRetention.resolution,
-                    ChromeSection.RESOLUTION_READOUT, action = { openSharedPicker(resolutionKind) }),
-                    MonitorOperatorLiveReadout(codecKind.name, "Codec",
-                        if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else readoutRetention.codec,
-                        ChromeSection.CODEC_READOUT, action = { openSharedPicker(codecKind) })),
+                headerReadouts,
                 fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState), actualLinkHealth.presentation.signalBars,
                 ChromeSection.FPS_READOUT),
             power = listOf(MonitorOperatorPowerReading(false, phoneBatteryReadout.percent, phoneBatteryReadout.externalPower),
                 MonitorOperatorPowerReading(true, cameraReadouts.batteryPercent, cameraReadouts.externalPower)),
-            readouts = readouts, panel = panelValue,
-            open = { id -> MonitorPickerKind.entries.firstOrNull { it.name == id }?.let(openSharedPicker) },
-            dismiss = { activeMonitorPickerKind = null; activeCommandControl = null; commandControlFeedback = null },
+            captureInputs = captureInputs,
             retireReadout = { commonEditor = null }, settings = onOpenSettings, media = onOpenMedia,
             cycleDisplay = cycleDisplayMode, displayIndex = displayModeOrder.indexOf(effectiveDisplayMode).takeIf { it >= 0 },
             displayCount = displayModeOrder.size, displayTitle = displayModeDescription, photo = isPhotographyMode,
@@ -2440,7 +2461,6 @@ internal fun MonitorScreen(
                     )
                 }
                 }),
-            captureColumns = if (isPortrait && !fieldLayout.tablet) { if (isPhotographyMode) 5 else 3 } else readouts.size,
             modifier = Modifier.fillMaxSize().then(sceneLayer), chromeBoxes = chromeEditBoxes,
             resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
             retainsPanel = activeMonitorPickerKind?.let { retainMonitorPickerForChrome(effectiveDisplayMode,
@@ -2685,7 +2705,7 @@ internal fun MonitorScreen(
                 )
             }
             },
-            cameraPanel = { key, pickerFrame, isTopDropDown ->
+            cameraPanel = { key, pickerFrame, isTopDropDown, _ ->
                 activeMonitorPicker?.takeIf { it.kind.name == key }?.let { picker ->
                     CompositionLocalProvider(LocalMonitorGlass provides glass,
                         com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
