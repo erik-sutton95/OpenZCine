@@ -460,7 +460,20 @@ final class RunnerTests: XCTestCase {
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
-            XCTFail("Actual composed LUT inspector did not publish a current native preview")
+            let meaning = model.nativeInspectorMeaning(tool: .lut)
+            let element = previewElement()
+            let hasImage =
+                meaning.flatMap { model.nativeInspectorPreview.image(matching: $0) } != nil
+            XCTFail(
+                "Actual composed LUT inspector did not publish a current native preview: "
+                    + "element=\(element != nil), accessibility=\(String(describing: element?.accessibilityValue)), "
+                    + "frame=\(model.nativeInspectorFrame != nil), meaning=\(meaning != nil), image=\(hasImage), "
+                    + "tool=\(String(describing: model.assist.configureTool)), "
+                    + "scene=\(model.assist.inspectorSceneActive), covered=\(model.assist.liveCovered), "
+                    + "playback=\(model.assist.gradesClip), locked=\(model.interfaceLocked), "
+                    + "editor=\(String(describing: model.chromeEditorMode)), "
+                    + "panel=\(String(describing: model.activePanel)), display=\(model.displayMode)"
+            )
             return try XCTUnwrap(nil as CGImage?)
         }
         func center(_ image: CGImage) -> [UInt8] {
