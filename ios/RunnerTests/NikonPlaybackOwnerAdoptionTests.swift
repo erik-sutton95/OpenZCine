@@ -1209,7 +1209,13 @@ extension NikonPlaybackOwnerAdoptionTests {
     func testActualNikonGalleryKeepsScrollOffsetWhileOpeningAndReturningFromList() async throws {
         try await assertActualGalleryScrollPreserved(layout: .list)
     }
-    private func assertActualGalleryScrollPreserved(layout: MonitorMediaLayout) async throws {
+    func testActualNikonGalleryDoesNotRestoreAnOutgoingLayoutPosition() async throws {
+        try await assertActualGalleryScrollPreserved(layout: .grid, returningLayout: .list)
+        try await assertActualGalleryScrollPreserved(layout: .list, returningLayout: .grid)
+    }
+    private func assertActualGalleryScrollPreserved(
+        layout: MonitorMediaLayout, returningLayout: MonitorMediaLayout? = nil
+    ) async throws {
         let fixture = try PlaybackFixture()
         defer { fixture.remove() }
         let previousLayout = fixture.model.mediaBrowserLayout
@@ -1305,6 +1311,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(presented)
         observation.invalidate()
         for offset in openingOffsets.values { XCTAssertEqual(offset, before, accuracy: 1) }
+        if let returningLayout { fixture.model.mediaBrowserLayout = returningLayout }
         host.dismiss(animated: false)
         let returned = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(returned)
@@ -1313,10 +1320,19 @@ extension NikonPlaybackOwnerAdoptionTests {
             Self.galleryScrollViews(host.view).first {
                 $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
             })
-        XCTAssertEqual(
-            returnedScroll.contentOffset.y, before, accuracy: 1,
-            "Returning from playback must preserve the operator's gallery position even if UIKit remounted it"
-        )
+        if returningLayout == nil {
+            XCTAssertEqual(
+                returnedScroll.contentOffset.y, before, accuracy: 1,
+                "Returning from playback must preserve the operator's gallery position even if UIKit remounted it"
+            )
+        } else {
+            XCTAssertEqual(returnedScroll.contentOffset.y, -returnedScroll.adjustedContentInset.top,
+                accuracy: 1, "A changed layout must not inherit the outgoing layout's captured position")
+        }
+        // Restoration is consumed once. A subsequent operator scroll must stay independent.
+        returnedScroll.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(returnedScroll.contentOffset.y, 450, accuracy: 1)
         await library.dispose()
     }
     private static func galleryScrollViews(_ view: UIView) -> [UIScrollView] {
