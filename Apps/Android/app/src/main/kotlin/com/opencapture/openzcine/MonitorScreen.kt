@@ -2196,9 +2196,7 @@ internal fun MonitorScreen(
         }
         val timecode = timecodeRetention.timecodeFor(sessionState)
         val commonStatus = MonitorStatusPresentation(commonControl.isRecording,
-            timecode = if (cameraReportsTimecode) timecode?.let {
-                "%02d:%02d:%02d".format(java.util.Locale.ROOT, it.hour, it.minute, it.second)
-            } else null)
+            timecode = if (cameraReportsTimecode) monitorTimecodeLabel(timecode) else null)
         val scopes = scopesShown { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }
         val emptyScopes = remember { MutableStateFlow(com.opencapture.opencine.media.ScopeAssistBundle.EMPTY) }
         val scopeSource = monitorFrameSource?.let { source -> rememberNikonLiveScopeBundles(scopes,

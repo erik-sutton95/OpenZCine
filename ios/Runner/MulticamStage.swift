@@ -119,12 +119,7 @@ struct MulticamStage: View {
             name: member.displayName, model: SavedCameraPathGroups.pathLabel(for: member.record),
             battery: member.batteryPercent,
             storage: member.storage.map { "\($0.gigabytesFree) GB" } ?? MultiviewTally.unavailable,
-            timecode: member.timecode.flatMap { timecode in
-                timecode.on
-                    ? String(
-                        format: "%02d:%02d:%02d", timecode.hour, timecode.minute, timecode.second)
-                    : nil
-            },
+            timecode: member.timecode?.monitorLabel,
             tally: MultiviewTally.text(recording: rolling, waiting: coordinator.groupBusy),
             // Nikon reports no take length: the tile times it from the first recording frame.
             recordingSince: rolling == true && !coordinator.groupBusy ? member.recordingSince : nil,

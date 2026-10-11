@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.opencapture.monitorui.MonitorTimecodeFormat
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -464,4 +465,10 @@ internal fun liveViewHeaderTimecode(timecode: LiveFrameTimecode?): LiveFrameTime
             it.second in 0..59 &&
             it.frame in 0..255 &&
             (it.on || it.hour != 0 || it.minute != 0 || it.second != 0 || it.frame != 0)
+    }
+
+/** Shared monitor readout from enabled camera-header telemetry, including genuine frames. */
+internal fun monitorTimecodeLabel(timecode: LiveFrameTimecode?): String? =
+    timecode?.takeIf { it.on }?.let {
+        MonitorTimecodeFormat.label(it.hour, it.minute, it.second, frames = it.frame)
     }

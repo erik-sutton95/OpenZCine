@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import com.opencapture.monitorui.MultiviewArrangement
+import com.opencapture.openzcine.monitorTimecodeLabel
 import com.opencapture.opencine.core.CameraCommandIntent
 import com.opencapture.opencine.core.CommandFailure
 import com.opencapture.opencine.core.CommandStage
@@ -527,9 +528,7 @@ class MulticamCoordinator(
                         withContext(decodeContext) { decode(frame.jpegData) }?.let { member.frame = it }
                     }
                     member.timecode =
-                        frame.timecode?.takeIf { it.on }?.let {
-                            "%02d:%02d:%02d".format(it.hour, it.minute, it.second)
-                        }
+                        monitorTimecodeLabel(frame.timecode)
                     member.recording = frame.isRecording
                     member.recordingSinceMillis =
                         if (frame.isRecording) member.recordingSinceMillis ?: now() else null
