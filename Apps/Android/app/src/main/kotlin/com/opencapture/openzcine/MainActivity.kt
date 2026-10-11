@@ -1001,6 +1001,26 @@ class MainActivity : ComponentActivity() {
                         val assist = monitorAssist ?: return
                         val currentSessionState = monitorState ?: return
                         val currentCameraProperties = monitorProperties ?: return
+                        val native = active as? SwiftCoreCameraSession
+                        val incidentOwner = native?.connectionOwner
+                        val canonicalIncidentConnection = native != null && incidentOwner != null &&
+                            currentSessionState is CameraSessionState.Connected && !multicam.owns(active)
+                        val incidentProducer = remember(active, incidentOwner, canonicalIncidentConnection) {
+                            if (!canonicalIncidentConnection) null else {
+                                val host = AppDiagnostics.host
+                                val source = AppDiagnostics.incidents.beginBoundSession(
+                                    com.opencapture.opencine.media.FeedIncidentSessionContext(
+                                        java.util.UUID.randomUUID().toString(), host.versionName,
+                                        host.versionCode.toString(), host.sourceRevision, "Android",
+                                        android.os.Build.VERSION.RELEASE, android.os.Build.DEVICE, "nikon",
+                                        testSource = AppDiagnostics.origin.currentTestSource(),
+                                        buildIdentity = AppDiagnostics.origin.currentBuildIdentity()))
+                                com.opencapture.openzcine.diagnostics.NikonFeedIncidentProducer(source,
+                                    isCurrentConnection = { native?.connectionOwner == incidentOwner })
+                            }
+                        }
+                        DisposableEffect(incidentProducer) { onDispose { incidentProducer?.end() } }
+
                         LaunchedEffect(currentSessionState) {
                             diagnostics.record(
                                 when (currentSessionState) {
@@ -1230,6 +1250,7 @@ class MainActivity : ComponentActivity() {
                                         frameioController = frameioController,
                                         accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                                         linkHealth = monitorLinkHealth,
+                                        incidentProducer = incidentProducer,
                                         relaySharing = relayBroadcastController,
                                         relaySharingEnabled = relayBroadcastEnabled,
                                         onRelayShareToggle = { enable ->

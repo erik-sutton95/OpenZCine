@@ -318,11 +318,12 @@ const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
  *   Compose Canvas present path so chrome/popups can blur the live feed.
  */
 @Composable
-fun LiveFeedView(
+internal fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
     onPresentedFrame: ((LiveFrame, Bitmap, MonitorBitmapPreviewBaker?) -> Unit)? = null,
+    incidentObserver: com.opencapture.openzcine.diagnostics.NikonFeedIncidentProducer? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects,
     configuration: FeedEffectsConfiguration = FeedEffectsConfiguration(),
@@ -502,7 +503,7 @@ fun LiveFeedView(
         fallbackColorMode.value = LiveFeedColorMode.UNKNOWN
         gpuBackend.clearFrame()
     }
-    LaunchedEffect(source, presentationState, collectFrames) {
+    LaunchedEffect(source, presentationState, collectFrames, incidentObserver) {
         if (!collectFrames) return@LaunchedEffect
         if (BuildConfig.DEBUG) {
             Log.d(
@@ -523,18 +524,23 @@ fun LiveFeedView(
         // a 1080p source halved every frame on every device.
         val decoder = MonitorJpegFrameDecoder(maxLongSide = LIVE_FEED_MAX_LONG_SIDE)
         val stats = MonitorFramePacingStats(log = { if (BuildConfig.DEBUG) Log.d(TAG, it) })
+        // Capture the connection observer once. A successor callback must not retag old work.
+        val incident = incidentObserver.takeIf { source is com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource }
+        val frames = if (incident != null && source is com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource)
+            source.currentStreamFrames else source.frames
         val decodeWorker = MonitorFrameDecodeWorker("zc-feed-decode")
         try {
             decodeWorker.run { isCurrent ->
             monitorPumpFramesWithSourceFrame(
-                frames = source.frames,
+                frames = frames,
                 stats = stats,
                 timestampNanos = { it.timestampNanos },
                 isCurrent = isCurrent,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.
                 decode = { frame ->
-                    (frame as? BitmapLiveFrame)?.bitmap ?: decoder.decode(frame.jpegData)
+                    if (incident != null) incident.decode { decoder.decode(frame.jpegData) }
+                    else (frame as? BitmapLiveFrame)?.bitmap ?: decoder.decode(frame.jpegData)
                 },
                 present = { sourceFrame, bitmap ->
                     val frameColorMode = decodedLiveFeedColorMode(bitmap)
@@ -551,6 +557,7 @@ fun LiveFeedView(
                     } else {
                         gpuBackend.clearFrame()
                     }
+                    incident?.published()
                     onFrame?.invoke(bitmap)
                     latestPresentedFrame.value?.invoke(
                         sourceFrame,

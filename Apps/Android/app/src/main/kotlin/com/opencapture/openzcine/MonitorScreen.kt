@@ -164,6 +164,7 @@ import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
@@ -321,6 +322,7 @@ internal fun MonitorScreen(
      * down (grayed, non-writing) until the operator revokes or the watcher gives it back.
      */
     controlsSurrendered: Boolean = false,
+    incidentProducer: com.opencapture.openzcine.diagnostics.NikonFeedIncidentProducer? = null,
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -1719,11 +1721,13 @@ internal fun MonitorScreen(
         // Link health must use generation-filtered frames so a restart does not
         // score a stale replay JPEG as a live stream. Conflate so chrome never
         // backpressures the shared live-frame bus (feed hitch root cause).
-        LaunchedEffect(actualLinkHealth, healthFrameSource) {
+        LaunchedEffect(actualLinkHealth, healthFrameSource, incidentProducer) {
+            val incident = incidentProducer
             val swiftSource =
                 healthFrameSource as? SwiftCoreLiveFrameSource
                     ?: return@LaunchedEffect
             swiftSource.currentStreamFrames
+                .onEach { incident?.received() }
                 .metadataOnly()
                 .conflate()
                 .collect(actualLinkHealth::recordFrame)
@@ -1769,10 +1773,18 @@ internal fun MonitorScreen(
         LaunchedEffect(actualLinkHealth, commandRoundTripMilliseconds) {
             actualLinkHealth.reportRoundTripMilliseconds(commandRoundTripMilliseconds)
         }
-        LaunchedEffect(actualLinkHealth, healthFrameSource) {
+        val incidentLifecycle by rememberUpdatedState(com.opencapture.opencine.media.FeedIncidentLifecycle(
+            foreground = lifecycleState.isAtLeast(Lifecycle.State.STARTED),
+            settingsCovered = !isMonitorFront || healthFrameSource == null,
+            connected = sessionState is CameraSessionState.Connected,
+            sceneActive = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+            thermalState = "unknown", assistState = "unknown"))
+        LaunchedEffect(actualLinkHealth, healthFrameSource, incidentProducer) {
+            val incident = incidentProducer
             while (true) {
                 delay(1_000)
                 actualLinkHealth.refresh()
+                incident?.publish(incidentLifecycle)
             }
         }
         var feedPointerSize by remember(monitorFrameSource) { mutableStateOf(IntSize.Zero) }
@@ -2605,6 +2617,7 @@ internal fun MonitorScreen(
                             scaleX = localFraming.horizontalPresentationScale
                             scaleY = localFraming.verticalPresentationScale
                         },
+                        incidentObserver = incidentProducer,
                         onPresentedFrame = { frame, bitmap, baker ->
                             // TC is owned by the stream collector above; present
                             // path only drives FPS + wear (decode can lag a take).

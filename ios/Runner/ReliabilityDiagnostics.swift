@@ -33,7 +33,7 @@ enum ReliabilityDiagnostics {
     /// A Z body serves 192.168.1.x, the most common home network, so no address prefix marks the
     /// camera path: the live camera session alone holds reports back (`NativeAppRoot`).
     static let gate = ReliabilityReportingGate(cameraIPv4Prefix: nil)
-    /// No feed-incident capture runs in this app yet, so nothing is a test source.
+    /// Canonical live connection observations use the current run origin; no injection is installed.
     static let origin = FeedIncidentOrigin(
         derivesTestSource: false, verification: false,
         buildIdentity: Bundle.main.object(forInfoDictionaryKey: "OPCBuildIdentity") as? String,
@@ -41,6 +41,9 @@ enum ReliabilityDiagnostics {
     static let reporting = ReliabilityReporting(
         host: host, consent: consent, dsn: dsn, gate: gate, origin: origin,
         sink: SentryReliabilitySink())
+    static let incidents = FeedIncidentRuntime(reporting: reporting,
+        directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("OpenZCine/Diagnostics/incidents", isDirectory: true))
     @MainActor static let problemReporting = ProblemReporting(
         host: host, gate: gate, dsnProvider: dsn.configured,
         isForeground: { UIApplication.shared.applicationState == .active })

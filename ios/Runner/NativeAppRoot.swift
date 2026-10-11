@@ -4523,6 +4523,7 @@ final class NativeAppModel {
         startLiveView(session: session)
     }
 
+    @ObservationIgnored private var feedIncidentProducer: NikonFeedIncidentProducer?
     private let frameDecoder = FrameDecoder()
     @ObservationIgnored private var frameRendererStorage: LiveFrameRenderer?
     /// Whether the CPU renderer's memo may hold a baked frame — lets the identity/Metal display
@@ -7022,6 +7023,8 @@ final class NativeAppModel {
     private func clearCameraSessionState(
         resetConnection: Bool, preserveMonitorSurface: Bool = false
     ) {
+        feedIncidentProducer?.end()
+        feedIncidentProducer = nil
         // Invalidate any in-flight establishment attempt: it re-checks this generation before
         // publishing a session, so a handshake finishing after this clear can't resurrect state.
         connectionGeneration += 1
@@ -7122,6 +7125,7 @@ final class NativeAppModel {
     }
 
     private func startLiveView(session: NativeCameraSession, skipPropertyBootstrap: Bool = false) {
+        let incident = feedIncidentProducer?.beginPreview()
         let retiredDecodeSource = frameDecoder.retireSource()
         Task { await frameDecoder.resetProcessors(source: retiredDecodeSource) }
         if videoSource == .cameraLiveView { resetCameraPropertyState() }
@@ -7149,7 +7153,7 @@ final class NativeAppModel {
             consume: { [weak self] frame, delivery in
                 guard let self, cameraSession === session else { return false }
                 return await consumeCameraFrame(
-                    frame, delivery: delivery, session: session, frameRate: &frameRate)
+                    frame, delivery: delivery, session: session, frameRate: &frameRate, incident: incident)
             },
             safePoint: { [weak self] count, pollEveryCall in
                 guard let self, cameraSession === session else { return }
@@ -7465,10 +7469,21 @@ final class NativeAppModel {
 
     private func startLinkHealthMonitoring() {
         linkHealthUpdateTask?.cancel()
+        let incident = feedIncidentProducer
         linkHealthUpdateTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshLinkHealth()
+                incident?.publish(lifecycle: FeedIncidentLifecycle(
+                    foreground: !self.screenWakeSuppressedForBackground,
+                    settingsCovered: self.shouldPauseLiveFeed || self.streamsHeaderOnly
+                        || self.videoSource != .cameraLiveView,
+                    playbackActive: self.isMediaPlaybackActive,
+                    connected: self.cameraSession != nil,
+                    thermalState: String(ProcessInfo.processInfo.thermalState.rawValue),
+                    lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                    sceneActive: UIApplication.shared.applicationState == .active,
+                    assistState: "unknown"))
                 try? await Task.sleep(
                     for: (self.isMonitorPresented && self.measuredLiveViewFPS > 0)
                         ? .seconds(1) : .seconds(3))
@@ -7632,6 +7647,7 @@ final class NativeAppModel {
     /// error means the connection is gone — the loop ends and the live-view watchdog drives
     /// reconnection. Bound to the session.
     private func startEventDraining(session: NativeCameraSession) {
+        let incident = feedIncidentProducer
         monitorRuntime?.startEventDrain(
             receive: { [weak self] event in
                 guard let self, cameraSession === session else { return }
@@ -7653,6 +7669,7 @@ final class NativeAppModel {
             unexpectedEnd: { [weak self] in
                 guard let self, cameraSession === session else { return }
                 AppDiagnostics.shared.record(.connectionEventChannelEnded)
+                incident?.unexpectedDisconnect()
                 recoverFromEndedEventChannel(session: session)
             })
     }
@@ -7837,7 +7854,8 @@ final class NativeAppModel {
     /// scopes, relay, watch and display processing stay with their presentation owner.
     private func consumeCameraFrame(
         _ frame: PTPLiveViewFrame, delivery: NikonLiveViewPump.Delivery,
-        session: NativeCameraSession, frameRate: inout FrameRateSampler
+        session: NativeCameraSession, frameRate: inout FrameRateSampler,
+        incident: NikonFeedIncidentProducer.Preview?
     ) async -> Bool {
         if delivery.headerOnly {
             liveViewFocus = frame.focus
@@ -7850,7 +7868,8 @@ final class NativeAppModel {
         guard !Task.isCancelled, cameraSession === session,
             let decodeSource = frameDecoder.source(session)
         else { return false }
-        let cleanFrame = await frameDecoder.decode(frame.jpeg, source: decodeSource)
+        incident?.received()
+        let cleanFrame = await frameDecoder.decode(frame.jpeg, source: decodeSource, incident: incident)
         let decoded = await displayReadyLiveFrame(from: cleanFrame)
         guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame
         else { return false }
@@ -7886,6 +7905,7 @@ final class NativeAppModel {
                 isRecording: frame.isRecording)
             sampleScopesIfDue(clean: cleanFrame) { [weak self] in self?.cameraSession === session }
         }
+        incident?.published()
         applyLiveViewHeaderState(frame)
         applyLiveViewHeaderTimecode(frame.timecode)
         if !delivery.bodyBusy { liveFPS = frameRate.formatted }
@@ -12973,6 +12993,19 @@ extension NativeAppModel {
     }
 
     private func bindMonitorRuntime(_ session: NativeCameraSession) {
+        feedIncidentProducer?.end()
+        feedIncidentProducer = nil
+        // Lent multicam, demo and editor shells never retire a canonical incident source.
+        if multicam.lentMember == nil, !isDemoSession {
+            let host = ReliabilityDiagnostics.host
+            let source = ReliabilityDiagnostics.incidents.beginBoundSession(.init(
+                sessionID: UUID().uuidString, appVersion: host.version, appBuild: host.build,
+                sourceRevision: host.sourceRevision, osName: "iOS", osVersion: UIDevice.current.systemVersion,
+                hardwareClass: UIDevice.current.model, cameraFamily: "nikon",
+                testSource: ReliabilityDiagnostics.origin.currentTestSource(),
+                buildIdentity: ReliabilityDiagnostics.origin.currentBuildIdentity()))
+            feedIncidentProducer = NikonFeedIncidentProducer(source: source)
+        }
         if let monitorRuntime {
             monitorRuntime.replaceLink(session)
         } else {
