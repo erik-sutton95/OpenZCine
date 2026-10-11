@@ -1116,6 +1116,7 @@ class MainActivity : ComponentActivity() {
                                         frameioController.internetHopState
                                             .allowsMonitorSessionRecovery(),
                                 linkHealth = monitorLinkHealth,
+                                incidentProducer = incidentProducer,
                                 activeTransportIsUsb =
                                     activeSavedCamera?.transport == SavedCameraTransport.USB_C,
                                 isDemoSession = pairingScript != null || demo?.second != null,
@@ -1250,7 +1251,6 @@ class MainActivity : ComponentActivity() {
                                         frameioController = frameioController,
                                         accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                                         linkHealth = monitorLinkHealth,
-                                        incidentProducer = incidentProducer,
                                         relaySharing = relayBroadcastController,
                                         relaySharingEnabled = relayBroadcastEnabled,
                                         onRelayShareToggle = { enable ->
