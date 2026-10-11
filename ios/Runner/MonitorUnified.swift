@@ -13,12 +13,104 @@ private enum NikonLiveReadoutKey: Hashable {
     case storage
 }
 
+/// A native quick gesture retains exact advertised domains and source authority.
+struct NikonCaptureQuickIdentity: Hashable, Sendable {
+    enum Kind: Hashable, Sendable { case format, codec }
+    let source: MonitorCaptureSourceIdentity
+    let authority: ControlAuthority
+    let kind: Kind
+    let formatRaw: [UInt64]
+    let formatTokens: [String]
+    let codecRaw: [UInt32]
+    let codecLabels: [String]
+    let formatDependency: UInt64?
+    let codecDependency: String?
+    let shutterMode: String?
+    let shutterLocked: Bool?
+    let pictureControl: String?
+    let snapshot: MonitorReadoutSnapshot
+
+    var picker: CameraPicker { kind == .format ? .resolution : .codec }
+
+    func admits(_ current: Self, target: String) -> Bool {
+        source == current.source && authority == current.authority && kind == current.kind
+            && formatRaw == current.formatRaw && formatTokens == current.formatTokens
+            && codecRaw == current.codecRaw && codecLabels == current.codecLabels
+            && formatDependency == current.formatDependency
+            && codecDependency == current.codecDependency
+            && shutterMode == current.shutterMode && shutterLocked == current.shutterLocked
+            && pictureControl == current.pictureControl && snapshot.options.contains(target)
+            && (current.snapshot.selection == snapshot.selection
+                || current.snapshot.selection == target)
+    }
+}
+
 extension NativeAppModel {
     var operatorLiveIdentity: MonitorOperatorLiveIdentity {
         .init(
             monitor: shell.monitor?.id, camera: shell.control.snapshot?.session,
             epoch: shell.control.snapshot?.epoch, picture: videoSource.rawValue,
             pictureOwner: liveFrameSource.map(ObjectIdentifier.init))
+    }
+
+    func operatorNativeQuick(for picker: CameraPicker)
+        -> MonitorOperatorNativeCaptureQuick<NikonCaptureQuickIdentity>?
+    {
+        guard picker == .resolution || picker == .codec,
+            let state = shell.control.snapshot, state.connection == .ready,
+            cameraPropertySnapshot.captureSelector == .video, shell.control.isRecording == false,
+            !interfaceLocked, !relayControlSurrendered, !sessionRecovery.isRecovering,
+            chromeEditorMode == nil, activePanel == nil, !lockedControls.contains(picker),
+            monitorAvailability.cameraControls
+        else { return nil }
+        switch state.authority {
+        case .owner, .lease: break
+        default: return nil
+        }
+        let properties = cameraPropertySnapshot
+        let formatRaw = cameraScreenModes.map(\.raw)
+        let formatTokens = recordingFormatPresentations.map(\.token)
+        let codecRaw = cameraFileTypeModes.map(\.raw)
+        let codecLabels = cameraFileTypeModes.map(\.label)
+        guard !formatRaw.isEmpty, formatRaw.count == formatTokens.count,
+            Set(formatRaw).count == formatRaw.count, Set(formatTokens).count == formatTokens.count,
+            !codecRaw.isEmpty, Set(codecRaw).count == codecRaw.count,
+            Set(codecLabels).count == codecLabels.count,
+            let raw = properties.rawScreenSize, let formatIndex = formatRaw.firstIndex(of: raw),
+            let codec = activeCodecMode, codecRaw.contains(codec.raw)
+        else { return nil }
+        let kind: NikonCaptureQuickIdentity.Kind = picker == .resolution ? .format : .codec
+        let snapshot = MonitorReadoutSnapshot(
+            title: kind == .format ? "Format" : "Codec",
+            options: kind == .format ? formatTokens : codecLabels,
+            selection: kind == .format ? formatTokens[formatIndex] : codec.label)
+        let identity = NikonCaptureQuickIdentity(
+            source: .init(
+                camera: state.session, epoch: state.epoch, monitor: shell.monitor?.id,
+                pictureOwner: liveFrameSource.map(ObjectIdentifier.init),
+                picture: videoSource.rawValue),
+            authority: state.authority, kind: kind,
+            formatRaw: formatRaw,
+            formatTokens: kind == .format ? formatTokens : cameraScreenModes.map(\.label),
+            codecRaw: codecRaw, codecLabels: codecLabels,
+            formatDependency: kind == .codec ? raw : nil,
+            codecDependency: kind == .format ? properties.fileType : nil,
+            shutterMode: properties.shutterMode?.rawValue,
+            shutterLocked: properties.shutterLocked, pictureControl: properties.pictureControl,
+            snapshot: snapshot)
+        return .init(identity: identity, snapshot: snapshot, enabled: true, delayed: true)
+    }
+
+    func operatorNativeQuickIsCurrent(_ identity: NikonCaptureQuickIdentity) -> Bool {
+        operatorNativeQuick(for: identity.picker)?.identity == identity
+    }
+
+    /// Own optimistic selection may advance; source, circuits and advertised domains may not.
+    func operatorNativeQuickAdmits(_ identity: NikonCaptureQuickIdentity, target: String) -> Bool {
+        guard let current = operatorNativeQuick(for: identity.picker)?.identity else {
+            return false
+        }
+        return identity.admits(current, target: target)
     }
 }
 
@@ -79,13 +171,19 @@ struct NikonMonitorShell: View {
                 let picker = CameraPicker.forValueLabel(
                     value.label, photography: model.isPhotographyMode)
             else { return nil }
-            // The shutter's lock and angle/speed circuits use the existing typed LadderSheet.
+            // A held shutter adjusts its reported circuit. Lock controls stay in the full sheet.
+            let quickEnabled =
+                picker != .shutter
+                || (model.cameraPropertySnapshot.shutterLocked == false
+                    && model.cameraPropertySnapshot.shutterMode != nil
+                    && !model.lockedControls.contains(.shutter))
             let field =
-                value.label == "SHUTTER"
-                ? nil
-                : picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
+                quickEnabled
+                ? picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
+                : nil
             return Readout(
                 id: .picker(picker), title: value.label, value: value.value, field: field,
+                quickEnabled: quickEnabled,
                 accessibilityIdentifier: picker.nikonControlSetting.map {
                     "monitor.capture." + $0.key.rawValue
                 } ?? "")
@@ -170,6 +268,36 @@ struct NikonMonitorShell: View {
             title: picker == .stabilization ? "VR / E-VR" : picker.valueLabel,
             subtitle: model.pickerSubtitle(for: picker))
     }
+    private var captureInputs:
+        MonitorOperatorCaptureInputs<
+            NikonLiveReadoutKey, DisplayChromeVisibility.Section, NikonCaptureQuickIdentity
+        >
+    {
+        .init(
+            readouts: readouts, panel: panel, haptics: model.preferences.hapticsEnabled,
+            open: { key in if case .picker(let picker) = key { model.showPicker(picker) } },
+            dismiss: {
+                if model.activePanel?.coversFullScreen == false { model.dismissActivePanel() }
+            },
+            isTop: { key in
+                if case .picker(let picker) = key { return picker.isTopBar }
+                return false
+            },
+            nativeQuick: { key in
+                guard case .picker(let picker) = key else { return nil }
+                return model.operatorNativeQuick(for: picker)
+            },
+            nativeCurrent: { key, identity in
+                guard key == .picker(identity.picker) else { return false }
+                return model.operatorNativeQuickIsCurrent(identity)
+            },
+            nativeCommit: { key, identity, value in
+                guard key == .picker(identity.picker), model.operatorNativeQuickIsCurrent(identity),
+                    identity.snapshot.options.contains(value)
+                else { return }
+                model.applyQuickPicker(identity.picker, value: value, identity: identity)
+            })
+    }
     private var haptics: OperatorHaptics {
         .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true })
     }
@@ -217,7 +345,7 @@ struct NikonMonitorShell: View {
         let layout: FieldMonitorLayout = self.layout
         let identity = model.operatorLiveIdentity
         let menus = NikonAssistMenuAdapter(model: model, compact: false)
-        MonitorOperatorDescriptorLiveSurface(
+        MonitorOperatorLiveBody(
             host: model, control: model.shell.control, identity: identity,
             current: { [weak model] in model?.operatorLiveIdentity == $0 }, layout: layout,
             safeArea: safeArea, sourceAspect: sourceAspect,
@@ -232,12 +360,7 @@ struct NikonMonitorShell: View {
             clean: model.displayMode == .clean,
             command: model.displayMode == .command, readOnly: model.relayControlSurrendered,
             recovering: model.sessionRecovery.isRecovering, status: status, power: power,
-            readouts: readouts,
-            panel: panel,
-            open: { key in if case .picker(let picker) = key { model.showPicker(picker) } },
-            dismiss: {
-                if model.activePanel?.coversFullScreen == false { model.dismissActivePanel() }
-            },
+            captureInputs: captureInputs,
             settings: { model.activePanel = .settings }, media: model.openMediaBrowser,
             cycleDisplay: model.cycleDisplayMode, displayTitle: model.displayMode.title,
             displayIndex: model.displayOrder.firstIndex(of: model.displayMode),
@@ -286,7 +409,7 @@ struct NikonMonitorShell: View {
                             && model.displayMode != .command)
                 }.transaction { $0.animation = nil }
             },
-            cameraPanel: { key in
+            cameraPanel: { key, _ in
                 if case .picker(let picker) = key { NikonCameraSettingExtension(picker: picker) }
             }, photoRelease: { NikonPhotoRelease(diameter: Double($0)) },
             preview: { _ in EmptyView() },
