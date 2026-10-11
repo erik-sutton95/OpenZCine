@@ -4366,26 +4366,35 @@ final class NativeAppModel {
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
         func seedQuickDemoCamera() {
             guard isDemoSession else { return }
-            let modes = [(6048, 3400, 25), (3840, 2160, 25), (1920, 1080, 25)].map { width, height, fps in
+            let modes = [(6048, 3400, 25), (3840, 2160, 25), (1920, 1080, 25)].map {
+                width, height, fps in
                 let raw = UInt64(width) << 48 | UInt64(height) << 32 | UInt64(fps) << 16
                 let size = PTPCameraPropertyDecoders.screenSize(raw)
                 return PTPCameraScreenSizeMode(raw: raw, label: "\(width)x\(height) · \(size.fps)p")
             }
             applyBootstrapObservation(.screenModes(modes))
-            applyBootstrapObservation(.fileTypes(PTPCameraPropertyDecoders.fileTypeModes(
-                fromEnum: [0x0001_0A00, 0x0010_0A00])))
+            applyBootstrapObservation(
+                .fileTypes(
+                    PTPCameraPropertyDecoders.fileTypeModes(
+                        fromEnum: [0x0001_0A00, 0x0010_0A00])))
             applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
-            applyBootstrapObservation(.property(.movieShutterMode,
-                Data([PTPCameraPropertyDecoders.shutterModeCode(.angle)])))
+            applyBootstrapObservation(
+                .property(
+                    .movieShutterMode,
+                    Data([PTPCameraPropertyDecoders.shutterModeCode(.angle)])))
             applyBootstrapObservation(.property(.movieTVLockSetting, Data([0])))
             if let angle = PTPCameraPropertyWrite.request(control: .shutter, label: "180°") {
                 applyBootstrapObservation(.property(angle.property, angle.data))
             }
             applyBootstrapObservation(.options(.movieShutterAngle, ["90°", "180°", "270°"]))
-            applyBootstrapObservation(.property(.movieRecordScreenSize,
-                PTPCameraPropertyWrite.screenSize(raw: modes[1].raw).data))
-            applyBootstrapObservation(.property(.movieFileType,
-                PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data))
+            applyBootstrapObservation(
+                .property(
+                    .movieRecordScreenSize,
+                    PTPCameraPropertyWrite.screenSize(raw: modes[1].raw).data))
+            applyBootstrapObservation(
+                .property(
+                    .movieFileType,
+                    PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data))
             let driver = NikonQuickDemoDriver(model: self)
             let session = NikonCameraSession(driver: driver, serialNumber: "SIMULATED-quick")
             driver.session = session

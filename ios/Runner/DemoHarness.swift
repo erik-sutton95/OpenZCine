@@ -1133,33 +1133,40 @@ enum DemoHarness {
 #endif
 
 #if DEBUG
-/// SIMULATED driver retains the production Nikon adapter without any camera transport.
-@MainActor final class NikonQuickDemoDriver: NikonControlDriver {
-    private weak var model: NativeAppModel?
-    weak var session: NikonCameraSession?
-    init(model: NativeAppModel) { self.model = model }
-    var nikonControlFacts: NikonControlFacts {
-        guard let model else { return .init(connection: .disconnected(.requested)) }
-        var facts = model.nikonControlFacts
-        facts.recording = false
-        return facts
-    }
-    func queueSettingWrites(_ label: String, for setting: NikonControlSetting,
-        operation: OperationID?) -> Int {
-        guard let model else { return 0 }
-        let writes = PTPCameraPropertyWrite.requests(control: setting.cameraControl,
-            label: label, snapshot: model.operatorQuickReportedProperties)
-        for write in writes { model.applyBootstrapObservation(.property(write.property, write.data)) }
-        Task { @MainActor [weak self] in
-            guard let session = self?.session else { return }
-            if let operation {
-                session.operationSent(operation)
-                for write in writes { session.writeLanded(operation, write: write, readback: write.data) }
-            }
-            _ = session.refresh()
+    /// SIMULATED driver retains the production Nikon adapter without any camera transport.
+    @MainActor final class NikonQuickDemoDriver: NikonControlDriver {
+        private weak var model: NativeAppModel?
+        weak var session: NikonCameraSession?
+        init(model: NativeAppModel) { self.model = model }
+        var nikonControlFacts: NikonControlFacts {
+            guard let model else { return .init(connection: .disconnected(.requested)) }
+            var facts = model.nikonControlFacts
+            facts.recording = false
+            return facts
         }
-        return writes.count
+        func queueSettingWrites(
+            _ label: String, for setting: NikonControlSetting,
+            operation: OperationID?
+        ) -> Int {
+            guard let model else { return 0 }
+            let writes = PTPCameraPropertyWrite.requests(
+                control: setting.cameraControl,
+                label: label, snapshot: model.operatorQuickReportedProperties)
+            for write in writes {
+                model.applyBootstrapObservation(.property(write.property, write.data))
+            }
+            Task { @MainActor [weak self] in
+                guard let session = self?.session else { return }
+                if let operation {
+                    session.operationSent(operation)
+                    for write in writes {
+                        session.writeLanded(operation, write: write, readback: write.data)
+                    }
+                }
+                _ = session.refresh()
+            }
+            return writes.count
+        }
+        func queueRecord(start: Bool, operation: OperationID) {}
     }
-    func queueRecord(start: Bool, operation: OperationID) {}
-}
 #endif
