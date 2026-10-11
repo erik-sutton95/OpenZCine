@@ -1,3 +1,4 @@
+- New OpenCine monitor, camera and media interface, with a new icon.
 - Live View and Multicam show frame timecode when the camera supplies it.
 - Playback controls follow actual playing and buffering state; Pause stays available while waiting.
 - Large clips use their full file size. Unsupported large-file transfers report an error instead of repeating data.

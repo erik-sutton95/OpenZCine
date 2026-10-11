@@ -1,5 +1,6 @@
 New and changed
 
+- A new shared OpenCine interface for the monitor, camera list, settings and media player, with compact View Assist captions and a new app icon.
 - Live View and Multicam show timecode frames when the camera supplies them; cameras without frame timecode keep the seconds display.
 - Format keeps image area, resolution and compatible frame rates grouped, with codec as a separate control.
 
