@@ -955,6 +955,9 @@ internal fun MediaBrowseScreen(
             if (actual != null && opening != null) {
                 val owner = ownerCameraID(clip)
                 val action = remember(actual, opening.id) { libraryActions.capture(listOf(opening.record.payload)) }
+                var playbackDeletionReturn by remember(actual, opening.id) {
+                    mutableStateOf<MonitorMediaDeletionCompletion?>(null)
+                }
                 MediaPlaybackScreen(
                     cacheStore = cacheStore,
                     library = actual,
@@ -992,9 +995,66 @@ internal fun MediaBrowseScreen(
                     sourceCurrent = { library === actual && action.sourceIsCurrent },
                     captureRecord = { record ->
                         val captured = libraryActions.capture(listOf(record.payload))
+                        val completed = playbackDeletionReturn
+                        val admission = completed?.admission ?: opening.admission
                         MonitorPlaybackAdmission {
-                            library === actual && actual.isCurrent(opening.admission) && captured.sourceIsCurrent &&
-                                library === actual && actual.isCurrent(opening.admission)
+                            library === actual && actual.isCurrent(admission) &&
+                                (completed == null || completed.isCurrent) && captured.sourceIsCurrent &&
+                                library === actual && actual.isCurrent(admission) &&
+                                (completed == null || completed.isCurrent)
+                        }
+                    },
+                    captureDeletion = { record, cleanup ->
+                        if (librarySource != MediaLibrarySource.CAMERA || !effectiveCameraConnected ||
+                            shareInProgress || library !== actual || connectionOwner == null) null else {
+                            val selected = listOf(record.payload.clip)
+                            val plan = deletionPlan(loadedClips, selected, ::ownerCameraID)
+                            val targets = plan.targets.map { NikonLibraryClip(ownerCameraID(it), it) }
+                            val capturedAction = libraryActions.capture(targets)
+                            val authority = capturedAction.captureDeletionAuthority()
+                            val nativeOwner = connectionOwner
+                            val browseBinding = actual.binding
+                            val browseSource = librarySourceOwner
+                            if (authority == null || !authority.isCurrent || !capturedAction.sourceIsCurrent) null else {
+                                MonitorOperatorPlaybackDeletionRequest(
+                                    com.opencapture.opencine.media.MonitorPlaybackDeletionConfirmation(
+                                        title = "Delete clip from camera?",
+                                        message = deleteConfirmationMessage(selected, plan)), authority,
+                                    perform = perform@{
+                                        fun accepted() = librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected &&
+                                            library === actual && connectionOwner == nativeOwner &&
+                                            authority.isCurrent && capturedAction.sourceIsCurrent &&
+                                            sameDeletionPlan(plan, deletionPlan(loadedClips, selected, ::ownerCameraID)) &&
+                                            library === actual && connectionOwner == nativeOwner && authority.isCurrent
+                                        if (!accepted() || !cleanup() || !accepted()) return@perform
+                                        capturedAction.deleteBatch(targets, deleteObject = { value ->
+                                            withContext(Dispatchers.IO) {
+                                                SwiftCore.isAvailable && nativeOwner != null && authority.isCurrent &&
+                                                    NikonNative.sessionDeleteObject(nativeOwner, value.clip.handle.toInt())
+                                            }
+                                        }, onProgress = { _, _ -> }, accepted = authority,
+                                            preparation = MonitorMediaDeletionPreparation.RETIRE_GALLERY,
+                                            prepare = { browseBinding?.let { browseSource?.retireBrowse(it) } },
+                                            afterFinish = { completed ->
+                                                if (completed.isCompleting && capturedAction.sourceIsCurrent) {
+                                                    val updated = withContext(Dispatchers.IO) {
+                                                        (offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID))
+                                                            .flatMap { libraryIndex.favoriteIDs(it) }.toSet()
+                                                    }
+                                                    if (completed.isCompleting && capturedAction.sourceIsCurrent) {
+                                                        favorites = updated
+                                                        actual.relist(after = completed)
+                                                    }
+                                                }
+                                            })
+                                        val completed = authority.completion
+                                        if (completed != null && completed.claim == authority.id && completed.isCurrent &&
+                                            library === actual && connectionOwner == nativeOwner &&
+                                            actual.isCurrent(completed.admission) && completed.isCurrent) {
+                                            playbackDeletionReturn = completed
+                                        }
+                                    })
+                            }
                         }
                     },
                 )

@@ -10670,7 +10670,10 @@ final class NativeAppModel {
     /// removes: still wording for stills, master wording for proxies with hidden masters, and
     /// the cross-card note only when backup copies really exist.
     func deletionConfirmMessage(for clips: [MediaClip]) -> String {
-        let plan = deletionPlan(for: clips)
+        deletionConfirmMessage(for: clips, plan: deletionPlan(for: clips))
+    }
+
+    func deletionConfirmMessage(for clips: [MediaClip], plan: DeletionPlan) -> String {
         var message: String
         if clips.count == 1, let only = clips.first {
             message =
@@ -10690,6 +10693,48 @@ final class NativeAppModel {
             message += " The backup copies on the other card are removed too."
         }
         return message
+    }
+
+    /// Captures one immutable consequence set for playback. Gallery/photo callers keep their
+    /// existing preparation policy; playback drains only its exact outgoing item first.
+    func capturePlaybackMediaDeletion(_ clip: MediaClip,
+        cleanup: @escaping @MainActor () async -> Bool,
+        deleteLocation: ((MediaObjectHandle) async -> Bool)? = nil
+    ) -> MonitorOperatorPlaybackDeletionRequest? {
+        guard isConnected, mediaBrowserSource == .camera, clip.handle != nil, let owner = mediaLibrary,
+            let current = mediaClips.first(where: { $0.id == clip.id }),
+            NikonMediaLibraryAction.sameContent(clip, current)
+        else { return nil }
+        let plan = deletionPlan(for: [current])
+        guard let action = captureMediaLibraryAction(plan.targets), action.sourceIsCurrent,
+            let authority = owner.captureDeletion(key: .init("playback-deletion"),
+                ifCurrent: { [weak self] in
+                    self?.isConnected == true && self?.mediaBrowserSource == .camera && action.sourceIsCurrent
+                })
+        else { return nil }
+        let copy = MonitorPlaybackDeletionConfirmation(title: "Delete clip from camera?",
+            message: deletionConfirmMessage(for: [current], plan: plan))
+        return .init(confirmation: copy, authority: authority, perform: { [weak self] in
+            guard let self, authority.isCurrent, self.mediaLibrary === owner,
+                self.playbackDeletionPlanIsCurrent(plan, requested: current) else { return }
+            guard await cleanup(), !Task.isCancelled, authority.isCurrent,
+                self.mediaLibrary === owner,
+                self.playbackDeletionPlanIsCurrent(plan, requested: current) else { return }
+            _ = await self.deleteMediaClips([current], deleteLocation: deleteLocation,
+                admitted: authority, frozenPlan: plan)
+        })
+    }
+
+    private func playbackDeletionPlanIsCurrent(_ captured: DeletionPlan, requested: MediaClip) -> Bool {
+        guard let current = mediaClips.first(where: { $0.id == requested.id }),
+            NikonMediaLibraryAction.sameContent(requested, current) else { return false }
+        let actual = deletionPlan(for: [current])
+        return actual.pairCount == captured.pairCount && actual.masterCount == captured.masterCount &&
+            actual.backupCount == captured.backupCount && actual.targets.count == captured.targets.count &&
+            zip(actual.targets, captured.targets).allSatisfy { current, old in
+                current.id == old.id && current.allLocations == old.allLocations &&
+                    NikonMediaLibraryAction.sameContent(old, current)
+            }
     }
 
     /// Deletes clips from the camera card (and any local copies). The request widens through
@@ -10712,9 +10757,10 @@ final class NativeAppModel {
 
     func deleteMediaClips(
         _ clips: [MediaClip], deleteLocation: ((MediaObjectHandle) async -> Bool)?,
-        admitted authority: MonitorMediaLibraryDeletionAuthority? = nil
+        admitted authority: MonitorMediaLibraryDeletionAuthority? = nil,
+        frozenPlan: DeletionPlan? = nil
     ) async -> Int {
-        let targets = deletionPlan(for: clips).targets
+        let targets = (frozenPlan ?? deletionPlan(for: clips)).targets
         let owner = mediaLibrary
         let producer = mediaProducer?.service
         let session = cameraSession

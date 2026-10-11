@@ -1366,3 +1366,82 @@ extension NikonPlaybackOwnerAdoptionTests {
 @MainActor private final class PlaybackGalleryOffsetCapture {
     var values: [CGFloat] = []
 }
+
+extension NikonPlaybackOwnerAdoptionTests {
+    /// SIMULATED connected facade around actual cached movie, shared player and app operations.
+    /// The test exposes/cancels a confirmation and never deletes a camera object or user file.
+    func testActualConnectedCameraPlaybackExposesDeleteAndCancelKeepsAllBytes() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let bucket = "SIMULATED-DELETE-CAMERA"
+        let url = try fixture.store.localURL(cameraID: bucket, filename: "SIMULATED-DELETE.MOV")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        let bytes = try Data(contentsOf: url)
+        let clip = MediaClip(cameraID: bucket, filename: url.lastPathComponent, handle: 42,
+            storageID: 65_537, sizeBytes: UInt64(bytes.count), captureDate: "20261011T120000")
+        fixture.store.upsertBatch([clip], cameraID: bucket)
+        fixture.model.mediaBrowserSource = .camera
+        fixture.model.openCachedMediaLibrary()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
+        fixture.model.connection = .connected
+        let catalog = try XCTUnwrap(fixture.store.catalogBytes(cameraID: bucket))
+        let coordinator = MediaDeliveryCoordinator(); defer { coordinator.close() }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(rootView: MediaPlayerView(clips: [clip], startingAt: clip)
+            .environment(fixture.model).environment(coordinator))
+        let window = UIWindow(windowScene: scene); window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host; window.makeKeyAndVisible(); host.view.frame = window.bounds
+        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKeyAndVisible() }
+        let mounted = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return Self.deletionCompositionElements(host.view).contains { $0.accessibilityLabel == "Delete clip from camera" }
+        }
+        XCTAssertTrue(mounted, "Actual connected Nikon playback must compose the shared deletion service")
+        let button = try XCTUnwrap(Self.deletionCompositionElements(host.view)
+            .first { $0.accessibilityLabel == "Delete clip from camera" })
+        XCTAssertTrue(button.accessibilityActivate())
+        let presented = await cachedCatalogSettled { host.presentedViewController != nil }
+        XCTAssertTrue(presented)
+        let dialog = try XCTUnwrap(host.presentedViewController as? UIAlertController)
+        XCTAssertTrue(dialog.message?.contains(clip.filename) == true)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(try fixture.store.catalogBytes(cameraID: bucket), catalog)
+        let cancel = try XCTUnwrap(dialog.actions.first { $0.style == .cancel }?.title)
+        let cancelMounted = await cachedCatalogSettled {
+            dialog.view.layoutIfNeeded()
+            return Self.deletionCompositionElements(dialog.view).contains { $0.accessibilityLabel == cancel }
+        }
+        XCTAssertTrue(cancelMounted)
+        let cancelButton = try XCTUnwrap(Self.deletionCompositionElements(dialog.view)
+            .first { $0.accessibilityLabel == cancel })
+        XCTAssertTrue(cancelButton.accessibilityActivate())
+        _ = await cachedCatalogSettled { host.presentedViewController == nil }
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(try fixture.store.catalogBytes(cameraID: bucket), catalog)
+        fixture.model.connection = .disconnected
+        let hidden = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return !Self.deletionCompositionElements(host.view).contains { $0.accessibilityLabel == "Delete clip from camera" }
+        }
+        XCTAssertTrue(hidden, "Offline cached playback must not advertise camera-card deletion")
+        await library.dispose()
+    }
+
+    private static func deletionCompositionElements(_ object: NSObject) -> [NSObject] {
+        if object.accessibilityElementsHidden { return [] }
+        var values = [object]
+        if let elements = object.accessibilityElements as? [NSObject], !elements.isEmpty {
+            values += elements.flatMap(deletionCompositionElements)
+        } else if object.accessibilityElementCount() > 0 {
+            values += (0..<object.accessibilityElementCount()).compactMap { object.accessibilityElement(at: $0) as? NSObject }
+                .flatMap(deletionCompositionElements)
+        } else if let view = object as? UIView {
+            values += view.subviews.flatMap(deletionCompositionElements)
+        }
+        return values
+    }
+}

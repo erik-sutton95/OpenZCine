@@ -191,7 +191,10 @@ internal fun deleteConfirmationMessage(
     selection: List<NikonMediaClipRecord>,
     ownerCameraID: (NikonMediaClipRecord) -> String,
 ): String {
-    val plan = deletionPlan(catalog, selection, ownerCameraID)
+    return deleteConfirmationMessage(selection, deletionPlan(catalog, selection, ownerCameraID))
+}
+
+internal fun deleteConfirmationMessage(selection: List<NikonMediaClipRecord>, plan: DeletionPlan): String {
     var message =
         if (selection.size == 1) {
             val only = selection.single()
@@ -208,6 +211,15 @@ internal fun deleteConfirmationMessage(
     if (plan.backupCount > 0) message += " The backup copies on the other card are removed too."
     return message
 }
+
+/** Revalidation never expands the confirmed request into newly discovered objects. */
+internal fun sameDeletionPlan(captured: DeletionPlan, current: DeletionPlan): Boolean =
+    captured.pairCount == current.pairCount && captured.masterCount == current.masterCount &&
+        captured.backupCount == current.backupCount && captured.targets.size == current.targets.size &&
+        captured.targets.zip(current.targets).all { (old, actual) ->
+            NikonMediaObjectIdentity(old) == NikonMediaObjectIdentity(actual) &&
+                sameNikonActionContent(old, actual)
+        }
 
 /**
  * Five-star rating row on glass (iOS `StarRatingRow`): tap a star to set the

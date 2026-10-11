@@ -1158,10 +1158,30 @@ struct MediaPlayerView: View {
                 && !model.isClipDownloaded(record.payload),
             share: MediaDeliveryEligibility.canDeliver(
                 clipIsLocal: model.isClipDownloaded(record.payload),
-                cameraConnected: model.isConnected))
+                cameraConnected: model.isConnected),
+            delete: model.isConnected && model.mediaBrowserSource == .camera && record.payload.handle != nil
+                && !covered && model.mediaDeletionProgress == nil)
     }
     private var operations: MonitorOperatorPlaybackOperations<MediaClip, String> {
         .init(
+            captureDeletion: { record in
+                guard let captured = context, let owner = captured.media.playback,
+                    let native = captured.native, captured.media.isCurrent(owner.token),
+                    owner.active?.asset.id == record.asset.id, access(record).delete == true
+                else { return nil }
+                let token = owner.token, run = deliveryCoordinator.capturedRun
+                return model.capturePlaybackMediaDeletion(record.payload, cleanup: {
+                    guard context === captured, captured.media.playback === owner,
+                        captured.native === native, captured.media.isCurrent(token) else { return false }
+                    owner.close()
+                    let transfer = native.captureEnteredTransferCleanup()
+                    await run?.cancelAndJoin()
+                    await transfer()
+                    return context === captured && captured.media.playback === owner &&
+                        captured.native === native && owner.closed &&
+                        owner.token == .init(owner: token.owner, revision: token.revision &+ 1)
+                })
+            },
             favorite: { record in model.toggleClipFavorite(record.payload) }, access: access,
             rating: .init(
                 levels: [1, 2, 3, 4, 5], noticeDuration: .seconds(4),

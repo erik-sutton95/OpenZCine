@@ -74,6 +74,7 @@ internal fun MediaPlaybackScreen(
     opening: MonitorMediaGalleryOpen<NikonLibraryClip>? = null,
     sourceCurrent: () -> Boolean = { true },
     captureRecord: ((MonitorMediaRecord<NikonLibraryClip>) -> MonitorPlaybackAdmission)? = null,
+    captureDeletion: ((MonitorMediaRecord<NikonLibraryClip>, suspend () -> Boolean) -> MonitorOperatorPlaybackDeletionRequest?)? = null,
 ): Unit {
     val actualLibrary = library ?: run { PlaybackLoading("Preparing media library…"); return }
     val initial = remember(actualLibrary, opening?.id, initialClip.libraryKey(cameraID)) {
@@ -163,13 +164,36 @@ internal fun MediaPlaybackScreen(
             exposureAssistCameraInput, {})?.Menu() },
         reference = picture?.reference, referenceAvailable = picture?.reference != null)
     val operations = MonitorOperatorPlaybackOperations<NikonLibraryClip, Unit>(
+        captureDeletion = { record ->
+            val outgoing = playerContext.media.state.value.playback
+            val outgoingNative = playerContext.native
+            val run = delivery.capturedRun
+            if (captureDeletion == null || outgoing == null || outgoingNative == null ||
+                !currentTransfer.value || cover || !capture.record(record).isCurrent() ||
+                !playerContext.media.isCurrent(outgoing.state.value.token) ||
+                outgoing.state.value.active?.asset?.id != record.asset.id) null else {
+                val token = outgoing.state.value.token
+                captureDeletion(record) {
+                    if (playerContext.media.state.value.playback !== outgoing || playerContext.native !== outgoingNative ||
+                        !playerContext.media.isCurrent(token)) false else {
+                        outgoing.close()
+                        run?.cancelAndJoin()
+                        outgoingNative.finishEnteredTransfer()
+                        val retired = outgoing.state.value
+                        playerContext.media.state.value.playback === outgoing && playerContext.native === outgoingNative &&
+                            retired.closed && retired.token == token.copy(revision = token.revision + 1)
+                    }
+                }
+            }
+        },
         favorite = { record -> if (capture.record(record).isCurrent()) onToggleFavorite(record.payload.clip) },
         access = { record ->
             val preparedRecord = prepared?.takeIf { it.record.asset.id == record.asset.id }
             val completed = (preparedRecord?.preparation as? MediaTransferPreparation.Ready)?.entry
             val ready = completed?.let { playbackShareState(it.state, it.downloadedBytes, it.expectedLength) == PlaybackShareState.READY } == true
             MonitorMediaGalleryAccess(share = capture.record(record).isCurrent() &&
-                canDeliverMedia(if (ready) 1 else 0, 1, currentTransfer.value), delete = null)
+                canDeliverMedia(if (ready) 1 else 0, 1, currentTransfer.value),
+                delete = captureDeletion != null && currentTransfer.value && !cover && capture.record(record).isCurrent())
         }, rating = playbackRating(cameraTransferAvailable, connectionOwner, onRatingMirrored,
             onCaptureRatingCompletion, onRatingDiagnostic))
     var closing by remember(playerContext) { mutableStateOf(false) }

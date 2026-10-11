@@ -7,12 +7,29 @@ import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** JVM coverage for the camera-card deletion policy and its local purge. */
 class MediaDeletionTest {
+    @Test
+    fun `frozen playback deletion copy and targets reject a late master or backup`() {
+        val proxy = still(handle = 5, filename = "SIMULATED.MP4")
+        val master = still(handle = 6, filename = "SIMULATED.NEV")
+        val captured = deletionPlan(listOf(proxy), listOf(proxy), oneBucket)
+        val copy = deleteConfirmationMessage(listOf(proxy), captured)
+        assertFalse("master" in copy)
+        assertTrue(sameDeletionPlan(captured, deletionPlan(listOf(proxy), listOf(proxy), oneBucket)))
+        val widened = deletionPlan(listOf(proxy, master), listOf(proxy), oneBucket)
+        assertFalse(sameDeletionPlan(captured, widened))
+        assertEquals(listOf(proxy), captured.targets)
+        assertEquals(copy, deleteConfirmationMessage(listOf(proxy), captured))
+        val backup = proxy.copy(handle = 55, storageId = 2)
+        assertFalse(sameDeletionPlan(captured, deletionPlan(listOf(proxy, backup), listOf(proxy), oneBucket)))
+    }
+
     @Test
     fun `rating write result decodes confirmed stars, coded refusals, and no-code failures`() {
         assertEquals(RatingWriteResult.Confirmed(3), ratingWriteResult(3))
