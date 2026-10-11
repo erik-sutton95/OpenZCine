@@ -425,14 +425,14 @@ final class RunnerTests: XCTestCase {
             window.rootViewController = nil
             previousKey?.makeKeyAndVisible()
         }
-        func previewElement() -> NSObject? {
+        func renderedElement(_ identifier: String) -> NSObject? {
             var seen = Set<ObjectIdentifier>()
             func find(_ object: NSObject) -> NSObject? {
                 guard seen.insert(ObjectIdentifier(object)).inserted else { return nil }
                 let getter = NSSelectorFromString("accessibilityIdentifier")
                 if object.responds(to: getter),
                     object.perform(getter)?.takeUnretainedValue() as? String
-                        == "monitor.inspector.preview"
+                        == identifier
                 {
                     return object
                 }
@@ -448,6 +448,33 @@ final class RunnerTests: XCTestCase {
                 return nil
             }
             return find(host.view)
+        }
+        func previewElement() -> NSObject? { renderedElement("monitor.inspector.preview") }
+        func mountedElement(_ identifier: String) async throws -> NSObject {
+            let ready = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    MainActor.assumeIsolated {
+                        host.view.layoutIfNeeded()
+                        return renderedElement(identifier) != nil
+                    }
+                }, object: nil)
+            let result = await XCTWaiter.fulfillment(of: [ready], timeout: 5)
+            XCTAssertEqual(
+                result, .completed, "Actual monitor control did not mount: \(identifier)")
+            return try XCTUnwrap(renderedElement(identifier))
+        }
+        func openRenderedLUTOptions() async throws {
+            if renderedElement("monitor.assists.collapse") == nil {
+                let expand = try await mountedElement("monitor.assists.expand")
+                XCTAssertTrue(expand.accessibilityActivate())
+                _ = try await mountedElement("monitor.assists.collapse")
+            }
+            let element = try await mountedElement("monitor.assist.LUT")
+            let action = try XCTUnwrap(
+                element.accessibilityCustomActions?.first { $0.name == "Options" })
+            let handler = try XCTUnwrap(action.actionHandler)
+            XCTAssertTrue(handler(action))
+            XCTAssertEqual(model.assist.configureTool, MonitorAssistTool.lut.selection)
         }
         func settledImage() async throws -> CGImage {
             for _ in 0..<250 {
@@ -491,7 +518,7 @@ final class RunnerTests: XCTestCase {
             }
             return pixel
         }
-        model.showAssist(.lut)
+        try await openRenderedLUTOptions()
         let colored = try await settledImage()
         XCTAssertLessThanOrEqual(max(colored.width, colored.height), 320)
         XCTAssertGreaterThan(Int(center(colored)[1]), Int(center(colored)[0]) + 20)
@@ -522,13 +549,13 @@ final class RunnerTests: XCTestCase {
             "Retired native sampling must not replace the new source's bundle")
         XCTAssertFalse(model.liveFrameSource === oldSource)
         model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
-        model.showAssist(.lut)
+        try await openRenderedLUTOptions()
         let reopened = center(try await settledImage())
         XCTAssertGreaterThan(Int(reopened[0]), Int(reopened[1]) + 20)
         model.beginChromeEditing(.live)
         XCTAssertNil(model.nativeInspectorMeaning(tool: .lut))
         model.endChromeEditing()
-        model.showAssist(.lut)
+        try await openRenderedLUTOptions()
         _ = try await settledImage()
         model.retireOperatorQuickPresentation()
         let retired = try XCTUnwrap(model.nativeInspectorMeaning(tool: .lut))
