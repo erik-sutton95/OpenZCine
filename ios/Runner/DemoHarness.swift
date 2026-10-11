@@ -1,6 +1,7 @@
 import MonitorPresentation
 import Network
 import OpenCineApple
+import OpenCineCore
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -249,6 +250,9 @@ enum DemoHarness {
                 environment: env, fallbackDirectoryPath: localDemoFallback)
             if env["ZC_DEMO_AUTOSTART"] == "1" {
                 model.startDemoSession()
+                if env["ZC_DEMO_QUICK_SETTINGS"] == "1" {
+                    model.seedQuickDemoCamera()
+                }
                 if env["ZC_DEMO_BLUETOOTH_SHUTTER"] == "1" {
                     // Physical-device diagnostic: enter an immediately recordable monitor with the
                     // opt-in active, so a real HID shutter can be tested without a Nikon session.
@@ -1126,4 +1130,36 @@ enum DemoHarness {
             onKey?(command.input ?? "", command.modifierFlags.contains(.command))
         }
     }
+#endif
+
+#if DEBUG
+/// SIMULATED driver retains the production Nikon adapter without any camera transport.
+@MainActor final class NikonQuickDemoDriver: NikonControlDriver {
+    private weak var model: NativeAppModel?
+    weak var session: NikonCameraSession?
+    init(model: NativeAppModel) { self.model = model }
+    var nikonControlFacts: NikonControlFacts {
+        guard let model else { return .init(connection: .disconnected(.requested)) }
+        var facts = model.nikonControlFacts
+        facts.recording = false
+        return facts
+    }
+    func queueSettingWrites(_ label: String, for setting: NikonControlSetting,
+        operation: OperationID?) -> Int {
+        guard let model else { return 0 }
+        let writes = PTPCameraPropertyWrite.requests(control: setting.cameraControl,
+            label: label, snapshot: model.operatorQuickReportedProperties)
+        for write in writes { model.applyBootstrapObservation(.property(write.property, write.data)) }
+        Task { @MainActor [weak self] in
+            guard let session = self?.session else { return }
+            if let operation {
+                session.operationSent(operation)
+                for write in writes { session.writeLanded(operation, write: write, readback: write.data) }
+            }
+            _ = session.refresh()
+        }
+        return writes.count
+    }
+    func queueRecord(start: Bool, operation: OperationID) {}
+}
 #endif
