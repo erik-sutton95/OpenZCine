@@ -104,6 +104,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- Completed cached clips open from a fresh offline media library on iOS and Android.
+
 - Media gallery taps remain valid after the active source changes or reconnects.
 - Apple progressive clip playback reads only transferred bytes, waits at a
   temporary end of data and resumes the requested speed when data arrives.

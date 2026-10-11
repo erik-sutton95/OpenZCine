@@ -6,7 +6,7 @@ New and changed
 
 Fixes
 
-- Media clip taps stay usable after a camera source changes or reconnects.
+- Media clip taps stay usable after a camera source changes or reconnects. Completed cached clips also open while offline.
 - On iPhone and iPad, playback waits for missing clip data and resumes when it arrives. Pause keeps it stopped; an interrupted transfer reports an error.
 - Large camera clips use their full file size and keep partial downloads for retry. A camera without large-file support reports an error instead of repeating clip data.
 
