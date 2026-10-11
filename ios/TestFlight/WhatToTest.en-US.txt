@@ -1,27 +1,24 @@
 New and changed
 
-- Share what you see. Turn on Share This Feed in Settings > Link and other devices list it under Nearby Broadcasts, each with its own scopes and LUTs, with no network needed. A watcher can ask for camera control; while a watcher holds it, record presses from Apple Watch or a Bluetooth shutter are refused.
-- One camera, many setups. Its own access point, a cable, a hotspot, and each Wi-Fi network you use are saved separately, shown as tabs on the camera's row, and renameable so "Wi-Fi (2)" can become "Studio". Stream Preset and Quality Bias are remembered per setup.
-- Rotation, both ways. Turn the body on its side and the picture follows (video and photo), and the iPhone itself now works in both landscape directions. Settings > Controls has Auto-Rotate Feed if you want the monitoring image to stay put.
-- Pinch the live view to zoom anywhere in the frame (the old fixed 2x/3x/4x magnifier is retired), and tap-to-focus follows the zoom. The focus dial works in video as well as photo, off by default in the FOCUS popup.
-- Settings > Link > Processing: Feed Upscaler (Off, Fast, Quality, AI) and Feed Noise Reduction. AI infers detail the camera never captured, so judge critical focus on Quality or Fast. Link Health now shows the measured rate the link is actually carrying.
-- On the wrist: photo mode with a shutter and a shots-remaining readout, the crown magnifies the preview and a drag pans it. On iPad the picture can come from the camera's HDMI output through a USB capture device while exposure, focus, record and media keep working over the camera link.
+- A completely new OpenCine interface for the live monitor, camera list, settings and media player. Your saved camera setups and display preferences carry over.
+- A redesigned assist toolbar with clearer icons and short captions such as PEAK, FALSE and WAVE. Tap to toggle a tool; hold a tool with options to adjust it.
+- The movie Format picker groups image area (FX/DX where available), resolution and compatible frame rates. Codec remains a separate control. Choices follow your camera and its selected codec, rather than offering every possible combination.
+- A circular-arrow recenter button returns the focus point to the center. It appears when there is a focus point or tracking state to reset.
+- A new app icon.
+- Multicam brings up to four cameras together, with grid and center-stage views and a separate recording result for each camera. Use a router, phone hotspot or supported cable setup; a camera's own Wi-Fi cannot join the group.
 
 Fixes
 
-- Answering "Start recording?" or "Stop recording?" now does exactly that. A take started or stopped on the camera while the prompt was open is no longer reversed.
-- A refused record, such as no card or a full card, puts the Record button back to what the camera reports.
-- The FPS readout no longer jumps after a late or repeated frame, such as during a Wi-Fi hiccup.
-- Frame.io no longer asks you to sign in again after a token refresh.
-- Original Z 7, Z 6, Z 5, and Z 50 now reach live view over USB-C, and USB-C reconnects after the cable is knocked loose or a few seconds in the background, without force-quitting the app.
-- Original Z 6, Z 5, and Z 7 no longer get pairing steps they do not support. A Z 6III is no longer treated as an original Z 6. Settings > Share Diagnostics keeps a connect-attempt trace on the phone until you send it.
-- Share and Save to Photos handle camera clips, even proxies shorter than their header, without "Invalid sample cursor". Pause holds during loops, seeks and scrubs.
-- Support, Privacy, and Terms in Settings now open at opencapture.org/openzcine, the project's new home. Old links keep working.
+- Recording confirmation runs the start or stop you approved, even if the camera changed state while the question was open. A refused recording returns the button to what the camera reports.
+- Controls, media actions and transfers stay tied to the camera they were opened for after a reconnect or camera change.
+- Playback Pause holds during loops, seeks and scrubs.
+- Share and Save to Photos handle readable Nikon proxies even when their media is shorter than the header. Photos access is requested before the long export, with visible progress while saving.
+- Frame.io keeps your sign-in when refreshing a token instead of asking you to sign in again.
 
 What to test
 
-- Turn on Record Confirmation, tap Record, then start or stop the take on the camera body before you answer. The camera should end up the way you answered, and Record should match it.
-- Share This Feed and hand camera control to a watcher, then press record on Apple Watch or a Bluetooth shutter: it should be refused. Take control back and both work again.
-- If you were signed in to Frame.io before this update, upload a clip without signing in again. Watch the FPS readout across a Wi-Fi hiccup: it should stay steady.
-- Plug in over USB-C, connect, then knock the cable loose and plug it back in. It should come back without force-quitting. On an original Z 6, Z 5, Z 7, or Z 6III, connect over USB-C and the camera's own Wi-Fi.
-- Pause during a clip loop or scrub, then tap Share and use Share and Save to Photos. Pause should hold; both exports should finish without disconnecting, with a spinner while Photos writes.
+- Connect a saved camera and check the new monitor, settings and media pages in both landscape directions and portrait. Confirm your saved setups and display preferences remain intact.
+- Pick a codec, then change image area where available, resolution and frame rate. Check each change against the camera's own display. Try another codec and confirm that only its supported choices appear.
+- Toggle PEAK, FALSE and WAVE; hold to open their options. Try clean view, then bring the controls back. Move the focus point and use the circular-arrow button to recenter it.
+- Turn on Record Confirmation. Open a start or stop question, change recording on the camera body, then answer. Check that the camera ends in the state you approved and that the button follows its report.
+- Play a camera clip, pause during a loop or seek, return to Media and reopen it. Try Share, Save to Photos and a Frame.io upload. If you have multiple cameras, check the individual results from Multicam record.

@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **New app icon** (iOS + Android).
 - **Multicam** (iOS + Android): the grid button on Your cameras opens a stage of four tiles;
   add up to four bodies over USB-C, a router or the phone's hotspot (a camera's own access point
   cannot join). Grid or Center stage, name, battery, timecode and record tally on every tile,
@@ -314,6 +315,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **New monitor interface** (iOS + Android): the live monitor, camera list,
+  settings and media player use the shared OpenCine interface. Saved camera
+  setups and display preferences retain their existing storage.
+- **Assist toolbar** (iOS + Android): shared icons and short captions such as
+  PEAK, FALSE and WAVE, with tap-to-toggle and hold-for-options interaction.
+- **Grouped movie formats** (iOS + Android): image area where applicable,
+  resolution and eligible frame rates come from the camera's advertised choices.
+  FX/DX is shown for applicable Nikon formats; codec remains a separate control.
+  No unsupported resolution and rate combinations are generated.
+- **Focus recenter button** (iOS + Android): a circular-arrow icon returns the
+  focus point to the center, retaining the camera's existing tracking rules.
 - **Your cameras and pairing on the shared OpenCine pages** (iOS + Android): one card per camera
   with a chip per setup, connect progress, prompts and failures on the card (Try again, Take over
   a camera another device holds, Share diagnostics), and NEARBY cameras on this network. The
