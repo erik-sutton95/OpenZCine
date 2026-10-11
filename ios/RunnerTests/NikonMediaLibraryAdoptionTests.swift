@@ -2,6 +2,8 @@ import Foundation
 import OpenCineAppKit
 import OpenCineCore
 import OpenCineMedia
+import OpenZCineCore
+import Testing
 import XCTest
 
 @testable import Runner
@@ -527,4 +529,334 @@ import XCTest
 @MainActor private final class LibraryEmptyCursor: MediaCatalogCursor {
     func next() async throws -> MediaCatalogDelta? { nil }
     func close() {}
+}
+
+/// SIMULATED: real file descriptors and NativeCameraSession, no camera or giant allocation.
+@MainActor @Suite struct NikonLargeObjectTransferTests {
+    @Test func sparseResumeReturnsTheExactOpenedDescriptorExtentAboveFourGiB() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let (file, _) = try store.openForStreaming(cameraID: "SIMULATED", filename: "LARGE.MOV")
+        let extent = UInt64(UInt32.max) + 17
+        try file.truncate(atOffset: extent)
+        try file.close()
+        let (resumed, offset) = try store.openForStreaming(
+            cameraID: "SIMULATED", filename: "LARGE.MOV")
+        defer { try? resumed.close() }
+        #expect(UInt64(offset) == extent)
+        #expect(try resumed.offset() == extent)
+    }
+
+    @Test func actualStreamResumesAboveBoundaryAndContinuesShortChunks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let (file, _) = try store.openForStreaming(cameraID: "SIMULATED", filename: "LARGE.MOV")
+        let start = UInt64(UInt32.max) + 9
+        try file.truncate(atOffset: start)
+        try file.close()
+        let transport = LargeTransferTransport(
+            operations: [.getPartialObjectEx], chunks: [Data([1, 2]), Data([3, 4, 5]), Data([6])])
+        let session = try await establish(transport)
+        defer { session.close() }
+        await transport.clear()
+        var progress: [UInt64] = []
+        let end = try await NikonMediaObjectTransfer.stream(
+            session: session, handle: 7, totalBytes: start + 6, store: store,
+            cameraID: "SIMULATED", filename: "LARGE.MOV", onProgress: { progress.append($0) })
+        #expect(end == start + 6 && progress == [start, start + 2, start + 5, start + 6])
+        let calls = await transport.calls
+        #expect(
+            calls.map(\.operation) == [
+                .getPartialObjectEx, .getPartialObjectEx, .getPartialObjectEx,
+            ])
+        #expect(
+            calls.map(\.parameters) == [[7, 8, 1, 6, 0], [7, 10, 1, 4, 0], [7, 13, 1, 1, 0]])
+        let url = try store.localURL(cameraID: "SIMULATED", filename: "LARGE.MOV")
+        let check = try FileHandle(forReadingFrom: url)
+        defer { try? check.close() }
+        try check.seek(toOffset: start)
+        #expect(try check.read(upToCount: 6) == Data([1, 2, 3, 4, 5, 6]))
+    }
+
+    @Test func actualRequestsKeepTransportSpecificChunkScheduling() async throws {
+        for kind in [CameraTransportKind.usb, .ptpIP] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let transport = LargeTransferTransport(operations: [.getPartialObject], kind: kind)
+            let session = try await establish(transport)
+            defer { session.close() }
+            await transport.clear()
+            await #expect(throws: PTPObjectTransferError.self) {
+                try await NikonMediaObjectTransfer.stream(
+                    session: session, handle: 7, totalBytes: 8 << 20,
+                    store: MediaClipStore(root: root), cameraID: "SIMULATED", filename: "CHUNK.MOV",
+                    onProgress: { _ in })
+            }
+            let call = try #require(await transport.calls.first)
+            #expect(call.operation == .getPartialObject)
+            #expect(call.parameters == [7, 0, kind == .usb ? 4 << 20 : 1 << 20])
+        }
+    }
+
+    @Test func unsupportedAndUnknownTransfersPreserveExistingBytesAndSendNoRead() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let (file, _) = try store.openForStreaming(cameraID: "SIMULATED", filename: "KEEP.MOV")
+        try file.write(contentsOf: Data([4, 5, 6]))
+        try file.close()
+        let transport = LargeTransferTransport(operations: [.getPartialObject])
+        let session = try await establish(transport)
+        defer { session.close() }
+        await transport.clear()
+        for total in [UInt64(0), UInt64(UInt32.max), UInt64(UInt32.max) + 10] {
+            await #expect(throws: PTPObjectTransferError.self) {
+                try await NikonMediaObjectTransfer.stream(
+                    session: session, handle: 7, totalBytes: total, store: store,
+                    cameraID: "SIMULATED", filename: "KEEP.MOV",
+                    onProgress: { _ in Issue.record("Unexpected progress") })
+            }
+            #expect(
+                try Data(contentsOf: store.localURL(cameraID: "SIMULATED", filename: "KEEP.MOV"))
+                    == Data([4, 5, 6]))
+        }
+        #expect(await transport.calls.isEmpty)
+        let model = NativeAppModel(mediaClipStore: store)
+        for total in [UInt64(0), UInt64(UInt32.max)] {
+            let clip = MediaClip(
+                cameraID: "SIMULATED", filename: "KEEP.MOV", handle: 7,
+                storageID: 65_537, sizeBytes: total, captureDate: "")
+            #expect(!model.isClipDownloaded(clip))
+        }
+    }
+
+    @Test func indexedLocalUnknownSizePreservesActualCachedFileAndOperatorMetadata() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        var clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "LOCAL.MOV",
+            handle: nil, storageID: nil, sizeBytes: 0, captureDate: "")
+        clip.isFavorite = true
+        clip.starRating = 4
+        clip.exportStatus = .exported
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        let (file, _) = try store.openForStreaming(cameraID: clip.cameraID, filename: clip.filename)
+        try file.write(contentsOf: Data([4, 5, 6]))
+        try file.close()
+        let model = NativeAppModel(mediaClipStore: store)
+        #expect(model.isClipDownloaded(clip))
+        #expect(model.hasCachedMediaClips)
+        let indexed = try #require(store.list(cameraID: clip.cameraID).first)
+        #expect(indexed.sizeBytes == 0 && indexed.isFavorite && indexed.starRating == 4)
+        #expect(indexed.exportStatus == .exported && indexed.handle == nil)
+        #expect(
+            try Data(contentsOf: store.localURL(cameraID: clip.cameraID, filename: clip.filename))
+                == Data([4, 5, 6]))
+    }
+
+    @Test func unknownCameraCacheRetainsMetadataWithoutClaimingCompletedDownload() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        var clip = MediaClip(
+            cameraID: "SIMULATED", filename: "KEEP.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 0, captureDate: "")
+        clip.isFavorite = true
+        clip.starRating = 4
+        clip.exportStatus = .exported
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        let (file, _) = try store.openForStreaming(cameraID: clip.cameraID, filename: clip.filename)
+        try file.write(contentsOf: Data([4, 5, 6]))
+        try file.close()
+        let model = NativeAppModel(mediaClipStore: store)
+        #expect(!model.isClipDownloaded(clip))
+        #expect(model.retainsLocalMediaClip(clip))
+        let removed = store.applyCameraRemoval(
+            cameraID: clip.cameraID,
+            removedHandles: [.init(storageID: 65_537, handle: 7)],
+            hasLocalFile: model.retainsLocalMediaClip)
+        #expect(removed.isEmpty)
+        let retained = try #require(store.list(cameraID: clip.cameraID).first)
+        #expect(retained.handle == nil && retained.storageID == nil)
+        #expect(
+            retained.isFavorite && retained.starRating == 4 && retained.exportStatus == .exported)
+        #expect(retained.sizeBytes == 0 && model.isClipDownloaded(retained))
+        #expect(
+            try Data(contentsOf: store.localURL(cameraID: clip.cameraID, filename: clip.filename))
+                == Data([4, 5, 6]))
+    }
+
+    @Test func invalidChunksAreRejectedBeforeAnyBytesOrDurableProgress() async throws {
+        for payload in [Data(), Data([1, 2, 3, 4, 5])] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = MediaClipStore(root: root)
+            let transport = LargeTransferTransport(
+                operations: [.getPartialObject], chunks: [payload])
+            let session = try await establish(transport)
+            defer { session.close() }
+            var progress: [UInt64] = []
+            await #expect(throws: PTPObjectTransferError.self) {
+                try await NikonMediaObjectTransfer.stream(
+                    session: session, handle: 7, totalBytes: 4, store: store,
+                    cameraID: "SIMULATED", filename: "INVALID.MOV",
+                    onProgress: { progress.append($0) })
+            }
+            #expect(progress == [0])
+            #expect(
+                try Data(contentsOf: store.localURL(cameraID: "SIMULATED", filename: "INVALID.MOV"))
+                    .isEmpty)
+        }
+    }
+
+    @Test func cancellationAfterReadDoesNotWriteOrPublishStaleBytes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let transport = LargeTransferTransport(
+            operations: [.getPartialObject], chunks: [Data([1, 2, 3, 4])], holdRead: true)
+        let session = try await establish(transport)
+        defer { session.close() }
+        var progress: [UInt64] = []
+        let task = Task {
+            try await NikonMediaObjectTransfer.stream(
+                session: session, handle: 7, totalBytes: 4, store: store,
+                cameraID: "SIMULATED", filename: "CANCEL.MOV", onProgress: { progress.append($0) })
+        }
+        await transport.waitUntilRead()
+        task.cancel()
+        await transport.release()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(progress == [0])
+        #expect(
+            try Data(contentsOf: store.localURL(cameraID: "SIMULATED", filename: "CANCEL.MOV"))
+                .isEmpty)
+    }
+
+    @Test func catalogResolvesSentinelOrPreservesAnUnknownVisibleRow() async throws {
+        for supported in [true, false] {
+            let total = UInt64(UInt32.max) + 700
+            let transport = LargeTransferTransport(
+                operations: supported ? [.getObjectSize] : [.getPartialObject], totalBytes: total)
+            let session = try await establish(transport)
+            defer { session.close() }
+            let driver = LargeTransferControlDriver()
+            let common = NikonCameraSession(driver: driver, serialNumber: "SIMULATED")
+            let io = NikonMediaCatalogAdapter(
+                native: session, common: common, namespace: "SIMULATED", isCurrent: { true })
+            let source = try #require(io.sourceIdentity)
+            let row = try #require(
+                try await io.object(.init(storageID: 65_537, handle: 7), source: source))
+            #expect(row.filename == "SIMULATED-LARGE.MOV")
+            #expect(row.sizeBytes == (supported ? total : UInt64(UInt32.max)))
+            #expect(row.knownSize == (supported ? total : nil))
+            #expect(
+                NikonMediaCatalogAdapter.clip(row, bucket: "SIMULATED").sizeBytes == row.sizeBytes)
+            let sizeReads = await transport.calls.filter { $0.operation == .getObjectSize }
+            #expect(sizeReads.count == (supported ? 1 : 0))
+        }
+    }
+
+    private func establish(_ transport: LargeTransferTransport) async throws -> NativeCameraSession
+    {
+        try await NativeCameraSession.establish(
+            transport: transport,
+            host: "usb:SIMULATED-large", cameraName: "SIMULATED", requestPairing: false)
+    }
+}
+
+@MainActor private final class LargeTransferControlDriver: NikonControlDriver {
+    var nikonControlFacts = NikonControlFacts()
+    func queueSettingWrites(
+        _ label: String, for setting: NikonControlSetting, operation: OperationID?
+    ) -> Int { 0 }
+    func queueRecord(start: Bool, operation: OperationID) {}
+}
+
+private actor LargeTransferTransport: CameraTransport {
+    struct Call: Sendable {
+        let operation: PTPOperationCode
+        let parameters: [UInt32]
+    }
+    nonisolated let kind: CameraTransportKind
+    let operations: [PTPOperationCode]
+    let totalBytes: UInt64
+    var chunks: [Data]
+    var holdRead: Bool
+    private(set) var calls: [Call] = []
+    private var readEntered = false
+    private var entered: CheckedContinuation<Void, Never>?
+    private var releaseRead: CheckedContinuation<Void, Never>?
+    init(
+        operations: [PTPOperationCode], chunks: [Data] = [],
+        totalBytes: UInt64 = UInt64(UInt32.max) + 700, holdRead: Bool = false,
+        kind: CameraTransportKind = .usb
+    ) {
+        self.kind = kind
+        self.operations = operations
+        self.chunks = chunks
+        self.totalBytes = totalBytes
+        self.holdRead = holdRead
+    }
+    func clear() { calls = [] }
+    func executeTransaction(
+        operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
+        dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?
+    ) async throws -> PTPIPTransactionResult {
+        calls.append(.init(operation: operationCode, parameters: parameters))
+        var data = Data()
+        switch operationCode {
+        case .getDeviceInfo: data = deviceInfo()
+        case .getObjectSize: data = Data(ByteCoding.uint64LE(totalBytes))
+        case .getObjectInfo: data = objectInfo()
+        case .getPartialObject, .getPartialObjectEx:
+            if holdRead {
+                readEntered = true
+                entered?.resume()
+                entered = nil
+                await withCheckedContinuation { releaseRead = $0 }
+            }
+            data = chunks.isEmpty ? Data() : chunks.removeFirst()
+        default: break
+        }
+        let bytes =
+            ByteCoding.uint16LE(PTPResponseCode.ok.rawValue)
+            + ByteCoding.uint32LE(transactionID ?? 1)
+        return PTPIPTransactionResult(
+            operationResponse: try PTPOperationResponse(payloadBytes: bytes), data: data)
+    }
+    func waitUntilRead() async {
+        if readEntered { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+    func release() {
+        releaseRead?.resume()
+        releaseRead = nil
+    }
+    func nextEvent() async throws -> PTPEvent { throw NativeCameraSessionError.connectionClosed }
+    nonisolated func close() {}
+    private func string(_ value: String) -> [UInt8] {
+        [UInt8(value.utf16.count + 1)] + value.utf16.flatMap { ByteCoding.uint16LE($0) } + [0, 0]
+    }
+    private func deviceInfo() -> Data {
+        var bytes: [UInt8] = [100, 0, 10, 0, 0, 0, 100, 0, 0, 0, 0]
+        bytes += ByteCoding.uint32LE(UInt32(operations.count))
+        for operation in operations { bytes += ByteCoding.uint16LE(operation.rawValue) }
+        for _ in 0..<4 { bytes += ByteCoding.uint32LE(0) }
+        for value in ["SIMULATED", "SIMULATED", "1.0", "SIMULATED-large"] { bytes += string(value) }
+        return Data(bytes)
+    }
+    private func objectInfo() -> Data {
+        var bytes = [UInt8](repeating: 0, count: 52)
+        bytes.replaceSubrange(0..<4, with: ByteCoding.uint32LE(65_537))
+        bytes.replaceSubrange(4..<6, with: ByteCoding.uint16LE(0x300D))
+        bytes.replaceSubrange(8..<12, with: ByteCoding.uint32LE(UInt32.max))
+        bytes += string("SIMULATED-LARGE.MOV") + string("20261011T120000")
+        return Data(bytes)
+    }
 }

@@ -4488,7 +4488,7 @@ final class NativeAppModel {
         mediaLibraryBytes?.retire()
         let codec = NikonMediaLibraryCodec(store: mediaClipStore, bucket: bucket, service: service)
         { [weak self] in
-            self?.isClipDownloaded($0) == true
+            self?.retainsLocalMediaClip($0) == true
         }
         let bytes = NikonMediaLibraryByteStore(store: mediaClipStore, bucket: bucket) {
             [weak self] in
@@ -13885,7 +13885,7 @@ extension NativeAppModel {
                 category: mediaCategoryTab.nikonMediaCategory,
                 identityProbeBudget: identityProbeBudget,
                 retainedLocalFilenames: Set(
-                    cached.filter { self.isClipDownloaded($0) }.map(\.filename))))
+                    cached.filter { self.retainsLocalMediaClip($0) }.map(\.filename))))
         prepareMediaLibrary(rows: cached, bucket: bucket, service: service)
         return mediaLibrary
     }
@@ -13998,11 +13998,24 @@ extension NativeAppModel {
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let onDisk = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
-        // Unknown expected size still requires a non-empty file: a zero-byte stub counted as
-        // "downloaded" was enough to keep a formatted card's record alive forever (#296's
-        // removal pass preserves rows with a local copy).
-        guard clip.sizeBytes > 0 else { return onDisk > 0 }
+        // A local-only legacy row can use the existing nonempty-file fact without claiming a
+        // camera extent. Active unknown/sentinel objects cannot establish transfer completion.
+        if clip.sizeBytes == 0 {
+            return clip.handle == nil && clip.storageID == nil && clip.allLocations.isEmpty
+                && onDisk > 0
+        }
+        guard clip.sizeBytes != UInt64(UInt32.max) else { return false }
         return onDisk >= clip.sizeBytes
+    }
+
+    /// Catalog retention preserves legacy unknown-size local bytes without marking a camera
+    /// download complete. Used only by removal and retained-filename reconciliation.
+    func retainsLocalMediaClip(_ clip: MediaClip) -> Bool {
+        guard clip.sizeBytes == 0 else { return isClipDownloaded(clip) }
+        guard let url = clipLocalURL(clip),
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        else { return false }
+        return ((attributes[.size] as? NSNumber)?.uint64Value ?? 0) > 0
     }
 
     func clipLocalURL(_ clip: MediaClip) -> URL? {
@@ -14181,33 +14194,12 @@ extension NativeAppModel {
         let bucket = clip.cameraID
         let total = clip.sizeBytes
         do {
-            let (fileHandle, startOffset) = try mediaClipStore.openForStreaming(
-                cameraID: bucket, filename: clip.filename)
-            defer { try? fileHandle.close() }
-            var offset = startOffset
-            // USB keeps the big chunk (fewer round-trips, and nothing shares that pipe). On
-            // Wi-Fi each chunk is ONE gate-held transaction the live feed queues behind — a
-            // 4 MiB read on a slow router exceeds the 6 s frame deadline and kills the session
-            // outright, so the wireless chunk stays ~a second of transfer, not several.
-            let chunk: UInt32 = session.transportKind == .usb ? 4 << 20 : 1 << 20
-            if total > 0, UInt64(offset) >= total {
-                mediaDownloadProgress[clip.id] = nil
-                return
-            }
-            mediaDownloadProgress[clip.id] =
-                total > 0 ? min(1.0, Double(offset) / Double(total)) : 0
-            while !Task.isCancelled {
-                let data = try await session.getPartialObject(
-                    handle: handle, offset: offset, length: chunk)
-                if data.isEmpty { break }
-                try fileHandle.write(contentsOf: data)
-                offset = offset &+ UInt32(data.count)
-                if total > 0 {
-                    mediaDownloadProgress[clip.id] = min(1.0, Double(offset) / Double(total))
-                }
-                if data.count < Int(chunk) { break }
-                if total > 0, UInt64(offset) >= total { break }
-            }
+            let offset = try await NikonMediaObjectTransfer.stream(
+                session: session, handle: handle, totalBytes: total, store: mediaClipStore,
+                cameraID: bucket, filename: clip.filename,
+                onProgress: { offset in
+                    mediaDownloadProgress[clip.id] = Double(offset) / Double(total)
+                })
             if Task.isCancelled {
                 mediaDownloadProgress[clip.id] = nil
                 return
@@ -14222,7 +14214,6 @@ extension NativeAppModel {
                 return
             }
             mediaDownloadProgress[clip.id] = nil
-            try? mediaClipStore.removeLocalFile(cameraID: bucket, filename: clip.filename)
             mediaLibraryLogger.error(
                 "streamClip(\(clip.filename, privacy: .private(mask: .hash))) failed: \(error.localizedDescription, privacy: .private(mask: .hash))"
             )

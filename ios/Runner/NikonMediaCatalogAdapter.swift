@@ -60,9 +60,17 @@ import OpenZCineCore
             handle: location.handle, storageID: location.storageID)
         try require(source)
         guard let value else { return nil }
+        let reportedSize = UInt64(value.info.compressedSize)
+        // Keep an unsupported row visible with the existing reserved-sentinel unknown-size facts.
+        let size =
+            reportedSize == UInt64(UInt32.max)
+            ? (try? await native.resolvedObjectSize(
+                handle: location.handle, reportedSize: reportedSize)) ?? reportedSize
+            : reportedSize
+        try require(source)
         return .init(
             location: location, filename: value.info.filename, captureDate: value.info.captureDate,
-            sizeBytes: UInt64(value.info.compressedSize),
+            sizeBytes: size,
             pixelWidth: value.info.imagePixWidth > 0 ? value.info.imagePixWidth : nil,
             pixelHeight: value.info.imagePixHeight > 0 ? value.info.imagePixHeight : nil)
     }
