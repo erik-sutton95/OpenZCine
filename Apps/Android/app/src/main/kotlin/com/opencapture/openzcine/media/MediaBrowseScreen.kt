@@ -967,10 +967,10 @@ internal fun MediaBrowseScreen(
                             resolvedSize,
                         )
                     },
+                    // The library stays live under the player; a delete inside it relists by itself.
                     onClose = {
                         if (photoOpening?.id == opening.id && openedPhotoLibrary === actual) {
                             playingClip = null; photoOpening = null; openedPhotoLibrary = null
-                            reloadKey += 1
                         }
                     },
                     opening = opening,
@@ -1059,7 +1059,7 @@ internal fun MediaBrowseScreen(
                     rawRecord = raw, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
                     onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
                         libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
-                    }, onClose = { viewingPhoto = null; reloadKey += 1 })
+                    }, onClose = { viewingPhoto = null })
             }
         }
 
