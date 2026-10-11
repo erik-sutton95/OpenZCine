@@ -1,24 +1,16 @@
 New and changed
 
-- A completely new OpenCine interface for the live monitor, camera list, settings and media player. Your saved camera setups and display preferences carry over.
-- A redesigned assist toolbar with clearer icons and short captions such as PEAK, FALSE and WAVE. Tap to toggle a tool; hold a tool with options to adjust it.
-- The movie Format picker groups image area (FX/DX where available), resolution and compatible frame rates. Codec remains a separate control. Choices follow your camera and its selected codec, rather than offering every possible combination.
-- A circular-arrow recenter button returns the focus point to the center. It appears when there is a focus point or tracking state to reset.
-- A new app icon.
-- Multicam brings up to four cameras together, with grid and center-stage views and a separate recording result for each camera. Use a router, phone hotspot or supported cable setup; a camera's own Wi-Fi cannot join the group.
+- Live View and Multicam show timecode frames when the camera supplies them; cameras without frame timecode keep the seconds display.
+- Format keeps image area, resolution and compatible frame rates grouped, with codec as a separate control.
 
 Fixes
 
-- Recording confirmation runs the start or stop you approved, even if the camera changed state while the question was open. A refused recording returns the button to what the camera reports.
-- Controls, media actions and transfers stay tied to the camera they were opened for after a reconnect or camera change.
-- Playback Pause holds during loops, seeks and scrubs.
-- Share and Save to Photos handle readable Nikon proxies even when their media is shorter than the header. Photos access is requested before the long export, with visible progress while saving.
-- Frame.io keeps your sign-in when refreshing a token instead of asking you to sign in again.
+- Media clip taps stay usable after a camera source changes or reconnects.
+- On iPhone and iPad, playback waits for missing clip data and resumes when it arrives. Pause keeps it stopped; an interrupted transfer reports an error.
+- Large camera clips use their full file size and keep partial downloads for retry. A camera without large-file support reports an error instead of repeating clip data.
 
 What to test
 
-- Connect a saved camera and check the new monitor, settings and media pages in both landscape directions and portrait. Confirm your saved setups and display preferences remain intact.
-- Pick a codec, then change image area where available, resolution and frame rate. Check each change against the camera's own display. Try another codec and confirm that only its supported choices appear.
-- Toggle PEAK, FALSE and WAVE; hold to open their options. Try clean view, then bring the controls back. Move the focus point and use the circular-arrow button to recenter it.
-- Turn on Record Confirmation. Open a start or stop question, change recording on the camera body, then answer. Check that the camera ends in the state you approved and that the button follows its report.
-- Play a camera clip, pause during a loop or seek, return to Media and reopen it. Try Share, Save to Photos and a Frame.io upload. If you have multiple cameras, check the individual results from Multicam record.
+- Reconnect, open Media and try short, long and partially downloaded clips in portrait and both landscape directions.
+- On a clip that is still downloading, watch playback wait for more data, then press Pause. It should restart only when you press Play.
+- Check timecode against the camera display, including frame zero. Try a clip over 4 GB if available and report any transfer error.

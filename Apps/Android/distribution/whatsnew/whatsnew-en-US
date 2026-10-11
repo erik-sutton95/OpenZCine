@@ -1,4 +1,4 @@
-- A completely new OpenCine monitor, camera list, settings and media interface, plus a new app icon.
-- Short assist captions, clearer icons and a circular-arrow focus recenter button.
-- Grouped FX/DX (where available), resolution and compatible frame rates; codec stays separate. Choices follow your camera.
-- Controls and transfers stay with their original camera. Playback Pause holds during loops, seeks and scrubs.
+- Live View and Multicam show frame timecode when the camera supplies it.
+- Playback controls follow actual playing and buffering state; Pause stays available while waiting.
+- Large clips use their full file size. Unsupported large-file transfers report an error instead of repeating data.
+- Format keeps image area, resolution and frame rate grouped; codec stays separate.

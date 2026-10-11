@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- Live View and Multicam preserve Nikon frame timecode when it is reported by
+  the camera, including frame zero. Cameras without frame timecode keep their
+  seconds display; no frame rate is guessed.
+
 - **New app icon** (iOS + Android).
 - **Multicam** (iOS + Android): the grid button on Your cameras opens a stage of four tiles;
   add up to four bodies over USB-C, a router or the phone's hotspot (a camera's own access point
@@ -99,6 +103,16 @@ All notable changes to this project are documented here. The format is based on
   configuration.
 
 ### Fixed
+
+- Media gallery taps remain valid after the active source changes or reconnects.
+- Apple progressive clip playback reads only transferred bytes, waits at a
+  temporary end of data and resumes the requested speed when data arrives.
+  An operator pause prevents a late refill from restarting playback, and transfer
+  failures are reported without deleting the partial clip.
+- Nikon media transfers keep 64-bit file sizes and resume offsets. Extended
+  reads and full-size queries require the camera's advertised operations;
+  unsupported or invalid transfers fail before appending data. Older local
+  clips without size metadata keep their cached-media and export information.
 
 - **Record confirmation runs the start or stop you confirmed** (iOS): answering "Start
   recording?" or "Stop recording?" used to recompute the toggle, so a take started or stopped on
