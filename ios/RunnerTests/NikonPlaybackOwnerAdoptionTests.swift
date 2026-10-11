@@ -870,7 +870,8 @@ extension NikonPlaybackOwnerAdoptionTests {
 
     /// SIMULATED real movie bytes enter through the actual app catalog appearance callback.
     /// The fixture deliberately leaves the newly constructed library unopened.
-    private func assertCatalogAppearanceStartsCachedPlayer(source: MediaBrowserSource) async throws {
+    private func assertCatalogAppearanceStartsCachedPlayer(source: MediaBrowserSource) async throws
+    {
         let fixture = try PlaybackFixture()
         defer { fixture.remove() }
         fixture.model.mediaBrowserSource = source
