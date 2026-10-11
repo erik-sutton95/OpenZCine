@@ -160,7 +160,7 @@ struct ShellAdoptionTests {
             ])
         #expect(model.monitorNoticeTrigger == trigger)
         model.showAssist(.vectorscope)
-        #expect(model.assist.configureTool == .vectorscope.selection)
+        #expect(model.assist.configureTool == MonitorAssistTool.vectorscope.selection)
         model.toggleAssist(.vectorscope)
         #expect(model.assist.liveTools.contains(.vectorscope))
         #expect(
