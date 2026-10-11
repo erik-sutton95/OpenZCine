@@ -111,6 +111,13 @@ import XCTest
         let entered = PlaybackSignal()
         let release = PlaybackSignal()
         let installed = PlaybackSignal()
+        let streamRelease = PlaybackSignal()
+        let streamTask = Task { await streamRelease.wait() }
+        let streamTicket = NativeAppModel.MediaClipStreamTicket(task: streamTask)
+        defer {
+            streamRelease.signal()
+            streamTask.cancel()
+        }
         let native = NikonPlaybackNativePort(
             playable: { asset in
                 XCTAssertEqual(asset.url.lastPathComponent, "OLD.MOV")
@@ -130,7 +137,8 @@ import XCTest
         native.retireItem(for: oldToken)
         guard
             case .cached(let oldItem) = try XCTUnwrap(
-                native.candidates(for: old, model: fixture.model).first)
+                native.candidates(for: old, model: fixture.model, startStream: { streamTicket })
+                    .first)
         else { return XCTFail("Actual resolved growing-file candidate missing") }
         let outgoing = Task { () -> Bool in
             do {
@@ -143,6 +151,7 @@ import XCTest
         XCTAssertNil(native.player.currentItem)
         let successorToken = MonitorPlaybackItemToken(owner: identity, revision: 2)
         native.retireItem(for: successorToken)
+        streamRelease.signal()
         guard
             case .cached(let nextItem) = try XCTUnwrap(
                 native.candidates(for: successor, model: fixture.model).first)
@@ -403,4 +412,448 @@ import XCTest
     var native: NikonPlaybackNativePort?
     var assists: NikonPlaybackAssistAdapter?
     var entered = false
+}
+extension NikonPlaybackOwnerAdoptionTests {
+    func testActualGrowingCacheRecoversPixelsWithoutAdvancingBeyondTheHeldPicture() async throws {
+        try await assertActualProgressiveRecovery(pauseDuringWait: false)
+    }
+
+    func testActualGrowingCachePauseRemainsPausedAfterTheCapturedBytesArrive() async throws {
+        try await assertActualProgressiveRecovery(pauseDuringWait: true)
+    }
+
+    func testRetiredGrowingCacheCannotResumeOrPublishIntoTheSuccessorItem() async throws {
+        try await assertActualProgressiveRecovery(pauseDuringWait: false, retireDuringWait: true)
+    }
+
+    func testActualGrowingCacheFailurePublishesOnlyItsCapturedNativeError() async throws {
+        try await assertActualProgressiveRecovery(pauseDuringWait: false, failDuringWait: true)
+    }
+
+    func testUnresolvedClipSizesRefuseBeforeProbingAndPreserveExistingCacheBytes() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        for size in [UInt64.zero, UInt64(UInt32.max)] {
+            let clip = try fixture.clip(
+                "SIZE-\(size).MOV", expected: size, bytes: size == 0 ? 0 : 4)
+            var probes = 0
+            let native = NikonPlaybackNativePort(playable: { _ in
+                probes += 1
+                return true
+            })
+            let identity = UUID()
+            native.retireItem(for: .init(owner: identity, revision: 0))
+            let token = MonitorPlaybackItemToken(owner: identity, revision: 1)
+            native.retireItem(for: token)
+            defer { native.close(token: token) }
+            guard
+                case .cached(let source) = try XCTUnwrap(
+                    native.candidates(for: clip, model: fixture.model).first)
+            else { return XCTFail("The actual cache candidate is required") }
+            let before = try Data(contentsOf: source.url)
+            do {
+                _ = try await native.prepare(source, token: token, readyTimeout: nil)
+                XCTFail("An unresolved native total cannot become a resource-loader length")
+            } catch {
+                XCTAssertEqual(
+                    error as? MonitorPlaybackError,
+                    .nativeFailure("The clip's full size is unavailable."))
+            }
+            XCTAssertEqual(probes, 0)
+            XCTAssertNil(native.player.currentItem)
+            XCTAssertEqual(try Data(contentsOf: source.url), before)
+        }
+        await fixture.model.mediaLibrary?.dispose()
+    }
+
+    func testIncompleteCacheWithoutTransferTicketRefusesBeforeNativeProbe() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let clip = try fixture.clip("NO-TICKET.MOV", expected: 8, bytes: 4)
+        var probes = 0
+        let native = NikonPlaybackNativePort(playable: { _ in
+            probes += 1
+            return true
+        })
+        let identity = UUID()
+        native.retireItem(for: .init(owner: identity, revision: 0))
+        let token = MonitorPlaybackItemToken(owner: identity, revision: 1)
+        native.retireItem(for: token)
+        defer { native.close(token: token) }
+        guard
+            case .cached(let source) = try XCTUnwrap(
+                native.candidates(for: clip, model: fixture.model).first)
+        else { return XCTFail("Actual incomplete cache candidate missing") }
+        let before = try Data(contentsOf: source.url)
+        do {
+            _ = try await native.prepare(source, token: token, readyTimeout: nil)
+            XCTFail("An incomplete cache needs its captured transfer ticket")
+        } catch {
+            XCTAssertEqual(
+                error as? MonitorPlaybackError,
+                .nativeFailure("The clip transfer is unavailable."))
+        }
+        XCTAssertEqual(probes, 0)
+        XCTAssertNil(native.player.currentItem)
+        XCTAssertEqual(try Data(contentsOf: source.url), before)
+        await fixture.model.mediaLibrary?.dispose()
+    }
+
+    func testCompletedLocalCacheWithUnknownSizeRetainsTheDirectFilePath() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "LOCAL-UNKNOWN.MOV", handle: nil,
+            storageID: nil, sizeBytes: 0, captureDate: "20261011T120000")
+        fixture.store.upsertBatch([clip], cameraID: clip.cameraID)
+        let url = try fixture.store.localURL(cameraID: clip.cameraID, filename: clip.filename)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        var starts = 0
+        let native = NikonPlaybackNativePort(playable: { _ in
+            XCTFail("A complete local file needs no progressive probe")
+            return false
+        })
+        let identity = UUID()
+        native.retireItem(for: .init(owner: identity, revision: 0))
+        let token = MonitorPlaybackItemToken(owner: identity, revision: 1)
+        native.retireItem(for: token)
+        defer { native.close(token: token) }
+        guard
+            case .cached(let source) = try XCTUnwrap(
+                native.candidates(
+                    for: clip, model: fixture.model,
+                    startStream: {
+                        starts += 1
+                        return nil
+                    }
+                )
+                .first)
+        else { return XCTFail("The actual completed local cache is required") }
+        _ = try await native.prepare(source, token: token, readyTimeout: nil)
+        XCTAssertTrue(fixture.model.isClipDownloaded(clip))
+        XCTAssertEqual((native.player.currentItem?.asset as? AVURLAsset)?.url, url)
+        XCTAssertEqual(starts, 0)
+        await fixture.model.mediaLibrary?.dispose()
+    }
+
+    func testEndedIncompleteTransferFailsTheUnplayableProbeAndPreservesItsPrefix() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let clip = try fixture.clip("ENDED.MOV", expected: UInt64(UInt32.max) + 1, bytes: 4)
+        let finishedTask = Task {}
+        let ticket = NativeAppModel.MediaClipStreamTicket(task: finishedTask)
+        let until = ContinuousClock.now.advanced(by: .seconds(2))
+        let native = NikonPlaybackNativePort(
+            playable: { _ in false },
+            poll: {
+                guard ContinuousClock.now < until else {
+                    throw MonitorPlaybackError.nativeFailure(
+                        "The fixture did not observe task completion.")
+                }
+                await Task.yield()
+            })
+        let identity = UUID()
+        native.retireItem(for: .init(owner: identity, revision: 0))
+        let token = MonitorPlaybackItemToken(owner: identity, revision: 1)
+        native.retireItem(for: token)
+        defer { native.close(token: token) }
+        guard
+            case .cached(let source) = try XCTUnwrap(
+                native.candidates(for: clip, model: fixture.model, startStream: { ticket }).first)
+        else { return XCTFail("The captured incomplete source is required") }
+        let before = try Data(contentsOf: source.url)
+        do {
+            _ = try await native.prepare(source, token: token, readyTimeout: nil)
+            XCTFail("An ended incomplete native transfer cannot keep probing")
+        } catch {
+            XCTAssertEqual(
+                error as? MonitorPlaybackError,
+                .nativeFailure("The clip transfer did not complete."))
+        }
+        XCTAssertNil(native.player.currentItem)
+        XCTAssertEqual(try Data(contentsOf: source.url), before)
+        await finishedTask.value
+        await fixture.model.mediaLibrary?.dispose()
+    }
+
+    private func assertActualProgressiveRecovery(
+        pauseDuringWait: Bool, retireDuringWait: Bool = false, failDuringWait: Bool = false
+    ) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let movie = directory.appendingPathComponent("complete.mov")
+        try await NikonGrowingMovieFixture.write(at: movie)
+        let bytes = try Data(contentsOf: movie)
+        let prefix = try NikonGrowingMovieFixture.prefixEnd(bytes)
+        let store = MediaClipStore(root: directory.appendingPathComponent("cache"))
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        let clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "GROWING.MOV", handle: 4,
+            storageID: 65_537, sizeBytes: UInt64(bytes.count), captureDate: "20261011T120000")
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        let url = try store.localURL(cameraID: clip.cameraID, filename: clip.filename)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try bytes.prefix(prefix).write(to: url)
+        model.mediaDownloadProgress[clip.id] = Double(prefix) / Double(bytes.count)
+        let writerRelease = PlaybackSignal()
+        let streamTask = Task {
+            await writerRelease.wait()
+            guard !Task.isCancelled else { return }
+            do {
+                let writer = try FileHandle(forWritingTo: url)
+                defer { try? writer.close() }
+                if !failDuringWait {
+                    try writer.seekToEnd()
+                    try writer.write(contentsOf: bytes.suffix(from: prefix))
+                }
+                model.mediaDownloadProgress[clip.id] =
+                    failDuringWait ? Double(prefix) / Double(bytes.count) : 1
+            } catch { XCTFail("The owned native writer failed: \(error)") }
+        }
+        let streamTicket = NativeAppModel.MediaClipStreamTicket(task: streamTask)
+        defer {
+            writerRelease.signal()
+            streamTask.cancel()
+        }
+        let native = NikonPlaybackNativePort()
+        let identity = UUID()
+        native.retireItem(for: .init(owner: identity, revision: 0))
+        let token = MonitorPlaybackItemToken(owner: identity, revision: 1)
+        native.retireItem(for: token)
+        defer { native.close(token: .init(owner: identity, revision: 3)) }
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ])
+        native.afterItemInstallation = { $0.add(output) }
+        var transport: MonitorPlaybackTransportState?
+        var expectedToken = token
+        var observedTokens: [MonitorPlaybackItemToken] = []
+        var failures: [String] = []
+        native.onEvent = { admitted, event in
+            XCTAssertEqual(admitted, expectedToken)
+            observedTokens.append(admitted)
+            if case .transport(let value) = event { transport = value }
+            if case .failed(let message) = event { failures.append(message) }
+        }
+        guard
+            case .cached(let source) = try XCTUnwrap(
+                native.candidates(for: clip, model: model, startStream: { streamTicket }).first)
+        else { return XCTFail("The actual growing cache must remain the native source") }
+        _ = try await native.prepare(source, token: token, readyTimeout: nil)
+        let item = try XCTUnwrap(native.player.currentItem)
+        defer { item.remove(output) }
+        let readyEnd = ContinuousClock.now.advanced(by: .seconds(8))
+        while item.status == .unknown, ContinuousClock.now < readyEnd {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(item.status, .readyToPlay, "\(String(describing: item.error))")
+        guard item.status == .readyToPlay else { return }
+        XCTAssertFalse(model.isClipDownloaded(clip))
+        XCTAssertFalse(native.player.automaticallyWaitsToMinimizeStalling)
+        native.play(rate: 1, token: token)
+        var sample = NikonGrowingMovieFixture.PixelSample()
+        var largestClockLead = 0.0
+        let heldEnd = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < heldEnd {
+            sample.read(native.player, output)
+            if sample.changedTime >= 0 {
+                largestClockLead = max(
+                    largestClockLead, native.player.currentTime().seconds - sample.changedTime)
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let heldChanged = sample.changedTime
+        XCTAssertGreaterThan(sample.changedFrames, 0)
+        XCTAssertGreaterThan(heldChanged, 0.5, "The prefix must play before completion")
+        XCTAssertLessThanOrEqual(native.player.currentTime().seconds, heldChanged + 0.5)
+        XCTAssertLessThanOrEqual(largestClockLead, 0.5)
+        XCTAssertEqual(transport, .waiting)
+        if pauseDuringWait { native.pause(token: token) }
+        var successorItem: AVPlayerItem?
+        if retireDuringWait {
+            item.remove(output)
+            native.afterItemInstallation = nil
+            let next = MediaClip(
+                cameraID: clip.cameraID, filename: "SUCCESSOR.MOV", handle: 5,
+                storageID: clip.storageID, sizeBytes: UInt64(bytes.count),
+                captureDate: "20261011T120001")
+            store.upsertBatch([next], cameraID: next.cameraID)
+            try bytes.write(to: store.localURL(cameraID: next.cameraID, filename: next.filename))
+            expectedToken = .init(owner: identity, revision: 2)
+            native.retireItem(for: expectedToken)
+            // The successor must join the exact entered outgoing write before native IO.
+            writerRelease.signal()
+            guard
+                case .cached(let successor) = try XCTUnwrap(
+                    native.candidates(for: next, model: model).first)
+            else { return XCTFail("The successor's complete native source is required") }
+            _ = try await native.prepare(successor, token: expectedToken, readyTimeout: nil)
+            successorItem = try XCTUnwrap(native.player.currentItem)
+            native.pause(token: expectedToken)
+        }
+        let publicationBoundary = observedTokens.count
+        writerRelease.signal()
+        await streamTask.value
+        // Exercise the real observed host byte-publication path, not a new native test port.
+        if retireDuringWait { model.mediaDownloadProgress[clip.id] = 0.99 }
+        model.mediaDownloadProgress[clip.id] =
+            failDuringWait ? Double(prefix) / Double(bytes.count) : 1
+        let resumedEnd = ContinuousClock.now.advanced(by: .seconds(4))
+        while ContinuousClock.now < resumedEnd,
+            pauseDuringWait || retireDuringWait || failDuringWait
+                || sample.changedTime <= heldChanged + 0.5
+        {
+            sample.read(native.player, output)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        if failDuringWait {
+            XCTAssertFalse(model.isClipDownloaded(clip))
+            XCTAssertTrue(native.player.currentItem === item)
+            XCTAssertEqual(
+                failures,
+                [MonitorAppleProgressiveAssetError.incompleteTransfer.localizedDescription])
+            XCTAssertEqual(try Data(contentsOf: url), bytes.prefix(prefix))
+            XCTAssertEqual(native.player.rate, 0)
+            XCTAssertTrue(observedTokens.allSatisfy { $0 == token })
+        } else if retireDuringWait {
+            XCTAssertTrue(model.isClipDownloaded(clip))
+            XCTAssertTrue(native.player.currentItem === successorItem)
+            XCTAssertEqual(native.player.rate, 0)
+            XCTAssertTrue(
+                observedTokens.dropFirst(publicationBoundary).allSatisfy { $0 == expectedToken })
+        } else if pauseDuringWait {
+            XCTAssertTrue(model.isClipDownloaded(clip))
+            XCTAssertLessThanOrEqual(sample.changedTime, heldChanged + 0.5)
+            XCTAssertEqual(native.player.rate, 0)
+            XCTAssertEqual(transport, .paused)
+        } else {
+            XCTAssertTrue(model.isClipDownloaded(clip))
+            XCTAssertGreaterThan(sample.changedTime, heldChanged + 0.5)
+            XCTAssertGreaterThan(native.player.rate, 0)
+            XCTAssertEqual(transport, .playing)
+        }
+        await model.mediaLibrary?.dispose()
+    }
+}
+
+/// Owned native movie data for the actual partial-cache adapter, with no camera or wire fixture.
+@MainActor private enum NikonGrowingMovieFixture {
+    struct PixelSample {
+        var changedTime = -1.0
+        var changedFrames = 0
+        private var fingerprint: UInt64?
+        mutating func read(_ player: AVPlayer, _ output: AVPlayerItemVideoOutput) {
+            let time = player.currentTime()
+            var decoded = CMTime.invalid
+            guard output.hasNewPixelBuffer(forItemTime: time),
+                let buffer = output.copyPixelBuffer(
+                    forItemTime: time, itemTimeForDisplay: &decoded),
+                decoded.isValid, decoded.seconds.isFinite
+            else { return }
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            guard
+                let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self)
+            else { return }
+            let width = CVPixelBufferGetWidth(buffer)
+            let height = CVPixelBufferGetHeight(buffer)
+            guard width > 0, height > 0 else { return }
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            var hash: UInt64 = 14_695_981_039_346_656_037
+            for y in [0, height / 3, height / 2, height - 1] {
+                for x in [0, width / 3, width / 2, width - 1] {
+                    for channel in 0..<3 {
+                        hash =
+                            (hash ^ UInt64(base[y * stride + x * 4 + channel])) &* 1_099_511_628_211
+                    }
+                }
+            }
+            if fingerprint != hash {
+                fingerprint = hash
+                changedTime = decoded.seconds
+                changedFrames += 1
+            }
+        }
+    }
+    static func write(at url: URL) async throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        writer.shouldOptimizeForNetworkUse = true
+        let input = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 128, AVVideoHeightKey: 96,
+                AVVideoCompressionPropertiesKey: [AVVideoMaxKeyFrameIntervalKey: 1],
+            ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 128, kCVPixelBufferHeightKey as String: 96,
+            ])
+        writer.add(input)
+        guard writer.startWriting() else { throw CocoaError(.fileWriteUnknown) }
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<60 {
+            let until = ContinuousClock.now.advanced(by: .seconds(5))
+            while !input.isReadyForMoreMediaData, writer.status == .writing,
+                ContinuousClock.now < until
+            {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            guard input.isReadyForMoreMediaData else { throw CocoaError(.fileWriteUnknown) }
+            let pool = try XCTUnwrap(adaptor.pixelBufferPool)
+            var optional: CVPixelBuffer?
+            guard
+                CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &optional)
+                    == kCVReturnSuccess
+            else { throw CocoaError(.fileWriteUnknown) }
+            let buffer = try XCTUnwrap(optional)
+            CVPixelBufferLockBaseAddress(buffer, [])
+            guard
+                let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self)
+            else { throw CocoaError(.coderInvalidValue) }
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            for y in 0..<96 {
+                for x in 0..<128 {
+                    let pixel = base + y * stride + x * 4
+                    pixel[0] = UInt8((x + frame * 3) % 255)
+                    pixel[1] = UInt8((y + frame * 5) % 255)
+                    pixel[2] = UInt8((frame * 7) % 255)
+                    pixel[3] = 255
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            guard
+                adaptor.append(
+                    buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 10))
+            else { throw CocoaError(.fileWriteUnknown) }
+        }
+        input.markAsFinished()
+        await withCheckedContinuation { continuation in
+            writer.finishWriting { continuation.resume() }
+        }
+        guard writer.status == .completed else { throw CocoaError(.fileWriteUnknown) }
+    }
+    static func prefixEnd(_ data: Data) throws -> Int {
+        var cursor = 0
+        while cursor + 8 <= data.count {
+            var size = data[cursor..<(cursor + 4)].reduce(0) { ($0 << 8) | Int($1) }
+            let type = String(decoding: data[(cursor + 4)..<(cursor + 8)], as: UTF8.self)
+            var header = 8
+            if size == 1, cursor + 16 <= data.count {
+                size = data[(cursor + 8)..<(cursor + 16)].reduce(0) { ($0 << 8) | Int($1) }
+                header = 16
+            }
+            guard size >= header, cursor + size <= data.count else { break }
+            if type == "mdat" { return cursor + header + max(1, (size - header) * 35 / 100) }
+            cursor += size
+        }
+        throw CocoaError(.fileReadCorruptFile)
+    }
 }

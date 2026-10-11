@@ -38,6 +38,7 @@ import com.opencapture.opencine.appkit.MonitorPlaybackScopeSession
 import com.opencapture.opencine.media.MonitorPlaybackEvent
 import com.opencapture.opencine.media.MonitorPlaybackItemToken
 import com.opencapture.opencine.media.MonitorPlaybackMetadata
+import com.opencapture.opencine.media.MonitorPlaybackTransportState
 import com.opencapture.opencine.media.ScopeAssistBundle
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FeedEffectsRenderer
@@ -82,6 +83,14 @@ internal class NikonPlaybackPicture(
     val interaction: MonitorPlaybackInteractionOptions,
     val picture: @Composable (MonitorPlaybackPictureGeometry) -> Unit,
 )
+
+/** Native Media3 state conversion only; shared model preserves the operator's requested intent. */
+private fun observedTransport(player: Player): MonitorPlaybackTransportState? = when {
+    player.playbackState == Player.STATE_IDLE -> null
+    player.isPlaying -> MonitorPlaybackTransportState.PLAYING
+    !player.playWhenReady || player.playbackState == Player.STATE_ENDED -> MonitorPlaybackTransportState.PAUSED
+    else -> MonitorPlaybackTransportState.WAITING
+}
 
 @Composable
 internal fun rememberNikonPlaybackPicture(
@@ -172,6 +181,10 @@ internal fun rememberNikonPlaybackPicture(
                     native.publish(attachment, MonitorPlaybackEvent.Playing(isPlaying))
                 }
 
+                override fun onEvents(player: Player, events: Player.Events) {
+                    native.publish(attachment, MonitorPlaybackEvent.Transport(observedTransport(player)))
+                }
+
                 override fun onVideoSizeChanged(size: VideoSize) {
                     videoSize = size
                 }
@@ -226,6 +239,7 @@ internal fun rememberNikonPlaybackPicture(
                 max(playerBuffered, entry.progress.toFloat().coerceIn(0f, 1f))
             native.updateBuffer(attachment, bufferedFraction)
             native.publish(attachment, MonitorPlaybackEvent.Playing(player.isPlaying))
+            native.publish(attachment, MonitorPlaybackEvent.Transport(observedTransport(player)))
             playbackState = player.playbackState
             playbackError = player.playerError
             delay(200)
