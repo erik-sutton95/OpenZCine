@@ -4,6 +4,7 @@ import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
+import OpenCineNikon
 import OpenZCineCore
 import SwiftUI
 
@@ -29,6 +30,7 @@ struct NikonCaptureQuickIdentity: Hashable, Sendable {
     let shutterLocked: Bool?
     let pictureControl: String?
     let snapshot: MonitorReadoutSnapshot
+    let displayedSelection: String
 
     var picker: CameraPicker { kind == .format ? .resolution : .codec }
 
@@ -42,6 +44,8 @@ struct NikonCaptureQuickIdentity: Hashable, Sendable {
             && pictureControl == current.pictureControl && snapshot.options.contains(target)
             && (current.snapshot.selection == snapshot.selection
                 || current.snapshot.selection == target)
+            && (current.displayedSelection == snapshot.selection
+                || current.displayedSelection == target)
     }
 }
 
@@ -56,9 +60,24 @@ extension NativeAppModel {
     func operatorNativeQuick(for picker: CameraPicker)
         -> MonitorOperatorNativeCaptureQuick<NikonCaptureQuickIdentity>?
     {
+        buildNativeQuick(for: picker, allowPending: false)
+    }
+
+    private func buildNativeQuick(for picker: CameraPicker, allowPending: Bool)
+        -> MonitorOperatorNativeCaptureQuick<NikonCaptureQuickIdentity>?
+    {
+        // Initial gestures cannot borrow a queued selection. Admission after release ignores the
+        // pending queue itself: its own drain may remove the entry before the transport predicate.
+        if !allowPending {
+            guard !operatorQuickHasPendingWrite(for: .resolution),
+                !operatorQuickHasPendingWrite(for: .codec)
+            else { return nil }
+        }
+        let reported = operatorQuickReportedProperties
         guard picker == .resolution || picker == .codec,
             let state = shell.control.snapshot, state.connection == .ready,
-            cameraPropertySnapshot.captureSelector == .video, shell.control.isRecording == false,
+            reported.captureSelector == .video, cameraPropertySnapshot.captureSelector == .video,
+            shell.control.isRecording == false,
             !interfaceLocked, !relayControlSurrendered, !sessionRecovery.isRecovering,
             chromeEditorMode == nil, activePanel == nil, !lockedControls.contains(picker),
             monitorAvailability.cameraControls
@@ -72,14 +91,31 @@ extension NativeAppModel {
         let formatTokens = recordingFormatPresentations.map(\.token)
         let codecRaw = cameraFileTypeModes.map(\.raw)
         let codecLabels = cameraFileTypeModes.map(\.label)
+        let reportedCodecs = cameraFileTypeModes.filter {
+            PTPCameraPropertyDecoders.fileType($0.raw) == reported.fileType
+        }
+        let displayedCodecs = cameraFileTypeModes.filter {
+            PTPCameraPropertyDecoders.fileType($0.raw) == properties.fileType
+        }
         guard !formatRaw.isEmpty, formatRaw.count == formatTokens.count,
             Set(formatRaw).count == formatRaw.count, Set(formatTokens).count == formatTokens.count,
             !codecRaw.isEmpty, Set(codecRaw).count == codecRaw.count,
             Set(codecLabels).count == codecLabels.count,
-            let raw = properties.rawScreenSize, let formatIndex = formatRaw.firstIndex(of: raw),
-            let codec = activeCodecMode, codecRaw.contains(codec.raw)
+            let raw = reported.rawScreenSize, let formatIndex = formatRaw.firstIndex(of: raw),
+            let displayedRaw = properties.rawScreenSize,
+            let displayedFormatIndex = formatRaw.firstIndex(of: displayedRaw),
+            reportedCodecs.count == 1, displayedCodecs.count == 1
         else { return nil }
+        let codec = reportedCodecs[0]
+        let displayedCodec = displayedCodecs[0]
         let kind: NikonCaptureQuickIdentity.Kind = picker == .resolution ? .format : .codec
+        if !allowPending {
+            guard displayedRaw == raw, displayedCodec.raw == codec.raw else { return nil }
+        } else {
+            // An optimistic change to the other property invalidates this command immediately.
+            guard kind == .format ? displayedCodec.raw == codec.raw : displayedRaw == raw
+            else { return nil }
+        }
         let snapshot = MonitorReadoutSnapshot(
             title: kind == .format ? "Format" : "Codec",
             options: kind == .format ? formatTokens : codecLabels,
@@ -93,11 +129,13 @@ extension NativeAppModel {
             formatRaw: formatRaw,
             formatTokens: kind == .format ? formatTokens : cameraScreenModes.map(\.label),
             codecRaw: codecRaw, codecLabels: codecLabels,
-            formatDependency: kind == .codec ? raw : nil,
+            formatDependency: kind == .codec ? displayedRaw : nil,
             codecDependency: kind == .format ? properties.fileType : nil,
             shutterMode: properties.shutterMode?.rawValue,
             shutterLocked: properties.shutterLocked, pictureControl: properties.pictureControl,
-            snapshot: snapshot)
+            snapshot: snapshot,
+            displayedSelection: kind == .format
+                ? formatTokens[displayedFormatIndex] : displayedCodec.label)
         return .init(identity: identity, snapshot: snapshot, enabled: true, delayed: true)
     }
 
@@ -107,7 +145,8 @@ extension NativeAppModel {
 
     /// Own optimistic selection may advance; source, circuits and advertised domains may not.
     func operatorNativeQuickAdmits(_ identity: NikonCaptureQuickIdentity, target: String) -> Bool {
-        guard let current = operatorNativeQuick(for: identity.picker)?.identity else {
+        guard let current = buildNativeQuick(for: identity.picker, allowPending: true)?.identity
+        else {
             return false
         }
         return identity.admits(current, target: target)
