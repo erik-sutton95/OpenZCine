@@ -10706,12 +10706,10 @@ final class NativeAppModel {
             NikonMediaLibraryAction.sameContent(clip, current)
         else { return nil }
         let plan = deletionPlan(for: [current])
-        guard let action = captureMediaLibraryAction(plan.targets), action.sourceIsCurrent,
-            let authority = owner.captureDeletion(key: .init("playback-deletion"),
-                ifCurrent: { [weak self] in
-                    self?.isConnected == true && self?.mediaBrowserSource == .camera && action.sourceIsCurrent
-                })
-        else { return nil }
+        guard let action = captureMediaLibraryAction(plan.targets), action.sourceIsCurrent else { return nil }
+        let authority = owner.captureDeletion(key: .init("playback-deletion"), ifCurrent: { [weak self] in
+            self?.isConnected == true && self?.mediaBrowserSource == .camera && action.sourceIsCurrent
+        })
         let copy = MonitorPlaybackDeletionConfirmation(title: "Delete clip from camera?",
             message: deletionConfirmMessage(for: [current], plan: plan))
         return .init(confirmation: copy, authority: authority, perform: { [weak self] in
