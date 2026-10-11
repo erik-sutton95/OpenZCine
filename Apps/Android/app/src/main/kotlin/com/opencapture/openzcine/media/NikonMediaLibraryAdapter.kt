@@ -187,8 +187,6 @@ internal class NikonMediaLibraryActions(
             value.clip.libraryKey(value.bucket) to if (current != null && sameNikonActionContent(value.clip, current)) current else null
         }
         private val requested = values.associateBy { it.clip.libraryKey(it.bucket) }
-        private val favoritesAtCapture = values.map { it.bucket }.distinct().associateWith(index::favoriteIDs)
-        fun favoriteTarget(value: NikonLibraryClip): Boolean = value.clip.libraryKey(value.bucket) !in favoritesAtCapture[value.bucket].orEmpty()
         private val capturedRecords = owner?.state?.value?.records.orEmpty().filter {
             requested[it.payload.clip.libraryKey(it.payload.bucket)]?.let { original ->
                 sameNikonActionContent(original.clip, it.payload.clip)

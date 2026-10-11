@@ -31,7 +31,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.ui.platform.LocalViewConfiguration
-import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -656,30 +655,13 @@ internal fun MediaBrowseScreen(
             offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
         }
 
+    // The heart is a local flag, as in Pocket and Insta. It never writes the camera's star rating:
+    // that is the operator's data on the card. A star write still mirrors into the favorites.
     fun toggleFavorite(clip: NikonMediaClipRecord) {
-        val owner = ownerCameraID(clip)
-        val value = NikonLibraryClip(owner, clip)
+        val value = NikonLibraryClip(ownerCameraID(clip), clip)
         val action = libraryActions.capture(listOf(value))
         val updated = action.toggleFavorite(value)
         if (updated != null && action.isCurrent) favorites = mergedFavorites(updated)
-        // Heart and camera star are one signal (Favorites reads the set that star writes fill):
-        // agree the body's rating with the heart when connected. Best-effort — an offline clip
-        // keeps only the local flag. [verify-on-HW]
-        val nowFavorite = action.favoriteTarget(value)
-        val ratingOwner = connectionOwner
-        if (
-            effectiveCameraConnected && SwiftCore.isAvailable && clip.handle != 0L && ratingOwner != null
-        ) {
-            scope.launch {
-                withContext(Dispatchers.IO) {
-                    NikonNative.sessionSetObjectRating(
-                        ratingOwner,
-                        clip.handle.toInt(),
-                        if (nowFavorite) 1 else 0,
-                    )
-                }
-            }
-        }
     }
 
     // Mirrors a camera star write (viewer/player, seed-read or set) into the local favorite set
