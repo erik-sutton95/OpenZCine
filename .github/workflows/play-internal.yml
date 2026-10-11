@@ -54,6 +54,7 @@ jobs:
               - '.swift-format'
               - 'scripts/android-*.sh'
               - 'scripts/verify-android-*.sh'
+              - 'scripts/ci-install-swift-android.sh'
               - 'justfile'
               - '.github/workflows/play-internal.yml'
 
@@ -96,16 +97,13 @@ jobs:
 
       # Keep the Play artifact on the exact Swift Android SDK/toolchain that
       # CI uses. Gradle stages the arm64-v8a core into build output itself.
-      - name: Set up Swift Android toolchain
-        id: swift-android
-        uses: skiptools/swift-android-action@2044b79660f201ccef8cbce62877e4ec5409f9c8 # v2.9.5
+      - name: Set up Android NDK 27
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1.6.0
         with:
-          swift-version: '6.3.3'
-          ndk-version: '27'
-          compile-sdk-api-level: '29'
-          build-package: false
-          build-tests: false
-          run-tests: false
+          ndk-version: r27c
+          link-to-sdk: true
+      - name: Install Swift Android SDK
+        run: ./scripts/ci-install-swift-android.sh
 
       - name: Run Android checks
         working-directory: Apps/Android

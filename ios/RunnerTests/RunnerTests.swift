@@ -1985,8 +1985,11 @@ extension RunnerTests {
         // `+y` tap lands on the same neighbour in both. Getting this backwards would shift the
         // whole overlay by one row, which is exactly the sort of thing this test exists to catch.
         let base = rendered(frame)
-        let grey = (0..<(w * h)).map { i in
-            (Double(base[i * 4]) + Double(base[i * 4 + 1]) + Double(base[i * 4 + 2])) / 3
+        let grey: [Double] = (0..<(w * h)).map { i -> Double in
+            let red = Double(base[i * 4])
+            let green = Double(base[i * 4 + 1])
+            let blue = Double(base[i * 4 + 2])
+            return (red + green + blue) / 3
         }
         let dark = Peaking.underColor
 

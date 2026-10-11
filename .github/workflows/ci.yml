@@ -57,7 +57,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
-          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|scripts/android-|scripts/verify-android-|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
+          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|scripts/android-|scripts/verify-android-|scripts/ci-install-swift-android\.sh$|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
             if ! grep -Fxq 'Apps/Android/distribution/whatsnew/whatsnew-en-US' <<< "$changed_files"; then
               echo "Update Apps/Android/distribution/whatsnew/whatsnew-en-US with plain-language changes for Play testers." >&2
               exit 1
@@ -143,8 +143,10 @@ jobs:
               - 'Package.resolved'
               - 'scripts/android-*.sh'
               - 'scripts/verify-android-*.sh'
+              - 'scripts/ci-install-swift-android.sh'
               - 'justfile'
-              # Changing the Play build or upload path must re-run the Android job.
+              # Changing the CI or Play build must re-run the Android job.
+              - '.github/workflows/ci.yml'
               - '.github/workflows/play-internal.yml'
             bug_relay:
               - 'services/bug-relay/**'
@@ -232,18 +234,15 @@ jobs:
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
 
-      # Swift 6.3.3 plus its matching Android SDK. The action configures the
-      # NDK sysroot; Gradle then cross-compiles the arm64-v8a core itself.
-      - name: Set up Swift Android toolchain
-        id: swift-android
-        uses: skiptools/swift-android-action@2044b79660f201ccef8cbce62877e4ec5409f9c8 # v2.9.5
+      # Reuse the SHA-compliant Pocket/Insta setup for Swift 6.3.3 and NDK 27.
+      # The install script configures the API 29 SDK; Gradle stages the core.
+      - name: Set up Android NDK 27
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1.6.0
         with:
-          swift-version: '6.3.3'
-          ndk-version: '27'
-          compile-sdk-api-level: '29'
-          build-package: false
-          build-tests: false
-          run-tests: false
+          ndk-version: r27c
+          link-to-sdk: true
+      - name: Install Swift Android SDK
+        run: ./scripts/ci-install-swift-android.sh
 
       - name: Build, compile UI tests, unit-test, lint, and verify release packages
         working-directory: Apps/Android
