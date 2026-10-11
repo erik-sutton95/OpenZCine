@@ -102,8 +102,7 @@ struct NikonMonitorShell: View {
         let tc = model.liveTimecode
         let recording = MonitorStatusPresentation(
             recording: reportedRecord,
-            timecode: model.cameraReportsTimecode
-                ? String(format: "%02d:%02d:%02d", tc.hour, tc.minute, tc.second) : nil)
+            timecode: model.cameraReportsTimecode ? tc.monitorLabel : nil)
         var format: [Readout] = []
         if mounted.contains(.resolutionReadout) {
             format.append(

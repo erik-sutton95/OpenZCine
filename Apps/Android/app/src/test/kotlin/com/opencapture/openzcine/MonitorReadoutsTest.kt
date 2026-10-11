@@ -16,6 +16,18 @@ import kotlin.test.assertTrue
 
 class MonitorReadoutsTest {
     @Test
+    fun `monitor and multicam preserve the camera frame counter`() {
+        val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 17)
+        assertEquals("01:02:03:17", monitorTimecodeLabel(camera))
+        assertEquals("01:02:03:18", monitorTimecodeLabel(camera.copy(frame = 18)))
+        assertEquals("00:00:00:00", monitorTimecodeLabel(camera.copy(hour = 0, minute = 0, second = 0, frame = 0)))
+        assertNull(monitorTimecodeLabel(null))
+        assertNull(monitorTimecodeLabel(camera.copy(on = false)))
+        assertNull(monitorTimecodeLabel(camera.copy(hour = 24)))
+        assertNull(monitorTimecodeLabel(camera.copy(frame = -1)))
+    }
+
+    @Test
     fun `camera snapshot projects every monitor readout without demo fallbacks`() {
         val readouts =
             monitorCameraReadouts(
