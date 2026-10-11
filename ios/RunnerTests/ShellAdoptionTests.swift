@@ -125,18 +125,18 @@ struct ShellAdoptionTests {
         #expect(shown.map(\.label) == reported.map(\.label))
     }
 
-    /// Nikon main toasts a refused third live scope in portrait fit view; the monitor notice is
-    /// that toast on the integration.
-    @Test("A third scope in portrait fit view is refused with the cap notice")
-    func scopeCapRefusalShowsItsNotice() {
+    @Test("SIMULATED third scope stays active and inspectable while fit renders two recent scopes")
+    func scopeSelectionDoesNotConfuseActivationWithFitPlacement() {
         let model = NativeAppModel()
         let saved = model.preferences
         let live = model.assist.liveTools
+        let options = model.assist.configureTool
         defer {
             for tool in MonitorAssistTool.scopeTools {
                 model.assist.set(tool, visible: live.contains(tool), context: .liveView)
             }
             model.preferences = saved
+            model.assist.configureTool = options
         }
         model.isMonitorPresented = true
         model.monitorIsPortrait = true
@@ -150,10 +150,22 @@ struct ShellAdoptionTests {
 
         model.setAssist(.parade, visible: true)
 
-        #expect(!model.assist.liveTools.contains(.parade))
-        #expect(model.monitorNotice == model.scopeCapNoticeText)
-        #expect(model.monitorNoticeTrigger == trigger + 1)
+        #expect(model.assist.liveTools.isSuperset(of: [.waveform, .histogram, .parade]))
+        #expect(
+            model.preferences.displayedFitScopes(on: model.assist.liveTools) == [
+                .parade, .histogram,
+            ])
+        #expect(model.monitorNoticeTrigger == trigger)
+        model.showAssist(.vectorscope)
+        #expect(model.assist.configureTool == .vectorscope.selection)
         model.toggleAssist(.vectorscope)
-        #expect(model.monitorNoticeTrigger == trigger + 2)
+        #expect(model.assist.liveTools.contains(.vectorscope))
+        #expect(
+            model.preferences.displayedFitScopes(on: model.assist.liveTools) == [
+                .parade, .vectorscope,
+            ])
+        model.interfaceLocked = true
+        model.toggleAssist(.vectorscope)
+        #expect(model.assist.liveTools.contains(.vectorscope))
     }
 }

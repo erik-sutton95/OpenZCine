@@ -12351,10 +12351,6 @@ final class NativeAppModel {
 
     func showAssist(_ tool: MonitorAssistTool) {
         guard !interfaceLocked else { return }
-        if isScopeCapBlocked(tool) {
-            showMonitorNotice(scopeCapNoticeText)
-            return
-        }
         activePanel = nil
         assist.configureTool = tool.selection
     }
@@ -12478,11 +12474,9 @@ final class NativeAppModel {
         movablePanelPositions[id] = MovablePanelStoredCenter(center: center, in: bounds)
     }
 
-    /// Whether the monitor shell is currently rendering the portrait tree (set by `MonitorShell`);
-    /// scopes the fit-mode 2-scope display cap to portrait so landscape stays uncapped.
+    /// Whether the monitor shell is currently rendering the portrait tree (set by `MonitorShell`).
     var monitorIsPortrait = false
-    /// The monitor notice a scope toggle refused by the fit-mode cap shows; names the escape hatch
-    /// (close one, or pinch to fill).
+    /// Legacy DEBUG screenshot notice. Live scope activation is no longer refused in fit mode.
     let scopeCapNoticeText = "2 scopes max in fit view — close one or pinch to fill"
 
     /// A camera refusal the operator has to be told about while the monitor is up, and a counter
@@ -12504,44 +12498,16 @@ final class NativeAppModel {
         monitorNoticeTrigger += 1
     }
 
-    /// Count of live-view-active scope tools (waveform/parade/histogram/traffic lights).
-    var activeScopeCount: Int {
-        MonitorAssistTool.scopeTools.filter {
-            assist.liveTools.contains($0)
-        }.count
-    }
-
-    /// True only in portrait-fit with ≥2 scopes already active — the state that refuses a 3rd scope.
-    /// Keys on the EFFECTIVE layout, not the persisted preference: a vertical camera forces the
-    /// fill layout (floating scopes, no stacked zone to protect), so the cap must stand down
-    /// there even while the stored aspect still says fit (field report: iPad portrait +
-    /// vertical body refused extra scopes for a zone that wasn't even mounted).
-    var scopeCapActive: Bool {
-        monitorIsPortrait && preferences.portraitFeedAspect == .fit16x9
-            && !displayedFeedRotation.isVertical && activeScopeCount >= 2
-    }
-
-    /// Whether activating `tool` is blocked by the fit-mode cap (a scope not yet active while the
-    /// cap is engaged). Deactivating an already-active scope is never blocked.
-    func isScopeCapBlocked(_ tool: MonitorAssistTool) -> Bool {
-        scopeCapActive && MonitorAssistTool.scopeTools.contains(tool)
-            && !assist.liveTools.contains(tool)
-    }
-
     func toggleAssist(_ tool: MonitorAssistTool, context: ViewAssistContext = .liveView) {
         setAssist(tool, visible: !assist.tools(for: context).contains(tool), context: context)
     }
 
-    /// The Nikon guards around the shared toggle: the interface lock, and the portrait-fit cap
-    /// that refuses a third live scope. Live scopes also record their recency for that cap.
+    /// The interface lock guards the shared toggle. Fit placement selects two recent scopes
+    /// without changing the operator's active tools, which remain available in fill mode.
     func setAssist(
         _ tool: MonitorAssistTool, visible: Bool, context: ViewAssistContext = .liveView
     ) {
         guard !interfaceLocked else { return }
-        if visible, context == .liveView, isScopeCapBlocked(tool) {
-            showMonitorNotice(scopeCapNoticeText)
-            return
-        }
         assist.set(tool, visible: visible, context: context)
         if context == .liveView { preferences.recordScopeActivation(tool, on: visible) }
         // Switching the tool off cannot leave the feed punched in: the button goes with the tool,

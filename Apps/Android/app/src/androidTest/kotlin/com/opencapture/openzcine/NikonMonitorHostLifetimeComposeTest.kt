@@ -16,6 +16,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import com.opencapture.monitorui.MonitorAssistTool
 import androidx.compose.ui.test.performClick
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.compose.ui.unit.dp
@@ -116,6 +120,47 @@ class NikonMonitorHostLifetimeComposeTest {
         composeRule.mainClock.advanceTimeByFrame()
         composeRule.waitUntil(5_000) { source.collectors.get() == 0 }
         composeRule.runOnIdle { assertEquals(1, detachments); assertTrue(original.parent == null) }
+    }
+
+    @Test fun actualPortraitPaletteKeepsThirdScopeActiveAndItsOptionsAvailable() {
+        val source = CountedPictureSource()
+        val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "scope-selection"))
+        runBlocking { session.connect() }
+        val assists = idleNikonAssists()
+        composeRule.setContent {
+            val context = LocalContext.current
+            val settings = remember {
+                OperatorSettings(context.getSharedPreferences("SIMULATED-scope-selection", Context.MODE_PRIVATE)
+                    .also { it.edit().clear().commit() })
+            }
+            val scope = rememberCoroutineScope()
+            val common = remember { NikonOpenCineSession(session, scope) }
+            val control = remember { MonitorControlModel(scope).also { it.bind(common) } }
+            DisposableEffect(Unit) { onDispose { control.unbind() } }
+            OpenZCineTheme {
+                Box(Modifier.requiredSize(400.dp, 840.dp)) {
+                    MonitorScreen(session, common, control, source, assists, settings,
+                        liveViewEnabled = true, sessionRecoveryEnabled = false, glassTierOverride = "flat")
+                }
+            }
+        }
+        composeRule.waitUntil(5_000) { source.collectors.get() >= 2 }
+        composeRule.onNodeWithTag("monitor.assists.expand").performClick()
+        for (tool in listOf(MonitorAssistTool.WAVE, MonitorAssistTool.HISTO, MonitorAssistTool.PARADE)) {
+            composeRule.onNodeWithContentDescription("${tool.title}, off").performClick()
+        }
+        composeRule.runOnIdle {
+            assertTrue(assists.shared.isOn(MonitorAssistTool.WAVE))
+            assertTrue(assists.shared.isOn(MonitorAssistTool.HISTO))
+            assertTrue(assists.shared.isOn(MonitorAssistTool.PARADE))
+            assertEquals(listOf(ScopeKind.PARADE, ScopeKind.HISTOGRAM),
+                assists.shared.portraitScopes(scopesShown(assists.shared::isOn)))
+        }
+        composeRule.onNodeWithContentDescription("${MonitorAssistTool.PARADE.title}, on")
+            .performSemanticsAction(SemanticsActions.OnLongClick)
+        composeRule.runOnIdle { assertEquals(MonitorAssistTool.PARADE, assists.shared.configureTool) }
+        composeRule.onNodeWithContentDescription("Dismiss ${MonitorAssistTool.PARADE.title}").performClick()
+        composeRule.runOnIdle { assertTrue(assists.shared.isOn(MonitorAssistTool.WAVE)) }
     }
 
     private fun nativePicture(): View? {

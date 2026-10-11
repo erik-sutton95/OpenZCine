@@ -356,10 +356,8 @@ struct NikonMonitorShell: View {
             }, readTransfer: { model.scopeAssist.transfer },
             readClipByte: { _ in model.scopeAssist.clipByte },
             audioAvailable: model.monitorAvailability.audioMeters,
-            configurableTools: Set(
-                model.liveAssistPaletteTools.filter { !model.isScopeCapBlocked($0) }.map(
-                    \.selection)),
-            optionsUnavailableNotice: model.scopeCapNoticeText, paradeIntensityScale: 1)
+            configurableTools: Set(model.liveAssistPaletteTools.map(\.selection)),
+            paradeIntensityScale: 1)
     }
     private var bodyViews: MonitorOperatorBodyViews {
         .init(
