@@ -555,6 +555,9 @@ final class RunnerTests: XCTestCase {
         model.beginChromeEditing(.live)
         XCTAssertNil(model.nativeInspectorMeaning(tool: .lut))
         model.endChromeEditing()
+        // Done returns to Display settings; the operator closes it to reach the palette again.
+        XCTAssertEqual(model.activePanel, .settings)
+        model.activePanel = nil
         try await openRenderedLUTOptions()
         _ = try await settledImage()
         model.retireOperatorQuickPresentation()

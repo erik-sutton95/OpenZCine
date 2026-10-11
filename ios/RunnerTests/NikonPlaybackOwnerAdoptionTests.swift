@@ -1411,15 +1411,23 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
         XCTAssertEqual(try fixture.store.catalogBytes(cameraID: bucket), catalog)
         let cancel = try XCTUnwrap(dialog.actions.first { $0.style == .cancel }?.title)
-        let cancelMounted = await cachedCatalogSettled {
+        let destructive = try XCTUnwrap(dialog.actions.first { $0.style == .destructive }?.title)
+        let rendered = await cachedCatalogSettled {
             dialog.view.layoutIfNeeded()
-            return Self.deletionCompositionElements(dialog.view).contains { $0.accessibilityLabel == cancel }
+            return Self.deletionCompositionElements(dialog.view).contains { $0.accessibilityLabel == destructive }
         }
-        XCTAssertTrue(cancelMounted)
-        let cancelButton = try XCTUnwrap(Self.deletionCompositionElements(dialog.view)
-            .first { $0.accessibilityLabel == cancel })
-        XCTAssertTrue(cancelButton.accessibilityActivate())
-        _ = await cachedCatalogSettled { host.presentedViewController == nil }
+        XCTAssertTrue(rendered)
+        if let cancelButton = Self.deletionCompositionElements(dialog.view)
+            .first(where: { $0.accessibilityLabel == cancel }) {
+            XCTAssertTrue(cancelButton.accessibilityActivate())
+        } else {
+            // iOS 26 anchors this sheet as a popover with no Cancel row; the accessibility
+            // escape gesture is that presentation's real cancel path.
+            XCTAssertNotNil(dialog.popoverPresentationController)
+            XCTAssertTrue([dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
+        }
+        let dismissed = await cachedCatalogSettled { host.presentedViewController == nil }
+        XCTAssertTrue(dismissed)
         XCTAssertEqual(try Data(contentsOf: url), bytes)
         XCTAssertEqual(try fixture.store.catalogBytes(cameraID: bucket), catalog)
         fixture.model.connection = .disconnected
@@ -1436,8 +1444,8 @@ extension NikonPlaybackOwnerAdoptionTests {
         var values = [object]
         if let elements = object.accessibilityElements as? [NSObject], !elements.isEmpty {
             values += elements.flatMap(deletionCompositionElements)
-        } else if object.accessibilityElementCount() > 0 {
-            values += (0..<object.accessibilityElementCount()).compactMap { object.accessibilityElement(at: $0) as? NSObject }
+        } else if case let count = object.accessibilityElementCount(), count > 0, count != NSNotFound {
+            values += (0..<count).compactMap { object.accessibilityElement(at: $0) as? NSObject }
                 .flatMap(deletionCompositionElements)
         } else if let view = object as? UIView {
             values += view.subviews.flatMap(deletionCompositionElements)
