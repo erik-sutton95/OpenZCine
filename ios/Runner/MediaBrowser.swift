@@ -338,6 +338,9 @@ struct MediaBrowserView: View {
             }
         }
         model.refreshMediaClips()
+        if !model.isConnected || model.mediaBrowserSource != .camera {
+            model.mediaLibrary?.begin()
+        }
         if let resume = model.pendingHopShareResumeClips {
             model.pendingHopShareResumeClips = nil
             let records =

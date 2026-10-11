@@ -117,6 +117,22 @@ class OfflineMediaMainActivityTest {
     }
 
     @Test
+    fun malformedCompletedCacheReportsFailureInsteadOfWaitingForever() {
+        scenario = ActivityScenario.launch(
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+        )
+        device.waitForCamerasAction("Media library").click()
+        device.waitForText(CACHED_FILENAME).click()
+        // The deliberately malformed four-byte fixture must reach Media3 and report its error.
+        // An unopened offline library leaves the borrowed shared player preparing forever.
+        assertNotNull(
+            "The actual cached player must enter native preparation and publish its failure",
+            device.wait(Until.findObject(By.text("Source error")), UI_TIMEOUT_MILLIS),
+        )
+    }
+
+    @Test
     fun clearingStandaloneSettingsStillLeavesMediaLibraryEntryInCamerasHeader() {
         scenario =
             ActivityScenario.launch(
