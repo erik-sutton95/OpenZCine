@@ -861,33 +861,31 @@ struct MediaDeliveryShareSheetModifier: ViewModifier {
 
     @Environment(MediaDeliveryCoordinator.self) private var coordinator
 
+    // Gate only the binding: an if/else around `content` would give the host two identities
+    // and discard all of its @State (gallery scroll, selection) whenever `enabled` flips.
     func body(content: Content) -> some View {
-        if enabled {
-            let delivery = coordinator
-            let presentedID = delivery.sharePayload?.id
-            content
-                .sheet(
-                    item: delivery.sharePresentation,
-                    onDismiss: {
-                        if let presentedID, delivery.completeSharePresentation(id: presentedID) {
-                            onDismiss?()
-                        }
-                    },
-                    content: { payload in
-                        MultiShareSheet(
-                            urls: payload.urls,
-                            metadataText: payload.metadataText,
-                            onFinished: {
-                                if delivery.completeSharePresentation(id: payload.id) {
-                                    onDismiss?()
-                                }
-                            }
-                        )
+        let delivery = coordinator
+        let presentedID = delivery.sharePayload?.id
+        content
+            .sheet(
+                item: enabled ? delivery.sharePresentation : .constant(nil),
+                onDismiss: {
+                    if let presentedID, delivery.completeSharePresentation(id: presentedID) {
+                        onDismiss?()
                     }
-                )
-        } else {
-            content
-        }
+                },
+                content: { payload in
+                    MultiShareSheet(
+                        urls: payload.urls,
+                        metadataText: payload.metadataText,
+                        onFinished: {
+                            if delivery.completeSharePresentation(id: payload.id) {
+                                onDismiss?()
+                            }
+                        }
+                    )
+                }
+            )
     }
 }
 
