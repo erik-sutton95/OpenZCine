@@ -1,6 +1,7 @@
 import AVFAudio
 import MonitorUI
 import Network
+import Observation
 import OpenCineAppKit
 import OpenCineApple
 import OpenCineCameraControls
@@ -814,6 +815,13 @@ final class NativeAppModel {
     /// The root (`AppShell`): the camera monitor, the shared pair page (a NEARBY camera's Pair)
     /// and the standalone Media and Settings covers.
     @ObservationIgnored lazy var shell = makeShellModel()
+    /// Retires a released native capture gesture when its source or monitor presentation changes.
+    private var operatorQuickPresentationRevision = UUID()
+
+    func retireOperatorQuickPresentation() {
+        operatorQuickPresentationRevision = UUID()
+    }
+
     var diagnosticsShareItem: DiagnosticsShareItem?
     var diagnosticsErrorMessage: String?
     var isPreparingDiagnostics = false
@@ -7672,6 +7680,7 @@ final class NativeAppModel {
     /// worst battery/thermal profile on set, and enough sustained work for iOS to jetsam-kill the
     /// app so it vanishes mid-shoot. The session object is kept so `enterForeground()` can resume.
     func enterBackground() {
+        retireOperatorQuickPresentation()
         AppDiagnostics.shared.record(.enteredBackground)
         screenWakeSuppressedForBackground = true
         syncScreenWakePolicy()
@@ -8396,6 +8405,7 @@ final class NativeAppModel {
         // The camera's report is recorded even while the button defers to an app command below:
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
+            retireOperatorQuickPresentation()
             reportedRecording = recording
             refreshCommonControlFacts()
         }
@@ -12696,6 +12706,50 @@ final class NativeAppModel {
             return held
         }
         return family.depths.first
+    }
+
+    /// One release from the shared compact picker, bounded through the native safe-point queue.
+    func applyQuickPicker(
+        _ picker: CameraPicker, value: String, identity: NikonCaptureQuickIdentity
+    ) {
+        guard picker == identity.picker, operatorNativeQuickIsCurrent(identity),
+            identity.snapshot.options.contains(value), isMonitorPresented,
+            !screenWakeSuppressedForBackground
+        else { return }
+        #if DEBUG
+            if isDemoSession {
+                // The explicit simulated descriptor fixture uses the existing local picker path.
+                // It never creates transport authority or sends a native command.
+                applyPickerValue(value, for: picker)
+                return
+            }
+        #endif
+        guard let native = cameraSession, let owner = native.commandOwner,
+            let common = controlSession, common.id == identity.source.camera,
+            reportedRecording == false
+        else { return }
+        let current = common.refresh()
+        guard current.epoch == identity.source.epoch, current.connection == .ready,
+            current.authority == identity.authority
+        else { return }
+        let revision = operatorQuickPresentationRevision
+        let valid = OSAllocatedUnfairLock(initialState: true)
+        let admission = NikonCommandAdmission(
+            owner: owner, isCurrent: { valid.withLock { $0 } })
+        guard queuePickerWrites(value, for: picker, admission: admission) > 0 else { return }
+        // The queue's optimistic mutation is complete. No actor suspension occurs before this
+        // observation is installed, including when the queue schedules an idle drain task.
+        withObservationTracking {
+            let current =
+                cameraSession === native && operatorQuickPresentationRevision == revision
+                && isMonitorPresented && !screenWakeSuppressedForBackground
+                && reportedRecording == false && operatorNativeQuickAdmits(identity, target: value)
+            if !current { valid.withLock { $0 = false } }
+        } onChange: {
+            // Observation may notify before the mutation completes. Revoke immediately without
+            // reading actor-isolated state from a transport predicate or another executor.
+            valid.withLock { $0 = false }
+        }
     }
 
     func applyPickerValue(_ value: String, for picker: CameraPicker) {

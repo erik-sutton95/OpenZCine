@@ -155,6 +155,8 @@ extension NativeAppModel {
 
 struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.monitorWindowGeometry) private var windowGeometry
     let context: LiveViewLayoutContext
     private typealias Readout = MonitorOperatorLiveReadout<
         NikonLiveReadoutKey, DisplayChromeVisibility.Section
@@ -458,6 +460,10 @@ struct NikonMonitorShell: View {
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
         .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value
         }
+        .onChange(of: layout) { _, _ in model.retireOperatorQuickPresentation() }
+        .onChange(of: windowGeometry) { _, _ in model.retireOperatorQuickPresentation() }
+        .onChange(of: scenePhase) { _, _ in model.retireOperatorQuickPresentation() }
+        .onDisappear { model.retireOperatorQuickPresentation() }
         .onChange(of: model.activePanel) { _, panel in
             // Compatibility callers still presenting a native assist route feed the same shared inspector.
             if case .assist(let tool) = panel {
