@@ -448,17 +448,20 @@ struct MediaClipStore {
     /// Opens a clip file for streaming download. Resumes at the end of a partial cache when present;
     /// otherwise creates an empty file at offset zero.
     func openForStreaming(cameraID: String, filename: String) throws -> (
-        handle: FileHandle, offset: UInt32
+        handle: FileHandle, offset: UInt64
     ) {
         let dir = directory(for: cameraID)
         let url = try localURL(cameraID: cameraID, filename: filename)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if FileManager.default.fileExists(atPath: url.path) {
-            let size = fileSize(at: url)
             let fileHandle = try FileHandle(forUpdating: url)
-            try fileHandle.seekToEnd()
-            let offset = UInt32(min(size, UInt64(UInt32.max)))
-            return (fileHandle, offset)
+            do {
+                let offset = try fileHandle.seekToEnd()
+                return (fileHandle, offset)
+            } catch {
+                try? fileHandle.close()
+                throw error
+            }
         }
         FileManager.default.createFile(atPath: url.path, contents: nil)
         return (try FileHandle(forWritingTo: url), 0)
@@ -707,5 +710,45 @@ struct MediaClipStore {
             "delta sync removed \(removedFilenames.count, privacy: .public) index row(s), shrank \(shrunkCount, privacy: .public) row(s) for \(cameraID, privacy: .private(mask: .hash))"
         )
         return removedFilenames
+    }
+}
+
+/// The real native-session/cache seam for one bounded progressive Nikon object transfer.
+/// Range math stays in the shared cursor; the host keeps transfer ownership and cancellation.
+@MainActor enum NikonMediaObjectTransfer {
+    static func stream(
+        session: NativeCameraSession, handle: UInt32, totalBytes: UInt64,
+        store: MediaClipStore, cameraID: String, filename: String,
+        onProgress: (UInt64) -> Void
+    ) async throws -> UInt64 {
+        guard totalBytes > 0, totalBytes != UInt64(UInt32.max) else {
+            throw PTPObjectTransferError.unresolvedObjectSize(reportedBytes: totalBytes)
+        }
+        // Keep one Wi-Fi transaction below the live-view deadline; USB keeps the original 4 MiB.
+        let chunk: UInt64 = session.transportKind == .usb ? 4 << 20 : 1 << 20
+        let supportsExtended = session.operationPolicy.supports(.getPartialObjectEx)
+        // Refuse unsupported large objects before creating or opening any cache file.
+        _ = try PTPObjectTransferCursor(
+            objectHandle: handle, totalBytes: totalBytes, chunkSize: chunk,
+            supportsExtendedReads: supportsExtended)
+        try Task.checkCancellation()
+        let (file, resumeOffset) = try store.openForStreaming(
+            cameraID: cameraID, filename: filename)
+        defer { try? file.close() }
+        var cursor = try PTPObjectTransferCursor(
+            objectHandle: handle, totalBytes: totalBytes, resumeOffset: resumeOffset,
+            chunkSize: chunk, supportsExtendedReads: supportsExtended)
+        onProgress(cursor.offset)
+        while let request = try cursor.nextRequest() {
+            try Task.checkCancellation()
+            let data = try await session.getPartialObject(request)
+            try Task.checkCancellation()
+            var next = cursor
+            try next.advance(by: UInt64(data.count))
+            try file.write(contentsOf: data)
+            cursor = next
+            onProgress(cursor.offset)
+        }
+        return cursor.offset
     }
 }
