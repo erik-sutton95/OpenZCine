@@ -451,7 +451,15 @@ struct NikonMonitorShell: View {
             cameraPanel: { key, _ in
                 if case .picker(let picker) = key { NikonCameraSettingExtension(picker: picker) }
             }, photoRelease: { NikonPhotoRelease(diameter: Double($0)) },
-            preview: { _ in EmptyView() },
+            preview: {
+                if let tool = MonitorAssistTool(rawValue: $0.rawValue),
+                    MonitorInspectorPreviewPolicy.isImage($0)
+                        || [.waveform, .parade, .histogram, .vectorscope, .trafficLights].contains(
+                            tool)
+                {
+                    NikonAssistInspectorPreview(tool: tool)
+                }
+            },
             lookMenu: { LUTPickerContent() }
         )
         .overlay { MonitorRecoveryOverlay() }

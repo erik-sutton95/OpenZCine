@@ -1891,6 +1891,16 @@ internal fun MonitorScreen(
                 }
         }
         val physicalViewport = MonitorRect(0f, 0f, viewportWidth, viewportHeight)
+        val inspectorPreview = remember(appContext) { NikonLiveInspectorPreview(appContext) }
+        DisposableEffect(inspectorPreview) { onDispose { inspectorPreview.close() } }
+        val inspectorSourceIdentity = listOf(sharedControlState.snapshot?.session,
+            sharedControlState.snapshot?.epoch, pictureFrameSource, physicalViewport,
+            LocalDensity.current.density, LocalDensity.current.fontScale)
+        SideEffect {
+            inspectorPreview.configure(monitorFrameSource, inspectorSourceIdentity,
+                isMonitorFront && !locked && chromeEditorMode == null &&
+                    lifecycleState.isAtLeast(Lifecycle.State.RESUMED))
+        }
         // Photography's landscape feed: the still image-area's shape centred in
         // the clear box between the chrome lanes — the rail and capture band
         // never overlap the image (iOS centered letterbox + reserved lanes).
@@ -2230,6 +2240,8 @@ internal fun MonitorScreen(
             AssistHost(com.opencapture.openzcine.settings.SettingsPalette.peaking,
                 com.opencapture.openzcine.settings.SettingsPalette.highlight, com.opencapture.openzcine.settings.SettingsPalette.midtone),
             scopeSource, scopeStackMoved = {}, lookPicker = null, panelPlacement = placement,
+            preview = { tool -> NikonInspectorImagePreview(tool, assists, inspectorPreview,
+                exposureAssistCameraInput, lutLibrary, inspectorSourceIdentity, liveFeedPresentation.colorMode) },
             lookMenu = { NikonLutOptions(assists, lutLibrary,
                 onOpenRedDownload = { assists.shared.configureTool = null; redDownloadPresented = true },
                 onRequestLutImport = lutLibrary?.let { { lutImportLauncher.launch(arrayOf("*/*", "application/octet-stream")) } },
@@ -2602,6 +2614,7 @@ internal fun MonitorScreen(
                             // path only drives FPS + wear (decode can lag a take).
                             fpsSampler.accept(System.nanoTime())
                             hasPresentedFrame = true
+                            inspectorPreview.accept(pictureFrameSource, bitmap)
                             wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
                         },
                         presentationState = liveFeedPresentation,

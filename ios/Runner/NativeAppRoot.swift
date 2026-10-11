@@ -816,7 +816,7 @@ final class NativeAppModel {
     /// and the standalone Media and Settings covers.
     @ObservationIgnored lazy var shell = makeShellModel()
     /// Retires a released native capture gesture when its source or monitor presentation changes.
-    private var operatorQuickPresentationRevision = UUID()
+    private(set) var operatorQuickPresentationRevision = UUID()
 
     func retireOperatorQuickPresentation() {
         operatorQuickPresentationRevision = UUID()
@@ -1884,7 +1884,7 @@ final class NativeAppModel {
             case .failed, .idle: return
             default: break
             }
-            self.publishNativeFrame(display, owner: .relay(client))
+            self.publishNativeFrame(display, clean: decoded, owner: .relay(client))
             self.lastGoodFrameAt = Date()
             if self.relayFailureReason != nil { self.relayFailureReason = nil }
             // The viewer's assists meter the clean frame exactly as the host's do.
@@ -2028,6 +2028,38 @@ final class NativeAppModel {
     @ObservationIgnored private let nativePictureBus = LiveFrameSampleBus()
     @ObservationIgnored private var nativePictureSource: LiveFrameSampleBus.Source?
     @ObservationIgnored private var nativePictureOwner: NativePictureOwner?
+    @ObservationIgnored private var nativeInspectorImage: UIImage?
+    @ObservationIgnored private var nativeInspectorVideoSource: VideoSourceKind?
+    @ObservationIgnored lazy var nativeInspectorPreview = NikonLiveInspectorPreview(
+        fileStore: lutFileStore)
+    /// The clean accepted raster and the same lease used by the actual monitor picture.
+    var nativeInspectorFrame: (source: LiveFrameSampleBus.Source, image: UIImage)? {
+        guard let source = liveFrameSource, source.isActive, let image = nativeInspectorImage else {
+            return nil
+        }
+        switch nativePictureOwner {
+        case .local:
+            guard nativeInspectorVideoSource == videoSource else { return nil }
+        case .cameraSource(let owner):
+            guard videoSource == .cameraLiveView, let value = owner.value,
+                value === cameraSession
+            else { return nil }
+        case .relaySource(let owner):
+            guard videoSource == .relay, let value = owner.value, value === relayClient else {
+                return nil
+            }
+            switch relayClientState {
+            case .failed, .idle: return nil
+            default: break
+            }
+        case .captureSource(let owner, let generation):
+            guard videoSource == .hdmiCapture, let value = owner.value,
+                value === uvcSource, value.fence.isCurrent(generation)
+            else { return nil }
+        case nil: return nil
+        }
+        return (source, image)
+    }
     private(set) var liveFrameSource: LiveFrameSampleBus.Source?
     var liveFrameImage: UIImage? {
         didSet {
@@ -2039,6 +2071,10 @@ final class NativeAppModel {
                 nativePictureSource = nativePictureBus.openSource(.live)
                 liveFrameSource = nativePictureSource
             }
+            if case .local? = nativePictureOwner {
+                nativeInspectorImage = liveFrameImage
+                nativeInspectorVideoSource = videoSource
+            }
         }
     }
     private func retireNativePictureSource() {
@@ -2047,10 +2083,12 @@ final class NativeAppModel {
         nativePictureBus.closeSource(nativePictureSource)
         nativePictureSource = nil
         nativePictureOwner = nil
+        nativeInspectorImage = nil
+        nativeInspectorVideoSource = nil
     }
     /// Retain an accepted held raster through recovery; only a newly admitted picture or clear
     /// retires its render lease. Acquisition callbacks separately check the captured actual source.
-    private func publishNativeFrame(_ image: UIImage, owner: NativePictureOwner) {
+    private func publishNativeFrame(_ image: UIImage, clean: UIImage, owner: NativePictureOwner) {
         if !owner.matches(nativePictureOwner) {
             retireNativePictureSource()
             nativePictureOwner = owner
@@ -2058,6 +2096,7 @@ final class NativeAppModel {
         }
         if liveFrameSource !== nativePictureSource { liveFrameSource = nativePictureSource }
         if liveFrameImage !== image { liveFrameImage = image }
+        nativeInspectorImage = clean
     }
     /// AF / face-detection boxes from the latest live-view frame's header, drawn over the feed.
     var liveViewFocus: PTPLiveViewFocusInfo? {
@@ -2096,6 +2135,14 @@ final class NativeAppModel {
     func publishLiveScopeBundle(_ bundle: ScopeAssistBundle) {
         nativePictureBus.publish(
             nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
+    }
+    /// Async scope derivation retains its original lease, never the source current at completion.
+    func captureLiveScopePublication() -> @MainActor (ScopeAssistBundle) -> Void {
+        let captured = nativePictureSource
+        return { [weak self] bundle in
+            _ = self?.nativePictureBus.publish(
+                captured, source: nil, transfer: .rec709, bundle: bundle)
+        }
     }
     /// A still sampled with no live picture (the demo's mock feed) opens the live source the
     /// frame loop would, or the bus drops its scopes.
@@ -7329,7 +7376,7 @@ final class NativeAppModel {
         // also writes the focus box. On a header-less source the only thing that knows where the
         // AF point is, is our own `ChangeAfArea`; passing nil here wiped the box about one frame
         // after the tap drew it, which reads exactly like tap-to-focus doing nothing at all.
-        publishNativeFrame(display, owner: .capture(source, generation))
+        publishNativeFrame(display, clean: image, owner: .capture(source, generation))
         sampleScopesIfDue(clean: image) { [weak self, weak source] in
             guard let self, let source else { return false }
             return self.videoSource == .hdmiCapture && self.uvcSource === source
@@ -7804,7 +7851,7 @@ final class NativeAppModel {
         consecutiveBadLiveFrames = 0
         measuredLiveViewFPS = frameRate.displayFPS
         if delivery.first {
-            publishNativeFrame(image, owner: .camera(session))
+            publishNativeFrame(image, clean: cleanFrame, owner: .camera(session))
             liveViewFocus = frame.focus
             isMonitorPresented = true
             AppDiagnostics.shared.record(.liveViewStarted)
@@ -7820,7 +7867,8 @@ final class NativeAppModel {
                     ? measuredLiveViewFPS
                     : relaySoloFPSBaseline + 0.05 * (measuredLiveViewFPS - relaySoloFPSBaseline)
             }
-            publishLiveFrameDisplay(image: image, focus: frame.focus, session: session)
+            publishLiveFrameDisplay(
+                image: image, cleanFrame: cleanFrame, focus: frame.focus, session: session)
             captureRelayFrameMetadata(frame)
             broadcastRelayFrame(image: cleanFrame)
             let watchEffects = image === cleanFrame ? liveImageEffects : nil
@@ -8055,10 +8103,10 @@ final class NativeAppModel {
     /// The identity and equality checks below are the only filtering that remains, and they
     /// suppress redundant observable writes rather than frames.
     private func publishLiveFrameDisplay(
-        image: UIImage, focus: PTPLiveViewFocusInfo?,
+        image: UIImage, cleanFrame: UIImage, focus: PTPLiveViewFocusInfo?,
         session: NativeCameraSession
     ) {
-        publishNativeFrame(image, owner: .camera(session))
+        publishNativeFrame(image, clean: cleanFrame, owner: .camera(session))
         if liveViewFocus != focus {
             dismissInstantReviewIfAutofocusEngaged(previous: liveViewFocus, next: focus)
             liveViewFocus = focus
@@ -8102,7 +8150,7 @@ final class NativeAppModel {
     private func sampleScopesIfDue(
         clean: UIImage, isStillCurrent: @escaping @MainActor () -> Bool
     ) {
-        let visibleScopes = renderedLiveAssistTools
+        let visibleScopes = scopeSamplingLiveAssistTools
         guard ScopeAssistSampling.shouldSample(visible: visibleScopes) else {
             if scopeAssist != .empty { clearScopeAssist() }
             return
@@ -8115,6 +8163,7 @@ final class NativeAppModel {
         lastScopeSampleTime = now
         scopeSampleInFlight = true
         let tier = thermalTier
+        let publish = captureLiveScopePublication()
         Task {
             // `defer` so an early exit can never leave the in-flight gate stuck true (which would
             // silently stop all scope sampling).
@@ -8122,7 +8171,7 @@ final class NativeAppModel {
             let samples = await sampleLiveScopeAssist(
                 image: clean, visibleScopes: visibleScopes, thermalTier: tier)
             guard isStillCurrent(), !Task.isCancelled else { return }
-            await publishScopeAssist(samples: samples)
+            await publishScopeAssist(samples: samples, publish: publish)
         }
     }
 

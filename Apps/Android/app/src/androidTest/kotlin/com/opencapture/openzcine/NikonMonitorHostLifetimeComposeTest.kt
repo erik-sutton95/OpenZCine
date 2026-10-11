@@ -20,6 +20,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
 import com.opencapture.monitorui.MonitorAssistTool
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.performClick
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.compose.ui.unit.dp
@@ -35,7 +38,9 @@ import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.flow
 import org.junit.Assert.assertEquals
@@ -161,6 +166,98 @@ class NikonMonitorHostLifetimeComposeTest {
         composeRule.runOnIdle { assertEquals(MonitorAssistTool.PARADE, assists.shared.configureTool) }
         composeRule.onNodeWithContentDescription("Dismiss ${MonitorAssistTool.PARADE.title}").performClick()
         composeRule.runOnIdle { assertTrue(assists.shared.isOn(MonitorAssistTool.WAVE)) }
+    }
+
+    @Test fun actualInspectorRendersNativePixelsAndRetiresSourceEffectsAndReopenedEditor() {
+        assertTrue("This native composed regression requires the staged Swift core",
+            com.opencapture.openzcine.bridge.SwiftCore.isAvailable)
+        val first = RepeatingPictureSource(android.graphics.Color.GREEN)
+        val second = RepeatingPictureSource(android.graphics.Color.RED, initiallyPaused = true)
+        val selectedSource = mutableStateOf<LiveFrameSource?>(first)
+        val front = mutableStateOf(true)
+        val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "inspector-preview"))
+        runBlocking { session.connect() }
+        val assists = idleNikonAssists()
+        composeRule.setContent {
+            val context = LocalContext.current
+            val settings = remember {
+                OperatorSettings(context.getSharedPreferences("SIMULATED-inspector-preview", Context.MODE_PRIVATE)
+                    .also { it.edit().clear().commit() })
+            }
+            val scope = rememberCoroutineScope()
+            val common = remember { NikonOpenCineSession(session, scope) }
+            val control = remember { MonitorControlModel(scope).also { it.bind(common) } }
+            DisposableEffect(Unit) { onDispose { control.unbind() } }
+            OpenZCineTheme {
+                Box(Modifier.requiredSize(840.dp, 400.dp)) {
+                    MonitorScreen(session, common, control, selectedSource.value, assists, settings,
+                        isMonitorFront = front.value, liveViewEnabled = true,
+                        sessionRecoveryEnabled = false, glassTierOverride = "flat")
+                }
+            }
+        }
+        composeRule.waitUntil(5_000) { first.collectors.get() >= 2 }
+        composeRule.onNodeWithTag("monitor.assists.expand").performClick()
+        composeRule.onNodeWithContentDescription("${MonitorAssistTool.LUT.title}, off")
+            .performSemanticsAction(SemanticsActions.OnLongClick)
+        fun pixel(): androidx.compose.ui.graphics.Color {
+            val pixels = composeRule.onNodeWithContentDescription("${MonitorAssistTool.LUT.title} image preview")
+                .captureToImage().toPixelMap()
+            return pixels[pixels.width / 2, pixels.height / 2]
+        }
+        composeRule.waitUntil(10_000) {
+            runCatching { pixel().let { it.green > it.red + .1f } }.getOrDefault(false)
+        }
+        composeRule.runOnIdle {
+            assertEquals(MonitorAssistTool.LUT, assists.shared.configureTool)
+            assertTrue("Audition must not enable the live tool", !assists.shared.isOn(MonitorAssistTool.LUT))
+            assists.selectLut(FeedLutSelection.BuiltIn(FeedLut.MONO))
+        }
+        composeRule.waitUntil(10_000) {
+            runCatching { pixel().let { kotlin.math.abs(it.red - it.green) < .02f &&
+                kotlin.math.abs(it.green - it.blue) < .02f && it.green > .1f } }.getOrDefault(false)
+        }
+        composeRule.onNodeWithContentDescription("Dismiss ${MonitorAssistTool.LUT.title}").performClick()
+        composeRule.runOnIdle {
+            selectedSource.value = second
+            assists.selectLut(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709))
+        }
+        composeRule.onNodeWithContentDescription("${MonitorAssistTool.LUT.title}, on")
+            .performSemanticsAction(SemanticsActions.OnLongClick)
+        composeRule.onNodeWithText("Preview unavailable").assertExists()
+        composeRule.runOnIdle { second.paused.set(false) }
+        composeRule.waitUntil(10_000) {
+            runCatching { pixel().let { it.red > it.green + .1f } }.getOrDefault(false)
+        }
+        // Settings/Media cover destroys the visible editor demand without opening another source.
+        composeRule.runOnIdle { front.value = false }
+        composeRule.waitUntil(5_000) { assists.shared.inspectorScopeDemand == null }
+        composeRule.runOnIdle { front.value = true }
+        composeRule.waitUntil(10_000) {
+            runCatching { pixel().let { it.red > it.green + .1f } }.getOrDefault(false)
+        }
+    }
+
+    /** SIMULATED regular decoded pictures through the actual live feed, not an injected preview. */
+    private class RepeatingPictureSource(color: Int, initiallyPaused: Boolean = false) : LiveFrameSource {
+        val collectors = AtomicInteger()
+        val paused = AtomicBoolean(initiallyPaused)
+        private val jpeg = ByteArrayOutputStream().use { output ->
+            val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(color)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)
+            bitmap.recycle()
+            output.toByteArray()
+        }
+        override val frames = flow {
+            collectors.incrementAndGet()
+            try {
+                while (true) {
+                    if (!paused.get()) emit(LiveFrame(System.nanoTime(), jpeg))
+                    delay(225)
+                }
+            } finally { collectors.decrementAndGet() }
+        }
     }
 
     private fun nativePicture(): View? {

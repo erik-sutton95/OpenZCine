@@ -363,6 +363,168 @@ final class RunnerTests: XCTestCase {
     }
 
     @MainActor
+    func testActualSharedNikonInspectorUsesAcceptedNativePictureAndRetiresChangedMeaning()
+        async throws
+    {
+        // SIMULATED raster enters the same accepted local picture path used by still/demo feeds.
+        // The actual shared monitor composes the inspector and drives the native renderer task.
+        let model = NativeAppModel()
+        let savedPreferences = model.preferences
+        let savedConfiguration = model.assistConfiguration
+        let savedTools = model.assist.liveTools
+        let savedInspector = model.assist.configureTool
+        defer {
+            model.assist.configureTool = savedInspector
+            for tool in MonitorAssistTool.activeCases {
+                model.assist.set(tool, visible: savedTools.contains(tool), context: .liveView)
+            }
+            model.preferences = savedPreferences
+            model.assistConfiguration = savedConfiguration
+        }
+        model.preferences = OperatorPreferences.defaults
+        model.isMonitorPresented = true
+        model.videoSource = .hdmiCapture
+        for tool in MonitorAssistTool.activeCases {
+            model.assist.set(tool, visible: false, context: .liveView)
+        }
+        func raster(_ color: UIColor) -> UIImage {
+            UIGraphicsImageRenderer(size: CGSize(width: 640, height: 360)).image {
+                color.setFill()
+                $0.fill(CGRect(x: 0, y: 0, width: 640, height: 360))
+            }
+        }
+        model.liveFrameImage = raster(.green)
+        model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        model.shell.present(
+            ConnectedCamera(
+                saved: SavedCamera(
+                    id: "SIMULATED-inspector",
+                    integration: IntegrationID("org.opencapture.nikon-ptp"),
+                    advertisedName: "SIMULATED camera", model: "SIMULATED"),
+                session: NikonPictureLifetimeSession()))
+        let delivery = MediaDeliveryCoordinator()
+        let host = UIHostingController(
+            rootView: GeometryReader { proxy in
+                NikonMonitorShell(
+                    context: LiveViewLayoutContext(
+                        proxy: proxy, deviceOrientation: .unknown, screenWidth: nil)
+                )
+                .environment(model).environment(delivery).environment(\.scenePhase, .active)
+            })
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
+        let previousKey = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKey?.makeKeyAndVisible()
+        }
+        func previewElement() -> NSObject? {
+            var seen = Set<ObjectIdentifier>()
+            func find(_ object: NSObject) -> NSObject? {
+                guard seen.insert(ObjectIdentifier(object)).inserted else { return nil }
+                let getter = NSSelectorFromString("accessibilityIdentifier")
+                if object.responds(to: getter),
+                    object.perform(getter)?.takeUnretainedValue() as? String
+                        == "monitor.inspector.preview"
+                {
+                    return object
+                }
+                var children = object.accessibilityElements as? [NSObject] ?? []
+                let count = object.accessibilityElementCount()
+                if count > 0 && count < 512 {
+                    children += (0..<count).compactMap {
+                        object.accessibilityElement(at: $0) as? NSObject
+                    }
+                }
+                if let view = object as? UIView { children += view.subviews }
+                for child in children { if let result = find(child) { return result } }
+                return nil
+            }
+            return find(host.view)
+        }
+        func settledImage() async throws -> CGImage {
+            for _ in 0..<250 {
+                host.view.layoutIfNeeded()
+                if previewElement()?.accessibilityValue == "Picture",
+                    let meaning = model.nativeInspectorMeaning(tool: .lut),
+                    let image = model.nativeInspectorPreview.image(matching: meaning)
+                {
+                    return image
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTFail("Actual composed LUT inspector did not publish a current native preview")
+            return try XCTUnwrap(nil as CGImage?)
+        }
+        func center(_ image: CGImage) -> [UInt8] {
+            var pixel = [UInt8](repeating: 0, count: 4)
+            pixel.withUnsafeMutableBytes { bytes in
+                let context = CGContext(
+                    data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                    bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                context?.draw(
+                    image,
+                    in: CGRect(
+                        x: -CGFloat(image.width) / 2, y: -CGFloat(image.height) / 2,
+                        width: CGFloat(image.width), height: CGFloat(image.height)))
+            }
+            return pixel
+        }
+        model.showAssist(.lut)
+        let colored = try await settledImage()
+        XCTAssertLessThanOrEqual(max(colored.width, colored.height), 320)
+        XCTAssertGreaterThan(Int(center(colored)[1]), Int(center(colored)[0]) + 20)
+        XCTAssertFalse(model.assist.isOn(.lut), "Previewing a tool must not enable its live switch")
+        model.assistConfiguration.selectedLUT = .builtIn(.monochrome)
+        let nextMeaning = try XCTUnwrap(model.nativeInspectorMeaning(tool: .lut))
+        XCTAssertNil(
+            model.nativeInspectorPreview.image(matching: nextMeaning),
+            "The old look must retire synchronously")
+        let mono = center(try await settledImage())
+        XCTAssertLessThan(abs(Int(mono[0]) - Int(mono[1])), 3)
+        XCTAssertLessThan(abs(Int(mono[1]) - Int(mono[2])), 3)
+        let oldSource = try XCTUnwrap(model.liveFrameSource)
+        let retiredScopePublication = model.captureLiveScopePublication()
+        model.liveFrameImage = nil
+        XCTAssertFalse(oldSource.isActive)
+        XCTAssertNil(model.nativeInspectorMeaning(tool: .lut))
+        model.assist.configureTool = nil
+        for _ in 0..<20 { await Task.yield() }
+        let red = raster(.red)
+        model.liveFrameImage = red
+        await model.refreshScopes(from: red, full: true)
+        let currentScopeBundle = model.scopeAssist
+        XCTAssertNotEqual(currentScopeBundle, .empty)
+        retiredScopePublication(.empty)
+        XCTAssertEqual(
+            model.scopeAssist, currentScopeBundle,
+            "Retired native sampling must not replace the new source's bundle")
+        XCTAssertFalse(model.liveFrameSource === oldSource)
+        model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        model.showAssist(.lut)
+        let reopened = center(try await settledImage())
+        XCTAssertGreaterThan(Int(reopened[0]), Int(reopened[1]) + 20)
+        model.beginChromeEditing(.live)
+        XCTAssertNil(model.nativeInspectorMeaning(tool: .lut))
+        model.endChromeEditing()
+        model.showAssist(.lut)
+        _ = try await settledImage()
+        model.retireOperatorQuickPresentation()
+        let retired = try XCTUnwrap(model.nativeInspectorMeaning(tool: .lut))
+        XCTAssertNil(
+            model.nativeInspectorPreview.image(matching: retired),
+            "Geometry/source receipts retire old pictures")
+    }
+
+    @MainActor
     func testActualSharedNikonMonitorKeepsNativePictureThroughOwnedAndBorrowedLifetimes()
         async throws
     {

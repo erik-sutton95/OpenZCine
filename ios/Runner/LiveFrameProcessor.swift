@@ -278,9 +278,31 @@ extension NativeAppModel {
             photographyPreview: isPhotographyMode)
     }
 
+    /// Audition the selected tool without changing the live assist switches or its calibration.
+    func inspectorImageEffects(tool: MonitorAssistTool) -> LiveImageEffects {
+        var visible: Set<MonitorAssistTool> = []
+        if renderedLiveAssistTools.contains(.lut) || tool == .lut { visible.insert(.lut) }
+        if [.falseColor, .peaking, .zebra].contains(tool) { visible.insert(tool) }
+        return imageEffects(
+            for: visible, mapping: exposureSignalMapping, photographyPreview: isPhotographyMode)
+    }
+
+    /// Inspector demand uses the existing tap without enabling an assist on the monitor.
+    var scopeSamplingLiveAssistTools: Set<MonitorAssistTool> {
+        var visible = renderedLiveAssistTools
+        if let selection = assist.configureTool,
+            let tool = MonitorAssistTool(rawValue: selection.rawValue),
+            [.waveform, .parade, .histogram, .vectorscope, .trafficLights].contains(tool),
+            nativeInspectorMeaning(tool: tool) != nil
+        {
+            visible.insert(tool)
+        }
+        return visible
+    }
+
     /// Whether any scope tool is on, so the frame loop only pays for sampling when a scope is shown.
     var scopesActive: Bool {
-        let visible = renderedLiveAssistTools
+        let visible = scopeSamplingLiveAssistTools
         return visible.contains(.waveform) || visible.contains(.parade)
             || visible.contains(.histogram) || visible.contains(.vectorscope)
             || visible.contains(.trafficLights)
@@ -314,11 +336,14 @@ extension NativeAppModel {
 
     /// Publishes scope bins/points and derived traffic-light readings in one assignment.
     /// Heavy derivation runs off the main actor; only the final `scopeAssist` assignment is main-bound.
-    func publishScopeAssist(samples: OpenCineMedia.ScopeSamples) async {
+    func publishScopeAssist(
+        samples: OpenCineMedia.ScopeSamples,
+        publish: @MainActor (ScopeAssistBundle) -> Void
+    ) async {
         let trafficLightsCrushClip = assist.crushClipCompensation
         let mapping = exposureSignalMapping
         let vectorscopeCube = vectorscopeMonitorCube(
-            visibleTools: renderedLiveAssistTools,
+            visibleTools: scopeSamplingLiveAssistTools,
             curve: mapping.curve)
         let previous = scopeAssist
         let bundle = await Task.detached(priority: .userInitiated) {
@@ -329,7 +354,10 @@ extension NativeAppModel {
                 vectorscopeCube: vectorscopeCube,
                 previous: previous)
         }.value
-        publishLiveScopeBundle(bundle)
+        guard !Task.isCancelled, exposureSignalMapping == mapping,
+            assist.crushClipCompensation == trafficLightsCrushClip
+        else { return }
+        publish(bundle)
     }
 
     func clearScopeAssist() {
@@ -353,7 +381,7 @@ extension NativeAppModel {
             bytesPerRow: buffer.bytesPerRow, transfer: .rec709, includePoints: includePoints,
             layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true
         )
-        await publishScopeAssist(samples: samples)
+        await publishScopeAssist(samples: samples, publish: captureLiveScopePublication())
     }
 }
 
@@ -377,6 +405,16 @@ final class LiveFrameProcessor {
     func outputCIImage(for image: UIImage, effects: LiveImageEffects) -> CIImage? {
         guard !effects.isIdentity else { return nil }
         return native.outputCIImage(for: image, graph: graph(for: effects))
+    }
+
+    /// A missing stored cube is unavailable in the inspector, rather than an ungraded audition.
+    func outputInspectorCIImage(for image: UIImage, effects: LiveImageEffects) -> CIImage? {
+        if let selection = effects.lut,
+            LUTCubeCache.cube(forKey: selection.cacheKey, { self.cube(for: selection) }) == nil
+        {
+            return nil
+        }
+        return outputCIImage(for: image, effects: effects)
     }
 
     private func graph(for effects: LiveImageEffects) -> MonitorUIImageGraph {
