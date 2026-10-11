@@ -1,5 +1,4 @@
-- Record, its confirmation and Wear OS send an explicit start or stop, then wait for the camera to report it instead of guessing.
-- Controls, media and transfers reach the camera on screen, never one connected earlier. Playback Pause holds during loops, seeks and scrubs.
-- The live picture stays upright on a field monitor.
-- ISO and white balance on the command grid open their pickers.
-- Support, Privacy, and Terms pages now live at opencapture.org/openzcine. Old links keep working.
+- A completely new OpenCine monitor, camera list, settings and media interface, plus a new app icon.
+- Short assist captions, clearer icons and a circular-arrow focus recenter button.
+- Grouped FX/DX (where available), resolution and compatible frame rates; codec stays separate. Choices follow your camera.
+- Controls and transfers stay with their original camera. Playback Pause holds during loops, seeks and scrubs.
