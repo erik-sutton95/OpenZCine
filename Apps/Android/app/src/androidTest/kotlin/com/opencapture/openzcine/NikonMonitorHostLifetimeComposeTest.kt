@@ -158,7 +158,7 @@ class NikonMonitorHostLifetimeComposeTest {
             assertTrue(assists.shared.isOn(MonitorAssistTool.WAVE))
             assertTrue(assists.shared.isOn(MonitorAssistTool.HISTO))
             assertTrue(assists.shared.isOn(MonitorAssistTool.PARADE))
-            assertEquals(listOf(ScopeKind.PARADE, ScopeKind.HISTOGRAM),
+            assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
                 assists.shared.portraitScopes(scopesShown(assists.shared::isOn)))
         }
         composeRule.onNodeWithContentDescription("${MonitorAssistTool.PARADE.title}, on")

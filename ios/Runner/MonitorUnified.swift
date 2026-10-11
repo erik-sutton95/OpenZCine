@@ -429,7 +429,12 @@ struct NikonMonitorShell: View {
                 model.monitorAvailability.audioMeters ? model.observedLiveAudioLevels : nil
             },
             fittedScopes: model.renderedFitScopes.map(\.selection),
-            renderedTools: Set(model.renderedLiveAssistTools.map(\.selection)),
+            renderedTools: Set(
+                model.renderedLiveAssistTools.filter {
+                    !layout.portrait || layout.fillsPicture
+                        || !MonitorAssistTool.scopeTools.contains($0)
+                        || model.renderedFitScopes.contains($0)
+                }.map(\.selection)),
             usageSeed: nikonAssistUsageSeed, cameraViews: bodyViews,
             retireEditor: model.displaySession.retireEditor,
             returnToStage: model.isMulticamLiveView ? (model.returnToMulticam as () -> Void) : nil,

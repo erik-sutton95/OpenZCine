@@ -1517,20 +1517,14 @@ internal fun MonitorScreen(
         // alongside geometry.
         // Portrait's shared scopes zone must reflect panels actually mounted,
         // not every remembered landscape scope. The selection mirrors iOS:
-        // two newest activations, then canonical presentation order.
+        // First two eligible scopes in canonical order. Other selections remain active and
+        // return in fill/landscape; cinema-only selections cannot consume photo scope space.
         val portraitScopes =
-            if (isPortrait && !isPortraitFill && effectiveDisplayMode == MonitorDisplayMode.LIVE) {
-                // Photography suppresses the cinema-only scopes at render, so the
-                // zone must bill only the photography-visible ones (just the
-                // histogram) — a band sized to the full set opens a dead gap
-                // between feed and toolbar (iOS
-                // `displayedFitScopes.filter(appliesToPhotography)`).
-                assists.shared.portraitScopes(scopesShown(assists.shared::isOn)).let { scopes ->
-                    if (isPhotographyMode) scopes.filter { it.appliesToPhotography } else scopes
-                }
-            } else {
-                emptyList()
-            }
+            if (isPortrait && !isPortraitFill && effectiveDisplayMode != MonitorDisplayMode.COMMAND) {
+                assists.shared.portraitScopes(scopesShown {
+                    assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode)
+                })
+            } else { emptyList() }
         val scopeCount = portraitScopes.size
         // Picture identity belongs to the session. Acquisition follows the existing preview
         // policy, so command mode/background/bootstrap release demand without disposing its host.
@@ -2385,7 +2379,9 @@ internal fun MonitorScreen(
             palette = palette, usage = usage, setUsage = { usage = it; usageStore.value = it }, usageSeed = nikonUsageSeed,
             renderedTools = liveAssistTools.filter { tool ->
                 assists.shared.rendersLive(tool, effectiveDisplayMode, isPhotographyMode) &&
-                    (tool !in ScopeKind.canonical.map { it.assistTool } || scopeSource !== emptyScopes)
+                    (tool !in ScopeKind.canonical.map { it.assistTool } ||
+                        (scopeSource !== emptyScopes &&
+                            (!isPortrait || isPortraitFill || tool.scopeKind in portraitScopes)))
             }.toSet(),
             fittedScopes = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList(),
             scopeZone = scopeZone, signalOptions = signal,

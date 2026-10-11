@@ -125,7 +125,9 @@ struct ShellAdoptionTests {
         #expect(shown.map(\.label) == reported.map(\.label))
     }
 
-    @Test("SIMULATED third scope stays active and inspectable while fit renders two recent scopes")
+    @Test(
+        "SIMULATED third scope stays active and inspectable while fit renders the first two eligible scopes"
+    )
     func scopeSelectionDoesNotConfuseActivationWithFitPlacement() {
         let model = NativeAppModel()
         let saved = model.preferences
@@ -139,6 +141,7 @@ struct ShellAdoptionTests {
             model.assist.configureTool = options
         }
         model.isMonitorPresented = true
+        model.displayMode = .live
         model.monitorIsPortrait = true
         model.preferences.portraitFeedAspect = .fit16x9
         for tool in MonitorAssistTool.scopeTools {
@@ -152,8 +155,8 @@ struct ShellAdoptionTests {
 
         #expect(model.assist.liveTools.isSuperset(of: [.waveform, .histogram, .parade]))
         #expect(
-            model.preferences.displayedFitScopes(on: model.assist.liveTools) == [
-                .parade, .histogram,
+            model.renderedFitScopes == [
+                .waveform, .parade,
             ])
         #expect(model.monitorNoticeTrigger == trigger)
         model.showAssist(.vectorscope)
@@ -161,8 +164,8 @@ struct ShellAdoptionTests {
         model.toggleAssist(.vectorscope)
         #expect(model.assist.liveTools.contains(.vectorscope))
         #expect(
-            model.preferences.displayedFitScopes(on: model.assist.liveTools) == [
-                .parade, .vectorscope,
+            model.renderedFitScopes == [
+                .waveform, .parade,
             ])
         model.interfaceLocked = true
         model.toggleAssist(.vectorscope)

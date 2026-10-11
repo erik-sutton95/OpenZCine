@@ -208,13 +208,9 @@ fun normalizeScopeOrder(order: List<ScopeKind>, selected: Set<ScopeKind>): List<
     return order.filter { it in selected && seen.add(it) }
 }
 
-/** iOS portrait-fit policy: two newest active scopes, displayed in canonical order. */
-fun portraitDisplayedScopes(selected: Set<ScopeKind>, activationOrder: List<ScopeKind>): List<ScopeKind> {
-    val active = ScopeKind.canonical.filter(selected::contains)
-    val ordered = normalizeScopeOrder(activationOrder, selected)
-    val chosen = if (ordered.isEmpty()) active.take(2) else ordered.takeLast(2)
-    return ScopeKind.canonical.filter(chosen::contains)
-}
+/** First two eligible selections, without changing the active set or floating-scope order. */
+fun portraitDisplayedScopes(selected: Set<ScopeKind>): List<ScopeKind> =
+    ScopeKind.canonical.filter(selected::contains).take(2)
 
 /** Current persisted scale for one scope kind. */
 internal fun MonitorAssistState.scaleFor(kind: ScopeKind): Float =

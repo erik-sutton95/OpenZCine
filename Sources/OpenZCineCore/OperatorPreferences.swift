@@ -549,11 +549,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         setChrome(Self.defaults.chrome(for: mode, capture: capture), for: mode, capture: capture)
     }
 
-    /// The ≤2 scope tools the portrait-fit stacked zone displays out of the `on` live tools: the
-    /// two most recently activated (per ``scopeActivationOrder``), shown in canonical
-    /// ``MonitorAssistTool/scopeTools`` order for display stability. Older active scopes stay
-    /// active-but-hidden and reappear in fill mode. With no recorded order (a migrated install),
-    /// the canonical `prefix(2)` shows.
     /// Records a live scope switching on (it becomes the newest) or off. Other tools are ignored;
     /// playback toggles never call this, so the live recency survives a review session.
     public mutating func recordScopeActivation(_ tool: MonitorAssistTool, on: Bool) {
@@ -562,11 +557,10 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         if on { scopeActivationOrder.append(tool) }
     }
 
+    /// First two eligible active scopes in the common canonical order. Remaining selections
+    /// stay active and return in fill or landscape; stored activation history does not choose fit.
     public func displayedFitScopes(on: Set<MonitorAssistTool>) -> [MonitorAssistTool] {
-        let active = MonitorAssistTool.scopeTools.filter { on.contains($0) }
-        let ordered = scopeActivationOrder.filter { active.contains($0) }
-        let chosen = ordered.isEmpty ? Array(active.prefix(2)) : Array(ordered.suffix(2))
-        return MonitorAssistTool.scopeTools.filter { chosen.contains($0) }
+        Array(MonitorAssistTool.scopeTools.filter { on.contains($0) }.prefix(2))
     }
 
     private enum CodingKeys: String, CodingKey {

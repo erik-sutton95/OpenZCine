@@ -11250,10 +11250,10 @@ final class NativeAppModel {
     }
 
     /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
-    /// photography toolset — the recency selection itself stays in the core preferences.
+    /// photography toolset. Eligibility is resolved before choosing the canonical first two.
     var renderedFitScopes: [MonitorAssistTool] {
         let rendered = renderedLiveAssistTools
-        return preferences.displayedFitScopes(on: assist.liveTools).filter { rendered.contains($0) }
+        return preferences.displayedFitScopes(on: rendered)
     }
 
     /// Runs the target the operator confirmed. It used to recompute `!isRecording` here, so a take

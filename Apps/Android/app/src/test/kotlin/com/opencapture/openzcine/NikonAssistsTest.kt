@@ -131,14 +131,14 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `portrait fit shows the two newest scopes in canonical order`() {
+    fun `portrait fit shows the first two eligible scopes regardless of activation order`() {
         val state = restore().shared
         state.toggle(MonitorAssistTool.WAVE)
         state.toggle(MonitorAssistTool.VECTOR)
         state.toggle(MonitorAssistTool.HISTO)
 
         assertEquals(
-            listOf(ScopeKind.HISTOGRAM, ScopeKind.VECTORSCOPE),
+            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM),
             state.portraitScopes(scopesShown(state::isOn)),
         )
         state.toggle(MonitorAssistTool.HISTO)
@@ -269,7 +269,7 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `legacy multi scope selection keeps canonical selection and portrait recency`() {
+    fun `legacy multi scope selection keeps all selections with canonical fit placement`() {
         assist.edit()
             .putString("scopes", "wave,parade,histo,lights")
             .putString("scopeActivationOrder", "wave,parade,histo,lights")
@@ -281,7 +281,7 @@ class NikonAssistsTest {
             scopesShown(state::isOn),
         )
         assertEquals(
-            listOf(ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS),
+            listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
             state.portraitScopes(scopesShown(state::isOn)),
         )
         state.toggle(MonitorAssistTool.WAVE)

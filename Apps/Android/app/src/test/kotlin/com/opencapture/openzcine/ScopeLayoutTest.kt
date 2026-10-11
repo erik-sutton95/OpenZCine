@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
 /** Pure multi-scope selection, demand, and placement policy checks. */
 class ScopeLayoutTest {
     @Test
-    fun `portrait keeps two newest selections in canonical presentation order`() {
+    fun `portrait keeps the first two eligible canonical selections`() {
         val selected =
             setOf(
                 ScopeKind.WAVEFORM,
@@ -26,29 +26,9 @@ class ScopeLayoutTest {
                 ScopeKind.TRAFFIC_LIGHTS,
             )
 
-        val displayed =
-            portraitDisplayedScopes(
-                selected,
-                listOf(
-                    ScopeKind.WAVEFORM,
-                    ScopeKind.PARADE,
-                    ScopeKind.HISTOGRAM,
-                    ScopeKind.TRAFFIC_LIGHTS,
-                ),
-            )
-
-        assertEquals(listOf(ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS), displayed)
-    }
-
-    @Test
-    fun `portrait migration without order falls back to canonical prefix`() {
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
-            portraitDisplayedScopes(
-                setOf(ScopeKind.WAVEFORM, ScopeKind.PARADE, ScopeKind.HISTOGRAM),
-                emptyList(),
-            ),
-        )
+        val displayed = portraitDisplayedScopes(selected)
+        assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE), displayed)
+        assertEquals(4, selected.size, "Fit placement must not alter the active selection")
     }
 
     @Test
