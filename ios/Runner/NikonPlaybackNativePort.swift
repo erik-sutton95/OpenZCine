@@ -1,6 +1,8 @@
 import AVFoundation
 import Foundation
+import Observation
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineMedia
 
 /// Native file IO stays in the app: Nikon plays a growing cache before transfer completion.
@@ -17,9 +19,16 @@ import OpenCineMedia
     private var source: Source?
     private var stream: NativeAppModel.MediaClipStreamTicket?
     private var timeObserver: Any?
+    private var transportObserver: NSKeyValueObservation?
+    private var statusObserver: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
     private var probeAsset: AVURLAsset?
     private var metadataTask: Task<Void, Never>?
+    private var transferObservationTask: Task<Void, Never>?
+    private var progressiveAsset: MonitorAppleProgressiveAsset?
+    private var bufferRecovery: MonitorApplePlaybackBufferRecovery?
+    private var transferCompleted = false
+    private var reportedFailure = false
     private var enteredTransfer: Task<Void, Never>?
     private var preparationBarrier: (@MainActor () async -> Void)?
     private var facts = MonitorPlaybackMetadata()
@@ -28,12 +37,14 @@ import OpenCineMedia
     private let captureBeforePrepare: @MainActor () -> (@MainActor () async -> Void)
 
     /// Immutable actual clip/address/native primitive binding captured before preparation suspends.
-    private struct Source {
+    private struct Source: Sendable {
         let clip: MediaClip
         let item: MonitorPlaybackItem
-        let downloaded: @MainActor () -> Bool
-        let start: @MainActor () -> NativeAppModel.MediaClipStreamTicket?
-        let cancel: @MainActor (NativeAppModel.MediaClipStreamTicket) -> Void
+        let downloaded: @MainActor @Sendable () -> Bool
+        let readableBytes: @MainActor @Sendable () -> UInt64
+        let observeProgress: @MainActor @Sendable () -> Void
+        let start: @MainActor @Sendable () -> NativeAppModel.MediaClipStreamTicket?
+        let cancel: @MainActor @Sendable (NativeAppModel.MediaClipStreamTicket) -> Void
     }
 
     init(
@@ -52,7 +63,10 @@ import OpenCineMedia
         self.captureBeforePrepare = captureBeforePrepare
     }
 
-    func candidates(for clip: MediaClip, model: NativeAppModel) -> [MonitorPlaybackCandidate] {
+    func candidates(
+        for clip: MediaClip, model: NativeAppModel,
+        startStream: (@MainActor @Sendable () -> NativeAppModel.MediaClipStreamTicket?)? = nil
+    ) -> [MonitorPlaybackCandidate] {
         guard let url = model.clipLocalURL(clip), token != nil else { return [] }
         let item = MonitorPlaybackItem(
             url: url, mimeType: clip.fileExtension == "mov" ? "video/quicktime" : "video/mp4",
@@ -60,7 +74,12 @@ import OpenCineMedia
         source = Source(
             clip: clip, item: item,
             downloaded: { model.isClipDownloaded(clip) },
-            start: { model.startClipStream(clip) },
+            readableBytes: {
+                model.mediaClipStore.cachedByteCount(
+                    cameraID: clip.cameraID, filename: clip.filename)
+            },
+            observeProgress: { _ = model.mediaDownloadProgress[clip.id] },
+            start: startStream ?? { model.startClipStream(clip) },
             cancel: { model.cancelClipStream($0) })
         // This is the actual resolved cache path, which may still be growing. The generic
         // complete-download candidate would delay the first picture until the whole file arrives.
@@ -99,8 +118,35 @@ import OpenCineMedia
             throw MonitorPlaybackError.retired
         }
         if !captured.downloaded() {
-            stream = captured.start()
+            guard captured.clip.sizeBytes > 0,
+                captured.clip.sizeBytes != UInt64(UInt32.max),
+                captured.clip.sizeBytes <= UInt64(Int64.max)
+            else {
+                throw MonitorPlaybackError.nativeFailure("The clip's full size is unavailable.")
+            }
+            guard let capturedStream = captured.start() else {
+                throw MonitorPlaybackError.nativeFailure("The clip transfer is unavailable.")
+            }
+            stream = capturedStream
+            // Observe only this existing transfer. Completion must also unblock a failed probe.
+            transferObservationTask = Task { [weak self] in
+                await capturedStream.task.value
+                guard let self, !Task.isCancelled, self.current(admitted),
+                    self.stream === capturedStream, self.source?.item == captured.item
+                else { return }
+                self.transferCompleted = true
+                if let progressive = self.progressiveAsset {
+                    if captured.downloaded() {
+                        progressive.finish()
+                    } else {
+                        progressive.fail()
+                    }
+                }
+            }
             while current(admitted), !Task.isCancelled, !captured.downloaded() {
+                guard !transferCompleted else {
+                    throw MonitorPlaybackError.nativeFailure("The clip transfer did not complete.")
+                }
                 if FileManager.default.fileExists(atPath: item.url.path) {
                     let probe = AVURLAsset(
                         url: item.url,
@@ -120,11 +166,56 @@ import OpenCineMedia
             }
         }
         guard current(admitted), !Task.isCancelled else { throw MonitorPlaybackError.retired }
-        let asset = AVURLAsset(
-            url: item.url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        guard !transferCompleted || captured.downloaded() else {
+            throw MonitorPlaybackError.nativeFailure("The clip transfer did not complete.")
+        }
+        let asset: AVURLAsset
+        if !captured.downloaded(), captured.clip.sizeBytes > 0,
+            captured.clip.sizeBytes <= UInt64(Int64.max)
+        {
+            let progressive = try await MonitorAppleProgressiveAsset(
+                file: item.url, contentLength: Int64(captured.clip.sizeBytes),
+                contentType: captured.item.mimeType == "video/quicktime" ? .mov : .mp4,
+                readableBytes: Int64(min(captured.readableBytes(), captured.clip.sizeBytes)))
+            guard current(admitted), !Task.isCancelled, source?.item == captured.item else {
+                progressive.close()
+                throw MonitorPlaybackError.retired
+            }
+            // The captured transfer may end while the file descriptor opens off Main.
+            guard !transferCompleted || captured.downloaded() else {
+                progressive.close()
+                throw MonitorPlaybackError.nativeFailure("The clip transfer did not complete.")
+            }
+            progressiveAsset = progressive
+            asset = progressive.asset
+            progressive.onFailure = { [weak self, weak progressive] error in
+                guard let self, let progressive, self.current(admitted),
+                    self.progressiveAsset === progressive, self.source?.item == captured.item,
+                    let item = self.player.currentItem, item.asset === progressive.asset
+                else { return }
+                self.publishFailure(item, admitted: admitted, message: error.localizedDescription)
+            }
+            observeProgress(captured, progressive: progressive, admitted: admitted)
+        } else {
+            // Completed files retain the direct file path.
+            asset = AVURLAsset(
+                url: item.url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        }
         let nativeItem = AVPlayerItem(asset: asset)
         player.replaceCurrentItem(with: nativeItem)
         player.automaticallyWaitsToMinimizeStalling = false
+        if progressiveAsset != nil {
+            bufferRecovery = MonitorApplePlaybackBufferRecovery(
+                player: player, item: nativeItem,
+                isCurrent: { [weak self] in
+                    self?.current(admitted) == true && self?.player.currentItem === nativeItem
+                },
+                onTransport: { [weak self] state in
+                    guard let self, self.current(admitted), self.player.currentItem === nativeItem
+                    else { return }
+                    self.onEvent?(admitted, .transport(state))
+                })
+        }
         observe(nativeItem, admitted: admitted)
         afterItemInstallation?(nativeItem)
         guard current(admitted), player.currentItem === nativeItem else {
@@ -150,7 +241,62 @@ import OpenCineMedia
         return facts
     }
 
+    private func observeProgress(
+        _ captured: Source, progressive: MonitorAppleProgressiveAsset,
+        admitted: MonitorPlaybackItemToken
+    ) {
+        guard current(admitted), progressiveAsset === progressive, source?.item == captured.item
+        else { return }
+        withObservationTracking {
+            captured.observeProgress()
+        } onChange: { [weak self, weak progressive] in
+            Task { @MainActor in
+                guard let self, let progressive, self.current(admitted),
+                    self.progressiveAsset === progressive, self.source?.item == captured.item
+                else { return }
+                self.observeProgress(captured, progressive: progressive, admitted: admitted)
+            }
+        }
+        let bytes = min(captured.readableBytes(), captured.clip.sizeBytes)
+        guard current(admitted), progressiveAsset === progressive, source?.item == captured.item
+        else { return }
+        progressive.update(readableBytes: Int64(bytes))
+        if captured.downloaded() { progressive.finish() }
+    }
+
     private func observe(_ item: AVPlayerItem, admitted: MonitorPlaybackItemToken) {
+        statusObserver = item.observe(\.status, options: [.initial, .new]) {
+            [weak self] _, change in
+            guard change.newValue == .failed else { return }
+            Task { @MainActor in
+                self?.publishFailure(
+                    item, admitted: admitted,
+                    message: item.error?.localizedDescription ?? "Could not open that clip.")
+            }
+        }
+        if bufferRecovery == nil {
+            transportObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) {
+                [weak self] _, _ in
+                Task { @MainActor in
+                    guard let self, self.current(admitted), self.player.currentItem === item else {
+                        return
+                    }
+                    let state: MonitorPlaybackTransportState?
+                    if item.status != .readyToPlay {
+                        state = nil
+                    } else {
+                        switch self.player.timeControlStatus {
+                        case .paused: state = .paused
+                        case .waitingToPlayAtSpecifiedRate: state = .waiting
+                        case .playing: state = .playing
+                        @unknown default: state = nil
+                        }
+                    }
+                    guard self.current(admitted), self.player.currentItem === item else { return }
+                    self.onEvent?(admitted, .transport(state))
+                }
+            }
+        }
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
@@ -173,10 +319,22 @@ import OpenCineMedia
         }
     }
 
+    private func publishFailure(
+        _ item: AVPlayerItem, admitted: MonitorPlaybackItemToken, message: String
+    ) {
+        guard current(admitted), player.currentItem === item, !reportedFailure else { return }
+        reportedFailure = true
+        bufferRecovery?.pause()
+        guard current(admitted), player.currentItem === item else { return }
+        onEvent?(admitted, .failed(message))
+    }
+
     /// Actual notification callback entry, also exercised with captured native items in the fixture.
     func nativeDidEnd(_ item: AVPlayerItem, admitted: MonitorPlaybackItemToken) {
         guard current(admitted), player.currentItem === item else { return }
         publishDuration(item, admitted: admitted)
+        guard current(admitted), player.currentItem === item else { return }
+        bufferRecovery?.pause()
         guard current(admitted), player.currentItem === item else { return }
         onEvent?(admitted, .playing(false))
         guard current(admitted), player.currentItem === item else { return }
@@ -194,12 +352,20 @@ import OpenCineMedia
 
     func play(rate: Double, token admitted: MonitorPlaybackItemToken) {
         guard current(admitted), player.currentItem != nil else { return }
+        if let bufferRecovery {
+            bufferRecovery.play(rate: rate)
+            return
+        }
         player.rate = Float(rate)
         onEvent?(admitted, .playing(true))
     }
 
     func pause(token admitted: MonitorPlaybackItemToken) {
         guard current(admitted) else { return }
+        if let bufferRecovery {
+            bufferRecovery.pause()
+            return
+        }
         player.pause()
         onEvent?(admitted, .playing(false))
     }
@@ -247,6 +413,14 @@ import OpenCineMedia
     }
 
     private func retireNativeItem() {
+        bufferRecovery?.close()
+        bufferRecovery = nil
+        progressiveAsset?.close()
+        progressiveAsset = nil
+        transferObservationTask?.cancel()
+        transferObservationTask = nil
+        transferCompleted = false
+        reportedFailure = false
         metadataTask?.cancel()
         metadataTask = nil
         probeAsset?.cancelLoading()
@@ -262,6 +436,8 @@ import OpenCineMedia
         endObserver = nil
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
+        transportObserver = nil
+        statusObserver = nil
         player.pause()
         if let item = player.currentItem {
             item.videoComposition = nil
