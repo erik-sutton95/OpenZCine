@@ -180,8 +180,102 @@ jobs:
       # published. Delete when the app pins it by url + version.
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
+      - name: Prepare a private iOS test simulator with real accessibility
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-ios"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import plistlib
+          import subprocess
+
+          device_types = json.loads(subprocess.check_output(
+              ["xcrun", "simctl", "list", "devicetypes", "--json"]))
+          device_type = next((device for device in device_types["devicetypes"]
+                              if device["identifier"] == "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro"), None)
+          if device_type is None:
+              raise RuntimeError("The iPhone 16 Pro simulator device type is unavailable")
+          runtimes = json.loads(subprocess.check_output(
+              ["xcrun", "simctl", "list", "runtimes", "--json"]))
+          available_ios = [candidate for candidate in runtimes["runtimes"]
+                            if candidate.get("isAvailable", False)
+                            and candidate["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
+          if not available_ios:
+              raise RuntimeError("No available iOS simulator runtime")
+          selected_runtime = max(available_ios, key=lambda candidate:
+                                  (tuple(int(part) for part in candidate["version"].split(".")),
+                                  candidate["identifier"]))
+          runtime = selected_runtime["identifier"]
+          name = "opc-nikon-native-" + os.environ["GITHUB_RUN_ID"] + "-" + os.environ["GITHUB_RUN_ATTEMPT"]
+          device_id = subprocess.check_output(
+              ["xcrun", "simctl", "create", name, device_type["identifier"], runtime], text=True).strip()
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write("IOS_TEST_DEVICE_ID=" + device_id + "\n")
+          # First boot initializes this new device's own preference store.
+          subprocess.run(["xcrun", "simctl", "bootstatus", device_id, "-b"], check=True)
+          subprocess.run(["xcrun", "simctl", "shutdown", device_id], check=True)
+          current = json.loads(subprocess.check_output(
+              ["xcrun", "simctl", "list", "devices", "--json"]))
+          selected = next(device for devices in current["devices"].values()
+                          for device in devices if device["udid"] == device_id)
+          if selected["state"] != "Shutdown":
+              raise RuntimeError("The private simulator must be shut down before changing preferences")
+          preference = (Path.home() / "Library/Developer/CoreSimulator/Devices" / device_id
+                        / "data/Library/Preferences/com.apple.Accessibility.plist")
+          before = preference.read_bytes()
+          original = plistlib.loads(before)
+          enabled = dict(original, ApplicationAccessibilityEnabled=True, AccessibilityEnabled=True)
+          preference.write_bytes(plistlib.dumps(enabled, fmt=plistlib.FMT_BINARY))
+          report = {
+              "deviceID": device_id, "deviceName": device_type["name"], "runtime": runtime,
+              "runtimeVersion": selected_runtime["version"],
+              "preferenceBeforeSHA256": hashlib.sha256(before).hexdigest(),
+              "preferenceAfterSHA256": hashlib.sha256(preference.read_bytes()).hexdigest(),
+              "originalValues": {key: original.get(key) for key in
+                                  ["ApplicationAccessibilityEnabled", "AccessibilityEnabled"]},
+              "enabledOnlyForPrivateDevice": True,
+          }
+          (Path(os.environ["RUNNER_TEMP"]) / "native-ios/simulator-setup.json").write_text(
+              json.dumps(report, indent=2) + "\n")
+          subprocess.run(["xcrun", "simctl", "bootstatus", device_id, "-b"], check=True)
+          PY
       - name: Run native checks
-        run: just native-check
+        env:
+          IOS_TEST_RESULT_BUNDLE_PATH: ${{ runner.temp }}/native-ios/Runner.xcresult
+          IOS_TEST_LOG_PATH: ${{ runner.temp }}/native-ios/ios-test.log
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-ios"
+          just native-check
+      - name: Delete the private iOS test simulator
+        if: always()
+        run: |
+          if [ -n "${IOS_TEST_DEVICE_ID:-}" ]; then
+            # A completed test may already have shut down its destination.
+            xcrun simctl shutdown "$IOS_TEST_DEVICE_ID" || true
+            xcrun simctl delete "$IOS_TEST_DEVICE_ID"
+          fi
+      - name: Summarize iOS test results
+        if: always()
+        run: |
+          result_bundle="$RUNNER_TEMP/native-ios/Runner.xcresult"
+          if [ -d "$result_bundle" ]; then
+            xcrun xcresulttool get test-results summary --path "$result_bundle" \
+              | tee "$RUNNER_TEMP/native-ios/summary.json"
+          fi
+      - name: Retain iOS test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-ios-test-evidence
+          path: |
+            ${{ runner.temp }}/native-ios/Runner.xcresult
+            ${{ runner.temp }}/native-ios/ios-test.log
+            ${{ runner.temp }}/native-ios/summary.json
+            ${{ runner.temp }}/native-ios/simulator-setup.json
+          retention-days: 7
+          if-no-files-found: warn
 
   gate:
     name: CI gate
