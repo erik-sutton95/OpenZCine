@@ -3,6 +3,7 @@ import Foundation
 import MonitorUI
 import Observation
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineMedia
 import SwiftUI
 import UIKit
