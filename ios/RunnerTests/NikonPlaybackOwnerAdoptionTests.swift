@@ -858,3 +858,108 @@ extension NikonPlaybackOwnerAdoptionTests {
         throw CocoaError(.fileReadCorruptFile)
     }
 }
+
+extension NikonPlaybackOwnerAdoptionTests {
+    func testOfflineCameraCatalogAppearanceStartsTheBorrowedCachedPlayer() async throws {
+        try await assertCatalogAppearanceStartsCachedPlayer(source: .camera)
+    }
+
+    func testLocalCatalogAppearanceStartsTheBorrowedCachedPlayer() async throws {
+        try await assertCatalogAppearanceStartsCachedPlayer(source: .iPhone)
+    }
+
+    /// SIMULATED real movie bytes enter through the actual app catalog appearance callback.
+    /// The fixture deliberately leaves the newly constructed library unopened.
+    private func assertCatalogAppearanceStartsCachedPlayer(source: MediaBrowserSource) async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        fixture.model.mediaBrowserSource = source
+        let bucket = source == .camera ? "SIMULATED-OFFLINE-CAMERA" : MediaClipStore.localBucketID
+        let url = try fixture.store.localURL(cameraID: bucket, filename: "SIMULATED-CACHED.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        let bytes = try Data(contentsOf: url)
+        let clip = MediaClip(
+            cameraID: bucket, filename: url.lastPathComponent, handle: 4,
+            storageID: 65_537, sizeBytes: UInt64(bytes.count), captureDate: "20261011T120000")
+        fixture.store.upsertBatch([clip], cameraID: bucket)
+        if source == .camera {
+            fixture.model.openCachedMediaLibrary()
+        } else {
+            fixture.model.refreshMediaClips()
+            fixture.model.isStandaloneMediaLibraryPresented = true
+        }
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        let record = try XCTUnwrap(library.records.first { $0.payload.id == clip.id })
+        XCTAssertFalse(fixture.model.isConnected)
+        XCTAssertTrue(fixture.model.isClipDownloaded(clip))
+        XCTAssertFalse(library.browsing, "The actual catalog must start this fresh offline library")
+
+        let coordinator = MediaDeliveryCoordinator()
+        defer { coordinator.close() }
+        let host = UIHostingController(
+            rootView: MediaBrowserView().environment(fixture.model).environment(coordinator))
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            originalKeyWindow?.makeKeyAndVisible()
+        }
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+        let began = await cachedCatalogSettled { library.browsing }
+        XCTAssertTrue(began, "MediaBrowser appearance must begin its existing offline library")
+        XCTAssertTrue(fixture.model.mediaLibrary === library)
+        XCTAssertNil(library.binding, "Offline browsing must not create a camera session")
+
+        let scanned = await cachedCatalogSettled {
+            library.entries[record.asset.id]?.isPlayableOffline == true
+        }
+        XCTAssertTrue(scanned)
+        let gallery = MonitorMediaGalleryModel(library: library)
+        let request = try XCTUnwrap(
+            gallery.open(
+                record.asset.id, admitted: gallery.snapshot(), operations: .init(),
+                sourceAvailable: false))
+        XCTAssertEqual(request.record.payload, clip)
+        XCTAssertEqual(request.playlist.map(\.asset.id), [record.asset.id])
+        let context = try XCTUnwrap(
+            NikonOperatorPlaybackContext(model: fixture.model, initial: request))
+        XCTAssertTrue(context.library === library)
+        context.media.setPlayerVisible(true)
+        context.media.setSceneActive(true)
+        XCTAssertTrue(
+            context.media.open(
+                request.record, playlist: request.playlist, admitted: request.admission))
+        let ready = await cachedCatalogSettled { context.media.playback?.ready == true }
+        XCTAssertTrue(ready)
+        let owner = try XCTUnwrap(context.media.playback)
+        let native = try XCTUnwrap(context.native)
+        XCTAssertEqual(owner.active?.asset.id, request.record.asset.id)
+        XCTAssertTrue(owner.nativeItemInstalled)
+        XCTAssertEqual(native.token, owner.token)
+        XCTAssertTrue(library.isCurrent(request.admission))
+        let asset = try XCTUnwrap(native.player.currentItem?.asset as? AVURLAsset)
+        XCTAssertEqual(asset.url, url)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        context.media.closePlayback()
+        await library.dispose()
+    }
+
+    private func cachedCatalogSettled(_ predicate: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !predicate(), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        return predicate()
+    }
+}

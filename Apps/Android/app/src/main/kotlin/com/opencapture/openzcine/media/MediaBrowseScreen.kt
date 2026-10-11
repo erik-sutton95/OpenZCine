@@ -514,6 +514,7 @@ internal fun MediaBrowseScreen(
             actual.applyLocalRecords(MonitorMediaCatalogCapture(resetLibrary = true,
                 upserts = localRows.map(codec::record),
                 sourceFavoriteKeys = buckets.flatMap { libraryIndex.favoriteIDs(it) }.toSet()), actual.actionToken)
+            if (!actual.state.value.browsing) actual.begin()
             offlineClipOwners = localRows.associate { it.clip.offlineObjectKey() to it.bucket }
             state = BrowseState.Loaded(localRows.map { it.clip })
         } else if (connectedSource == null) {
