@@ -161,7 +161,8 @@ struct FalseColorTests {
         #expect(FalseColorMap.band(value: 60, scale: .ire) == nil)
         #expect(FalseColorMap.band(value: 79, scale: .ire) == nil)
         let red = try #require(FalseColorMap.band(value: 100.1, scale: .ire))
-        #expect((red.red, red.green, red.blue) == (220.0 / 255, 51.0 / 255, 33.0 / 255))
+        let expectedRed: (Double, Double, Double) = (220.0 / 255, 51.0 / 255, 33.0 / 255)
+        #expect((red.red, red.green, red.blue) == expectedRed)
     }
 
     @Test("LOG monitor IRE keeps each source paper-grey anchor and calibrated clip")
@@ -410,11 +411,13 @@ struct FalseColorTests {
         #expect(FalseColorMap.band(value: 5.5, scale: .video, mapping: mapping) != nil)
         #expect(FalseColorMap.band(value: 11.5, scale: .ire, mapping: mapping) == nil)
         let mg = try #require(FalseColorMap.band(value: 38, scale: .ire, mapping: mapping))
-        #expect((mg.red, mg.green, mg.blue) == (123.0 / 255, 207.0 / 255, 87.0 / 255))
+        let expectedGrey: (Double, Double, Double) = (123.0 / 255, 207.0 / 255, 87.0 / 255)
+        #expect((mg.red, mg.green, mg.blue) == expectedGrey)
         #expect(FalseColorMap.band(value: 42, scale: .ire, mapping: mapping) == nil)
         #expect(FalseColorMap.band(value: 49, scale: .video, mapping: mapping) == nil)
         let white = try #require(FalseColorMap.band(value: 95, scale: .ire, mapping: mapping))
-        #expect((white.red, white.green, white.blue) == (220.0 / 255, 51.0 / 255, 33.0 / 255))
+        let expectedWhite: (Double, Double, Double) = (220.0 / 255, 51.0 / 255, 33.0 / 255)
+        #expect((white.red, white.green, white.blue) == expectedWhite)
     }
 
     @Test("CineStop whole-stop zones are flat and their clip shelf follows camera calibration")
@@ -422,7 +425,8 @@ struct FalseColorTests {
         let low = ExposureSignalMapping(curve: .redLog3G10, clipNative: 145)
         let high = ExposureSignalMapping(curve: .redLog3G10, clipNative: 215)
         let middle = try #require(FalseColorMap.band(value: 0, scale: .stops, mapping: low))
-        #expect((middle.red, middle.green, middle.blue) == (127.0 / 255, 127.0 / 255, 127.0 / 255))
+        let expectedMiddle: (Double, Double, Double) = (127.0 / 255, 127.0 / 255, 127.0 / 255)
+        #expect((middle.red, middle.green, middle.blue) == expectedMiddle)
         #expect(FalseColorMap.band(value: -0.5, scale: .stops, mapping: low) == middle)
         #expect(FalseColorMap.band(value: 0.5, scale: .stops, mapping: low) != middle)
         #expect(

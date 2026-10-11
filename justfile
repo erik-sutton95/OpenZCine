@@ -96,14 +96,24 @@ ios-build:
 ios-test:
     #!/usr/bin/env bash
     set -euo pipefail
-    device_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ && !found { print $2; found = 1 }')"
+    device_id="${IOS_TEST_DEVICE_ID:-}"
+    if [ -z "$device_id" ]; then
+        device_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ && !found { print $2; found = 1 }')"
+    fi
     if [ -z "$device_id" ]; then
         echo "No available iPhone simulator found." >&2
         exit 1
     fi
-    xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
-      -destination "platform=iOS Simulator,id=$device_id" \
-      test
+    test_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
+      -destination "platform=iOS Simulator,id=$device_id")
+    if [ -n "${IOS_TEST_RESULT_BUNDLE_PATH:-}" ]; then
+        test_command+=(-resultBundlePath "$IOS_TEST_RESULT_BUNDLE_PATH")
+    fi
+    if [ -n "${IOS_TEST_LOG_PATH:-}" ]; then
+        "${test_command[@]}" test 2>&1 | tee "$IOS_TEST_LOG_PATH"
+    else
+        "${test_command[@]}" test
+    fi
 
 # Build the watchOS companion app for the simulator.
 watch-build:
