@@ -1113,7 +1113,7 @@ struct MediaPlayerView: View {
                 falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
                 reference: menus.falseColorReference),
             availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
-            initialChromeVisible: !DemoHarness.playbackCleanView, loopAvailable: false,
+            initialChromeVisible: !DemoHarness.playbackCleanView,
             paradeIntensityScale: 1,
             picture: { owner, _ in
                 if let native = context.native, context.media.playback === owner {
@@ -1187,16 +1187,21 @@ struct MediaPlayerView: View {
         var rows: [MonitorPlaybackMetadataValue] = []
         if let master = clip.linkedR3DFilename { rows.append(.init("Master", master)) }
         if let storage = clip.storageID { rows.append(.init("Storage", String(storage))) }
+        let buffered = context?.media.playback.flatMap { owner -> Double? in
+            guard let context, owner.ready, context.media.isCurrent(owner.token),
+                owner.active?.asset.id == record.asset.id
+            else { return nil }
+            return context.native?.bufferedThroughSeconds(token: owner.token)
+        }
         return .init(
             availability: model.isClipDownloaded(clip) ? .original : .camera,
             progress: model.mediaDownloadProgress[clip.id],
-            buffered: model.clipBufferedFraction(clip),
             colorLabel: mapping.curve.rawValue,
             transfer: NikonPlaybackScopeConfiguration(
                 trafficLightsCrushClip: model.assist.crushClipCompensation, mapping: mapping,
                 vectorscopeCube: nil
             ).transfer, clipByte: Int(mapping.clipNative.rounded()),
-            metadata: rows, clockStyle: .roundedMinutesSeconds)
+            metadata: rows, clockStyle: .roundedMinutesSeconds, bufferedThroughSeconds: buffered)
     }
     private func synchronizeNativeFacts() {
         guard let context, let player = context.media.playback,

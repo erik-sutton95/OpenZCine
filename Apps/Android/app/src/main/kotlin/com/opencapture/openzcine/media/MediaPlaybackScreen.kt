@@ -197,17 +197,22 @@ internal fun MediaPlaybackScreen(
             effects = picture?.effects ?: FeedEffectsRenderPlan.IDENTITY, cacheOriginal = false,
             deliveryPresented = cover, operations = operations,
             source = { record ->
-                val captured = prepared?.takeIf { it.record.asset.id == record.asset.id }
+                val captured = prepared?.takeIf {
+                    it.record.asset.id == record.asset.id && logical?.state?.value?.let { current ->
+                        current.ready && current.token == it.token && playerContext.media.isCurrent(it.token)
+                    } == true
+                }
                 val item = (captured?.preparation as? MediaTransferPreparation.Ready)?.entry
                 MonitorPlaybackSourceValues(progress = item?.progress,
-                    buffered = captured?.buffered?.toDouble(), colorLabel = record.asset.colorLabel,
+                    colorLabel = record.asset.colorLabel,
                     transfer = picture?.transfer, clipByte = picture?.clipByte,
-                    clockStyle = MonitorPlaybackClockStyle.ELAPSED_MINUTES_SECONDS)
+                    clockStyle = MonitorPlaybackClockStyle.ELAPSED_MINUTES_SECONDS,
+                    bufferedThroughSeconds = captured?.bufferedThroughSeconds)
             }, nativeAudio = { value -> picture?.audio?.takeIf { value === logical } },
             close = ::close, share = delivery::share,
             signalOptions = signal,
             availableAssistTools = nikonPlaybackAssistTools(picture?.imageEffectsAvailable == true).toSet(),
-            initialChromeVisible = true, loopAvailable = false,
+            initialChromeVisible = true,
             interaction = picture?.interaction ?: MonitorPlaybackInteractionOptions(
                 doubleTapResetsZoom = true, continuousPanBounds = true, zoomAgainstCanvas = true),
             picture = { _, _, geometry -> picture?.picture?.invoke(geometry) })

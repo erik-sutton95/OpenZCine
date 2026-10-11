@@ -3,6 +3,7 @@
 package com.opencapture.openzcine.media
 
 import androidx.media3.common.Player
+import androidx.media3.common.MediaItem
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.core.MonotonicInstant
 import com.opencapture.opencine.media.*
@@ -24,6 +25,62 @@ import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NikonPlaybackOwnerAdoptionTest {
+    @Test fun `actual attached native buffer publishes seconds and rejects SDK and source retirement`() = runTest {
+        val fixture = Fixture(this)
+        try {
+            for (scenario in listOf("positive", "unset", "missing", "item-replaced", "source-retired", "source-reentry", "read-reentry")) {
+                var accepted = true
+                var admissionReentry: (() -> Unit)? = null
+                val port = NikonPlaybackNativePort(sourceCurrent = {
+                    val callback = admissionReentry; admissionReentry = null; callback?.invoke()
+                    accepted
+                })
+                val token = MonitorPlaybackItemToken(java.util.UUID.randomUUID(), 0)
+                port.retireItem(token)
+                port.candidates(fixture.records[0], fixture.library)
+                var nativeItem: MediaItem? = MediaItem.Builder().setMediaId("SIMULATED-buffer").build()
+                var milliseconds = 2_500L
+                var onRead: (() -> Unit)? = null
+                var reads = 0
+                val player = Proxy.newProxyInstance(Player::class.java.classLoader, arrayOf(Player::class.java)) { _, method, _ ->
+                    when (method.name) {
+                        "getCurrentMediaItem" -> nativeItem
+                        "getBufferedPosition" -> { reads += 1; onRead?.invoke(); milliseconds }
+                        else -> when (method.returnType) {
+                            java.lang.Boolean.TYPE -> false
+                            java.lang.Integer.TYPE -> 0
+                            java.lang.Long.TYPE -> 0L
+                            java.lang.Float.TYPE -> 0f
+                            java.lang.Double.TYPE -> 0.0
+                            else -> null
+                        }
+                    }
+                } as Player
+                val attached = port.attach(player, token, {}) { _, _ -> }
+                assertEquals(2.5, port.updateBuffer(attached))
+                assertEquals(2.5, port.preparedSource.value?.bufferedThroughSeconds)
+                when (scenario) {
+                    "unset" -> milliseconds = -1
+                    "missing" -> nativeItem = null
+                    "item-replaced" -> onRead = { nativeItem = MediaItem.Builder().setMediaId("SIMULATED-successor").build() }
+                    "source-retired" -> accepted = false
+                    "source-reentry" -> admissionReentry = { port.retireItem(token.copy(revision = 1)) }
+                    "read-reentry" -> onRead = { port.retireItem(token.copy(revision = 1)) }
+                }
+                if (scenario == "positive") assertEquals(2.5, port.updateBuffer(attached))
+                else assertNull(port.updateBuffer(attached), "$scenario cannot publish a native buffer observation")
+                if (scenario in setOf("unset", "missing", "item-replaced")) {
+                    assertNull(port.preparedSource.value?.bufferedThroughSeconds)
+                }
+                port.close(token.copy(revision = 1))
+                val closedReads = reads
+                assertNull(port.updateBuffer(attached))
+                assertEquals(closedReads, reads)
+                assertNull(port.preparedSource.value)
+            }
+        } finally { fixture.close() }
+    }
+
     @Test fun `actual pending native attachment cannot overwrite or dispose successor`() = runTest {
         val fixture = Fixture(this)
         try {

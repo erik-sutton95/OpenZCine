@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import MonitorPresentation
 import MonitorUI
 import Observation
 import OpenCineAppKit
@@ -963,4 +964,389 @@ extension NikonPlaybackOwnerAdoptionTests {
         }
         return predicate()
     }
+}
+
+// Draft insertion into existing NikonPlaybackOwnerAdoptionTests after coordinator releases Z.
+// SIMULATED local movie; actual app MediaPlayerView composition and native AVPlayer.
+extension NikonPlaybackOwnerAdoptionTests {
+    func testActualNikonPlayerExposesSharedTransportControls() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let url = try fixture.store.localURL(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-CONTROLS.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        let clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: url.lastPathComponent,
+            handle: nil, storageID: nil, sizeBytes: UInt64(try Data(contentsOf: url).count),
+            captureDate: "20261011T120000")
+        let movie = try Data(contentsOf: url)
+        let clips = try (0..<3).map { index in
+            var value = clip
+            value.filename = "SIMULATED-CONTROLS-\(index).MOV"
+            let target = try fixture.store.localURL(
+                cameraID: value.cameraID, filename: value.filename)
+            try movie.write(to: target)
+            return value
+        }
+        fixture.store.upsertBatch(clips, cameraID: clip.cameraID)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
+        let coordinator = MediaDeliveryCoordinator()
+        defer { coordinator.close() }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(
+            rootView: MediaPlayerView(clips: clips, startingAt: clips[1])
+                .environment(fixture.model).environment(coordinator))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        host.view.frame = window.bounds
+        let mounted = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return Self.playbackCompositionElements(host.view).contains {
+                $0.accessibilityLabel == "Favorite clip"
+            }
+        }
+        XCTAssertTrue(mounted)
+        let labels = Self.playbackCompositionElements(host.view).compactMap(\.accessibilityLabel)
+        for required in [
+            "Favorite clip", "Clip information", "Share clip", "Conform preview",
+            "Mute", "Loop playback", "Previous clip", "Next clip",
+        ] {
+            XCTAssertTrue(
+                labels.contains(required),
+                "Actual Nikon composition omits shared control: " + required)
+        }
+        let retainedFavorite = try XCTUnwrap(
+            Self.playbackCompositionElements(host.view).first {
+                $0.accessibilityLabel == "Favorite clip"
+            })
+        XCTAssertTrue(retainedFavorite.accessibilityActivate())
+        let favored = try XCTUnwrap(
+            fixture.store.list(cameraID: clip.cameraID).first {
+                $0.filename == clips[1].filename
+            })
+        XCTAssertTrue(
+            favored.isFavorited, "The admitted rendered action must reach durable favorite state")
+        let bytes = try XCTUnwrap(fixture.store.catalogBytes(cameraID: clip.cameraID))
+        library.close()
+        // A retired native accessibility element may itself refuse activation; either way,
+        // its formerly admitted action must never amend the closed source.
+        _ = retainedFavorite.accessibilityActivate()
+        XCTAssertEqual(
+            try fixture.store.catalogBytes(cameraID: clip.cameraID), bytes,
+            "A retained rendered action must respect its closed shared playback lifetime")
+        await library.dispose()
+    }
+
+    func testActualNativeLoopSeeksToStartAndResumesThenDisabledLoopStopsAtEnd() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let url = try fixture.store.localURL(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-LOOP.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        let data = try Data(contentsOf: url)
+        let clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: url.lastPathComponent,
+            handle: nil, storageID: nil, sizeBytes: UInt64(data.count),
+            captureDate: "20261011T120000")
+        var successor = clip
+        successor.filename = "SIMULATED-LOOP-SUCCESSOR.MOV"
+        try data.write(
+            to: fixture.store.localURL(cameraID: successor.cameraID, filename: successor.filename))
+        fixture.store.upsertBatch([clip, successor], cameraID: clip.cameraID)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
+        let native = NikonPlaybackNativePort()
+        let session = try NikonPlaybackSession(
+            clips: [clip, successor], startingAt: clip, model: fixture.model, native: native)
+        defer { session.owner.close() }
+        let ready = await cachedCatalogSettled {
+            session.owner.ready && native.player.currentItem?.status == .readyToPlay
+                && (session.owner.duration ?? 0) > 1
+        }
+        XCTAssertTrue(ready)
+        let item = try XCTUnwrap(native.player.currentItem)
+        let token = session.owner.token
+        let duration = try XCTUnwrap(session.owner.duration)
+        var ended: [MonitorPlaybackItemToken] = []
+        // This callback is reached by the real AVPlayerItem end notification, not a fake event.
+        native.afterPlaybackEnd = { ended.append($0) }
+        session.owner.setPlaying(false)
+        session.owner.setLooping(true)
+        let positioned = await native.seek(seconds: duration - 0.3, tolerance: 0, token: token)
+        XCTAssertTrue(positioned)
+        session.owner.setPlaying(true)
+        let looped = await cachedCatalogSettled {
+            ended == [token] && native.player.currentTime().seconds > 0.1
+                && native.player.currentTime().seconds < 1 && native.player.rate > 0
+        }
+        XCTAssertTrue(looped, "The real native end must seek to zero and resume advancing")
+        XCTAssertEqual(session.owner.token, token)
+        XCTAssertTrue(native.player.currentItem === item)
+        XCTAssertTrue(session.owner.playRequested)
+        XCTAssertFalse(session.owner.reachedEnd)
+
+        session.owner.setPlaying(false)
+        session.owner.setLooping(false)
+        let repositioned = await native.seek(seconds: duration - 0.3, tolerance: 0, token: token)
+        XCTAssertTrue(repositioned)
+        session.owner.setPlaying(true)
+        let stopped = await cachedCatalogSettled {
+            ended == [token, token] && session.owner.reachedEnd && native.player.rate == 0
+        }
+        XCTAssertTrue(stopped, "Disabling loop must leave the actual native end paused")
+        XCTAssertFalse(session.owner.playRequested)
+
+        session.owner.goToAdjacent(1)
+        let replaced = await cachedCatalogSettled {
+            session.owner.token != token && session.owner.ready
+                && native.player.currentItem?.status == .readyToPlay
+        }
+        XCTAssertTrue(replaced)
+        session.owner.setPlaying(false)
+        let replacement = try XCTUnwrap(native.player.currentItem)
+        native.nativeDidEnd(item, admitted: token)
+        XCTAssertEqual(ended, [token, token])
+        XCTAssertTrue(native.player.currentItem === replacement)
+        XCTAssertFalse(session.owner.reachedEnd)
+        XCTAssertFalse(session.owner.playRequested)
+        XCTAssertEqual(native.player.rate, 0)
+        session.owner.close()
+        await library.dispose()
+    }
+
+    func testActualNativeLoadedTimeRangesStaySeparateFromTransferAndRetireBeforeCallbacks()
+        async throws
+    {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let url = try fixture.store.localURL(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-NATIVE-BUFFER.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        let bytes = try Data(contentsOf: url)
+        let clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: url.lastPathComponent,
+            handle: nil, storageID: nil, sizeBytes: UInt64(bytes.count),
+            captureDate: "20261011T120000")
+        fixture.store.upsertBatch([clip], cameraID: clip.cameraID)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
+        let native = NikonPlaybackNativePort()
+        let session = try NikonPlaybackSession(
+            clips: [clip], startingAt: clip, model: fixture.model, native: native)
+        defer { session.owner.close() }
+        let observed = await cachedCatalogSettled {
+            session.owner.ready
+                && (native.bufferedThroughSeconds(token: session.owner.token) ?? 0) > 1
+        }
+        XCTAssertTrue(observed)
+        let token = session.owner.token
+        let item = try XCTUnwrap(native.player.currentItem)
+        let expected = try XCTUnwrap(
+            item.loadedTimeRanges.map {
+                CMTimeGetSeconds(CMTimeRangeGetEnd($0.timeRangeValue))
+            }.filter { $0.isFinite && $0 >= 0 }.max())
+        XCTAssertEqual(
+            try XCTUnwrap(native.bufferedThroughSeconds(token: token)), expected, accuracy: 0.001)
+        XCTAssertTrue(fixture.model.isClipDownloaded(clip))
+        XCTAssertNotEqual(expected, 1, "A complete byte transfer is not the native temporal extent")
+        let prior = native.beforeItemRetirement
+        var retiringReads: [Double?] = []
+        native.beforeItemRetirement = {
+            retiringReads.append(native.bufferedThroughSeconds(token: token))
+            prior?()
+        }
+        session.owner.close()
+        XCTAssertEqual(retiringReads.count, 1)
+        XCTAssertTrue(retiringReads.allSatisfy { $0 == nil })
+        XCTAssertNil(native.bufferedThroughSeconds(token: token))
+        await library.dispose()
+    }
+
+    private static func playbackCompositionElements(_ object: NSObject) -> [NSObject] {
+        if object.accessibilityElementsHidden { return [] }
+        if let view = object as? UIView, view.isHidden || view.alpha < 0.01 { return [] }
+        if object.isAccessibilityElement { return [object] }
+        if let elements = object.accessibilityElements as? [NSObject], !elements.isEmpty {
+            return elements.flatMap(playbackCompositionElements)
+        }
+        let count = object.accessibilityElementCount()
+        if count > 0, count != NSNotFound {
+            let elements = (0..<count).compactMap {
+                object.accessibilityElement(at: $0) as? NSObject
+            }
+            if !elements.isEmpty { return elements.flatMap(playbackCompositionElements) }
+        }
+        return ((object as? UIView)?.subviews ?? []).flatMap(playbackCompositionElements)
+    }
+}
+
+// SIMULATED local bytes, actual app gallery and its actual fullScreenCover opening callback.
+extension NikonPlaybackOwnerAdoptionTests {
+    func testActualNikonGalleryKeepsScrollOffsetWhileOpeningAndReturningFromGrid() async throws {
+        try await assertActualGalleryScrollPreserved(layout: .grid)
+    }
+    func testActualNikonGalleryKeepsScrollOffsetWhileOpeningAndReturningFromList() async throws {
+        try await assertActualGalleryScrollPreserved(layout: .list)
+    }
+    private func assertActualGalleryScrollPreserved(layout: MonitorMediaLayout) async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let previousLayout = fixture.model.mediaBrowserLayout
+        defer { fixture.model.mediaBrowserLayout = previousLayout }
+        fixture.model.mediaBrowserLayout = layout
+        let url = try fixture.store.localURL(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-SCROLL.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        let movie = try Data(contentsOf: url)
+        let clips = try (0..<48).map { index in
+            let name = String(format: "SIMULATED-SCROLL-%02d.MOV", index)
+            let target = try fixture.store.localURL(
+                cameraID: MediaClipStore.localBucketID, filename: name)
+            try movie.write(to: target)
+            return MediaClip(
+                cameraID: MediaClipStore.localBucketID, filename: name,
+                handle: nil, storageID: nil, sizeBytes: UInt64(movie.count),
+                captureDate: "20261011T120000")
+        }
+        fixture.store.upsertBatch(clips, cameraID: MediaClipStore.localBucketID)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        let coordinator = MediaDeliveryCoordinator()
+        defer { coordinator.close() }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(
+            rootView: MediaBrowserView()
+                .environment(fixture.model).environment(coordinator))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        host.view.frame = window.bounds
+        let ready = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return library.entries.values.filter { $0.isPlayableOffline }.count >= clips.count
+                && Self.galleryScrollViews(host.view).contains {
+                    $0.contentSize.height > $0.bounds.height + 500
+                }
+        }
+        XCTAssertTrue(ready)
+        let scroll = try XCTUnwrap(
+            Self.galleryScrollViews(host.view).first {
+                $0.contentSize.height > $0.bounds.height + 500
+            })
+        scroll.setContentOffset(CGPoint(x: 0, y: 400), animated: false)
+        host.view.layoutIfNeeded()
+        let before = scroll.contentOffset.y
+        XCTAssertGreaterThan(before, 300)
+        // The actual visible clip action must enter Nikon's real opening callback.
+        let found = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return Self.galleryScrollObjects(host.view).contains {
+                Self.galleryScrollIdentifier($0)?.hasPrefix("monitor.media.clip.") == true
+                    && $0.accessibilityFrame.intersects(scroll.convert(scroll.bounds, to: nil))
+            }
+        }
+        XCTAssertTrue(found)
+        let element = try XCTUnwrap(
+            Self.galleryScrollObjects(host.view).first {
+                Self.galleryScrollIdentifier($0)?.hasPrefix("monitor.media.clip.") == true
+                    && $0.accessibilityFrame.intersects(scroll.convert(scroll.bounds, to: nil))
+            })
+        XCTAssertTrue(
+            element.accessibilityActivate(),
+            "The real visible media clip must open through accessibility")
+        XCTAssertEqual(scroll.contentOffset.y, before, accuracy: 1)
+        let openingOffsets = PlaybackGalleryOffsetCapture()
+        let observation = scroll.observe(\.contentOffset, options: [.new]) { captured, _ in
+            MainActor.assumeIsolated {
+                // A cover may legitimately retire its offscreen UIKit view. Only a still-mounted
+                // gallery viewport can expose the reported visible jump during presentation.
+                if captured.window != nil, captured.bounds.height > 1,
+                    host.presentedViewController == nil
+                        || host.presentedViewController?.isBeingPresented == true
+                {
+                    openingOffsets.values.append(captured.contentOffset.y)
+                }
+            }
+        }
+        let presented = await cachedCatalogSettled { host.presentedViewController != nil }
+        XCTAssertTrue(presented)
+        observation.invalidate()
+        for offset in openingOffsets.values { XCTAssertEqual(offset, before, accuracy: 1) }
+        host.dismiss(animated: false)
+        let returned = await cachedCatalogSettled { host.presentedViewController == nil }
+        XCTAssertTrue(returned)
+        host.view.layoutIfNeeded()
+        let returnedScroll = try XCTUnwrap(
+            Self.galleryScrollViews(host.view).first {
+                $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
+            })
+        XCTAssertEqual(
+            returnedScroll.contentOffset.y, before, accuracy: 1,
+            "Returning from playback must preserve the operator's gallery position even if UIKit remounted it"
+        )
+        await library.dispose()
+    }
+    private static func galleryScrollViews(_ view: UIView) -> [UIScrollView] {
+        ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap(galleryScrollViews)
+    }
+    private static func galleryScrollObjects(_ object: NSObject) -> [NSObject] {
+        if object.accessibilityElementsHidden { return [] }
+        if let view = object as? UIView, view.isHidden || view.alpha < 0.01 { return [] }
+        let children: [NSObject]
+        if let values = object.accessibilityElements as? [NSObject], !values.isEmpty {
+            children = values
+        } else {
+            let count = object.accessibilityElementCount()
+            if count > 0, count != NSNotFound {
+                children = (0..<count).compactMap {
+                    object.accessibilityElement(at: $0) as? NSObject
+                }
+            } else {
+                children = (object as? UIView)?.subviews ?? []
+            }
+        }
+        return [object] + children.flatMap(galleryScrollObjects)
+    }
+    private static func galleryScrollIdentifier(_ object: NSObject) -> String? {
+        let getter = NSSelectorFromString("accessibilityIdentifier")
+        guard object.responds(to: getter) else { return nil }
+        return object.perform(getter)?.takeUnretainedValue() as? String
+    }
+}
+
+@MainActor private final class PlaybackGalleryOffsetCapture {
+    var values: [CGFloat] = []
 }

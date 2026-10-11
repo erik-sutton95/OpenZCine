@@ -228,16 +228,10 @@ internal fun rememberNikonPlaybackPicture(
                         captureRate = selectedPlaybackVideoFrameRate(player.currentTracks)?.toDouble()),
                 ),
             ))
-            // Prefer ExoPlayer buffered window; fall back to cache-download progress.
-            val playerBuffered =
-                if (observedDuration != null) {
-                    (player.bufferedPosition.toFloat() / observedDuration.toFloat()).coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
-            bufferedFraction =
-                max(playerBuffered, entry.progress.toFloat().coerceIn(0f, 1f))
-            native.updateBuffer(attachment, bufferedFraction)
+            val through = native.updateBuffer(attachment)
+            bufferedFraction = if (through != null && observedDuration != null) {
+                (through / (observedDuration / 1000.0)).coerceIn(0.0, 1.0).toFloat()
+            } else 0f
             native.publish(attachment, MonitorPlaybackEvent.Playing(player.isPlaying))
             native.publish(attachment, MonitorPlaybackEvent.Transport(observedTransport(player)))
             playbackState = player.playbackState

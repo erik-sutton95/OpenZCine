@@ -14306,11 +14306,12 @@ extension NativeAppModel {
     ) -> Task<Void, Never>? {
         let action = captureMediaLibraryAction([clip])
         let captured = action?.capturedClip(clip) ?? clip
-        var stars = captured.isFavorite ? 0 : max(captured.starRating ?? 0, 1)
+        let favorite = !captured.isFavorited
+        var stars = favorite ? max(captured.starRating ?? 0, 1) : 0
         if action?.canMutate(clip) != false {
             mediaClipStore.update(cameraID: clip.cameraID, filename: clip.filename) {
-                $0.isFavorite.toggle()
-                stars = $0.isFavorite ? max($0.starRating ?? 0, 1) : 0
+                $0.isFavorite = favorite
+                stars = favorite ? max($0.starRating ?? 0, 1) : 0
                 $0.starRating = stars
             }
             if let action { action.publish() } else { refreshMediaClips() }

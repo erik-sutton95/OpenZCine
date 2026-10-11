@@ -8,6 +8,66 @@ import XCTest
 
 @testable import Runner
 
+@Suite("Playback favorite persistence")
+@MainActor struct NikonPlaybackFavoritePersistenceTests {
+    @Test func retainedPlaybackCannotFavoriteReplacementContent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        let original = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "REPLACED.MOV", handle: nil,
+            storageID: nil, sizeBytes: 4, captureDate: "20261011T120000")
+        store.upsertBatch([original], cameraID: original.cameraID)
+        model.refreshMediaClips()
+        let library = try #require(model.mediaLibrary)
+        let playbackRecord = try #require(library.records.first)
+        var replacement = original
+        replacement.sizeBytes = 8
+        replacement.captureDate = "20261011T120001"
+        store.upsertBatch([replacement], cameraID: replacement.cameraID)
+        let beforeBytes = try store.catalogBytes(cameraID: replacement.cameraID)
+        let before = try #require(beforeBytes)
+        model.toggleClipFavorite(playbackRecord.payload)
+        #expect(try store.catalogBytes(cameraID: replacement.cameraID) == before)
+        await library.dispose()
+    }
+
+    @Test func cameraRatingOnlyFavoriteClearsAndStalePlaybackRecordTogglesCurrentRow() async throws
+    {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        var clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "RATED.MOV", handle: nil,
+            storageID: nil, sizeBytes: 4, captureDate: "20261011T120000")
+        clip.starRating = 4
+        clip.isFavorite = false
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        model.refreshMediaClips()
+        let library = try #require(model.mediaLibrary)
+        let record = try #require(library.records.first)
+        #expect(record.favorite)
+        // Playback keeps its captured record while the canonical catalog amends operator flags.
+        model.toggleClipFavorite(record.payload)
+        let cleared = try #require(store.list(cameraID: clip.cameraID).first)
+        #expect(!cleared.isFavorited)
+        #expect(cleared.starRating == 0)
+        #expect(library.record(record.asset.id)?.favorite == false)
+        model.toggleClipFavorite(record.payload)
+        let selected = try #require(store.list(cameraID: clip.cameraID).first)
+        #expect(selected.isFavorite)
+        #expect(selected.starRating == 1)
+        #expect(library.record(record.asset.id)?.favorite == true)
+        let reopened = MediaClipStore(root: root)
+        #expect(reopened.list(cameraID: clip.cameraID).first?.starRating == 1)
+        await library.dispose()
+    }
+}
+
 @MainActor final class NikonMediaLibraryAdoptionTests: XCTestCase {
     func testPlaybackEligibilityPreservesNativeKindAndCanonicalRawMasterIdentity() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
