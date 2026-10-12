@@ -146,9 +146,10 @@ class NikonCaptureQuickComposeTest {
             val control = remember { MonitorControlModel(scope).also { it.bind(common) } }
             DisposableEffect(Unit) { onDispose { control.unbind() } }
             OpenZCineTheme {
-                MonitorScreen(session, common, control, frameSource = null, assists = idleNikonAssists(),
-                    operatorSettings = settings, liveViewEnabled = false, sessionRecoveryEnabled = false,
-                    glassTierOverride = "flat", controlsSurrendered = surrendered())
+                val assists = remember { idleNikonAssists() }
+                MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), frameSource = null,
+                    assists = assists, operatorSettings = settings, liveViewEnabled = false, sessionRecoveryEnabled = false,
+                    controlsSurrendered = surrendered())
             }
         }
         composeRule.mainClock.advanceTimeByFrame()

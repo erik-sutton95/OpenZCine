@@ -4,13 +4,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.opencapture.monitorui.MonitorTimecodeFormat
+import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
+import com.opencapture.opencine.cameracontrols.MonitorOperatorPowerReading
+import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.opencine.nikon.LiveFrameTimecode
+import com.opencapture.opencine.vocabulary.ConnectionPhase
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 import java.util.Locale
-import kotlin.math.ceil
+import java.util.concurrent.atomic.AtomicInteger
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
 
@@ -23,82 +28,6 @@ internal data class MonitorCameraReadouts(
     val batteryPercent: Int?,
     val externalPower: Boolean?,
 )
-
-/** Visual battery state, including a separately rendered external-power marker. */
-internal data class MonitorBatteryPresentation(
-    val percent: Int?,
-    val label: String,
-    val externalPower: Boolean,
-    val urgency: CameraBatteryUrgency = CameraBatteryUrgency.NOMINAL,
-    /** The body's blinking exhaustion step. Only that step pulses. */
-    val pulses: Boolean = false,
-)
-
-/**
- * How urgently the camera gauge should read, mirroring the shared core's
- * `CameraBatteryGauge.Urgency`.
- *
- * The steps are the operator's, not the body's: three bars or more is "carry on", two is "find a
- * spare", one is "swap now". Keeping the thresholds in one definition per platform is what stops
- * iOS and Android warning at different charges for the same reading.
- */
-internal enum class CameraBatteryUrgency {
-    NOMINAL,
-    LOW,
-    DEPLETED,
-}
-
-/** Mirrors `CameraBatteryGauge.urgency`. An absent reading must not cry wolf. */
-internal fun cameraBatteryUrgency(filledBars: Int?): CameraBatteryUrgency =
-    when (filledBars) {
-        null -> CameraBatteryUrgency.NOMINAL
-        1 -> CameraBatteryUrgency.DEPLETED
-        2 -> CameraBatteryUrgency.LOW
-        else -> CameraBatteryUrgency.NOMINAL
-    }
-
-/**
- * Live-view header timecode retention for one connected camera.
- *
- * Always mirrors camera-header TC (standby and rolling). Keeps the last good
- * sample when Nikon briefly reports empty/off around record transitions.
- * UI publishes are lightly rate-limited so second ticks stay smooth without
- * thrashing composition on every frame.
- */
-internal class MonitorTimecodeRetention(private val cameraIdentity: CameraIdentity?) {
-    private var retainedTimecode: LiveFrameTimecode? by mutableStateOf(null)
-    private var lastPublishNanos: Long = 0L
-
-    /** Ingest a live-view header sample and publish when it advances. */
-    fun accept(timecode: LiveFrameTimecode?): Unit {
-        if (cameraIdentity == null) return
-        val next = liveViewHeaderTimecode(timecode) ?: return
-        publish(next)
-    }
-
-    /** Returns the retained value only while the same camera is still connected. */
-    fun timecodeFor(sessionState: CameraSessionState): LiveFrameTimecode? {
-        val currentIdentity = (sessionState as? CameraSessionState.Connected)?.identity
-        return retainedTimecode.takeIf { cameraIdentity != null && currentIdentity == cameraIdentity }
-    }
-
-    private fun publish(next: LiveFrameTimecode) {
-        if (next == retainedTimecode) return
-        val now = System.nanoTime()
-        val previous = retainedTimecode
-        val secondChanged =
-            previous == null ||
-                previous.hour != next.hour ||
-                previous.minute != next.minute ||
-                previous.second != next.second
-        // Always publish second boundaries immediately; frame ticks ~30 Hz max.
-        if (!secondChanged && lastPublishNanos != 0L && now - lastPublishNanos < 33_000_000L) {
-            return
-        }
-        lastPublishNanos = now
-        retainedTimecode = next
-    }
-}
 
 /** Identity key that scopes retained frame metadata to one connected camera. */
 internal fun monitorTimecodeOwner(sessionState: CameraSessionState): CameraIdentity? =
@@ -147,65 +76,17 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String {
 /** Accepts only a real battery percentage; platform sentinels stay unavailable. */
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
 
-/** Camera battery label that preserves authoritative external-power-only readback. */
-/** Bars in the camera's gauge, mirroring iOS `CameraBatteryGauge.barCount`. */
-internal const val CAMERA_BATTERY_BAR_COUNT = 5
-
 /**
- * Gauge markers carried in the readout label. The label is the shared contract between the
- * readout builder and the chrome that draws it; the chrome recognises these and renders real
- * segments rather than printing the characters, which never matched the iOS gauge's metrics.
+ * The camera battery as the body's own five-step gauge (A5-01, iOS `MonitorUnified.cameraBattery`): bars,
+ * never a percent, since `BatteryLevel` reads 60 for anything from 40 to 59 percent. An unread battery is
+ * absent, never an empty red cell.
  */
-internal const val FILLED_BAR = '\u25AE'
-internal const val EMPTY_BAR = '\u25AF'
-
-/**
- * Filled bars for a raw `BatteryLevel` (0x5001) value, mirroring iOS `CameraBatteryGauge`.
- *
- * The property is a five-bar gauge, not a percentage — it only ever carries 1/20/40/60/80/100,
- * where 1 is the blinking shutter-disabled step. Off-step values round UP to the step they sit
- * under so the gauge can read low but never high.
- */
-internal fun cameraBatteryBars(percent: Int?): Int? {
-    val raw = percent ?: return null
-    if (raw <= 0) return null
-    if (raw == 1) return 1
-    val clamped = minOf(100, raw)
-    return maxOf(1, minOf(CAMERA_BATTERY_BAR_COUNT, ceil(clamped / 20.0).toInt()))
-}
-
-/**
- * The camera battery readout: bars, not a percentage (#303).
- *
- * Printing the raw value as "60%" claimed a precision the body never sent — it reads 60 for
- * anything from 40% to 59%, which is exactly the discrepancy reported from the field.
- */
-internal fun batteryReadoutLabel(percent: Int?, externalPower: Boolean? = null): String =
-    cameraBatteryBars(validBatteryPercent(percent))?.let { filled ->
-        // Drawn as filled/empty blocks so the readout reads as a gauge rather than a number.
-        // iOS draws real segments; this is the string-based mirror, since the Android readout is
-        // a text label rather than its own view.
-        buildString {
-            repeat(CAMERA_BATTERY_BAR_COUNT) { index ->
-                append(if (index < filled) FILLED_BAR else EMPTY_BAR)
-            }
-        }
-    } ?: if (externalPower == true) "EXT" else UNAVAILABLE_MONITOR_VALUE
-
-/** Builds the battery label and visible power-marker state from authoritative readback. */
-internal fun monitorBatteryPresentation(
-    percent: Int?,
-    externalPower: Boolean? = null,
-): MonitorBatteryPresentation {
-    val validPercent = validBatteryPercent(percent)
-    return MonitorBatteryPresentation(
-        percent = validPercent,
-        label = batteryReadoutLabel(validPercent, externalPower),
-        externalPower = externalPower == true,
-        urgency = cameraBatteryUrgency(cameraBatteryBars(validPercent)),
-        // Raw 1 is the body's blinking shutter-disabled step, distinct from a steady last bar.
-        pulses = validPercent == 1,
-    )
+internal fun nikonCameraBatteryReading(rawLevel: Int?, externalPower: Boolean?): MonitorOperatorPowerReading? {
+    val gauge = NikonCameraBatteryGauge.gauge(rawLevel ?: 0)
+    if (gauge == NikonCameraBatteryGauge.Unknown) return null
+    return MonitorOperatorPowerReading(camera = true, percent = null, charging = externalPower,
+        bars = gauge.filledBars, barCount = NikonCameraBatteryGauge.BAR_COUNT,
+        warning = gauge.urgency != NikonCameraBatteryGauge.Urgency.NOMINAL, exhausted = gauge.pulses)
 }
 
 // ── iOS top-bar readout parity (MonitorTextFormat + MediaStatus + FrameRateSampler) ──
@@ -383,89 +264,47 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
     }
 }
 
-/**
- * What the frame-rate chip is carrying instead of a rate.
- *
- * iOS parks these same words in `liveFPS` and the chip prints whatever is there
- * (`NativeAppRoot.swift:1627`, `:1651`, `:6556`, `:7628`; chip at `MonitorControls.swift:81-120`).
- * The chip is the only visible link readout on the monitor — `connectionMessage` is behind it — so
- * a route that never came up has to be distinguishable from a live feed, which a stale `25.00`
- * makes impossible.
- */
-internal enum class MonitorFeedState(val word: String) {
-    /** The session is gone and bounded recovery owns the screen (iOS `heldFrameBadge`). */
-    NO_LINK("NO LINK"),
+/** Pictures the monitor presented, counted for the shared link readout's rate. */
+internal class PresentedFrameCounter {
+    private val count = AtomicInteger()
 
-    /** The session is up but the stream is being restarted. */
-    RECOV("RECOV"),
-
-    /** The body is busy and has stopped feeding frames. */
-    BUSY("BUSY"),
-
-    /** The route failed outright and nothing is retrying it. */
-    FAIL("FAIL"),
-}
-
-/** Chip text before the first measurable interval (iOS `CameraDisplayState.preview.liveFPS`). */
-private const val READY_FRAME_RATE = "READY"
-
-/**
- * The one rule for what the FPS chip says.
- *
- * A [state] always wins: while the feed is down the measured rate is the rate of a feed that
- * stopped arriving, and printing it claims frames are still coming. A rate is only printed when it
- * is a real, positive measurement.
- *
- * The words are Kotlin constants rather than `stringResource` lookups because the chip's caller
- * needs this rule in a plain function it can also unit-test; `MonitorReadoutsTest` pins them to the
- * `monitor_fps_*` strings so the two spellings cannot drift.
- */
-internal fun fpsChipLabel(rate: Double?, state: MonitorFeedState?): String =
-    state?.word
-        ?: rate?.takeIf { it.isFinite() && it > 0.0 }?.let {
-            String.format(Locale.ROOT, "%.2f", it)
-        }
-        ?: READY_FRAME_RATE
-
-/**
- * iOS `FrameRateSampler`: live-measured delivery rate over a rolling 30-interval
- * window, published at most ~1 Hz, `"%.2f"`. Starts as iOS's `"READY"` until the
- * first measurable interval.
- */
-internal class MonitorFrameRateSampler {
-    private val sampler = com.opencapture.opencine.media.FrameRateSampler(
-        windowSize = 30,
-        displayRefreshInterval = 1.0,
-    )
-
-    /** Formatted through [fpsChipLabel] so the chip has one definition of a printed rate. */
-    var formatted: String by mutableStateOf(fpsChipLabel(rate = null, state = null))
+    @Volatile
+    var lastPresentedAtMillis: Long? = null
         private set
 
-    fun accept(nowNanos: Long) {
-        sampler.recordFrame(at = nowNanos / 1e9)
-        formatted = fpsChipLabel(rate = sampler.displayFPS.takeIf { sampler.intervalCount > 0 }, state = null)
+    val framesPresented: Int get() = count.get()
+
+    fun presented(nowMillis: Long) {
+        count.incrementAndGet()
+        lastPresentedAtMillis = nowMillis
     }
 }
 
 /**
- * Live-view header timecode acceptance (iOS parity).
- *
- * iOS always applies `frame.timecode` digits to the hero readout without
- * requiring the header "on" flag. Nikon can leave `on=0` while still advancing
- * H:M:S:F during a take; requiring `on` froze Android TC for the whole roll.
- *
- * Pure zero + off is treated as "not available" so we never invent a clock.
- * Any other in-range H:M:S:F from the camera header is accepted as-is.
+ * The Nikon monitor's link facts for the shared FPS chip and bars (A3-16). The chip owes the operator
+ * two words: a dropped session under bounded recovery and a preview the live session rejected. The
+ * bars are the Swift scorer's, which reads the Nikon pump watchdog and the USB transport that the
+ * shared inputs cannot carry.
  */
-internal fun liveViewHeaderTimecode(timecode: LiveFrameTimecode?): LiveFrameTimecode? =
-    timecode?.takeIf {
-        it.hour in 0..23 &&
-            it.minute in 0..59 &&
-            it.second in 0..59 &&
-            it.frame in 0..255 &&
-            (it.on || it.hour != 0 || it.minute != 0 || it.second != 0 || it.frame != 0)
-    }
+internal fun nikonLinkObservation(
+    state: CameraSessionState,
+    recovery: SessionRecoveryUi,
+    previewRejected: Boolean,
+    frames: PresentedFrameCounter,
+    linkBars: Int,
+): MonitorLinkObservation =
+    MonitorLinkObservation(
+        connection = when (state) {
+            is CameraSessionState.Connected -> ConnectionPhase.LIVE
+            CameraSessionState.Connecting -> ConnectionPhase.OPENING_DATALINK
+            CameraSessionState.Disconnected -> ConnectionPhase.IDLE
+        },
+        framesPresented = frames.framesPresented,
+        lastPresentedAtMillis = frames.lastPresentedAtMillis,
+        feedRecovering = previewRejected,
+        sessionRecovering = recovery != SessionRecoveryUi.Idle,
+        linkBars = linkBars,
+    )
 
 /** Shared monitor readout from enabled camera-header telemetry, including genuine frames. */
 internal fun monitorTimecodeLabel(timecode: LiveFrameTimecode?): String? =

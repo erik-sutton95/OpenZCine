@@ -1,7 +1,7 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.LiveFocusInfo
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import kotlin.math.abs
 import com.opencapture.opencine.runtime.NativeFeedContentRect
 

@@ -111,10 +111,13 @@ struct NikonAssistOptions: View {
                 showTopDivider: false
             ) {
                 NikonSettingsChoices(
-                    options: ["3s", "5s", "7s", "∞"], selected: instantReviewDurationLabel
-                ) {
+                    options: MonitorReviewDuration.allCases.map(\.label),
+                    selected: MonitorReviewDuration.fromSeconds(
+                        model.assistConfiguration.instantReviewSeconds
+                    ).label
+                ) { label in
                     model.assistConfiguration.instantReviewSeconds =
-                        $0 == "∞" ? 0 : Int($0.dropLast()) ?? 5
+                        MonitorReviewDuration.allCases.first { $0.label == label }?.rawValue ?? 5
                 }
             }
             NikonSettingsSwitch(
@@ -132,11 +135,6 @@ struct NikonAssistOptions: View {
                 model.assistConfiguration.instantReviewShowsCaptureInfo.toggle()
             }
         }
-    }
-
-    private var instantReviewDurationLabel: String {
-        let seconds = model.assistConfiguration.instantReviewSeconds
-        return seconds > 0 ? "\(seconds)s" : "∞"
     }
 
     private func selectionFeedback() {

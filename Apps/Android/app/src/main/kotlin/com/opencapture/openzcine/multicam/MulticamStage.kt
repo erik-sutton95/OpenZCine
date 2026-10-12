@@ -53,6 +53,8 @@ import com.opencapture.opencine.core.MonitorEntryID
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
+import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
+import com.opencapture.openzcine.nikonCameraBatteryReading
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import kotlinx.coroutines.delay
 
@@ -193,7 +195,7 @@ private object MulticamTileAction {
 }
 
 /** The member's values as the shared stage shows them; unknown stays unknown. */
-private fun tile(member: MulticamMember, coordinator: MulticamCoordinator): MultiviewTile {
+internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): MultiviewTile {
     val rolling = member.recording.takeIf { member.isLive }
     val (status, detail) = when (val state = member.status) {
         MemberStatus.Live -> null to "Connected"
@@ -207,7 +209,10 @@ private fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mult
         ) to state.reason
     }
     return MultiviewTile(
-        name = member.displayName, model = member.record.transport.displayName, battery = member.batteryPercent,
+        name = member.displayName, model = member.record.transport.displayName,
+        // The body's five-step gauge (A5-01): bars, never a percent it did not report.
+        batteryBars = nikonCameraBatteryReading(member.batteryPercent, null)?.bars,
+        batteryBarCount = NikonCameraBatteryGauge.BAR_COUNT,
         timecode = member.timecode,
         tally = MultiviewTally.text(rolling, waiting = coordinator.groupBusy),
         // Nikon reports no take length: the tile times it from the first recording frame.

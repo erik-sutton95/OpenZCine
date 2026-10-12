@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkit.MonitorReviewOptions
+import com.opencapture.opencine.appkit.MonitorReviewDuration
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.Stable
@@ -25,7 +27,7 @@ import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 
 /**
  * The shared [MonitorAssistState] plus this camera's typed assist extensions: the monitor look LUT
@@ -43,6 +45,21 @@ class NikonAssists internal constructor(
 
     /** PLAY: each new still shows full screen. Session-local, and photography only. */
     var instantReview: Boolean by mutableStateOf(false)
+
+    /** Persisted review choices; PLAY visibility remains scoped to this monitor. */
+    var reviewOptions: MonitorReviewOptions by mutableStateOf(MonitorReviewOptions())
+        private set
+    private var persistReview: (MonitorReviewOptions) -> Unit = {}
+
+    internal fun restoreReviewOptions(options: MonitorReviewOptions, persist: (MonitorReviewOptions) -> Unit) {
+        reviewOptions = options
+        persistReview = persist
+    }
+
+    fun updateReviewOptions(options: MonitorReviewOptions) {
+        reviewOptions = options
+        persistReview(options)
+    }
 
     /** Picking a look arms LUT, as the shared picker does. */
     fun selectLut(selection: FeedLutSelection) {
@@ -275,8 +292,24 @@ internal fun restoreNikonAssists(
                     .putString(LUT_FILE_KEY, lut.value.fileName)
         }
         editor.apply()
+    }.also { state ->
+        state.restoreReviewOptions(MonitorReviewOptions(
+            duration = MonitorReviewDuration.fromSeconds(
+                assist.getInt(REVIEW_SECONDS_KEY, 5)),
+            showsFocusPoint = assist.getBoolean(REVIEW_FOCUS_KEY, true),
+            showsCaptureInfo = assist.getBoolean(REVIEW_INFO_KEY, true),
+        )) { options ->
+            assist.edit().putInt(REVIEW_SECONDS_KEY, options.duration.seconds)
+                .putBoolean(REVIEW_FOCUS_KEY, options.showsFocusPoint)
+                .putBoolean(REVIEW_INFO_KEY, options.showsCaptureInfo).apply()
+        }
     }
 }
+
+/** The instant review's persisted options (iOS `assistConfiguration.instantReview*`). */
+private const val REVIEW_SECONDS_KEY = "instantReview.seconds.v1"
+private const val REVIEW_FOCUS_KEY = "instantReview.focusPoint.v1"
+private const val REVIEW_INFO_KEY = "instantReview.captureInfo.v1"
 
 private fun storedLut(assist: SharedPreferences): StoredLutSelection? =
     if (assist.all[LUT_KIND_KEY] != LUT_STORED) null

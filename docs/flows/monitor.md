@@ -141,7 +141,9 @@ flowchart TD
 - **Screen:** Full-screen black base + command dashboard (hero timecode, health strip, reorderable
   3×3 control grid, Image/Focus/Audio side column). Feed hidden; stream loop idles at safe points.
 - **Code:** `MonitorPanels.swift` (`CommandMonitor`, `CommandPrimaryGrid`),
-  `streamUntilStall` command-mode branch.
+  `streamUntilStall` command-mode branch. Android: `CommandMonitor.kt` projects the Nikon tiles
+  and draws them with OpenCine `MonitorCommandDashboard` (grid, drag reorder, health strip, side
+  column); the order persists through OpenCine `MonitorCommandTileOrderPreferences`.
 - **Detail:** Side rails (record, DISP, settings, media) remain in the same positions as live/clean.
   Property polls run every 250 ms instead of every 8 frames.
 - 📝 Notes:

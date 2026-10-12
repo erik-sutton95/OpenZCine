@@ -59,6 +59,9 @@ internal interface LiveFeedGpuBackend {
  * Order: Vulkan (when native module loads + device supports it) → GLES2 surface.
  * AGSL is intentionally **not** a live-monitor backend (A12 jank measurements).
  */
+/** Phones reporting less total RAM keep the proven GLES surface. */
+private const val MIN_VULKAN_RAM_BYTES: Long = 4L * 1024L * 1024L * 1024L
+
 internal object LiveFeedGpuBackendFactory {
     @Volatile private var vulkanProbed = false
     @Volatile private var vulkanAvailable = false
@@ -87,7 +90,7 @@ internal object LiveFeedGpuBackendFactory {
                     appContext.getSystemService(Context.ACTIVITY_SERVICE)
                         as android.app.ActivityManager
                 val info = android.app.ActivityManager.MemoryInfo().also(am::getMemoryInfo)
-                am.isLowRamDevice || info.totalMem < MIN_FULL_GLASS_RAM_BYTES
+                am.isLowRamDevice || info.totalMem < MIN_VULKAN_RAM_BYTES
             }.getOrDefault(false)
         if (lowRam) {
             Log.i(TAG, "low-RAM floor — preferring GLES live surface")
