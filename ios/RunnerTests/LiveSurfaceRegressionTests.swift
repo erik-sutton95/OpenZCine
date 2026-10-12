@@ -1,5 +1,6 @@
-import OpenCineApple
+import Observation
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -61,7 +62,9 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         }
 
         /// What VoiceOver reaches, for a failure message.
-        var identifiers: [String] { elements().map(Self.identifier).filter { !$0.isEmpty }.sorted() }
+        var identifiers: [String] {
+            elements().map(Self.identifier).filter { !$0.isEmpty }.sorted()
+        }
 
         private static func identifier(_ object: NSObject) -> String {
             let getter = NSSelectorFromString("accessibilityIdentifier")
@@ -133,7 +136,8 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             let coverShown = try await hosted.settle {
                 hosted.element(prefix: "monitor.settings.tab.") != nil
             }
-            XCTAssertTrue(coverShown, "\(source): Settings must render its cover: \(hosted.identifiers)")
+            XCTAssertTrue(
+                coverShown, "\(source): Settings must render its cover: \(hosted.identifiers)")
 
             model.activePanel = nil
             let backToLive = try await hosted.settle {
@@ -141,7 +145,8 @@ final class LiveSurfaceRegressionTests: XCTestCase {
                     && hosted.element("monitor.system.settings") != nil
             }
             XCTAssertTrue(
-                backToLive, "\(source): closing Settings must return to the monitor: \(hosted.identifiers)")
+                backToLive,
+                "\(source): closing Settings must return to the monitor: \(hosted.identifiers)")
         }
     }
 
@@ -282,6 +287,145 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertFalse(model.isRecording)
         XCTAssertNil(model.pendingRecordConfirmation, "no prompt may stand in for a refused press")
     }
+
+    // MARK: R-03
+
+    /// R-03: under a full-screen cover the Nikon pump reads one camera property every 250 ms,
+    /// and every read re-ran the hidden live surface, so the media page never let the main
+    /// thread settle. The display state write is equality-gated already (`@Observable` skips an
+    /// equal value), but the shutter lock sync rewrote `lockedControls` in place after every
+    /// read, and an in-place write notifies even when nothing changed. A poll that reads back
+    /// what the camera already reported must notify nothing the monitor reads.
+    func testAnUnchangedCameraPollNotifiesNothingTheMonitorReads() {
+        let model = NativeAppModel()
+        model.startDemoSession()
+        // A movie body in shutter angle mode with the shutter unlocked, as a connected ZR
+        // reports it: the shell's shutter readout then reads the lock set.
+        model.seedQuickDemoCamera()
+        // Everything one property read writes that the live shell reads.
+        func reads() {
+            _ = model.cameraState
+            _ = model.cameraPropertySnapshot
+            _ = model.lockedControls
+            _ = model.focusArea
+            _ = model.focusSubject
+            _ = model.cameraBatteryCharging
+        }
+        let probe = PollObservationProbe()
+        let unchanged: [(PTPPropertyCode, Data)] = [
+            (.liveViewSelector, Data([1])),
+            (.movieShutterMode, Data([PTPCameraPropertyDecoders.shutterModeCode(.angle)])),
+            (.movieTVLockSetting, Data([0])),
+        ]
+        for _ in 0..<8 {
+            for (property, data) in unchanged {
+                withObservationTracking {
+                    reads()
+                } onChange: {
+                    MainActor.assumeIsolated { probe.unchanged += 1 }
+                }
+                model.applyBootstrapObservation(.property(property, data))
+            }
+        }
+        XCTAssertEqual(probe.unchanged, 0, "24 unchanged reads must not invalidate the monitor")
+
+        withObservationTracking {
+            reads()
+        } onChange: {
+            MainActor.assumeIsolated { probe.changed = true }
+        }
+        model.applyBootstrapObservation(.property(.movieTVLockSetting, Data([1])))
+        XCTAssertTrue(probe.changed, "a real lock change still reaches the monitor")
+        XCTAssertTrue(model.lockedControls.contains(.shutter))
+    }
+
+    /// The shared surface consumes picture facts; only the raster consumes every image.
+    func testLiveImagesNotifyTheRasterWithoutInvalidatingUnchangedPictureFacts() {
+        for source: VideoSourceKind in [.cameraLiveView, .hdmiCapture] {
+            let model = NativeAppModel()
+            model.videoSource = source
+            model.liveFrameImage = frame(size: CGSize(width: 16, height: 12))
+            let initial = NikonMonitorShell.picture(model)
+            let probe = PollObservationProbe()
+            for _ in 0..<24 {
+                withObservationTracking {
+                    _ = NikonMonitorShell.picture(model)
+                } onChange: {
+                    MainActor.assumeIsolated { probe.unchanged += 1 }
+                }
+                withObservationTracking {
+                    _ = model.liveFrameImage
+                } onChange: {
+                    MainActor.assumeIsolated { probe.raster += 1 }
+                }
+                let size =
+                    probe.raster.isMultiple(of: 2)
+                    ? CGSize(width: 32, height: 24) : CGSize(width: 16, height: 12)
+                let next = frame(size: size)
+                model.liveFrameImage = next
+                XCTAssertTrue(model.liveFrameImage === next, "the actual raster must advance")
+                XCTAssertEqual(NikonMonitorShell.picture(model), initial)
+            }
+            XCTAssertEqual(probe.unchanged, 0, "same picture facts must not re-drive chrome")
+            XCTAssertEqual(probe.raster, 24, "every accepted image must reach the raster")
+        }
+    }
+
+    func testPictureFactsStillNotifyForFirstFrameClearAndCaptureAspectChange() {
+        let model = NativeAppModel()
+        model.videoSource = .hdmiCapture
+        XCTAssertTrue(NikonMonitorShell.picture(model).waiting)
+        let probe = PollObservationProbe()
+        func observe() {
+            probe.changed = false
+            withObservationTracking {
+                _ = NikonMonitorShell.picture(model)
+            } onChange: {
+                MainActor.assumeIsolated { probe.changed = true }
+            }
+        }
+        observe()
+        model.liveFrameImage = frame(size: CGSize(width: 16, height: 12))
+        XCTAssertTrue(probe.changed)
+        XCTAssertFalse(NikonMonitorShell.picture(model).waiting)
+        XCTAssertEqual(NikonMonitorShell.picture(model).aspect, 4 / 3)
+        observe()
+        model.liveFrameImage = frame(size: CGSize(width: 16, height: 9))
+        XCTAssertTrue(probe.changed, "changed capture geometry must reach the chrome")
+        XCTAssertEqual(NikonMonitorShell.picture(model).aspect, 16 / 9)
+        observe()
+        model.liveFrameImage = nil
+        XCTAssertTrue(probe.changed)
+        XCTAssertTrue(NikonMonitorShell.picture(model).waiting)
+
+        let held = frame(size: CGSize(width: 16, height: 12))
+        model.liveFrameImage = held
+        observe()
+        model.forceSessionRecoveryState(.waitingForOperator(attemptsMade: 8))
+        XCTAssertTrue(probe.changed, "recovery facts must remain observable")
+        XCTAssertTrue(NikonMonitorShell.picture(model).recovering)
+        XCTAssertFalse(NikonMonitorShell.picture(model).waiting, "a held picture stays present")
+        XCTAssertTrue(model.liveFrameImage === held)
+        observe()
+        model.forceSessionRecoveryState(.idle)
+        XCTAssertTrue(probe.changed)
+        XCTAssertFalse(NikonMonitorShell.picture(model).recovering)
+        XCTAssertTrue(model.liveFrameImage === held)
+    }
+
+    private func frame(size: CGSize) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+    }
+}
+
+@MainActor
+private final class PollObservationProbe {
+    var unchanged = 0
+    var changed = false
+    var raster = 0
 }
 
 /// The demo monitor as the root mounts it, in both phone orientations: it is the shell's
@@ -294,7 +438,8 @@ final class LiveSurfaceScreens: XCTestCase {
                 $0.activationState == .foregroundActive
             })
         for (name, size) in [
-            ("portrait", CGSize(width: 402, height: 874)), ("landscape", CGSize(width: 874, height: 402)),
+            ("portrait", CGSize(width: 402, height: 874)),
+            ("landscape", CGSize(width: 874, height: 402)),
         ] {
             let model = NativeAppModel()
             model.preferences = OperatorPreferences.defaults

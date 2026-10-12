@@ -203,17 +203,23 @@ struct NikonMonitorShell: View {
     private typealias Readout = MonitorOperatorLiveReadout<NikonLiveReadoutKey, Section>
 
     private var sourceAspect: Double {
+        Self.picture(model).aspect
+    }
+    /// Picture facts read by the shared chrome, independently of the raster view.
+    static func picture(_ model: NativeAppModel) -> MonitorOperatorLivePicture {
         let raw: Double
-        if model.videoSource == .hdmiCapture, let image = model.liveFrameImage,
-            image.size.height > 0
-        {
-            raw = Double(image.size.width / image.size.height)
+        if model.videoSource == .hdmiCapture, let aspect = model.liveFrameAspect {
+            raw = aspect
         } else {
             raw =
                 model.isPhotographyMode
                 ? model.cameraPropertySnapshot.photographyFeedAspect : 16 / 9
         }
-        return model.displayedFeedRotation.isVertical ? 1 / raw : raw
+        return .init(
+            aspect: model.displayedFeedRotation.isVertical ? 1 / raw : raw,
+            waiting: !model.hasLiveFrameImage && !model.isDemoSession,
+            vertical: model.displayedFeedRotation.isVertical, flipped: false,
+            recovering: model.sessionRecovery.isRecovering)
     }
     /// The shared field-monitor geometry. Portrait fill yields to de-squeeze, as on every app.
     private var live: LiveMonitorLayout {
@@ -369,13 +375,7 @@ struct NikonMonitorShell: View {
     private var source: MonitorOperatorLiveSource<NikonLiveReadoutKey, NikonCaptureQuickIdentity> {
         .init(
             identity: { model.operatorLiveIdentity }, available: { model.monitorAvailableSections },
-            picture: {
-                .init(
-                    aspect: sourceAspect,
-                    waiting: model.liveFrameImage == nil && !model.isDemoSession,
-                    vertical: model.displayedFeedRotation.isVertical, flipped: false,
-                    recovering: model.sessionRecovery.isRecovering)
-            },
+            picture: { Self.picture(model) },
             status: { status }, cameraBattery: { cameraBattery }, capture: { captureInputs },
             record: { record },
             // The Nikon EV needle and level remain native instruments until F04 and A1-31.
