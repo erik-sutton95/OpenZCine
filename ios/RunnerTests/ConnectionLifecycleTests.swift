@@ -312,6 +312,169 @@ struct SessionRecoveryLifecycleTests {
     }
 }
 
+/// A6-02: a returned PTP control session is not a recovered monitor. Recovery ends only on a
+/// source frame and a presented picture after the attempt started, and the whole automatic run
+/// stops at the shared 180 s budget. SIMULATED transport and virtual clock (`SessionRecoveryPeers`).
+@MainActor
+@Suite("Dropped-session recovery proof")
+struct SessionRecoveryPictureTests {
+    @MainActor
+    final class Peer {
+        private struct Sleeper {
+            let id: UUID
+            let at: TimeInterval
+            let continuation: CheckedContinuation<Void, Error>
+        }
+        var time: TimeInterval = 0
+        var connects = 0
+        var controlReady = false
+        var establishing = false
+        var picture: (sourceAt: TimeInterval?, presentedAt: TimeInterval?) = (nil, nil)
+        var onConnect: () -> Void = {}
+        private var sleepers: [Sleeper] = []
+
+        var peers: NativeAppModel.SessionRecoveryPeers {
+            .init(
+                connect: { [unowned self] in
+                    connects += 1
+                    onConnect()
+                },
+                isEstablishing: { [unowned self] in establishing },
+                hasControlSession: { [unowned self] in controlReady },
+                picture: { [unowned self] in picture },
+                now: { [unowned self] in time },
+                sleep: { [unowned self] in try await pause($0) })
+        }
+
+        private func pause(_ duration: Duration) async throws {
+            try Task.checkCancellation()
+            let id = UUID()
+            let parts = duration.components
+            let at = time + Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    sleepers.append(Sleeper(id: id, at: at, continuation: continuation))
+                }
+            } onCancel: {
+                Task { @MainActor in
+                    guard let index = self.sleepers.firstIndex(where: { $0.id == id }) else {
+                        return
+                    }
+                    let sleeper = self.sleepers.remove(at: index)
+                    sleeper.continuation.resume(throwing: CancellationError())
+                }
+            }
+        }
+
+        private func settle() async { for _ in 0..<64 { await Task.yield() } }
+
+        /// Wakes virtual sleepers in time order until `done` holds or the clock reaches `limit`.
+        func drive(until limit: TimeInterval, _ done: () -> Bool = { false }) async -> Bool {
+            for _ in 0..<20_000 {
+                await settle()
+                if done() { return true }
+                guard let next = sleepers.map(\.at).min(), next <= limit else {
+                    time = max(time, limit)
+                    await settle()
+                    return done()
+                }
+                time = max(time, next)
+                let ready = sleepers.filter { $0.at <= next }
+                sleepers.removeAll { $0.at <= next }
+                for sleeper in ready { sleeper.continuation.resume() }
+            }
+            return done()
+        }
+    }
+
+    private func recovering(_ peer: Peer) -> NativeAppModel {
+        let model = NativeAppModel()
+        model.cameraHost = "usb:recovery-picture-tests-not-attached"
+        model.isMonitorPresented = true
+        model.sessionRecoveryPeers = peer.peers
+        return model
+    }
+
+    private func waitingForOperator(_ model: NativeAppModel) -> Bool {
+        if case .waitingForOperator = model.sessionRecovery { return true }
+        return false
+    }
+
+    @Test("A returned control session without a picture keeps recovering")
+    func controlWithoutPictureKeepsRecovering() async {
+        let peer = Peer()
+        peer.onConnect = { peer.controlReady = true }
+        let model = recovering(peer)
+
+        model.debugSimulateTransportDetach()
+        _ = await peer.drive(until: 5)
+
+        #expect(peer.connects == 1)
+        #expect(model.sessionRecovery == .retrying(attempt: 1, maxAttempts: 8))
+        model.exitMonitorToOperatorMenu()
+    }
+
+    @Test("A picture from before the attempt does not end recovery")
+    func stalePictureKeepsRecovering() async {
+        let peer = Peer()
+        peer.time = 100
+        peer.picture = (99, 99)
+        peer.onConnect = { peer.controlReady = true }
+        let model = recovering(peer)
+
+        model.debugSimulateTransportDetach()
+        _ = await peer.drive(until: 105)
+
+        #expect(model.sessionRecovery.isRecovering)
+        model.exitMonitorToOperatorMenu()
+    }
+
+    @Test("A source frame and presented picture after the attempt started end recovery")
+    func freshPictureEndsRecovery() async {
+        let peer = Peer()
+        peer.onConnect = { peer.controlReady = true }
+        let model = recovering(peer)
+
+        model.debugSimulateTransportDetach()
+        _ = await peer.drive(until: 1)
+        peer.picture = (peer.time, peer.time)
+        let recovered = await peer.drive(until: 2) { model.sessionRecovery == .idle }
+
+        #expect(recovered)
+        #expect(peer.connects == 1)
+        model.exitMonitorToOperatorMenu()
+    }
+
+    @Test("A dial that never returns hands to the operator at the total budget")
+    func hungAttemptsStopAtBudget() async {
+        let peer = Peer()
+        peer.onConnect = { peer.establishing = true }
+        let model = recovering(peer)
+
+        model.debugSimulateTransportDetach()
+        let handedOver = await peer.drive(until: 400) { waitingForOperator(model) }
+
+        #expect(handedOver)
+        #expect(peer.time <= 180.001, "automatic recovery ran \(peer.time) s")
+        model.exitMonitorToOperatorMenu()
+    }
+
+    @Test("Control sessions that never show a picture stop at the total budget")
+    func controlOnlyAttemptsStopAtBudget() async {
+        let peer = Peer()
+        peer.onConnect = { peer.controlReady = true }
+        let model = recovering(peer)
+
+        model.debugSimulateTransportDetach()
+        let handedOver = await peer.drive(until: 400) { waitingForOperator(model) }
+
+        #expect(handedOver)
+        #expect(peer.time <= 180.001, "automatic recovery ran \(peer.time) s")
+        #expect(peer.connects > 1, "a control-only attempt is retried, not accepted")
+        model.exitMonitorToOperatorMenu()
+    }
+}
+
 /// The USB transport's detach contract (#254). ImageCaptureCore reports a removal per device, and
 /// the transport backing the live session must die with its own cable — and only its own.
 @Suite("USB transport detach")

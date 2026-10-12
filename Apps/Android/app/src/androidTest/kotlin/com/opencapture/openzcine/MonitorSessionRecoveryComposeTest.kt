@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import android.os.SystemClock
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -12,6 +13,7 @@ import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.MonitorPictureClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
@@ -29,13 +31,14 @@ class MonitorSessionRecoveryComposeTest {
         val session = ComposeRecoverySession()
         val enabled = mutableStateOf(true)
         val mounted = mutableStateOf(true)
+        val pictures = MonitorPictureClock(SystemClock::elapsedRealtime)
         composeRule.setContent {
             CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
                 if (mounted.value) {
                     MonitorSessionRecoveryEffect(
                         session = session,
+                        pictures = pictures,
                         enabled = enabled.value,
-                        schedule = { _, _ -> 0L },
                     )
                 }
             }
