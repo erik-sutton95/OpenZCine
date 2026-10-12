@@ -414,8 +414,9 @@ class MainActivity : ComponentActivity() {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
                     }
                 var showProblemReport by remember { mutableStateOf(false) }
-                // The transport wizard is an explicit Pair a new camera choice. An empty saved
-                // list stays on the shared cameras or pair page, the same home as the other apps.
+                // The transport wizard is an explicit choice: Pair a new camera on the cameras page, or
+                // the pair page's Nikon entry. An empty saved list stays on the shared pair page, the
+                // same home as the other apps.
                 var transportWizard by remember { mutableStateOf(pairingScript != null) }
                 val frameioRedirect by frameioRedirectCallback.collectAsState()
                 LaunchedEffect(frameioController, frameioRedirect) {
@@ -639,6 +640,7 @@ class MainActivity : ComponentActivity() {
                                         { savedCameras },
                                         pairingEnvironment.credentials,
                                         onScanAccessPoint = { scanningAccessPointFor = it },
+                                        onChooseConnection = { transportWizard = true },
                                     ),
                                 ),
                             ),
@@ -1405,7 +1407,8 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     val pairPage: @Composable () -> Unit = {
-                        BackHandler(enabled = camerasState.saved.isNotEmpty() || shellState.camerasChosen) {
+                        // The wizard always opens from a shared page, so Back returns to it.
+                        BackHandler {
                             transportWizard = false
                             shell.endPairing()
                         }

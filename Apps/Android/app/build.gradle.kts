@@ -362,6 +362,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.kotlin.test.junit)
     // Retired donor renderer for exact Vulkan pixel parity; test APK only.
     androidTestImplementation(project(":frozen-vulkan-donor"))
 

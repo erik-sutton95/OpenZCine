@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -26,7 +27,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.monitorui.MonitorCameraAction
 import com.opencapture.monitorui.MonitorConnectFailure
+import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.opencine.appkit.CameraItem
 import com.opencapture.opencine.appkit.IntegrationSlots
 import com.opencapture.opencine.appkit.SavedCamerasStore
@@ -127,17 +130,21 @@ internal fun recordsOf(camera: SavedCamera, records: List<SavedCameraRecord>): L
     }
 
 /**
- * This app's slots on the shared pages: adding a setup (its add-setup choices; an access point
- * without a stored key goes through [onScanAccessPoint], the full-screen credential scanner) and
- * the take-over question.
+ * This app's slots on the shared pages: the pair page's way into the transport wizard
+ * ([onChooseConnection]: the camera access point, hotspot, router, USB-C and HDMI paths that nearby
+ * discovery alone never offers), adding a setup (its add-setup choices; an access point without a
+ * stored key goes through [onScanAccessPoint], the full-screen credential scanner) and the take-over
+ * question.
  */
 internal fun nikonIntegrationSlots(
     connector: SavedCameraConnector,
     records: () -> List<SavedCameraRecord>,
     credentials: PairingCredentials,
     onScanAccessPoint: (SavedCamera) -> Unit,
+    onChooseConnection: () -> Unit,
 ): IntegrationSlots =
     IntegrationSlots(
+        pairing = { ChooseConnectionEntry(onChooseConnection) },
         addRoute = { camera, done ->
             AddSetupCard(camera, recordsOf(camera, records()), connector, credentials, done, onScanAccessPoint)
         },
@@ -145,6 +152,17 @@ internal fun nikonIntegrationSlots(
             (prompt as? NikonTakeOverPrompt)?.let { TakeOverConfirmationDialog(it.holder, it.confirm, it.cancel) }
         },
     )
+
+/** The pair page's entry to the transport wizard, in the cameras page's own action style. */
+@Composable
+private fun ChooseConnectionEntry(onClick: () -> Unit) {
+    val title = stringResource(R.string.pairing_step_choose_path)
+    MonitorCameraAction(
+        text = title, primary = false, enabled = true, contentDescription = title, onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        icon = { tint -> MonitorIcon(MonitorIcon.PLUS, null, Modifier.size(14.dp), tint = tint) },
+    )
+}
 
 /**
  * "+ Add setup": the kinds this camera does not have yet. Every row does something: a reachable
