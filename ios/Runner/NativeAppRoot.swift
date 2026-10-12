@@ -3591,7 +3591,7 @@ final class NativeAppModel {
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
         if !preservingMonitorSurface {
             // A fresh operator connect starts a fresh storm ledger (`SessionDropStormGuard`).
-            sessionDropStormGuard.reset()
+            recoveryEpisode.resetStorm()
             beginConnectionProgress(
                 host: host,
                 discoveredCamera: discoveredCamera,
@@ -4155,7 +4155,7 @@ final class NativeAppModel {
         }
         setRelayBroadcasting(false)
         // Deliberate exit clears the storm ledger (`SessionDropStormGuard`) with the session.
-        sessionDropStormGuard.reset()
+        recoveryEpisode.resetStorm()
         disconnectCameraSession(resetConnection: true)
         startDiscoveryLoop(resetResults: false)
     }
@@ -4287,13 +4287,28 @@ final class NativeAppModel {
             beginSessionRecovery(host: cameraHost, reason: "transport detached (debug)")
         }
 
+        /// SIMULATED transport facts and clock for the recovery attempts, so a test drives the
+        /// shipped loop without a camera: what one attempt's connect does, whether it is still
+        /// establishing, whether its control session returned, the picture clocks, and time.
+        struct SessionRecoveryPeers {
+            var connect: @MainActor () -> Void
+            var isEstablishing: @MainActor () -> Bool
+            var hasControlSession: @MainActor () -> Bool
+            var picture: @MainActor () -> (sourceAt: TimeInterval?, presentedAt: TimeInterval?)
+            var now: @MainActor () -> TimeInterval
+            var sleep: @MainActor (Duration) async throws -> Void
+        }
+        @ObservationIgnored var sessionRecoveryPeers: SessionRecoveryPeers? {
+            didSet { recoveryEpisode = makeRecoveryEpisode() }
+        }
+
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
         var debugIsEstablishingConnection: Bool { isEstablishingConnection }
         var debugHasCameraSession: Bool { cameraSession != nil }
         var debugConnectionGeneration: Int { connectionGeneration }
-        var debugHasSessionRecoveryTask: Bool { sessionRecoveryTask != nil }
+        var debugHasSessionRecoveryTask: Bool { recoveryEpisode.isRunning }
         var debugPendingCameraWriteCount: Int { pendingCameraWrites.count }
         func debugEnqueueCameraWrite(_ property: PTPPropertyCode) {
             enqueueCameraWrite(
@@ -4645,11 +4660,6 @@ final class NativeAppModel {
     /// Bounded-timeout watchdog for the in-flight attempt: fails a phase that stops making
     /// progress instead of letting the operator stare at a spinner (see `CameraConnectionTimeout`).
     @ObservationIgnored private var connectionTimeoutTask: Task<Void, Never>?
-    /// The bounded auto-reconnect loop that runs behind a preserved monitor after an established
-    /// session drops (cable knocked loose, camera power-cycled). Cancelled by any operator-driven
-    /// teardown so a manual disconnect can never race a retry back into a live session.
-    @ObservationIgnored private var sessionRecoveryTask: Task<Void, Never>?
-    @ObservationIgnored private var recoveryCardGraceTask: Task<Void, Never>?
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
@@ -6778,58 +6788,162 @@ final class NativeAppModel {
 
     // MARK: - Session recovery
 
-    /// Monotonic epoch for the recovery loop, so a cancelled run can't clear the handle of the run
-    /// that replaced it.
-    @ObservationIgnored private var sessionRecoveryGeneration = 0
+    /// The shared recovery episode (OpenCineCameraVocabulary): admission, the drop-storm pause,
+    /// the card grace, attempts on the shared backoff, the 180 s budget and the fresh-picture rule.
+    /// This model keeps only the Nikon transport behind its port, the held-frame presentation and
+    /// the relay heartbeat. A returned PTP control session never ends recovery on its own (A6-02).
+    @ObservationIgnored private lazy var recoveryEpisode = makeRecoveryEpisode()
+    /// The last live-view frame from the camera and the last picture this monitor published, on
+    /// the episode's wall clock. Header-only deliveries count: in Command and on an HDMI source
+    /// the header is what the monitor presents from the camera.
+    @ObservationIgnored private var recoverySourceFrameAt: TimeInterval?
+    @ObservationIgnored private var recoveryPresentedAt: TimeInterval?
 
-    /// Cross-run drop damping (see `SessionDropStormGuard`). Reset ONLY by operator action —
-    /// a reconnect that succeeds proves nothing during a storm, succeeding is what storms do.
-    @ObservationIgnored private var sessionDropStormGuard = SessionDropStormGuard()
-
-    /// How long the operator's card waits behind attempt 1 (attempt 2+ shows it at once).
-    private static let recoveryCardGrace: Duration = .seconds(2.5)
-    /// Ceiling on ONE automatic recovery attempt. Recovery connects run without the phase
-    /// watchdog, and a dial into a vanished network (a killed hotspot) can block a socket past
-    /// every cancellation — without this bound, attempt 1 never ends and the loop never marches.
-    private static let recoveryAttemptDeadline: Duration = .seconds(30)
+    private func makeRecoveryEpisode() -> SessionRecoveryEpisode {
+        var timing = SessionRecoveryEpisode.Timing.continuous
+        #if DEBUG
+            if let peers = sessionRecoveryPeers {
+                let origin = ContinuousClock().now
+                timing = .init(
+                    monotonicNow: { origin.advanced(by: .seconds(peers.now())) },
+                    uptime: { peers.now() }, wallNow: { peers.now() },
+                    sleep: { try await peers.sleep($0) }, jitter: { 0.5 })
+            }
+        #endif
+        return SessionRecoveryEpisode(
+            port: .init(
+                observe: { [weak self] in self?.recoveryObservation() ?? .init() },
+                cleanup: { [weak self] kind, attempt in
+                    self?.cleanUpRecovery(kind, attempt: attempt)
+                },
+                connect: { [weak self] attempt in
+                    guard let self else { return false }
+                    self.startRecoveryAttempt(host: attempt.targetID)
+                    return true
+                }),
+            attemptDeadline: NikonSessionRecovery.attemptDeadline, timing: timing,
+            changed: { [weak self] snapshot, episode in
+                self?.publishRecovery(snapshot, fromEpisode: episode != nil)
+            })
+    }
 
     /// Recovers an ESTABLISHED session that dropped underneath the operator — a knocked USB cable,
     /// a camera power cycle, a wedged command channel — without leaving live view.
     ///
-    /// The monitor stays up on the last decoded frame (badged as held, not live) while a bounded,
-    /// cancellable retry loop rebuilds the session through the normal `connectToCamera` path: the
-    /// stale transport, PTP session, sockets, tasks, queued property writes and camera identity are
-    /// all disposed (with a graceful `CloseSession`) before the replacement is built. When the
-    /// shared budget is spent the operator chooses — retry, or back to the operator menu.
+    /// The monitor stays up on the last decoded frame (badged as held, not live) while the episode
+    /// rebuilds the session through the normal `connectToCamera` path: the stale transport, PTP
+    /// session, sockets, tasks, queued property writes and camera identity are all disposed (with a
+    /// graceful `CloseSession`) before the replacement is built. When the shared budget is spent the
+    /// operator chooses: retry, or back to the operator menu.
     ///
     /// Only ever runs against a host this app was already connected to, so a retry can never
     /// blind-probe a camera sitting on its pairing wizard (probing knocks the body out of pairing).
-    private func beginSessionRecovery(host: String, reason: String) {
+    private func beginSessionRecovery(
+        host: String, reason: String, trigger: SessionRecoveryTrigger = .datalinkLost
+    ) {
         // Any evidence of a session to recover arms it — a control session that exists or
         // existed, or a presented monitor. Requiring the MONITOR alone (the old guard) silently
         // dropped every death before the first frame, on the ready page, or behind a
         // full-screen panel, while the UI said "connected" forever (the audit's H1/H5).
         guard !isDemoSession,
-            isCameraControlSession || cameraSession != nil || isMonitorPresented,
-            sessionRecoveryTask == nil
+            isCameraControlSession || cameraSession != nil || isMonitorPresented
         else { return }
-        // A paused storm is already waiting on the operator; the same dead session's other loss
-        // reporters (event channel AND stall watchdog fire for one drop) must not re-count it.
-        // The spent-budget card is equally an operator decision — a later loss reporter must
-        // not restart a whole fresh automatic run behind it.
+        // A paused storm or a spent budget is the operator's decision; the same dead session's
+        // other loss reporters (event channel AND stall watchdog fire for one drop) must not
+        // restart a run behind it. The episode refuses too; this also covers a painted state.
         if case .pausedAfterRepeatedDrops = sessionRecovery { return }
         if case .waitingForOperator = sessionRecovery { return }
         let target = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return }
-        connection = .reconnecting
-        liveFPS = SessionRecoveryCopy.heldFrameBadge
-        isStreamRecovering = true
-        sessionRecoveryGeneration += 1
-        let generation = sessionRecoveryGeneration
-        // Keep the watchers alive on the held frame: with no fresh camera frames, every
-        // viewer's stall watchdog would tear down and rejoin in a loop for the whole outage.
-        // A 2 s re-send of the frozen frame stays inside their 8 s stall threshold, so they
-        // keep the picture the broadcaster is holding — same as the broadcaster's own monitor.
+        recoveryEpisode.begin(targetID: target, trigger: trigger, reason: reason)
+    }
+
+    /// One attempt: the normal connect path, which disposes the previous session first.
+    private func startRecoveryAttempt(host: String) {
+        #if DEBUG
+            if let peers = sessionRecoveryPeers {
+                peers.connect()
+                return
+            }
+        #endif
+        cameraHost = host
+        connectToCamera(preservingMonitorSurface: true)
+    }
+
+    /// The attempt as the episode sees it: establishing or holding a control session is still
+    /// running; neither means the dial gave up. Only the picture clocks can end recovery.
+    private func recoveryObservation() -> SessionRecoveryEpisode.Observation {
+        var establishing = isEstablishingConnection
+        var hasControlSession = cameraSession != nil
+        var picture = (sourceAt: recoverySourceFrameAt, presentedAt: recoveryPresentedAt)
+        #if DEBUG
+            if let peers = sessionRecoveryPeers {
+                establishing = peers.isEstablishing()
+                hasControlSession = peers.hasControlSession()
+                picture = peers.picture()
+            }
+        #endif
+        return .init(
+            ownsConnection: true,
+            progress: establishing || hasControlSession ? .running : .failed,
+            sourceAt: picture.sourceAt, presentedAt: picture.presentedAt)
+    }
+
+    private func cleanUpRecovery(
+        _ kind: SessionRecoveryEpisode.Cleanup, attempt: SessionRecoveryEpisode.Attempt
+    ) {
+        switch kind {
+        case .initialDrop:
+            connection = .reconnecting
+            liveFPS = SessionRecoveryCopy.heldFrameBadge
+            isStreamRecovering = true
+            startRelayRecoveryHeartbeat()
+            logConnection(
+                "session lost host=\(attempt.targetID) (\(attempt.reason)) → bounded recovery")
+        case .stormPause:
+            // Reconnects keep succeeding and dying young: an external killer, not a blip.
+            // Retrying harder is what churns the body's PTP stack into its battery-pull wedge,
+            // so dispose the dead session gracefully and wait for the operator instead.
+            logConnection("session lost host=\(attempt.targetID) → storm pause")
+            disconnectCameraSession(resetConnection: false, preserveMonitorSurface: true)
+        case .failedAttempt, .budgetExhausted:
+            // A dial into a vanished network can block a socket past every cancellation, and a
+            // control session that never produced a picture is not a monitor. Retire either with
+            // a graceful close the next connect awaits.
+            guard isEstablishingConnection || cameraSession != nil else { return }
+            logConnection(
+                "recovery attempt ended without a picture host=\(attempt.targetID), abandoning it")
+            disconnectCameraSession(resetConnection: false, preserveMonitorSurface: true)
+        }
+    }
+
+    private func publishRecovery(_ snapshot: SessionRecoveryEpisode.Snapshot, fromEpisode: Bool) {
+        let previous = sessionRecovery
+        if previous != snapshot.state { sessionRecovery = snapshot.state }
+        if sessionRecoveryCardGraceElapsed != snapshot.cardGraceElapsed {
+            sessionRecoveryCardGraceElapsed = snapshot.cardGraceElapsed
+        }
+        guard fromEpisode, previous != snapshot.state else { return }
+        switch snapshot.state {
+        case .idle:
+            if case .retrying(let attempt, _) = previous, !snapshot.holdsPicture {
+                logConnection("recovered host=\(cameraHost) after \(attempt - 1) failed attempt(s)")
+            }
+        case .waitingForOperator(let attempts):
+            logConnection(
+                "recovery handed to the operator host=\(cameraHost) after \(attempts) attempt(s)")
+        case .pausedAfterRepeatedDrops(let drops):
+            logConnection("recovery paused after \(drops) drops host=\(cameraHost)")
+        case .retrying:
+            break
+        }
+    }
+
+    /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
+    /// stall watchdog would tear down and rejoin in a loop for the whole outage. A 2 s re-send of
+    /// the frozen frame stays inside their 8 s stall threshold, so they keep the picture the
+    /// broadcaster is holding, same as the broadcaster's own monitor.
+    private func startRelayRecoveryHeartbeat() {
         relayRecoveryHeartbeatTask?.cancel()
         relayRecoveryHeartbeatTask = Task { [weak self] in
             var heldBeats = 0
@@ -6854,82 +6968,6 @@ final class NativeAppModel {
                 }
             }
         }
-        if sessionDropStormGuard.noteDrop(now: ProcessInfo.processInfo.systemUptime) {
-            // Reconnects keep succeeding and dying young — an external killer, not a blip.
-            // Retrying harder is what churns the body's PTP stack into its battery-pull wedge,
-            // so dispose the dead session gracefully and wait for the operator instead.
-            logConnection(
-                "session lost host=\(target) (\(reason)) → storm pause after "
-                    + "\(sessionDropStormGuard.dropsInWindow) drops")
-            disconnectCameraSession(resetConnection: false, preserveMonitorSurface: true)
-            sessionRecovery = .pausedAfterRepeatedDrops(drops: sessionDropStormGuard.dropsInWindow)
-            recoveryCardGraceTask?.cancel()
-            sessionRecoveryCardGraceElapsed = true
-            return
-        }
-        logConnection("session lost host=\(target) (\(reason)) → bounded recovery")
-        sessionRecoveryTask = Task { [weak self] in
-            await self?.runSessionRecovery(host: target)
-            guard let self, self.sessionRecoveryGeneration == generation else { return }
-            self.sessionRecoveryTask = nil
-        }
-        // Attempt-1 card grace (see `sessionRecoveryCardGraceElapsed`): most drops heal on the
-        // immediate first retry, so the card waits this out — but it must always arrive if the
-        // attempt is still running, or a stalled attempt leaves the operator with no exit.
-        sessionRecoveryCardGraceElapsed = false
-        recoveryCardGraceTask?.cancel()
-        recoveryCardGraceTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.recoveryCardGrace)
-            guard let self, !Task.isCancelled else { return }
-            guard self.sessionRecoveryGeneration == generation else { return }
-            self.sessionRecoveryCardGraceElapsed = true
-        }
-    }
-
-    /// The bounded loop itself. Every pass delegates teardown-then-rebuild to `connectToCamera`, so
-    /// nothing here reimplements disposal; this only owns *when* to try and when to stop.
-    private func runSessionRecovery(host: String) async {
-        let policy = SessionRecoveryPolicy.monitor
-        var failures = 0
-        while !Task.isCancelled {
-            let state = policy.state(afterFailedAttempts: failures)
-            sessionRecovery = state
-            guard case .retrying = state else { return }
-            cameraHost = host
-            connectToCamera(preservingMonitorSurface: true)
-            // Bound the attempt by polling the establishment latch, NOT by awaiting the task:
-            // a wedged attempt's `value` never resolves (cancellation cannot interrupt a blocked
-            // socket read, per #264), and awaiting it would wedge this loop with it.
-            var attemptElapsed: Duration = .zero
-            while isEstablishingConnection, !Task.isCancelled,
-                attemptElapsed < Self.recoveryAttemptDeadline
-            {
-                try? await Task.sleep(for: .milliseconds(250))
-                attemptElapsed += .milliseconds(250)
-            }
-            if Task.isCancelled { return }
-            if isEstablishingConnection {
-                logConnection(
-                    "recovery attempt stalled past \(Self.recoveryAttemptDeadline) host=\(host) — abandoning it"
-                )
-                clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
-            }
-            if cameraSession != nil {
-                sessionRecovery = .idle
-                logConnection("recovered host=\(host) after \(failures) failed attempt(s)")
-                return
-            }
-            failures += 1
-            guard
-                case .retry(let wait) = policy.decision(
-                    afterFailedAttempts: failures, jitter: .random(in: 0...1))
-            else {
-                sessionRecovery = policy.state(afterFailedAttempts: failures)
-                logConnection("recovery exhausted host=\(host) after \(failures) attempts")
-                return
-            }
-            try? await Task.sleep(for: .seconds(wait))
-        }
     }
 
     /// Operator action from the recovery affordance: start a fresh bounded recovery run.
@@ -6946,9 +6984,9 @@ final class NativeAppModel {
         cancelSessionRecovery()
         // Operator intent clears the storm ledger: the retry itself is not a drop, and the next
         // pause should take a fresh cluster of drops to earn.
-        sessionDropStormGuard.reset()
+        recoveryEpisode.resetStorm()
         clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
-        beginSessionRecovery(host: host, reason: "operator retry")
+        beginSessionRecovery(host: host, reason: "operator retry", trigger: .operatorRetry)
     }
 
     /// Operator action from the recovery affordance: leave the held frame for the operator menu.
@@ -6958,16 +6996,13 @@ final class NativeAppModel {
         disconnect()
     }
 
-    /// Stops any in-flight recovery loop and clears the affordance.
+    /// Stops any in-flight recovery episode and clears the affordance.
     private func cancelSessionRecovery() {
-        sessionRecoveryGeneration += 1
-        sessionRecoveryTask?.cancel()
-        sessionRecoveryTask = nil
-        recoveryCardGraceTask?.cancel()
-        recoveryCardGraceTask = nil
-        sessionRecoveryCardGraceElapsed = false
+        recoveryEpisode.cancel()
         relayRecoveryHeartbeatTask?.cancel()
         relayRecoveryHeartbeatTask = nil
+        // A painted state (`forceSessionRecoveryState`) never reached the episode.
+        sessionRecoveryCardGraceElapsed = false
         sessionRecovery = .idle
     }
 
@@ -7822,6 +7857,10 @@ final class NativeAppModel {
             applyLiveViewHeaderTimecode(frame.timecode)
             captureRelayFrameMetadata(frame)
             publishWatchState()
+            // Command and an HDMI picture source present the camera's header, not its image.
+            let now = Date.timeIntervalSinceReferenceDate
+            recoverySourceFrameAt = now
+            recoveryPresentedAt = now
             return true
         }
         guard !Task.isCancelled, cameraSession === session,
@@ -7832,6 +7871,7 @@ final class NativeAppModel {
         let decoded = await displayReadyLiveFrame(from: cleanFrame)
         guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame
         else { return false }
+        recoverySourceFrameAt = Date.timeIntervalSinceReferenceDate
         let arrival = CACurrentMediaTime()
         frameRate.recordFrame(at: arrival)
         lastGoodFrameAt = Date()
@@ -7864,6 +7904,7 @@ final class NativeAppModel {
             sampleScopesIfDue(clean: cleanFrame) { [weak self] in self?.cameraSession === session }
         }
         incident?.published()
+        recoveryPresentedAt = Date.timeIntervalSinceReferenceDate
         applyLiveViewHeaderState(frame)
         applyLiveViewHeaderTimecode(frame.timecode)
         if !delivery.bodyBusy { liveFPS = frameRate.formatted }
