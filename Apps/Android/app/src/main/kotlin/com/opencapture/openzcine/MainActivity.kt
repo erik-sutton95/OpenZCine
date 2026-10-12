@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkit.retainedMonitorRoot
 import com.opencapture.opencine.appkit.MonitorActivityLaunch
 import com.opencapture.opencine.appkit.rememberMonitorLaunchSplash
 import com.opencapture.opencine.appkit.MonitorKeepScreenAwake
@@ -63,26 +64,19 @@ import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
-import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
 import com.opencapture.openzcine.diagnostics.AppDiagnostics
 import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportDialog
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
-import com.opencapture.openzcine.media.AndroidMediaGalleryGateway
 import com.opencapture.openzcine.media.MediaBrowseScreen
-import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.media.MediaDeliveryCompletionToast
-import com.opencapture.openzcine.media.MediaDeliveryCoordinator
 import com.opencapture.openzcine.media.MediaDeliveryProgressOverlay
 import com.opencapture.openzcine.media.MediaLibraryCameraBucket
 import com.opencapture.openzcine.media.MediaLibraryCategory
-import com.opencapture.openzcine.media.MediaLibraryIndex
-import com.opencapture.openzcine.media.SharedPreferencesMediaLibraryPreferences
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
-import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
 import com.opencapture.openzcine.pairing.ConnectedNetworkName
@@ -132,12 +126,9 @@ import com.opencapture.openzcine.multicam.LocalMulticamReturn
 import com.opencapture.openzcine.multicam.MulticamCoordinator
 import com.opencapture.openzcine.multicam.MulticamPickerRow
 import com.opencapture.openzcine.multicam.MulticamStage
-import com.opencapture.openzcine.multicam.multicamDecoder
-import com.opencapture.openzcine.multicam.multicamLink
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.transport.WifiLowLatencyLock
-import com.opencapture.openzcine.pairing.realPairingEnvironment
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
 import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.relay.monitorRelayNearbyOwner
@@ -148,8 +139,6 @@ import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.SetupStreamSettings
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -185,6 +174,10 @@ class MainActivity : ComponentActivity() {
     /** Holds the solid system SplashScreen until the first Compose frame; the root brands from then on. */
     private val launch = MonitorActivityLaunch()
 
+    /** The session and its owners, kept across recreation (an undeclared configuration change). */
+    internal lateinit var root: AppRoot
+        private set
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen().setKeepOnScreenCondition { !launch.firstFrameDrawn }
         super.onCreate(savedInstanceState)
@@ -193,15 +186,23 @@ class MainActivity : ComponentActivity() {
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
         diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
         AppDiagnostics.install(applicationContext)
-        publishFrameioRedirect(intent)
+        // A recreated activity's intent was already handed to the retained controller.
+        if (savedInstanceState == null) publishFrameioRedirect(intent)
         if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
-        val demo = DemoHarness.demoLiveFeed(intent, applicationContext)
+        root =
+            retainedMonitorRoot {
+                AppRoot(
+                    applicationContext, DemoHarness.demoLiveFeed(intent, applicationContext),
+                    DemoHarness.pairingScript(intent), diagnostics, DemoHarness.galleryFailureInjection(intent),
+                )
+            }
+        val demo = root.demo
         val debugAssistEffects = DemoHarness.assistEffects(intent)
         val debugScopes = DemoHarness.scopeKinds(intent)
         val debugPortraitAspect = DemoHarness.portraitFeedAspect(intent)
         val debugInitialSettingsTab = DemoHarness.settingsTab(intent)
         val debugSession: CameraSession? = demo?.first
-        val pairingScript = DemoHarness.pairingScript(intent)
+        val pairingScript = root.pairingScript
         val debugSplitComparison = DemoHarness.splitComparison(intent)
         val operatorSettings =
             OperatorSettings(applicationContext).also { settings ->
@@ -219,15 +220,10 @@ class MainActivity : ComponentActivity() {
                     rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
                 CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics) {
                 Box(Modifier.fillMaxSize()) {
-                var monitorSession by remember { mutableStateOf(debugSession) }
-                // The HDMI capture feed beside a capture-only session. Non-null
-                // exactly while the monitor is on the HDMI path; closed (CameraX
-                // unbind) whenever the monitor exits.
-                var uvcSource by remember { mutableStateOf<UvcFrameSource?>(null) }
-                // A monitor reached from a saved card retains that exact
-                // profile. Link settings may then leave the monitor without
-                // guessing a topology or constructing a second session.
-                var activeSavedCamera by remember { mutableStateOf<SavedCameraRecord?>(null) }
+                // The session, its HDMI feed and its saved profile live in the retained root.
+                var monitorSession by root::monitorSession
+                var uvcSource by root::uvcSource
+                var activeSavedCamera by root::activeSavedCamera
                 // The row the running pairing CREATED, so walking away from it takes the row back
                 // out — the wizard saves before the body confirmation. Null once anything
                 // connected through it, or when the pairing refreshed a setup that already
@@ -236,7 +232,7 @@ class MainActivity : ComponentActivity() {
                 var requestedReconnectID by rememberSaveable { mutableStateOf<String?>(null) }
                 var suppressedUsbAutoReconnectHosts by remember { mutableStateOf(emptySet<String>()) }
                 val connectionScope = rememberCoroutineScope()
-                val shellSessions = remember(connectionScope) { NikonShellSessions(connectionScope) }
+                val shellSessions = root.shellSessions
                 // The monitor relay ("multicast") — iOS parity: this device can WATCH another
                 // device's broadcast, and BROADCAST its own feed to watchers.
                 var watchController by
@@ -336,55 +332,17 @@ class MainActivity : ComponentActivity() {
                                 .also { it.start() }
                     }
                 }
-                val savedCameraStore =
-                    remember { SharedPreferencesSavedCameraStore(applicationContext) }
-                // The app-private LUT library owns transient SAF import and Swift-packed render
-                // payloads. It is deliberately process-local; only generated selections persist.
-                val lutLibrary = remember { AndroidLutLibrary(applicationContext) }
-                val mediaCacheStore =
-                    remember {
-                        MediaCacheStore(
-                            applicationContext.noBackupFilesDir.resolve("media-cache").toPath(),
-                        )
-                    }
-                val mediaLibraryIndex =
-                    remember {
-                        MediaLibraryIndex(
-                            SharedPreferencesMediaLibraryPreferences(applicationContext),
-                        )
-                    }
-                val frameioController =
-                    remember { frameioDeliveryController(applicationContext, lutLibrary) }
+                val savedCameraStore = root.savedCameraStore
+                val lutLibrary = root.lutLibrary
+                val mediaCacheStore = root.mediaCacheStore
+                val mediaLibraryIndex = root.mediaLibraryIndex
+                val frameioController = root.frameioController
                 val settingsAccount = remember(frameioController) { MonitorSettingsAccountModel(connectionScope) }
                 var settingsAccountCurrent by remember(settingsAccount) { mutableStateOf(true) }
                 DisposableEffect(settingsAccount) {
                     onDispose { settingsAccountCurrent = false; settingsAccount.retire() }
                 }
-                // The root releases the delivery owners before their supplied scope.
-                val deliveryScope = remember(frameioController) {
-                    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-                }
-                // App-scoped share/export progress (iOS MediaDeliveryCoordinator).
-                val mediaDeliveryCoordinator =
-                    remember(frameioController, mediaCacheStore) {
-                        MediaDeliveryCoordinator(
-                            appContext = applicationContext,
-                            frameioController = frameioController,
-                            cacheStore = mediaCacheStore,
-                            galleryGateway =
-                                AndroidMediaGalleryGateway(
-                                    applicationContext.contentResolver,
-                                    DemoHarness.galleryFailureInjection(intent),
-                                ),
-                            scope = deliveryScope,
-                        )
-                    }
-                DisposableEffect(mediaDeliveryCoordinator) {
-                    onDispose {
-                        mediaDeliveryCoordinator.close()
-                        deliveryScope.cancel()
-                    }
-                }
+                val mediaDeliveryCoordinator = root.mediaDeliveryCoordinator
                 val deliveryDisplay by mediaDeliveryCoordinator.display.collectAsState()
                 val systemSettingsActions =
                     remember {
@@ -410,43 +368,8 @@ class MainActivity : ComponentActivity() {
                 var completedMediaBuckets by
                     remember { mutableStateOf(emptyMap<String, MediaLibraryCameraBucket>()) }
                 var mediaCacheRevision by remember { mutableStateOf(0) }
-                // Keep the process-wide camera-AP binding alive while its
-                // handed-off session is active, then release it alongside the
-                // PTP slot when this activity or session leaves composition.
-                // Creating this once also prevents recomposition from
-                // orphaning a CameraApJoiner callback.
-                val pairingEnvironment =
-                    remember(pairingScript) {
-                        pairingScript?.environment
-                            ?: realPairingEnvironment(applicationContext) { phase, detail ->
-                                if (phase == "connect.gate") {
-                                    diagnostics.recordConnectTrace(detail)
-                                    return@realPairingEnvironment
-                                }
-                                // Closed phase tokens only; free-form detail is discarded here.
-                                AndroidDiagnosticEvent.fromPhase(phase)?.let {
-                                    diagnostics.record(it)
-                                }
-                            }
-                    }
-                // USB attach/detach must stay observed while a handed-off
-                // session is on the monitor; close the Android receiver only
-                // when this activity's whole Compose tree leaves.
-                DisposableEffect(pairingEnvironment) {
-                    onDispose { pairingEnvironment.usbCameraSource?.close() }
-                }
-                // Multicam (NIKON-01): up to four bodies on the shared OpenCineMulticam engine,
-                // each on its own saved-profile session beside the single-camera monitor.
-                val multicam =
-                    remember(pairingEnvironment) {
-                        MulticamCoordinator(
-                            scope = connectionScope,
-                            connect = { record ->
-                                withContext(Dispatchers.IO) { multicamLink(record, pairingEnvironment) }
-                            },
-                            decoder = ::multicamDecoder,
-                        )
-                    }
+                val pairingEnvironment = root.pairingEnvironment
+                val multicam = root.multicam
                 // Debug demo, scripted and settings deep-link launches skip the splash so
                 // screenshots stay deterministic.
                 val launchSplash =
@@ -940,8 +863,9 @@ class MainActivity : ComponentActivity() {
                                 awaitCancellation()
                             } finally {
                                 withContext(NonCancellable) {
-                                    // A multicam member keeps its session for its tile.
-                                    if (!multicam.owns(active)) {
+                                    // A multicam member keeps its session for its tile, and a
+                                    // recreated activity keeps the root's.
+                                    if (!multicam.owns(active) && !isChangingConfigurations) {
                                         shellSessions.retire(active)
                                         active.disconnect()
                                         pairingEnvironment.releaseCameraAp()
