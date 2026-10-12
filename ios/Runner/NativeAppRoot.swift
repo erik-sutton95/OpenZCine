@@ -13708,8 +13708,14 @@ struct NativeAppRoot: View {
             MonitorTheme.background.ignoresSafeArea()
             if model.isMonitorPresented, model.shell.monitor == nil {
                 // Monitors that are not the shell's: the relay watcher, HDMI capture, the demo.
+                // Their Media and Settings panels are shell covers too, shown over them as the
+                // shell shows them over its own monitor.
+                let covered = model.shell.cover != nil
                 MonitorExperience()
                     .environment(model)
+                    .accessibilityElement(children: covered ? .ignore : .contain)
+                    .accessibilityHidden(covered)
+                if let cover = model.shell.cover { NikonCoverPage(cover: cover) }
             } else if model.multicam.isPresented, model.shell.monitor == nil {
                 MulticamStage(
                     coordinator: model.multicam,
