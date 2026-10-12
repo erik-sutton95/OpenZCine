@@ -127,7 +127,6 @@ class RecordCameraFlowComposeTest {
                 diameter = 80f,
                 enabled = true,
                 confirm = true,
-                confirmationPolicy = MonitorControlModel.RecordConfirmationPolicy.EXPLICIT_TARGET,
                 onConfirmingChange = { reports += it },
             )
         }

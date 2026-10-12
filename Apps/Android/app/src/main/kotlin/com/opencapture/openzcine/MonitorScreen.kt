@@ -2483,8 +2483,9 @@ internal fun MonitorScreen(
             )
         }
 
-        // Dropped-session recovery over the held frame (iOS `MonitorRecoveryOverlay`).
-        MonitorRecoveryOverlay(
+        // Dropped-session recovery over the held frame: the shared card and its grace (iOS `MonitorRecoveryOverlay`).
+        // Nikon bodies drop the session when another phone scans for them, so the paused copy says so.
+        com.opencapture.opencine.cameracontrols.MonitorOperatorRecoveryCard(
             state = recoveryStateOverride ?: sessionRecoveryState,
             cameraName = recoveryStateOverride?.let { "Nikon ZR" } ?: lastConnectedCameraName,
             onRetry = {
@@ -2493,7 +2494,8 @@ internal fun MonitorScreen(
                 ProductionSessionRetryScheduleBridge.resetDropStormGuard()
                 sessionRecoveryRetryTicket += 1
             },
-            onBackToOperatorMenu = onBackToOperatorMenu,
+            onOperatorMenu = onBackToOperatorMenu,
+            dropSuspect = com.opencapture.opencine.vocabulary.SessionDropSuspect.OTHER_DEVICE_SCANNING,
         )
         // Registered HERE, not inside the options popup: launching the document picker pauses
         // the activity and the transient popup dismisses with it, so a launcher remembered in

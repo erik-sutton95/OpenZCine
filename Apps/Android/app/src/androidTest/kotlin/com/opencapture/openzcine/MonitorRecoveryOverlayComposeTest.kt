@@ -7,13 +7,15 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.opencapture.opencine.cameracontrols.MonitorOperatorRecoveryCard
+import com.opencapture.opencine.vocabulary.SessionDropSuspect
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Nikon's recovery card is the shared card with this camera's copy and 48 dp actions. */
+/** Nikon's recovery card is the shared card with this camera's copy and its 48 dp actions. */
 @RunWith(AndroidJUnit4::class)
 class MonitorRecoveryOverlayComposeTest {
     @get:Rule val compose = createComposeRule()
@@ -23,11 +25,12 @@ class MonitorRecoveryOverlayComposeTest {
         var retries = 0
         var menus = 0
         compose.setContent {
-            MonitorRecoveryOverlay(
+            MonitorOperatorRecoveryCard(
                 state = SessionRecoveryUi.PausedAfterDrops(drops = 3),
                 cameraName = "Z 6III",
                 onRetry = { retries += 1 },
-                onBackToOperatorMenu = { menus += 1 },
+                onOperatorMenu = { menus += 1 },
+                dropSuspect = SessionDropSuspect.OTHER_DEVICE_SCANNING,
             )
         }
         compose.onNodeWithText("Connection keeps dropping").assertIsDisplayed()
