@@ -1178,7 +1178,8 @@ class MainActivity : ComponentActivity() {
                     }
                     @Composable
                     fun StandaloneMedia() {
-                        val offlineBuckets = remember { completedMediaBuckets.values.toList() }
+                        // Read as state: a bucket scan still running when the cover opens adds its cameras here.
+                        val offlineBuckets = completedMediaBuckets.values.toList()
                         val primary = offlineBuckets.firstOrNull()
                         val offlineAssist =
                             remember(primary?.cameraID, offlineBuckets.size) {
