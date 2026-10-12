@@ -93,6 +93,7 @@ import androidx.lifecycle.compose.currentStateAsState
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.opencine.core.SettingKey
+import com.opencapture.opencine.appkit.MonitorPhotoRelease
 import com.opencapture.opencine.appkit.rememberPhoneBatteryReadout
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.statusPresentation
@@ -2450,9 +2451,9 @@ internal fun MonitorScreen(
                     }
                 }
             },
-            photoRelease = { enabled, decoration -> PhotographyShutterButton(stillCapturing, decoration,
-                enabled = enabled, timerRemaining = photoTimerRemaining,
-                bodyShutterPulse = bodyShutterPulse, onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
+            photoRelease = { enabled, decoration -> MonitorPhotoRelease(geometry.layout.record.width, enabled, decoration,
+                capturing = stillCapturing, timerRemaining = photoTimerRemaining, bodyPulse = bodyShutterPulse,
+                onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
         )
 
         // App self-timer tally: a white border pulse at the physical edge per

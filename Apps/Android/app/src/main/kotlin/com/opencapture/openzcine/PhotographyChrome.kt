@@ -1,42 +1,18 @@
 package com.opencapture.openzcine
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import java.util.Locale
-import kotlinx.coroutines.delay
 
 // The photography capture strip renders through the shared `MonitorCaptureStrip`
 // over `photographyCaptureSettings` (PhotographyPickers.kt) — iOS reuses
@@ -227,96 +203,6 @@ internal fun shotsRemainingCompactLabel(count: Int): String =
     } else {
         count.toString()
     }
-
-/**
- * System-rail still shutter (replaces the red record control in photography
- * mode). Press-tracked (iOS `shutterButtonPressed`/`Released`): finger-down
- * fires the release, and a hold in a continuous drive latches the burst until
- * finger-up. Stays tappable while capturing so a second press can end a
- * bulb/time exposure or cancel a countdown.
- */
-@Composable
-internal fun PhotographyShutterButton(
-    isCapturing: Boolean,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    /** Seconds left in a running app self-timer countdown (renders in the disc). */
-    timerRemaining: Int? = null,
-    /** Counter bumped when a shutter fires ON THE BODY — a bump dips the button briefly. */
-    bodyShutterPulse: Int = 0,
-    onPressed: () -> Unit = {},
-    onReleased: () -> Unit = {},
-) {
-    // A shutter fired on the camera BODY pulses the button (a quick dip-and-release) so an
-    // off-app capture visibly registers — mirrors the app-fired press feedback (iOS
-    // `bodyShutterPulse` / `bodyShutterFlash`). Instant playback already fires separately.
-    var bodyShutterFlash by remember { mutableStateOf(false) }
-    val pulseScale by
-        animateFloatAsState(
-            targetValue = if (bodyShutterFlash) 0.88f else 1f,
-            animationSpec = tween(durationMillis = 120),
-            label = "bodyShutterPulse",
-        )
-    LaunchedEffect(bodyShutterPulse) {
-        if (bodyShutterPulse > 0) {
-            bodyShutterFlash = true
-            delay(130)
-            bodyShutterFlash = false
-        }
-    }
-    // iOS PhotographyShutterButton: a 4pt white ring at the record-button
-    // footprint with a SOLID white disc inset 17pt total (0.5 alpha while
-    // capturing). Everything scales off the caller's slot (the record zone is
-    // the shared 82.8dp module) — a fixed inner size against a bigger slot
-    // rendered as a hollow ring.
-    Box(
-        modifier
-            .scale(pulseScale)
-            .pointerInput(enabled) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    if (!enabled) return@awaitEachGesture
-                    onPressed()
-                    // A cancelled pointer still releases the latch — iOS
-                    // backstops swallowed finger-ups the same way.
-                    waitForUpOrCancellation()
-                    onReleased()
-                }
-            }
-            .semantics {
-                contentDescription =
-                    when {
-                        timerRemaining != null -> "Self-timer, $timerRemaining seconds"
-                        isCapturing -> "Capturing"
-                        else -> "Shutter"
-                    }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .border(4.dp, Color.White.copy(alpha = 0.92f), CircleShape),
-        )
-        Box(
-            Modifier
-                .fillMaxSize()
-                .padding(8.5.dp)
-                .clip(CircleShape)
-                .background(if (isCapturing) Color.White.copy(alpha = 0.5f) else Color.White),
-            contentAlignment = Alignment.Center,
-        ) {
-            timerRemaining?.let { remaining ->
-                Text(
-                    "$remaining",
-                    style = chromeStyle(30f, FontWeight.Bold),
-                    color = Color.Black,
-                    maxLines = 1,
-                )
-            }
-        }
-    }
-}
 
 /** Whether the shell should show photography chrome for this snapshot. */
 internal fun prefersPhotographyChrome(properties: CameraPropertySnapshot): Boolean =
