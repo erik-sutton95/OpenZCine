@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.opencapture.monitorui.MonitorTimecodeFormat
+import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
 import com.opencapture.opencine.cameracontrols.MonitorOperatorPowerReading
 import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -11,7 +12,10 @@ import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.opencine.nikon.LiveFrameTimecode
+import com.opencapture.opencine.vocabulary.ConnectionPhase
+import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
 
@@ -260,70 +264,47 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
     }
 }
 
-/**
- * What the frame-rate chip is carrying instead of a rate.
- *
- * iOS parks these same words in `liveFPS` and the chip prints whatever is there
- * (`NativeAppRoot.swift:1627`, `:1651`, `:6556`, `:7628`; chip at `MonitorControls.swift:81-120`).
- * The chip is the only visible link readout on the monitor — `connectionMessage` is behind it — so
- * a route that never came up has to be distinguishable from a live feed, which a stale `25.00`
- * makes impossible.
- */
-internal enum class MonitorFeedState(val word: String) {
-    /** The session is gone and bounded recovery owns the screen (iOS `heldFrameBadge`). */
-    NO_LINK("NO LINK"),
+/** Pictures the monitor presented, counted for the shared link readout's rate. */
+internal class PresentedFrameCounter {
+    private val count = AtomicInteger()
 
-    /** The session is up but the stream is being restarted. */
-    RECOV("RECOV"),
-
-    /** The body is busy and has stopped feeding frames. */
-    BUSY("BUSY"),
-
-    /** The route failed outright and nothing is retrying it. */
-    FAIL("FAIL"),
-}
-
-/** Chip text before the first measurable interval (iOS `CameraDisplayState.preview.liveFPS`). */
-private const val READY_FRAME_RATE = "READY"
-
-/**
- * The one rule for what the FPS chip says.
- *
- * A [state] always wins: while the feed is down the measured rate is the rate of a feed that
- * stopped arriving, and printing it claims frames are still coming. A rate is only printed when it
- * is a real, positive measurement.
- *
- * The words are Kotlin constants rather than `stringResource` lookups because the chip's caller
- * needs this rule in a plain function it can also unit-test; `MonitorReadoutsTest` pins them to the
- * `monitor_fps_*` strings so the two spellings cannot drift.
- */
-internal fun fpsChipLabel(rate: Double?, state: MonitorFeedState?): String =
-    state?.word
-        ?: rate?.takeIf { it.isFinite() && it > 0.0 }?.let {
-            String.format(Locale.ROOT, "%.2f", it)
-        }
-        ?: READY_FRAME_RATE
-
-/**
- * iOS `FrameRateSampler`: live-measured delivery rate over a rolling 30-interval
- * window, published at most ~1 Hz, `"%.2f"`. Starts as iOS's `"READY"` until the
- * first measurable interval.
- */
-internal class MonitorFrameRateSampler {
-    private val sampler = com.opencapture.opencine.media.FrameRateSampler(
-        windowSize = 30,
-        displayRefreshInterval = 1.0,
-    )
-
-    /** Formatted through [fpsChipLabel] so the chip has one definition of a printed rate. */
-    var formatted: String by mutableStateOf(fpsChipLabel(rate = null, state = null))
+    @Volatile
+    var lastPresentedAtMillis: Long? = null
         private set
 
-    fun accept(nowNanos: Long) {
-        sampler.recordFrame(at = nowNanos / 1e9)
-        formatted = fpsChipLabel(rate = sampler.displayFPS.takeIf { sampler.intervalCount > 0 }, state = null)
+    val framesPresented: Int get() = count.get()
+
+    fun presented(nowMillis: Long) {
+        count.incrementAndGet()
+        lastPresentedAtMillis = nowMillis
     }
 }
+
+/**
+ * The Nikon monitor's link facts for the shared FPS chip and bars (A3-16). The chip owes the operator
+ * two words: a dropped session under bounded recovery and a preview the live session rejected. The
+ * bars are the Swift scorer's, which reads the Nikon pump watchdog and the USB transport that the
+ * shared inputs cannot carry.
+ */
+internal fun nikonLinkObservation(
+    state: CameraSessionState,
+    recovery: SessionRecoveryUi,
+    previewRejected: Boolean,
+    frames: PresentedFrameCounter,
+    linkBars: Int,
+): MonitorLinkObservation =
+    MonitorLinkObservation(
+        connection = when (state) {
+            is CameraSessionState.Connected -> ConnectionPhase.LIVE
+            CameraSessionState.Connecting -> ConnectionPhase.OPENING_DATALINK
+            CameraSessionState.Disconnected -> ConnectionPhase.IDLE
+        },
+        framesPresented = frames.framesPresented,
+        lastPresentedAtMillis = frames.lastPresentedAtMillis,
+        feedRecovering = previewRejected,
+        sessionRecovering = recovery != SessionRecoveryUi.Idle,
+        linkBars = linkBars,
+    )
 
 /** Shared monitor readout from enabled camera-header telemetry, including genuine frames. */
 internal fun monitorTimecodeLabel(timecode: LiveFrameTimecode?): String? =

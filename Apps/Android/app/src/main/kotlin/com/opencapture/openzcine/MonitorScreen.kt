@@ -1383,15 +1383,14 @@ internal fun MonitorScreen(
         // A watcher's pills show what the host formatted, never the retention's preview seeds
         // masquerading as a reporting camera (iOS `applyRelayState`).
         LaunchedEffect(relayedState) { relayedState?.let(readoutRetention::applyRelayed) }
-        val fpsSampler = remember(session, timecodeOwner) { MonitorFrameRateSampler() }
-        // The rate cell doubles as the link readout: with `connectionMessage` invisible behind the
-        // monitor, a route that never comes up is otherwise indistinguishable from a connected feed
-        // with no frames — which is exactly how it was reported from set (iOS `liveFPS`).
-        val feedState =
-            monitorFeedState(
-                recovery = recoveryStateOverride ?: sessionRecoveryState,
-                previewRejected = previewApplication is SwiftLiveViewPreviewState.Rejected,
-            )
+        // The rate cell doubles as the link readout (shared words and rate, A3-16): a route that never
+        // comes up must read differently from a connected feed with no frames.
+        val presentedFrames = remember(pictureFrameSource) { PresentedFrameCounter() }
+        val link = rememberMonitorLinkReadout(presentedFrames) {
+            nikonLinkObservation(sessionState, recoveryStateOverride ?: sessionRecoveryState,
+                previewApplication is SwiftLiveViewPreviewState.Rejected, presentedFrames,
+                actualLinkHealth.presentation.signalBars)
+        }
         var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
         val topBarMedia =
             if (prefersMediaDuration) {
@@ -1988,7 +1987,7 @@ internal fun MonitorScreen(
             status = MonitorOperatorLiveStatus({ commonControl.statusPresentation() },
                 !isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE),
                 !isPhotographyMode && mounted(MonitorDisplaySection.REC_READOUT), statusStorage, headerReadouts,
-                fpsChipLabel(fpsSampler.formatted.toDoubleOrNull(), feedState), actualLinkHealth.presentation.signalBars,
+                link.label, link.bars,
                 MonitorDisplaySection.FPS, recordingSection = MonitorDisplaySection.REC_READOUT,
                 timecodeSection = MonitorDisplaySection.TIMECODE),
             // A watcher's camera battery arrives over the relay as the host's raw level (cameraReadouts).
@@ -2040,7 +2039,7 @@ internal fun MonitorScreen(
                     } else {
                         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Column(Modifier.weight(2.35f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                CommandHealthStrip(commandPresentation, fpsSampler.formatted, actualLinkHealth.presentation.signalBars)
+                                CommandHealthStrip(commandPresentation, link.label, link.bars)
                                 CommandGrid(commandPresentation.tiles, commandControlsEnabled && accepts,
                                     pendingCommandControl, openCommandControl, moveCommandTileTo,
                                     modifier = Modifier.fillMaxWidth().weight(1f))
@@ -2194,7 +2193,7 @@ internal fun MonitorScreen(
                         onPresentedFrame = { frame, bitmap, baker, look ->
                             // TC is owned by the stream collector above; present
                             // path only drives FPS + wear (decode can lag a take).
-                            fpsSampler.accept(System.nanoTime())
+                            presentedFrames.presented(android.os.SystemClock.elapsedRealtime())
                             hasPresentedFrame = true
                             inspectorPreview.accept(pictureFrameSource, bitmap)
                             wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
@@ -2457,29 +2456,6 @@ internal fun MonitorDataAvailability.monitorSections(
             MonitorDisplaySection.COLOR, MonitorDisplaySection.ZOOM_CHIP, MonitorDisplaySection.GIMBAL_STICK -> false
         }
     }.toSet()
-
-/**
- * The word the frame-rate chip carries instead of a rate, mirroring what iOS parks in `liveFPS`
- * (`NativeAppRoot`): `SessionRecoveryCopy.heldFrameBadge` for the whole bounded-recovery arc after
- * an established session drops, `"RECOV"` while the session is up but the stream is being restarted.
- * A dropped session outranks a rejected stream — the link is the bigger fact.
- *
- * `null` means "print the measured rate": nothing is wrong that the chip has to say.
- *
- * [MonitorFeedState.BUSY] and [MonitorFeedState.FAIL] are deliberately unreachable here. The
- * body-busy hold lives inside the facade's live-view pump (`PTPIPClientSession`, no Kotlin-visible
- * state) and the relay client's failure never reaches this screen — `RelayWatchController` is
- * MainActivity's. Both need a signal plumbed in before this can name them.
- */
-internal fun monitorFeedState(
-    recovery: SessionRecoveryUi,
-    previewRejected: Boolean,
-): MonitorFeedState? =
-    when {
-        recovery != SessionRecoveryUi.Idle -> MonitorFeedState.NO_LINK
-        previewRejected -> MonitorFeedState.RECOV
-        else -> null
-    }
 
 /**
  * A portrait phone's top inset for the shared field layout, at least 44 dp. The shared layout hangs

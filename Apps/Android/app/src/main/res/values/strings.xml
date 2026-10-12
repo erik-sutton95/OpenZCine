@@ -862,10 +862,6 @@
     <!-- Wave 2 parity: feed-state words the FPS chip shows instead of a stale number, the
         armed add-setup watch pills, and the TalkBack labels the landscape chrome never had.
         Added centrally so no two agents contend on this file. -->
-    <string name="monitor_fps_no_link">NO LINK</string>
-    <string name="monitor_fps_recov">RECOV</string>
-    <string name="monitor_fps_busy">BUSY</string>
-    <string name="monitor_fps_fail">FAIL</string>
     <string name="monitor_waiting_live_view">WAITING FOR LIVE VIEW</string>
     <string name="conn_watch_usb_detail">Connect %1$s with a USB-C cable.</string>
     <string name="conn_watch_hotspot_detail">Turn on Personal Hotspot, then set the camera to join it.</string>
