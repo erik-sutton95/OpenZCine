@@ -2111,8 +2111,18 @@ final class NativeAppModel {
         return (source, image)
     }
     private(set) var liveFrameSource: LiveFrameSampleBus.Source?
+    /// Picture facts for chrome. Raster replacement is observed only by the feed view.
+    private(set) var hasLiveFrameImage = false
+    /// Source geometry changes independently of image identity, including HDMI format changes.
+    private(set) var liveFrameAspect: Double?
     var liveFrameImage: UIImage? {
         didSet {
+            let present = liveFrameImage != nil
+            if hasLiveFrameImage != present { hasLiveFrameImage = present }
+            let aspect = liveFrameImage.flatMap { image in
+                image.size.height > 0 ? Double(image.size.width / image.size.height) : nil
+            }
+            if liveFrameAspect != aspect { liveFrameAspect = aspect }
             if liveFrameImage == nil {
                 retireNativePictureSource()
                 liveFrameSource = nil
@@ -8584,16 +8594,17 @@ final class NativeAppModel {
     }
 
     /// Reflects `MovieTVLockSetting` poll readback into `lockedControls` for the shutter picker.
+    /// A pending write's target (`true` unlocks) wins over the readback until it lands.
+    ///
+    /// This runs after every camera property read, four times a second under a cover. An
+    /// in-place `insert`/`remove` notifies observers even when membership is unchanged, which
+    /// re-ran the hidden live surface on every poll (R-03), so only a real change is written.
     private func syncShutterLockFromSnapshot() {
-        if let pendingLock = pendingShutterLockState {
-            if pendingLock {
-                lockedControls.remove(.shutter)
-            } else {
-                lockedControls.insert(.shutter)
-            }
-            return
-        }
-        guard let locked = cameraPropertySnapshot.shutterLocked else { return }
+        guard
+            let locked = pendingShutterLockState.map({ !$0 })
+                ?? cameraPropertySnapshot.shutterLocked,
+            lockedControls.contains(.shutter) != locked
+        else { return }
         if locked {
             lockedControls.insert(.shutter)
         } else {
@@ -8629,6 +8640,7 @@ final class NativeAppModel {
     }
 
     /// Applies the integration's actual bootstrap reports to the app display and common facts.
+    /// The steady property poll applies each read through `.property` here too.
     func applyBootstrapObservation(_ observation: NikonBootstrapObservation) {
         switch observation {
         case .property(let property, let data):
@@ -8823,10 +8835,7 @@ final class NativeAppModel {
                 logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
             }
             let previousSelector = cameraPropertySnapshot.captureSelector
-            applyCameraRead(property, data)
-            publishCameraDisplayState()
-            syncFocusFromSnapshot()
-            syncShutterLockFromSnapshot()
+            applyBootstrapObservation(.property(property, data))
             if property == .liveViewSelector,
                 let previousSelector,
                 cameraPropertySnapshot.captureSelector != previousSelector
@@ -8840,9 +8849,6 @@ final class NativeAppModel {
                 dismissActivePanel()
                 // Photography does not offer the command monitor.
                 operatorSession.declare(modes: displayModes)
-            }
-            if property == .warningStatus {
-                applyThermalStreamStepDownIfNeeded()
             }
             if property == .movieShutterMode,
                 let pending = pendingShutterMode,
@@ -9272,6 +9278,8 @@ final class NativeAppModel {
         if labeled != next.resolutionFrameRate {
             next = next.updating(resolutionFrameRate: labeled)
         }
+        // Whole-value assignment on purpose: `@Observable` skips an equal `CameraDisplayState`, so
+        // an unchanged poll notifies nothing. An in-place edit of `cameraState` would notify always.
         cameraState = next
         broadcastRelayState()
         // Every camera property read lands here, so the seam's snapshot follows the camera.
