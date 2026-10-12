@@ -20,6 +20,8 @@ import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonStillPhotoClassification
 import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.MainActivity
+import com.opencapture.openzcine.PreferencesSnapshot
+import com.opencapture.openzcine.pairing.CAMERAS_DOCUMENT_PREFERENCES
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
@@ -46,12 +48,10 @@ class GalleryCoverReturnMainActivityTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context: Context = instrumentation.targetContext
     private val device = UiDevice.getInstance(instrumentation)
-    private val preferences = context.getSharedPreferences("openzcine.media-library", Context.MODE_PRIVATE)
     private val savedCameraStore = SharedPreferencesSavedCameraStore(context)
     private val cache = MediaCacheStore(context.noBackupFilesDir.resolve("media-cache").toPath())
     private val bucket = "SIMULATED-RETURN-${System.nanoTime()}"
-    private var preferencesBaseline: Map<String, *>? = null
-    private var savedCameraBaseline: List<SavedCameraRecord>? = null
+    private var savedState: PreferencesSnapshot? = null
     private var createdDirectory: Path? = null
     private var scenario: ActivityScenario<MainActivity>? = null
     private var originalIdleTimeout = 0L
@@ -61,8 +61,10 @@ class GalleryCoverReturnMainActivityTest {
         originalIdleTimeout = Configurator.getInstance().waitForIdleTimeout
         // The catalog's live frame clock never idles; read the tree as it is.
         Configurator.getInstance().waitForIdleTimeout = 0
-        preferencesBaseline = preferences.all.toMap()
-        savedCameraBaseline = savedCameraStore.records()
+        savedState = PreferencesSnapshot(context, "openzcine.media-library", CAMERAS_DOCUMENT_PREFERENCES,
+            SharedPreferencesSavedCameraStore.PREFERENCES_NAME)
+        // The app mirrors saved cameras into the shared document; start it from the seeded record alone.
+        check(context.getSharedPreferences(CAMERAS_DOCUMENT_PREFERENCES, Context.MODE_PRIVATE).edit().clear().commit())
         val record = SavedCameraRecord(
             host = "simulated-return-fixture", cameraName = "SIMULATED return",
             transport = SavedCameraTransport.USB_C, lastSeenAtEpochMillis = 1, wifiSsid = null,
@@ -104,22 +106,7 @@ class GalleryCoverReturnMainActivityTest {
     fun restoreFixtureState() {
         try { scenario?.close() } finally {
             Configurator.getInstance().waitForIdleTimeout = originalIdleTimeout
-            savedCameraBaseline?.let(savedCameraStore::replace)
-            preferencesBaseline?.let { saved ->
-                val editor = preferences.edit().clear()
-                saved.forEach { (key, value) ->
-                    when (value) {
-                        is String -> editor.putString(key, value)
-                        is Boolean -> editor.putBoolean(key, value)
-                        is Int -> editor.putInt(key, value)
-                        is Long -> editor.putLong(key, value)
-                        is Float -> editor.putFloat(key, value)
-                        is Set<*> -> editor.putStringSet(key, value.map { requireNotNull(it as? String) }.toSet())
-                        else -> error("Unsupported saved preference type for $key")
-                    }
-                }
-                check(editor.commit())
-            }
+            savedState?.restore()
             createdDirectory?.let { directory ->
                 check(directory.parent == cache.rootDirectory)
                 if (Files.exists(directory)) Files.walk(directory).use { paths ->

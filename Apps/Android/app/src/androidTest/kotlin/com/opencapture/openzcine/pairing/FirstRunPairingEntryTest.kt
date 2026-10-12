@@ -2,7 +2,6 @@ package com.opencapture.openzcine.pairing
 
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -11,6 +10,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import com.opencapture.openzcine.MainActivity
+import com.opencapture.openzcine.PreferencesSnapshot
 import com.opencapture.openzcine.R
 import java.util.regex.Pattern
 import org.junit.After
@@ -29,22 +29,18 @@ class FirstRunPairingEntryTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context: Context = instrumentation.targetContext
     private val device = UiDevice.getInstance(instrumentation)
-    private val stores = listOf(CAMERAS_DOCUMENT_PREFERENCES, SharedPreferencesSavedCameraStore.PREFERENCES_NAME)
-        .map { context.getSharedPreferences(it, Context.MODE_PRIVATE) }
-    private var baselines: List<Map<String, *>> = emptyList()
+    private var savedCameras: PreferencesSnapshot? = null
     private var scenario: ActivityScenario<MainActivity>? = null
 
     @Before
     fun forgetEverySavedCamera() {
-        baselines = stores.map { it.all.toMap() }
-        stores.forEach { check(it.edit().clear().commit()) }
+        savedCameras = PreferencesSnapshot(context, CAMERAS_DOCUMENT_PREFERENCES, SharedPreferencesSavedCameraStore.PREFERENCES_NAME)
+            .also { it.clear() }
     }
 
     @After
     fun restoreSavedCameras() {
-        try { scenario?.close() } finally {
-            stores.zip(baselines).forEach { (store, saved) -> store.restore(saved) }
-        }
+        try { scenario?.close() } finally { savedCameras?.restore() }
     }
 
     @Test
@@ -64,22 +60,6 @@ class FirstRunPairingEntryTest {
         assertNotNull("Back left the app instead of returning to the pair page",
             device.wait(Until.findObject(By.desc(entry)), TIMEOUT_MILLIS))
         assertEquals(Lifecycle.State.RESUMED, requireNotNull(scenario).state)
-    }
-
-    private fun SharedPreferences.restore(saved: Map<String, *>) {
-        val editor = edit().clear()
-        saved.forEach { (key, value) ->
-            when (value) {
-                is String -> editor.putString(key, value)
-                is Boolean -> editor.putBoolean(key, value)
-                is Int -> editor.putInt(key, value)
-                is Long -> editor.putLong(key, value)
-                is Float -> editor.putFloat(key, value)
-                is Set<*> -> editor.putStringSet(key, value.map { requireNotNull(it as? String) }.toSet())
-                else -> error("Unsupported saved preference type for $key")
-            }
-        }
-        check(editor.commit())
     }
 
     private companion object {
