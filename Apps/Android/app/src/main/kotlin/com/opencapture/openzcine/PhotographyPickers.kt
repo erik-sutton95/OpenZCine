@@ -286,7 +286,8 @@ internal fun photographyCaptureSettings(
         showsPicker: Boolean = true,
     ): MonitorPickerPresentation? {
         if (!showsPicker || options.isEmpty()) return null
-        val value = current?.takeIf { it in options } ?: options.first()
+        // Unknown stays blank: the drum seats on its first label without claiming it.
+        val value = current?.takeIf { it in options }.orEmpty()
         return MonitorPickerPresentation(
             kind = kind,
             title = title,
@@ -325,8 +326,7 @@ internal fun photographyCaptureSettings(
                             CommandControlRequest(
                                 title = "MODE",
                                 control = CameraControl.EXPOSURE_MODE,
-                                currentValue =
-                                    exposureMode?.takeIf { it in modeOptions } ?: "P",
+                                currentValue = exposureMode?.takeIf { it in modeOptions }.orEmpty(),
                                 options = modeOptions,
                             ),
                         applyValueOnActivate = false,
@@ -337,7 +337,7 @@ internal fun photographyCaptureSettings(
                             CommandControlRequest(
                                 title = "MODE",
                                 control = CameraControl.STILL_USER_MODE_PROGRAM,
-                                currentValue = userProgram ?: "P",
+                                currentValue = userProgram.orEmpty(),
                                 options = userModeOptions,
                             ),
                         applyValueOnActivate = false,
@@ -358,7 +358,7 @@ internal fun photographyCaptureSettings(
         } else {
             StillPickerPolicy.ISO_OPTIONS
         }
-    val isoCurrent = liveISO?.takeIf { it in isoOptions } ?: "800"
+    val isoCurrent = liveISO?.takeIf { it in isoOptions }.orEmpty()
     val allowsManualISO = StillPickerPolicy.allowsManualISO(exposureMode)
     fun isoMode(auto: Boolean) =
         MonitorPickerModePresentation(
@@ -456,8 +456,7 @@ internal fun photographyCaptureSettings(
                                 title = "DRIVE",
                                 control = CameraControl.STILL_DRIVE,
                                 currentValue =
-                                    properties.stillCaptureMode?.takeIf { it in driveOptions }
-                                        ?: driveOptions.first(),
+                                    properties.stillCaptureMode?.takeIf { it in driveOptions }.orEmpty(),
                                 options = driveOptions,
                             ),
                         applyValueOnActivate = false,
@@ -472,7 +471,12 @@ internal fun photographyCaptureSettings(
                                 // engage/restore logic, never a raw drive write.
                                 title = "Built-in Timer",
                                 control = CameraControl.STILL_DRIVE,
-                                currentValue = if (builtInTimerOn) "On" else "Off",
+                                currentValue =
+                                    when (properties.stillCaptureMode) {
+                                        null -> ""
+                                        StillPickerPolicy.SELF_TIMER_LABEL -> "On"
+                                        else -> "Off"
+                                    },
                                 options = listOf("Off", "On"),
                             ),
                         applyValueOnActivate = false,
@@ -519,8 +523,7 @@ internal fun photographyCaptureSettings(
                                 control = CameraControl.STILL_FOCUS_MODE,
                                 currentValue =
                                     properties.activeFocusMode(photography = true)
-                                        ?.takeIf { it in focusModeOptions }
-                                        ?: focusModeOptions.first(),
+                                        ?.takeIf { it in focusModeOptions }.orEmpty(),
                                 options = focusModeOptions,
                             ),
                         applyValueOnActivate = false,
@@ -532,8 +535,7 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_AREA,
                                 currentValue =
-                                    properties.focusArea?.takeIf { it in focusAreaOptions }
-                                        ?: focusAreaOptions.first(),
+                                    properties.focusArea?.takeIf { it in focusAreaOptions }.orEmpty(),
                                 options = focusAreaOptions,
                             ),
                         applyValueOnActivate = false,
@@ -545,8 +547,7 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_SUBJECT,
                                 currentValue =
-                                    properties.focusSubject?.takeIf { it in focusSubjectOptions }
-                                        ?: focusSubjectOptions.first(),
+                                    properties.focusSubject?.takeIf { it in focusSubjectOptions }.orEmpty(),
                                 options = focusSubjectOptions,
                             ),
                         applyValueOnActivate = false,
@@ -672,8 +673,7 @@ internal fun photographyTopBarPickers(
                                 control = CameraControl.STILL_IMAGE_AREA,
                                 currentValue =
                                     properties.imageArea
-                                        ?.takeIf { it in StillPickerPolicy.AREA_OPTIONS }
-                                        ?: "FX",
+                                        ?.takeIf { it in StillPickerPolicy.AREA_OPTIONS }.orEmpty(),
                                 options = StillPickerPolicy.AREA_OPTIONS,
                             ),
                         applyValueOnActivate = false,
@@ -686,7 +686,7 @@ internal fun photographyTopBarPickers(
                                 control = CameraControl.STILL_IMAGE_SIZE,
                                 currentValue =
                                     (cameraSizes ?: StillPickerPolicy.SIZE_OPTIONS).let { all ->
-                                        properties.imageSize?.takeIf { it in all } ?: all.first()
+                                        properties.imageSize?.takeIf { it in all }.orEmpty()
                                     },
                                 options = cameraSizes ?: StillPickerPolicy.SIZE_OPTIONS,
                             ),
@@ -707,7 +707,7 @@ internal fun photographyTopBarPickers(
                             CommandControlRequest(
                                 title = "QUALITY",
                                 control = CameraControl.STILL_QUALITY,
-                                currentValue = properties.compression ?: "JPEG Fine",
+                                currentValue = properties.compression.orEmpty(),
                                 options = StillPickerPolicy.QUALITY_OPTIONS,
                             ),
                     ),

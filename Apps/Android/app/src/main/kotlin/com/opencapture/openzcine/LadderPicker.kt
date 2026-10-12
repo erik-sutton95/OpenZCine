@@ -123,7 +123,7 @@ private fun ladderTab(
         label = mode.label,
         key = LadderTabKey(index, request.control),
         ladder = CaptureLadder(
-            current = request.currentValue,
+            current = request.currentValue.ifBlank { null },
             values = request.options,
             marked = mode.markedValues,
             lock = if (mode.drumLocked) CaptureLock.AUTO else null,

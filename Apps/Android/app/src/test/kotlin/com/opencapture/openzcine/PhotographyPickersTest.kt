@@ -291,6 +291,18 @@ class PhotographyPickersTest {
     }
 
     @Test
+    fun `an unreported value stays unknown instead of seeding the drum`() {
+        // A3-29: a seeded current (ISO 800, JPEG Fine) reads as already applied, so picking it sent
+        // no write while the body's value was unknown. Only the app's own timer has a known value.
+        val unknown = CameraPropertySnapshot(captureSelector = "photo")
+        val pickers = settings(unknown).mapNotNull { it.picker } + photographyTopBarPickers(unknown).values
+        val seeded =
+            pickers.flatMap { picker -> picker.modes.map { "${picker.kind}/${it.label}" to it.request.currentValue } }
+                .filter { (tab, current) -> current.isNotEmpty() && tab != "DRIVE/App-timer" }
+        assertEquals(emptyList(), seeded)
+    }
+
+    @Test
     fun `each drive tab writes through its own request`() {
         // A3-03: all three tabs drive STILL_DRIVE and two offer "Off". App-timer Off must
         // clear the app delay, not reach the body's Built-in Timer.
