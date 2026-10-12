@@ -360,7 +360,7 @@ internal fun monitorCaptureSettings(
         shutterTile?.request == null &&
             shutterTile?.unavailableReason != null &&
             shutterTile.value != "—" &&
-            shutterTile.unavailableReason.contains("locked", ignoreCase = true)
+            shutterTile.unavailableReason?.contains("locked", ignoreCase = true) == true
     val isoPresentation =
         isoPickerPresentation(
             isoTile = isoTile,

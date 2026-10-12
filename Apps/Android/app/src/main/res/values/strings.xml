@@ -300,7 +300,6 @@
     <string name="camera_state_other_change">. Another camera change is in progress.</string>
     <string name="camera_state_read_only">Read-only on this camera.</string>
     <string name="camera_state_locked">. Camera controls are locked.</string>
-    <string name="camera_state_change_hint">. Double tap to change.</string>
     <string name="camera_picker_description">%1$s camera control picker. %2$s.</string>
     <string name="action_close">Close</string>
     <string name="camera_controls_unavailable">Controls are unavailable until the camera is connected and unlocked.</string>
@@ -389,29 +388,9 @@
     <string name="temperature_check">CHECK</string>
     <string name="temperature_hot">HOT</string>
     <string name="command_dashboard_description">Command dashboard. Swipe up to view Image, Focus, Audio, and Monitor controls.</string>
-    <string name="command_side_description">Image, Focus, Audio, and Monitor controls. Swipe up to reveal more command controls.</string>
-    <string name="command_health_temp">Temp</string>
-    <string name="command_health_storage">Storage</string>
-    <string name="command_health_camera">Camera</string>
-    <string name="command_health_lens">Lens</string>
     <string name="command_health_fps">FPS</string>
     <string name="command_health_read">Read</string>
-    <string name="command_move_earlier">Move %1$s earlier</string>
-    <string name="command_move_later">Move %1$s later</string>
-    <string name="command_state_applying">. Applying change.</string>
-    <string name="command_state_pending">. Another control is being applied.</string>
-    <string name="command_state_read_only">Read-only.</string>
-    <string name="command_state_read_only_reorder">. %1$s Long press and drag to reorder.</string>
-    <string name="command_state_locked_reorder">. Controls are locked. Long press and drag to reorder.</string>
-    <string name="command_state_change_reorder">. Double tap to change; long press and drag to reorder.</string>
-    <string name="command_state_locked">. Controls are locked.</string>
-    <string name="command_change_description">Change %1$s</string>
-    <string name="command_more">MORE ⌄</string>
-    <string name="command_more_description">More command controls below. Swipe up to reveal them.</string>
     <string name="command_current_value">Current: %1$s</string>
-    <string name="command_health_value_description">%1$s %2$s</string>
-    <string name="command_value_description">%1$s: %2$s</string>
-    <string name="command_read_only_description">. %1$s</string>
 
     <!-- Shared monitor chrome. -->
     <string name="timecode_unavailable_description">Camera timecode unavailable</string>

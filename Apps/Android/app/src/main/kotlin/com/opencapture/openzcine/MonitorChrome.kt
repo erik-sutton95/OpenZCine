@@ -34,8 +34,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -44,8 +42,6 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
 import com.opencapture.monitorui.MonitorMaterial
 import com.opencapture.monitorui.monitorMaterial
 
@@ -98,29 +94,6 @@ fun FpsChip(signalBars: Int, fps: String, modifier: Modifier = Modifier) {
             maxLines = 1,
             softWrap = false,
         )
-    }
-}
-
-/**
- * Measures its single child unbounded and scales it down (top-start anchored)
- * to fit [maxWidth] — the shell-level analog of iOS `minimumScaleFactor`, so
- * chrome pills compress instead of wrapping when a band runs tight.
- */
-@Composable
-fun FitScale(maxWidth: Dp, content: @Composable () -> Unit) {
-    Layout(content) { measurables, _ ->
-        val placeable = measurables.first().measure(Constraints())
-        val maxPx = maxWidth.roundToPx()
-        val scale = if (placeable.width > maxPx) maxPx / placeable.width.toFloat() else 1f
-        val width = (placeable.width * scale).toInt()
-        val height = (placeable.height * scale).toInt()
-        layout(width, height) {
-            placeable.placeWithLayer(0, 0) {
-                scaleX = scale
-                scaleY = scale
-                transformOrigin = TransformOrigin(0f, 0f)
-            }
-        }
     }
 }
 

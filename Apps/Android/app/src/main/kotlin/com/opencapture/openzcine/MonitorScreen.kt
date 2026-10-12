@@ -9,11 +9,8 @@ import android.view.HapticFeedbackConstants
 import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.monitorBackdropSource
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -22,15 +19,12 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -514,7 +508,7 @@ internal fun MonitorScreen(
     // CORE-02: ISO, white balance and record go through the OpenCine camera-session seam. It
     // admits them against camera-reported state, keeps receipts, and drives [session] itself.
     SideEffect { commonSession.updateMonitorAuthority(availability, controlsSurrendered) }
-    val commandTileOrderStore = remember(appContext) { CommandTileOrderStore(appContext) }
+    val commandTileOrderStore = remember(appContext) { commandTileOrderStore(appContext) }
     var commandTileOrder by remember(commandTileOrderStore) {
         mutableStateOf(commandTileOrderStore.load())
     }
@@ -2027,27 +2021,9 @@ internal fun MonitorScreen(
                 fitted = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList()),
             MonitorOperatorBodyViews(
                 dashboard = { accepts ->
-                    if (isPortrait) {
-                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CommandGrid(commandPresentation.tiles, commandControlsEnabled && accepts,
-                                pendingCommandControl, openCommandControl, moveCommandTileTo,
-                                modifier = Modifier.fillMaxWidth().height(portraitCommandGridHeightDp(commandPresentation.tiles.size).dp))
-                            CommandSecondarySections(commandPresentation.sideSections, commandControlsEnabled && accepts,
-                                pendingCommandControl, openCommandControl, compact = false)
-                        }
-                    } else {
-                        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Column(Modifier.weight(2.35f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                CommandHealthStrip(commandPresentation, link.label, link.bars)
-                                CommandGrid(commandPresentation.tiles, commandControlsEnabled && accepts,
-                                    pendingCommandControl, openCommandControl, moveCommandTileTo,
-                                    modifier = Modifier.fillMaxWidth().weight(1f))
-                            }
-                            CommandSideColumn(commandPresentation.sideSections, commandControlsEnabled && accepts,
-                                pendingCommandControl, openCommandControl, Modifier.weight(.85f).fillMaxHeight())
-                        }
-                    }
+                    CommandDashboard(commandPresentation, isPortrait, commandControlsEnabled && accepts,
+                        pendingCommandControl, openCommandControl, moveCommandTileTo,
+                        link.label, link.bars)
                 },
                 focusDrive = if (
                     // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`), default OFF; off
