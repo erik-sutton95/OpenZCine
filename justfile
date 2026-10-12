@@ -158,6 +158,11 @@ ios-set-version marketing_version build_number:
 testflight:
     IOS_UPLOAD_VIA_ALTOOL=1 ./scripts/ios-testflight-upload.sh
 
+# Offline Sentry release-tooling checks (OpenCine scripts/sentry) against this app's archive hook.
+# No network, no uploads.
+sentry-test:
+    OPC_APP_ROOT=. OPC_APP_NAME=Runner bash ../OpenCine/scripts/sentry/sentry-test.sh
+
 # Run all native production checks that do not require camera hardware.
 native-check: check-demo-isolation swift-check ios-test ios-build watch-build
 

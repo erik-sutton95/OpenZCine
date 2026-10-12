@@ -703,6 +703,13 @@ class MainActivity : ComponentActivity() {
                     if (monitorSession == null) { shell.close(); camerasModel.sessionEnded() }
                 }
                 val camerasState by camerasModel.state.collectAsState()
+                // Automatic reports and a queued problem report wait from a connect attempt until the
+                // monitor's session retires, recovery included (A6-08): one lease while either holds.
+                val holdsCameraPath = camerasState.attempts.isNotEmpty() || monitorSession != null
+                DisposableEffect(holdsCameraPath) {
+                    val cameraPath = if (holdsCameraPath) AppDiagnostics.reporting.beginCameraPath() else null
+                    onDispose { cameraPath?.close() }
+                }
                 /** The saved camera and route that hold the app record with [profileID]. */
                 fun savedRoute(profileID: String): Pair<SavedCamera, com.opencapture.opencine.core.ConnectionRouteID>? =
                     camerasState.saved.firstNotNullOfOrNull { camera ->
@@ -1035,12 +1042,7 @@ class MainActivity : ComponentActivity() {
                         }
                         DisposableEffect(active) {
                             diagnostics.record(AndroidDiagnosticEvent.MONITOR_PRESENTED)
-                            // Automatic reports and a queued problem report wait while a session is held.
-                            AppDiagnostics.reporting.setCameraSessionActive(true)
-                            onDispose {
-                                AppDiagnostics.reporting.setCameraSessionActive(false)
-                                diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED)
-                            }
+                            onDispose { diagnostics.record(AndroidDiagnosticEvent.MONITOR_DISMISSED) }
                         }
                         // In-use beacon (iOS parity): while this session is held and NOT shared,
                         // advertise the relay type with ch= + w=0 so no other device's camera

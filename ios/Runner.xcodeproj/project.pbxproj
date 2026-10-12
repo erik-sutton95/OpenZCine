@@ -75,8 +75,6 @@
 		LDDR0000000000000000001A /* LadderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = LDDR0000000000000000001B /* LadderPicker.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
 		C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* SharedCameraControls.swift */; };
-		F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */; };
-		F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000004 /* SentryReliabilitySink.swift */; };
 		F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000002 /* ReliabilityDiagnostics.swift */; };
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
 		C0DE00000000000000000030 /* DesignShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000031 /* DesignShared.swift */; };
@@ -92,7 +90,7 @@
 		C0DE000000000000000000C6 /* DemoHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C7 /* DemoHarness.swift */; };
 		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
-		F2D000000000000000000008 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F2D000000000000000000009 /* Sentry */; };
+		F2D000000000000000000008 /* OpenCineSentryApple in Frameworks */ = {isa = PBXBuildFile; productRef = F2D000000000000000000009 /* OpenCineSentryApple */; };
 		C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000000ED1A02 /* OpenCineMedia */; };
 		CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */; };
 		DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DIAG00000000000000000001 /* AppDiagnostics.swift */; };
@@ -266,8 +264,6 @@
 		LDDR0000000000000000001B /* LadderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LadderPicker.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F8 /* SharedCameraControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCameraControls.swift; sourceTree = "<group>"; };
-		F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityReportingNetwork.swift; sourceTree = "<group>"; };
-		F2D000000000000000000004 /* SentryReliabilitySink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryReliabilitySink.swift; sourceTree = "<group>"; };
 		F2D000000000000000000002 /* ReliabilityDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityDiagnostics.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000031 /* DesignShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignShared.swift; sourceTree = "<group>"; };
@@ -338,7 +334,7 @@
 			files = (
 				OZC000000000000000000003 /* OpenZCineCore in Frameworks */,
 				C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */,
-				F2D000000000000000000008 /* Sentry in Frameworks */,
+				F2D000000000000000000008 /* OpenCineSentryApple in Frameworks */,
 				OCC000000000000000000003 /* OpenCineCore in Frameworks */,
 				C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */,
 				F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */,
@@ -485,8 +481,6 @@
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
 				C0DE000000000000000000F8 /* SharedCameraControls.swift */,
-				F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */,
-				F2D000000000000000000004 /* SentryReliabilitySink.swift */,
 				F2D000000000000000000002 /* ReliabilityDiagnostics.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
 				C0DE00000000000000000F11 /* NikonAssists.swift */,
@@ -576,6 +570,7 @@
 				97C146EC1CF9000F007C117D /* Resources */,
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				WTCH00000000000000000080 /* Embed Watch Content */,
+				F01000000000000000000001 /* Stamp source revision */,
 			);
 			buildRules = (
 			);
@@ -585,7 +580,7 @@
 			name = Runner;
 			packageProductDependencies = (
 				9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */,
-				F2D000000000000000000009 /* Sentry */,
+				F2D000000000000000000009 /* OpenCineSentryApple */,
 				OCC000000000000000000002 /* OpenCineCore */,
 				C0DE00000000000000ED1A02 /* OpenCineMedia */,
 				F10000000000000000000A02 /* OpenCineFrameIO */,
@@ -671,8 +666,8 @@
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
 				C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
-				F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */,
+				F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */,
 				OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
@@ -720,6 +715,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		F01000000000000000000001 /* Stamp source revision */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Stamp source revision";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "bash \"${SRCROOT}/../../OpenCine/scripts/sentry/stamp-source-revision.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		331C807D294A63A400263BE5 /* Sources */ = {
@@ -803,8 +817,6 @@
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
 				C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */,
-				F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */,
-				F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */,
 				F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
 				C0DE00000000000000000F01 /* NikonAssists.swift in Sources */,
@@ -1356,6 +1368,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../OpenCine;
 		};
+		F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../OpenCine/Packages/OpenCineSentryApple;
+		};
 		OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ..;
@@ -1363,14 +1379,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
-			requirement = {
-				kind = exactVersion;
-				version = 9.24.0;
-			};
-		};
 		C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
@@ -1382,10 +1390,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		F2D000000000000000000009 /* Sentry */ = {
+		F2D000000000000000000009 /* OpenCineSentryApple */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
+			package = F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */;
+			productName = OpenCineSentryApple;
 		};
 		OCC000000000000000000002 /* OpenCineCore */ = {
 			isa = XCSwiftPackageProductDependency;
