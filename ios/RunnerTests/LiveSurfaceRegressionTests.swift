@@ -56,6 +56,13 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             elements().first { Self.identifier($0) == id }
         }
 
+        func element(prefix: String) -> NSObject? {
+            elements().first { Self.identifier($0).hasPrefix(prefix) }
+        }
+
+        /// What VoiceOver reaches, for a failure message.
+        var identifiers: [String] { elements().map(Self.identifier).filter { !$0.isEmpty }.sorted() }
+
         private static func identifier(_ object: NSObject) -> String {
             let getter = NSSelectorFromString("accessibilityIdentifier")
             guard object.responds(to: getter) else { return "" }
@@ -122,17 +129,19 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             XCTAssertNotNil(model.shell.monitor, "\(source): the monitor must be the shell's")
 
             model.activePanel = .settings
+            // The cover's tab strip is a container; its tabs are the elements VoiceOver reaches.
             let coverShown = try await hosted.settle {
-                hosted.element("monitor.settings.tabs") != nil
+                hosted.element(prefix: "monitor.settings.tab.") != nil
             }
-            XCTAssertTrue(coverShown, "\(source): Settings must render its cover")
+            XCTAssertTrue(coverShown, "\(source): Settings must render its cover: \(hosted.identifiers)")
 
             model.activePanel = nil
             let backToLive = try await hosted.settle {
-                hosted.element("monitor.settings.tabs") == nil
+                hosted.element(prefix: "monitor.settings.tab.") == nil
                     && hosted.element("monitor.system.settings") != nil
             }
-            XCTAssertTrue(backToLive, "\(source): closing Settings must return to the monitor")
+            XCTAssertTrue(
+                backToLive, "\(source): closing Settings must return to the monitor: \(hosted.identifiers)")
         }
     }
 
