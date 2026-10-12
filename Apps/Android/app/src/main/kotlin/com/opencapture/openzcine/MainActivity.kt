@@ -948,11 +948,12 @@ class MainActivity : ComponentActivity() {
                     val monitorOperatorSession = remember(monitorAssist) {
                         monitorAssist?.let {
                             MonitorOperatorSessionModel(shell, it.shared, operatorSettings.displayPreferences, connectionScope)
-                                .also { session -> debugChromeEdit?.let(session::beginEditing) }
                         }
                     }
                     LaunchedEffect(monitorOperatorSession, shellState.monitor?.id) {
                         monitorOperatorSession?.synchronize(shellState.monitor?.id)
+                        // After synchronizing: a new monitor retires the previous one's editor.
+                        if (shellState.monitor != null) debugChromeEdit?.let { monitorOperatorSession?.beginEditing(it) }
                     }
                     DisposableEffect(monitorOperatorSession) { onDispose { monitorOperatorSession?.close() } }
                     val monitorState = monitored?.state?.collectAsState()?.value
