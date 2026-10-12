@@ -1,8 +1,6 @@
 package com.opencapture.openzcine.pairing
 
 import android.content.SharedPreferences
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,11 +16,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,7 +25,9 @@ import androidx.compose.ui.unit.sp
 import com.opencapture.monitorui.MonitorCameraAction
 import com.opencapture.monitorui.MonitorConnectFailure
 import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.opencine.appkit.CameraItem
+import com.opencapture.opencine.appkit.DiscoveryPermissions
 import com.opencapture.opencine.appkit.IntegrationSlots
 import com.opencapture.opencine.appkit.SavedCamerasStore
 import com.opencapture.opencine.appkit.StoredString
@@ -185,27 +182,25 @@ private fun AddSetupCard(
                 androidx.compose.runtime.LaunchedEffect(camera.id) { done(null) }
                 return
             }
-    val context = LocalContext.current
     // Asked for here only: naming a network is the one thing this permission buys, and a second
     // router setup is the one place the name is needed.
-    var networkNameGranted by remember { mutableStateOf(ConnectedNetworkName.isPermissionGranted(context)) }
-    val networkNameLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { networkNameGranted = it }
+    val networkName =
+        rememberPermissionGate("setup.networkName", DiscoveryPermissions.wifiName, DiscoveryPermissions.wifiNameRequest)
     val usbCameras by connector.usbCameras.collectAsState()
     val discovered by connector.discoveredCameras.collectAsState()
     val usbReady = usbCameras.any { it.access == UsbPtpCameraAccess.READY }
     val routerFound = discovered.any { SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName) }
     val apKeyStored = remember(anchor.id) { accessPointSsidFor(anchor)?.let(credentials::passphrase) != null }
     Column(
-        Modifier.background(StartupColors.surface, RoundedCornerShape(20.dp)).padding(20.dp).verticalScroll(rememberScrollState()),
+        Modifier.background(MonitorPalette.surface, RoundedCornerShape(20.dp)).padding(20.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.saved_add_setup_title, anchor.displayTitle), color = StartupColors.ink, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-        Text(stringResource(R.string.saved_add_setup_body), color = StartupColors.muted, fontSize = 13.sp, lineHeight = 18.sp)
-        if (group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE } && !networkNameGranted) {
-            Text(stringResource(R.string.saved_setup_router_name_permission), color = StartupColors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
-            TextButton(onClick = { networkNameLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION) }) {
-                Text(stringResource(R.string.saved_setup_router_name_permission_action), color = StartupColors.accent, fontSize = 13.sp)
+        Text(stringResource(R.string.saved_add_setup_title, anchor.displayTitle), color = MonitorPalette.text, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.saved_add_setup_body), color = MonitorPalette.muted, fontSize = 13.sp, lineHeight = 18.sp)
+        if (group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE } && !networkName.granted) {
+            Text(stringResource(R.string.saved_setup_router_name_permission), color = MonitorPalette.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+            TextButton(onClick = networkName::request) {
+                Text(stringResource(R.string.saved_setup_router_name_permission_action), color = MonitorPalette.accent, fontSize = 13.sp)
             }
         }
         for (kind in missingSetupKinds(group)) {
@@ -227,8 +222,8 @@ private fun AddSetupCard(
                     SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_wait_for_camera
                 }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(title), color = StartupColors.ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(stringResource(body), color = StartupColors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+                Text(stringResource(title), color = MonitorPalette.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(body), color = MonitorPalette.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
                 TextButton(
                     onClick = {
                         if (kind == SavedCameraTransport.CAMERA_ACCESS_POINT && !apKeyStored) {
