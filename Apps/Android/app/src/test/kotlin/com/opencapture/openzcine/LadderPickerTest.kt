@@ -32,7 +32,7 @@ class LadderPickerTest {
         assertEquals(listOf("Low Base", "High Base"), sheet.tabs.map { it.label })
         assertEquals("800 / 4000", sheet.tabs[0].detail)
         assertEquals(setOf("800"), sheet.tabs[0].ladder.marked)
-        assertEquals(CameraControl.BASE_ISO, sheet.tabs[0].activate?.key)
+        assertEquals(CameraControl.BASE_ISO, sheet.tabs[0].activate?.key?.control)
         assertEquals("Low", sheet.tabs[0].activate?.value)
         assertTrue(sheet.tabs[0].applyOnActivate)
         assertNull(sheet.lock)
@@ -69,7 +69,7 @@ class LadderPickerTest {
         assertEquals(CaptureLock.CAMERA_CONTROL, sheet.lock)
         assertTrue(sheet.lock!!.freezesSheet)
         assertFalse(sheet.tabs[0].applyOnActivate)
-        assertEquals(CameraControl.SHUTTER_MODE, sheet.tabs[1].activate?.key)
+        assertEquals(CameraControl.SHUTTER_MODE, sheet.tabs[1].activate?.key?.control)
         assertEquals("Speed", sheet.tabs[1].activate?.value)
     }
 
@@ -88,7 +88,7 @@ class LadderPickerTest {
         assertFalse(modeSheet.tabs[0].disabled)
         assertTrue(modeSheet.tabs[1].disabled)
         assertFalse(modeSheet.tabs[1].applyOnActivate)
-        assertEquals(CameraControl.STILL_USER_MODE_PROGRAM, modeSheet.tabs[1].key)
+        assertEquals(CameraControl.STILL_USER_MODE_PROGRAM, modeSheet.tabs[1].key.control)
         assertNull(modeSheet.tabs[0].field)
 
         val drivePicker = picker(
@@ -111,7 +111,7 @@ class LadderPickerTest {
         assertFalse(ladderShowsTimerShots(drivePicker, drive.tabs[0]))
         assertTrue(ladderShowsTimerShots(drivePicker, drive.tabs[1]))
         assertTrue(ladderShowsTimerShots(drivePicker, drive.tabs[2]))
-        val write = requestForLadderWrite(drivePicker, LadderWrite(CameraControl.STILL_DRIVE, "5s"))
+        val write = requestForLadderWrite(drivePicker, LadderWrite(drive.tabs[2].key, "5s"))
         assertNotNull(write)
         assertTrue("5s" in write.options)
         assertFalse("Single" in write.options)
@@ -174,7 +174,7 @@ class LadderPickerTest {
         )
         val sheet = videoLadderPresentation(picker)
         assertTrue(sheet.tabs.all { !it.applyOnActivate && it.field == null && it.steps == null })
-        assertEquals(CameraControl.FOCUS_AREA, sheet.tabs[1].key)
+        assertEquals(CameraControl.FOCUS_AREA, sheet.tabs[1].key.control)
     }
 
     @Test
@@ -227,7 +227,7 @@ class LadderPickerTest {
             MonitorPickerKind.WHITE_BALANCE,
             mode("Kelvin", CameraControl.WHITE_BALANCE, "5560K", listOf("5560K")),
         )
-        val write = com.opencapture.opencine.cameracontrols.LadderWrite(CameraControl.WHITE_BALANCE, "5550K")
+        val write = LadderWrite(LadderTabKey(0, CameraControl.WHITE_BALANCE), "5550K")
         assertEquals(CameraControl.WHITE_BALANCE, requestForLadderWrite(picker, write)?.control)
     }
 
