@@ -665,17 +665,6 @@ class MediaLibraryStateTest {
     }
 
     @Test
-    fun `viewer displays the toggled pair side while identity stays on the jpeg`() {
-        val jpeg = clip(handle = 1, filename = "DSC_0001.JPG", kind = NikonMediaContentKind.STILL_PHOTO)
-        val raw = clip(handle = 2, filename = "DSC_0001.NEF", kind = NikonMediaContentKind.STILL_PHOTO)
-
-        assertEquals(jpeg, stillViewerDisplaySide(jpeg, raw, showingRaw = false))
-        assertEquals(raw, stillViewerDisplaySide(jpeg, raw, showingRaw = true))
-        // Unpaired stills ignore a stray RAW request.
-        assertEquals(jpeg, stillViewerDisplaySide(jpeg, rawSibling = null, showingRaw = true))
-    }
-
-    @Test
     fun `sweep selection only adds items and visibility changes prune safely`() {
         val first = MediaLibrarySelection.begin("one")
         val swept = MediaLibrarySelection.addSweep(first, listOf("one", "two", "three"))

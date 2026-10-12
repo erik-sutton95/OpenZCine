@@ -61,17 +61,6 @@ internal fun rawSibling(
     return catalog.firstOrNull { it.isRawStill && it.rawPairKey(ownerCameraID(it)) == pairKey }
 }
 
-/**
- * The pair side the still viewer loads, names, and shares for a JPG ⇄ RAW
- * toggle state (iOS viewer `displayClip`). Ratings and deletion stay keyed on
- * the JPEG side regardless of the toggle.
- */
-internal fun stillViewerDisplaySide(
-    clip: NikonMediaClipRecord,
-    rawSibling: NikonMediaClipRecord?,
-    showingRaw: Boolean,
-): NikonMediaClipRecord = if (showingRaw) rawSibling ?: clip else clip
-
 private val masterExtensions = setOf("r3d", "nev")
 
 private fun NikonMediaClipRecord.stemLowercase(): String =
