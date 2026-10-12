@@ -3,6 +3,7 @@ package com.opencapture.openzcine.multicam
 import com.opencapture.opencine.multicam.ExclusionReason
 import com.opencapture.opencine.multicam.RecordDirection
 import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.FakeCameraSession
@@ -191,5 +192,17 @@ class MulticamCoordinatorTest {
             assertFalse("stop" in body.log)
         }
         assertFalse(stage.presented)
+    }
+
+    /** A5-01: a member's tile draws the body's five-step gauge, never a percent it did not report. */
+    @Test
+    fun tileShowsTheBodysBatteryBars() = runTest {
+        val stage = stage()
+        val member = MulticamMember(0, record("h0"))
+        member.properties = CameraPropertySnapshot(batteryPercent = 58)
+        val reading = tile(member, stage)
+        assertEquals(listOf(null, 3, 5), listOf(reading.battery, reading.batteryBars, reading.batteryBarCount))
+        member.properties = CameraPropertySnapshot()
+        assertNull(tile(member, stage).batteryBars, "no reading stays unknown")
     }
 }

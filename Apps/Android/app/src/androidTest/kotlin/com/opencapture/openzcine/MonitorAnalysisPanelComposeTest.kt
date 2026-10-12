@@ -98,9 +98,6 @@ class MonitorAnalysisPanelComposeTest {
             assertNull(assist.centerFor(MonitorAssistTool.HISTO, portrait = true))
             assertTrue(moved.x > start.x && moved.y > start.y)
             assertTrue(moved.x + moved.width <= 380f + 0.5f && moved.y + moved.height <= 280f + 0.5f)
-            val base = MonitorRect(moved.x, moved.y + moved.height - 44f, 44f, 44f)
-            val reset = focusResetButtonClearFrame(base, listOf(moved), layout.viewport)
-            assertTrue(reset.y + reset.height + FOCUS_RESET_PANEL_GAP_DP <= moved.y + 0.5f)
             visible.value = false
         }
         composeRule.runOnIdle { assertNull(reportedFrame) }

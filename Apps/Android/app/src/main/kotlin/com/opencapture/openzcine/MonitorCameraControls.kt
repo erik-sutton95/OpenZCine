@@ -1,5 +1,9 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.WhiteBalanceTint
+import com.opencapture.opencine.nikon.FocusPickerPolicy
+import com.opencapture.opencine.nikon.ShutterPickerPolicy
+import com.opencapture.opencine.nikon.StillPickerLadders
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
 import androidx.activity.compose.BackHandler
@@ -85,6 +89,9 @@ import kotlin.math.min
 import kotlinx.coroutines.withTimeoutOrNull
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
+import com.opencapture.opencine.cameracontrols.chromeClickable
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /**
  * iOS `panelRevealCurve`: CSS cubic-bezier(0.16, 1, 0.3, 1), 0.20s ease-out-expo
@@ -353,7 +360,7 @@ internal fun monitorCaptureSettings(
         shutterTile?.request == null &&
             shutterTile?.unavailableReason != null &&
             shutterTile.value != "—" &&
-            shutterTile.unavailableReason.contains("locked", ignoreCase = true)
+            shutterTile.unavailableReason?.contains("locked", ignoreCase = true) == true
     val isoPresentation =
         isoPickerPresentation(
             isoTile = isoTile,
@@ -401,32 +408,16 @@ internal fun monitorCaptureSettings(
         ),
         run {
             val irisTile = primary[CommandTileKind.IRIS]
-            val cameraOpts = irisTile?.request?.options.orEmpty()
-            val options =
-                cameraOpts.ifEmpty {
-                    IrisPickerPolicy.options(forLensDescriptor = null)
-                }
-            // Open IRIS whenever we have a live f-number, using the lens/core ladder
-            // if the body did not advertise a writable enum (same as iOS).
-            val live = irisTile?.value?.takeIf { it != "—" }
+            // Only the f-numbers the facade reports. Core already falls back to the lens ladder
+            // where the body allows that write; a body that advertises none leaves IRIS read-only.
             val presentation =
-                if (live != null && options.isNotEmpty()) {
-                    val request =
-                        irisTile.request?.copy(options = options)
-                            ?: CommandControlRequest(
-                                title = strings.resolve(R.string.camera_label_iris),
-                                control = CameraControl.IRIS,
-                                currentValue = if (live in options) live else options.first(),
-                                options = options,
-                            )
+                irisTile?.request?.takeIf { it.options.isNotEmpty() }?.let { request ->
                     MonitorPickerPresentation(
                         kind = MonitorPickerKind.IRIS,
                         title = strings.resolve(R.string.camera_label_iris),
                         subtitle = strings.resolve(R.string.camera_subtitle_iris),
                         modes = listOf(MonitorPickerModePresentation(request.title, request)),
                     )
-                } else {
-                    null
                 }
             MonitorCaptureSettingPresentation(
                 kind = MonitorPickerKind.IRIS,
@@ -1051,7 +1042,7 @@ internal fun MonitorControlPickerPanel(
                 onSelect = onSelect,
                 onDismiss = onDismiss,
                 nefOptions =
-                    nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
+                    nefOptions.ifEmpty { StillPickerLadders.NEF_OPTIONS },
                 controlsEnabled = writeEnabled,
                 chromeless = chromeless,
             )
@@ -1069,7 +1060,7 @@ internal fun MonitorControlPickerPanel(
                 onClose = onDismiss,
                 onHold = if (currentPicker.kind == MonitorPickerKind.SHUTTER && writeEnabled) onShutterLongPress else null,
                 tintLabel = { tint ->
-                    WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta)
+                    WhiteBalanceTint.label(tint.amberBlue ?: 0, tint.greenMagenta)
                 },
                 tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
                     stringResource(R.string.camera_wb_tint_double_tap_help),
@@ -1248,7 +1239,7 @@ internal fun PickerPanelBody(
             Modifier
                 .then(if (chromeless) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
                     .heightIn(max = frame.height.dp)
-                    .overlayGlass(ChromeShape)
+                    .monitorMaterial(MonitorMaterial.Expanded, ChromeShape)
                     .border(1.dp, LiveDesign.hairlineStrong, ChromeShape))
                 // iOS PickerPanel: long-press anywhere (incl. lock banner) toggles shutter
                 // control lock. requireUnconsumed=false so the drum still scrolls.
@@ -1765,7 +1756,7 @@ internal fun MFDriveStrip(
             Modifier
                 .width(28.dp)
                 .fillMaxHeight()
-                .glass(CircleShape)
+                .monitorMaterial(MonitorMaterial.Compact, CircleShape)
                 .background(
                     Color.White.copy(alpha = if (dragging) 0.14f else 0f),
                     CircleShape,

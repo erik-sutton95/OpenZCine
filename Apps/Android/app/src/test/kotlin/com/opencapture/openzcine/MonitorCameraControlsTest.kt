@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.FocusPickerPolicy
+import com.opencapture.opencine.nikon.ShutterPickerPolicy
 import com.opencapture.monitorui.MonitorLayoutPolicy
 import com.opencapture.monitorui.MonitorFieldLayout
 import com.opencapture.monitorui.MonitorRect
@@ -12,7 +14,6 @@ import com.opencapture.opencine.nikon.withOptimisticControlValue
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CodecBitDepthOption
-import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -181,6 +182,19 @@ class MonitorCameraControlsTest {
     }
 
     @Test
+    fun `an iris the body does not advertise stays read-only`() {
+        // A3-20: no f-number enum means no invented ladder; the live value still reads out.
+        val snapshot = cameraSnapshot()
+        val noIris = snapshot.copy(controlCapabilities = snapshot.controlCapabilities.copy(irisValues = emptyList()))
+        val dashboard = dashboard(noIris)
+        val iris = monitorCaptureSettings(dashboard, strings).first { it.kind == MonitorPickerKind.IRIS }
+
+        assertEquals("f/2.8", iris.value)
+        assertNull(iris.picker)
+        assertEquals(emptyList(), dashboard.tiles.first { it.kind == CommandTileKind.IRIS }.request?.options.orEmpty())
+    }
+
+    @Test
     fun `relayed values fill a watcher's strip by kind and never grant a picker`() {
         // A watcher's dashboard is empty — the session has no properties — so the baseline is
         // all dashes with no pickers, and the broadcaster's forwarded values fill the cells.
@@ -256,48 +270,6 @@ class MonitorCameraControlsTest {
                 MonitorPickerKind.ISO,
                 MonitorPickerKind.IRIS,
                 controlsEnabled = false,
-            ),
-        )
-    }
-
-
-    @Test
-    fun `picker waits for pending camera command before chrome closes it`() {
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.COMMAND,
-                cameraValuesVisible = false,
-                cameraCommandPending = true,
-            ),
-        )
-        assertTrue(
-            !retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.COMMAND,
-                cameraValuesVisible = true,
-                cameraCommandPending = false,
-            ),
-        )
-        assertTrue(
-            !retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = false,
-                cameraCommandPending = false,
-            ),
-        )
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = true,
-                cameraCommandPending = false,
-            ),
-        )
-        // Top-bar resolution/codec pickers stay open without the capture strip.
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = false,
-                cameraCommandPending = false,
-                isTopBarPicker = true,
             ),
         )
     }

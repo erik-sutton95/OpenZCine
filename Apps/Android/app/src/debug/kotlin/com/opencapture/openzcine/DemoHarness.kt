@@ -22,8 +22,8 @@ import com.opencapture.openzcine.pairing.PairingFlowState
 import com.opencapture.openzcine.pairing.PairingPath
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
-import com.opencapture.openzcine.settings.PortraitFeedAspect
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.cameracontrols.PortraitFeedAspect
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -141,18 +141,6 @@ object DemoHarness {
      */
     const val EXTRA_USB_STATE = "zc.demo.usbState"
 
-    /** String intent extra forcing a glass tier (`full`/`flat`) for testing. */
-    const val EXTRA_GLASS_TIER = "zc.glass.tier"
-
-    /**
-     * Glass-tier override: `--es zc.glass.tier flat` (or `full`) pins chrome
-     * glass. FLAT is the opaque-fill floor; legacy `blur` maps to FLAT. Null
-     * (default / release) lets [resolveTier] pick the platform ceiling. The
-     * override can only lower the tier — low-RAM devices stay FLAT even if
-     * `"full"` is requested.
-     */
-    fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
-
     /**
      * Stages the dropped-session recovery affordance over the held frame
      * (`--es zc.demo.sessionLost retrying|lost`), mirroring iOS
@@ -177,7 +165,7 @@ object DemoHarness {
     /** Debug-only fit/fill override used for deterministic portrait screenshots. */
     fun portraitFeedAspect(intent: Intent): PortraitFeedAspect? =
         when (intent.getStringExtra(EXTRA_PORTRAIT_ASPECT)) {
-            "fit" -> PortraitFeedAspect.FIT_16_9
+            "fit" -> PortraitFeedAspect.FIT_16X9
             "fill" -> PortraitFeedAspect.FILL
             else -> null
         }
@@ -243,7 +231,9 @@ object DemoHarness {
     const val EXTRA_CHROME_EDIT = "zc.demo.chromeEdit"
 
     internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? =
-        intent.getStringExtra(EXTRA_CHROME_EDIT)?.let { MonitorDisplayMode.fromStoredName(it) }
+        intent.getStringExtra(EXTRA_CHROME_EDIT)?.trim()?.let { raw ->
+            MonitorDisplayMode.entries.firstOrNull { it.name.equals(raw, true) || it.title.equals(raw, true) }
+        }
 
     /** Debug-only standalone settings selector; release builds always return null. */
     internal fun settingsTab(intent: Intent): MonitorSettingsTab? =

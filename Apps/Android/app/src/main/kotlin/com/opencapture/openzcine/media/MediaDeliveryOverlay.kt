@@ -17,7 +17,8 @@ import com.opencapture.monitorui.MonitorMediaDeliveryProgressPanel
 import com.opencapture.monitorui.MonitorMediaDeliveryProgressDetailsValue
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
-import com.opencapture.openzcine.glass
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /**
  * iOS `MediaDeliveryOverlay` — progress pill for share / save / Frame.io prep.
@@ -76,7 +77,7 @@ internal fun MediaDeliveryCompletionToast(message: String, modifier: Modifier = 
             modifier =
                 Modifier.padding(bottom = 28.dp)
                     .clip(DeliveryCapsule)
-                    .glass(DeliveryCapsule)
+                    .monitorMaterial(MonitorMaterial.Compact, DeliveryCapsule)
                     .padding(horizontal = 16.dp, vertical = 10.dp),
         )
     }

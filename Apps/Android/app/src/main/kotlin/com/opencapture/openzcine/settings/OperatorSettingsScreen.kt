@@ -15,6 +15,7 @@ import com.opencapture.opencine.appkit.diagnostics.settingsStatus
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.cameracontrols.*
+import com.opencapture.opencine.appkit.MonitorOperatorSessionModel
 import com.opencapture.opencine.appkit.MonitorSettingsCacheIdentity
 import com.opencapture.opencine.appkit.MonitorSettingsCacheSource
 import com.opencapture.opencine.appkit.MonitorSettingsAccountActions
@@ -133,6 +134,10 @@ internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolea
 internal fun OperatorSettingsScreen(
     session: CameraSession?,
     assists: NikonAssists,
+    /** The display owner the Display rows edit. */
+    operatorSession: MonitorOperatorSessionModel,
+    /** Whether a live monitor sits under these settings, so Edit view can open on it. */
+    editsLiveView: Boolean = false,
     settings: OperatorSettings,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
@@ -228,10 +233,10 @@ internal fun OperatorSettingsScreen(
         },
         clearSummary = { clearReceipt },
     )
-    val captureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties))
-        CaptureLayoutMode.PHOTO else CaptureLayoutMode.VIDEO
-    val display = rememberNikonBorrowedDisplay(settings, assists.shared, toggleSetting, emitHaptic,
-        captureMode, onEditView = { mode -> settings.beginChromeEditing(mode); closeOwned() })
+    // One layout per DISP mode over the shared owner; Edit view opens on the live monitor and Done
+    // returns here, to Display.
+    val display = MonitorOperatorDisplaySource(operatorSession, NIKON_DISPLAY_SECTIONS,
+        if (editsLiveView) ({ mode -> retainedAccount.retire(); operatorSession.beginEditing(mode) }) else null)
     val unavailable = stringResource(R.string.settings_image_processing_unavailable)
     val assistSections = listOf(MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA, MonitorAssistTool.WAVE,
         MonitorAssistTool.PARADE, MonitorAssistTool.HISTO, MonitorAssistTool.VECTOR, MonitorAssistTool.PEAK,

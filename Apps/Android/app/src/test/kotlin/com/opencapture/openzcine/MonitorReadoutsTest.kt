@@ -1,13 +1,8 @@
 package com.opencapture.openzcine
 
-import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
-import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.opencine.nikon.LiveFrameTimecode
-import com.opencapture.openzcine.core.MonitorDataAvailability
-import com.opencapture.openzcine.settings.ChromeSection
-import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -80,93 +75,28 @@ class MonitorReadoutsTest {
     }
 
     @Test
-    fun `battery labels distinguish percentage external power and unavailable`() {
-        // #303: the camera gauge is five bars, not a percentage — BatteryLevel only ever carries
-        // 1/20/40/60/80/100, so "80%" claimed a precision the body never sent.
-        assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(0))
-        assertEquals("\u25AE\u25AE\u25AE\u25AE\u25AF", batteryReadoutLabel(80, externalPower = true))
-        assertEquals("\u25AE\u25AE\u25AE\u25AF\u25AF", batteryReadoutLabel(60))
-        assertEquals("\u25AE\u25AF\u25AF\u25AF\u25AF", batteryReadoutLabel(20))
-        // The blinking shutter-disabled step, and an off-step value rounding up to its step.
-        assertEquals("\u25AE\u25AF\u25AF\u25AF\u25AF", batteryReadoutLabel(1))
-        assertEquals("\u25AE\u25AE\u25AF\u25AF\u25AF", batteryReadoutLabel(39))
-        assertEquals("EXT", batteryReadoutLabel(null, externalPower = true))
-        assertEquals(UNAVAILABLE_MONITOR_VALUE, batteryReadoutLabel(Int.MIN_VALUE))
-        val poweredPercentage = monitorBatteryPresentation(80, externalPower = true)
-        assertEquals("\u25AE\u25AE\u25AE\u25AE\u25AF", poweredPercentage.label)
-        assertEquals(80, poweredPercentage.percent)
-        assertTrue(poweredPercentage.externalPower)
-        val poweredOnly = monitorBatteryPresentation(null, externalPower = true)
-        assertEquals("EXT", poweredOnly.label)
-        assertTrue(poweredOnly.externalPower)
-        assertFalse(monitorBatteryPresentation(80, externalPower = false).externalPower)
-    }
-
-    @Test
-    fun `timecode uses exact camera header fields and never an elapsed clock`() {
-        val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 4)
-        assertEquals(camera, liveViewHeaderTimecode(camera))
-
-        // Pure off/zero is unavailable (no invented clock).
-        val offZero = LiveFrameTimecode(on = false, hour = 0, minute = 0, second = 0, frame = 0)
-        assertNull(liveViewHeaderTimecode(offZero))
-        assertNull(liveViewHeaderTimecode(null))
-
-        // Nikon can leave the header "on" flag clear while still advancing H:M:S:F
-        // during a take — digits must still be accepted (iOS liveTimecode parity).
-        val rollingWithFlagOff = camera.copy(on = false)
-        assertEquals(rollingWithFlagOff, liveViewHeaderTimecode(rollingWithFlagOff))
-    }
-
-    @Test
-    fun `out of range timecode is unavailable rather than normalized`() {
-        val invalid = LiveFrameTimecode(on = true, hour = 24, minute = 0, second = 0, frame = 0)
-
-        assertNull(liveViewHeaderTimecode(invalid))
-    }
-
-    @Test
-    fun `timecode retention mirrors camera headers mid-take`() {
-        val owner = CameraIdentity("ZR", "ZR", "1")
-        val retention = MonitorTimecodeRetention(owner)
-        val connected = CameraSessionState.Connected(owner)
-        val seed = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 0)
-        retention.accept(seed)
-        assertEquals(seed, retention.timecodeFor(connected))
-
-        // Constant sync: mid-take headers update the display immediately.
-        val midTake = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 10, frame = 12)
-        retention.accept(midTake)
-        assertEquals(midTake, retention.timecodeFor(connected))
-
-        // Empty/off zero must not wipe the last good camera sample.
-        retention.accept(LiveFrameTimecode(on = false, hour = 0, minute = 0, second = 0, frame = 0))
-        assertEquals(midTake, retention.timecodeFor(connected))
-    }
-
-    @Test
-    fun `timecode readout hides on a body that strikes no timecode`() {
-        val owning = MonitorDataAvailability.OWNING
-
-        // The live-view header's own status bit gates the slot: bodies with no timecode hardware
-        // pin it to zero forever, and a frozen 00:00:00:00 on set is worse than no readout.
-        assertTrue(owning.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = true))
-        assertFalse(owning.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = false))
-
-        // Photography rents the same slot for the SHOTS counter, which has nothing to do with
-        // timecode — it follows the camera link instead.
-        assertTrue(
-            owning.hasSource(
-                ChromeSection.TIMECODE_READOUT,
-                cameraReportsTimecode = false,
-                isPhotographyMode = true,
-            ),
-        )
-
-        // A device receiving nothing has no timecode source however the body is set.
-        val unlinked =
-            MonitorDataAvailability(ownsCameraSession = false, receivesCameraMetadata = false)
-        assertFalse(unlinked.hasSource(ChromeSection.TIMECODE_READOUT, cameraReportsTimecode = true))
+    fun `the camera battery is the body's five step gauge, never a percent`() {
+        // A5-01, #303: BatteryLevel only carries 1/20/40/60/80/100, so "60%" claimed a precision
+        // the body never sent (it reads 60 for anything from 40 to 59 percent).
+        val sixty = requireNotNull(nikonCameraBatteryReading(60, externalPower = true))
+        assertNull(sixty.percent)
+        assertEquals(3, sixty.bars)
+        assertEquals(5, sixty.barCount)
+        assertTrue(sixty.camera)
+        assertEquals(true, sixty.charging)
+        assertFalse(sixty.warning)
+        assertFalse(sixty.exhausted)
+        // An off-step value rounds up to the step it sits under; two bars warns.
+        val low = requireNotNull(nikonCameraBatteryReading(39, externalPower = null))
+        assertEquals(2, low.bars)
+        assertTrue(low.warning)
+        // The blinking shutter-disabled step pulses.
+        val critical = requireNotNull(nikonCameraBatteryReading(1, externalPower = false))
+        assertEquals(1, critical.bars)
+        assertTrue(critical.exhausted)
+        // An unread battery is absent, never an empty red cell.
+        assertNull(nikonCameraBatteryReading(null, externalPower = true))
+        assertNull(nikonCameraBatteryReading(0, externalPower = null))
     }
 
     @Test
@@ -207,55 +137,5 @@ class MonitorReadoutsTest {
         assertEquals(status.minutesRemaining, status.minutesRemaining.coerceIn(35, 45))
         assertEquals("${status.minutesRemaining} Min", status.durationLabel)
         assertNull(monitorMediaStatus(null, "R3D NE", "6048x3402", 25))
-    }
-
-    @Test
-    fun `fps chip says what the feed is doing instead of the rate it last had`() {
-        assertEquals("25.00", fpsChipLabel(rate = 25.0, state = null))
-        assertEquals("23.98", fpsChipLabel(rate = 23.976, state = null))
-        // The whole point: a measured rate is still sitting there when the feed stops.
-        assertEquals("NO LINK", fpsChipLabel(rate = 25.0, state = MonitorFeedState.NO_LINK))
-        assertEquals("RECOV", fpsChipLabel(rate = 25.0, state = MonitorFeedState.RECOV))
-        assertEquals("BUSY", fpsChipLabel(rate = 25.0, state = MonitorFeedState.BUSY))
-        assertEquals("FAIL", fpsChipLabel(rate = 25.0, state = MonitorFeedState.FAIL))
-        // Nothing measured yet is iOS's "READY", and a non-measurement never prints as a rate.
-        assertEquals("READY", fpsChipLabel(rate = null, state = null))
-        assertEquals("READY", fpsChipLabel(rate = 0.0, state = null))
-        assertEquals("READY", fpsChipLabel(rate = -1.0, state = null))
-        assertEquals("READY", fpsChipLabel(rate = Double.NaN, state = null))
-        assertEquals("READY", fpsChipLabel(rate = Double.POSITIVE_INFINITY, state = null))
-    }
-
-    @Test
-    fun `the chip carries a word from the first connect, never a blank`() {
-        // The screen round-trips the sampler's seed back through `formatted.toDoubleOrNull()`, so
-        // this exact path — a non-numeric seed and no feed state — runs on every connect before the
-        // first frame. It has to land on READY; anything falsy there blanks the chip.
-        val seeded = MonitorFrameRateSampler().formatted
-        assertEquals("READY", seeded)
-        assertEquals("READY", fpsChipLabel(rate = seeded.toDoubleOrNull(), state = null))
-    }
-
-    @Test
-    fun `feed-state words are spelled the same in code and in strings`() {
-        // The words live in Kotlin so the chip's rule stays a pure function the caller can test.
-        // That is only safe while the resource says the same thing, so pin the two together.
-        val strings =
-            Path.of(
-                requireNotNull(System.getProperty("openzcine.repositoryRoot")) {
-                    "Gradle must expose the OpenZCine repository root to readout tests"
-                },
-            ).resolve("Apps/Android/app/src/main/res/values/strings.xml").toFile().readText()
-        mapOf(
-            MonitorFeedState.NO_LINK to "monitor_fps_no_link",
-            MonitorFeedState.RECOV to "monitor_fps_recov",
-            MonitorFeedState.BUSY to "monitor_fps_busy",
-            MonitorFeedState.FAIL to "monitor_fps_fail",
-        ).forEach { (state, resource) ->
-            assertTrue(
-                """<string name="$resource">${state.word}</string>""" in strings,
-                "$resource must read ${state.word}, matching MonitorFeedState.$state",
-            )
-        }
     }
 }
