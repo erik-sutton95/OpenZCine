@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.frameio
 
+import com.opencapture.opencine.frameio.FrameioHopAvailability
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.CameraSession

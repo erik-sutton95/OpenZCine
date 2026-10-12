@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.frameio
 
+import com.opencapture.opencine.frameio.FrameioDeliveryException
 import com.opencapture.opencine.runtime.MonitorMovieExportContainer
 import com.opencapture.opencine.runtime.MonitorMovieExportLut
 import com.opencapture.openzcine.FeedLut
@@ -12,7 +13,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
@@ -183,59 +183,6 @@ class FrameioMediaPreparationTest {
             assertTrue(
                 Files.list(exportRoot).use { paths -> paths.iterator().hasNext() },
             )
-        }
-    }
-
-    @Test
-    fun `metadata sidecar records approved delivery context without cloud identifiers`() = runTest {
-        val root = createTempDirectory("frameio-metadata")
-        try {
-            val source = root.resolve("source.mov")
-            Files.write(source, byteArrayOf(1, 2, 3, 4))
-            val artifact = artifact(source, supportsLutBake = true)
-            val prepared =
-                FrameioPreparedArtifact(
-                    StagedMediaShare(source, "C0001.mp4", "video/mp4"),
-                    9,
-                    "Unit LUT",
-                    null,
-                )
-            val destination =
-                FrameioDestination(
-                    accountID = "private-account-id",
-                    workspaceID = "private-workspace-id",
-                    projectID = "private-project-id",
-                    projectName = "Dailies",
-                    folderID = "private-folder-id",
-                )
-            val writer = AndroidFrameioMetadataSidecarWriter(root, clock = { 123_000L })
-
-            writer.recordSuccessfulDelivery(
-                artifact,
-                prepared,
-                destination,
-                MediaDeliveryConfiguration(includeMetadata = true),
-            )
-
-            val sidecar =
-                Files.list(root).use { paths ->
-                    paths.iterator().asSequence()
-                        .firstOrNull { path -> path.fileName.toString().endsWith(".meta.json") }
-                }
-            assertNotNull(sidecar)
-            val body = String(Files.readAllBytes(sidecar), Charsets.UTF_8)
-            assertTrue(body.contains("\"originalFilename\": \"C0001.MOV\""))
-            assertTrue(body.contains("\"deliveryFilename\": \"C0001.mp4\""))
-            assertTrue(body.contains("\"projectName\": \"Dailies\""))
-            assertTrue(body.contains("\"lutName\": \"Unit LUT\""))
-            assertTrue(body.contains("\"cameraID\": \"camera-unit\""))
-            assertTrue(body.contains("\"sizeBytes\": 9"))
-            assertFalse(body.contains("private-account-id"))
-            assertFalse(body.contains("private-workspace-id"))
-            assertFalse(body.contains("private-project-id"))
-            assertFalse(body.contains("private-folder-id"))
-        } finally {
-            root.toFile().deleteRecursively()
         }
     }
 

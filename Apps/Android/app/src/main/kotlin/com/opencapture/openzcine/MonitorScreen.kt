@@ -288,7 +288,7 @@ internal fun MonitorScreen(
      * Shared camera-AP → internet hop owner (Frame.io + RED download). Required
      * for "Download over internet" while bound to the camera access point.
      */
-    frameioController: com.opencapture.openzcine.frameio.FrameioDeliveryController? = null,
+    frameioController: com.opencapture.opencine.frameio.FrameioDeliveryController? = null,
     liveViewEnabled: Boolean = true,
     glassTierOverride: String? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,

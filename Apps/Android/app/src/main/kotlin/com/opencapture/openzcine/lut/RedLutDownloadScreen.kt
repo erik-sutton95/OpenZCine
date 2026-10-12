@@ -51,9 +51,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
-import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioHopAvailability
-import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.opencine.frameio.FrameioDeliveryController
+import com.opencapture.opencine.frameio.FrameioHopAvailability
+import com.opencapture.opencine.frameio.FrameioInternetHopState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
