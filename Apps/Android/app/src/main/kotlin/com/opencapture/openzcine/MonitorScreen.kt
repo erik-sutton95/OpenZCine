@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import java.util.concurrent.atomic.AtomicReference
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.opencine.cameracontrols.*
 import android.os.Build
@@ -328,6 +330,8 @@ internal fun MonitorScreen(
     val stillCapturing by stillCapture.isCapturing.collectAsState()
     // Post-capture instant playback (PLAY view-assist tool).
     val instantReview = remember(session) { InstantReviewController(session) }
+    // The AF boxes on the latest presented frame, captured into the review a release produces.
+    val captureReviewFocus = remember(session) { AtomicReference<LiveFocusInfo?>(null) }
     val instantReviewState by instantReview.review.collectAsState()
     // MF focus-by-wire drive (on-feed vertical strip beside the system rail).
     val mfDrive = remember(session) { MFDriveController(session) }
@@ -1004,6 +1008,7 @@ internal fun MonitorScreen(
                     enabled = true,
                     compression = snapshot.compression,
                     infoLine = photographyReviewInfoLine(snapshot),
+                    focus = captureReviewFocus.get(),
                 )
             }
         }
@@ -1014,6 +1019,7 @@ internal fun MonitorScreen(
             enabled = isPhotographyMode && assists.instantReview,
             compression = cameraProperties.compression,
             infoLine = photographyReviewInfoLine(cameraProperties),
+            focus = captureReviewFocus.get(),
         )
     }
     // iOS shutter long-press (strip cell + open picker panel): toggle MovieTVLock.
@@ -1650,6 +1656,7 @@ internal fun MonitorScreen(
         // portrait fill centre-crops the image and every feed-aligned overlay
         // through the same content-rect resolver. Command unmounts the feed.
         val feedFocus = liveFeedPresentation.focus
+        SideEffect { captureReviewFocus.set(feedFocus) }
 
         // A half-press on the body clears the instant review at once, instead of the operator
         // waiting out a countdown they have already decided to abandon. Twin of iOS
@@ -1931,7 +1938,8 @@ internal fun MonitorScreen(
             reference = reference, referenceAvailable = reference != null,
             level = { com.opencapture.monitorui.settings.MonitorSettingsChoices(LocalLevelStyle.entries,
                 operatorSettings.levelStyle, accentSelection = true, title = LocalLevelStyle::label) {
-                haptics.selection(); operatorSettings.levelStyle = it } })
+                haptics.selection(); operatorSettings.levelStyle = it } },
+            instantReview = { NikonReviewOptions(assists) })
         val usageStore = remember(appContext) { com.opencapture.opencine.appkit.MonitorToolUsagePreferences(
             appContext.getSharedPreferences("assist", android.content.Context.MODE_PRIVATE), "assistToolUsage.v1") }
         var usage by remember(usageStore) { mutableStateOf(usageStore.value) }
@@ -2395,6 +2403,7 @@ internal fun MonitorScreen(
                 onDismiss = instantReview::dismiss,
                 onToggleStar = { starred -> instantReview.setStarred(recordScope, starred) },
                 desqueeze = localFraming,
+                options = assists.reviewOptions,
             )
         }
 
