@@ -1937,7 +1937,7 @@ final class NativeAppModel {
         }
     }
 
-    var cameraState = CameraDisplayState.preview {
+    var cameraState = CameraDisplayState.blank {
         // The wrist reads battery, media and camera name from here, and had no way to hear about
         // any of them changing. Per-frame telemetry deliberately lives outside this struct (see
         // below), so this fires on real changes, not every frame.
@@ -1945,14 +1945,14 @@ final class NativeAppModel {
     }
     // Per-frame telemetry (timecode, FPS) is held separately from `cameraState` so updating it
     // never invalidates every view observing the heavy HUD struct — only the readouts re-render.
-    var liveTimecode = CameraDisplayState.preview.timecode
+    var liveTimecode = CameraDisplayState.blank.timecode
     /// Whether the body is running timecode at all — the header's own status byte, held apart from
     /// `liveTimecode` on purpose. Chrome that only needs "is there a timecode" must not observe the
     /// counter: that ticks every frame and would re-render the whole top bar at feed rate. Bodies
     /// without timecode hardware pin the status byte to zero forever, which is exactly the signal
     /// that hides the readout rather than parking a frozen 00:00:00:00 on set.
-    var cameraReportsTimecode = CameraDisplayState.preview.timecode.on
-    var liveFPS = CameraDisplayState.preview.liveFPS
+    var cameraReportsTimecode = CameraDisplayState.blank.timecode.on
+    var liveFPS = CameraDisplayState.blank.liveFPS
     /// Top-bar signal indicator level (0–4 bars), derived from the continuously-scored
     /// `linkHealth` transport health with hysteresis (`LinkSignalBars`) so it reads steadily.
     /// USB-C sessions pin to full bars while linked — frame timing there isn't radio quality.
@@ -7053,6 +7053,8 @@ final class NativeAppModel {
             // mid-recovery is exactly when a foreign probe must stay away.
             updateCameraInUseBeacon()
             liveFrameImage = nil
+            // The next body reports its own values; none of this one's survive it (A1-03).
+            cameraState = .blank
             isMonitorPresented = false
             activePanel = nil
         }
