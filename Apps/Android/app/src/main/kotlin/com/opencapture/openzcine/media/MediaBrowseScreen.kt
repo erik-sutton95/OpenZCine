@@ -22,6 +22,7 @@ import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaSelectionConfiguration
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonMediaDeletionPlan
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import android.content.Context
@@ -589,7 +590,7 @@ internal fun MediaBrowseScreen(
         deleteConfirmTargets = null
         viewingPhoto = null
         deletionSelectedCount = selection.size
-        val targets = cameraDeletionTargets(catalog, selection, ::ownerCameraID)
+        val targets = NikonMediaDeletionPlan.of(catalog, selection, ::ownerCameraID).targets
         deletionAction = libraryActions.beginDeletion(targets.map { NikonLibraryClip(ownerCameraID(it), it) }) {
             library?.let { owner ->
                 owner.binding?.let { librarySourceOwner?.retireBrowse(it) }
@@ -687,10 +688,10 @@ internal fun MediaBrowseScreen(
         deletionMessage = { rows -> deleteConfirmationMessage(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID) },
         acceptedDeletion = MonitorMediaGalleryDeletion(
             capture = { rows ->
-                val targets = cameraDeletionTargets(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID)
+                val targets = NikonMediaDeletionPlan.of(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID).targets
                 libraryActions.capture(targets.map { NikonLibraryClip(ownerCameraID(it), it) }).captureDeletionAuthority()
             }, perform = { rows, authority ->
-                val targets = cameraDeletionTargets(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID)
+                val targets = NikonMediaDeletionPlan.of(loadedClips, rows.map { it.payload.clip }, ::ownerCameraID).targets
                     .map { NikonLibraryClip(ownerCameraID(it), it) }
                 val action = libraryActions.capture(targets)
                 val nativeOwner = connectionOwner
@@ -892,7 +893,7 @@ internal fun MediaBrowseScreen(
             if (actual != null && opening != null && selected != null) {
                 val actualState by actual.state.collectAsState()
                 val target = selected.payload
-                val raw = rawSibling(loadedClips, target.clip, ::ownerCameraID)?.let { sibling ->
+                val raw = NikonMediaDeletionPlan.rawSibling(loadedClips, target.clip, ::ownerCameraID)?.let { sibling ->
                     actualState.records.firstOrNull { it.payload.clip.libraryKey(it.payload.bucket) == sibling.libraryKey(target.bucket) }
                 }
                 val action = remember(actual, opening.admission, selected.asset.id) {
@@ -990,7 +991,7 @@ internal fun MediaBrowseScreen(
                         if (librarySource != MediaLibrarySource.CAMERA || !effectiveCameraConnected ||
                             shareInProgress || library !== actual || connectionOwner == null) null else {
                             val selected = listOf(record.payload.clip)
-                            val plan = deletionPlan(loadedClips, selected, ::ownerCameraID)
+                            val plan = NikonMediaDeletionPlan.of(loadedClips, selected, ::ownerCameraID)
                             val targets = plan.targets.map { NikonLibraryClip(ownerCameraID(it), it) }
                             val capturedAction = libraryActions.capture(targets)
                             val authority = capturedAction.captureDeletionAuthority()
@@ -1006,7 +1007,7 @@ internal fun MediaBrowseScreen(
                                         fun accepted() = librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected &&
                                             library === actual && connectionOwner == nativeOwner &&
                                             authority.isCurrent && capturedAction.sourceIsCurrent &&
-                                            sameDeletionPlan(plan, deletionPlan(loadedClips, selected, ::ownerCameraID)) &&
+                                            sameDeletionPlan(plan, NikonMediaDeletionPlan.of(loadedClips, selected, ::ownerCameraID)) &&
                                             library === actual && connectionOwner == nativeOwner && authority.isCurrent
                                         if (!accepted() || !cleanup() || !accepted()) return@perform
                                         capturedAction.deleteBatch(targets, deleteObject = { value ->
@@ -1047,7 +1048,7 @@ internal fun MediaBrowseScreen(
             val opening = photoOpening
             if (actual != null && opening != null) {
                 val actualState by actual.state.collectAsState()
-                val raw = rawSibling(loadedClips, clip, ::ownerCameraID)?.let { sibling ->
+                val raw = NikonMediaDeletionPlan.rawSibling(loadedClips, clip, ::ownerCameraID)?.let { sibling ->
                     actualState.records.firstOrNull { it.payload.clip.libraryKey(it.payload.bucket) == sibling.libraryKey(opening.record.payload.bucket) }
                 }
                 val action = remember(actual, opening.admission, opening.record.asset.id) {
