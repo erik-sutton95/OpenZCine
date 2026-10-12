@@ -117,6 +117,32 @@ class OfflineMediaMainActivityTest {
     }
 
     @Test
+    fun theCachedClipPlayerSharesThroughTheSharedDeliveryPopupAcrossRotation() {
+        scenario =
+            ActivityScenario.launch(
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+        try {
+            // A launch can replace the orientation the test host had, so set it after.
+            device.setOrientationNatural()
+            device.waitForOrientation(landscape = false)
+            device.waitForCamerasAction("Media library").click()
+            device.waitForText(CACHED_FILENAME).click()
+            device.waitForDescription("Share clip").click()
+            // The shared popup (A4-10), not a Z overlay, offers the native share destination.
+            assertNotNull(device.waitForText("Nearby Share, Files, and other apps"))
+            saveDeviceScreenshot("openzcine-android-delivery-popup-portrait.png")
+            device.setOrientationLeft()
+            device.waitForOrientation(landscape = true)
+            assertNotNull(device.waitForText("Nearby Share, Files, and other apps"))
+            saveDeviceScreenshot("openzcine-android-delivery-popup-landscape.png")
+        } finally {
+            device.setOrientationNatural()
+        }
+    }
+
+    @Test
     fun malformedCompletedCacheReportsFailureInsteadOfWaitingForever() {
         scenario = ActivityScenario.launch(
             Intent(context, MainActivity::class.java)
@@ -239,6 +265,13 @@ class OfflineMediaMainActivityTest {
         }
         waitForIdle()
         return waitForDescription(description)
+    }
+
+    private fun UiDevice.waitForOrientation(landscape: Boolean) {
+        val deadline = System.currentTimeMillis() + UI_TIMEOUT_MILLIS
+        while ((displayWidth > displayHeight) != landscape && System.currentTimeMillis() < deadline) waitForIdle()
+        assertEquals(landscape, displayWidth > displayHeight)
+        waitForIdle()
     }
 
     private fun UiDevice.waitForDescription(description: String): UiObject2 =
