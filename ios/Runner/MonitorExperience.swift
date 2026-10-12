@@ -268,17 +268,15 @@ struct LiveFeedModule: View {
     /// Lays the feed stack out in the camera's own frame (width/height swapped when the body is
     /// vertical), then rotates it upright into the displayed footprint. Gesture locations report
     /// in the pre-rotation space, so tap-to-focus and the AF overlay need no coordinate changes.
-    @ViewBuilder private func rotatedFeedImage(
+    /// One structure for every rotation (landscape rotates by zero), so turning the body keeps
+    /// the picture's zoom, pinch and focus hold (A1-34).
+    private func rotatedFeedImage(
         width: CGFloat, height: CGFloat, rotation: PTPLiveViewRotation
     ) -> some View {
-        if rotation == .landscape {
-            feedImage(width: width, height: height)
-        } else {
-            let swap = rotation.isVertical
-            feedImage(width: swap ? height : width, height: swap ? width : height)
-                .rotationEffect(.degrees(rotation.displayDegreesClockwise))
-                .frame(width: width, height: height)
-        }
+        let swap = rotation.isVertical
+        return feedImage(width: swap ? height : width, height: swap ? width : height)
+            .rotationEffect(.degrees(rotation.displayDegreesClockwise))
+            .frame(width: width, height: height)
     }
 
     @ViewBuilder private func feedImage(width: CGFloat, height: CGFloat) -> some View {
