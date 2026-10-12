@@ -225,6 +225,9 @@ public struct ExposureSignalMapping: Equatable, Sendable {
         }
     }
 
+    /// The camera's clip on the shared 0...255 tap axis: the ceiling the shared assists take.
+    public var clipByte: Int { Int(clipNative.rounded()) }
+
     /// Native code for zero scene light according to the published transfer function.
     public var blackNative: Double { curve.encode(linearLight: 0) * 255 }
 
@@ -253,6 +256,16 @@ public struct ExposureSignalMapping: Equatable, Sendable {
 }
 
 extension ExposureToneCurve {
+    /// The shared monitor transfer naming this curve, which every shared assist reads.
+    public var monitorTransfer: MonitorTransfer {
+        switch self {
+        case .redLog3G10: .log3G10
+        case .nikonNLog: .nlog
+        case .srgb: .srgb
+        case .hlg: .hdr
+        }
+    }
+
     /// Default clipping code when camera-specific warning metadata is unavailable.
     public var defaultClipNative: Double {
         switch self {

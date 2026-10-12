@@ -1,6 +1,7 @@
 import MonitorPresentation
 import Network
 import OpenCineApple
+import OpenCineAppKit
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -227,11 +228,11 @@ enum DemoHarness {
     extension DemoHarness {
         /// The DISP mode a capture is aimed at: the Edit view's mode when one is named, else the
         /// mode the run launches into.
-        static func demoDispMode(_ env: [String: String]) -> DispMode? {
-            if let raw = env["ZC_DEMO_CHROME_EDIT"], let mode = DispMode(rawValue: raw) {
+        static func demoDispMode(_ env: [String: String]) -> MonitorDisplayMode? {
+            if let raw = env["ZC_DEMO_CHROME_EDIT"], let mode = MonitorDisplayMode(rawValue: raw) {
                 return mode
             }
-            return env["ZC_DEMO_DISP"].flatMap(DispMode.init(rawValue:))
+            return env["ZC_DEMO_DISP"].flatMap(MonitorDisplayMode.init(rawValue:))
         }
 
         /// Stages the model from the launch environment (`SIMCTL_CHILD_ZC_DEMO_*` via
@@ -297,10 +298,11 @@ enum DemoHarness {
                     // popup-layout captures.
                     model.presentAssistOptions(tool)
                 }
-                if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
+                if let raw = env["ZC_DEMO_DISP"], let mode = MonitorDisplayMode(rawValue: raw) {
                     // Demo/screenshot affordance: launch straight into a DISP mode (live/clean/
                     // command) for headless mode-state captures.
-                    model.displayMode = mode
+                    model.operatorSession.declare(modes: model.displayModes)
+                    model.operatorSession.select(mode)
                 }
                 if let raw = env["ZC_DEMO_RELAY_END_AFTER"], let seconds = Int(raw) {
                     // Verification affordance: a deliberate operator disconnect on a timer, so
@@ -562,35 +564,35 @@ enum DemoHarness {
                 }
                 if let raw = env["ZC_DEMO_CHROME_HIDE"] {
                     // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated
-                    // `DisplayChromeVisibility.Section` raw values, e.g.
+                    // `MonitorDisplayChrome.Section` raw values or the retired Nikon names, e.g.
                     // "lockButton,railMedia,focusBox") so each hidden state can be captured
                     // headlessly — simctl cannot drive the Settings switches. Applies to the DISP
                     // mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else the current one,
-                    // on the capture side the body reports.
+                    // in the shared per-DISP chrome.
                     let target = Self.demoDispMode(env) ?? model.displayMode
-                    let capture = model.captureLayoutMode
-                    var chrome = model.preferences.chrome(for: target, capture: capture)
                     for value in raw.split(separator: ",") {
-                        // The short names the earlier hooks used, then the section raw values.
-                        let section: DisplayChromeVisibility.Section? =
+                        // The short names the earlier hooks used, the retired Nikon section names,
+                        // then the shared section raw values.
+                        let sections: [MonitorDisplayChrome.Section] =
                             switch value {
-                            case "lock": .lockButton
-                            case "battery": .batteryIndicators
-                            case "topbar": .statusBar
-                            case "toolbar": .assistToolbar
-                            case "values": .cameraValues
-                            default: DisplayChromeVisibility.Section(rawValue: String(value))
+                            case "lock", "lockButton": [.lockButton]
+                            case "battery", "batteryIndicators": [.batteries]
+                            case "topbar": [.statusBar]
+                            case "toolbar", "assistToolbar": [.toolBar]
+                            case "values": [.cameraValues]
+                            case "timecodeReadout": [.timecode]
+                            case "resolutionReadout": [.format]
+                            case "codecReadout": [.codec]
+                            case "mediaReadout": [.storage]
+                            case "fpsReadout": [.fps]
+                            // "rail" is the retired whole-rail blob: the rail controls.
+                            case "rail": [.railRecord, .railMedia, .railSettings]
+                            default: MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] } ?? []
                             }
-                        if let section, chrome.isVisible(section) { chrome.toggle(section) }
-                        // "rail" is the retired whole-rail blob — expand it to the four controls.
-                        if value == "rail" {
-                            for control in DisplayChromeVisibility.Section.railControls
-                            where chrome.isVisible(control) {
-                                chrome.toggle(control)
-                            }
+                        for section in sections where model.operatorSession.chrome(for: target).isVisible(section) {
+                            model.operatorSession.toggle(section, in: target)
                         }
                     }
-                    model.preferences.setChrome(chrome, for: target, capture: capture)
                 }
                 if let mode = Self.demoDispMode(env), env["ZC_DEMO_CHROME_EDIT"] != nil {
                     // Demo/screenshot affordance: open the Edit view on one DISP mode
@@ -615,14 +617,14 @@ enum DemoHarness {
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
                     // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
-                    // view capture with a pinned scope still gets samples.
+                    // view capture with a pinned scope still gets samples (hence every scope).
                     let scopesOn = MonitorAssistTool.scopeTools.contains {
                         model.assist.liveTools.contains($0)
                     }
                     if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
                     {
-                        Task { await model.refreshScopes(from: mock) }
+                        Task { await model.refreshScopes(from: mock, full: true) }
                     }
                 }
                 if env["ZC_DEMO_SCOPE_SAMPLES"] == "1",
@@ -702,9 +704,10 @@ enum DemoHarness {
                         }
                     model.forceSessionRecoveryState(staged)
                 }
-                if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
+                if let raw = env["ZC_DEMO_DISP"], let mode = MonitorDisplayMode(rawValue: raw) {
                     // Demo/screenshot affordance: start in a specific display mode (live/clean/command).
-                    model.displayMode = mode
+                    model.operatorSession.declare(modes: model.displayModes)
+                    model.operatorSession.select(mode)
                 }
                 if env["ZC_DEMO_PANEL"] == "settings" {
                     // Demo/screenshot affordance: open Operator Setup on launch (tab via

@@ -153,14 +153,54 @@ extension NativeAppModel {
     }
 }
 
+/// A monitor source with a picture and no camera control here: a relay watcher, a capture card
+/// or the demo. The shell owns it like a camera, so `AppShell` hosts every monitor (A1-01). It
+/// reports a ready, read-only link and refuses every command; closing ends it.
+@MainActor
+final class NikonPictureSourceSession: CameraSession {
+    nonisolated let id = CameraSessionID()
+    private var snapshot: CameraSnapshot
+    private var subscribers: [AsyncStream<CameraSnapshot>.Continuation] = []
+
+    init() { snapshot = CameraSnapshot(session: id, connection: .ready, authority: .readOnly) }
+
+    func snapshots() async -> AsyncStream<CameraSnapshot> {
+        let (stream, continuation) = AsyncStream<CameraSnapshot>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
+        continuation.yield(snapshot)
+        if case .disconnected = snapshot.connection {
+            continuation.finish()
+        } else {
+            subscribers.append(continuation)
+        }
+        return stream
+    }
+    func submit(_ command: CameraCommand) async -> CommandReceipt {
+        CommandReceipt(
+            operation: command.operation, session: id, intent: command.intent,
+            stage: .rejected(.readOnly))
+    }
+    func outcome(of operation: OperationID) async -> CommandReceipt? { nil }
+    func receipt(of operation: OperationID) async -> CommandReceipt? { nil }
+    func close(_ reason: SessionCloseReason) async {
+        if case .disconnected = snapshot.connection { return }
+        snapshot.connection = .disconnected(reason)
+        snapshot.revision = snapshot.revision.next()
+        for subscriber in subscribers {
+            subscriber.yield(snapshot)
+            subscriber.finish()
+        }
+        subscribers.removeAll()
+    }
+}
+
 struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.monitorWindowGeometry) private var windowGeometry
     let context: LiveViewLayoutContext
-    private typealias Readout = MonitorOperatorLiveReadout<
-        NikonLiveReadoutKey, DisplayChromeVisibility.Section
-    >
+    private typealias Section = MonitorDisplayChrome.Section
+    private typealias Readout = MonitorOperatorLiveReadout<NikonLiveReadoutKey, Section>
 
     private var sourceAspect: Double {
         let raw: Double
@@ -175,33 +215,19 @@ struct NikonMonitorShell: View {
         }
         return model.displayedFeedRotation.isVertical ? 1 / raw : raw
     }
-    private var safeArea: MonitorSafeArea {
-        .init(
-            top: context.feedSafeArea.top, leading: context.feedSafeArea.leading,
-            bottom: context.feedSafeArea.bottom, trailing: context.feedSafeArea.trailing)
-    }
-    private var layout: FieldMonitorLayout {
-        .init(
-            width: context.viewportWidth, height: context.viewportHeight, safeArea: safeArea,
-            sourceAspect: sourceAspect, fill: model.preferences.portraitFeedAspect != .fit16x9,
+    /// The shared field-monitor geometry. Portrait fill yields to de-squeeze, as on every app.
+    private var live: LiveMonitorLayout {
+        let safe = context.feedSafeArea
+        return .fieldMonitor(
+            size: CGSize(width: context.viewportWidth, height: context.viewportHeight),
+            safeArea: EdgeInsets(
+                top: safe.top, leading: safe.leading, bottom: safe.bottom, trailing: safe.trailing),
+            sourceAspect: sourceAspect,
+            fill: model.preferences.portraitFeedAspect == .fill && model.liveDesqueeze.factor <= 1,
             showsValues: model.chromeSectionMounts(.cameraValues),
+            showsBottomBars: model.chromeSectionMounts(.toolBar)
+                || model.chromeSectionMounts(.cameraValues),
             topControlInset: context.topControlInset)
-    }
-    private var mounted: Set<DisplayChromeVisibility.Section> {
-        let rail = model.monitorSideRailPlan
-        var value = Set(
-            DisplayChromeVisibility.Section.allCases.filter { model.chromeSectionMounts($0) })
-        for section in [
-            DisplayChromeVisibility.Section.batteryIndicators, .lockButton, .railSettings,
-            .railMedia, .railRecord, .railDisp,
-        ] {
-            if model.railControlMounts(section, plan: rail) {
-                value.insert(section)
-            } else {
-                value.remove(section)
-            }
-        }
-        return value
     }
     private var readouts: [Readout] {
         let values =
@@ -230,76 +256,69 @@ struct NikonMonitorShell: View {
                 } ?? "")
         }
     }
-    private var status:
-        MonitorOperatorLiveStatus<NikonLiveReadoutKey, DisplayChromeVisibility.Section>
-    {
+    /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
+    private var forwardedRecording: Bool? {
+        model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil
+    }
+    private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, Section> {
         let photo = model.isPhotographyMode
-        let reportedRecord =
-            model.shell.control.session == nil
-            ? (model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil)
-            : model.shell.control.isRecording
-        let tc = model.liveTimecode
-        let recording = MonitorStatusPresentation(
-            recording: reportedRecord,
-            timecode: model.cameraReportsTimecode ? tc.monitorLabel : nil)
+        // The common session publishes the header timecode at frame precision (A5-04).
+        let recording =
+            model.pictureOnlyMonitor
+            ? MonitorStatusPresentation(
+                recording: forwardedRecording,
+                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil)
+            : model.shell.control.statusPresentation()
         var format: [Readout] = []
-        if mounted.contains(.resolutionReadout) {
+        if model.chromeSectionMounts(.format) {
             format.append(
                 .init(
                     id: .picker(photo ? .stillSize : .resolution), title: "Format",
                     value: photo
                         ? model.stillSizeAreaDisplay ?? "--"
                         : model.cameraState.resolutionFrameRate,
-                    section: .resolutionReadout))
+                    section: .format))
         }
-        if mounted.contains(.codecReadout) {
+        if model.chromeSectionMounts(.codec) {
             format.append(
                 .init(
                     id: .picker(photo ? .stillQuality : .codec), title: "Codec",
                     value: photo
                         ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--"
                         : MonitorTextFormat.codecCompactLabel(model.cameraState.codec),
-                    section: .codecReadout))
+                    section: .codec))
         }
         let storage: Readout?
-        if photo && mounted.contains(.timecodeReadout) {
+        if photo && model.chromeSectionMounts(.timecode) {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: model.photoPillShowsStorage
                     ? model.mediaReadout
                     : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
-                section: .timecodeReadout, action: { model.photoPillShowsStorage.toggle() })
-        } else if mounted.contains(.mediaReadout) {
+                section: .timecode, action: { model.photoPillShowsStorage.toggle() })
+        } else if model.chromeSectionMounts(.storage) {
             storage = .init(
                 id: .storage, title: "Storage", value: model.mediaReadout,
-                section: .mediaReadout, action: model.toggleMediaReadout)
+                section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil
         }
+        let fps = model.chromeSectionMounts(.fps)
         return .init(
-            recording: recording, showsTimecode: !photo && mounted.contains(.timecodeReadout),
-            showsRecording: !photo && mounted.contains(.recReadout), storage: storage,
-            format: format,
-            fps: mounted.contains(.fpsReadout) ? model.liveFPS : nil,
-            signalBars: mounted.contains(.fpsReadout) ? model.liveSignalBars : nil,
-            fpsSection: .fpsReadout)
+            recording: recording, showsTimecode: !photo && model.chromeSectionMounts(.timecode),
+            showsRecording: !photo && model.chromeSectionMounts(.recReadout), storage: storage,
+            format: format, fps: fps ? model.liveFPS : nil,
+            signalBars: fps ? model.liveSignalBars : nil, fpsSection: .fps)
     }
-    private var power: [MonitorOperatorPowerReading] {
+    /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
+    private var cameraBattery: MonitorOperatorPowerReading? {
         let gauge = CameraBatteryGauge.gauge(
             rawBatteryLevel: model.cameraState.cameraBatteryPercent)
-        return [
-            .init(
-                id: "phone", title: "Phone battery", camera: false,
-                percent: model.cameraState.phoneBatteryPercent,
-                warning: model.cameraState.phoneBatteryPercent <= 15,
-                charging: model.phoneBatteryCharging),
-            .init(
-                id: "camera", title: "Camera battery", camera: true,
-                bars: gauge == .unknown ? nil : gauge.filledBars,
-                barCount: CameraBatteryGauge.barCount,
-                warning: gauge.urgency != .nominal, exhausted: gauge.pulses,
-                charging: model.cameraBatteryCharging),
-        ]
+        guard gauge != .unknown else { return nil }
+        return .init(
+            id: "camera", title: "Camera battery", camera: true, bars: gauge.filledBars,
+            barCount: CameraBatteryGauge.barCount, warning: gauge.urgency != .nominal,
+            exhausted: gauge.pulses, charging: model.cameraBatteryCharging)
     }
     private var panel: MonitorOperatorCameraPanel<NikonLiveReadoutKey>? {
         guard case .picker(let picker) = model.activePanel else { return nil }
@@ -310,9 +329,7 @@ struct NikonMonitorShell: View {
             subtitle: model.pickerSubtitle(for: picker))
     }
     private var captureInputs:
-        MonitorOperatorCaptureInputs<
-            NikonLiveReadoutKey, DisplayChromeVisibility.Section, NikonCaptureQuickIdentity
-        >
+        MonitorOperatorCaptureInputs<NikonLiveReadoutKey, Section, NikonCaptureQuickIdentity>
     {
         .init(
             readouts: readouts, panel: panel, haptics: model.preferences.hapticsEnabled,
@@ -339,27 +356,85 @@ struct NikonMonitorShell: View {
                 model.applyQuickPicker(identity.picker, value: value, identity: identity)
             })
     }
-    private var haptics: OperatorHaptics {
-        .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true })
+    private var record: MonitorOperatorRecordSource {
+        .init(
+            photo: model.isPhotographyMode, confirm: model.preferences.recordConfirmationEnabled,
+            busy: false, openMode: nil,
+            external: model.pictureOnlyMonitor
+                ? .init(
+                    recording: forwardedRecording, confirmation: model.pendingRecordConfirmation,
+                    request: model.toggleRecording, cancel: model.cancelRecordToggle,
+                    confirm: model.confirmRecordToggle) : nil)
     }
-    private var assists: MonitorOperatorLiveAssistSource {
+    private var source: MonitorOperatorLiveSource<NikonLiveReadoutKey, NikonCaptureQuickIdentity> {
+        .init(
+            identity: { model.operatorLiveIdentity }, available: { model.monitorAvailableSections },
+            picture: {
+                .init(
+                    aspect: sourceAspect,
+                    waiting: model.liveFrameImage == nil && !model.isDemoSession,
+                    vertical: model.displayedFeedRotation.isVertical, flipped: false,
+                    recovering: model.sessionRecovery.isRecovering)
+            },
+            status: { status }, cameraBattery: { cameraBattery }, capture: { captureInputs },
+            record: { record },
+            // The Nikon EV needle and level remain native instruments until F04 and A1-31.
+            exposure: nil, level: nil,
+            audio: {
+                model.monitorAvailability.audioMeters
+                    ? model.observedLiveAudioLevels.map { .init(levels: $0, caption: nil) } : nil
+            },
+            readOnly: { model.relayControlSurrendered },
+            borrowed: { model.isMulticamLiveView },
+            returnToStage: model.isMulticamLiveView ? (model.returnToMulticam as () -> Void) : nil,
+            coverOpen: { model.activePanel?.coversFullScreen == true },
+            note: Binding(get: { model.monitorNote }, set: { model.monitorNote = $0 }),
+            settings: { model.activePanel = .settings }, media: model.openMediaBrowser)
+    }
+    /// The scope source the shared surface reads: the model's published samples and facts.
+    static func assistSource(_ model: NativeAppModel) -> MonitorOperatorLiveAssistSource {
         .init(
             stores: model.scopePanels.operatorStores,
             looks: .init(
                 scaleHelp: "The reported source selects its exposure curve.",
                 rec709LookCurve: { _ in nil }),
-            haptics: haptics,
-            readBundle: {
-                var value = model.scopeAssist
-                value.levelAxis = model.exposureSignalMapping.scopeLevelAxis
-                return value
-            }, readTransfer: { model.scopeAssist.transfer },
+            haptics: .init(isEnabled: { [weak model] in
+                model?.preferences.hapticsEnabled == true
+            }),
+            readBundle: { model.scopeAssist }, readTransfer: { model.scopeAssist.transfer },
             readClipByte: { _ in model.scopeAssist.clipByte },
             audioAvailable: model.monitorAvailability.audioMeters,
             configurableTools: Set(model.liveAssistPaletteTools.map(\.selection)),
             paradeIntensityScale: 1)
     }
-    private var bodyViews: MonitorOperatorBodyViews {
+    private func assists(_ layout: FieldMonitorLayout) -> MonitorOperatorLiveAssists {
+        @Bindable var model = model
+        let menus = NikonAssistMenuAdapter(model: model, compact: false)
+        return .init(
+            scopes: Self.assistSource(model),
+            tools: { model.liveAssistPaletteTools.map(\.selection) },
+            rendered: {
+                Set(
+                    model.renderedLiveAssistTools.filter {
+                        !layout.portrait || layout.fillsPicture
+                            || !MonitorAssistTool.scopeTools.contains($0)
+                            || model.renderedFitScopes.contains($0)
+                    }.map(\.selection))
+            },
+            fitted: { model.renderedFitScopes.map(\.selection) },
+            signalOptions: .init(
+                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                reference: menus.falseColorReference,
+                level: AnyView(NikonAssistOptions(tool: .level)),
+                instantReview: AnyView(NikonAssistOptions(tool: .instantReview))),
+            usage: $model.assistToolUsage, usageSeed: nikonAssistUsageSeed,
+            toggle: {
+                if let tool = MonitorAssistTool(rawValue: $0.rawValue) {
+                    model.toggleAssist(tool, context: .liveView)
+                }
+            })
+    }
+    private func bodyViews(_ layout: FieldMonitorLayout) -> MonitorOperatorBodyViews {
         .init(
             focusDrive: model.showsMFDriveScrub ? AnyView(MFDriveVerticalScrub()) : nil,
             dashboard: AnyView(NikonCommandDashboard(layout: layout)),
@@ -367,8 +442,12 @@ struct NikonMonitorShell: View {
             comparison: LUTResolution.showsSplitComparisonKey(
                 visibleTools: model.renderedLiveAssistTools, enabled: model.assist.splitComparison)
                 ? AnyView(SplitComparisonKey()) : nil,
-            resetFocus: mounted.contains(.focusBox) && model.isFocusResetAvailable
-                ? (model.resetFocusPoint as () -> Void) : nil)
+            resetFocus: model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
+                ? (model.resetFocusPoint as () -> Void) : nil,
+            // Framing marks ride the picture in the camera's own orientation (FeedAlignedAssists).
+            feedMarks: AnyView(EmptyView()),
+            waiting: model.videoSource == .relay && model.relayFailureReason != nil
+                ? AnyView(RelayJoinRecovery()) : nil)
     }
     private var connectionControl: AnyView? {
         if model.videoSource == .relay, model.relayHoldsControl || model.relayAllowsControlRequests
@@ -378,80 +457,26 @@ struct NikonMonitorShell: View {
         if model.relayControlSurrendered { return AnyView(BroadcasterControlKey()) }
         return nil
     }
+    private var portraitAspect: Binding<PortraitFeedAspect> {
+        Binding(
+            get: { model.preferences.portraitFeedAspect },
+            set: { model.preferences.portraitFeedAspect = $0 })
+    }
 
     var body: some View {
-        @Bindable var model = model
-        let layout: FieldMonitorLayout = self.layout
-        let identity = model.operatorLiveIdentity
-        let menus = NikonAssistMenuAdapter(model: model, compact: false)
-        MonitorOperatorLiveBody(
-            host: model, control: model.shell.control, identity: identity,
-            current: { [weak model] in model?.operatorLiveIdentity == $0 }, layout: layout,
-            safeArea: safeArea, sourceAspect: sourceAspect,
-            sections: .init(
-                status: .statusBar, power: .batteryIndicators, capture: .cameraValues,
-                assists: .assistToolbar, lock: .lockButton, settings: .railSettings,
-                media: .railMedia, record: .railRecord, display: .railDisp),
-            mounted: mounted, editing: model.chromeEditorMode,
-            locked: Binding(
-                get: { model.interfaceLocked }, set: { _ in model.toggleInterfaceLock() }),
-            covered: model.activePanel?.coversFullScreen == true,
-            clean: model.displayMode == .clean,
-            command: model.displayMode == .command, readOnly: model.relayControlSurrendered,
-            recovering: model.sessionRecovery.isRecovering, status: status, power: power,
-            captureInputs: captureInputs,
-            settings: { model.activePanel = .settings }, media: model.openMediaBrowser,
-            cycleDisplay: model.cycleDisplayMode, displayTitle: model.displayMode.title,
-            displayIndex: model.displayOrder.firstIndex(of: model.displayMode),
-            displayCount: model.displayOrder.count,
-            photo: model.isPhotographyMode,
-            confirmRecord: model.preferences.recordConfirmationEnabled,
-            externalRecord: model.shell.control.session == nil
-                ? .init(
-                    recording: model.isDemoSession || model.videoSource == .relay
-                        ? model.isRecording : nil,
-                    confirmation: model.pendingRecordConfirmation, request: model.toggleRecording,
-                    cancel: model.cancelRecordToggle, confirm: model.confirmRecordToggle) : nil,
-            assist: model.assist, tools: model.liveAssistPaletteTools.map(\.selection),
-            usage: $model.assistToolUsage,
-            toggleTool: {
-                if let tool = MonitorAssistTool(rawValue: $0.rawValue) {
-                    model.toggleAssist(tool, context: .liveView)
-                }
-            },
-            assistSource: assists,
-            signalOptions: .init(
-                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
-                reference: menus.falseColorReference,
-                level: AnyView(NikonAssistOptions(tool: .level)),
-                instantReview: AnyView(NikonAssistOptions(tool: .instantReview))),
-            readAudio: {
-                model.monitorAvailability.audioMeters ? model.observedLiveAudioLevels : nil
-            },
-            fittedScopes: model.renderedFitScopes.map(\.selection),
-            renderedTools: Set(
-                model.renderedLiveAssistTools.filter {
-                    !layout.portrait || layout.fillsPicture
-                        || !MonitorAssistTool.scopeTools.contains($0)
-                        || model.renderedFitScopes.contains($0)
-                }.map(\.selection)),
-            usageSeed: nikonAssistUsageSeed, cameraViews: bodyViews,
-            retireEditor: model.displaySession.retireEditor,
-            returnToStage: model.isMulticamLiveView ? (model.returnToMulticam as () -> Void) : nil,
-            notice: model.monitorNotice, noticeRevision: model.monitorNoticeTrigger,
-            onCaptureFrame: {
-                if model.operatorLiveIdentity == identity { model.captureBarFrame = $0 }
-            },
+        let live = self.live
+        let layout =
+            live.presentation
+            ?? FieldMonitorLayout(width: context.viewportWidth, height: context.viewportHeight)
+        MonitorOperatorLiveSurface(
+            host: model, control: model.shell.control, session: model.operatorSession,
+            layout: live, source: source, assists: assists(layout), views: bodyViews(layout),
+            portraitAspect: portraitAspect,
             picture: {
                 GeometryReader { picture in
                     LiveFeedModule(
-                        viewportWidth: picture.size.width, fixedContentHeight: picture.size.height
-                    )
-                    .opacity(model.displayMode == .command ? 0 : 1)
-                    .allowsHitTesting(
-                        model.chromeEditorMode == nil && !model.interfaceLocked
-                            && model.displayMode != .command)
-                }.transaction { $0.animation = nil }
+                        viewportWidth: picture.size.width, fixedContentHeight: picture.size.height)
+                }
             },
             cameraPanel: { key, _ in
                 if case .picker(let picker) = key { NikonCameraSettingExtension(picker: picker) }
@@ -469,7 +494,9 @@ struct NikonMonitorShell: View {
         )
         .overlay { MonitorRecoveryOverlay() }
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
-        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value
+        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value }
+        .onChange(of: model.shell.monitor?.id, initial: true) { _, monitor in
+            model.operatorSession.synchronize(source: monitor)
         }
         .onChange(of: layout) { _, _ in model.retireOperatorQuickPresentation() }
         .onChange(of: windowGeometry) { _, _ in model.retireOperatorQuickPresentation() }

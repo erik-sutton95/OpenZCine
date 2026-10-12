@@ -5,6 +5,7 @@ import MonitorUI
 import Network
 import Observation
 import OpenCineApple
+import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
@@ -341,9 +342,12 @@ final class RunnerTests: XCTestCase {
         }
         let clampedNative = try await enterAndFinish("999")
         XCTAssertEqual(clampedNative, "255")
+        // A native code is the shared zebra's code on this camera's transfer and clip.
         XCTAssertEqual(
             model.assist.zebraHighlightIRE,
-            model.exposureSignalMapping.monitorPercent(signalNative: 255), accuracy: 0.0001)
+            OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                1, transfer: model.exposureSignalMapping.curve.monitorTransfer,
+                clipByte: model.exposureSignalMapping.clipByte), accuracy: 0.0001)
         // Codes above the tone curve's clipping point map to the existing normalized maximum.
         // After committing, the real binding displays that converted threshold again.
         XCTAssertEqual(
@@ -355,7 +359,9 @@ final class RunnerTests: XCTestCase {
         _ = try await enterAndFinish("128")
         XCTAssertEqual(
             model.assist.zebraHighlightIRE,
-            model.exposureSignalMapping.monitorPercent(signalNative: 128), accuracy: 0.0001)
+            OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                128.0 / 255, transfer: model.exposureSignalMapping.curve.monitorTransfer,
+                clipByte: model.exposureSignalMapping.clipByte), accuracy: 0.0001)
         let retained = model.assist.zebraHighlightIRE
         _ = try await enterAndFinish("")
         XCTAssertEqual(threshold.text, "128")
@@ -616,8 +622,9 @@ final class RunnerTests: XCTestCase {
             for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
                 window.frame.size = size
                 host.view.frame.size = size
-                for mode in [DispMode.live, .clean, .command] {
-                    model.displayMode = mode
+                model.operatorSession.declare(modes: [.live, .clean, .command])
+                for mode in [MonitorDisplayMode.live, .clean, .command] {
+                    model.setDisplayMode(mode)
                     host.view.setNeedsLayout()
                     host.view.layoutIfNeeded()
                     let next = try await picture(in: host)
@@ -626,7 +633,7 @@ final class RunnerTests: XCTestCase {
                         "Rotation and DISP must preserve the actual native picture view")
                 }
             }
-            model.displayMode = .live
+            model.setDisplayMode(.live)
             for panel in [NativeAppModel.ActivePanel.settings, .media] {
                 model.activePanel = panel
                 let coveredPicture = try await picture(in: host)
@@ -1463,7 +1470,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(MonitorAudioMetrics.panelSize.height, 168)
     }
 
-    /// Live view samples the feed JPEG's raw codes straight through UIKit; playback taps the
+    /// Live view samples the feed JPEG's raw codes on the shared working raster; playback taps the
     /// composition through Core Image with an explicit BT.709 output space to undo AVFoundation's
     /// working-space conversion. This pins the two pipelines to each other: the same pixels
     /// sampled through both must produce (near-)identical scope readings. [1:1 live/playback]
@@ -1490,14 +1497,18 @@ final class RunnerTests: XCTestCase {
                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
                 provider: data, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
 
-        // Path A — live view: straight UIKit decode into the untagged sampling context.
-        let live = try XCTUnwrap(
-            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: 256))
-        let liveSamples = OpenCineMedia.ScopeSampler.sampleRaw(
-            bytes: live.data, width: live.width, height: live.height,
-            bytesPerRow: live.bytesPerRow, transfer: .rec709, includePoints: true, layout: .rgba,
-            stride: ScopeAssistSampling.pointStride, includeSampleCoordinates: true,
-            requireCompleteRows: true)
+        // Both paths end on the shared engine's tap: the working raster and its 200-wide copy.
+        let raster = MonitorWorkingRaster()
+        func tap(_ image: CGImage) throws -> OpenCineMedia.ScopeSamples {
+            let buffer = try XCTUnwrap(raster.prepared(image))
+            let tap = try XCTUnwrap(
+                LiveFrameTap.copyBGRA8(buffer, maxWidth: OpenCineMedia.ScopeSampler.maxWidth))
+            return OpenCineMedia.ScopeSampler.sampleRaw(
+                bytes: tap.bytes, width: tap.width, height: tap.height,
+                bytesPerRow: tap.bytesPerRow, transfer: .rec709, includePoints: true)
+        }
+        // Path A (live view): the decoded frame's own codes.
+        let liveSamples = try tap(cgImage)
 
         // Path B — playback: through the composition render context (working sRGB) with the
         // BT.709 output space, exactly like the player's scope tap.
@@ -1506,13 +1517,7 @@ final class RunnerTests: XCTestCase {
             MediaLUT.renderContext.createCGImage(
                 ciImage, from: ciImage.extent, format: .RGBA8,
                 colorSpace: MonitorImageSampling.fileCodeColorSpace))
-        let playback = try XCTUnwrap(
-            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: rendered), maxWidth: 256))
-        let playbackSamples = OpenCineMedia.ScopeSampler.sampleRaw(
-            bytes: playback.data, width: playback.width, height: playback.height,
-            bytesPerRow: playback.bytesPerRow, transfer: .rec709, includePoints: true,
-            layout: .rgba, stride: ScopeAssistSampling.pointStride,
-            includeSampleCoordinates: true, requireCompleteRows: true)
+        let playbackSamples = try tap(rendered)
 
         XCTAssertEqual(
             liveSamples.histogramLuma.reduce(0, +), playbackSamples.histogramLuma.reduce(0, +),
@@ -1537,43 +1542,51 @@ final class RunnerTests: XCTestCase {
         }
     }
 
-    func testScopeBundleKeepsRawSamples() {
+    /// Playback scopes are the shared derivation on the clip's Nikon transfer and clip.
+    func testPlaybackScopeBundleIsTheSharedDerivation() {
         let point = OpenCineMedia.ScopePoint(
             xRatio: 0.5, yRatio: 0, red: 112, green: 68, blue: 62, luma: 82)
         var luma = Array(repeating: 0, count: 256)
         luma[82] = 1
+        var red = Array(repeating: 0, count: 256)
+        red[112] = 1
+        var green = Array(repeating: 0, count: 256)
+        green[68] = 1
+        var blue = Array(repeating: 0, count: 256)
+        blue[62] = 1
         let samples = OpenCineMedia.ScopeSamples(
-            histogramLuma: luma,
-            histogramRed: Array(repeating: 0, count: 256),
-            histogramGreen: Array(repeating: 0, count: 256),
-            histogramBlue: Array(repeating: 0, count: 256),
+            histogramLuma: luma, histogramRed: red, histogramGreen: green, histogramBlue: blue,
             points: [point])
-        let mapping = ExposureSignalMapping(curve: .redLog3G10)
+        let configuration = NikonPlaybackScopeConfiguration(
+            mapping: ExposureSignalMapping(curve: .redLog3G10), compensation: .quarter,
+            vectorscope: false, look: nil)
 
-        let bundle = ScopeAssistSampling.bundle(
-            samples: samples,
-            trafficLightsCrushClip: .quarter,
-            mapping: mapping)
-        // Every scope — vectorscope included — reads the untouched source/log points.
+        let bundle = configuration.bundle(samples: samples, previous: .empty)
+        // Every scope reads the untouched source/log points.
         XCTAssertEqual(bundle.samples, samples)
         XCTAssertEqual(bundle.revision, 1)
-        // The shared histogram is drawn on this camera's axis, not a shared transfer curve.
+        XCTAssertEqual(bundle.transfer, .log3G10)
+        XCTAssertEqual(bundle.clipByte, 180)
+        XCTAssertNil(bundle.levelAxis, "the shared axis follows the transfer and clip")
         XCTAssertEqual(
             bundle.histogramDisplay,
             OpenCineMedia.ScopeSampler.histogramDisplay(
-                samples: samples, previous: .empty, axis: mapping.scopeLevelAxis))
-        let next = ScopeAssistSampling.bundle(
-            samples: samples, trafficLightsCrushClip: .quarter, mapping: mapping,
-            previous: bundle)
+                samples: samples, previous: .empty, transfer: .log3G10, clipByte: 180))
+        XCTAssertEqual(
+            bundle.traffic,
+            ScopeTrafficLights.reading(
+                red: red, green: green, blue: blue, luma: luma, transfer: .log3G10, clipByte: 180,
+                threshold: MonitorCrushClipCompensation.quarter.pixelFractionThreshold))
+        let next = configuration.bundle(samples: samples, previous: bundle)
         XCTAssertEqual(next.revision, 2)
         XCTAssertEqual(next.trailSamples, samples)
     }
 
     func testWaveformAndParadePaletteUsesCalibratedBrightness() {
-        // The intensity the Nikon scope plot hands the shared plots.
-        XCTAssertEqual(NikonScopePlot.traceIntensity(0), 0)
-        XCTAssertEqual(NikonScopePlot.traceIntensity(100), 0.25)
-        XCTAssertEqual(NikonScopePlot.traceIntensity(200), 0.5)
+        // The intensity the shared surface hands the waveform and parade plots.
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(0), 0)
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(100), 0.25)
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(200), 0.5)
         // The vectorscope keeps its unity baseline.
         XCTAssertEqual(MonitorScopeGeometry.vectorscopeIntensity(100), 1)
     }
@@ -3245,7 +3258,7 @@ struct NikonSettingsScrollTests {
         }
         let display = try await scroll(in: host) { abs($0.contentOffset.y - 180) < 1 }
         #expect(model.operatorSettingsTab == .display)
-        #expect(model.chromeEditorReturnMode == nil)
+        #expect(model.operatorSession.returnedMode == nil)
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
         try await settle(in: host) { model.operatorSettingsScrollOffsets["Display"] == 320 }
         model.operatorSettingsTab = .controls
@@ -3824,7 +3837,8 @@ extension RunnerTests {
             "Exposed: \(elements(host.view).map(identifier).filter { !$0.isEmpty })")
         XCTAssertTrue(expand.accessibilityActivate())
         try await settle()
-        let bar = model.captureBarFrame
+        let bar = elements(host.view).filter { identifier($0).hasPrefix("monitor.capture.") }
+            .map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
         let covered = elements(host.view).filter { identifier($0).hasPrefix("monitor.assist.") }
             .map { $0.accessibilityFrame.intersection(bar) }
             .filter { !$0.isNull && $0.width >= 8 && $0.height >= 8 }
@@ -3845,7 +3859,7 @@ extension RunnerTests {
             resolutionFrameRate: state.resolutionFrameRate, codec: state.codec,
             media: state.media, liveFPS: state.liveFPS,
             cameraBatteryPercent: state.cameraBatteryPercent,
-            phoneBatteryPercent: state.phoneBatteryPercent, cameraName: state.cameraName,
+            cameraName: state.cameraName,
             lens: state.lens, temperature: state.temperature,
             values: state.values.map { CameraValue(label: $0.label, value: "8888") },
             mediaStatus: state.mediaStatus)
