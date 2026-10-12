@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.cameracontrols.CaptureDrumWheel
 import com.opencapture.opencine.nikon.StillPickerLadders
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -684,8 +685,8 @@ private fun TimerShotsStepButton(
 }
 
 /**
- * The Image-quality dual-drum panel (iOS `QualityPickerPanel`): a RAW On/Off
- * wheel with the NEF compression chips beneath, beside a JPEG/HEIF tier wheel
+ * The Image-quality dual-drum panel (iOS `QualityPickerPanel`, on the shared value drum): a RAW
+ * On/Off drum with the NEF compression chips beneath, beside a JPEG/HEIF tier wheel
  * with the ★ optimal-quality toggle. The pair composes one image-quality
  * write; NEF compression writes its own property. Turning the last active
  * half off bounces the other half back on.
@@ -775,15 +776,14 @@ internal fun QualityPickerPanelBody(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 QualityColumnCaption("RAW")
-                AccentDrumWheel(
+                CaptureDrumWheel(
                     options = listOf("On", "Off"),
                     selection = if (config.rawEnabled) "On" else "Off",
-                    wheelHeight = 112.dp,
                     interactive = controlsEnabled,
-                    onSettle = { settled ->
-                        if (!controlsEnabled) return@AccentDrumWheel
+                    onSelect = { settled ->
+                        if (!controlsEnabled) return@CaptureDrumWheel
                         val enabled = settled == "On"
-                        if (enabled == config.rawEnabled) return@AccentDrumWheel
+                        if (enabled == config.rawEnabled) return@CaptureDrumWheel
                         config =
                             if (!enabled && config.tier == StillQualityConfig.TIER_OFF) {
                                 // Dropping RAW with the tier off would select
@@ -827,14 +827,13 @@ internal fun QualityPickerPanelBody(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 QualityColumnCaption("JPEG · HEIF")
-                AccentDrumWheel(
+                CaptureDrumWheel(
                     options = StillQualityConfig.TIER_OPTIONS,
                     selection = config.tier,
-                    wheelHeight = 112.dp,
                     interactive = controlsEnabled,
-                    onSettle = { settled ->
-                        if (!controlsEnabled) return@AccentDrumWheel
-                        if (settled == config.tier) return@AccentDrumWheel
+                    onSelect = { settled ->
+                        if (!controlsEnabled) return@CaptureDrumWheel
+                        if (settled == config.tier) return@CaptureDrumWheel
                         config =
                             if (settled == StillQualityConfig.TIER_OFF) {
                                 if (!config.rawEnabled) {
