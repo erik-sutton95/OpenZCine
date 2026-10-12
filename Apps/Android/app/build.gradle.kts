@@ -312,10 +312,6 @@ dependencies {
     implementation(libs.compose.material3)
     // Playback transport SF-symbol stand-ins (play/pause/share/volume/star).
     implementation(libs.compose.material.icons.extended)
-    // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
-    implementation(libs.kyant.backdrop)
-    // Runtime of backdrop, pinned here.
-    implementation(libs.kyant.shapes)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)
@@ -333,6 +329,8 @@ dependencies {
     testImplementation(libs.json)
     testImplementation(libs.kotlinx.coroutines.test)
 
+    // NikonFeedIncidentProducerTest asserts with kotlin.test, as the unit tests do.
+    androidTestImplementation(libs.kotlin.test.junit)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)

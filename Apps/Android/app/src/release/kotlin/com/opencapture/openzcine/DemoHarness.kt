@@ -7,8 +7,8 @@ import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
-import com.opencapture.openzcine.settings.PortraitFeedAspect
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.cameracontrols.PortraitFeedAspect
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
 /**
@@ -63,10 +63,6 @@ object DemoHarness {
     /** Always null: release builds carry no scripted pairing wizard. */
     @Suppress("UNUSED_PARAMETER")
     fun pairingScript(intent: Intent): PairingScript? = null
-
-    /** Always null: release builds always run the platform-resolved glass tier. */
-    @Suppress("UNUSED_PARAMETER")
-    fun glassTierOverride(intent: Intent): String? = null
 
     /** Always null: release builds cannot stage a dropped-session affordance. */
     @Suppress("UNUSED_PARAMETER")

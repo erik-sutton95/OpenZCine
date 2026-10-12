@@ -1,6 +1,5 @@
 package com.opencapture.openzcine.multicam
 
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.asImageBitmap
 import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
@@ -41,6 +40,3 @@ internal fun multicamDecoder(): (ByteArray) -> androidx.compose.ui.graphics.Imag
 }
 
 private const val TILE_LONG_SIDE = 960
-
-/** Set while Live View shows a lent multicam member: the lock slot becomes Return to Multicam. */
-val LocalMulticamReturn = staticCompositionLocalOf<(() -> Unit)?> { null }

@@ -1,7 +1,9 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorDeviceTilt
 import com.opencapture.monitorui.MonitorLevelGeometry
 import com.opencapture.monitorui.MonitorScopeRect
+import com.opencapture.monitorui.MonitorTiltSource
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusBox
 import com.opencapture.opencine.nikon.LiveFocusInfo
@@ -166,7 +168,7 @@ class LiveFrameMetadataOverlaysTest {
         val reading =
             resolveLiveLevel(
                 camera = LiveCameraLevel(rollDegrees = -0.5, pitchDegrees = 1.0, yawDegrees = 0.0),
-                deviceGravity = DeviceGravityLevel(rollDegrees = 12.0, pitchDegrees = 5.0),
+                deviceGravity = MonitorDeviceTilt(12.0, 5.0, MonitorTiltSource.GRAVITY_SENSOR),
             )
 
         assertNotNull(reading)
@@ -180,11 +182,12 @@ class LiveFrameMetadataOverlaysTest {
         val reading =
             resolveLiveLevel(
                 camera = null,
-                deviceGravity = DeviceGravityLevel(rollDegrees = 2.0, pitchDegrees = -1.0),
+                deviceGravity = MonitorDeviceTilt(2.0, -1.0, MonitorTiltSource.ACCELEROMETER_LOW_PASS),
             )
 
         assertNotNull(reading)
         assertEquals(LiveLevelSource.DEVICE_GRAVITY, reading.source)
+        assertEquals(MonitorTiltSource.ACCELEROMETER_LOW_PASS, reading.deviceTiltProvenance)
     }
 
     @Test
@@ -220,70 +223,4 @@ class LiveFrameMetadataOverlaysTest {
 
         assertTrue(description.startsWith("Debug focus fixture, not camera focus data."))
     }
-
-    @Test
-    fun `low pass accelerometer tilt stays normalized and maps device axes like gravity`() {
-        val portraitRest = lowPassDeviceTilt(null, sampleX = 0f, sampleY = -9.81f, sampleZ = 0f)
-        val landscapeRest = lowPassDeviceTilt(null, sampleX = -9.81f, sampleY = 0f, sampleZ = 0f)
-
-        assertNotNull(portraitRest)
-        assertNotNull(landscapeRest)
-        assertEquals(1f, vectorMagnitude(portraitRest), absoluteTolerance = 0.000_001f)
-        assertEquals(1f, vectorMagnitude(landscapeRest), absoluteTolerance = 0.000_001f)
-
-        val portrait =
-            deviceGravityLevel(
-                gravityX = portraitRest.x,
-                gravityY = portraitRest.y,
-                gravityZ = portraitRest.z,
-                isPortrait = true,
-                provenance = DeviceTiltProvenance.ACCELEROMETER_LOW_PASS,
-            )
-        val landscape =
-            deviceGravityLevel(
-                gravityX = landscapeRest.x,
-                gravityY = landscapeRest.y,
-                gravityZ = landscapeRest.z,
-                isPortrait = false,
-                provenance = DeviceTiltProvenance.ACCELEROMETER_LOW_PASS,
-            )
-
-        assertNotNull(portrait)
-        assertNotNull(landscape)
-        assertTrue(kotlin.math.abs(portrait.rollDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(landscape.rollDegrees) < 0.000_001)
-
-        val smoothed =
-            lowPassDeviceTilt(
-                previous = portraitRest,
-                sampleX = 9.81f,
-                sampleY = 0f,
-                sampleZ = 0f,
-                retention = 0.8f,
-            )
-        assertNotNull(smoothed)
-        assertEquals(1f, vectorMagnitude(smoothed), absoluteTolerance = 0.000_001f)
-        assertTrue(smoothed.x > 0f)
-        assertTrue(smoothed.y < 0f)
-
-        val fallback = resolveLiveLevel(camera = null, deviceGravity = portrait)
-        assertNotNull(fallback)
-        assertEquals(DeviceTiltProvenance.ACCELEROMETER_LOW_PASS, fallback.deviceTiltProvenance)
-    }
-
-    @Test
-    fun `gravity conversion is level at portrait and landscape rest positions`() {
-        val portrait = deviceGravityLevel(gravityX = 0f, gravityY = -1f, gravityZ = 0f, isPortrait = true)
-        val landscape = deviceGravityLevel(gravityX = -1f, gravityY = 0f, gravityZ = 0f, isPortrait = false)
-
-        assertNotNull(portrait)
-        assertNotNull(landscape)
-        assertTrue(kotlin.math.abs(portrait.rollDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(portrait.pitchDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(landscape.rollDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(landscape.pitchDegrees) < 0.000_001)
-    }
-
-    private fun vectorMagnitude(vector: DeviceTiltVector): Float =
-        kotlin.math.sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
 }

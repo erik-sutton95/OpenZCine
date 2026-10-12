@@ -173,13 +173,10 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   physical fallback check covers the latter. Debug-frame metadata is visibly and semantically
   marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
   camera pass.
-- **Liquid-glass chrome:** on API 33+ (**FULL**), monitor chrome uses
-  [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)
-  (`io.github.kyant0:backdrop`) 1:1 — `rememberLayerBackdrop` on the live feed,
-  `drawBackdrop { vibrancy(); blur(); lens() }` on chrome. On older APIs chrome is
-  **FLAT**: a more opaque solid fill (same policy as pre–iOS 26). Auto frame-budget
-  demote is off by default (live-view pacing was collapsing FULL on mid-range
-  phones). Debug: `--es zc.glass.tier flat` (`full`/`flat`; lowers only).
+- **Chrome material:** every monitor panel uses the shared Core material (`monitorMaterial`), the
+  same as Pocket and Insta. On devices that sustain it (API 31+, 4 GB RAM, hardware rendering) the
+  material blurs a bounded sample of the presented picture, graded with the live look; elsewhere it
+  is the shared plain fill.
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
   monitor-owned clean-frame sampler at 30 Hz (24 Hz above three active scopes), with the same
   thermal slowdown tiers as iOS. The shared core owns all axis/curve and Traffic

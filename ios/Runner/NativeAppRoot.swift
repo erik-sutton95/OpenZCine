@@ -13305,52 +13305,24 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .mode: PTPCameraPropertyDecoders.exposureProgramFallbackOptions
         case .audio: ["Auto"] + (1...20).map(String.init)
         case .stillMode: PTPCameraPropertyDecoders.exposureProgramFallbackOptions
-        case .stillISO:
-            [
-                "100", "125", "160", "200", "250", "320", "400", "500", "640", "800", "1000",
-                "1250", "1600", "2000", "2500", "3200", "4000", "5000", "6400", "8000", "10000",
-                "12800", "16000", "20000", "25600", "32000", "40000", "51200",
-            ]
-        case .stillShutter:
-            [
-                "30s", "15s", "8s", "4s", "2s", "1s", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60",
-                "1/125", "1/200", "1/250", "1/500", "1/1000", "1/2000", "1/4000", "1/8000", "Bulb",
-            ]
-        case .stillIris:
-            // One decimal place throughout, matching the `irisFNumber` readout so the drum centres
-            // on the live aperture.
-            [
-                "f/1.2", "f/1.4", "f/1.8", "f/2.0", "f/2.2", "f/2.5", "f/2.8", "f/3.2", "f/3.5",
-                "f/4.0", "f/4.5", "f/5.0", "f/5.6", "f/6.3", "f/7.1", "f/8.0", "f/9.0", "f/10.0",
-                "f/11.0", "f/13.0", "f/14.0", "f/16.0", "f/18.0", "f/20.0", "f/22.0",
-            ]
+        case .stillISO: StillPickerLadders.isoOptions
+        case .stillShutter: StillPickerLadders.shutterOptions
+        case .stillIris: StillPickerLadders.irisOptions
         // The label union across the lineup minus the dial-only Quick position and the on-body
         // Self-timer (the app-side Timer tab owns countdowns — a remote release never runs the
         // body's); a body that lacks one rejects the write and the rejection surface handles it.
-        case .stillDrive:
-            StillDriveMode.allCases.filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label)
-        case .stillFocus: ["AF-S", "AF-C", "AF-A", "MF"]
-        case .stillMeter: ["Matrix", "Center", "Spot", "Highlight"]
+        case .stillDrive: StillPickerLadders.driveOptions
+        case .stillFocus: StillPickerLadders.focusModeOptions
+        case .stillMeter: StillPickerLadders.meterOptions
         // SIZE is modes-driven (Area | Size tabs).
         case .stillSize: []
         // The `CompressionSetting` ladder minus the ★ size-priority variants and TIFF —
         // labels round-trip through `PTPCameraPropertyDecoders.compressionSetting`.
-        case .stillQuality:
-            [
-                "RAW", "RAW+JPEG Fine", "RAW+JPEG Normal", "RAW+JPEG Basic", "JPEG Fine",
-                "JPEG Normal", "JPEG Basic",
-            ]
+        case .stillQuality: StillPickerLadders.qualityOptions
         // The full picture-control set: built-ins, the creative looks, and the custom and
         // downloaded cloud slots (a slot with nothing registered rejects through the
         // queue's surface).
-        case .stillPicture:
-            [
-                "Auto", "Standard", "Neutral", "Vivid", "Monochrome", "Portrait", "Landscape",
-                "Flat", "Flat Mono", "Deep Tone Mono", "Rich Tone Portrait",
-                "Dream", "Morning", "Pop", "Sunday", "Somber", "Drama", "Silence", "Bleach",
-                "Melancholic", "Pure", "Denim", "Toy", "Sepia", "Blue", "Red", "Pink",
-                "Charcoal", "Graphite", "Binary", "Carbon",
-            ] + (1...9).map { "Custom \($0)" } + (1...9).map { "Cloud \($0)" }
+        case .stillPicture: StillPickerLadders.pictureOptions
         }
     }
 
@@ -13378,22 +13350,11 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .shutter:
             [
                 PickerMode(
-                    title: "Angle",
-                    options: [
-                        "5.6°", "11.2°", "22.5°", "45°", "72°", "86.4°", "90°", "108°", "144°",
-                        "172°", "180°", "216°", "288°", "346°", "360°",
-                    ],
-                    base: "180°"),
+                    title: "Angle", options: ShutterPickerPolicy.angleOptions,
+                    base: ShutterPickerPolicy.angleBase),
                 PickerMode(
-                    title: "Speed",
-                    options: [
-                        "1/6", "1/8", "1/10", "1/13", "1/15", "1/20", "1/25", "1/30", "1/40",
-                        "1/50", "1/60", "1/80", "1/100", "1/125", "1/160", "1/200", "1/250",
-                        "1/320", "1/400", "1/500", "1/640", "1/800", "1/1000", "1/1250", "1/1600",
-                        "1/2000", "1/2500", "1/3200", "1/4000", "1/5000", "1/6400", "1/8000",
-                        "1/10000", "1/13000", "1/16000",
-                    ],
-                    base: "1/50"),
+                    title: "Speed", options: ShutterPickerPolicy.speedOptions,
+                    base: ShutterPickerPolicy.speedBase),
             ]
         case .whiteBalance:
             [
@@ -13416,15 +13377,14 @@ enum CameraPicker: String, CaseIterable, Identifiable {
         case .focus:
             [
                 PickerMode(
-                    title: "AF Mode", options: ["MF", "AF-S", "AF-C", "AF-F"], base: "AF-F"),
+                    title: "AF Mode", options: FocusPickerPolicy.afModeOptions,
+                    base: FocusPickerPolicy.afModeBase),
                 PickerMode(
-                    title: "Area",
-                    options: ["Single", "Wide-S", "Wide-L", "Auto", "Subject tracking"],
-                    base: "Single"),
+                    title: "Area", options: FocusPickerPolicy.areaOptions,
+                    base: FocusPickerPolicy.areaBase),
                 PickerMode(
-                    title: "Subject",
-                    options: ["Auto", "People", "Animal", "Bird", "Vehicle", "Airplane"],
-                    base: "Auto"),
+                    title: "Subject", options: FocusPickerPolicy.subjectOptions,
+                    base: FocusPickerPolicy.subjectBase),
             ]
         case .audio:
             // Five independent camera audio settings chosen by tab (ZR video-menu sound settings).
@@ -13441,9 +13401,8 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // Two independent stills settings chosen by tab: the sensor-crop image area and the
             // pixel-count image size.
             [
-                PickerMode(
-                    title: "Area", options: StillImageArea.allCases.map(\.label), base: "FX"),
-                PickerMode(title: "Size", options: ["Size L", "Size M", "Size S"], base: "Size L"),
+                PickerMode(title: "Area", options: StillPickerLadders.areaOptions, base: "FX"),
+                PickerMode(title: "Size", options: StillPickerLadders.sizeOptions, base: "Size L"),
             ]
         case .stillDrive:
             // Release mode plus two timers: Built-in engages the body's self-timer release
@@ -13452,15 +13411,10 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // release never runs the body's countdown, so the two are complementary.
             [
                 PickerMode(
-                    title: "Drive",
-                    options: StillDriveMode.allCases
-                        .filter { $0 != .quickSetting && $0 != .selfTimer }.map(\.label),
-                    base: "Single"),
+                    title: "Drive", options: StillPickerLadders.driveOptions, base: "Single"),
                 PickerMode(title: "Built-in Timer", options: ["Off", "On"], base: "Off"),
                 PickerMode(
-                    title: "App-timer",
-                    options: ["Off", "1s", "2s", "3s", "5s", "10s", "20s", "30s", "60s"],
-                    base: "Off"),
+                    title: "App-timer", options: StillPickerLadders.appTimerOptions, base: "Off"),
             ]
         case .stillISO:
             // Auto hands sensitivity to the body (the drum tracks its live pick, locked);
@@ -13474,17 +13428,12 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // AF mode, AF-area, and subject detection — three independent stills settings by
             // tab, mirroring the movie FOCUS picker.
             [
-                PickerMode(title: "Mode", options: ["AF-S", "AF-C", "AF-A", "MF"], base: "AF-S"),
                 PickerMode(
-                    title: "Area",
-                    options: [
-                        "Pinpoint", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L",
-                        "3D tracking", "Auto",
-                    ],
-                    base: "Single"),
+                    title: "Mode", options: StillPickerLadders.focusModeOptions, base: "AF-S"),
                 PickerMode(
-                    title: "Subject",
-                    options: ["Off", "Auto", "People", "Animal", "Vehicle", "Bird", "Airplane"],
+                    title: "Area", options: StillPickerLadders.focusAreaOptions, base: "Single"),
+                PickerMode(
+                    title: "Subject", options: StillPickerLadders.focusSubjectOptions,
                     base: "Auto"),
             ]
         case .stillMode:
@@ -13492,7 +13441,7 @@ enum CameraPicker: String, CaseIterable, Identifiable {
             // bank is active, so the tab grays otherwise.
             [
                 PickerMode(title: "Mode", options: CameraPicker.stillMode.options, base: "P"),
-                PickerMode(title: "U Mode", options: ["P", "S", "A", "M"], base: "P"),
+                PickerMode(title: "U Mode", options: StillPickerLadders.userModeOptions, base: "P"),
             ]
         case .iris, .resolution, .codec, .stabilization, .mode,
             .stillShutter, .stillIris, .stillMeter,

@@ -44,6 +44,7 @@ import com.opencapture.monitorui.settings.MonitorSettingsTab
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import com.opencapture.monitorui.LocalMonitorBackdrops
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -119,6 +120,7 @@ import com.opencapture.opencine.appkit.CamerasModel
 import com.opencapture.opencine.appkit.ShellActions
 import com.opencapture.opencine.appkit.ShellBrand
 import com.opencapture.opencine.appkit.ShellModel
+import com.opencapture.opencine.appkit.MonitorOperatorSessionModel
 import com.opencapture.opencine.appkit.ShellCoverPresentation
 import com.opencapture.opencine.appkit.MonitorSettingsAccountModel
 import com.opencapture.opencine.appkit.MonitorControlModel
@@ -135,7 +137,6 @@ import com.opencapture.opencine.core.RouteKind
 import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.opencine.nikon.NikonIntegration
 import com.opencapture.opencine.nikon.NikonSavedRecordsV0
-import com.opencapture.openzcine.multicam.LocalMulticamReturn
 import com.opencapture.openzcine.multicam.MulticamCoordinator
 import com.opencapture.openzcine.multicam.MulticamPickerRow
 import com.opencapture.openzcine.multicam.MulticamStage
@@ -232,7 +233,7 @@ class MainActivity : ComponentActivity() {
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
             }
         // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
-        DemoHarness.chromeEditMode(intent)?.let(operatorSettings::beginChromeEditing)
+        val debugChromeEdit = DemoHarness.chromeEditMode(intent)
         setContent {
             // Drop the solid system hold as soon as Compose paints; the only
             // branded splash is LaunchSplashOverlay (rounded logo + wordmark).
@@ -240,7 +241,11 @@ class MainActivity : ComponentActivity() {
             OpenZCineTheme {
                 val operatorHaptics =
                     rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
-                CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics) {
+                // The presented picture under every shared material panel; the monitor feeds and activates it.
+                val liveBackdrop = remember { NikonLiveBackdrop(applicationContext) }
+                DisposableEffect(liveBackdrop) { onDispose { liveBackdrop.close() } }
+                CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics,
+                    LocalMonitorBackdrops provides listOf(liveBackdrop.source)) {
                 Box(Modifier.fillMaxSize()) {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 // The HDMI capture feed beside a capture-only session. Non-null
@@ -656,9 +661,11 @@ class MainActivity : ComponentActivity() {
                             CamerasModel.RoutePolicy.PREFER_REACHABLE,
                         ).also { model -> savedCameraStore.onReplaced = model::reloadSaved }
                     }
+                // The one note sink: refusals and interruptions show on the monitor (Pocket's placement).
+                val monitorNote = remember { mutableStateOf<String?>(null) }
                 val shell = remember(camerasModel, connectionScope) {
                     ShellModel(camerasModel, MonitorControlModel(connectionScope)).also {
-                        it.control.onNote = { note -> android.widget.Toast.makeText(applicationContext, note, android.widget.Toast.LENGTH_SHORT).show() }
+                        it.control.onNote = { note -> monitorNote.value = note }
                         if (pairingScript != null) it.beginPairing()
                         if (debugInitialSettingsTab != null) it.open(ShellModel.Cover.SETTINGS)
                     }
@@ -792,7 +799,15 @@ class MainActivity : ComponentActivity() {
                     var watchSettingsPresented by
                         remember(watching) { mutableStateOf(false) }
                     val watchCommon = remember(watching.session) { shellSessions.acquire(watching.session) }
-                    val watchControl = remember(watchCommon) { MonitorControlModel(connectionScope).also { it.bind(watchCommon) } }
+                    val watchNote = remember(watching) { mutableStateOf<String?>(null) }
+                    val watchControl = remember(watchCommon) {
+                        MonitorControlModel(connectionScope).also { it.bind(watchCommon); it.onNote = { note -> watchNote.value = note } }
+                    }
+                    // The watcher's display owner. It has no shell monitor to edit in place, so Settings offers
+                    // the Display rows without Edit view.
+                    val watchOperatorSession = remember(watchAssist) {
+                        MonitorOperatorSessionModel(shell, watchAssist.shared, operatorSettings.displayPreferences, connectionScope)
+                    }
                     DisposableEffect(watchCommon) {
                         onDispose { watchControl.unbind(); shellSessions.retire(watching.session) }
                     }
@@ -801,6 +816,7 @@ class MainActivity : ComponentActivity() {
                             watching.session,
                             commonSession = watchCommon,
                             commonControl = watchControl,
+                            operatorSession = watchOperatorSession,
                             frameSource = watching.frameSource,
                             assists = watchAssist,
                             operatorSettings = operatorSettings,
@@ -822,6 +838,8 @@ class MainActivity : ComponentActivity() {
                             onOpenSettings = { watchSettingsPresented = true },
                             onOpenMedia = {},
                             onBackToOperatorMenu = leaveWatch,
+                            note = watchNote.value,
+                            clearNote = { if (watchNote.value == it) watchNote.value = null },
                         )
                         if (!watchSettingsPresented) {
                             // Gated, not layered: composing the watch overlay under the
@@ -840,6 +858,7 @@ class MainActivity : ComponentActivity() {
                             OperatorSettingsScreen(
                                 session = watching.session,
                                 assists = watchAssist,
+                                operatorSession = watchOperatorSession,
                                 settings = operatorSettings,
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
@@ -925,6 +944,18 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    // The one display owner for this monitor: DISP modes, chrome, editor, lock and arming.
+                    val monitorOperatorSession = remember(monitorAssist) {
+                        monitorAssist?.let {
+                            MonitorOperatorSessionModel(shell, it.shared, operatorSettings.displayPreferences, connectionScope)
+                        }
+                    }
+                    LaunchedEffect(monitorOperatorSession, shellState.monitor?.id) {
+                        monitorOperatorSession?.synchronize(shellState.monitor?.id)
+                        // After synchronizing: a new monitor retires the previous one's editor.
+                        if (shellState.monitor != null) debugChromeEdit?.let { monitorOperatorSession?.beginEditing(it) }
+                    }
+                    DisposableEffect(monitorOperatorSession) { onDispose { monitorOperatorSession?.close() } }
                     val monitorState = monitored?.state?.collectAsState()?.value
                     val monitorProperties = monitored?.cameraProperties?.collectAsState()?.value
                     val monitorLinkHealth = remember(monitored) { AndroidLinkHealthMonitor() }
@@ -999,6 +1030,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         val assist = monitorAssist ?: return
+                        val operatorSession = monitorOperatorSession ?: return
                         val currentSessionState = monitorState ?: return
                         val currentCameraProperties = monitorProperties ?: return
                         val native = active as? SwiftCoreCameraSession
@@ -1090,12 +1122,12 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 null
                             }
-                        CompositionLocalProvider(LocalMulticamReturn provides returnToMulticam) {
                         Box {
                             MonitorScreen(
                                 active,
                                 commonSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
                                 commonControl = shell.control,
+                                operatorSession = operatorSession,
                                 frameSource = demo?.second ?: uvcSource,
                                 assists = assist,
                                 operatorSettings = operatorSettings,
@@ -1108,7 +1140,7 @@ class MainActivity : ComponentActivity() {
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
                                 liveViewEnabled = overlay == null,
-                                glassTierOverride = DemoHarness.glassTierOverride(intent),
+                                liveBackdrop = liveBackdrop,
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == null,
                                 sessionRecoveryEnabled =
@@ -1139,6 +1171,10 @@ class MainActivity : ComponentActivity() {
                                 onDriveDiagnostic = diagnostics::record,
                                 controlsSurrendered =
                                     relayBroadcastUi.controlHolderName != null,
+                                borrowed = shellState.monitor?.isBorrowed == true,
+                                returnToStage = returnToMulticam,
+                                note = monitorNote.value,
+                                clearNote = { if (monitorNote.value == it) monitorNote.value = null },
                             )
                             relayBroadcastUi.controlHolderName?.let { holder ->
                                 Row(
@@ -1220,11 +1256,11 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        }
                     }
                     @Composable
                     fun CameraPage(active: CameraSession, cover: ShellModel.Cover) {
                         val assist = monitorAssist ?: return
+                        val operatorSession = monitorOperatorSession ?: return
                         val currentSessionState = monitorState ?: return
                         val currentCameraProperties = monitorProperties ?: return
                         val cameraID = monitorCameraID
@@ -1246,6 +1282,9 @@ class MainActivity : ComponentActivity() {
                                     OperatorSettingsScreen(
                                         session = active,
                                         assists = assist,
+                                        operatorSession = operatorSession,
+                                        editsLiveView = true,
+                                        initialTab = operatorSession.settingsTab,
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
@@ -1383,9 +1422,14 @@ class MainActivity : ComponentActivity() {
                             remember {
                                 restoreNikonAssists(applicationContext, availableStoredLut = lutLibrary::contains)
                             }
+                        val standaloneSession = remember(standaloneAssist) {
+                            MonitorOperatorSessionModel(shell, standaloneAssist.shared, operatorSettings.displayPreferences,
+                                connectionScope)
+                        }
                         OperatorSettingsScreen(
                             session = null,
                             assists = standaloneAssist,
+                            operatorSession = standaloneSession,
                             settings = operatorSettings,
                             mediaCacheStore = mediaCacheStore,
                             frameioController = frameioController,

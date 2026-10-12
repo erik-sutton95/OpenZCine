@@ -3,7 +3,6 @@ package com.opencapture.openzcine
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,7 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -33,7 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -50,6 +46,7 @@ import com.opencapture.monitorui.MonitorGuidesMenu
 import com.opencapture.monitorui.MonitorMirrorMenu
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorInspector
+import com.opencapture.monitorui.MonitorLabelWheel
 import com.opencapture.monitorui.MonitorOptionGroup
 import com.opencapture.monitorui.MonitorTab
 import com.opencapture.monitorui.monitorScrollFade
@@ -67,6 +64,7 @@ import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.nikonAssistSection
 import kotlinx.coroutines.launch
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
+import com.opencapture.opencine.cameracontrols.chromeClickable
 
 /** A palette chip: a shared assist, or PLAY (photography's instant review, this camera's own). */
 internal sealed interface NikonAssistChip {
@@ -630,7 +628,7 @@ private fun CapsuleActionButton(
             .background(LiveDesign.background.copy(alpha = 0.38f), ChromeShape)
             .border(1.dp, if (enabled) tint.copy(alpha = 0.6f) else LiveDesign.hairline, ChromeShape)
             .alpha(if (enabled) 1f else 0.45f)
-            .chromeClickable(enabled, onClick)
+            .chromeClickable(enabled, onClick = onClick)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -644,9 +642,9 @@ private fun CapsuleActionButton(
 }
 
 /**
- * iOS `AccentDrumWheel`: a snapping wheel. The settled row renders large in
- * accent between two hairlines; neighbours dim above and below. Settling on a
- * row applies it; long-press requests deletion for stored looks.
+ * The looks on the shared label wheel (iOS `LUTDrumWheel`): the settled row applies once the wheel
+ * has seated on the current look (or the first, as iOS falls back), a tap applies its row, and a
+ * long press asks to delete a stored look.
  */
 @Composable
 private fun LutDrumWheel(
@@ -654,92 +652,18 @@ private fun LutDrumWheel(
     onDeleteRequest: ((com.opencapture.openzcine.lut.StoredLutEntry) -> Unit)?,
 ) {
     if (entries.isEmpty()) return
-    val rowHeightDp = 44.dp
-    val wheelHeight = rowHeightDp * 3
-    val listState =
-        androidx.compose.foundation.lazy.rememberLazyListState(
-            initialFirstVisibleItemIndex =
-                entries.indexOfFirst(LutWheelEntry::selected).coerceAtLeast(0),
-        )
-    val fling =
-        androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(
-            lazyListState = listState,
-            snapPosition = androidx.compose.foundation.gestures.snapping.SnapPosition.Center,
-        )
-    val centeredIndex by remember {
-        androidx.compose.runtime.derivedStateOf {
-            val layout = listState.layoutInfo
-            val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
-            layout.visibleItemsInfo
-                .minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) }
-                ?.index ?: 0
-        }
-    }
-    LaunchedEffect(entries) {
-        val index = entries.indexOfFirst(LutWheelEntry::selected).coerceAtLeast(0)
-        listState.scrollToItem(index)
-    }
-    // Apply the row the wheel settles on, as iOS does on drum settle.
-    LaunchedEffect(listState, entries) {
-        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress to centeredIndex }
-            .collect { (scrolling, index) ->
-                if (!scrolling) {
-                    entries.getOrNull(index)?.takeIf { !it.selected }?.apply?.invoke()
-                }
-            }
-    }
-    Box(Modifier.fillMaxWidth().height(wheelHeight)) {
-        androidx.compose.foundation.lazy.LazyColumn(
-            state = listState,
-            flingBehavior = fling,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = rowHeightDp),
-            modifier = Modifier.fillMaxWidth().height(wheelHeight),
-        ) {
-            items(entries.size) { index ->
-                val entry = entries[index]
-                val isCentered = index == centeredIndex
-                Box(
-                    Modifier.fillMaxWidth()
-                        .height(rowHeightDp)
-                        .pointerInput(entry) {
-                            detectTapGestures(
-                                onTap = { entry.apply() },
-                                onLongPress = {
-                                    entry.stored?.let { onDeleteRequest?.invoke(it) }
-                                },
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        entry.label,
-                        style =
-                            chromeStyle(
-                                if (isCentered) 20f else 14f,
-                                if (isCentered) FontWeight.Bold else FontWeight.Medium,
-                                mono = true,
-                            ),
-                        color = if (isCentered) LiveDesign.accent else LiveDesign.muted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-        // Hairlines bracketing the settled row, like the iOS drum.
-        Box(
-            Modifier.fillMaxWidth()
-                .height(1.dp)
-                .align(Alignment.TopCenter)
-                .offset(y = rowHeightDp)
-                .background(LiveDesign.hairlineStrong),
-        )
-        Box(
-            Modifier.fillMaxWidth()
-                .height(1.dp)
-                .align(Alignment.TopCenter)
-                .offset(y = rowHeightDp * 2)
-                .background(LiveDesign.hairlineStrong),
-        )
-    }
+    val haptics = LocalOperatorHaptics.current
+    fun key(entry: LutWheelEntry) = entry.stored?.selection?.fileName ?: entry.label
+    MonitorLabelWheel(
+        entries = entries,
+        selection = key(entries.firstOrNull(LutWheelEntry::selected) ?: entries.first()),
+        matches = { entry, selection -> key(entry) == selection },
+        key = ::key,
+        label = LutWheelEntry::label,
+        onSelect = { if (!it.selected) it.apply() },
+        rowHeight = 52.dp,
+        wheelHeight = 146.dp,
+        onClickFeedback = { haptics.selection() },
+        onLongPress = onDeleteRequest?.let { delete -> { entry -> entry.stored?.let(delete) } },
+    )
 }

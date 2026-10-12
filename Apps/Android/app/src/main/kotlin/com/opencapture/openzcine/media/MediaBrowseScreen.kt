@@ -77,14 +77,13 @@ import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.chromeClickable
+import com.opencapture.opencine.cameracontrols.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.frameio.FrameioDeliveryController
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
-import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.opencine.nikon.CameraStorageSlotStatus
 import com.opencapture.openzcine.settings.OperatorSettings
@@ -97,6 +96,8 @@ import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonMediaClips
 import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.monitorui.MonitorMediaLayout
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /** Loading / loaded / failed states of one camera or persisted-local listing pass. */
 internal sealed interface BrowseState {
@@ -1092,7 +1093,7 @@ internal fun MediaBrowseScreen(
             ) {
                 Column(
                     Modifier
-                        .glass(RoundedCornerShape(16.dp))
+                        .monitorMaterial(MonitorMaterial.Compact, RoundedCornerShape(16.dp))
                         .padding(horizontal = 24.dp, vertical = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1306,7 +1307,7 @@ private fun cachedStillThumbnail(
 private fun MediaStatusMessage(message: String, modifier: Modifier = Modifier) {
     Text(
         message,
-        modifier = modifier.glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)).padding(12.dp),
+        modifier = modifier.monitorMaterial(MonitorMaterial.Compact, RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)).padding(12.dp),
         style = chromeStyle(12f, FontWeight.Medium),
         color = LiveDesign.text,
         maxLines = 3,
