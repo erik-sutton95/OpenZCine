@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.WhiteBalanceTint
+import com.opencapture.opencine.nikon.ShutterPickerPolicy
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
@@ -1737,8 +1739,8 @@ internal fun commandLadderPresentation(
     subtitle: String = request.currentValue,
 ): LadderSheetPresentation<CameraControl> {
     val tint = if (request.control == CameraControl.WHITE_BALANCE_TINT) {
-        val (amber, green) = WhiteBalanceTintGrid.cellsFromLabel(request.currentValue.ifBlank { "Neutral" })
-        CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTintGrid.cellRange)
+        val (amber, green) = WhiteBalanceTint.cellsFromLabel(request.currentValue.ifBlank { "Neutral" })
+        CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTint.cellRange)
     } else {
         null
     }
@@ -1783,7 +1785,7 @@ internal fun CommandControlDialog(
         chromeless = chromeless,
         error = feedback?.takeIf { it.isError }?.message,
         unavailable = if (interactive) null else stringResource(R.string.camera_controls_unavailable),
-        tintLabel = { tint -> WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta) },
+        tintLabel = { tint -> WhiteBalanceTint.label(tint.amberBlue ?: 0, tint.greenMagenta) },
         tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
             stringResource(R.string.camera_wb_tint_double_tap_help),
     )

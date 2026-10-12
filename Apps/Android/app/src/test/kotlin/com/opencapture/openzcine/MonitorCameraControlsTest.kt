@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.FocusPickerPolicy
+import com.opencapture.opencine.nikon.ShutterPickerPolicy
 import com.opencapture.monitorui.MonitorLayoutPolicy
 import com.opencapture.monitorui.MonitorFieldLayout
 import com.opencapture.monitorui.MonitorRect

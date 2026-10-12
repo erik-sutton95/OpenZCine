@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.WhiteBalanceTint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -66,16 +67,16 @@ internal fun WhiteBalanceTintPad(
 ) {
     val density = LocalDensity.current
     val sidePx = with(density) { PAD_SIDE_DP.dp.toPx() }
-    val range = WhiteBalanceTintGrid.cellRange
-    val seed = remember(currentLabel) { WhiteBalanceTintGrid.cellsFromLabel(currentLabel) }
+    val range = WhiteBalanceTint.cellRange
+    val seed = remember(currentLabel) { WhiteBalanceTint.cellsFromLabel(currentLabel) }
     var ab by remember(currentLabel) { mutableIntStateOf(seed.first) }
     var gm by remember(currentLabel) { mutableIntStateOf(seed.second) }
     LaunchedEffect(currentLabel) {
-        val cells = WhiteBalanceTintGrid.cellsFromLabel(currentLabel)
+        val cells = WhiteBalanceTint.cellsFromLabel(currentLabel)
         ab = cells.first
         gm = cells.second
     }
-    val label = WhiteBalanceTintGrid.label(ab, gm)
+    val label = WhiteBalanceTint.label(ab, gm)
     val enabled = available && interactive
     val a11y =
         stringResource(R.string.camera_wb_tint_description) + " " +
@@ -102,8 +103,8 @@ internal fun WhiteBalanceTintPad(
                 enabled = enabled,
                 contentDescription = stringResource(R.string.camera_wb_tint_shift_blue),
             ) {
-                ab = WhiteBalanceTintGrid.clamp(ab - 1)
-                onCommit(WhiteBalanceTintGrid.label(ab, gm))
+                ab = WhiteBalanceTint.clamp(ab - 1)
+                onCommit(WhiteBalanceTint.label(ab, gm))
             }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -114,8 +115,8 @@ internal fun WhiteBalanceTintPad(
                     enabled = enabled,
                     contentDescription = stringResource(R.string.camera_wb_tint_shift_green),
                 ) {
-                    gm = WhiteBalanceTintGrid.clamp(gm + 1)
-                    onCommit(WhiteBalanceTintGrid.label(ab, gm))
+                    gm = WhiteBalanceTint.clamp(gm + 1)
+                    onCommit(WhiteBalanceTint.label(ab, gm))
                 }
                 Box(
                     Modifier
@@ -128,7 +129,7 @@ internal fun WhiteBalanceTintPad(
                                 onDoubleTap = {
                                     ab = 0
                                     gm = 0
-                                    onCommit(WhiteBalanceTintGrid.label(0, 0))
+                                    onCommit(WhiteBalanceTint.label(0, 0))
                                 },
                             )
                         }
@@ -143,10 +144,10 @@ internal fun WhiteBalanceTintPad(
                                     gm = cellFromNormalized(1f - y)
                                 },
                                 onDragEnd = {
-                                    onCommit(WhiteBalanceTintGrid.label(ab, gm))
+                                    onCommit(WhiteBalanceTint.label(ab, gm))
                                 },
                                 onDragCancel = {
-                                    onCommit(WhiteBalanceTintGrid.label(ab, gm))
+                                    onCommit(WhiteBalanceTint.label(ab, gm))
                                 },
                             )
                         },
@@ -207,8 +208,8 @@ internal fun WhiteBalanceTintPad(
                     enabled = enabled,
                     contentDescription = stringResource(R.string.camera_wb_tint_shift_magenta),
                 ) {
-                    gm = WhiteBalanceTintGrid.clamp(gm - 1)
-                    onCommit(WhiteBalanceTintGrid.label(ab, gm))
+                    gm = WhiteBalanceTint.clamp(gm - 1)
+                    onCommit(WhiteBalanceTint.label(ab, gm))
                 }
             }
             TintChevronArrow(
@@ -216,8 +217,8 @@ internal fun WhiteBalanceTintPad(
                 enabled = enabled,
                 contentDescription = stringResource(R.string.camera_wb_tint_shift_amber),
             ) {
-                ab = WhiteBalanceTintGrid.clamp(ab + 1)
-                onCommit(WhiteBalanceTintGrid.label(ab, gm))
+                ab = WhiteBalanceTint.clamp(ab + 1)
+                onCommit(WhiteBalanceTint.label(ab, gm))
             }
         }
 
@@ -299,10 +300,10 @@ private fun thumbOffset(value: Int, lower: Int, upper: Int, sidePx: Float): Floa
 }
 
 private fun cellFromNormalized(t: Float): Int {
-    val range = WhiteBalanceTintGrid.cellRange
+    val range = WhiteBalanceTint.cellRange
     val clamped = t.coerceIn(0f, 1f)
     val value = range.first + clamped * (range.last - range.first)
-    return WhiteBalanceTintGrid.clamp(value.roundToInt())
+    return WhiteBalanceTint.clamp(value.roundToInt())
 }
 
 /** iOS `side: CGFloat = 108`. */

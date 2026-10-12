@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.WhiteBalanceTint
 import androidx.compose.ui.geometry.Offset
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlCapabilities
@@ -849,6 +850,6 @@ class CommandMonitorTest {
                 options = listOf("Neutral"),
             ),
         )
-        assertEquals(WhiteBalanceTintGrid.cellRange, tint.tabs.single().tint?.range)
+        assertEquals(WhiteBalanceTint.cellRange, tint.tabs.single().tint?.range)
     }
 }

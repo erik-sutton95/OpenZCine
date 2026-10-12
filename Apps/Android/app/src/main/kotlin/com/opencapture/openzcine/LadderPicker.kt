@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.WhiteBalanceTint
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
@@ -157,8 +158,8 @@ private fun coreField(
 
 private fun tintOf(mode: MonitorPickerModePresentation): CaptureTint? {
     if (mode.request.control != CameraControl.WHITE_BALANCE_TINT) return null
-    val (amber, green) = WhiteBalanceTintGrid.cellsFromLabel(mode.request.currentValue.ifBlank { "Neutral" })
-    return CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTintGrid.cellRange)
+    val (amber, green) = WhiteBalanceTint.cellsFromLabel(mode.request.currentValue.ifBlank { "Neutral" })
+    return CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTint.cellRange)
 }
 
 /**

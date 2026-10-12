@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.StillPickerLadders
 import com.opencapture.opencine.appkit.MonitorCaptureChoice
 import com.opencapture.opencine.appkit.MonitorCaptureField
 import com.opencapture.opencine.core.ISOValue
@@ -102,7 +103,7 @@ class LadderPickerTest {
                 applyOnActivate = false, showsTimerShots = true,
             ),
             mode(
-                "App-timer", CameraControl.STILL_DRIVE, "Off", StillPickerPolicy.APP_TIMER_OPTIONS,
+                "App-timer", CameraControl.STILL_DRIVE, "Off", StillPickerLadders.APP_TIMER_OPTIONS,
                 applyOnActivate = false, showsTimerShots = true,
             ),
         )

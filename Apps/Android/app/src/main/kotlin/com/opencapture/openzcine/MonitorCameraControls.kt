@@ -1,5 +1,9 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.WhiteBalanceTint
+import com.opencapture.opencine.nikon.FocusPickerPolicy
+import com.opencapture.opencine.nikon.ShutterPickerPolicy
+import com.opencapture.opencine.nikon.StillPickerLadders
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
 import androidx.activity.compose.BackHandler
@@ -1035,7 +1039,7 @@ internal fun MonitorControlPickerPanel(
                 onSelect = onSelect,
                 onDismiss = onDismiss,
                 nefOptions =
-                    nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
+                    nefOptions.ifEmpty { StillPickerLadders.NEF_OPTIONS },
                 controlsEnabled = writeEnabled,
                 chromeless = chromeless,
             )
@@ -1053,7 +1057,7 @@ internal fun MonitorControlPickerPanel(
                 onClose = onDismiss,
                 onHold = if (currentPicker.kind == MonitorPickerKind.SHUTTER && writeEnabled) onShutterLongPress else null,
                 tintLabel = { tint ->
-                    WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta)
+                    WhiteBalanceTint.label(tint.amberBlue ?: 0, tint.greenMagenta)
                 },
                 tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
                     stringResource(R.string.camera_wb_tint_double_tap_help),
