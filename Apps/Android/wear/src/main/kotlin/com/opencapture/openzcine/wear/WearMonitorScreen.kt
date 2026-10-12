@@ -9,6 +9,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.wear.compose.material3.MaterialTheme
+import com.opencapture.monitorui.MonitorTimecodeFormat
 import com.opencapture.monitorui.wrist.*
 import com.opencapture.openzcine.wearrelay.WatchConnectionState
 import com.opencapture.openzcine.wearrelay.WatchRelayState
@@ -52,7 +53,7 @@ internal fun WearMonitorContent(presentation: WearMonitorPresentation, onToggleR
         openOnPhone = stringResource(R.string.wear_open_on_phone), waitingForPhone = stringResource(R.string.wear_waiting_for_phone),
         phoneUnavailable = stringResource(R.string.wear_phone_unavailable), noCamera = stringResource(R.string.wear_no_camera),
         feedPaused = stringResource(R.string.wear_feed_paused), waitingForPreview = stringResource(R.string.wear_waiting_for_preview),
-        timecodeUnavailable = stringResource(R.string.wear_timecode_unavailable), unavailable = stringResource(R.string.wear_unavailable),
+        timecodeUnavailable = MonitorTimecodeFormat.placeholder(frames = true), unavailable = stringResource(R.string.wear_unavailable),
         startRecording = stringResource(R.string.wear_start_recording_description), stopRecording = stringResource(R.string.wear_stop_recording_description),
         batteryLabel = { resources.getString(R.string.wear_battery_percent, it) })
     MaterialTheme {
@@ -81,3 +82,6 @@ private fun WearMonitorPresentation.neutral(storageStatus: String? = null): Moni
         state?.isRecording, isSendingCommand, commandMessage, frame != null, state?.cameraBatteryPercent,
         state?.timecode?.takeIf { it.on }?.label(), frameTimecode?.takeIf { it.on }?.label(), storageStatus, state?.media)
 }
+
+/** The body's frame timecode by the shared rule (every Z body declares frame precision). */
+private fun WatchTimecode.label(): String? = MonitorTimecodeFormat.label(hour, minute, second, frame)

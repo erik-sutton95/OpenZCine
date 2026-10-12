@@ -18,7 +18,7 @@ struct WatchMonitorView: View {
         let timecode = (controller.frameTimecode ?? state?.timecode).flatMap {
             $0.on ? $0.label : nil
         }
-        let header = photography ? shots : timecode ?? "--:--:--:--"
+        let header = photography ? shots : timecode ?? Timecode.placeholder
         return WatchMonitorPresentation(
             sourceRevision: controller.presentationRevision,
             header: header, headerAccessibility: photography ? "Shots remaining \(shots)" : nil,

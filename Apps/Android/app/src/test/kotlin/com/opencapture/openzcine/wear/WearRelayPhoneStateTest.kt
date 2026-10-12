@@ -125,7 +125,7 @@ class WearRelayPhoneStateTest {
                 liveFPS = "25",
             )
         val commandMode = retainWatchFrameMetadata(state.copy(feedLive = false), frameMetadata)
-        assertEquals("01:02:03:04", commandMode.timecode.label())
+        assertEquals(WatchTimecode(true, 1, 2, 3, 4), commandMode.timecode)
         assertEquals("25", commandMode.liveFPS)
     }
 

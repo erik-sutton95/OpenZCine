@@ -40,7 +40,7 @@ class WatchRelayWireTest {
         assertEquals("Nikon ZR", state.cameraName)
         assertEquals(80, state.cameraBatteryPercent)
         assertEquals(WatchConnectionState.CONNECTED, state.connection)
-        assertEquals("01:02:03:04", state.timecode.label())
+        assertEquals(WatchTimecode(true, 1, 2, 3, 4), state.timecode)
         assertEquals(521, assertNotNull(state.mediaStatus).gigabytesFree)
         assertEquals(47, assertNotNull(state.mediaStatus).percentFree)
 
@@ -64,7 +64,7 @@ class WatchRelayWireTest {
             frame.jpeg.contentEquals(Base64.getDecoder().decode("/9j/4AAQ")),
             "The preview bytes must remain the Swift Codable Data base64 representation.",
         )
-        assertEquals("12:34:56:07", frame.timecode.label())
+        assertEquals(WatchTimecode(true, 12, 34, 56, 7), frame.timecode)
     }
 
     @Test
