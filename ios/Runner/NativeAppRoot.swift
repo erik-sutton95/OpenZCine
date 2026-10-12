@@ -4316,6 +4316,11 @@ final class NativeAppModel {
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
         var debugIsEstablishingConnection: Bool { isEstablishingConnection }
         var debugHasCameraSession: Bool { cameraSession != nil }
+        /// Adopts an already-established SIMULATED transport session for hosted media tests.
+        /// The real session supplies deletion authority; no connection flag bypasses admission.
+        func debugAdoptEstablishedMediaSession(_ session: NativeCameraSession?) {
+            cameraSession = session
+        }
         var debugHoldsReportingCameraPath: Bool { reportingCameraPath != nil }
         var debugConnectionGeneration: Int { connectionGeneration }
         var debugHasSessionRecoveryTask: Bool { sessionRecoveryTask != nil }

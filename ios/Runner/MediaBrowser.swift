@@ -1098,8 +1098,8 @@ struct MediaPlayerView: View {
             share: MediaDeliveryEligibility.canDeliver(
                 clipIsLocal: model.isClipDownloaded(record.payload),
                 cameraConnected: model.isConnected),
-            delete: model.isConnected && model.mediaBrowserSource == .camera && record.payload.handle != nil
-                && !covered && model.mediaDeletionProgress == nil)
+            delete: model.canDeleteMedia([record.payload]) && model.mediaBrowserSource == .camera
+                && record.payload.handle != nil && !covered && model.mediaDeletionProgress == nil)
     }
     private var operations: MonitorOperatorPlaybackOperations<MediaClip, String> {
         .init(
