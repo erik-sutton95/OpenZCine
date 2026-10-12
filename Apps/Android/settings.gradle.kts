@@ -47,6 +47,8 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:vulkan")).using(project(":vulkan"))
         // Device-only Keystore sealing for camera Wi-Fi keys.
         substitute(module("com.opencapture.opencine:platform")).using(project(":platform"))
+        // The one Android Frame.io owner over the shared Swift wire (A4-09).
+        substitute(module("com.opencapture.opencine:frameio")).using(project(":frameio"))
     }
 }
 

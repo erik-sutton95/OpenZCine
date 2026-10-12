@@ -2,8 +2,8 @@ package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
-import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.opencine.frameio.FrameioCameraRejoinEvidence
+import com.opencapture.opencine.frameio.FrameioInternetHopState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

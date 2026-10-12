@@ -1,6 +1,6 @@
 package com.opencapture.openzcine.settings
 
-import com.opencapture.openzcine.frameio.FrameioNetworkState
+import com.opencapture.opencine.frameio.FrameioNetworkState
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue

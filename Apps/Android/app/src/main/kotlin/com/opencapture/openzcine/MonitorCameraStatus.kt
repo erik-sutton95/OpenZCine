@@ -15,7 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.opencine.frameio.FrameioInternetHopState
 
 /**
  * Operator-facing feed status when live view is not available.

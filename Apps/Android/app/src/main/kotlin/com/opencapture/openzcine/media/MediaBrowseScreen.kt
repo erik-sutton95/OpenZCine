@@ -27,7 +27,6 @@ import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.ui.platform.LocalViewConfiguration
@@ -79,17 +78,14 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.cameracontrols.chromeClickable
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
-import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioDeliveryState
-import com.opencapture.openzcine.frameio.FrameioInternetHopState
-import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
+import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliveryHost
+import com.opencapture.opencine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.opencine.nikon.CameraStorageSlotStatus
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.nikon.NikonMediaClips
@@ -136,88 +132,6 @@ internal fun mediaDeliveryMetadataSummary(clips: List<NikonMediaClipRecord>): St
 
 private const val MAXIMUM_SHARE_METADATA_ITEMS = 32
 private const val MAXIMUM_SHARE_METADATA_FILENAME_CHARACTERS = 160
-
-internal fun frameioDeliverySummary(
-    state: FrameioDeliveryState,
-    internetHopState: FrameioInternetHopState,
-    errorMessage: String?,
-    skippedBeforeUpload: Int,
-): String =
-    when (state) {
-        is FrameioDeliveryState.Completed ->
-            buildString {
-                if (state.uploadedCount > 0) {
-                    append("Delivered ${state.uploadedCount} cached item")
-                    if (state.uploadedCount != 1) append('s')
-                } else {
-                    append("No new cached items uploaded")
-                }
-                if (state.skippedCount > 0) {
-                    append("; ${state.skippedCount} already uploaded")
-                }
-                if (state.failedCount > 0) {
-                    append("; ${state.failedCount} failed")
-                }
-                state.firstFailureMessage?.takeIf(String::isNotBlank)?.let { firstFailure ->
-                    append("; first failure: ${firstFailure.trimEnd('.')}")
-                }
-                if (state.metadataFailureCount > 0) {
-                    append("; ${state.metadataFailureCount} metadata sidecar")
-                    if (state.metadataFailureCount != 1) append('s')
-                    append(" not saved")
-                }
-                if (state.cleanupFailureCount > 0) {
-                    append("; ${state.cleanupFailureCount} temporary export")
-                    if (state.cleanupFailureCount != 1) append('s')
-                    append(" not removed")
-                }
-                if (state.historyFailureCount > 0) {
-                    append("; ${state.historyFailureCount} upload history ")
-                    append(if (state.historyFailureCount == 1) "failure" else "failures")
-                }
-                if (skippedBeforeUpload > 0) {
-                    append("; $skippedBeforeUpload not prepared")
-                }
-                when (internetHopState) {
-                    is FrameioInternetHopState.Rejoined -> append("; camera rejoined")
-                    is FrameioInternetHopState.Failed -> append("; camera rejoin not verified")
-                    else -> Unit
-                }
-            }
-        is FrameioDeliveryState.Failed ->
-            buildString {
-                append(state.message)
-                if (internetHopState is FrameioInternetHopState.Failed) {
-                    append("; camera rejoin not verified")
-                    if (internetHopState.message.isNotBlank()) {
-                        append(": ${internetHopState.message}")
-                    }
-                }
-            }
-        FrameioDeliveryState.Idle -> errorMessage ?: "Frame.io delivery didn't start."
-        is FrameioDeliveryState.Uploading -> "Frame.io delivery is still in progress."
-    }
-
-/** Rejoins a consented camera-AP hop even when local preparation never reaches upload. */
-internal suspend fun endActiveFrameioHopAfterMediaJob(
-    isActive: () -> Boolean,
-    endHop: suspend () -> Unit,
-) {
-    if (isActive()) withContext(NonCancellable) { endHop() }
-}
-
-/** Preserves a preparation error while making a later camera-rejoin failure explicit. */
-internal fun frameioPreparationMessageAfterRejoin(
-    message: String?,
-    internetHopState: FrameioInternetHopState,
-): String? {
-    if (message == null || internetHopState !is FrameioInternetHopState.Failed) return message
-    return buildString {
-        append(message)
-        append(" Camera rejoin not verified")
-        if (internetHopState.message.isNotBlank()) append(": ${internetHopState.message}")
-    }
-}
 
 /** Keeps the loaded camera library stable during the one consented network round trip. */
 internal fun frameioHopKeepsCameraLibraryMounted(
@@ -300,8 +214,7 @@ internal fun MediaBrowseScreen(
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary,
-    frameioController: FrameioDeliveryController,
-    mediaDeliveryCoordinator: MediaDeliveryCoordinator,
+    mediaDelivery: NikonMediaDelivery,
     autoPlayFirstProxy: Boolean = false,
     /** Bumped when Settings clears the camera media cache so an open gallery reloads. */
     cacheRevision: Int = 0,
@@ -344,7 +257,7 @@ internal fun MediaBrowseScreen(
             libraryIndex.rememberCameraBucket(savedID, cameraID, displayName)
         }
     }
-    val internetHopState = frameioController.internetHopState
+    val internetHopState = mediaDelivery.frameio.internetHopState
     var rejoinedConnectionObserved by remember(cameraID) { mutableStateOf(false) }
     LaunchedEffect(internetHopState, cameraConnected) {
         when (internetHopState) {
@@ -414,9 +327,9 @@ internal fun MediaBrowseScreen(
     var autoPlayHandled by remember { mutableStateOf(false) }
     var deliverySelection by remember(cameraID) { mutableStateOf<List<NikonLibraryClip>>(emptyList()) }
     var deliveryAdmission by remember(cameraID) { mutableStateOf<MonitorMediaLibraryActionToken?>(null) }
-    var deliveryHost by remember { mutableStateOf<NikonMediaDeliveryHost?>(null) }
-    val deliveryDisplay by mediaDeliveryCoordinator.display.collectAsState()
-    val shareInProgress = deliveryDisplay.overlay != null
+    var deliveryPopup by remember { mutableStateOf<NikonDeliverySelection?>(null) }
+    val deliveryState by mediaDelivery.coordinator.lifetime.state.collectAsState()
+    val shareInProgress = deliveryState.running
     var shareMessage by remember { mutableStateOf<String?>(null) }
     var filters by remember(cameraID) { mutableStateOf(MediaLibraryFilters()) }
     var browseStorageSlots by
@@ -444,10 +357,6 @@ internal fun MediaBrowseScreen(
         deliverySelection = emptyList(); deliveryAdmission = null
     }
 
-    fun cancelActiveShareOrExitSelection() {
-        val outgoing = deliveryHost?.capturedRun
-        if (shareInProgress && outgoing != null) outgoing.cancel() else exitSelection()
-    }
 
     LaunchedEffect(cameraID, offlineCameraIDs) {
         favorites =
@@ -766,28 +675,28 @@ internal fun MediaBrowseScreen(
         if (!action.sourceIsCurrent || !actual.isCurrent(token)) return
         val capturedLut = selectedLut.takeIf { selectedLutLabel != null }
         val capturedLabel = selectedLutLabel
-        val outgoing = deliveryHost
-        outgoing?.close()
-        val host = NikonMediaDeliveryHost(scope, mediaDeliveryCoordinator, frameioController, cacheStore,
-            actual, MonitorMediaGalleryOpen(records.first(), records, token), connectionOwner,
-            sourceCurrent = { library === actual && action.sourceIsCurrent },
+        deliveryPopup = mediaDelivery.selection(records, actual, MonitorMediaGalleryOpen(records.first(), records, token),
+            connectionOwner, sourceCurrent = { library === actual && action.sourceIsCurrent },
             captureRecord = { record -> val captured = libraryActions.capture(listOf(record.payload))
                 MonitorPlaybackAdmission { library === actual && actual.isCurrent(token) && captured.sourceIsCurrent } },
-            configuration = { MediaDeliveryConfiguration(selectedLut = capturedLut) },
-            lutLabel = { capturedLabel }, beforeFirstIO = { outgoing?.cancelAndJoin() })
-        deliveryHost = host
-        host.share(records)
+            selectedLut = capturedLut, lutLabel = capturedLabel)
+    }
+
+    /** A still shares through the same delivery popup as clips (A4-18). */
+    fun presentStillDelivery(record: MonitorMediaRecord<NikonLibraryClip>, actual: MonitorMediaLibraryModel<NikonLibraryClip>,
+        opening: MonitorMediaGalleryOpen<NikonLibraryClip>, sourceIsCurrent: () -> Boolean) {
+        if (shareInProgress || !actual.isCurrent(opening.admission)) return
+        deliveryPopup = mediaDelivery.selection(listOf(record), actual, opening, connectionOwner,
+            sourceCurrent = { library === actual && sourceIsCurrent() },
+            captureRecord = { MonitorPlaybackAdmission { library === actual && actual.isCurrent(opening.admission) && sourceIsCurrent() } },
+            selectedLut = selectedLut.takeIf { selectedLutLabel != null }, lutLabel = selectedLutLabel)
     }
 
     LaunchedEffect(closeRequested) {
         if (!closeRequested) return@LaunchedEffect
-        val outgoing = deliveryHost
-        outgoing?.cancelAndJoin()
+        // A delivery run belongs to the app, not this gallery: it continues after close (A4-10).
         library?.close()
         onClose()
-    }
-    BackHandler(enabled = shareInProgress && playingClip == null && viewingPhoto == null) {
-        cancelActiveShareOrExitSelection()
     }
     Box(Modifier.fillMaxSize().background(LiveDesign.background)) {
         val selectionHaptics = LocalOperatorHaptics.current
@@ -882,7 +791,7 @@ internal fun MediaBrowseScreen(
             )
         }
 
-        deliveryHost?.let { NikonMediaDeliveryHostView(it) }
+        MonitorOperatorDeliveryHost(deliveryPopup, onDismissPopup = { deliveryPopup = null }, mediaDelivery.coordinator)
 
         seriesRepresentative?.let { representative ->
             val actual = openedPhotoLibrary
@@ -911,7 +820,8 @@ internal fun MediaBrowseScreen(
                     }, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
                     onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
                         libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
-                    }, onDeletedReturning = { admission ->
+                    }, onShare = { record -> presentStillDelivery(record, actual, opening) { action.sourceIsCurrent } },
+                    onDeletedReturning = { admission ->
                         if (library !== actual || !actual.isCurrent(admission)) return@MediaStillViewer
                         val index = members.indexOfFirst { it.asset.id == selected.asset.id }.coerceAtLeast(0)
                         seriesFrames = members.mapNotNull { actual.record(it.asset.id) }
@@ -955,8 +865,7 @@ internal fun MediaBrowseScreen(
                     exposureAssistCameraInput = exposureAssistCameraInput,
                     operatorSettings = operatorSettings,
                     lutLibrary = lutLibrary,
-                    frameioController = frameioController,
-                    mediaDeliveryCoordinator = mediaDeliveryCoordinator,
+                    mediaDelivery = mediaDelivery,
                     onToggleFavorite = ::toggleFavorite,
                     onRatingMirrored = ::mirrorRating,
                     onCaptureRatingCompletion = ::captureRatingCompletion,
@@ -1060,7 +969,8 @@ internal fun MediaBrowseScreen(
                     rawRecord = raw, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
                     onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
                         libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
-                    }, onClose = { viewingPhoto = null })
+                    }, onShare = { record -> presentStillDelivery(record, actual, opening) { action.sourceIsCurrent } },
+                     onClose = { viewingPhoto = null; reloadKey += 1 })
             }
         }
 

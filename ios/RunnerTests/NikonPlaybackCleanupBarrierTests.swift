@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineMedia
 import XCTest
 
@@ -9,9 +10,9 @@ import XCTest
 /// SIMULATED files and manual entered-operation gates exercise the actual native adapter.
 /// Four-byte cache files prove attachment ordering, not decoded picture or hardware behavior.
 @MainActor final class NikonPlaybackCleanupBarrierTests: XCTestCase {
-    private var deliveryRequest: MediaDeliveryBeginRequest {
-        .init(clips: [], destination: .nativeShare, configuration: .init())
-    }
+    private let exports = MonitorDeliveryExportStore(
+        root: FileManager.default.temporaryDirectory.appendingPathComponent(
+            "SIMULATED-barrier-exports-\(UUID().uuidString)", isDirectory: true))
     private func settle(_ condition: () -> Bool) async {
         for _ in 0..<1000 {
             if condition() { return }
@@ -19,54 +20,52 @@ import XCTest
         }
         XCTFail("Captured cleanup did not reach its manual boundary")
     }
+    private func caching(_ caching: Bool) -> MonitorDeliveryBatchProgress {
+        .init(
+            destination: .remoteUpload, totalClips: 1, clipIndex: 1,
+            clipFraction: caching ? 0.2 : 0.5, isCaching: caching)
+    }
 
-    func testActualFactoryFirstNativeItemWaitsForCapturedRunWithoutCancellingSuccessor()
-        async throws
-    {
+    /// A2-54: the first native item waits only while a delivery caches from the camera, and the
+    /// delivery goes on beside playback.
+    func testFirstNativeItemWaitsOnlyForTheCachingStageWithoutCancellingTheRun() async throws {
         let fixture = try NikonBarrierFixture()
         defer { fixture.remove() }
         let gate = NikonBarrierGate()
-        var entries = 0
-        var barrierEntries = 0
-        let coordinator = MediaDeliveryCoordinator(execute: { _, _, _ in
-            entries += 1
+        let coordinator = MonitorDeliveryCoordinator(exports: exports)
+        defer { coordinator.close() }
+        var report: (@MainActor (MonitorDeliveryBatchProgress) -> Void)?
+        coordinator.begin { _, progress in
+            report = progress
             await gate.wait()
             return .savedToPhotos(count: 1)
-        })
-        defer { coordinator.close() }
-        let outgoing = try XCTUnwrap(
-            coordinator.beginCaptured(deliveryRequest, model: fixture.model))
-        await settle { entries == 1 && gate.pending == 1 }
+        }
+        await settle { gate.pending == 1 }
+        report?(caching(true))
+        var barrierEntries = 0
         let context = try XCTUnwrap(
             NikonOperatorPlaybackContext(
                 model: fixture.model,
                 initial: fixture.opening,
-                captureDeliveryCleanup: {
-                    let captured = coordinator.capturedRun
-                    return {
-                        barrierEntries += 1
-                        await captured?.cancelAndJoin()
-                    }
+                cameraTransferReleased: {
+                    barrierEntries += 1
+                    await coordinator.cameraTransferReleased()
                 }))
         XCTAssertTrue(
             context.media.open(
                 fixture.first, playlist: fixture.opening.playlist,
                 admitted: fixture.opening.admission))
         await settle { barrierEntries == 1 }
-        XCTAssertNil(context.native?.player.currentItem)
-        XCTAssertFalse(context.media.playback?.ready ?? false)
-        let successor = try XCTUnwrap(
-            coordinator.beginCaptured(deliveryRequest, model: fixture.model))
-        XCTAssertEqual(entries, 1)
-        gate.release()
-        await outgoing.awaitEnteredCleanup()
-        await settle { context.media.playback?.ready == true && entries == 2 && gate.pending == 1 }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertNil(context.native?.player.currentItem, "No item while the camera transfers")
+        report?(caching(false))
+        await settle { context.media.playback?.ready == true }
         let asset = try XCTUnwrap(context.native?.player.currentItem?.asset as? AVURLAsset)
         XCTAssertEqual(asset.url.lastPathComponent, "FIRST.MOV")
-        XCTAssertTrue(
-            coordinator.isActive, "Old captured cleanup cannot cancel the replacement run")
+        XCTAssertTrue(coordinator.isActive, "Playback never cancels the delivery")
         gate.release()
-        await successor.awaitEnteredCleanup()
+        await settle { !coordinator.isActive }
+        XCTAssertEqual(coordinator.lifetime.state.toast, "Saved 1 clip to Photos")
         context.media.closePlayback()
         await fixture.library.dispose()
     }
@@ -127,13 +126,12 @@ import XCTest
         await fixture.library.dispose()
     }
 
-    func testBackRetiresSharedItemThenWaitsForExactEnteredRun() async throws {
+    /// A2-54: Back retires the item and joins only its own native work; a delivery goes on.
+    func testBackRetiresSharedItemAndLeavesTheDeliveryRunning() async throws {
         let fixture = try NikonBarrierFixture()
         defer { fixture.remove() }
         let context = try XCTUnwrap(
-            NikonOperatorPlaybackContext(
-                model: fixture.model,
-                initial: fixture.opening))
+            NikonOperatorPlaybackContext(model: fixture.model, initial: fixture.opening))
         XCTAssertTrue(
             context.media.open(
                 fixture.first, playlist: fixture.opening.playlist,
@@ -141,74 +139,47 @@ import XCTest
         await settle { context.media.playback?.ready == true }
         let native = try XCTUnwrap(context.native)
         let gate = NikonBarrierGate()
-        let coordinator = MediaDeliveryCoordinator(execute: { _, _, _ in
+        let coordinator = MonitorDeliveryCoordinator(exports: exports)
+        defer { coordinator.close() }
+        coordinator.begin { _, _ in
             await gate.wait()
             return .savedToPhotos(count: 1)
-        })
-        defer { coordinator.close() }
-        let run = try XCTUnwrap(coordinator.beginCaptured(deliveryRequest, model: fixture.model))
+        }
         await settle { gate.pending == 1 }
-        let finish = try XCTUnwrap(context.captureCloseCleanup(run: run))
+        let finish = try XCTUnwrap(context.captureCloseCleanup())
         XCTAssertNil(context.media.playback)
         XCTAssertNil(native.player.currentItem)
-        XCTAssertNil(
-            context.captureCloseCleanup(run: run), "Repeated Back cannot capture new cleanup")
-        var completed: Bool?
-        let closing = Task { completed = await finish() }
-        await settle { !coordinator.isActive }
-        XCTAssertNil(completed, "Dismissal waits for entered cleanup despite cancellation")
+        XCTAssertNil(context.captureCloseCleanup(), "Repeated Back cannot capture new cleanup")
+        let completed = await finish()
+        XCTAssertTrue(completed)
+        XCTAssertTrue(coordinator.isActive, "Back never cancels the delivery")
         gate.release()
-        await closing.value
-        XCTAssertEqual(completed, true)
-        XCTAssertNil(context.media.playback)
+        await settle { !coordinator.isActive }
+        XCTAssertEqual(coordinator.lifetime.state.toast, "Saved 1 clip to Photos")
         await fixture.library.dispose()
     }
 
-    func testOldBackCompletionCannotDismissReopenedPlayerOrCancelNewRun() async throws {
+    func testOldBackCompletionCannotDismissAReopenedPlayer() async throws {
         let fixture = try NikonBarrierFixture()
         defer { fixture.remove() }
-        let gate = NikonBarrierGate()
-        var entries = 0
-        let coordinator = MediaDeliveryCoordinator(execute: { _, _, _ in
-            entries += 1
-            await gate.wait()
-            return .savedToPhotos(count: 1)
-        })
-        defer { coordinator.close() }
         let context = try XCTUnwrap(
-            NikonOperatorPlaybackContext(
-                model: fixture.model,
-                initial: fixture.opening,
-                captureDeliveryCleanup: {
-                    let captured = coordinator.capturedRun
-                    return { await captured?.cancelAndJoin() }
-                }))
+            NikonOperatorPlaybackContext(model: fixture.model, initial: fixture.opening))
         XCTAssertTrue(
             context.media.open(
                 fixture.first, playlist: fixture.opening.playlist,
                 admitted: fixture.opening.admission))
         await settle { context.media.playback?.ready == true }
         let oldNative = try XCTUnwrap(context.native)
-        let run = try XCTUnwrap(coordinator.beginCaptured(deliveryRequest, model: fixture.model))
-        await settle { entries == 1 && gate.pending == 1 }
-        let finish = try XCTUnwrap(context.captureCloseCleanup(run: run))
-        let closing = Task { await finish() }
-        await settle { !coordinator.isActive }
+        let finish = try XCTUnwrap(context.captureCloseCleanup())
         XCTAssertTrue(
             context.media.open(
                 fixture.second, playlist: fixture.opening.playlist,
                 admitted: fixture.opening.admission))
-        let successor = try XCTUnwrap(
-            coordinator.beginCaptured(deliveryRequest, model: fixture.model))
-        gate.release()
-        let mayDismiss = await closing.value
+        let mayDismiss = await finish()
         XCTAssertFalse(mayDismiss)
-        await settle { context.media.playback?.ready == true && entries == 2 && gate.pending == 1 }
+        await settle { context.media.playback?.ready == true }
         XCTAssertFalse(context.native === oldNative)
         XCTAssertEqual(context.media.playback?.active?.asset.id, fixture.second.asset.id)
-        XCTAssertTrue(coordinator.isActive)
-        gate.release()
-        await successor.awaitEnteredCleanup()
         context.media.closePlayback()
         await fixture.library.dispose()
     }

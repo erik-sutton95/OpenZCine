@@ -1,5 +1,8 @@
 package com.opencapture.openzcine.frameio
 
+import com.opencapture.opencine.frameio.FrameioCameraHop
+import com.opencapture.opencine.frameio.FrameioCameraRejoinEvidence
+import com.opencapture.opencine.frameio.FrameioHopAvailability
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.pairing.PairedCamera
@@ -10,64 +13,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
-/** Whether the current camera context can safely perform an explicit Frame.io internet hop. */
-internal enum class FrameioHopAvailability {
-    READY,
-    NOT_CAMERA_ACCESS_POINT,
-    MISSING_SAVED_PROFILE,
-    FIXTURE_UNAVAILABLE,
-    ;
-
-    val operatorMessage: String
-        get() =
-            when (this) {
-                READY -> ""
-                NOT_CAMERA_ACCESS_POINT ->
-                    "This camera connection doesn't own a camera access-point binding."
-                MISSING_SAVED_PROFILE ->
-                    "OpenZCine can't return to this camera automatically because its saved Wi-Fi profile or key is unavailable. Pair it again before using a Frame.io hop."
-                FIXTURE_UNAVAILABLE ->
-                    "Network hopping is unavailable for demo fixtures. Connect a configured camera access point to verify the real workflow."
-            }
-}
-
-/** Session evidence captured only after a fresh camera connection succeeds. */
-internal data class FrameioCameraRejoinEvidence(
-    val cameraName: String,
-    val cameraModel: String,
-    val verifiedAtEpochMillis: Long,
-)
-
-/** Visible lifecycle of the explicit camera-AP → internet → camera-AP round trip. */
-internal sealed interface FrameioInternetHopState {
-    data object Idle : FrameioInternetHopState
-
-    data object LeavingCamera : FrameioInternetHopState
-
-    data object WaitingForInternet : FrameioInternetHopState
-
-    data object Online : FrameioInternetHopState
-
-    data object RejoiningCamera : FrameioInternetHopState
-
-    data class Rejoined(val evidence: FrameioCameraRejoinEvidence) : FrameioInternetHopState
-
-    data class Failed(val message: String) : FrameioInternetHopState
-}
-
-/** Camera lifecycle boundary held by the Frame.io controller while delivery context remains mounted. */
-internal interface FrameioCameraHop {
-    val availability: FrameioHopAvailability
-
-    /** Disconnects the current session, then releases its AP binding after operator consent. */
-    suspend fun leaveCameraNetwork(): Boolean
-
-    /** Rejoins through the saved profile and returns only protocol-connected session evidence. */
-    suspend fun rejoinCameraNetwork(): FrameioCameraRejoinEvidence?
-}
-
 /**
- * Production hop adapter over the existing Android pairing owner.
+ * Production hop adapter over the existing Android pairing owner; the shared Frame.io owner
+ * (com.opencapture.opencine.frameio) holds the lease around it.
  *
  * It never retains or exposes the Wi-Fi passphrase. The key is read from the encrypted pairing
  * store only for the rejoin request, and the monitor receives the reconnected session only after

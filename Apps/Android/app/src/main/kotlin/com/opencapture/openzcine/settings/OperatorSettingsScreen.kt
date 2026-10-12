@@ -93,9 +93,9 @@ import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.openzcine.frameio.FrameioConnectionState
-import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioNetworkState
+import com.opencapture.opencine.frameio.FrameioConnectionState
+import com.opencapture.opencine.frameio.FrameioDeliveryController
+import com.opencapture.opencine.frameio.FrameioNetworkState
 import com.opencapture.openzcine.diagnostics.AppDiagnostics
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheClearResult

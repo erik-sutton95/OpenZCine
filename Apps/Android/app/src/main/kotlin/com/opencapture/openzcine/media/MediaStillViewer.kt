@@ -5,7 +5,6 @@ import android.graphics.BitmapFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.cameracontrols.MonitorOperatorPhotoScreen
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
@@ -49,9 +48,10 @@ internal fun MediaStillViewer(
     onResolvedObjectSize: (NikonMediaClipRecord, Long) -> Unit = { _, _ -> },
     onDeleted: (() -> Unit)? = null,
     onDeletedReturning: ((MonitorMediaLibraryActionToken) -> Unit)? = null,
+    /** Opens the shared delivery popup for the still, the same entry as clips (A4-18). */
+    onShare: ((MonitorMediaRecord<NikonLibraryClip>) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
-    val context = LocalContext.current
     val io = remember(library, record.asset.id, admission, cacheStore, connectionOwner) {
         NikonStillPictureIO(cacheStore, cameraTransferAvailable, connectionOwner, onResolvedObjectSize)
     }
@@ -112,19 +112,11 @@ internal fun MediaStillViewer(
     val sharing = MonitorMediaPictureSharing<NikonLibraryClip>(readiness = { request ->
         if (io.completed(request) != null && operations.access?.invoke(request.record)?.share != false)
             MonitorMediaPictureShareReadiness.READY else MonitorMediaPictureShareReadiness.UNAVAILABLE
-    }, perform = { request ->
-        val entry = io.completed(request)
-        if (entry != null && request.isCurrent()) {
-            val staged = withContext(Dispatchers.IO) {
-                MediaShareStager(context.cacheDir.toPath()).stage(entry, request.record.payload.clip)
-            }
-            if (request.isCurrent()) context.startActivity(AndroidMediaShareIntent.chooserIntent(context, staged))
-        }
     })
     MonitorOperatorPhotoScreen(library = library, record = record, admission = admission, assist = assist,
         loaders = MonitorMediaPictureLoaders(preview = io::preview, cached = io::cached, progressive = io::progressive),
         operations = operations, sourceCurrent = sourceCurrent, variants = variants, rating = rating, sharing = sharing,
-        share = {}, collection = collection, selectRecord = selectRecord, collectionThumbnail = thumbnail,
+        share = onShare?.let { open -> { request -> if (request.isCurrent()) open(request.record) } }, collection = collection, selectRecord = selectRecord, collectionThumbnail = thumbnail,
         deleted = onDeleted, deletedReturning = onDeletedReturning, close = onClose)
 }
 

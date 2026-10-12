@@ -1,28 +1,50 @@
-import AVFoundation
 import Foundation
 import OpenCineAppKit
+import OpenCineAppKitApple
+import OpenCineApple
+import OpenCineCameraControls
 import OpenCineFrameIO
+import OpenCineFrameIOApple
+import OpenCineMedia
 import OpenZCineCore
+import SwiftUI
 import os
 
-/// Container format for baked media exports.
-enum MediaExportFormat: String, Sendable, CaseIterable, Identifiable {
-    case mov
-    case mp4
+/// OpenZCine's side of delivery: the Nikon capture, its export, Frame.io account and the camera
+/// AP hop. Run lifetime, progress, staging, Photos, share and the popup are the shared owners'.
+typealias NikonDeliveryConfiguration = MonitorDeliveryExportConfiguration<
+    String, MonitorMediaExporter.Format
+>
+typealias NikonHopToken = MonitorInternetHop<NikonHopRoute>.Token
+typealias NikonDeliveryPopup = MonitorOperatorDeliveryPopupHost<
+    String, MonitorMediaExporter.Format, FrameioProject, NikonFrameioProjectContext,
+    NikonHopToken, FrameioMark
+>
 
-    var id: String { rawValue }
-
-    var avFileType: AVFileType {
-        switch self {
-        case .mov: .mov
-        case .mp4: .mp4
-        }
-    }
-
-    var label: String { rawValue.uppercased() }
+/// Where an internet hop leaves from and returns to (the Nikon side of A2-16).
+struct NikonHopRoute {
+    let host: String
+    let displayName: String?
+    /// The open Media or Settings page stays over the cameras page while the phone is away.
+    let rehostActivePanel: Bool
+    /// The camera AP the phone left, once it has.
+    var ssid: String? = nil
 }
 
-/// Best-effort clip metadata written beside exports when the operator enables metadata.
+/// The Nikon Wi‑Fi joiner calls of the hop. Tests replace them; a nil `rejoin` runs the full
+/// camera join pipeline.
+struct NikonHopNative {
+    var currentSSID: @MainActor () async -> String? = {
+        await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
+    }
+    var leaveNetwork: @MainActor (String) -> Void = {
+        WiFiJoinCoordinator.shared.leaveCameraNetwork(ssid: $0)
+    }
+    var rejoin: (@MainActor (_ host: String, _ ssid: String) async -> Void)?
+}
+
+/// Best-effort clip metadata written beside exports when the operator enables metadata:
+/// OpenZCine's sidecar schema, with the body's model and serial.
 struct MediaClipDeliveryMetadata: Codable, Sendable {
     let filename: String
     let captureDate: String
@@ -41,274 +63,224 @@ struct MediaClipDeliveryMetadata: Codable, Sendable {
             captureDate: clip.captureDate,
             sizeBytes: clip.sizeBytes,
             cameraName: camera?.displayName,
-            cameraModel: camera?.model.nilIfEmpty,
-            cameraSerial: camera?.serialNumber.nilIfEmpty,
+            cameraModel: camera?.model.isEmpty == false ? camera?.model : nil,
+            cameraSerial: camera?.serialNumber.isEmpty == false ? camera?.serialNumber : nil,
             lutName: lutName,
             exportedAt: Date()
         )
     }
 }
 
-extension String {
-    fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
-}
+enum NikonDelivery {
+    static let logger = Logger(subsystem: "OpenZCine", category: "media-export")
+    private static let timecodeLogger = Logger(subsystem: "OpenZCine", category: "media-timecode")
 
-/// Where a delivery run sends prepared clips.
-enum MediaDeliveryDestination: String, CaseIterable, Identifiable, Sendable {
-    case nativeShare
-    case frameio
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .nativeShare: "Share"
-        case .frameio: "Frame.io"
+    @Sendable static func traceTimecode(_ diagnostic: MonitorMovieTimecode.Diagnostic) {
+        switch diagnostic.level {
+        case .information: timecodeLogger.info("\(diagnostic.message, privacy: .public)")
+        case .error: timecodeLogger.error("\(diagnostic.message, privacy: .public)")
         }
     }
 
-    var subtitle: String {
-        switch self {
-        case .nativeShare: "AirDrop, Files, and other apps"
-        case .frameio: "Upload to your Frame.io project"
-        }
+    /// The "Include metadata" share text of the delivered clips.
+    static func metadataSummary(for clips: [MediaClip]) -> String {
+        MonitorDeliveryMetadataSummary.text(
+            files: clips.map {
+                .init(
+                    filename: $0.filename, captureDate: $0.captureDate.isEmpty ? nil : $0.captureDate,
+                    sizeBytes: $0.sizeBytes > 0 ? $0.sizeBytes : nil)
+            },
+            formatBytes: { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) })
     }
-
-    var systemImage: String {
-        switch self {
-        case .nativeShare: "square.and.arrow.up"
-        case .frameio: "arrow.up.circle"
-        }
-    }
-
-    var actionTitle: String {
-        switch self {
-        case .nativeShare: "Share"
-        case .frameio: "Upload"
-        }
-    }
-}
-
-/// Whether native share / save (and Frame.io after a cache pre-pass) can start.
-///
-/// The player used to require a complete local file, which greyed Share out for every on-camera
-/// clip even though `MediaDeliveryRunner` already pulls those files before export. Cached clips
-/// stay deliverable offline; uncached clips need the camera.
-enum MediaDeliveryEligibility {
-    /// One clip, as the playback transport Share button sees it.
-    static func canDeliver(clipIsLocal: Bool, cameraConnected: Bool) -> Bool {
-        clipIsLocal || cameraConnected
-    }
-
-    /// A selection of clips, as the destination popup sees it.
-    static func canDeliver(localCount: Int, totalCount: Int, cameraConnected: Bool) -> Bool {
-        totalCount > 0 && (localCount > 0 || cameraConnected)
-    }
-}
-
-/// Options shared by native share and Frame.io delivery.
-struct MediaDeliveryConfiguration: Sendable {
-    var bakeLUT: Bool = true
-    var exportFormat: MediaExportFormat = .mov
-    var includeMetadata: Bool = true
-    var forceFrameioReupload: Bool = false
-}
-
-/// Result of a batch delivery run.
-struct MediaDeliveryBatchResult: Sendable {
-    var exportedURLs: [URL] = []
-    var metadataURLs: [URL] = []
-    var uploadedCount: Int = 0
-    var skippedCount: Int = 0
-    var failedClips: [(MediaClip, String)] = []
 }
 
 extension NativeAppModel {
-    /// Output filename for delivery — always the camera original name, with the export format
-    /// extension only when LUT baking transcodes the clip.
-    func deliveryFilename(
-        for clip: MediaClip, configuration: MediaDeliveryConfiguration
-    ) -> String {
-        guard configuration.bakeLUT else { return clip.filename }
-        let stem = (clip.filename as NSString).deletingPathExtension
-        return "\(stem).\(configuration.exportFormat.rawValue)"
-    }
-
-    func deliveryMetadata(
-        for clip: MediaClip, configuration: MediaDeliveryConfiguration
-    ) -> MediaClipDeliveryMetadata? {
-        guard configuration.includeMetadata else { return nil }
-        let lutName: String? =
-            configuration.bakeLUT
-            ? {
-                switch assistConfiguration.selectedLUT {
-                case .builtIn(let look): look.rawValue
-                case .stored(_, let name): (name as NSString).deletingPathExtension
+    /// The shared delivery popup over one captured selection, and its begin on the app's
+    /// coordinator (A2-74). Nil when the selection's source is gone.
+    func deliveryPopup(
+        _ capture: NikonMediaDeliveryCapture, preferred: MonitorDeliveryDestination? = nil,
+        coordinator: MonitorDeliveryCoordinator
+    ) -> NikonDeliveryPopup.Made? {
+        guard capture.isCurrent else { return nil }
+        let current = MonitorDeliveryAdmission { capture.isCurrent }
+        let hop = internetHop.deliveryService(
+            route: { [weak self] in self?.hopRoute() }, admission: { capture.action.sourceIsCurrent })
+        // Once the camera session has gone, the lease the capture holds is its source.
+        let internet = MonitorDeliveryInternetService<NikonHopToken>(
+            needsHop: hop.needsHop,
+            begin: {
+                let token = hop.begin()
+                capture.internetLease = token
+                return token
+            }, owns: hop.owns, wait: hop.wait, restoreEntered: hop.restoreEntered,
+            restore: hop.restore)
+        let remote = frameioRemote(capture, current: current, internet: internet)
+        var configuration = NikonDeliveryConfiguration(logTransform: "unchanged", exportFormat: .mov)
+        configuration.bakeLUT = capture.cube != nil
+        let model = NikonDeliveryPopup.Preparation(
+            selection: { [weak self] in
+                .init(
+                    files: capture.clips.map {
+                        .init(filename: $0.filename, sizeBytes: $0.sizeBytes > 0 ? $0.sizeBytes : nil)
+                    },
+                    cachedCount: capture.clips.filter(capture.isCached).count,
+                    connected: capture.action.sourceIsCurrent && self?.isConnected == true)
+            }, configuration: configuration,
+            exportOptions: .init(
+                curves: [],
+                formats: MonitorMediaExporter.Format.allCases.map {
+                    .init(id: $0.rawValue, label: $0.label, value: $0)
+                },
+                lutAvailable: { capture.cube != nil }, convertLogAvailable: { nil },
+                lutLabel: { capture.lutLabel }, convertHelp: "", convertUnavailableHelp: "",
+                bakeExposureAvailable: { nil }, formatsForRemoteUpload: false,
+                filename: { configuration in
+                    capture.clips.count == 1
+                        ? capture.clips.first.map { capture.filename($0, configuration: configuration) }
+                        : nil
+                }), remote: remote, preferredDestination: preferred,
+            sourceCurrent: { capture.isCurrent },
+            beforeInternetHop: {
+                try await coordinator.cacheBeforeInternetHop(
+                    records: capture.clips, originals: capture.originals,
+                    source: .init { capture.action.sourceIsCurrent }, filename: \.filename,
+                    uploadCaption: remote.presentation.progressCaption)
+            })
+        let begin: (NikonDeliveryPopup.Preparation.Request) -> Void = { [weak self] request in
+            let remoteRun = request.destination == .remoteUpload
+            guard let self, capture.isCurrent, !remoteRun || capture.account.isCurrent,
+                let configuration = request.configuration
+            else {
+                if let lease = request.internetLease { internet.restore(lease) }
+                return
+            }
+            capture.internetLease = request.internetLease
+            coordinator.begin { admission, progress in
+                let accepted = MonitorDeliveryAdmission {
+                    admission.isCurrent() && capture.isCurrent
+                        && (!remoteRun || capture.account.isCurrent)
                 }
-            }() : nil
-        return .from(clip, camera: connectedIdentity, lutName: lutName)
+                return await coordinator.run(
+                    records: capture.clips, destination: request.destination,
+                    action: request.action, admission: accepted,
+                    source: self.deliverySource(capture, configuration: configuration, admission: accepted),
+                    includeMetadata: configuration.includeMetadata,
+                    remote: remoteRun
+                        ? self.frameioRun(capture, configuration: configuration, admission: accepted)
+                        : nil,
+                    internet: internet, lease: request.internetLease, progress: progress)
+            }
+        }
+        return (model, begin)
     }
 
-    /// Resolves a clip to a shareable/uploadable file URL, optionally baking the selected LUT.
-    func prepareClipForDelivery(
-        _ clip: MediaClip,
-        configuration: MediaDeliveryConfiguration,
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> MediaLUT.ExportResult {
-        guard let sourceURL = clipLocalURL(clip) else {
-            throw MediaDeliveryError.unsafeMediaFilename
-        }
-        guard isClipDownloaded(clip) else {
-            throw MediaDeliveryError.clipNotCached(clip.filename)
-        }
-        let filename = deliveryFilename(for: clip, configuration: configuration)
-        let cube = configuration.bakeLUT ? currentLUTCube() : nil
-        if configuration.bakeLUT, cube == nil {
-            throw MediaDeliveryError.noLUTSelected
-        }
-        return try await MediaLUT.export(
-            sourceURL: sourceURL,
-            outputFilename: filename,
-            format: configuration.exportFormat,
-            cube: cube,
-            metadata: deliveryMetadata(for: clip, configuration: configuration),
-            progress: progress
-        )
+    /// The Nikon clips as a delivery source: stills as their cached originals, movies exported.
+    private func deliverySource(
+        _ capture: NikonMediaDeliveryCapture, configuration: NikonDeliveryConfiguration,
+        admission: MonitorDeliveryAdmission
+    ) -> MonitorDeliverySource<MediaClip> {
+        .init(
+            originals: capture.originals,
+            still: { clip in
+                guard clip.mediaKind == .photo, admission.isCurrent(), capture.isCached(clip)
+                else { return nil }
+                return capture.localURL(clip)
+            },
+            export: { clip, store, progress in
+                try await capture.export(
+                    clip, configuration: configuration, store: store, admission: admission,
+                    progress: progress)
+            },
+            filename: \.filename, metadata: NikonDelivery.metadataSummary(for:),
+            noPrepared: { _ in "Nothing to share." })
     }
 
-    /// Compatibility entry points retain their result and callbacks; ordering is shared.
-    func deliverClipsForShare(
-        _ clips: [MediaClip], configuration: MediaDeliveryConfiguration,
-        onProgress: @escaping @MainActor (Int, Int, Double) -> Void
-    ) async -> MediaDeliveryBatchResult {
-        await deliverCompatibilityBatch(
-            clips, configuration: configuration, remote: false, onProgress: onProgress)
+    /// One accepted Frame.io run: the captured account and destination, and the clip's Frame.io
+    /// status as its upload history (A2-53).
+    private func frameioRun(
+        _ capture: NikonMediaDeliveryCapture, configuration: NikonDeliveryConfiguration,
+        admission: MonitorDeliveryAdmission
+    ) -> MonitorDeliveryRemoteRun<MediaClip> {
+        .init(
+            progressCaption: "Uploading to Frame.io",
+            upload: { [weak self] clip, url, progress in
+                guard let self else { throw CancellationError() }
+                try await self.uploadCapturedFrameio(
+                    clip, source: url, capture: capture, admission: admission, progress: progress)
+            },
+            history: .init(
+                wasUploaded: { clip in
+                    let row = capture.store.list(cameraID: clip.cameraID).first { $0.id == clip.id }
+                    return (row ?? clip).frameioStatus == .uploaded
+                },
+                // The upload itself records `.uploaded` on the clip.
+                recordUploaded: { _ in }),
+            reupload: configuration.forceReupload)
     }
-    func uploadClipsToFrameio(
-        _ clips: [MediaClip], configuration: MediaDeliveryConfiguration,
-        onProgress: @escaping @MainActor (Int, Int, Double) -> Void
-    ) async -> MediaDeliveryBatchResult {
-        await deliverCompatibilityBatch(
-            clips, configuration: configuration, remote: true, onProgress: onProgress)
-    }
-    private func deliverCompatibilityBatch(
-        _ clips: [MediaClip], configuration: MediaDeliveryConfiguration,
-        remote: Bool, onProgress: @escaping @MainActor (Int, Int, Double) -> Void
-    ) async -> MediaDeliveryBatchResult {
-        var result = MediaDeliveryBatchResult()
-        guard !clips.isEmpty, let capture = NikonMediaDeliveryCapture(model: self, clips: clips)
-        else { return result }
-        let admission = MonitorDeliveryAdmission { capture.isCurrent }
-        var remoteCapture: NikonMediaDeliveryCapture?
-        let records = clips.enumerated().map { (index: $0.offset, clip: $0.element) }
-        typealias Batch = MonitorDeliveryModel<
-            MonitorDeliveryBatchProgress, MonitorDeliveryBatchOutcome<URL>, URL
-        >
-        _ = await Batch.runBatch(
-            records: records, destination: remote ? .remoteUpload : .nativeShare,
-            action: .systemShare, admission: admission,
-            originals: .init(available: { _ in true }, acquire: { _ in }, progress: { _ in nil }),
-            exporter: .init {
-                record, progress -> (clip: MediaClip, export: MediaLUT.ExportResult)? in
-                let clip = record.clip
-                let status =
-                    capture.store.list(cameraID: clip.cameraID).first { $0.id == clip.id }?
-                    .frameioStatus ?? clip.frameioStatus
-                if remote, status == .uploaded, !configuration.forceFrameioReupload {
-                    result.skippedCount += 1
-                    onProgress(record.index + 1, clips.count, 1)
+
+    /// The popup's Frame.io service over the captured account.
+    private func frameioRemote(
+        _ capture: NikonMediaDeliveryCapture, current: MonitorDeliveryAdmission,
+        internet: MonitorDeliveryInternetService<NikonHopToken>
+    ) -> MonitorDeliveryRemoteService<FrameioProject, NikonFrameioProjectContext, NikonHopToken> {
+        let choice: (FrameioProject) -> MonitorDeliveryProject<FrameioProject> = {
+            .init(id: $0.id, name: $0.name, uploadable: $0.rootFolderID.map { _ in true }, payload: $0)
+        }
+        return .init(
+            presentation: .init(displayName: "Frame.io", progressCaption: "Uploading to Frame.io"),
+            observe: { [weak self] in
+                let saved = capture.frameioDestination
+                return .init(
+                    configured: capture.frameioConfiguration != nil,
+                    connected: self?.isFrameioConnected == true && capture.account.isCurrent,
+                    onCameraNetwork: self?.isOnCameraAccessPoint == true,
+                    savedProjectID: saved?.projectID, savedProjectName: saved?.projectName)
+            },
+            load: { [weak self] in
+                guard let self else { throw CancellationError() }
+                if let token = capture.internetLease {
+                    guard await self.internetHop.waitForInternet(token), current.isCurrent()
+                    else { throw CancellationError() }
+                }
+                let context = try await self.loadFrameioProjectListing(
+                    captured: capture, admission: current)
+                return .init(context: context, projects: context.listing.projects.map(choice))
+            },
+            create: { [weak self] name, context in
+                guard let self else { throw CancellationError() }
+                return choice(
+                    try await self.createFrameioProject(
+                        name: name, captured: capture, context: context, admission: current))
+            },
+            persist: { [weak self] project, context in
+                self?.persistFrameioDestination(
+                    project: project.payload, context: context, captured: capture)
+            },
+            internet: internet,
+            transfer: { [weak self] token in
+                guard current.isCurrent(), let next = self?.internetHop.transfer(token) else {
                     return nil
                 }
-                do {
-                    let exported = try await capture.prepare(
-                        clip, configuration: configuration, admission: admission, progress: progress
-                    )
-                    if !remote {
-                        result.exportedURLs.append(exported.videoURL)
-                        if let metadata = exported.metadataURL {
-                            result.metadataURLs.append(metadata)
-                        }
-                    }
-                    return (clip: clip, export: exported)
-                } catch {
-                    result.failedClips.append((clip, error.localizedDescription))
-                    if admission.isCurrent() {
-                        let ns = error as NSError
-                        let detail = "\(ns.domain) code=\(ns.code) \(ns.localizedDescription)"
-                        Logger(subsystem: "OpenZCine", category: "media-export").error(
-                            "clip failed \(clip.filename, privacy: .public): \(detail, privacy: .public)"
-                        )
-                    }
-                    throw error
-                }
-            }, share: { .init(urls: $0) }, photos: nil,
-            upload: remote
-                ? .init { artifact, progress in
-                    do {
-                        if remoteCapture == nil {
-                            if !self.isFrameioConnected { try await self.connectFrameio() }
-                            guard admission.isCurrent() else { throw CancellationError() }
-                            remoteCapture = NikonMediaDeliveryCapture(
-                                model: self, clips: clips,
-                                action: capture.action)
-                        }
-                        guard let remoteCapture, admission.isCurrent(),
-                            remoteCapture.account.isCurrent
-                        else { throw CancellationError() }
-                        if self.frameioUser == nil {
-                            let user = try? await remoteCapture.frameioClient(admission: admission)
-                                .currentUser()
-                            guard admission.isCurrent(), remoteCapture.account.isCurrent
-                            else { throw CancellationError() }
-                            self.frameioUser = user
-                        }
-                        try await self.uploadCapturedFrameio(
-                            artifact.clip, source: artifact.export.videoURL,
-                            metadata: capture.metadata(artifact.clip, configuration: configuration),
-                            capture: remoteCapture, admission: admission, progress: progress)
-                        result.uploadedCount += 1
-                    } catch {
-                        result.failedClips.append((artifact.clip, error.localizedDescription))
-                        throw error
-                    }
-                } : nil,
-            internet: Optional<MonitorDeliveryInternetService<FrameioInternetHop.Token>>.none,
-            filename: { $0.clip.filename },
-            policy: .init(
-                behavior: .init(
-                    nativeFailures: .continueItems,
-                    emptyUploadSucceeds: true, singleUploadFailureUsesDetail: false)),
-            progress: { value in
-                onProgress(value.clipIndex, value.totalClips, value.clipFraction)
-            })
-        return result
-    }
-
-    /// Plain-text metadata summary for share sheets when the operator enables metadata.
-    func metadataSummary(for clips: [MediaClip]) -> String {
-        clips.map { clip in
-            let size =
-                clip.sizeBytes > 0
-                ? ByteCountFormatter.string(fromByteCount: Int64(clip.sizeBytes), countStyle: .file)
-                : "unknown size"
-            let date = clip.captureDate.isEmpty ? "unknown date" : clip.captureDate
-            return "\(clip.filename) · \(date) · \(size)"
-        }.joined(separator: "\n")
+                capture.internetLease = next
+                return next
+            }, skipsUploaded: true)
     }
 }
 
-enum MediaDeliveryError: LocalizedError {
-    case clipNotCached(String)
-    case noLUTSelected
-    case emptySelection
-    case unsafeMediaFilename
+/// One opened delivery popup: the captured selection, keyed for the popup's identity.
+struct NikonDeliveryRequest: Identifiable {
+    let id = UUID()
+    let capture: NikonMediaDeliveryCapture
 
-    var errorDescription: String? {
-        switch self {
-        case .clipNotCached(let name): "\(name) isn't fully cached yet."
-        case .noLUTSelected: "Select a LUT before baking grades into exports."
-        case .emptySelection: "Select at least one clip."
-        case .unsafeMediaFilename: "The camera supplied an unsafe media filename."
-        }
+    /// The shared popup; `onDismiss` runs once it closes, after a begin or a cancel.
+    @MainActor func popup(
+        _ model: NativeAppModel, coordinator: MonitorDeliveryCoordinator,
+        onDismiss: @escaping () -> Void
+    ) -> NikonDeliveryPopup {
+        NikonDeliveryPopup(
+            selectionID: id,
+            make: { model.deliveryPopup(capture, coordinator: coordinator) },
+            onDismiss: onDismiss
+        ) { FrameioMark() }
     }
 }

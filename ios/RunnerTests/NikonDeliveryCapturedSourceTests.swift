@@ -32,7 +32,6 @@ import XCTest
                 $0.captureDate = "20261008T120000"
             }
             XCTAssertFalse(capture.isCurrent)
-            XCTAssertFalse(capture.completionIsCurrent)
             capture.update(clip) { $0.frameioStatus = .uploaded }
             XCTAssertEqual(model.mediaClipStore.list(cameraID: clip.cameraID).first?.sizeBytes, 12)
             XCTAssertNotEqual(
@@ -57,7 +56,6 @@ import XCTest
             XCTAssertTrue(action.contentIsCurrent)
             XCTAssertFalse(action.sourceIsCurrent)
             XCTAssertFalse(capture.isCurrent)
-            XCTAssertFalse(capture.completionIsCurrent)
             facts.revision = 2
             XCTAssertFalse(capture.isCurrent)
         }

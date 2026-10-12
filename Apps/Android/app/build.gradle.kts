@@ -206,7 +206,8 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
             include("Package.swift", "Package.resolved", "Sources/**")
         },
         // The root Package.swift takes these from the sibling OpenCine checkout: OpenCineMedia
-        // (and OpenCineCore, which it depends on), OpenCineFrameIO (the Frame.io facade),
+        // (and OpenCineCore, which it depends on), OpenCineFrameIO and OpenCineFrameIOAndroid
+        // (the Frame.io wire and FrameioNative's JNI exports),
         // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it),
         // OpenCineNikonAndroid (the PTP-IP / USB session layer and NikonNative's JNI exports)
         // and OpenCineJNISupport (+ the OpenCineJNI header), so a package edit must restage the core.
@@ -216,6 +217,7 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineMedia/**",
                 "Sources/OpenCineCore/**",
                 "Sources/OpenCineFrameIO/**",
+                "Sources/OpenCineFrameIOAndroid/**",
                 "Sources/OpenCineNikon/**",
                 "Sources/OpenCineNikonAndroid/**",
                 "Sources/OpenCineJNISupport/**",
@@ -324,6 +326,8 @@ dependencies {
     // The shared reporting adapter: appkit's reporting sink, transport and problem report upload on
     // the Sentry SDK (sentry-android comes with it, at the version OpenCine pins).
     implementation("com.opencapture.opencine:appkit-sentry:0.1.0-SNAPSHOT")
+    // The one Frame.io owner (sign-in, upload, history, hop lease) over FrameioNative (A4-09).
+    implementation("com.opencapture.opencine:frameio:0.1.0-SNAPSHOT")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)

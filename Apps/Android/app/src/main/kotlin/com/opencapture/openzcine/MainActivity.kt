@@ -68,9 +68,12 @@ import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.frameio.AndroidFrameioCameraApHop
-import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.opencine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
+import com.opencapture.openzcine.frameio.frameioArtifactPreparer
 import com.opencapture.openzcine.frameio.frameioDeliveryController
+import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliveryChrome
+import com.opencapture.opencine.cameracontrols.rememberMonitorDeliveryCoordinator
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
 import com.opencapture.openzcine.diagnostics.AppDiagnostics
 import com.opencapture.opencine.appkit.diagnostics.AutomaticReportsPrompt
@@ -80,9 +83,8 @@ import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
 import com.opencapture.openzcine.media.AndroidMediaGalleryGateway
 import com.opencapture.openzcine.media.MediaBrowseScreen
 import com.opencapture.openzcine.media.MediaCacheStore
-import com.opencapture.openzcine.media.MediaDeliveryCompletionToast
-import com.opencapture.openzcine.media.MediaDeliveryCoordinator
-import com.opencapture.openzcine.media.MediaDeliveryProgressOverlay
+import com.opencapture.openzcine.media.NikonMediaDelivery
+import com.opencapture.openzcine.media.ZMediaShare
 import com.opencapture.openzcine.media.MediaLibraryCameraBucket
 import com.opencapture.openzcine.media.MediaLibraryCategory
 import com.opencapture.openzcine.media.MediaLibraryIndex
@@ -156,9 +158,6 @@ import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.SetupStreamSettings
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
@@ -382,38 +381,30 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 val frameioController =
-                    remember { frameioDeliveryController(applicationContext, lutLibrary) }
+                    remember { frameioDeliveryController(applicationContext) }
                 val settingsAccount = remember(frameioController) { MonitorSettingsAccountModel(connectionScope) }
                 var settingsAccountCurrent by remember(settingsAccount) { mutableStateOf(true) }
                 DisposableEffect(settingsAccount) {
                     onDispose { settingsAccountCurrent = false; settingsAccount.retire() }
                 }
-                // The root releases the delivery owners before their supplied scope.
-                val deliveryScope = remember(frameioController) {
-                    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-                }
-                // App-scoped share/export progress (iOS MediaDeliveryCoordinator).
-                val mediaDeliveryCoordinator =
-                    remember(frameioController, mediaCacheStore) {
-                        MediaDeliveryCoordinator(
+                // App-scoped delivery (A4-10): the shared run owner the root chrome presents;
+                // a run outlives the media screen that began it.
+                val deliveryCoordinator = rememberMonitorDeliveryCoordinator()
+                val mediaDelivery =
+                    remember(frameioController, mediaCacheStore, deliveryCoordinator) {
+                        NikonMediaDelivery(
                             appContext = applicationContext,
-                            frameioController = frameioController,
+                            coordinator = deliveryCoordinator,
+                            frameio = frameioController,
                             cacheStore = mediaCacheStore,
                             galleryGateway =
                                 AndroidMediaGalleryGateway(
                                     applicationContext.contentResolver,
                                     DemoHarness.galleryFailureInjection(intent),
                                 ),
-                            scope = deliveryScope,
+                            exporter = frameioArtifactPreparer(applicationContext, lutLibrary),
                         )
                     }
-                DisposableEffect(mediaDeliveryCoordinator) {
-                    onDispose {
-                        mediaDeliveryCoordinator.close()
-                        deliveryScope.cancel()
-                    }
-                }
-                val deliveryDisplay by mediaDeliveryCoordinator.display.collectAsState()
                 val systemSettingsActions =
                     remember {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
@@ -1378,8 +1369,7 @@ class MainActivity : ComponentActivity() {
                                         exposureAssistCameraInput = playbackExposureAssistCameraInput,
                                         operatorSettings = operatorSettings,
                                         lutLibrary = lutLibrary,
-                                        frameioController = frameioController,
-                                        mediaDeliveryCoordinator = mediaDeliveryCoordinator,
+                                        mediaDelivery = mediaDelivery,
                                         autoPlayFirstProxy = DemoHarness.autoPlaysMedia(intent),
                                         onRatingDiagnostic = diagnostics::record,
                                         onClose = { shell.dismissCover() },
@@ -1414,8 +1404,7 @@ class MainActivity : ComponentActivity() {
                             exposureAssistCameraInput = ExposureAssistCameraInput(),
                             operatorSettings = operatorSettings,
                             lutLibrary = lutLibrary,
-                            frameioController = frameioController,
-                            mediaDeliveryCoordinator = mediaDeliveryCoordinator,
+                            mediaDelivery = mediaDelivery,
                             onRatingDiagnostic = diagnostics::record,
                             onClose = { shell.dismissCover() },
                         )
@@ -1681,32 +1670,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                // Global delivery progress (iOS MediaDeliveryGlobalOverlay) — survives
-                // leaving media browser / playback while export or Frame.io upload runs.
-                deliveryDisplay.overlay?.let { state ->
-                    Box(
-                        Modifier
-                            .align(Alignment.TopCenter)
-                            .windowInsetsPadding(WindowInsets.safeDrawing)
-                            .padding(top = 12.dp, start = 16.dp, end = 16.dp),
-                    ) {
-                        MediaDeliveryProgressOverlay(
-                            state = state,
-                            expanded = deliveryDisplay.expanded,
-                            onCancel = mediaDeliveryCoordinator::cancel,
-                            onExpandToggle = {
-                                mediaDeliveryCoordinator.isExpanded =
-                                    !mediaDeliveryCoordinator.isExpanded
-                            },
-                        )
-                    }
-                }
-                deliveryDisplay.toast?.let { toast ->
-                    MediaDeliveryCompletionToast(
-                        message = toast,
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                    )
-                }
+                // The shared delivery chrome: progress, outcome toast and the share chooser.
+                MonitorOperatorDeliveryChrome(
+                    deliveryCoordinator,
+                    ZMediaShare,
+                    mediaDelivery::mimeType,
+                    displayName = mediaDelivery::displayName,
+                )
                 if (showProblemReport) {
                     ManualProblemReportDialog(
                         AppDiagnostics.manualReport,

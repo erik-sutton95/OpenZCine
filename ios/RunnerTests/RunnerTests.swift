@@ -4,6 +4,7 @@ import MonitorPresentation
 import MonitorUI
 import Network
 import Observation
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineAppKit
 import OpenCineCameraControls
@@ -388,7 +389,7 @@ final class RunnerTests: XCTestCase {
                     integration: IntegrationID("org.opencapture.nikon-ptp"),
                     advertisedName: "SIMULATED camera", model: "SIMULATED"),
                 session: NikonPictureLifetimeSession()))
-        let delivery = MediaDeliveryCoordinator()
+        let delivery = MonitorDeliveryCoordinator()
         let host = UIHostingController(
             rootView: GeometryReader { proxy in
                 NikonMonitorShell(
@@ -563,7 +564,7 @@ final class RunnerTests: XCTestCase {
                 model.shell.present(camera)
             }
             let monitor = model.shell.monitor?.id
-            let delivery = MediaDeliveryCoordinator()
+            let delivery = MonitorDeliveryCoordinator()
             let content = GeometryReader { proxy in
                 NikonMonitorShell(
                     context: LiveViewLayoutContext(
@@ -663,7 +664,7 @@ final class RunnerTests: XCTestCase {
             integration: IntegrationID("org.opencapture.nikon-ptp"),
             advertisedName: "SIMULATED camera", model: "SIMULATED")
         model.shell.present(ConnectedCamera(saved: saved, session: session))
-        let delivery = MediaDeliveryCoordinator()
+        let delivery = MonitorDeliveryCoordinator()
         let content = GeometryReader { proxy in
             NikonMonitorShell(
                 context: LiveViewLayoutContext(
@@ -3709,7 +3710,7 @@ extension RunnerTests {
         let model = NativeAppModel()
         model.preferences = OperatorPreferences.defaults
         model.startDemoSession()
-        let delivery = MediaDeliveryCoordinator()
+        let delivery = MonitorDeliveryCoordinator()
         let host = UIHostingController(
             rootView: GeometryReader { proxy in
                 NikonMonitorShell(

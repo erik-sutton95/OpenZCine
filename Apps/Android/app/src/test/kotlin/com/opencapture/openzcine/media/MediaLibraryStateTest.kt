@@ -6,9 +6,8 @@ import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
 import com.opencapture.opencine.nikon.NikonStillPhotoClassification
 import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
-import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
-import com.opencapture.openzcine.frameio.FrameioDeliveryState
-import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.opencine.frameio.FrameioCameraRejoinEvidence
+import com.opencapture.opencine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SavedCameraRecords
 import com.opencapture.openzcine.pairing.SavedCameraTransport
@@ -23,7 +22,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.runTest
 import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaLayout
 
@@ -106,116 +104,6 @@ class MediaLibraryStateTest {
             MediaLibrarySource.LOCAL,
             mediaLibrarySourceForConnection(cameraConnected = false),
         )
-    }
-
-    @Test
-    fun `Frameio dialog cannot close while the camera network handoff is unsettled`() {
-        val blocked =
-            listOf(
-                FrameioInternetHopState.LeavingCamera,
-                FrameioInternetHopState.WaitingForInternet,
-                FrameioInternetHopState.RejoiningCamera,
-            )
-        blocked.forEach { state -> assertTrue(frameioHopBlocksDismissal(state)) }
-
-        assertFalse(frameioHopBlocksDismissal(FrameioInternetHopState.Idle))
-        assertFalse(frameioHopBlocksDismissal(FrameioInternetHopState.Online))
-        assertFalse(frameioHopBlocksDismissal(rejoinedState()))
-        assertFalse(frameioHopBlocksDismissal(FrameioInternetHopState.Failed("failed")))
-    }
-
-    @Test
-    fun `failed Frameio upload cannot hide a failed camera rejoin`() {
-        val summary =
-            frameioDeliverySummary(
-                state = FrameioDeliveryState.Failed("Upload failed"),
-                internetHopState = FrameioInternetHopState.Failed("Saved profile did not reconnect"),
-                errorMessage = null,
-                skippedBeforeUpload = 0,
-            )
-
-        assertTrue(summary.contains("Upload failed"))
-        assertTrue(summary.contains("camera rejoin not verified"))
-        assertTrue(summary.contains("Saved profile did not reconnect"))
-    }
-
-    @Test
-    fun `failed Frameio preparation cannot hide a later failed camera rejoin`() {
-        val summary =
-            frameioPreparationMessageAfterRejoin(
-                message = "Couldn't prepare selected media.",
-                internetHopState =
-                    FrameioInternetHopState.Failed("Saved profile did not reconnect"),
-            )
-
-        assertNotNull(summary)
-        assertTrue(summary.contains("Couldn't prepare selected media"))
-        assertTrue(summary.contains("Camera rejoin not verified"))
-        assertTrue(summary.contains("Saved profile did not reconnect"))
-    }
-
-    @Test
-    fun `confirmed Frameio delivery reports orphaned temporary exports without claiming failure`() {
-        val summary =
-            frameioDeliverySummary(
-                state =
-                    FrameioDeliveryState.Completed(
-                        uploadedCount = 1,
-                        failedCount = 0,
-                        cleanupFailureCount = 1,
-                    ),
-                internetHopState = rejoinedState(),
-                errorMessage = null,
-                skippedBeforeUpload = 0,
-            )
-
-        assertTrue(summary.contains("Delivered 1 cached item"))
-        assertTrue(summary.contains("1 temporary export not removed"))
-        assertTrue(summary.contains("camera rejoined"))
-    }
-
-    @Test
-    fun `Frameio summary distinguishes uploaded skipped and failed batch counts`() {
-        val summary =
-            frameioDeliverySummary(
-                state =
-                    FrameioDeliveryState.Completed(
-                        uploadedCount = 2,
-                        skippedCount = 3,
-                        failedCount = 1,
-                    ),
-                internetHopState = FrameioInternetHopState.Idle,
-                errorMessage = null,
-                skippedBeforeUpload = 0,
-            )
-
-        assertTrue(summary.contains("Delivered 2 cached items"))
-        assertTrue(summary.contains("3 already uploaded"))
-        assertTrue(summary.contains("1 failed"))
-    }
-
-    @Test
-    fun `Frameio media preparation cleanup ends an active hop before returning`() = runTest {
-        var ended = false
-
-        endActiveFrameioHopAfterMediaJob(
-            isActive = { true },
-            endHop = { ended = true },
-        )
-
-        assertTrue(ended)
-    }
-
-    @Test
-    fun `Frameio media preparation cleanup skips a hop already ended by delivery`() = runTest {
-        var calls = 0
-
-        endActiveFrameioHopAfterMediaJob(
-            isActive = { false },
-            endHop = { calls += 1 },
-        )
-
-        assertEquals(0, calls)
     }
 
     @Test

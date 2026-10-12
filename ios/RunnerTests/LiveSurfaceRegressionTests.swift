@@ -97,7 +97,7 @@ final class LiveSurfaceRegressionTests: XCTestCase {
                 context: LiveViewLayoutContext(
                     proxy: proxy, deviceOrientation: .unknown, screenWidth: nil))
         }
-        .environment(model).environment(MediaDeliveryCoordinator())
+        .environment(model).environment(model.delivery)
     }
 
     // MARK: A1-01, A2-01
@@ -120,7 +120,7 @@ final class LiveSurfaceRegressionTests: XCTestCase {
                 model.startDemoSession()
             }
             let hosted = try Hosted(
-                NativeRootContent().environment(model).environment(MediaDeliveryCoordinator()))
+                NativeRootContent().environment(model).environment(model.delivery))
             defer { hosted.close() }
             let monitorShown = try await hosted.settle {
                 hosted.element("monitor.system.settings") != nil
@@ -301,7 +301,7 @@ final class LiveSurfaceScreens: XCTestCase {
             model.startDemoSession()
             let host = UIHostingController(
                 rootView: AnyView(
-                    NativeRootContent().environment(model).environment(MediaDeliveryCoordinator())))
+                    NativeRootContent().environment(model).environment(model.delivery)))
             host.safeAreaRegions = []
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(origin: .zero, size: size)
