@@ -242,31 +242,14 @@
 
     // MARK: - Stored LUT library
 
-    /// `SwiftCore.validateImportedLut(bytes, category, fileName): String?` — validates strict
-    /// UTF-8 through the shared `CubeLUT` parser before Android copies a SAF document into
-    /// app-private storage. The compact result is versioned by `LUTLibraryWire`; nil is a
-    /// fail-closed import rejection.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_validateImportedLut")
-    public func swiftCoreValidateImportedLut(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?, category: jint,
-        fileName: jstring?
-    ) -> jstring? {
-        guard let utf8 = swiftBytes(env, utf8, maximumCount: LUTLibraryWire.maximumSourceBytes),
-            let fileName = swiftString(env, fileName),
-            let record = LUTLibraryWire.validatedImport(
-                utf8: utf8, categoryOrdinal: Int(category), fileName: fileName)
-        else { return nil }
-        return javaString(env, record)
-    }
-
-    /// `SwiftCore.packImportedLut(bytes): ByteArray?` — reparses an app-private cube and packs it
-    /// into the existing feed-effects texture layout. Kotlin must render nil as unavailable rather
-    /// than reimplementing cube parsing, interpolation, or colour math.
+    /// `SwiftCore.packImportedLut(bytes): ByteArray?`: runs the shared `CubeLUT.validatedImport`
+    /// gate over an app-private cube and packs it into the existing feed-effects texture layout.
+    /// Kotlin must treat nil as a refused cube rather than reimplementing parsing or colour math.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_packImportedLut")
     public func swiftCorePackImportedLut(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?
     ) -> jbyteArray? {
-        guard let utf8 = swiftBytes(env, utf8, maximumCount: LUTLibraryWire.maximumSourceBytes),
+        guard let utf8 = swiftBytes(env, utf8, maximumCount: CubeLUT.maximumImportBytes),
             let bytes = LUTLibraryWire.packedImportedLUT(utf8: utf8)
         else { return nil }
         return javaByteArray(env, bytes)

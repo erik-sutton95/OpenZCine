@@ -1,6 +1,13 @@
 package com.opencapture.openzcine
 
+import android.app.Instrumentation
 import android.content.Context
+import android.content.Intent
+import androidx.test.platform.app.InstrumentationRegistry
+import com.opencapture.opencine.core.IntegrationID
+import com.opencapture.opencine.core.RouteKind
+import com.opencapture.opencine.core.SavedCamera
+import com.opencapture.opencine.core.SavedRoute
 import android.content.SharedPreferences
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorParadeMode
@@ -114,25 +121,91 @@ class NikonOperatorSettingsComposeTest {
         val called = mutableListOf<String>()
         val actions = object : SystemSettingsActions by NoExternalActions {
             override fun openSupport(): Boolean { called += "support"; return true }
-            override fun openSource(): Boolean { called += "source"; return true }
-            override fun openPrivacy(): Boolean { called += "privacy"; return true }
-            override fun openTerms(): Boolean { called += "terms"; return true }
         }
-        show(OperatorSettings(preferences), MonitorSettingsTab.STORAGE, actions = actions)
-        composeRule.onNodeWithText("Full Resolution Caching").assertDoesNotExist()
-        composeRule.onNodeWithText("Local Media Cache").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("monitor.settings.tab.System").performScrollTo().performClick()
-        // OpenCine's reliability reporting (D2): the row is now part of the System tab.
-        composeRule.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Licenses").assertDoesNotExist()
-        composeRule.onNodeWithText("NOTICE").assertDoesNotExist()
-        for (label in listOf("Open Source Code", "Open Privacy Policy", "Open Terms of Use", "Open Support")) {
-            composeRule.onNodeWithContentDescription(label).performScrollTo().performClick()
+        // Source, privacy and terms are web pages: capture the browser intents instead of opening them.
+        val opened = mutableListOf<String>()
+        val browser = object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? =
+                if (intent.action != Intent.ACTION_VIEW) null
+                else Instrumentation.ActivityResult(0, null).also { opened += intent.dataString.orEmpty() }
         }
-        composeRule.runOnIdle {
-            assertEquals(listOf("source", "privacy", "terms", "support"), called)
-            assertFalse(preferences.contains("cache.originals"))
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.addMonitor(browser)
+        try {
+            show(OperatorSettings(preferences), MonitorSettingsTab.STORAGE, actions = actions)
+            composeRule.onNodeWithText("Full Resolution Caching").assertDoesNotExist()
+            composeRule.onNodeWithText("Local Media Cache").performScrollTo().assertIsDisplayed()
+            composeRule.onNodeWithTag("monitor.settings.tab.System").performScrollTo().performClick()
+            // OpenCine's reliability reporting (D2): the row is now part of the System tab.
+            composeRule.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
+            for (label in listOf("Open Source Code", "Open Privacy Policy", "Open Terms of Use", "Open Support")) {
+                composeRule.onNodeWithContentDescription(label).performScrollTo().performClick()
+            }
+            composeRule.runOnIdle {
+                assertEquals(listOf("https://github.com/erik-sutton95/OpenZCine", "https://openzcine.app/privacy/",
+                    "https://openzcine.app/terms/"), opened)
+                assertEquals(listOf("support"), called)
+                assertFalse(preferences.contains("cache.originals"))
+            }
+        } finally {
+            instrumentation.removeMonitor(browser)
         }
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun systemTabShipsLicensesNoticeAndDiagnosticOptionsOffline() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-settings-legal", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        show(OperatorSettings(preferences), MonitorSettingsTab.SYSTEM)
+        composeRule.onNodeWithText("Diagnostic options").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Share Diagnostics").assertDoesNotExist()
+        for ((page, attribution) in listOf("licenses" to "Apache License, Version 2.0",
+            "notice" to "not affiliated with or endorsed by Nikon Corporation")) {
+            val document = hasAnyAncestor(hasTestTag("legal.document.$page"))
+            composeRule.onNodeWithContentDescription(if (page == "notice") "Open NOTICE" else "Open Licenses")
+                .performScrollTo().performClick()
+            composeRule.onNodeWithTag("legal.document.$page").assertIsDisplayed()
+            composeRule.onNode(hasText(attribution, substring = true) and document).assertExists()
+            composeRule.onNode(hasContentDescription("Close") and document).performClick()
+            composeRule.onNodeWithTag("legal.document.$page").assertDoesNotExist()
+        }
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun clearingTheCacheAsksFirst() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-settings-clear", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        show(OperatorSettings(preferences), MonitorSettingsTab.STORAGE)
+        composeRule.onNodeWithText("Clear").performScrollTo().performClick()
+        composeRule.onNodeWithText("Clear cache?").assertIsDisplayed()
+        composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.onNodeWithText("Clear cache?").assertDoesNotExist()
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun linkHealthScaleIsPresentBeforeACameraLinks() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-settings-link-health", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        show(OperatorSettings(preferences), MonitorSettingsTab.LINK)
+        composeRule.onNodeWithText("Link Health").assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.settings_link_no_camera_caption)).assertIsDisplayed()
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun linkTabListsTheSavedSetups() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-settings-saved", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val saved = SavedCamera(id = "SIMULATED-saved", integration = IntegrationID("nikon"), name = "B camera",
+            advertisedName = "Z6_3", model = "Z6III",
+            routes = listOf(SavedRoute(key = "ap", kind = RouteKind.CAMERA_ACCESS_POINT, network = "Z6III_SIMULATED")))
+        show(OperatorSettings(preferences), MonitorSettingsTab.LINK, savedCameras = listOf(saved))
+        composeRule.onNodeWithText("Your cameras").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("B camera").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Z6III_SIMULATED").assertIsDisplayed()
         preferences.edit().clear().commit()
     }
 
@@ -428,31 +501,108 @@ class NikonOperatorSettingsComposeTest {
         stores.forEach { it.edit().clear().commit() }
     }
 
+    // F05 replaced app-private capture layouts with one shared layout per declared DISP mode.
+    @Test fun actualSharedDisplayPersistsDeclaredModesAndRetiresOnlyTheCurrentEditor() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-display-declared", Context.MODE_PRIVATE)
+        preferences.edit().clear().putString("unrelated.operator.choice", "retained").commit()
+        val settings = OperatorSettings(preferences)
+        val liveRecord = settings.displayPreferences.live.isVisible(MonitorDisplaySection.RAIL_RECORD)
+        val commandRecord = settings.displayPreferences.command.isVisible(MonitorDisplaySection.RAIL_RECORD)
+        val offersEditor = androidx.compose.runtime.mutableStateOf(true)
+        show(settings, MonitorSettingsTab.DISPLAY, editorAvailable = { offersEditor.value })
+        composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor.settings.display.toggle.LIVE.RAIL_RECORD").performScrollTo().performClick()
+        composeRule.runOnIdle {
+            val reloaded = OperatorSettings(preferences).displayPreferences
+            assertEquals(!liveRecord, reloaded.live.isVisible(MonitorDisplaySection.RAIL_RECORD))
+            assertEquals(commandRecord, reloaded.command.isVisible(MonitorDisplaySection.RAIL_RECORD))
+            assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
+            operatorSessionShown.synchronize("SIMULATED-first-display-source")
+        }
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").performScrollTo().performClick()
+        composeRule.runOnIdle {
+            assertEquals(MonitorDisplayMode.LIVE, operatorSessionShown.editingMode)
+            operatorSessionShown.synchronize("SIMULATED-successor-display-source")
+            assertEquals(null, operatorSessionShown.editingMode)
+            offersEditor.value = false
+        }
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").assertDoesNotExist()
+        composeRule.runOnIdle { offersEditor.value = true }
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").performScrollTo().assertIsDisplayed()
+        preferences.edit().clear().commit()
+    }
+
+    // Declared capabilities replace the retired enabledDisplayModes preference; empty pins persist.
+    @Test fun actualSharedDisplayKeepsEmptyCleanPinsAcrossDeclaredModeChanges() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-display-declared-pins", Context.MODE_PRIVATE)
+        preferences.edit().clear().putString("unrelated.operator.choice", "retained").commit()
+        val settings = OperatorSettings(preferences)
+        val stores = assistStores("z2-display-declared-pins")
+        val kept = restoreAssists(stores).shared.pinned
+        val modes = androidx.compose.runtime.mutableStateOf(listOf(MonitorDisplayMode.LIVE, MonitorDisplayMode.CLEAN, MonitorDisplayMode.COMMAND))
+        show(settings, MonitorSettingsTab.DISPLAY, assists = restoreAssists(stores), declaredModes = { modes.value })
+        composeRule.onNodeWithText("DISP 2 · Clean").performScrollTo().performClick()
+        for (tool in kept) {
+            composeRule.onNodeWithTag("monitor.settings.display.toggle.clean.pin.${tool.name}")
+                .performScrollTo().performClick()
+        }
+        composeRule.runOnIdle {
+            assertTrue(restoreAssists(stores).shared.pinned.isEmpty())
+            modes.value = listOf(MonitorDisplayMode.COMMAND)
+        }
+        composeRule.onNodeWithText("DISP 1 · Live").assertDoesNotExist()
+        composeRule.onNodeWithText("DISP 2 · Clean").assertDoesNotExist()
+        composeRule.onNodeWithText("DISP 3 · Command").performScrollTo().assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(listOf(MonitorDisplayMode.COMMAND), operatorSessionShown.modes)
+            assertEquals(MonitorDisplayMode.COMMAND, operatorSessionShown.mode)
+            assertTrue(restoreAssists(stores).shared.pinned.isEmpty())
+            assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
+            modes.value = emptyList()
+        }
+        composeRule.onNodeWithText("DISP 3 · Command").performScrollTo().assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(listOf(MonitorDisplayMode.COMMAND), operatorSessionShown.modes)
+            assertTrue(restoreAssists(stores).shared.pinned.isEmpty())
+        }
+        preferences.edit().clear().commit()
+        stores.forEach { it.edit().clear().commit() }
+    }
+
     private fun show(
         settings: OperatorSettings, initial: MonitorSettingsTab, session: CameraSession? = null,
         actions: SystemSettingsActions = NoExternalActions, assists: NikonAssists = idleNikonAssists(),
         editsLiveView: Boolean = false,
         /** The modes a mounted video monitor declares (Command is the body's dashboard, DISP 3). */
         modes: List<MonitorDisplayMode> = listOf(MonitorDisplayMode.LIVE, MonitorDisplayMode.CLEAN, MonitorDisplayMode.COMMAND),
+        savedCameras: List<SavedCamera> = emptyList(),
+        declaredModes: (() -> List<MonitorDisplayMode>)? = null,
+        editorAvailable: (() -> Boolean)? = null,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val cache = MediaCacheStore(Files.createTempDirectory(context.cacheDir.toPath(), "z2-settings"))
         composeRule.setContent {
             OpenZCineTheme {
                 val operatorSession = rememberTestOperatorSession(assists, settings)
-                SideEffect { operatorSession.declare(modes) }
+                val offered = declaredModes?.invoke() ?: modes
+                val editsCurrentLiveView = editorAvailable?.invoke() ?: editsLiveView
+                SideEffect { operatorSession.declare(offered); operatorSessionShown = operatorSession }
                 OperatorSettingsScreen(
                     session = session, assists = assists,
-                    operatorSession = operatorSession, editsLiveView = editsLiveView,
+                    operatorSession = operatorSession, editsLiveView = editsCurrentLiveView,
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,
                     onReportProblem = {},
-                    initialTab = initial, onClose = {},
+                    initialTab = initial, savedCameras = savedCameras, onClose = {},
                 )
             }
         }
     }
 
+    private lateinit var operatorSessionShown: com.opencapture.opencine.appkit.MonitorOperatorSessionModel
     private lateinit var assistsShown: NikonAssists
 
     private fun assistStores(name: String): List<SharedPreferences> {

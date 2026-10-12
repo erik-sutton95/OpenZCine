@@ -177,41 +177,6 @@ class NikonMediaLibraryAdapterTest {
         } finally { root.toFile().deleteRecursively() }
     }
 
-    @Test fun `actual gallery selection actions read current owner before compose frame updates`() = runTest {
-        val root = createTempDirectory("nikon-library-draft")
-        var owner: MonitorMediaLibraryModel<NikonLibraryClip>? = null
-        var retainedOwner: MonitorMediaLibraryModel<NikonLibraryClip>? = null
-        try {
-            val index = MediaLibraryIndex(Preferences())
-            val first = clip(100)
-            val second = first.copy(handle = 5, filename = "Second.MOV")
-            val codec = NikonMediaLibraryCodec("SIMULATED", null, MediaCacheStore(root), { emptySet() }, { false })
-            val rows = listOf(first, second).map { codec.record(NikonLibraryClip("SIMULATED", it)) }
-            val actual = MonitorMediaLibraryModel(
-                cache = MonitorMediaCache(MonitorMediaCacheDirectory(root.toFile()), codec,
-                    MonitorMediaOriginalEligibility.ExactSize, "catalog", emptyList()),
-                favoritesStore = NikonLibraryFavorites(index, listOf("SIMULATED")),
-                scope = this, cacheScanning = MonitorMediaCacheScanning.BACKGROUND,
-                initialCatalog = MediaCatalog(), initialRecords = rows)
-            owner = actual; retainedOwner = actual
-            val oldFrame = actual.state.value
-            val selection = NikonMediaLibrarySelection(owner = { owner }, observe = { oldFrame })
-            selection.selecting = true
-            selection.selectedKeys = MediaLibrarySelection.begin(first.libraryKey("SIMULATED"))
-            selection.selectedKeys = MediaLibrarySelection.toggle(selection.selectedKeys, second.libraryKey("SIMULATED"))
-            assertFalse(oldFrame.selecting)
-            assertTrue(oldFrame.selectedIDs.isEmpty())
-            assertTrue(selection.selecting)
-            assertEquals(setOf(first.libraryKey("SIMULATED"), second.libraryKey("SIMULATED")), selection.selectedKeys)
-            assertEquals(rows.map { it.asset.id }.toSet(), actual.state.value.selectedIDs)
-            owner = null
-            assertFalse(selection.selecting)
-            assertTrue(selection.selectedKeys.isEmpty())
-            selection.selectedKeys = setOf(first.libraryKey("SIMULATED"))
-            assertEquals(rows.map { it.asset.id }.toSet(), actual.state.value.selectedIDs)
-        } finally { retainedOwner?.dispose(); root.toFile().deleteRecursively() }
-    }
-
     @Test fun `actual captured rating callback cannot rewrite refreshed or rebound same-key content`() = runTest {
         val root = createTempDirectory("nikon-action-draft")
         try {
@@ -266,7 +231,7 @@ class NikonMediaLibraryAdapterTest {
                 initialRecords = listOf(codec.record(NikonLibraryClip("SIMULATED", old))))
             val actions = NikonMediaLibraryActions(index, cache, { owner }, { codec })
             val value = NikonLibraryClip("SIMULATED", old)
-            val capture = actions.beginDeletion(listOf(value)) { owner.close() }
+            val capture = owner.close().let { actions.capture(listOf(value)) }
             val entered = kotlinx.coroutines.CompletableDeferred<Unit>(); val release = kotlinx.coroutines.CompletableDeferred<Unit>()
             var progress: Pair<Int, Int>? = null
             val pending = async {
@@ -307,7 +272,7 @@ class NikonMediaLibraryAdapterTest {
             owner.select(rows.map { it.asset.id }.toSet(), selecting = true)
             val actions = NikonMediaLibraryActions(index, cache, { owner }, { codec })
             val values = listOf(removed, protected).map { NikonLibraryClip("SIMULATED", it) }
-            val capture = actions.beginDeletion(values) { owner.close() }
+            val capture = owner.close().let { actions.capture(values) }
             val publishedRows = owner.state.value.records
             var wireCalls = 0
             val count = capture.deleteBatch(values, { value ->
@@ -364,7 +329,7 @@ class NikonMediaLibraryAdapterTest {
                 initialRecords = listOf(codec.record(NikonLibraryClip("SIMULATED", old))))
             val actions = NikonMediaLibraryActions(index, cache, { owner }, { codec })
             val value = NikonLibraryClip("SIMULATED", old)
-            val capture = actions.beginDeletion(listOf(value)) { owner.close() }
+            val capture = owner.close().let { actions.capture(listOf(value)) }
             val successor = old.copy(sizeBytes = 200)
             val path = root.resolve(cache.libraryRelativeAddress("SIMULATED", MediaCacheObjectIdentity(successor)))
             val content = ByteArray(200) { 8 }; var reentered = false
@@ -476,7 +441,7 @@ class NikonMediaLibraryAdapterTest {
                     cacheScanning = MonitorMediaCacheScanning.IMMEDIATE, initialCatalog = MediaCatalog(),
                     initialRecords = listOf(codec.record(NikonLibraryClip("SIMULATED", old))))
                 val actions = NikonMediaLibraryActions(index, cache, { owner }, { codec }); val value = NikonLibraryClip("SIMULATED", old)
-                val capture = actions.beginDeletion(listOf(value)) { owner.close() }
+                val capture = owner.close().let { actions.capture(listOf(value)) }
                 val entered = kotlinx.coroutines.CompletableDeferred<Unit>(); val release = kotlinx.coroutines.CompletableDeferred<Unit>()
                 var progress: Pair<Int, Int>? = null; var nativeCalls = 0
                 val pending = async { capture.deleteBatch(listOf(value), {

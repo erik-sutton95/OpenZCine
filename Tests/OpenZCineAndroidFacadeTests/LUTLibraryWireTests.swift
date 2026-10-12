@@ -1,43 +1,27 @@
 import Foundation
+import OpenZCineCore
 import Testing
 
 @testable import OpenZCineAndroidFacade
 
 struct LUTLibraryWireTests {
-    @Test("validation uses the shared selection cache key and strict parser")
-    func validationCarriesCanonicalSelection() throws {
-        let record = try #require(
-            LUTLibraryWire.validatedImport(
-                utf8: Array(identityCube.utf8),
-                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
-                fileName: "operator-look-a1b2c3d4.cube"))
+    @Test("imports the shared gate refuses never pack, so nothing is stored")
+    func packingFailsClosed() {
+        for text in [
+            "not a cube",
+            // Far-out-of-domain samples (RED float noise is ~1e-6).
+            "LUT_3D_SIZE 2\n1.2 0 0\n",
+            "LUT_3D_SIZE 2\nLUT_3D_SIZE 2\n",
+        ] {
+            #expect(LUTLibraryWire.packedImportedLUT(utf8: Array(text.utf8)) == nil)
+        }
         #expect(
-            record.components(separatedBy: LUTLibraryWire.fieldSeparator)
-                == ["1", "2", "stored:Custom:operator-look-a1b2c3d4.cube"])
+            LUTLibraryWire.packedImportedLUT(
+                utf8: Array(repeating: 120, count: CubeLUT.maximumImportBytes + 1)) == nil)
     }
 
-    @Test("validation rejects unsafe file names and invalid cube bytes before storage")
-    func validationFailsClosed() {
-        #expect(
-            LUTLibraryWire.validatedImport(
-                utf8: Array(identityCube.utf8),
-                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
-                fileName: "../outside.cube") == nil)
-        // Far-out-of-domain samples fail the Android preflight (RED float noise is ~1e-6).
-        #expect(
-            LUTLibraryWire.validatedImport(
-                utf8: Array("LUT_3D_SIZE 2\n1.2 0 0\n".utf8),
-                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
-                fileName: "unsafe-samples.cube") == nil)
-        #expect(
-            LUTLibraryWire.validatedImport(
-                utf8: Array(identityCube.utf8),
-                categoryOrdinal: 99,
-                fileName: "operator-look.cube") == nil)
-    }
-
-    @Test("RED IPP2 float-export overshoot (1.000001) still validates")
-    func redIpp2FloatOvershootValidates() throws {
+    @Test("RED IPP2 float-export overshoot (1.000001) still packs")
+    func redIpp2FloatOvershootPacks() throws {
         // Official RED size-33 packs export many lattice points as 1.000001. A hard
         // 0…1 gate rejected every cube after a successful zip extract.
         let redLike = """
@@ -52,46 +36,16 @@ struct LUTLibraryWireTests {
             0 1 1
             1.000001 1.000001 1.000001
             """
-        let record = try #require(
-            LUTLibraryWire.validatedImport(
-                utf8: Array(redLike.utf8),
-                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.red,
-                fileName: "red-look-a1b2c3d4e5f6.cube"))
-        #expect(
-            record.components(separatedBy: LUTLibraryWire.fieldSeparator)
-                == ["1", "2", "stored:RED:red-look-a1b2c3d4e5f6.cube"])
         let packed = try #require(LUTLibraryWire.packedImportedLUT(utf8: Array(redLike.utf8)))
         #expect(packed.count == 2 * 2 * 2 * 4)
         // Quantization clamps 1.000001 → 255.
         #expect(packed[4] == 255)
     }
 
-    @Test("Android validation rejects duplicate size declarations and oversized sources")
-    func androidBoundaryLimits() {
-        #expect(
-            LUTLibraryWire.validatedImport(
-                utf8: Array("LUT_3D_SIZE 2\nLUT_3D_SIZE 2\n".utf8),
-                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
-                fileName: "duplicate.cube") == nil)
-        #expect(
-            LUTLibraryWire.validatedImport(
-                utf8: Array(repeating: 120, count: LUTLibraryWire.maximumSourceBytes + 1),
-                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
-                fileName: "oversized.cube") == nil)
-    }
-
-    @Test("a 65³ Resolve cube validates and packs as the 33³ renderer grid")
+    @Test("a 65³ Resolve cube packs as the 33³ renderer grid")
     func resolveSizedCubePacksForRenderer() throws {
-        let utf8 = Array(zeroCubeText(size: 65).utf8)
-        let record = try #require(
-            LUTLibraryWire.validatedImport(
-                utf8: utf8,
-                categoryOrdinal: LUTLibraryWire.CategoryOrdinal.custom,
-                fileName: "clean-whites-a1b2c3d4e5.cube"))
-        #expect(
-            record.components(separatedBy: LUTLibraryWire.fieldSeparator)
-                == ["1", "33", "stored:Custom:clean-whites-a1b2c3d4e5.cube"])
-        let packed = try #require(LUTLibraryWire.packedImportedLUT(utf8: utf8))
+        let packed = try #require(
+            LUTLibraryWire.packedImportedLUT(utf8: Array(zeroCubeText(size: 65).utf8)))
         #expect(packed.count == 33 * 33 * 33 * 4)
     }
 

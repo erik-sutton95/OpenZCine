@@ -35,6 +35,7 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:appkit")).using(project(":appkit"))
         // The optional reporting adapter: appkit's reporting on the Sentry SDK.
         substitute(module("com.opencapture.opencine:appkit-sentry")).using(project(":appkit-sentry"))
+        substitute(module("com.opencapture.opencine:media3")).using(project(":media3"))
         // The shared capture sheets over the camera vocabulary (LadderSheet).
         substitute(module("com.opencapture.opencine:camera-controls")).using(project(":camera-controls"))
         substitute(module("com.opencapture.opencine:native-runtime")).using(project(":native-runtime"))

@@ -49,6 +49,8 @@ import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.OpenZCineTheme
 import java.io.File
 import java.time.LocalDate
+import com.opencapture.opencine.appkit.MonitorMediaSort
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilterDialog
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -58,7 +60,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** SIMULATED listed facts with the actual native Nikon dialog and shared form. */
+/** SIMULATED listed facts through the production Nikon filter mapping and the shared dialog and form. */
 @RunWith(AndroidJUnit4::class)
 class NikonMediaFilterFormComposeTest {
     @get:Rule
@@ -131,9 +133,11 @@ class NikonMediaFilterFormComposeTest {
         val offered = offered(clips)
         composeRule.setContent {
             FilterFixtureHost {
-                if (presented) MediaFilterDialog(
-                    filters, offered, listOf(FIRST, SECOND),
-                    onFiltersChanged = { filters = it }, onDismiss = { presented = false },
+                if (presented) MonitorMediaGalleryFilterDialog(
+                    nikonGalleryFilters(filters, offered, listOf(FIRST, SECOND).mapIndexed { index, id ->
+                        MonitorMediaFilterChoice(id.toString(), "SLOT ${index + 1}") }),
+                    hasActiveFilters = filters.activeCount > 0,
+                    action = { filters = filters.applying(it, offered) }, close = { presented = false },
                 )
             }
         }
@@ -175,7 +179,8 @@ class NikonMediaFilterFormComposeTest {
         val offered = offered(listOf(clip(1, "A.MOV", 0, "", FIRST)))
         composeRule.setContent {
             FilterFixtureHost {
-                MediaFilterDialog(MediaLibraryFilters(), offered, emptyList(), {}, {})
+                MonitorMediaGalleryFilterDialog(nikonGalleryFilters(MediaLibraryFilters(), offered, emptyList()),
+                    hasActiveFilters = false, action = {}, close = {})
             }
         }
         composeRule.onNodeWithText("Nothing in this tab to filter by.").assertIsDisplayed()
@@ -310,7 +315,7 @@ class NikonMediaFilterFormComposeTest {
         composeRule.runOnIdle {
             val result = MediaLibraryFiltering.displayed(
                 clips, MediaLibraryCategory.ALL, emptySet(), "SIMULATED-filter",
-                MediaLibrarySortOrder.NAME, filters, TODAY,
+                MonitorMediaSort.NAME, filters, TODAY,
             )
             assertEquals(expected, result.mapTo(linkedSetOf(), NikonMediaClipRecord::filename))
         }
@@ -319,7 +324,7 @@ class NikonMediaFilterFormComposeTest {
     /** The chips the production gallery projection offers for [clips]. */
     private fun offered(clips: List<NikonMediaClipRecord>): MediaFilterOptions =
         NikonAppGalleryProjection(
-            clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MediaLibrarySortOrder.NEWEST, today = TODAY,
+            clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MonitorMediaSort.NEWEST, today = TODAY,
         ).filterOptions
 
     private fun clip(handle: Long, name: String, width: Int, date: String, storage: Long, format: String? = null) =

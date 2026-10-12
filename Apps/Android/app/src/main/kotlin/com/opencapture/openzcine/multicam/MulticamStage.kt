@@ -55,8 +55,8 @@ import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
 import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.openzcine.nikonCameraBatteryReading
-import com.opencapture.openzcine.pairing.SavedCameraRecord
 import kotlinx.coroutines.delay
+import com.opencapture.opencine.nikon.SavedCameraRecord
 
 /** One saved body offered by Add camera; [refusal] says why it cannot join, null when it can. */
 data class MulticamPickerRow(val record: SavedCameraRecord, val refusal: String?)
@@ -117,12 +117,9 @@ fun MulticamStage(
                 close = { leaving = true },
                 recordContext = { slot ->
                     val plan = slot?.let(coordinator::memberAt)?.let { coordinator.plan(it.id) } ?: coordinator.groupPlan()
-                    MultiviewRecordContext(
-                        plan, busy = coordinator.groupBusy,
-                        prompt = MulticamCopy.confirm(plan.direction, coordinator.names(plan)),
-                    )
+                    MultiviewRecordContext(plan, busy = coordinator.groupBusy)
                 },
-                record = { plan, _ -> coordinator.start(plan) },
+                record = { plan, slot -> coordinator.start(plan, together = slot == null) },
                 // The value the operator picked, by the name shown: one no longer advertised writes nothing.
                 choose = { slot, readout, choice ->
                     coordinator.memberAt(slot)?.takeIf { readout == 0 || readout == 2 }?.let { member ->

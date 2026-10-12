@@ -1866,8 +1866,8 @@ internal fun MonitorScreen(
                 val library = lutLibrary
                 if (uri != null && library != null) {
                     recordScope.launch {
-                        when (val result = library.importFromDocument(uri)) {
-                            is com.opencapture.openzcine.lut.CustomLutImportResult.Imported -> {
+                        when (val result = library.importDocument(appContext.contentResolver, uri)) {
+                            is com.opencapture.opencine.cameracontrols.MonitorLutImportResult.Imported -> {
                                 // iOS importCustomLUT: select + enable the LUT immediately —
                                 // the graded feed is the confirmation the operator sees.
                                 if (library.prepare(result.entry.selection)) {
@@ -1875,7 +1875,7 @@ internal fun MonitorScreen(
                                 }
                                 commonControl.onNote("${result.entry.displayName} imported.")
                             }
-                            is com.opencapture.openzcine.lut.CustomLutImportResult.Rejected ->
+                            is com.opencapture.opencine.cameracontrols.MonitorLutImportResult.Rejected ->
                                 commonControl.onNote(result.message)
                         }
                     }

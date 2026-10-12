@@ -12,51 +12,18 @@ import androidx.compose.runtime.setValue
 import com.opencapture.opencine.media.MonitorPlaybackStartTiming
 import kotlinx.coroutines.CoroutineScope
 
-/** One actual gallery-borrowing logical owner. Native preparation/transfer remain the bounded
- * existing session primitives; callers supply current already-filtered typed playlist values. */
-internal class NikonPlaybackSession(
+/** The Nikon player policy: the shared defaults plus the proxy end clearance Z iOS also uses. */
+internal fun nikonPlaybackModel(
     library: MonitorMediaLibraryModel<NikonLibraryClip>,
-    record: MonitorMediaRecord<NikonLibraryClip>,
-    records: List<MonitorMediaRecord<NikonLibraryClip>>,
+    native: NikonPlaybackNativePort,
     scope: CoroutineScope,
-    val native: NikonPlaybackNativePort = NikonPlaybackNativePort(),
     now: () -> com.opencapture.opencine.core.MonotonicInstant = { com.opencapture.opencine.core.MonotonicInstant.now() },
-) {
-    val owner = MonitorMediaPlaybackModel<NikonLibraryClip, Unit>(
-        library = library, native = native, scope = scope, readyTimeout = null,
-        retryNativeFailures = false,
-        startTiming = MonitorPlaybackStartTiming.AFTER_NATIVE_ITEM_INSTALLATION,
-        candidates = { native.candidates(it, library) }, now = now,
-    )
-    init { owner.load(record, records) }
-
-    fun navigate(target: MonitorMediaRecord<NikonLibraryClip>, records: List<MonitorMediaRecord<NikonLibraryClip>>) {
-        if (!owner.isActive) return
-        owner.load(target, records)
-    }
-    data class DeliveryPause(val item: com.opencapture.opencine.media.MonitorPlaybackItemToken, val resume: Boolean)
-    fun pauseForDelivery(nativePlaying: Boolean): DeliveryPause? {
-        if (!owner.isActive) return null
-        val captured = DeliveryPause(owner.state.value.token, nativePlaying)
-        owner.setPlaying(false)
-        return captured
-    }
-    fun resumeAfterDelivery(captured: DeliveryPause) {
-        if (!captured.resume || !owner.isActive || owner.state.value.token != captured.item) return
-        owner.setPlaying(true)
-    }
-
-    fun scenePaused(item: com.opencapture.opencine.media.MonitorPlaybackItemToken) {
-        if (!owner.isActive || owner.state.value.token != item) return
-        owner.setPlaying(false)
-        owner.setSceneActive(false)
-    }
-    fun sceneResumed(item: com.opencapture.opencine.media.MonitorPlaybackItemToken) {
-        if (!owner.isActive || owner.state.value.token != item) return
-        owner.setSceneActive(true)
-    }
-
-}
+): MonitorMediaPlaybackModel<NikonLibraryClip, Unit> = MonitorMediaPlaybackModel(
+    library = library, native = native, scope = scope, readyTimeout = null,
+    retryNativeFailures = false,
+    startTiming = MonitorPlaybackStartTiming.AFTER_NATIVE_ITEM_INSTALLATION,
+    candidates = { native.candidates(it, library) }, now = now, seekEndClearance = 0.25,
+)
 
 /** One shared player, borrowing the actual gallery and canonical source generation. */
 internal class NikonOperatorPlaybackContext(
@@ -96,12 +63,7 @@ internal class NikonOperatorPlaybackContext(
                     cleanupScope = cleanupScope,
                     beforePrepare = { previous?.finishEnteredTransfer() },
                     captureBeforePrepare = captureDeliveryCleanup)
-                val playback = MonitorMediaPlaybackModel<NikonLibraryClip, Unit>(
-                    library = owner, native = next, scope = scope, readyTimeout = null,
-                    retryNativeFailures = false,
-                    startTiming = MonitorPlaybackStartTiming.AFTER_NATIVE_ITEM_INSTALLATION,
-                    candidates = { next.candidates(it, owner) }, seekEndClearance = 0.25,
-                    sceneLossPolicy = com.opencapture.opencine.media.MonitorPlaybackSceneLossPolicy.CLEAR_REQUEST)
+                val playback = nikonPlaybackModel(owner, next, scope)
                 playback.setItemAdmission(::recordAdmission)
                 if (!admission.isCurrent() || !sourceAdmitted()) {
                     playback.close(); null

@@ -1,11 +1,11 @@
 package com.opencapture.openzcine.settings
 
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraRecords
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * The Kotlin half of the pair. Every case here has a twin in the shared core's
@@ -115,16 +115,16 @@ class SetupStreamSettingsTest {
             SavedCameraRecords.updatingStreamSettings(
                 host = "192.168.1.1",
                 transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
-                streamPreset = LiveViewStreamPreset.FAST,
-                qualityBias = LiveViewQualityBias.LATENCY,
+                streamPreset = LiveViewStreamPreset.FAST.name,
+                qualityBias = LiveViewQualityBias.LATENCY.name,
                 records = records,
             )
 
         val accessPoint =
             updated.first { it.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
         val router = updated.first { it.transport == SavedCameraTransport.INFRASTRUCTURE }
-        assertEquals(LiveViewStreamPreset.FAST, accessPoint.streamPreset)
-        assertEquals(LiveViewQualityBias.LATENCY, accessPoint.qualityBias)
+        assertEquals(LiveViewStreamPreset.FAST.name, accessPoint.streamPreset)
+        assertEquals(LiveViewQualityBias.LATENCY.name, accessPoint.qualityBias)
         assertNull(router.streamPreset)
         assertNull(router.qualityBias)
     }
@@ -176,8 +176,8 @@ class SetupStreamSettingsTest {
                     transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
                     lastSeenAtEpochMillis = null,
                     wifiSsid = null,
-                    streamPreset = LiveViewStreamPreset.QUALITY,
-                    qualityBias = LiveViewQualityBias.DETAIL,
+                    streamPreset = LiveViewStreamPreset.QUALITY.name,
+                    qualityBias = LiveViewQualityBias.DETAIL.name,
                 ),
             )
 
@@ -186,12 +186,12 @@ class SetupStreamSettingsTest {
                 host = "192.168.1.1",
                 transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
                 streamPreset = null,
-                qualityBias = LiveViewQualityBias.LATENCY,
+                qualityBias = LiveViewQualityBias.LATENCY.name,
                 records = records,
             )
 
-        assertEquals(LiveViewStreamPreset.QUALITY, updated.first().streamPreset)
-        assertEquals(LiveViewQualityBias.LATENCY, updated.first().qualityBias)
+        assertEquals(LiveViewStreamPreset.QUALITY.name, updated.first().streamPreset)
+        assertEquals(LiveViewQualityBias.LATENCY.name, updated.first().qualityBias)
     }
 
     /**
@@ -207,8 +207,8 @@ class SetupStreamSettingsTest {
                 transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
                 lastSeenAtEpochMillis = 1_700_000_000_000L,
                 wifiSsid = "NIKON_ZR_6002199",
-                streamPreset = LiveViewStreamPreset.FAST,
-                qualityBias = LiveViewQualityBias.LATENCY,
+                streamPreset = LiveViewStreamPreset.FAST.name,
+                qualityBias = LiveViewQualityBias.LATENCY.name,
             )
 
         val merged =
@@ -222,7 +222,7 @@ class SetupStreamSettingsTest {
             )
 
         assertEquals(1, merged.size)
-        assertEquals(LiveViewStreamPreset.FAST, merged.first().streamPreset)
-        assertEquals(LiveViewQualityBias.LATENCY, merged.first().qualityBias)
+        assertEquals(LiveViewStreamPreset.FAST.name, merged.first().streamPreset)
+        assertEquals(LiveViewQualityBias.LATENCY.name, merged.first().qualityBias)
     }
 }

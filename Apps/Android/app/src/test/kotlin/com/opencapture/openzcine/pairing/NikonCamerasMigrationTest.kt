@@ -18,6 +18,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * The saved setups across the upgrade to the shared document (SHELL-02 design 4), wired as
@@ -38,7 +41,7 @@ class NikonCamerasMigrationTest {
             networkName = "Studio",
         )
         for (host in listOf("192.168.1.1", "192.168.50.23")) {
-            records = SavedCameraRecords.updatingCustomName(host, "A-cam", records)
+            records = records.map { if (it.host == host) it.copy(customName = "A-cam") else it }
         }
         return SavedCameraRecords.upserting(
             "192.168.43.20", "ZR_4005678", SavedCameraTransport.PHONE_HOTSPOT, at + 300_000, null, records,
@@ -52,9 +55,9 @@ class NikonCamerasMigrationTest {
         val wifi = TestSharedPreferences()
         val app = SharedPreferencesSavedCameraStore(records)
         val removedKeys = mutableListOf<String>()
-        var appList: List<SavedCameraRecord> = emptyList()
+        val appList: List<SavedCameraRecord> get() = app.current
 
-        fun store() = nikonCamerasStore(document, records) { appList = recordsAfterSharedEdit(appList, app, removedKeys::add) }
+        fun store() = app.camerasStore(document)
 
         fun documentJson(): String? = document.getString("document", null)
 
@@ -77,16 +80,17 @@ class NikonCamerasMigrationTest {
         override fun cancel() = Unit
 
         override fun forget(hosts: List<String>) {
-            phone.appList = recordsForgetting(hosts, phone.appList, phone.removedKeys::add)
-            phone.app.replace(phone.appList)
+            phone.app.forget(hosts)
         }
     }
 
-    private fun Phone.model(scope: kotlinx.coroutines.CoroutineScope): CamerasModel {
-        appList = app.records()
-        return CamerasModel(listOf(AppIntegration(NikonIntegration(Port(this)))), store(), scope)
-            .also { model -> app.onReplaced = model::reloadSaved }
-    }
+    private fun Phone.model(scope: kotlinx.coroutines.CoroutineScope): CamerasModel =
+        CamerasModel(listOf(AppIntegration(NikonIntegration(Port(this)))), store(), scope)
+            .also { model -> app.bind(model, removedKeys::add) }
+
+    /** An older build's setup rename: the one setup at (host, transport), blank clearing it. */
+    private fun List<SavedCameraRecord>.withSetupName(host: String, transport: SavedCameraTransport, name: String?) =
+        map { if (it.host == host && it.transport == transport) it.copy(setupName = name?.trim()?.takeIf(String::isNotEmpty)) else it }
 
     @Test
     fun `upgrade reads every camera and setup and leaves the records and keys alone`() {
@@ -132,10 +136,9 @@ class NikonCamerasMigrationTest {
         val routes = model.state.value.saved.flatMap { it.routes }.associate { it.extras["host"] to it.id }
 
         // The app's own connect saves a USB-C setup for body B.
-        phone.appList = SavedCameraRecords.upserting(
+        phone.app.replace(SavedCameraRecords.upserting(
             "usb:3f9a2c", "ZR_4005678", SavedCameraTransport.USB_C, at + 400_000, null, phone.appList,
-        )
-        phone.app.replace(phone.appList)
+        ))
 
         val b = model.state.value.saved.single { it.advertisedName == "ZR_4005678" }
         assertEquals(setOf(RouteKind.PHONE_HOTSPOT, RouteKind.USB), b.routes.map { it.kind }.toSet())
@@ -178,7 +181,7 @@ class NikonCamerasMigrationTest {
 
         // The older build (no document): renames body B, forgets body A, adds body C.
         var old = phone.app.records()
-        old = SavedCameraRecords.updatingCustomName("192.168.43.20", "B-cam", old)
+        old = old.map { if (it.host == "192.168.43.20") it.copy(customName = "B-cam") else it }
         old = SavedCameraRecords.removing("192.168.1.1", "ZR_3001234", old)
         old = SavedCameraRecords.removing("192.168.50.23", "ZR_3001234", old)
         old = SavedCameraRecords.upserting("10.0.0.5", "Z_8_5009999", SavedCameraTransport.INFRASTRUCTURE, at + 500_000, null, old)
@@ -214,9 +217,7 @@ class NikonCamerasMigrationTest {
         model.renameRoute(route.id, camera.id, "  Shoulder camera  ")
 
         assertEquals("Shoulder camera", model.state.value.saved.single { it.id == camera.id }.routes.single().title)
-        val expected = SavedCameraRecords.updatingSetupName(
-            "192.168.43.20", SavedCameraTransport.PHONE_HOTSPOT, "Shoulder camera", original,
-        )
+        val expected = original.withSetupName("192.168.43.20", SavedCameraTransport.PHONE_HOTSPOT, "Shoulder camera")
         assertEquals(expected, phone.app.records(), "only this setup changes, including on older builds")
         assertEquals(expected, phone.appList)
 
@@ -237,9 +238,7 @@ class NikonCamerasMigrationTest {
         val routeIDs = initial.flatMap { it.routes }.map { it.id }
 
         for (name in listOf("Old build setup", null)) {
-            phone.app.replace(SavedCameraRecords.updatingSetupName(
-                "192.168.50.23", SavedCameraTransport.INFRASTRUCTURE, name, phone.app.records(),
-            ))
+            phone.app.replace(phone.app.records().withSetupName("192.168.50.23", SavedCameraTransport.INFRASTRUCTURE, name))
             val legacy = phone.legacyJson()
             val reloaded = phone.store().also { it.load() }.cameras
             val camera = reloaded.single { it.name == "A-cam" }
@@ -265,6 +264,54 @@ class NikonCamerasMigrationTest {
 
         assertTrue(phone.legacyJson()!!.contains("\"not a record\""), "an undecodable record is never overwritten")
         assertTrue(phone.app.records().filter { it.cameraName == "ZR_3001234" }.all { it.customName == "A-prime" })
+    }
+
+    /**
+     * A4-24: the wizard saves before the body confirms and again after the reconnect, while the
+     * operator may rename the camera on the shared page in between. One writer, merged at once:
+     * the app's records, the live list and a fresh launch all end with one row carrying the name.
+     */
+    @Test
+    fun `a rename during the wizard save keeps one record with the new name everywhere`() = runTest {
+        val phone = Phone()
+        phone.app.replace(appRecords())
+        val model = phone.model(backgroundScope)
+        val paired = SavedCameraRecord("172.20.10.4", "Z_8_5009999", SavedCameraTransport.PHONE_HOTSPOT, at + 600_000, null)
+
+        val (_, created) = phone.app.savePaired(paired, networkName = null)
+        assertNotNull(created, "the wizard's first save adds the setup")
+        model.rename(model.state.value.saved.single { it.advertisedName == "Z_8_5009999" }.id, "C-cam")
+        phone.app.savePaired(paired.copy(lastSeenAtEpochMillis = at + 700_000), networkName = null)
+
+        val body = { cameras: List<com.opencapture.opencine.core.SavedCamera> -> cameras.filter { it.advertisedName == "Z_8_5009999" } }
+        assertEquals(listOf("C-cam"), phone.app.records().filter { it.cameraName == "Z_8_5009999" }.map { it.customName })
+        assertEquals(listOf("C-cam"), body(model.state.value.saved).map { it.name })
+        assertEquals(listOf("C-cam"), body(phone.store().also { it.load() }.cameras).map { it.name })
+        assertEquals(phone.app.records(), phone.appList)
+    }
+
+    /** Stream settings and an abandoned pairing are app writes too: each reaches the shared list at once. */
+    @Test
+    fun `stream settings and an abandoned pairing reach the shared list at once`() = runTest {
+        val phone = Phone()
+        phone.app.replace(appRecords())
+        val model = phone.model(backgroundScope)
+        val fresh = { phone.store().also { it.load() }.cameras }
+
+        val ap = phone.appList.single { it.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }
+        phone.app.saveStreamSettings(ap, streamPreset = null, qualityBias = "DETAIL")
+        assertEquals("DETAIL", phone.app.records().single { it.host == ap.host && it.transport == ap.transport }.qualityBias)
+        assertEquals(fresh(), model.state.value.saved)
+
+        val (_, created) = phone.app.savePaired(
+            SavedCameraRecord("10.1.1.9", "Z_9_7001234", SavedCameraTransport.INFRASTRUCTURE, at + 800_000, null), networkName = "Van",
+        )
+        assertTrue(model.state.value.saved.any { it.advertisedName == "Z_9_7001234" })
+        phone.app.discard(assertNotNull(created))
+        assertTrue(model.state.value.saved.none { it.advertisedName == "Z_9_7001234" })
+        assertTrue(phone.app.records().none { it.cameraName == "Z_9_7001234" })
+        assertEquals(fresh(), model.state.value.saved)
+        assertTrue(phone.removedKeys.isEmpty(), "taking back a pairing never drops a Wi-Fi key")
     }
 
     @Test

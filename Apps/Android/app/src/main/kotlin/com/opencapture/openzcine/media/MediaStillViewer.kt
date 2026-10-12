@@ -23,7 +23,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
-private const val MAX_PREVIEW_DIMENSION_PX = 2_048
 private const val PROGRESSIVE_DECODE_STEP_BYTES = 256L * 1_024L
 
 /** Native image/record ports composed into the complete shared still-picture owner. */
@@ -251,22 +250,5 @@ private fun decodeCacheBitmap(entry: MediaCacheEntry): Bitmap? =
 
 private fun decodeBitmap(path: Path): Bitmap? {
     if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return null
-    return try {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path.toString(), bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = previewSampleSize(bounds.outWidth, bounds.outHeight)
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-        BitmapFactory.decodeFile(path.toString(), options)?.upright(MediaExifOrientation.fromFile(path))
-    } catch (_: OutOfMemoryError) { null }
-    catch (_: RuntimeException) { null }
-}
-
-/** Largest power-of-two sample that preserves the original 2K native decode ceiling. */
-internal fun previewSampleSize(width: Int, height: Int): Int {
-    var sampleSize = 1
-    while (width / sampleSize > MAX_PREVIEW_DIMENSION_PX || height / sampleSize > MAX_PREVIEW_DIMENSION_PX) sampleSize *= 2
-    return sampleSize
+    return MonitorBitmapDecoder.decode(path.toFile(), MonitorBitmapDecoder.PAGE_EDGE)?.upright(MediaExifOrientation.fromFile(path))
 }

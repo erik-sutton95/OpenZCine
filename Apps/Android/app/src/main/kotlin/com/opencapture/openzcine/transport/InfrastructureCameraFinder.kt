@@ -3,8 +3,13 @@ package com.opencapture.openzcine.transport
 import android.util.Log
 import com.opencapture.opencine.core.DiscoveryMode
 import com.opencapture.opencine.nikon.HostProbeVerdict
+import com.opencapture.opencine.nikon.InfrastructureDiscovery
+import com.opencapture.opencine.nikon.InfrastructureMissReason
+import com.opencapture.opencine.nikon.InfrastructurePreflight
+import com.opencapture.opencine.nikon.InfrastructureSweepTally
 import com.opencapture.opencine.nikon.NikonDialer
 import com.opencapture.opencine.nikon.NikonDiscovery
+import com.opencapture.opencine.nikon.NikonHosts
 import com.opencapture.opencine.nikon.NikonLocalInterface
 import com.opencapture.opencine.nikon.NikonPresence
 import java.net.Inet4Address
@@ -68,13 +73,13 @@ public class InfrastructureCameraFinder(
             return InfrastructureSearchReport(miss = InfrastructureMissReason.OnCameraAccessPoint)
         }
         val localSubnets =
-            interfaces.mapNotNull { CameraDiscovery.subnetBase(it.address) }.distinct().sorted()
+            interfaces.map { it.address }.filter(NikonHosts::isPrivateIPv4).mapNotNull(NikonHosts::subnetBase).distinct().sorted()
         if (localSubnets.isEmpty()) {
             return InfrastructureSearchReport(miss = InfrastructureMissReason.NoScannableInterface)
         }
         // NikonDiscovery drops excluded, own and off-subnet hosts; this keeps the app's stricter
         // subnet text match (a zero-padded octet never matches).
-        val directed = directedCandidates.filter { CameraDiscovery.subnetBase(it) in localSubnets }
+        val directed = directedCandidates.filter { it.trim().takeIf(NikonHosts::isPrivateIPv4)?.substringBeforeLast('.') in localSubnets }
         // What the occupancy sweep heard, per host; an answer in any pass outranks silence.
         val swept = java.util.concurrent.ConcurrentHashMap<String, HostProbeVerdict>()
         val dialer =
@@ -146,7 +151,7 @@ public fun localIPv4Interfaces(): List<NikonLocalInterface> =
                     .toList()
                     .filterIsInstance<Inet4Address>()
                     .mapNotNull { it.hostAddress }
-                    .filter(CameraDiscovery::isSupportedPtpIpDiscoveryHost)
+                    .filter(NikonHosts::isPrivateIPv4)
                     .map { NikonLocalInterface(networkInterface.name, it) }
             }
     }

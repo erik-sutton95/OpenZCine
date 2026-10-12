@@ -19,6 +19,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * OpenCine's `NikonConnectPort` over this app's own reconnect machinery ([SavedCameraConnector])

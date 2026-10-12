@@ -47,7 +47,6 @@ class StillPreviewStateTest {
 
         assertEquals(1.0, state.progress)
         assertEquals("Loading full JPEG preview…", state.message)
-        assertEquals(8, previewSampleSize(8_256, 5_504))
     }
 
     @Test

@@ -7,11 +7,11 @@ import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingEnvironment
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * Production hop adapter over the existing Android pairing owner; the shared Frame.io owner

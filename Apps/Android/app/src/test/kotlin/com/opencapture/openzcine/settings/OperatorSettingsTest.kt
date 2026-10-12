@@ -66,6 +66,26 @@ class OperatorSettingsTest {
     }
 
     @Test
+    fun `shared operator preferences read and write the existing safety keys`() {
+        val fresh = OperatorSettings(TestSharedPreferences()).operatorPreferences
+        assertTrue(fresh.haptics && fresh.keepScreenAwake && fresh.recordConfirmation)
+        // Values an earlier release stored under Z's keys come through the shared owner unchanged.
+        store.edit().putBoolean("controls.haptics", false).putBoolean("controls.keepScreenAwake", false)
+            .putBoolean("controls.recordConfirmation", false).commit()
+        val settings = OperatorSettings(store)
+        val shared = settings.operatorPreferences
+        assertFalse(shared.haptics || shared.keepScreenAwake || shared.recordConfirmation)
+        assertFalse(settings.hapticsEnabled.value || settings.keepScreenAwake.value || settings.recordConfirmationEnabled.value)
+        settings.hapticsEnabled.toggle()
+        settings.keepScreenAwake.toggle()
+        settings.recordConfirmationEnabled.toggle()
+        assertTrue(shared.haptics && shared.keepScreenAwake && shared.recordConfirmation)
+        val keys = listOf("controls.haptics", "controls.keepScreenAwake", "controls.recordConfirmation")
+        assertTrue(keys.all { store.getBoolean(it, false) })
+        assertEquals(keys.toSet(), store.all.keys)
+    }
+
+    @Test
     fun `storage keys never collide`() {
         val keys = OperatorSettings(store).all.map { it.key }
         assertEquals(keys.size, keys.toSet().size)
