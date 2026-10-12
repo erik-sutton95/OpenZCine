@@ -4573,12 +4573,15 @@ final class NativeAppModel {
         mediaLibrary?.close()
     }
 
-    private func prepareMediaLibrary(rows: [MediaClip], bucket: String, service: NikonMediaService?)
-    {
-        if let owner = mediaLibrary, mediaLibraryBucket == bucket,
-            mediaLibraryCodec?.service === service
-        {
+    func prepareMediaLibrary(rows: [MediaClip], bucket: String, service: NikonMediaService?) {
+        // The gallery's identity is its library (bucket); a camera service change rebinds it,
+        // so the screen's scroll, selection and filters survive a reconnect.
+        if let owner = mediaLibrary, mediaLibraryBucket == bucket, let codec = mediaLibraryCodec {
             mediaClips = rows
+            if codec.service !== service {
+                codec.service = service
+                owner.bind(service)
+            }
             return
         }
         mediaLibrary?.close()
