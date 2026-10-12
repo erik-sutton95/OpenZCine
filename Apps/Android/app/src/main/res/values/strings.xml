@@ -113,8 +113,6 @@
     <string name="pairing_hotspot_camera_3">Search for Wi‑Fi network → join this phone\'s hotspot</string>
     <string name="pairing_hotspot_camera_4">IP address → Obtain automatically</string>
     <string name="pairing_permissions_group">Android permissions</string>
-    <string name="pairing_permission_camera">Camera</string>
-    <string name="pairing_permission_camera_detail">Scan the Wi‑Fi details off the camera screen.</string>
     <string name="pairing_permission_nearby">Nearby devices</string>
     <string name="pairing_permission_location">Location</string>
     <string name="pairing_permission_nearby_detail">Find and stream from your camera over Wi‑Fi.</string>
@@ -133,7 +131,6 @@
     <string name="watch_on_camera_ap_message">This phone is on the camera\'s own Wi‑Fi, which doesn\'t pass traffic between devices — the broadcast can\'t reach it here. Switch to your regular Wi‑Fi, then join.</string>
     <string name="conn_share_diagnostics">Share diagnostics</string>
     <string name="pairing_connect_my_camera">Connect my camera</string>
-    <string name="pairing_permission_required">Both are required to connect to your camera — grant them to continue.</string>
     <string name="pairing_on_camera">On camera</string>
     <string name="pairing_on_phone">On this phone</string>
     <string name="pairing_looking_for_cameras">Looking for cameras</string>

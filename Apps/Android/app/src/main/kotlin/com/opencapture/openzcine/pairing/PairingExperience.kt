@@ -2,16 +2,11 @@ package com.opencapture.openzcine.pairing
 
 import android.Manifest
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.net.nsd.NsdManager
 import android.os.Build
-import android.provider.Settings
 import android.util.Log
 import androidx.annotation.StringRes
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,16 +14,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,6 +39,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -57,16 +48,21 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.opencapture.monitorui.MonitorPairingCheck
+import com.opencapture.monitorui.MonitorPairingCheckState
+import com.opencapture.monitorui.MonitorPairingDevice
 import com.opencapture.monitorui.MonitorPairingInstruction
 import com.opencapture.monitorui.MonitorPairingInstructionIcon
 import com.opencapture.monitorui.MonitorPairingPresentation
 import com.opencapture.monitorui.MonitorPairingStep
+import com.opencapture.monitorui.MonitorPalette
+import com.opencapture.monitorui.MonitorTypography
 import com.opencapture.opencine.appkit.CamerasModel
+import com.opencapture.opencine.appkit.DiscoveryPermissions
+import com.opencapture.opencine.appkit.PermissionGate
 import com.opencapture.opencine.appkit.IntegrationPairingFlow
 import com.opencapture.opencine.appkit.PairScreen
+import com.opencapture.opencine.appkit.pairPageFrame
 import com.opencapture.openzcine.R
 import com.opencapture.opencine.nikon.PtpIpConnectionStrategy
 import com.opencapture.opencine.nikon.PtpIpInitiatorIdentity
@@ -376,33 +372,25 @@ public fun requiredPairingPermission(): String =
         Manifest.permission.ACCESS_FINE_LOCATION
     }
 
+/**
+ * What the permissions step asks for: Android 12 ignores a fine-location request that does not
+ * carry coarse with it, so below API 33 it asks for both.
+ */
+internal fun pairingPermissionRequest(): List<String> =
+    if (Build.VERSION.SDK_INT >= 33) listOf(requiredPairingPermission()) else DiscoveryPermissions.wifiNameRequest
+
 /** Whether the pairing permission is already granted. */
 public fun isPairingPermissionGranted(context: Context): Boolean =
     context.checkSelfPermission(requiredPairingPermission()) == PackageManager.PERMISSION_GRANTED
-
-/** Whether Camera (the credential scanner's permission) is already granted. */
-public fun isCameraPermissionGranted(context: Context): Boolean =
-    context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
 /**
  * Whether this device has a camera the credential scanner can open.
  *
  * A field monitor can run Android with no camera at all. Typed Wi-Fi entry
- * still pairs, so the camera permission must not block the rest of the wizard.
+ * still pairs, so the scanner asks for the camera itself, only when it opens.
  */
 public fun deviceHasCamera(context: Context): Boolean =
     context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
-
-/**
- * Camera permission is satisfied when the device has no camera, or the grant is held.
- */
-internal fun isCameraPermissionSatisfied(hasCamera: Boolean, granted: Boolean): Boolean =
-    !hasCamera || granted
-
-/** Whether every permission the wizard's permissions step lists is granted. */
-public fun arePairingPermissionsGranted(context: Context): Boolean =
-    isPairingPermissionGranted(context) &&
-        isCameraPermissionSatisfied(deviceHasCamera(context), isCameraPermissionGranted(context))
 
 // MARK: - Copy
 
@@ -667,16 +655,13 @@ public fun PairingExperience(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val cameraRequired = remember { deviceHasCamera(context) }
-    var permissionGranted by remember { mutableStateOf(isPairingPermissionGranted(context)) }
-    var permissionDenied by remember { mutableStateOf(false) }
-    var cameraPermissionGranted by remember {
-        mutableStateOf(isCameraPermissionGranted(context))
-    }
-    var cameraPermissionDenied by remember { mutableStateOf(false) }
+    // Wi-Fi paths only (PairingPath.usesWifi). The shared gate remembers a denial across process
+    // death and sends the next ask to Settings once Android stops showing the dialog.
+    val network =
+        rememberPermissionGate("pairing.network", listOf(requiredPairingPermission()), pairingPermissionRequest())
     var flow by remember {
         mutableStateOf(
-            script?.start ?: PairingFlowState.initial(arePairingPermissionsGranted(context))
+            script?.start ?: PairingFlowState.initial(isPairingPermissionGranted(context))
         )
     }
     var phase by remember { mutableStateOf<PairingPhase>(PairingPhase.Idle) }
@@ -1178,51 +1163,6 @@ public fun PairingExperience(
         flow = flow.retreat()
     }
 
-    // Permission launchers + re-check on return from Settings.
-    val permissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            permissionGranted = granted
-            permissionDenied = !granted
-        }
-    val cameraPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            cameraPermissionGranted = granted
-            cameraPermissionDenied = !granted
-        }
-    fun openAppSettings() {
-        context.startActivity(
-            Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.fromParts("package", context.packageName, null),
-            )
-        )
-    }
-    fun requestPairingPermission() {
-        if (permissionDenied) {
-            openAppSettings()
-        } else {
-            permissionLauncher.launch(requiredPairingPermission())
-        }
-    }
-    fun requestCameraPermission() {
-        if (cameraPermissionDenied) {
-            openAppSettings()
-        } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                permissionGranted = isPairingPermissionGranted(context)
-                cameraPermissionGranted = isCameraPermissionGranted(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
     // Discovery is deliberately transport-specific: hotspot discovery never
     // touches USB, USB enumeration never scans or joins a network, and HDMI
     // only ever asks CameraX whether a capture device is enumerated.
@@ -1350,15 +1290,42 @@ public fun PairingExperience(
             else -> null
         }
 
-    Box(Modifier.fillMaxSize().startupBackdrop()) {
-        val steps = PairingStep.entries.filter {
-            !(it == PairingStep.PERMISSIONS && flow.skipsPermissions) &&
-                !(it == PairingStep.NETWORK && flow.path == PairingPath.HDMI_CAPTURE) &&
-                !(it == PairingStep.DISCOVER && flow.path == PairingPath.CAMERA_ACCESS_POINT)
+    // Connecting to a held camera drops the holder's session (the single-initiator mechanism the
+    // discovery shield exists to avoid): the row names whose it is, and this stops the tap being
+    // the whole decision.
+    var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
+    takeOverTarget?.let { held ->
+        TakeOverConfirmationDialog(
+            holder = held.heldByDeviceName,
+            onConfirm = {
+                takeOverTarget = null
+                connect(held.host)
+            },
+            onDismiss = { takeOverTarget = null },
+        )
+    }
+    val discovery =
+        discoveryPane(flow.path, cameras, usbCameras, hdmiCaptureReady, wifiSearchMiss)
+            .takeIf { flow.step == PairingStep.DISCOVER }
+    fun selectDiscovered(id: String) {
+        when {
+            id == HDMI_DEVICE_ID -> onStartHdmiMonitor()
+            id.startsWith(USB_DEVICE_PREFIX) ->
+                usbCameras.firstOrNull { USB_DEVICE_PREFIX + it.token == id }?.let(::connectUsb)
+            else -> cameras.firstOrNull { it.host == id }?.let { camera ->
+                if (camera.isHeldByAnotherDevice) takeOverTarget = camera else connect(camera.host)
+            }
         }
+    }
+
+    Box(Modifier.fillMaxSize().background(MonitorPalette.background)) {
+        val steps = flow.sequence
         val primary = when {
             flow.step == PairingStep.CHOOSE_PATH || flow.isFinalStep && flow.step != PairingStep.NETWORK -> null
             flow.step == PairingStep.NETWORK -> stringResource(R.string.pairing_connect_my_camera)
+            // The permission is asked from the step's own button; Settings once Android stops asking.
+            flow.step == PairingStep.PERMISSIONS && !network.granted ->
+                stringResource(if (network.needsSettings) R.string.status_settings else R.string.action_allow)
             else -> stringResource(R.string.action_continue)
         }
         PairScreen(
@@ -1366,19 +1333,27 @@ public fun PairingExperience(
             onDone = { onShowSavedCameras?.invoke() ?: onOpenWatcherList?.invoke() },
             onDiagnostics = { onShareDiagnostics?.invoke() },
             onReportProblem = { onReportProblem?.invoke() },
+            // The page's one watch entry (its menu): a watcher-only device never pairs.
             onWatchFeed = onOpenWatcherList,
-            modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp),
+            modifier = Modifier.pairPageFrame(),
             pairingFlow = IntegrationPairingFlow(
                 presentation = MonitorPairingPresentation(
                     steps = steps.map { MonitorPairingStep(stringResource(PairingCopy.stepTitle(it)), "") },
                     currentStep = flow.displayStepNumber - 1,
                     title = stringResource(PairingCopy.stepTitle(flow.step)),
-                    body = if (flow.step == PairingStep.NETWORK) stringResource(PairingCopy.networkSubtitle(flow.path)) else "",
+                    body = when (flow.step) {
+                        PairingStep.NETWORK -> stringResource(PairingCopy.networkSubtitle(flow.path))
+                        PairingStep.PERMISSIONS -> stringResource(PairingCopy.permissionDetail)
+                        PairingStep.DISCOVER -> discovery?.detail.orEmpty()
+                        else -> ""
+                    },
                     target = "Nikon Z", hint = "",
+                    devices = discovery?.devices.orEmpty(),
+                    progress = discovery?.waiting,
                     instructions = if (flow.step == PairingStep.NETWORK) networkInstructions(flow.path) else emptyList(),
+                    checks = if (flow.step == PairingStep.PERMISSIONS) listOf(networkPermissionCheck(network)) else emptyList(),
                     primaryAction = primary,
-                    primaryActionEnabled = !busy && (flow.step != PairingStep.PERMISSIONS ||
-                        permissionGranted && isCameraPermissionSatisfied(cameraRequired, cameraPermissionGranted)),
+                    primaryActionEnabled = !busy,
                     backAction =
                         when {
                             flow.canRetreat -> stringResource(R.string.action_back)
@@ -1418,10 +1393,13 @@ public fun PairingExperience(
                         onShareDiagnostics?.invoke()
                     } else if (flow.step == PairingStep.NETWORK && flow.path == PairingPath.CAMERA_ACCESS_POINT) {
                         connectMyCamera()
+                    } else if (flow.step == PairingStep.PERMISSIONS && !network.granted) {
+                        network.request()
                     } else {
                         flow = flow.advance()
                     }
                 },
+                onSelect = ::selectDiscovered,
                 onBack = {
                     when {
                         phase != PairingPhase.Idle -> cancelWork()
@@ -1437,27 +1415,16 @@ public fun PairingExperience(
                             ScannedJoinFields(staged, onSsidEdited = { correctedScanSsid = it }, onKeyEdited = { correctedScanKey = it })
                         }
                     } else when (flow.step) {
-                        PairingStep.PERMISSIONS -> PermissionsBody(
-                            nearbyGranted = permissionGranted, nearbyDenied = permissionDenied,
-                            cameraRequired = cameraRequired, cameraGranted = cameraPermissionGranted,
-                            cameraDenied = cameraPermissionDenied,
-                            onRequestNearby = ::requestPairingPermission, onRequestCamera = ::requestCameraPermission,
-                        )
                         PairingStep.CHOOSE_PATH -> ChoosePathBody(
                             onChoose = { path ->
                                 onDiagnosticPhase(diagnosticPhaseForPairingPath(path))
                                 flow = flow.choose(path)
                             },
-                            onOpenWatcherList = onOpenWatcherList,
                         )
                         PairingStep.PREPARE -> NumberedCards(PairingCopy.prepareSteps(flow.path).map { stringResource(it) })
-                        PairingStep.NETWORK -> Unit
-                        PairingStep.DISCOVER -> DiscoverBody(
-                            path = flow.path, cameras = cameras, usbCameras = usbCameras,
-                            onConnectCamera = { connect(it.host) }, onConnectUsbCamera = ::connectUsb,
-                            hdmiCaptureReady = hdmiCaptureReady, onStartHdmiMonitor = onStartHdmiMonitor,
-                            wifiSearchMiss = wifiSearchMiss,
-                        )
+                        // The shared page draws these from the presentation: the permission check,
+                        // the network cards and the discovered devices.
+                        PairingStep.PERMISSIONS, PairingStep.NETWORK, PairingStep.DISCOVER -> Unit
                     }
                 },
             ),
@@ -1500,38 +1467,6 @@ public fun PairingExperience(
     }
 }
 
-/**
- * "Watching another device? Open the camera list" — the iOS wizard row, verbatim: a
- * watcher-only device never pairs, so the wizard is the only screen it would ever see.
- */
-@Composable
-private fun PairingWatcherListLink(onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(StartupColors.tile.copy(alpha = 0.4f))
-            .border(1.dp, StartupColors.border.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            stringResource(R.string.pairing_watcher_question),
-            color = StartupColors.muted,
-            fontSize = 13.sp,
-        )
-        Text(
-            stringResource(R.string.pairing_watcher_action),
-            color = StartupColors.accent,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Spacer(Modifier.weight(1f))
-        Text("›", color = StartupColors.muted, fontSize = 15.sp)
-    }
-}
-
 // MARK: - Connect pane
 
 /** Operator-friendly device title: the raw SSID or camera name, else the generic body name. */
@@ -1559,201 +1494,53 @@ private fun ScannedJoinFields(
         key = it
         onKeyEdited(it)
     }
-    Text(stringResource(R.string.conn_scanned_caption), color = StartupColors.muted, fontSize = 12.5.sp)
+    Text(
+        stringResource(R.string.conn_scanned_caption),
+        color = MonitorPalette.muted,
+        style = MonitorTypography.text(12f).copy(lineHeight = 16.sp),
+    )
 }
 
 @Composable
 private fun ScannedField(label: String, value: String, onValueChange: (String) -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label.uppercase(), color = StartupColors.muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            label.uppercase(),
+            color = MonitorPalette.faint,
+            style = MonitorTypography.text(8f, FontWeight.Bold).copy(letterSpacing = 1.3.sp),
+        )
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
             singleLine = true,
-            textStyle = LocalTextStyle.current.copy(color = StartupColors.ink, fontSize = 16.sp, fontFamily = FontFamily.Monospace),
-            cursorBrush = SolidColor(StartupColors.ink),
-            modifier =
-                Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(StartupColors.control)
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
+            textStyle = LocalTextStyle.current.copy(color = MonitorPalette.text, fontSize = 16.sp, fontFamily = FontFamily.Monospace),
+            cursorBrush = SolidColor(MonitorPalette.text),
+            modifier = Modifier.fillMaxWidth().paneCard().padding(horizontal = 13.dp, vertical = 12.dp),
         )
     }
 }
 
 // MARK: - Step bodies
 
-@Composable
-private fun PermissionsBody(
-    nearbyGranted: Boolean,
-    nearbyDenied: Boolean,
-    cameraRequired: Boolean,
-    cameraGranted: Boolean,
-    cameraDenied: Boolean,
-    onRequestNearby: () -> Unit,
-    onRequestCamera: () -> Unit,
-) {
-    // Structure and sizes mirror iOS `StartupWizardPermissionsStep` in the
-    // compactPortrait profile: 10pt group label, 30pt icon circles at 14%
-    // accent, 13pt titles / 11pt details, inset hairline divider.
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(Modifier.fillMaxWidth().startupInstructionCard()) {
-            Row(
-                Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                MonitorIcon(MonitorIcon.LOCK, null, Modifier.size(13.dp), StartupColors.accent)
-                Text(
-                    stringResource(R.string.pairing_permissions_group),
-                    color = StartupColors.muted,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            if (cameraRequired) {
-                PermissionRow(
-                    glyph = MonitorIcon.CAMERA,
-                    title = stringResource(R.string.pairing_permission_camera),
-                    detail = stringResource(R.string.pairing_permission_camera_detail),
-                    granted = cameraGranted,
-                    denied = cameraDenied,
-                    onRequest = onRequestCamera,
-                )
-                Box(
-                    Modifier.fillMaxWidth()
-                        .padding(start = 42.dp)
-                        .height(1.dp)
-                        .background(StartupColors.border.copy(alpha = 0.10f))
-                )
-            }
-            PermissionRow(
-                glyph = MonitorIcon.WIFI,
-                title = stringResource(PairingCopy.permissionTitle),
-                detail = stringResource(PairingCopy.permissionDetail),
-                granted = nearbyGranted,
-                denied = nearbyDenied,
-                onRequest = onRequestNearby,
-            )
-        }
-        if (cameraRequired && (!nearbyGranted || !cameraGranted)) {
-            Text(
-                stringResource(R.string.pairing_permission_required),
-                color = StartupColors.dim,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
-            )
-        }
-    }
-}
+/** The pair pane's card surface (the shared page's instruction and device cards). */
+private fun Modifier.paneCard(): Modifier =
+    clip(RoundedCornerShape(11.dp))
+        .background(Color.White.copy(alpha = 0.03f))
+        .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(11.dp))
 
 @Composable
-private fun PermissionRow(
-    glyph: MonitorIcon,
-    title: String,
-    detail: String,
-    granted: Boolean,
-    denied: Boolean,
-    onRequest: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clickable(enabled = !granted, onClick = onRequest)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(
-            Modifier.size(30.dp)
-                .background(StartupColors.accent.copy(alpha = 0.14f), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            MonitorIcon(glyph, null, Modifier.size(15.dp), StartupColors.accent)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                color = StartupColors.ink,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                detail,
-                color = StartupColors.muted,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
-            )
-        }
-        when {
-            granted ->
-                PermissionStatusPill(
-                    text = stringResource(R.string.status_allowed),
-                    glyph = "✓",
-                    fill = StartupColors.ready.copy(alpha = 0.16f),
-                    stroke = StartupColors.ready.copy(alpha = 0.5f),
-                    textColor = StartupColors.ready,
-                )
-            denied ->
-                PermissionStatusPill(
-                    text = stringResource(R.string.status_settings),
-                    glyph = null,
-                    fill = StartupColors.control.copy(alpha = 0.6f),
-                    stroke = StartupColors.border.copy(alpha = 0.12f),
-                    textColor = StartupColors.muted,
-                )
-            else ->
-                PermissionStatusPill(
-                    text = stringResource(R.string.action_allow),
-                    glyph = null,
-                    fill = StartupColors.accent,
-                    stroke = androidx.compose.ui.graphics.Color.Transparent,
-                    textColor = StartupColors.darkText,
-                )
-        }
-    }
-}
-
-@Composable
-private fun PermissionStatusPill(
-    text: String,
-    glyph: String?,
-    fill: androidx.compose.ui.graphics.Color,
-    stroke: androidx.compose.ui.graphics.Color,
-    textColor: androidx.compose.ui.graphics.Color,
-) {
-    Row(
-        Modifier.clip(CircleShape)
-            .background(fill)
-            .border(1.dp, stroke, CircleShape)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        if (glyph != null) {
-            Text(glyph, color = textColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        }
-        Text(text, color = textColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun ChoosePathBody(
-    onChoose: (PairingPath) -> Unit,
-    onOpenWatcherList: (() -> Unit)?,
-) {
+private fun ChoosePathBody(onChoose: (PairingPath) -> Unit) {
     // iOS `transportCards`, stacked inside the step body's scroll. Cards group
     // several paths, so the operator picks a kind of connection first and the
     // specific one second.
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (card in PairingCard.entries) {
             PathChoiceCard(card, onChoose, Modifier.fillMaxWidth())
         }
-        onOpenWatcherList?.let { PairingWatcherListLink(onClick = it) }
     }
 }
 
-/** One transport option (iOS `StartupWizardTransportCard`, 14pt padding / 34pt tile). */
+/** One transport option (iOS `StartupWizardTransportCard`). */
 @Composable
 private fun PathChoiceCard(
     card: PairingCard,
@@ -1765,80 +1552,73 @@ private fun PathChoiceCard(
     var showsOptions by rememberSaveable(card) { mutableStateOf(false) }
     Column(
         modifier
-            .startupTile()
+            .paneCard()
             .clickable {
                 if (single != null) onChoose(single) else showsOptions = !showsOptions
             }
-            .padding(horizontal = 14.dp, vertical = 14.dp)
+            .padding(13.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        Box(
-            Modifier.size(34.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(StartupColors.accent.copy(alpha = 0.12f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            MonitorIcon(
-                icon =
-                    when (card) {
-                        PairingCard.WIRELESS -> MonitorIcon.RADIO
-                        PairingCard.CABLE_LINK -> MonitorIcon.CABLE
-                    },
-                contentDescription = null,
-                modifier = Modifier.size(19.dp),
-                tint = StartupColors.accent,
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            Box(
+                Modifier.size(26.dp).background(MonitorPalette.accent.copy(alpha = 0.12f), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                MonitorIcon(
+                    icon =
+                        when (card) {
+                            PairingCard.WIRELESS -> MonitorIcon.RADIO
+                            PairingCard.CABLE_LINK -> MonitorIcon.CABLE
+                        },
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MonitorPalette.accent,
+                )
+            }
+            Text(
+                stringResource(PairingCopy.cardTitle(card)),
+                color = MonitorPalette.text,
+                style = MonitorTypography.text(13.5f, FontWeight.SemiBold),
+                maxLines = 2,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                stringResource(PairingCopy.cardBadge(card)).uppercase(),
+                color = MonitorPalette.accent,
+                style = MonitorTypography.text(8.5f, FontWeight.Bold).copy(letterSpacing = 1.1.sp),
+                maxLines = 1,
             )
         }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            stringResource(PairingCopy.cardTitle(card)),
-            color = StartupColors.ink,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            lineHeight = 18.sp,
-            maxLines = 2,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            stringResource(PairingCopy.cardBadge(card)),
-            color = StartupColors.accent,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier =
-                Modifier.clip(CircleShape)
-                    .background(StartupColors.accent.copy(alpha = 0.15f))
-                    .padding(horizontal = 9.dp, vertical = 4.dp),
-        )
-        Spacer(Modifier.height(10.dp))
         if (showsOptions && single == null) {
             Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 for (option in card.options) {
                     Column(
                         Modifier.fillMaxWidth()
                             .clip(RoundedCornerShape(9.dp))
-                            .background(StartupColors.accent.copy(alpha = 0.1f))
+                            .background(MonitorPalette.accent.copy(alpha = 0.08f))
                             .clickable { onChoose(option) }
-                            .padding(horizontal = 9.dp, vertical = 7.dp)
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text(
                             stringResource(PairingCopy.pathTitle(option)),
-                            color = StartupColors.ink,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
+                            color = MonitorPalette.text,
+                            style = MonitorTypography.text(12.5f, FontWeight.SemiBold),
                         )
                         Text(
                             stringResource(PairingCopy.optionCaption(option)),
-                            color = StartupColors.muted,
-                            fontSize = 10.sp,
+                            color = MonitorPalette.muted,
+                            style = MonitorTypography.text(9.5f),
                         )
                     }
                 }
             }
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 for (pro in PairingCopy.cardPros(card)) {
-                    TradeoffRow("+", StartupColors.ready, stringResource(pro))
+                    TradeoffRow("+", MonitorPalette.accent, stringResource(pro))
                 }
-                TradeoffRow("−", StartupColors.dim, stringResource(PairingCopy.cardCon(card)))
+                TradeoffRow("−", MonitorPalette.faint, stringResource(PairingCopy.cardCon(card)))
             }
         }
     }
@@ -1847,69 +1627,146 @@ private fun PathChoiceCard(
 @Composable
 private fun TradeoffRow(
     symbol: String,
-    color: androidx.compose.ui.graphics.Color,
+    color: Color,
     text: String,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             symbol,
             color = color,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
+            style = MonitorTypography.text(12f, FontWeight.Bold),
             modifier = Modifier.width(12.dp),
         )
         Text(
             text,
-            color = StartupColors.muted,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
+            color = MonitorPalette.secondary,
+            style = MonitorTypography.text(12f).copy(lineHeight = 15.5.sp),
             modifier = Modifier.weight(1f),
         )
     }
 }
 
-/** Numbered instruction cards (iOS `StartupWizardPrepareCards`). */
+/** Numbered instruction cards (iOS `StartupWizardPrepareCards`), in the pane's card style. */
 @Composable
 private fun NumberedCards(steps: List<String>) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         steps.forEachIndexed { index, step ->
             Row(
-                Modifier.fillMaxWidth()
-                    .startupInstructionCard()
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Modifier.fillMaxWidth().paneCard().padding(13.dp),
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(24.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(StartupColors.accent.copy(alpha = 0.12f))
-                        .border(
-                            1.dp,
-                            StartupColors.accent.copy(alpha = 0.45f),
-                            RoundedCornerShape(8.dp),
-                        ),
+                    Modifier.size(22.dp).background(MonitorPalette.accent.copy(alpha = 0.16f), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         stringResource(R.string.step_number, index + 1),
-                        color = StartupColors.accent,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
+                        color = MonitorPalette.accent,
+                        style = MonitorTypography.text(10f, FontWeight.Bold),
+                        maxLines = 1,
                     )
                 }
                 Text(
                     step,
-                    color = StartupColors.ink,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 18.sp,
+                    color = MonitorPalette.secondary,
+                    style = MonitorTypography.text(12.5f).copy(lineHeight = 15.5.sp),
                     modifier = Modifier.weight(1f),
                 )
             }
         }
     }
 }
+
+/** The permissions step's one check: the Wi-Fi permission, as the shared page's check row. */
+@Composable
+private fun networkPermissionCheck(network: PermissionGate): MonitorPairingCheck =
+    MonitorPairingCheck(
+        title = stringResource(PairingCopy.permissionTitle),
+        subtitle = stringResource(R.string.pairing_permissions_group),
+        state = if (network.granted) MonitorPairingCheckState.COMPLETE else MonitorPairingCheckState.ACTIVE,
+        stateLabel =
+            stringResource(
+                when {
+                    network.granted -> R.string.status_allowed
+                    network.needsSettings -> R.string.status_settings
+                    else -> R.string.action_allow
+                },
+            ).uppercase(),
+    )
+
+/** The device row id of the HDMI capture device ([discoveryPane]). */
+private const val HDMI_DEVICE_ID = "hdmi"
+
+/** Prefix of a USB camera's device row id; the rest is its [UsbPtpCamera.token]. */
+private const val USB_DEVICE_PREFIX = "usb:"
+
+/** What the discover step shows on the shared pane: its rows, or why it is still waiting. */
+private class DiscoveryPane(val devices: List<MonitorPairingDevice>, val waiting: String?, val detail: String)
+
+/**
+ * The discover step on the shared pane: found cameras (Wi-Fi), attached cameras (USB-C) or the
+ * capture device (HDMI) as its device rows, else the waiting line and why. A row's tap is the
+ * flow's `onSelect` with the row id.
+ */
+@Composable
+private fun discoveryPane(
+    path: PairingPath,
+    cameras: List<DiscoveredCamera>,
+    usbCameras: List<UsbPtpCamera>,
+    hdmiCaptureReady: Boolean,
+    wifiSearchMiss: InfrastructureMissReason?,
+): DiscoveryPane =
+    when (path) {
+        PairingPath.USB_C ->
+            DiscoveryPane(
+                usbCameras.map { camera ->
+                    MonitorPairingDevice(
+                        id = USB_DEVICE_PREFIX + camera.token,
+                        name = camera.displayName,
+                        subtitle =
+                            if (camera.isDebugFixture) {
+                                "$USB_DEBUG_FIXTURE_LABEL · ${usbCameraDebugDetail(camera.access)}"
+                            } else {
+                                stringResource(usbCameraDetailResource(camera.access))
+                            },
+                        busy = camera.access == UsbPtpCameraAccess.IDENTITY_UNAVAILABLE,
+                    )
+                },
+                stringResource(R.string.pairing_waiting_usb).takeIf { usbCameras.isEmpty() },
+                stringResource(R.string.pairing_waiting_usb_detail).takeIf { usbCameras.isEmpty() }.orEmpty(),
+            )
+        PairingPath.HDMI_CAPTURE ->
+            DiscoveryPane(
+                listOfNotNull(
+                    MonitorPairingDevice(
+                        HDMI_DEVICE_ID,
+                        stringResource(R.string.pairing_hdmi_device_title),
+                        stringResource(R.string.pairing_hdmi_device_detail),
+                    ).takeIf { hdmiCaptureReady },
+                ),
+                stringResource(R.string.pairing_waiting_hdmi).takeIf { !hdmiCaptureReady },
+                stringResource(R.string.pairing_waiting_hdmi_detail).takeIf { !hdmiCaptureReady }.orEmpty(),
+            )
+        else ->
+            DiscoveryPane(
+                // The holder replaces "nearby": on this row the question is not where the camera
+                // is, it is who has it.
+                cameras.map { camera ->
+                    MonitorPairingDevice(camera.host, camera.name, camera.heldByLabel ?: stringResource(R.string.pairing_wifi_nearby))
+                },
+                stringResource(R.string.pairing_looking_for_cameras).takeIf { cameras.isEmpty() },
+                // A diagnosis the moment the search has one: once a sweep proved the subnet silent,
+                // or busy with nothing serving PTP, "still looking" withholds what the operator
+                // could act on.
+                if (cameras.isEmpty()) {
+                    wifiSearchMiss?.let { InfrastructureDiscovery.operatorCopy(it) }
+                        ?: stringResource(R.string.pairing_waiting_hotspot_detail)
+                } else {
+                    ""
+                },
+            )
+    }
 
 /**
  * The network step is instruction-only on every path (iOS `StartupWizardNetworkStep`): the
@@ -1985,264 +1842,6 @@ internal fun TakeOverConfirmationDialog(
     )
 }
 
-@Composable
-private fun DiscoverBody(
-    path: PairingPath,
-    cameras: List<DiscoveredCamera>,
-    usbCameras: List<UsbPtpCamera>,
-    onConnectCamera: (DiscoveredCamera) -> Unit,
-    onConnectUsbCamera: (UsbPtpCamera) -> Unit,
-    hdmiCaptureReady: Boolean,
-    onStartHdmiMonitor: () -> Unit,
-    wifiSearchMiss: InfrastructureMissReason? = null,
-) {
-    if (path == PairingPath.USB_C) {
-        UsbDiscoverBody(usbCameras, onConnectUsbCamera)
-        return
-    }
-    if (path == PairingPath.HDMI_CAPTURE) {
-        HdmiDiscoverBody(hdmiCaptureReady, onStartHdmiMonitor)
-        return
-    }
-    var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
-    takeOverTarget?.let { held ->
-        TakeOverConfirmationDialog(
-            holder = held.heldByDeviceName,
-            onConfirm = {
-                takeOverTarget = null
-                onConnectCamera(held)
-            },
-            onDismiss = { takeOverTarget = null },
-        )
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (cameras.isEmpty()) {
-            EmptyDiscoveryCard(
-                glyph = MonitorIcon.RADIO,
-                title = stringResource(R.string.pairing_looking_for_cameras),
-                // A diagnosis the moment the search has one. "Still looking" is honest only
-                // while nothing is known; once a sweep has proved the subnet silent, or proved
-                // it busy with nothing serving PTP, saying "still looking" withholds the one
-                // thing the operator could act on.
-                detail =
-                    wifiSearchMiss?.let { InfrastructureDiscovery.operatorCopy(it) }
-                        ?: stringResource(R.string.pairing_waiting_hotspot_detail),
-            )
-        } else {
-            for (camera in cameras) {
-                Row(
-                    Modifier.fillMaxWidth()
-                        .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
-                        .clickable {
-                            // Connecting to a held camera drops the holder's session — the same
-                            // single-initiator mechanism the discovery shield exists to avoid.
-                            // The row names whose it is; this stops the tap being the whole
-                            // decision.
-                            if (camera.isHeldByAnotherDevice) {
-                                takeOverTarget = camera
-                            } else {
-                                onConnectCamera(camera)
-                            }
-                        }
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    MonitorIcon(MonitorIcon.CAMERA, null, Modifier.size(20.dp), StartupColors.accent)
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            camera.name,
-                            color = StartupColors.ink,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        // The holder replaces "nearby": on this row the question is not
-                        // where the camera is, it is who has it.
-                        Text(
-                            camera.heldByLabel
-                                ?: stringResource(R.string.pairing_wifi_nearby),
-                            color = StartupColors.muted,
-                            fontSize = 11.sp,
-                        )
-                    }
-                    Text(
-                        if (camera.isHeldByAnotherDevice) {
-                            stringResource(R.string.action_take_over)
-                        } else {
-                            stringResource(R.string.action_connect)
-                        },
-                        color = StartupColors.darkText,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier =
-                            Modifier.clip(RoundedCornerShape(16.dp))
-                                .background(StartupColors.accent)
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * The HDMI capture path's final step: found/not-found for the capture device,
- * then a single action that opens the monitor on its feed. Mirrors the USB
- * body's shape — a ready tile with the accent action — so the two cable
- * options end the same way.
- */
-@Composable
-private fun HdmiDiscoverBody(
-    captureReady: Boolean,
-    onStartMonitoring: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (!captureReady) {
-            EmptyDiscoveryCard(
-                glyph = MonitorIcon.CABLE,
-                title = stringResource(R.string.pairing_waiting_hdmi),
-                detail = stringResource(R.string.pairing_waiting_hdmi_detail),
-            )
-        } else {
-            Row(
-                Modifier.fillMaxWidth()
-                    .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
-                    .clickable { onStartMonitoring() }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                MonitorIcon(MonitorIcon.CABLE, null, Modifier.size(20.dp), StartupColors.accent)
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.pairing_hdmi_device_title),
-                        color = StartupColors.ink,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        stringResource(R.string.pairing_hdmi_device_detail),
-                        color = StartupColors.muted,
-                        fontSize = 11.sp,
-                    )
-                }
-                Text(
-                    stringResource(R.string.pairing_start_monitoring),
-                    color = StartupColors.darkText,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier =
-                        Modifier.clip(RoundedCornerShape(16.dp))
-                            .background(StartupColors.accent)
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun UsbDiscoverBody(
-    cameras: List<UsbPtpCamera>,
-    onConnectCamera: (UsbPtpCamera) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (cameras.isEmpty()) {
-            EmptyDiscoveryCard(
-                glyph = MonitorIcon.CABLE,
-                title = stringResource(R.string.pairing_waiting_usb),
-                detail = stringResource(R.string.pairing_waiting_usb_detail),
-            )
-        } else {
-            cameras.forEach { camera ->
-                val actionable =
-                    camera.access == UsbPtpCameraAccess.READY ||
-                        camera.access == UsbPtpCameraAccess.NEEDS_PERMISSION ||
-                        camera.access == UsbPtpCameraAccess.DENIED
-                Row(
-                    Modifier.fillMaxWidth()
-                        .startupTile(borderColor = StartupColors.ready.copy(alpha = 0.28f))
-                        .clickable(enabled = actionable) { onConnectCamera(camera) }
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            camera.displayName,
-                            color = StartupColors.ink,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        if (camera.isDebugFixture) {
-                            Text(
-                                USB_DEBUG_FIXTURE_LABEL,
-                                color = StartupColors.accent,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.8.sp,
-                            )
-                        }
-                        Text(
-                            if (camera.isDebugFixture) {
-                                usbCameraDebugDetail(camera.access)
-                            } else {
-                                stringResource(usbCameraDetailResource(camera.access))
-                            },
-                            color = StartupColors.muted,
-                            fontSize = 11.sp,
-                        )
-                    }
-                    Text(
-                        stringResource(usbCameraActionResource(camera.access)),
-                        color = if (actionable) StartupColors.darkText else StartupColors.muted,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier =
-                            Modifier.clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    if (actionable) {
-                                        StartupColors.accent
-                                    } else {
-                                        StartupColors.control
-                                    },
-                                )
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** Centered icon + copy card while discovery waits (iOS `StartupEmptyDiscoveryCard`). */
-@Composable
-private fun EmptyDiscoveryCard(glyph: MonitorIcon, title: String, detail: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(
-            Modifier.fillMaxWidth()
-                .startupInstructionCard()
-                .padding(horizontal = 12.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            MonitorIcon(glyph, null, Modifier.size(26.dp), StartupColors.accent)
-            Text(
-                title,
-                color = StartupColors.ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                detail,
-                color = StartupColors.muted,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-            )
-        }
-        StartupIndeterminateBar()
-    }
-}
-
 internal const val USB_DEBUG_FIXTURE_LABEL: String = "DEBUG FIXTURE — NOT USB HARDWARE"
 
 @StringRes
@@ -2262,13 +1861,4 @@ internal fun usbCameraDebugDetail(access: UsbPtpCameraAccess): String =
         UsbPtpCameraAccess.READY -> "SIMULATED · ready"
         UsbPtpCameraAccess.DENIED -> "SIMULATED · access denied"
         UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> "SIMULATED · no stable identity"
-    }
-
-@StringRes
-private fun usbCameraActionResource(access: UsbPtpCameraAccess): Int =
-    when (access) {
-        UsbPtpCameraAccess.NEEDS_PERMISSION -> R.string.action_allow
-        UsbPtpCameraAccess.READY -> R.string.action_connect
-        UsbPtpCameraAccess.DENIED -> R.string.action_allow
-        UsbPtpCameraAccess.IDENTITY_UNAVAILABLE -> R.string.status_unavailable
     }

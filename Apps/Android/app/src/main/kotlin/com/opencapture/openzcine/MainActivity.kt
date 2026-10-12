@@ -1372,15 +1372,11 @@ class MainActivity : ComponentActivity() {
                                 },
                                 privacy = { systemSettingsActions.openPrivacy() },
                                 terms = { systemSettingsActions.openTerms() },
-                                // A selected nearby camera uses the shared pair page. Pair a new
-                                // camera, with nothing selected, opens the transport wizard.
+                                // Pair a new camera opens the transport wizard; a nearby card
+                                // opens the shared pair page (the integration declares its tap).
                                 pair = {
-                                    if (camerasState.selection != null) {
-                                        shell.beginPairing()
-                                    } else {
-                                        transportWizard = true
-                                        shell.beginPairing()
-                                    }
+                                    transportWizard = true
+                                    shell.beginPairing()
                                 },
                                 extraNearby = extra@{ id ->
                                     val broadcast =
@@ -1425,22 +1421,15 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         coverPresentation = ShellCoverPresentation.SHELL,
-                        pageFrame = { route, content ->
+                        pageFrame = { _, content ->
                             if (!standaloneMedia) {
                                 DisposableEffect(nikonPort) {
                                     nikonPort.pageVisible = true
                                     onDispose { nikonPort.pageVisible = false }
                                 }
-                                // Camera clearance belongs to the shared page; the pair page
-                                // retains its existing frame and both pages retain this ground.
-                                Box(
-                                    Modifier.fillMaxSize()
-                                        .background(MonitorPalette.background)
-                                        .then(if (route == ShellModel.Route.PAIR) {
-                                            Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
-                                                .padding(start = 18.dp, top = 24.dp, end = 18.dp, bottom = 16.dp)
-                                        } else Modifier),
-                                ) {
+                                // Clearance belongs to the shared pages (the pair page's frame is
+                                // the shell's); both pages keep this ground.
+                                Box(Modifier.fillMaxSize().background(MonitorPalette.background)) {
                                     content()
                                 }
                                 // "+ Add setup -> Camera access point" without a stored key: the

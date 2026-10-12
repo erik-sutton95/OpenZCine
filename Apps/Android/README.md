@@ -67,8 +67,9 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   to confirm the wrist UI becomes unavailable, resume to confirm it waits for a fresh heartbeat,
   feel all haptic outcomes, and inspect the tightest round/square watch layout for clipping.
 - **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
-  startup flow (`ios/Runner/StartupDesign.swift`) in its design language: permissions → choose
-  path → prepare → network (→ find and pair). Three hard-separated paths: **camera-AP** (the phone
+  startup flow (`ios/Runner/StartupDesign.swift`) drawn in the shared pair page's slots and
+  monitor tokens: choose path → (Wi-Fi paths only: the nearby or location permission) → prepare
+  → network (→ find and pair). Three hard-separated paths: **camera-AP** (the phone
   joins the camera's `NIKON_ZR_…` network via `WifiNetworkSpecifier` + `bindProcessToNetwork`,
   key entered once and remembered in a Keystore-encrypted store) and **phone-hotspot** (the
   CAMERA joins the phone's hotspot — the phone hosts, never scans or joins; NSD discovery waits
