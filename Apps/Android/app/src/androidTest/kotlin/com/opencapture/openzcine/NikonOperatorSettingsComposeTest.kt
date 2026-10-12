@@ -42,7 +42,9 @@ import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.appkit.MonitorDisplaySection
+import androidx.compose.runtime.SideEffect
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -428,14 +430,18 @@ class NikonOperatorSettingsComposeTest {
         settings: OperatorSettings, initial: MonitorSettingsTab, session: CameraSession? = null,
         actions: SystemSettingsActions = NoExternalActions, assists: NikonAssists = idleNikonAssists(),
         editsLiveView: Boolean = false,
+        /** The modes a mounted video monitor declares (Command is the body's dashboard, DISP 3). */
+        modes: List<MonitorDisplayMode> = listOf(MonitorDisplayMode.LIVE, MonitorDisplayMode.CLEAN, MonitorDisplayMode.COMMAND),
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val cache = MediaCacheStore(Files.createTempDirectory(context.cacheDir.toPath(), "z2-settings"))
         composeRule.setContent {
             OpenZCineTheme {
+                val operatorSession = rememberTestOperatorSession(assists, settings)
+                SideEffect { operatorSession.declare(modes) }
                 OperatorSettingsScreen(
                     session = session, assists = assists,
-                    operatorSession = rememberTestOperatorSession(assists, settings), editsLiveView = editsLiveView,
+                    operatorSession = operatorSession, editsLiveView = editsLiveView,
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,
                     onReportProblem = {},

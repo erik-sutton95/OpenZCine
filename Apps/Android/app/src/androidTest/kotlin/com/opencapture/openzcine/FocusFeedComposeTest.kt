@@ -68,7 +68,7 @@ class FocusFeedComposeTest {
         setMonitor(session, source, "focus-feed-compose-test")
 
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule
             .onNodeWithContentDescription(
@@ -120,7 +120,7 @@ class FocusFeedComposeTest {
             up()
         }
         assertDisplayMode("Live")
-        composeRule.onNodeWithTag("focus_reset_button").performClick()
+        composeRule.onNodeWithTag("monitor.system.focusReset").performClick()
         composeRule.waitUntil(5_000) { session.resetCount == 1 }
     }
 
@@ -162,7 +162,7 @@ class FocusFeedComposeTest {
         val session = FocusSession(focusDelayMillis = 250)
         setMonitor(session, FocusFrameSource(testJpeg()), "focus-feed-rapid-tap-test")
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
         val feed = composeRule.onNodeWithTag("monitor_live_feed")
 
@@ -188,7 +188,7 @@ class FocusFeedComposeTest {
             setMonitor(session, FocusFrameSource(testJpeg()), "focus-feed-pinch-test")
         settings.portraitFeedAspect = PortraitFeedAspect.FIT_16X9
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
 
         composeRule.onNodeWithTag("monitor_live_feed").performTouchInput {
@@ -241,7 +241,7 @@ class FocusFeedComposeTest {
             }
 
             composeRule.waitUntil(5_000) {
-                composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+                composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
             }
             composeRule
                 .onNodeWithContentDescription(
