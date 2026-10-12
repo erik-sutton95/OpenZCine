@@ -27,16 +27,10 @@ internal fun isWifiRadioEnabled(context: Context): Boolean =
 /**
  * Whether this phone currently sits on a camera's own soft-AP network. Used to
  * block joins that cannot work from there (camera APs isolate their clients).
- * Reads the associated SSID, which needs the location permission the app
- * already holds for Wi‑Fi discovery; an unreadable SSID reports `false`.
+ * Reads the network name through [ConnectedNetworkName], which needs the
+ * location permission; an unreadable name reports `false`.
  */
-internal fun isOnCameraAccessPointNetwork(context: Context): Boolean {
-    val wifi =
-        context.applicationContext.getSystemService(WifiManager::class.java) ?: return false
-    @Suppress("DEPRECATION")
-    val raw = wifi.connectionInfo?.ssid ?: return false
-    return looksLikeNikonAccessPointSsid(raw.trim().removeSurrounding("\""))
-}
+internal fun isOnCameraAccessPointNetwork(context: Context): Boolean = ConnectedNetworkName.isCameraAccessPoint(context)
 
 /**
  * Network-remedy prompt for camera-AP flows. Defaults to the "Wi‑Fi is off"
