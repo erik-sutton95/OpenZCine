@@ -136,13 +136,6 @@ class MediaClipsTest {
     }
 
     @Test
-    fun `playback time uses compact minute clock`() {
-        assertEquals("0:00", formatPlaybackTime(-1))
-        assertEquals("1:05", formatPlaybackTime(65_999))
-        assertEquals("61:01", formatPlaybackTime(3_661_000))
-    }
-
-    @Test
     fun `partial camera listing is represented as a retryable failure`() {
         val clip = NikonMediaClips.parse(wire.lines().first()).single()
 

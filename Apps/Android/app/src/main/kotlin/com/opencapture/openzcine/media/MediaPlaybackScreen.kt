@@ -41,7 +41,6 @@ import com.opencapture.openzcine.nikonPlaybackAssistTools
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.SettingsPalette
 import com.opencapture.openzcine.settings.nikonAssistSection
-import kotlin.math.max
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -361,9 +360,4 @@ private fun PlaybackLoading(message: String) {
             color = LiveDesign.muted,
         )
     }
-}
-
-internal fun formatPlaybackTime(milliseconds: Long): String {
-    val seconds = max(0L, milliseconds) / 1_000L
-    return "%d:%02d".format(seconds / 60L, seconds % 60L)
 }
