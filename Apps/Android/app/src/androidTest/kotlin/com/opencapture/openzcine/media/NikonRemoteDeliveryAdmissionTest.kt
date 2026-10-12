@@ -4,10 +4,15 @@ import android.content.ContextWrapper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.opencapture.opencine.appkit.*
+import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliverySelection
+import com.opencapture.opencine.cameracontrols.begin
+import com.opencapture.opencine.cameracontrols.preparation
+import com.opencapture.opencine.frameio.*
 import com.opencapture.opencine.media.MediaCatalog
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
-import com.opencapture.openzcine.frameio.*
+import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
+import com.opencapture.openzcine.frameio.PassthroughFrameioArtifactPreparer
 import java.io.File
 import java.io.OutputStream
 import java.nio.file.Files
@@ -27,8 +32,9 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** SIMULATED cache, account, HTTP and route ports through the actual Host and Coordinator.
- * Manual gates exercise acceptance before native entry; no camera/cloud/hardware credit. */
+/** SIMULATED cache, account, HTTP and route ports through the actual Nikon selection, shared
+ * popup model and app-scoped coordinator. Manual gates exercise acceptance before native entry;
+ * no camera/cloud/hardware credit. */
 @RunWith(AndroidJUnit4::class)
 class NikonRemoteDeliveryAdmissionTest {
     @Test fun currentAcceptedProjectUploadsAfterPredecessorCleanup() = runBlocking {
@@ -82,10 +88,9 @@ class NikonRemoteDeliveryAdmissionTest {
             val popup = f.prepare()
             f.reauthenticate("SIMULATED-token-B")
             f.controller.loadProjects()
-            val request = popup.model.takeRequest()!!
-            f.host.dismissPopup(popup)
-            f.host.begin(popup, request)
-            assertNull(f.host.capturedRun)
+            val request = popup.takeRequest()!!
+            assertNull(f.selection.begin(f.coordinator, request))
+            assertNull(f.coordinator.capturedRun)
             assertFalse(f.entryEntered.isCompleted)
             f.assertNoDeliveryIO()
         } }
@@ -96,8 +101,8 @@ class NikonRemoteDeliveryAdmissionTest {
             f.http.projectsRelease = projects
             val popup = f.prepare(waitForListing = false)
             withTimeout(10_000) { f.http.projectsEntered.await() }
-            assertNull(popup.model.state.value.listing)
-            assertTrue(popup.model.canContinue)
+            assertNull(popup.state.value.listing)
+            assertTrue(popup.canContinue)
             f.accept(popup)
             projects.complete(Unit)
             f.http.projectsRelease = null
@@ -124,7 +129,7 @@ class NikonRemoteDeliveryAdmissionTest {
             f.join()
             assertEquals(1, f.hop.leaves)
             assertEquals(1, f.hop.joins)
-            assertFalse(f.coordinator.nativeState.value.running)
+            assertFalse(f.coordinator.lifetime.state.value.running)
         } }
     }
     @Test fun accountRefusedBeforeNativeEntryJoinsTheAcceptedPreparationRoute() = runBlocking {
@@ -134,12 +139,13 @@ class NikonRemoteDeliveryAdmissionTest {
             f.releaseEntry()
             withTimeout(10_000) { f.hop.returnEntered.await() }
             f.assertNoDeliveryIO()
-            assertTrue(f.coordinator.nativeState.value.running)
+            assertTrue(f.coordinator.lifetime.state.value.running)
             f.hop.returnRelease.complete(Unit)
             f.join()
             assertEquals(1, f.hop.leaves)
             assertEquals(1, f.hop.joins)
-            assertNull(f.coordinator.completionToast)
+            // The refused run ends through the shared outcome toast (no upload was made).
+            assertEquals("Cancelled.", f.coordinator.lifetime.state.value.toast)
         } }
     }
     @Test fun oldBeforeEntryCancellationCannotRestoreASuccessorRoute() = runBlocking {
@@ -264,14 +270,15 @@ class NikonRemoteDeliveryAdmissionTest {
             override fun getCacheDir(): File = root.resolve("cache").toFile().apply { mkdirs() }
         }
         val controller = FrameioDeliveryController({ FrameioPublicConfiguration("SIMULATED", "simulated://callback") }, core, http,
-            secrets, destinations, network, root.resolve("cache/share/ready"), clock = { 1_000L },
+            secrets, destinations, network, listOf(root.resolve("cache/share/ready")), "OpenZCine", clock = { 1_000L },
             internetWaitPoll = {}, internetWaitAttempts = 2)
-        val coordinator = MediaDeliveryCoordinator(context, controller, cache, object : MediaGalleryGateway {
+        val coordinator = MonitorDeliveryCoordinator(scope)
+        private val delivery = NikonMediaDelivery(context, coordinator, controller, cache, object : MediaGalleryGateway {
             override fun createPending(artifact: MediaGalleryArtifact): PendingMediaGalleryItem = error("No Gallery IO")
             override fun openPending(item: PendingMediaGalleryItem): OutputStream = error("No Gallery IO")
             override fun publish(item: PendingMediaGalleryItem) = error("No Gallery IO")
             override fun deletePending(item: PendingMediaGalleryItem) = error("No Gallery IO")
-        }, scope)
+        }, PassthroughFrameioArtifactPreparer)
         private val index = MediaLibraryIndex(Preferences())
         private val codec = NikonMediaLibraryCodec("SIMULATED", null, cache, { emptySet() }, { false })
         val record = codec.record(NikonLibraryClip("SIMULATED", NikonMediaClipRecord(1, 1, 4, "20261007T120000",
@@ -280,40 +287,44 @@ class NikonRemoteDeliveryAdmissionTest {
             eligibility = MonitorMediaOriginalEligibility.ExactSize, catalogAddress = "SIMULATED/index.json", preservedMetadata = emptyList(),
             catalogStore = index.catalogByteStore("SIMULATED")), NikonLibraryFavorites(index, listOf("SIMULATED")),
             scope = scope, cacheScanning = MonitorMediaCacheScanning.IMMEDIATE, initialCatalog = MediaCatalog(), initialRecords = listOf(record))
-        val host: NikonMediaDeliveryHost
+        lateinit var selection: NikonDeliverySelection
         var acceptedLease: FrameioInternetLease? = null
         init {
             cache.openEntry("SIMULATED", MediaCacheObjectIdentity(record.payload.clip), 4).apply {
                 append(0, byteArrayOf(1, 2, 3, 4)); complete()
             }
             library.begin()
-            host = NikonMediaDeliveryHost(scope, coordinator, controller, cache, library,
-                MonitorMediaGalleryOpen(record, listOf(record), library.actionToken), null, { true }, { MonitorPlaybackAdmission { true } },
-                { MediaDeliveryConfiguration(bakeLut = false, includeMetadata = false) }, beforeFirstIO = {
-                    entryEntered.complete(Unit); entryRelease.await()
-                })
         }
-        suspend fun prepare(waitForListing: Boolean = true): NikonMediaDeliveryHost.Popup {
-            host.share(record)
-            val popup = host.popup.value!!
-            popup.model.selectDestination(MonitorDeliveryDestination.REMOTE_UPLOAD)
-            if (waitForListing) withTimeout(10_000) { popup.model.state.first { it.listing != null && !it.projectsLoading } }
+        /** The Nikon selection, its first cache IO held at the gate. */
+        suspend fun prepare(waitForListing: Boolean = true): MonitorDeliveryPreparationModel<Unit,
+            com.opencapture.opencine.runtime.MonitorMovieExportContainer, FrameioProject, FrameioCapturedProjectListing, FrameioInternetLease> {
+            val captured = delivery.selection(listOf(record), library, MonitorMediaGalleryOpen(record, listOf(record), library.actionToken),
+                null, { true }, { MonitorPlaybackAdmission { true } }, null, null,
+                MediaDeliveryConfiguration(bakeLut = false, includeMetadata = false))!!
+            val source = captured.source
+            selection = MonitorOperatorDeliverySelection(captured.records, captured.facts, captured.admission,
+                MonitorDeliverySource(source.originals, source.prepare, source.release, source.filename, source.metadata,
+                    source.noPrepared, load = { entryEntered.complete(Unit); entryRelease.await(); source.load() }),
+                captured.photos, captured.photosAuthorization, captured.exportOptions, captured.configuration, captured.remote)
+            val popup = selection.preparation(scope, coordinator)
+            popup.start()
+            popup.selectDestination(MonitorDeliveryDestination.REMOTE_UPLOAD)
+            if (waitForListing) withTimeout(10_000) { popup.state.first { it.listing != null && !it.projectsLoading } }
             return popup
         }
         suspend fun accept(withRoute: Boolean = false): MonitorDeliveryRunHandle = accept(prepare(), withRoute)
-        suspend fun accept(popup: NikonMediaDeliveryHost.Popup, withRoute: Boolean = false): MonitorDeliveryRunHandle {
+        suspend fun accept(popup: MonitorDeliveryPreparationModel<Unit, com.opencapture.opencine.runtime.MonitorMovieExportContainer,
+            FrameioProject, FrameioCapturedProjectListing, FrameioInternetLease>, withRoute: Boolean = false): MonitorDeliveryRunHandle {
             if (withRoute) {
                 network.value = FrameioNetworkState.CAMERA_ACCESS_POINT
                 controller.attachCameraHop(hop)
                 val lease = controller.claimInternetHop { true }!!
                 assertTrue(controller.waitInternetHop(lease))
-                assertTrue(popup.model.adoptInternetLease(lease))
+                assertTrue(popup.adoptInternetLease(lease))
             }
-            val request = popup.model.takeRequest()!!
+            val request = popup.takeRequest()!!
             acceptedLease = request.internetLease
-            host.dismissPopup(popup)
-            host.begin(popup, request)
-            val run = host.capturedRun!!
+            val run = selection.begin(coordinator, request)!!
             withTimeout(10_000) { entryEntered.await() }
             return run
         }
@@ -328,7 +339,7 @@ class NikonRemoteDeliveryAdmissionTest {
             assertTrue(controller.isConnected)
         }
         fun releaseEntry() { entryRelease.complete(Unit) }
-        suspend fun join() { withTimeout(10_000) { host.capturedRun!!.awaitEnteredCleanup() } }
+        suspend fun join() { withTimeout(10_000) { coordinator.capturedRun!!.awaitEnteredCleanup() } }
         fun assertNoDeliveryIO() {
             assertEquals(0, http.uploads)
             assertTrue(http.createdFolders.isEmpty())
@@ -336,7 +347,7 @@ class NikonRemoteDeliveryAdmissionTest {
         }
         suspend fun close() {
             entryRelease.complete(Unit); hop.returnRelease.complete(Unit); http.projectsRelease?.complete(Unit)
-            host.cancelAndJoin(); coordinator.close(); library.dispose(); scope.cancel()
+            coordinator.capturedRun?.cancelAndJoin(); coordinator.close(); library.dispose(); scope.cancel()
         }
     }
     private suspend fun fixture(body: suspend (Fixture) -> Unit) {

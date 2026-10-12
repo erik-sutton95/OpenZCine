@@ -3,10 +3,15 @@ package com.opencapture.openzcine.media
 import android.content.ContextWrapper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.opencapture.opencine.appkit.MonitorDeliveryAdmission
+import com.opencapture.opencine.appkit.*
+import com.opencapture.opencine.cameracontrols.begin
+import com.opencapture.opencine.frameio.*
+import com.opencapture.opencine.media.MediaCatalog
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
-import com.opencapture.openzcine.frameio.*
+import com.opencapture.opencine.runtime.MonitorMovieExportContainer
+import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
+import com.opencapture.openzcine.frameio.PassthroughFrameioArtifactPreparer
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.OutputStream
@@ -24,78 +29,62 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** SIMULATED cache bytes, native route and Gallery ports; actual app Coordinator/shared run.
- * No camera, HTTP, OAuth, Photos permissions or video-decoder qualification is implied. */
+/** SIMULATED cache bytes, native route and Gallery ports; the actual Nikon selection and the
+ * shared app-scoped run. No camera, HTTP, OAuth, Photos permissions or video-decoder
+ * qualification is implied. */
 @RunWith(AndroidJUnit4::class)
 class NikonNativeDeliveryLeaseTest {
     @Test fun nativeShareJoinsItsExistingSetupHopBeforeChooserPublication() = runBlocking {
         withContext(Dispatchers.Main.immediate) { fixture { f ->
-            val lease = f.lease()
-            var shares = 0
-            val handle = f.coordinator.beginNativeShareCaptured(listOf(f.selection), f.config, null,
-                MonitorDeliveryAdmission { f.controller.ownsInternetHop(lease) }, route = lease,
-                completion = MonitorDeliveryAdmission { f.controller.endedInternetHop(lease) }) { ready, _ ->
-                assertEquals(1, ready.size); assertTrue(Files.isRegularFile(ready.single().file)); shares++
-            }!!
+            val handle = f.begin(MonitorDeliveryPostExportAction.SYSTEM_SHARE, f.lease())!!
             withTimeout(10_000) { f.hop.returnEntered.await() }
-            assertEquals(0, shares)
-            assertTrue(f.coordinator.nativeState.value.running)
+            assertNull(f.state.share)
+            assertTrue(f.state.running)
             f.hop.returnRelease.complete(Unit)
             withTimeout(10_000) { handle.awaitEnteredCleanup() }
-            assertEquals(1, shares)
+            val ready = f.state.share!!.payload.urls
+            assertEquals(1, ready.size); assertTrue(ready.single().isFile)
             assertEquals(1, f.hop.leaves); assertEquals(1, f.hop.joins)
-            assertFalse(f.coordinator.nativeState.value.running)
+            assertFalse(f.state.running)
             assertEquals(0, f.httpCalls)
         } }
     }
     @Test fun nativePhotosJoinsItsExistingSetupHopWithoutUploadOrNewLeave() = runBlocking {
         withContext(Dispatchers.Main.immediate) { fixture { f ->
-            val lease = f.lease()
-            val handle = f.coordinator.beginSaveToPhotosCaptured(listOf(f.selection), f.config, null,
-                MonitorDeliveryAdmission { f.controller.ownsInternetHop(lease) }, route = lease,
-                completion = MonitorDeliveryAdmission { f.controller.endedInternetHop(lease) })!!
+            val handle = f.begin(MonitorDeliveryPostExportAction.SAVE_TO_PHOTOS, f.lease())!!
             withTimeout(10_000) { f.hop.returnEntered.await() }
             assertEquals(1, f.gallery.published)
-            assertNull(f.coordinator.completionToast)
-            assertTrue(f.coordinator.nativeState.value.running)
+            assertNull(f.state.toast)
+            assertTrue(f.state.running)
             f.hop.returnRelease.complete(Unit)
             withTimeout(10_000) { handle.awaitEnteredCleanup() }
-            assertNotNull(f.coordinator.completionToast)
+            assertNotNull(f.state.toast)
             assertEquals(1, f.hop.leaves); assertEquals(1, f.hop.joins)
             assertEquals(0, f.httpCalls)
         } }
     }
     @Test fun cancelledNativeRunJoinsCapturedReturnWithoutPublishing() = runBlocking {
         withContext(Dispatchers.Main.immediate) { fixture { f ->
-            val lease = f.lease()
-            var shares = 0
-            val handle = f.coordinator.beginNativeShareCaptured(listOf(f.selection), f.config, null,
-                MonitorDeliveryAdmission { f.controller.ownsInternetHop(lease) }, route = lease,
-                completion = MonitorDeliveryAdmission { f.controller.endedInternetHop(lease) }) { _, _ -> shares++ }!!
+            val handle = f.begin(MonitorDeliveryPostExportAction.SYSTEM_SHARE, f.lease())!!
             withTimeout(10_000) { f.hop.returnEntered.await() }
             handle.cancel()
-            assertEquals(0, shares)
+            assertNull(f.state.share)
             f.hop.returnRelease.complete(Unit)
             withTimeout(10_000) { handle.awaitEnteredCleanup() }
-            assertEquals(0, shares)
+            assertNull(f.state.share)
             assertEquals(1, f.hop.joins)
-            assertNull(f.coordinator.completionToast)
+            assertNull(f.state.toast)
         } }
     }
     @Test fun lateOldNativeReturnCannotRestoreOrPublishToSuccessor() = runBlocking {
         withContext(Dispatchers.Main.immediate) { fixture { f ->
-            val lease = f.lease()
-            var shares = 0
-            val handle = f.coordinator.beginNativeShareCaptured(listOf(f.selection), f.config, null,
-                MonitorDeliveryAdmission { f.controller.ownsInternetHop(lease) }, route = lease,
-                completion = MonitorDeliveryAdmission { f.controller.endedInternetHop(lease) }) { _, _ -> shares++ }!!
+            val handle = f.begin(MonitorDeliveryPostExportAction.SYSTEM_SHARE, f.lease())!!
             withTimeout(10_000) { f.hop.returnEntered.await() }
             val successor = Hop(f.network, "SIMULATED-B")
             f.controller.attachCameraHop(successor)
             val next = f.controller.claimInternetHop { true }!!
             f.hop.returnRelease.complete(Unit)
             withTimeout(10_000) { handle.awaitEnteredCleanup() }
-            assertEquals(0, shares)
             assertTrue(f.controller.ownsInternetHop(next))
             assertEquals(0, successor.leaves); assertEquals(0, successor.joins)
             assertEquals(1, f.hop.joins)
@@ -128,20 +117,24 @@ class NikonNativeDeliveryLeaseTest {
         override fun publish(item: PendingMediaGalleryItem) { published++ }
         override fun deletePending(item: PendingMediaGalleryItem) = Unit
     }
+    private class Preferences : MediaLibraryPreferences {
+        private val values = mutableMapOf<String, String>()
+        override fun getString(key: String): String? = values[key]
+        override fun putString(key: String, value: String?) {
+            if (value == null) values.remove(key) else values[key] = value
+        }
+    }
     private class Fixture(val root: Path) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val network = Network()
         val hop = Hop(network, "SIMULATED-A")
         val gallery = Gallery()
         var httpCalls = 0
-        val config = MediaDeliveryConfiguration(bakeLut = false, includeMetadata = false)
-        val selection = MediaDeliverySelection("SIMULATED", NikonMediaClipRecord(1, 1, 4,
-            "20261007T120000", 1920, 1080, "A.MOV", NikonMediaContentKind.PLAYABLE_PROXY, null))
         val cache = MediaCacheStore(root.resolve("media"))
         private val context = object : ContextWrapper(InstrumentationRegistry.getInstrumentation().targetContext) {
             override fun getCacheDir(): File = root.resolve("cache").toFile().apply { mkdirs() }
         }
-        val controller = FrameioDeliveryController({ null }, SwiftFrameioCoreBridge,
+        val controller = FrameioDeliveryController({ null }, NativeFrameioCoreBridge,
             object : FrameioHttpClient {
                 override suspend fun execute(request: FrameioHttpRequest, bearerToken: String?, contentType: String?): FrameioHttpResponse {
                     httpCalls++; error("No HTTP for native delivery")
@@ -161,20 +154,40 @@ class NikonNativeDeliveryLeaseTest {
                 override fun load(): FrameioDestination? = null
                 override fun save(destination: FrameioDestination) = error("No account IO")
                 override fun clear() = Unit
-            }, network, root.resolve("share"), internetWaitPoll = {}, internetWaitAttempts = 2)
-        val coordinator = MediaDeliveryCoordinator(context, controller, cache, gallery, scope)
+            }, network, listOf(root.resolve("cache/share/ready")), "OpenZCine", internetWaitPoll = {}, internetWaitAttempts = 2)
+        val coordinator = MonitorDeliveryCoordinator(scope)
+        private val delivery = NikonMediaDelivery(context, coordinator, controller, cache, gallery, PassthroughFrameioArtifactPreparer)
+        private val index = MediaLibraryIndex(Preferences())
+        private val codec = NikonMediaLibraryCodec("SIMULATED", null, cache, { emptySet() }, { false })
+        private val record = codec.record(NikonLibraryClip("SIMULATED", NikonMediaClipRecord(1, 1, 4, "20261007T120000",
+            1920, 1080, "A.MOV", NikonMediaContentKind.PLAYABLE_PROXY, null)))
+        private val library = MonitorMediaLibraryModel(MonitorMediaCache(MonitorMediaCacheDirectory(cache.rootDirectory.toFile()), codec,
+            eligibility = MonitorMediaOriginalEligibility.ExactSize, catalogAddress = "SIMULATED/index.json", preservedMetadata = emptyList(),
+            catalogStore = index.catalogByteStore("SIMULATED")), NikonLibraryFavorites(index, listOf("SIMULATED")),
+            scope = scope, cacheScanning = MonitorMediaCacheScanning.IMMEDIATE, initialCatalog = MediaCatalog(), initialRecords = listOf(record))
+        val state get() = coordinator.lifetime.state.value
         init {
-            cache.openEntry(selection.cameraID, MediaCacheObjectIdentity(selection.clip), 4).apply {
+            cache.openEntry("SIMULATED", MediaCacheObjectIdentity(record.payload.clip), 4).apply {
                 append(0, byteArrayOf(1, 2, 3, 4)); complete()
             }
+            library.begin()
             controller.attachCameraHop(hop)
         }
+        /** The setup hop the popup took, transferred to the accepted native request. */
         suspend fun lease(): FrameioInternetLease {
             val popup = controller.claimInternetHop { true }!!
             assertTrue(controller.waitInternetHop(popup))
             return controller.transferInternetHop(popup)!!
         }
-        fun close() { hop.returnRelease.complete(Unit); coordinator.close(); scope.cancel() }
+        fun begin(action: MonitorDeliveryPostExportAction, lease: FrameioInternetLease): MonitorDeliveryRunHandle? {
+            val selection = delivery.selection(listOf(record), library, MonitorMediaGalleryOpen(record, listOf(record), library.actionToken),
+                null, { true }, { MonitorPlaybackAdmission { true } }, null, null,
+                MediaDeliveryConfiguration(bakeLut = false, includeMetadata = false))!!
+            return selection.begin(coordinator, MonitorDeliveryPreparedRequest<Unit, MonitorMovieExportContainer, FrameioProject,
+                FrameioCapturedProjectListing, FrameioInternetLease>(MonitorDeliveryDestination.NATIVE_SHARE,
+                selection.configuration, action, lease))
+        }
+        suspend fun close() { hop.returnRelease.complete(Unit); coordinator.close(); library.dispose(); scope.cancel() }
     }
     private suspend fun fixture(body: suspend (Fixture) -> Unit) {
         val root = Files.createTempDirectory("SIMULATED-native-delivery-lease")
