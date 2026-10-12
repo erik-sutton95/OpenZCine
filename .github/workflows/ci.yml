@@ -277,6 +277,49 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  conformance:
+    name: Shared conformance scenarios, iOS
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    # Hosted macOS for the same reason as `native`: it runs code from the pull request.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+      - name: Install native tooling
+        run: brew install just || true
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
+      # OpenCine's scripts/ios-private-simulator.py: a new iPhone 16 Pro with accessibility enabled in
+      # its own preference store only, the setup every app's conformance job shares.
+      - name: Create a private simulator with accessibility enabled
+        run: |
+          mkdir -p "$RUNNER_TEMP/conformance-ios"
+          udid=$(../OpenCine/scripts/ios-private-simulator.py create \
+            "opc-z-conformance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --report "$RUNNER_TEMP/conformance-ios/simulator-setup.json")
+          echo "CONFORMANCE_DEVICE_ID=$udid" >> "$GITHUB_ENV"
+      - name: Run the shared scenarios and kit suites (RunnerUIReview)
+        run: just conformance-ios "$CONFORMANCE_DEVICE_ID" "$RUNNER_TEMP/conformance-ios/RunnerUIReview.xcresult"
+      - name: Delete the private simulator
+        if: always()
+        run: |
+          if [ -n "${CONFORMANCE_DEVICE_ID:-}" ]; then
+            ../OpenCine/scripts/ios-private-simulator.py delete "$CONFORMANCE_DEVICE_ID"
+          fi
+      - name: Retain conformance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conformance-ios-evidence
+          path: ${{ runner.temp }}/conformance-ios
+          retention-days: 7
+          if-no-files-found: warn
+
   gate:
     name: CI gate
     # The single required status check. `native` and `android` are conditional, and a required
@@ -284,7 +327,7 @@ jobs:
     # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
     # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
     if: always()
-    needs: [meta, secrets, changes, native, android, bug-relay, handbook]
+    needs: [meta, secrets, changes, native, conformance, android, bug-relay, handbook]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have passed or been deliberately skipped

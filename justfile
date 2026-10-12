@@ -89,6 +89,12 @@ check-demo-isolation:
 # Run all Swift-only checks.
 swift-check: swift-lint swift-test
 
+# The shared conformance scenarios and kit suites (RunnerUIReview: RunnerUITests without the
+# physical camera classes) on one simulator, made with accessibility enabled by
+# ../OpenCine/scripts/ios-private-simulator.py create <name>.
+conformance-ios udid result="":
+    xcodebuild -project ios/Runner.xcodeproj -scheme RunnerUIReview -destination 'platform=iOS Simulator,id={{udid}}' -parallel-testing-enabled NO {{ if result != "" { "-resultBundlePath " + result } else { "" } }} test
+
 # Build the native iOS app for the simulator.
 ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
