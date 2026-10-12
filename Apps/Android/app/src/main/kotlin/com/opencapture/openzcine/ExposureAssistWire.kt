@@ -1,7 +1,9 @@
 package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.opencine.media.MonitorTransfer
 import com.opencapture.openzcine.bridge.SwiftCore
+import kotlin.math.roundToInt
 
 /** Label the applied native read: the facade supplies built-in looks for the two log curves. */
 internal fun FeedFalseColorReference.curveLabel(read709: Boolean): String = when (curveOrdinal) {
@@ -23,6 +25,18 @@ data class ExposureAssistMapping(
     val middleGrayNative: Float,
     val clipNative: Float,
 ) {
+    /** The shared monitor transfer naming this curve, which every shared assist reads (Swift `monitorTransfer`). */
+    val transfer: MonitorTransfer
+        get() = when (curveOrdinal) {
+            ExposureCurveOrdinals.NIKON_NLOG -> MonitorTransfer.NLOG
+            ExposureCurveOrdinals.RED_LOG3G10 -> MonitorTransfer.LOG3G10
+            ExposureCurveOrdinals.HLG -> MonitorTransfer.HDR
+            else -> MonitorTransfer.SRGB
+        }
+
+    /** The camera's clip on the shared 0...255 tap axis: the ceiling the shared assists take. */
+    val clipByte: Int get() = clipNative.roundToInt().coerceIn(1, 255)
+
     companion object {
         private const val FIELD_COUNT = 4
 

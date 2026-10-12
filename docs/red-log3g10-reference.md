@@ -252,8 +252,7 @@ settings do not establish equal physical trace density across native backends.
 | Source display tone map | [`Sources/OpenZCineCore/MonitorDisplayToneMap.swift`](../Sources/OpenZCineCore/MonitorDisplayToneMap.swift) | Source-derived display fallback, separate from canonical false-colour categories |
 | False-colour source adapter and cubes | [`Sources/OpenZCineCore/FalseColor.swift`](../Sources/OpenZCineCore/FalseColor.swift) | Source-linear CineStop adapter; canonical `OpenCineMedia.LiveColorScience` bands and `MonitorFalseColorLattice` |
 | iOS false-colour rendering | [`ios/Runner/ImageEffectsCompositor.swift`](../ios/Runner/ImageEffectsCompositor.swift) | Cached cube application across live, playback, and demo feeds |
-| Histogram traffic lights / crush floor | [`Sources/OpenZCineCore/ScopeSampler.swift`](../Sources/OpenZCineCore/ScopeSampler.swift) | Crush/clip edge detection on the reference scale |
-| Traffic Lights meter | [`Sources/OpenZCineCore/TrafficLightsMeter.swift`](../Sources/OpenZCineCore/TrafficLightsMeter.swift) | Per-channel goal-post readout |
+| Scopes, histogram traffic lights and Traffic Lights meter | OpenCine `ScopeSampler`, `ScopeTrafficLights` and `MonitorAssistEngine` | Shared readings on the Nikon transfer and its stated clip |
 | Tests | [`Tests/OpenZCineCoreTests/ExposureScaleTests.swift`](../Tests/OpenZCineCoreTests/ExposureScaleTests.swift), [`FalseColorTests.swift`](../Tests/OpenZCineCoreTests/FalseColorTests.swift) | Golden anchors and round-trips |
 
 ## Goal posts and traffic lights
@@ -265,10 +264,9 @@ RED cameras expose two raw-data edge indicators beside the histogram ([RED 101 a
 - **Traffic lights** — RGB dots that light when **~2%** of pixels in a channel are clipped (per-channel
   clip visibility).
 
-OpenZCine implements RED-inspired **traffic lights** and crush/clip guides on the normalized
-black-to-current-clip scale (`ScopeSampler`, `TrafficLightsMeter`, waveform/parade safe-border
-guides). Thresholds are
-configurable in assist settings (`OperatorPreferences`). Crush detection anchors at the log toe floor
+OpenZCine shows the shared OpenCine **traffic lights** and crush/clip guides, read on the camera's
+transfer with its stated clip warning code as the ceiling (OpenCine `ScopeTrafficLights`, with a
+clip shelf and hysteresis). The crush/clip compensation is configurable in assist settings. Crush detection anchors at the log toe floor
 (`blackIRE`), not native code 0 or legal black — matching the Log3G10 toe behaviour described above.
 
 ## Related docs

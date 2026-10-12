@@ -177,23 +177,17 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   same as Pocket and Insta. On devices that sustain it (API 31+, 4 GB RAM, hardware rendering) the
   material blurs a bounded sample of the presented picture, graded with the live look; elsewhere it
   is the shared plain fill.
-- **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
-  monitor-owned clean-frame sampler at 30 Hz (24 Hz above three active scopes), with the same
-  thermal slowdown tiers as iOS. The shared core owns all axis/curve and Traffic
-  Lights decisions behind the facade (`Sources/OpenZCineAndroidFacade/ScopeFrameWire.swift` ↔
-  `bridge/ScopeWire.kt`): the 3-anchor display axis (log-black floor → 5% crush line, fixed
-  per-curve mid grey, clip warning → 95% line), tone-mapped vectorscope, and RGB goal-post
-  direction/fill/clip/crush values come back as flat payloads. The active camera codec/base ISO
-  resolves the curve and current clip in Swift before both renderer and scopes consume it. Kotlin
-  reduces each JPEG once (1/2ⁿ decode to ≤160 px wide) and draws (`ScopeView.kt`). Scope tools
-  toggle independently; landscape panels are draggable with per-scope persisted placement, while
-  portrait displays the two most-recent active scopes in canonical order. Operator Setup persists
-  the iOS-equivalent waveform/parade mode, guides, brightness, footprint, vectorscope zoom, and
-  histogram/Traffic Lights footprint; Kotlin does not duplicate any signal math. The histogram
-  carries the iOS-style RGB crush/clip edge blocks (default on) and a 95–100 IRE clip tint from
-  that same Swift result. View Assist persists iOS's five-step crush/clip compensation selector
-  (`0`, `¼`, `½`, `¾`, `1` stop) and forwards its raw value to Swift; Kotlin never remeasures the
-  Traffic Lights result. Debug intent selections are
+- **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights are the shared
+  OpenCine scopes on the shared live surface. One monitor-owned clean-frame sampler (`ScopeView.kt`)
+  reduces each JPEG once (1/2ⁿ decode to ≤160 px wide) and publishes the shared `ScopeAssistBundle`
+  (`ScopeSampler.bundle`): the shared level axis with the clip line at 100, the shared Traffic
+  Lights with their hysteresis and clip shelf, and the histogram on that axis, at about 12 Hz (10 Hz
+  above three active scopes) with the iOS thermal slowdown tiers. The camera supplies only its facts:
+  the curve as the shared `MonitorTransfer` and its stated clip warning code, which the Swift facade
+  resolves from the codec and ISO (`resolveExposureAssistMapping`). The operator's crush/clip
+  compensation (`0`, `¼`, `½`, `¾`, `1` stop) is the shared lamps' threshold. The vectorscope reads
+  the operator LUT, or the curve's built-in Rec.709 look. Portrait fit stacks the first two active
+  scopes under the picture. Debug intent selections are
   comma-separated:
 
   ```sh

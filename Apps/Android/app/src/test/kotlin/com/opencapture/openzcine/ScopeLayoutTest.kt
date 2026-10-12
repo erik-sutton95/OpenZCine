@@ -6,8 +6,6 @@ import com.opencapture.monitorui.MonitorScopePoint
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
-import com.opencapture.monitorui.MonitorAssistTool
-import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -148,14 +146,6 @@ class ScopeLayoutTest {
         assertEquals(
             MonitorScopePoint(192f, 124f),
             MonitorScopePanelMath.snap(MonitorScopePoint(190.5f, 125f)),
-        )
-    }
-
-    @Test
-    fun `operator scale clamps to the shared range`() {
-        assertEquals(
-            1.6f,
-            MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.scaleFor(ScopeKind.VECTORSCOPE),
         )
     }
 

@@ -130,30 +130,6 @@ object SwiftCore {
      */
     external fun startConnectionDemo(listener: ConnectionPhaseListener)
 
-    // ── Scopes (camera axis and Traffic Lights in the Swift core; sampling and plots shared) ──
-
-    /**
-     * The shared scopes' level axis for this camera: `[256 code-to-IRE levels,
-     * middle-grey IRE]` (Swift `ScopeFrameWire.levelAxis`). Black lands on the
-     * crush line, mid grey at its fixed per-curve level and [clipNative] (the
-     * camera-resolved warning endpoint) on the clip line. Call once per mapping.
-     */
-    external fun scopeLevelAxis(curve: Int, clipNative: Float): FloatArray
-
-    /**
-     * The core Traffic Lights meter on the shared sampler's four 256-bin
-     * histograms (luma, red, green, blue, concatenated): `(level, clip, crush)
-     * × RGB` (Swift `ScopeFrameWire.trafficLights`). [crushClipCompensationRaw]
-     * is the persisted raw `AssistConfiguration.CrushClipCompensation`; Swift
-     * alone applies it.
-     */
-    external fun scopeTrafficLights(
-        histograms: FloatArray,
-        curve: Int,
-        clipNative: Float,
-        crushClipCompensationRaw: Int,
-    ): FloatArray
-
     // ── Feed effects (colour math baked in the core, uploaded by Kotlin) ──
 
     /**

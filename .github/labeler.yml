@@ -42,7 +42,6 @@
           - "Sources/OpenZCineCore/*Assist*.swift"
           - "Sources/OpenZCineCore/*Scope*.swift"
           - "Sources/OpenZCineCore/FalseColor.swift"
-          - "Sources/OpenZCineCore/TrafficLightsMeter.swift"
           - "ios/Runner/*Scope*.swift"
           - "ios/Runner/*Assist*.swift"
           - "ios/Runner/Monitor*.swift"

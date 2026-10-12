@@ -1,5 +1,4 @@
 import Foundation
-import OpenCineMedia
 
 /// Scope traces anchor the signal's useful range to fixed safe-border lines: the curve's log-black
 /// floor lands exactly on the crush line 5% up from the bottom, and the ISO-dependent overexposure
@@ -124,19 +123,5 @@ public enum ScopeDisplayScale {
 extension ExposureToneCurve {
     public var middleGrayNativeCode: Double {
         encode(linearLight: 0.18) * 255
-    }
-}
-
-extension ExposureSignalMapping {
-    /// This mapping as the shared scope axis: each tap code at its waveform level (with the 5%
-    /// crush/clip shelves), mid grey on its fixed per-curve line. Shared WAVE/PARADE/HISTO plots
-    /// draw on it, so Nikon readings keep this placement.
-    public var scopeLevelAxis: ScopeLevelAxis {
-        ScopeLevelAxis(
-            table: (0...255).map {
-                Float(
-                    ScopeDisplayScale.waveformLevel(signalNative: Double($0), mapping: self) * 100)
-            },
-            middleGrayIRE: ScopeDisplayScale.middleGrayLevel(mapping: self) * 100)
     }
 }
