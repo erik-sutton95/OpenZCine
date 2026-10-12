@@ -129,8 +129,7 @@ class InstantReviewOptionsComposeTest {
             OpenZCineTheme {
                 val assists = remember { idleNikonAssists() }
                 MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), frameSource = null,
-                    assists = assists, operatorSettings = settings, liveViewEnabled = false, sessionRecoveryEnabled = false,
-                    glassTierOverride = "flat")
+                    assists = assists, operatorSettings = settings, liveViewEnabled = false, sessionRecoveryEnabled = false)
             }
         }
         composeRule.waitUntilAtLeastOneExists(hasContentDescription("Instant Playback", substring = true), 5_000)

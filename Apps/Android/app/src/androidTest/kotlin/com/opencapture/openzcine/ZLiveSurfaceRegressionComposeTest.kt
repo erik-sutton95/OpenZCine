@@ -107,7 +107,7 @@ class ZLiveSurfaceRegressionComposeTest {
             val assists = remember { idleNikonAssists() }
             OpenZCineTheme {
                 MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), frames, assists,
-                    settings, liveViewEnabled = liveView, sessionRecoveryEnabled = false, glassTierOverride = "flat",
+                    settings, liveViewEnabled = liveView, sessionRecoveryEnabled = false,
                     controlsSurrendered = surrendered, borrowed = returnToStage != null, returnToStage = returnToStage)
             }
         }
