@@ -3,6 +3,7 @@ import MonitorUI
 import Network
 import Observation
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
@@ -974,9 +975,21 @@ final class NativeAppModel {
     }
     /// Root-owned presentation state for the problem report sheet.
     var isBugReportPresented = false
+    /// The app's one internet hop (A2-16): the shared owner over the Nikon Wi‑Fi joiner.
+    @ObservationIgnored lazy var internetHop = MonitorInternetHop<NikonHopRoute>(
+        port: .init(
+            onCameraNetwork: { [weak self] in self?.isOnCameraAccessPoint ?? false },
+            leave: { [weak self] route, current in
+                await self?.leaveForInternetHop(route, current: current)
+            },
+            rejoin: { [weak self] route, current in
+                await self?.rejoinAfterInternetHop(route, current: current)
+            }))
+    /// The Nikon joiner seams of the hop; tests replace them.
+    @ObservationIgnored var hopNative = NikonHopNative()
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
     /// internet. Drives the download screen's "Switching networks…" state.
-    private(set) var internetHopActive = false
+    var internetHopActive: Bool { internetHop.isActive }
     /// True only while a browser link is intentionally using an internet hop. On return to the
     /// foreground, the app rejoins the camera AP through the normal saved-profile pipeline.
     private(set) var externalInternetLinkHandoffActive = false
@@ -984,23 +997,11 @@ final class NativeAppModel {
     /// prevents transient activation changes during presentation from prompting an immediate
     /// camera-AP rejoin over the page the person just opened.
     @ObservationIgnored private var externalInternetLinkSawBackground = false
-    @ObservationIgnored private var externalInternetLinkToken: FrameioInternetHop.Token?
+    @ObservationIgnored private var externalInternetLinkToken: MonitorInternetHop<NikonHopRoute>.Token?
     /// The selected destination shown while iOS leaves the camera AP and settles on an
     /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
     /// panel collapse with the camera session.
     private(set) var internetDestinationPreparationTitle: String?
-    /// Share context to restore after an internet hop re-hosts the media browser (the monitor
-    /// panel's view state dies with the monitor): the clips whose share sheet initiated the hop.
-    /// The standalone browser consumes this on mount — reopening a single cached clip, or the
-    /// share sheet for a multi-clip selection.
-    var pendingHopShareResumeClips: [MediaClip]?
-    var pendingMediaDelivery: NikonPendingMediaDelivery? {
-        didSet { if oldValue !== pendingMediaDelivery { oldValue?.releaseIfUnconsumed() } }
-    }
-    /// Where to return after the hop: the camera's host + AP SSID captured before leaving.
-    @ObservationIgnored private var internetHopReturn: (host: String, ssid: String)?
-    @ObservationIgnored private var internetHopOwnership = FrameioInternetHop()
-    @ObservationIgnored private var internetHopTask: Task<Void, Never>?
     let displaySession = MonitorDisplaySession<DispMode>(mode: .live)
     var displayMode: DispMode {
         get { displaySession.mode }
@@ -2181,8 +2182,11 @@ final class NativeAppModel {
             case .settings: shell.open(.settings)
             case .media: shell.open(.media)
             default:
-                // Only the panel's own cover closes with it, never a standalone one.
-                if oldValue == .settings || oldValue == .media { shell.dismissCover() }
+                // Only the panel's own cover closes with it, never a standalone one. Once the
+                // monitor has gone (an internet hop retains the page), the cover is standalone.
+                if oldValue == .settings || oldValue == .media, shell.monitor != nil {
+                    shell.dismissCover()
+                }
             }
             // The Bluetooth shutter only listens while the live view is front — re-reconcile
             // when a full-screen panel opens or closes over it.
@@ -2518,16 +2522,12 @@ final class NativeAppModel {
     /// Background task streaming the clip currently open in the player, if any.
     @ObservationIgnored private var clipStreamTask: Task<Void, Never>?
     @ObservationIgnored private var clipStreamClipID: String?
-    /// Frame.io integration state (Media upload): the connected user (nil = not connected), an
-    /// in-flight connect, and per-clip upload progress (`clip.id` → 0…1).
-    var frameioUser: FrameioUser?
-    var frameioConnecting = false
-    var frameioUploadProgress: [String: Double] = [:]
-    /// Clip ids with an upload task in flight — blocks duplicate taps before progress is set.
+    /// Frame.io: clip ids with an upload in flight (blocks a duplicate upload of one clip), and
+    /// the account epoch every captured delivery holds.
     @ObservationIgnored var frameioUploadInFlight: [String: UUID] = [:]
     @ObservationIgnored let frameioAccount = NikonFrameioAccount()
-    /// Last Frame.io upload error message, surfaced as a transient toast; cleared after it's shown.
-    var frameioUploadError: String?
+    /// The app-scoped delivery owner: a run survives leaving the gallery or the player (A4-10).
+    let delivery = MonitorDeliveryCoordinator()
     var linkHealth = 0
     var linkHealthDetail = "Not connected"
 
@@ -5391,248 +5391,90 @@ final class NativeAppModel {
         return nil
     }
 
+    /// The route a hop leaves from, captured now: the camera's host and name, and whether the
+    /// open Media or Settings page stays over the cameras page while the phone is away.
+    func hopRoute(rehostActivePanel: Bool = true) -> NikonHopRoute {
+        .init(
+            host: connectedIdentity?.host ?? cameraHost,
+            displayName: connectedIdentity?.displayName, rehostActivePanel: rehostActivePanel)
+    }
+
     /// Leaves the camera's Wi‑Fi so iOS falls back to home Wi‑Fi or cellular, letting the RED LUT
     /// download reach the internet from camera-AP transport. The download screen unblocks itself
     /// reactively when reachability flips; ``endInternetHop()`` (fired when that screen
     /// dismisses) arms the rejoin + reconnect.
-    func beginInternetHop(rehostActivePanel: Bool = true) {
-        _ = beginInternetHopCaptured(rehostActivePanel: rehostActivePanel, admission: { true })
+    func beginInternetHop() { internetHop.begin(hopRoute()) }
+
+    /// Rejoins the camera after the RED download's hop. No-op when no hop is active.
+    func endInternetHop() {
+        if let token = internetHop.token { internetHop.end(token) }
     }
 
-    /// Captures the same native leave task and exact route; supplied admission never borrows a source.
-    @discardableResult func beginInternetHopCaptured(
-        rehostActivePanel: Bool = true,
-        admission: @escaping @MainActor () -> Bool,
-        handover: (@MainActor (FrameioInternetHop.Token) -> FrameioInternetHop.Token?)? = nil,
-        currentSSID: @escaping @MainActor () async -> String? = {
-            await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
-        },
-        leaveNetwork: @escaping @MainActor (String) -> Void = {
-            WiFiJoinCoordinator.shared.leaveCameraNetwork(ssid: $0)
-        }
-    ) -> FrameioInternetHop.Token? {
-        guard !internetHopActive, admission(), !internetHopActive else { return nil }
-        let host = connectedIdentity?.host ?? cameraHost
-        let displayName = connectedIdentity?.displayName
-        let captured = internetHopOwnership.begin()
-        internetHopActive = true
-        guard internetHopOwnership.owns(captured), admission(), internetHopOwnership.owns(captured)
-        else {
-            _ = endInternetHopCaptured(captured)
-            return nil
-        }
-        let previous = internetHopTask
-        internetHopTask = nil
-        previous?.cancel()
-        guard internetHopOwnership.owns(captured), admission(), internetHopOwnership.owns(captured)
-        else {
-            _ = endInternetHopCaptured(captured)
-            return nil
-        }
-        let task = Task { [weak self] in
-            guard let self else { return }
-            guard self.internetHopOwnership.owns(captured), admission(),
-                self.internetHopOwnership.owns(captured), !Task.isCancelled
-            else {
-                if self.internetHopOwnership.owns(captured) {
-                    _ = self.endInternetHopCaptured(captured)
-                }
-                return
-            }
-            let observedSSID = await currentSSID()
-            guard self.internetHopOwnership.owns(captured), admission(),
-                self.internetHopOwnership.owns(captured), !Task.isCancelled
-            else {
-                if self.internetHopOwnership.owns(captured) {
-                    _ = self.endInternetHopCaptured(captured)
-                }
-                return
-            }
-            let ssid =
-                observedSSID ?? self.cameraAccessPointSSID(host: host, displayName: displayName)
-            guard let ssid, !ssid.isEmpty else {
-                _ = self.endInternetHopCaptured(captured)
-                return
-            }
-            let leaving: FrameioInternetHop.Token
-            if let handover {
-                guard let transferred = handover(captured) else {
-                    _ = self.endInternetHopCaptured(captured)
-                    return
-                }
-                leaving = transferred
-            } else {
-                leaving = captured
-            }
-            guard self.internetHopOwnership.owns(leaving), admission(),
-                self.internetHopOwnership.owns(leaving), !Task.isCancelled
-            else {
-                _ = self.endInternetHopCaptured(leaving)
-                return
-            }
-            self.internetHopReturn = (host, ssid)
-            self.leaveMonitorForInternetHop(rehostActivePanel: rehostActivePanel)
-            guard self.internetHopOwnership.owns(leaving), !Task.isCancelled else { return }
-            leaveNetwork(ssid)
-            guard self.internetHopOwnership.owns(leaving), !Task.isCancelled else { return }
-            self.connectedWiFiSSID = nil
-            if self.internetHopOwnership.owns(leaving) { self.internetHopTask = nil }
-        }
-        guard internetHopOwnership.owns(captured) else {
-            task.cancel()
-            return nil
-        }
-        internetHopTask = task
-        return captured
-    }
-    func ownsInternetHop(_ captured: FrameioInternetHop.Token) -> Bool {
-        internetHopOwnership.owns(captured)
-    }
-    func endedInternetHop(_ captured: FrameioInternetHop.Token) -> Bool {
-        internetHopOwnership.ended(captured)
-    }
-
-    func transferInternetHop(_ captured: FrameioInternetHop.Token) -> FrameioInternetHop.Token? {
-        internetHopOwnership.transfer(captured)
-    }
-
-    /// The hop's teardown. Long-running downloads and account sign-in keep their initiating
-    /// surface alive as a standalone cover, opened once the monitor has gone (leaving it closes
-    /// its panels). Support/report actions skip this: their selected destination becomes the
-    /// next surface after the camera session drops.
-    func leaveMonitorForInternetHop(rehostActivePanel: Bool) {
-        let panel = rehostActivePanel ? activePanel : nil
-        if panel != .media { pendingHopShareResumeClips = nil }
+    /// The Nikon leave of the shared hop: reads the joined SSID, tears the camera session down
+    /// and leaves the AP. Nil when the phone never left.
+    private func leaveForInternetHop(
+        _ route: NikonHopRoute, current: @escaping @MainActor () -> Bool
+    ) async -> NikonHopRoute? {
+        let observed = await hopNative.currentSSID()
+        guard current(),
+            let ssid = observed
+                ?? cameraAccessPointSSID(host: route.host, displayName: route.displayName),
+            !ssid.isEmpty
+        else { return nil }
+        var left = route
+        left.ssid = ssid
         // Nothing may pull the phone back onto the camera AP mid-download.
         stopDiscoveryLoop()
-        disconnectCameraSession(resetConnection: true)
+        // The open Media or Settings page stays, with its view state, over the cameras page
+        // (A2-07); support and report links leave nothing behind.
+        disconnectCameraSession(
+            resetConnection: true, cover: route.rehostActivePanel ? .retain : .dismiss)
         connection = .disconnected
-        if panel == .media { isStandaloneMediaLibraryPresented = true }
-        if panel == .settings { isStandaloneSettingsPresented = true }
-    }
-
-    /// True when the phone is joined to the camera's local-only AP (no internet route).
-    /// Address + cached-SSID based — deliberately no `NEHotspotNetwork` call, which logs a
-    /// nehelper error line per invocation while the wifi-info capability isn't live.
-    var isOnCameraAccessPoint: Bool {
-        CameraWiFiJoinPolicy.isOnCameraAccessPoint(
-            localAddresses: NativeNetworkInterfaceSnapshot.localIPv4Addresses(),
-            connectedSSID: connectedWiFiSSID
-        )
-    }
-
-    /// Waits (post-hop) for iOS to settle on a network with a real internet path. Returns false
-    /// on timeout so the caller can rejoin the camera and surface a clear error.
-    func waitForInternetPath(timeoutSeconds: Int) async -> Bool {
-        await waitForInternetPath(timeoutSeconds: timeoutSeconds, admission: { true })
-    }
-    func waitForInternetPath(
-        captured: FrameioInternetHop.Token, timeoutSeconds: Int,
-        tick: @escaping @MainActor () async -> Void = {
-            try? await Task.sleep(for: .milliseconds(500))
-        },
-        path: @escaping @MainActor () async -> Bool = {
-            await NativeAppModel.hasSatisfiedNetworkPath()
-        }
-    ) async -> Bool {
-        await waitForInternetPath(
-            timeoutSeconds: timeoutSeconds,
-            admission: { self.internetHopOwnership.owns(captured) }, tick: tick, path: path)
-    }
-    private func waitForInternetPath(
-        timeoutSeconds: Int, admission: @escaping @MainActor () -> Bool,
-        tick: @escaping @MainActor () async -> Void = {
-            try? await Task.sleep(for: .milliseconds(500))
-        },
-        path: @escaping @MainActor () async -> Bool = {
-            await NativeAppModel.hasSatisfiedNetworkPath()
-        }
-    ) async -> Bool {
-        for _ in 0..<(timeoutSeconds * 2) {
-            guard !Task.isCancelled, admission(), !Task.isCancelled else { return false }
-            await tick()
-            guard !Task.isCancelled, admission(), !Task.isCancelled else { return false }
-            if !isOnCameraAccessPoint {
-                let online = await path()
-                guard !Task.isCancelled, admission(), !Task.isCancelled else { return false }
-                if online { return true }
-            }
-        }
-        return false
-    }
-
-    private static func hasSatisfiedNetworkPath() async -> Bool {
-        let monitor = NWPathMonitor()
-        defer { monitor.cancel() }
-        return await withCheckedContinuation { continuation in
-            let resumed = OSAllocatedUnfairLock(initialState: false)
-            monitor.pathUpdateHandler = { path in
-                let first = resumed.withLock { state -> Bool in
-                    if state { return false }
-                    state = true
-                    return true
-                }
-                guard first else { return }
-                continuation.resume(returning: path.status == .satisfied)
-            }
-            monitor.start(queue: .global(qos: .utility))
-        }
+        // The session is gone, so the return is owed even when the hop ended meanwhile.
+        guard current() else { return left }
+        hopNative.leaveNetwork(ssid)
+        connectedWiFiSSID = nil
+        return left
     }
 
     /// Rejoins the camera's Wi‑Fi after an internet hop via the FULL join pipeline the scan flow
     /// uses (`NEHotspotConfiguration` apply with transparent retries, subnet confirmation, then
     /// discovery → connect chaining, narrated in the white card). A fire-and-forget re-apply is
     /// not enough: leaving the AP removes the configuration, so the return is a fresh join racing
-    /// iOS settling back onto home Wi‑Fi. No-op when no hop is active.
-    func endInternetHop() {
-        guard let captured = internetHopOwnership.token else { return }
-        _ = endInternetHopCaptured(captured)
-    }
-    /// End is admitted once. Progress callbacks and the native join cannot revive after route ABA.
-    @discardableResult func endInternetHopCaptured(
-        _ captured: FrameioInternetHop.Token,
-        rejoin: (@MainActor (String, String) async -> Void)? = nil
-    ) -> Task<Void, Never>? {
-        guard internetHopOwnership.end(captured) else { return nil }
-        let hopReturn = internetHopReturn
-        let outgoing = internetHopTask
-        internetHopReturn = nil
-        internetHopTask = nil
-        outgoing?.cancel()
-        internetHopActive = false
-        guard internetHopOwnership.ended(captured), let hopReturn else { return nil }
+    /// iOS settling back onto home Wi‑Fi.
+    private func rejoinAfterInternetHop(
+        _ route: NikonHopRoute, current: @escaping @MainActor () -> Bool
+    ) async {
+        guard let ssid = route.ssid, current() else { return }
         connectionProgressDeviceName = cameraWiFiJoinDeviceName()
-        guard internetHopOwnership.ended(captured) else { return nil }
         connectionProgressIsUSB = false
-        guard internetHopOwnership.ended(captured) else { return nil }
         connectionProgressPathKind = nil
-        guard internetHopOwnership.ended(captured) else { return nil }
         isConnectionProgressPresented = true
-        guard internetHopOwnership.ended(captured) else { return nil }
         let previous = cameraWiFiJoinTask
         cameraWiFiJoinTask = nil
         previous?.cancel()
-        guard internetHopOwnership.ended(captured) else { return nil }
-        let task = Task { [weak self] in
-            guard let self, self.internetHopOwnership.ended(captured) else { return }
-            if let rejoin {
-                await rejoin(hopReturn.host, hopReturn.ssid)
-            } else {
-                await self.runCameraWiFiJoin(
-                    target: .specificSSID(hopReturn.ssid), joinStrategy: .hotspotConfigurationOnly,
-                    reconnectHost: hopReturn.host)
-            }
+        if let rejoin = hopNative.rejoin {
+            await rejoin(route.host, ssid)
+            return
         }
-        guard internetHopOwnership.ended(captured) else {
-            task.cancel()
-            return task
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runCameraWiFiJoin(
+                target: .specificSSID(ssid), joinStrategy: .hotspotConfigurationOnly,
+                reconnectHost: route.host)
         }
         cameraWiFiJoinTask = task
-        return task
+        await task.value
     }
-    func restoreInternetHop(_ captured: FrameioInternetHop.Token) async {
-        let entered = endInternetHopCaptured(captured)
-        await entered?.value
+
+    /// True when the phone is joined to the camera's local-only AP (no internet route).
+    /// Address + cached-SSID based; deliberately no `NEHotspotNetwork` call, which logs a
+    /// nehelper error line per invocation while the wifi-info capability isn't live.
+    var isOnCameraAccessPoint: Bool {
+        CameraWiFiJoinPolicy.isOnCameraAccessPoint(
+            localAddresses: NativeNetworkInterfaceSnapshot.localIPv4Addresses(),
+            connectedSSID: connectedWiFiSSID
+        )
     }
 
     /// Leaves the camera AP only when needed and waits for a validated internet route before an
@@ -5650,29 +5492,20 @@ final class NativeAppModel {
             return .init(isCurrent: admission, complete: { _ in })
         }
         guard
-            let token = await beginInternetHopCaptured(
-                rehostActivePanel: false, admission: admission)
+            let token = internetHop.begin(hopRoute(rehostActivePanel: false), admission: admission)
         else { return nil }
-        guard await waitForInternetPath(captured: token, timeoutSeconds: 30),
-            ownsInternetHop(token), admission(), ownsInternetHop(token)
+        guard await internetHop.waitForInternet(token), internetHop.owns(token), admission()
         else {
-            await restoreInternetHop(token)
+            await internetHop.end(token)?.value
             return nil
         }
         externalInternetLinkToken = token
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = true
-        guard externalInternetLinkToken == token, ownsInternetHop(token), admission(),
-            externalInternetLinkToken == token, ownsInternetHop(token)
-        else {
-            await restoreInternetHop(token)
-            return nil
-        }
         return .init(
             isCurrent: { [weak self] in
-                guard let self, self.ownsInternetHop(token) else { return false }
-                let admitted = admission()
-                return admitted && self.ownsInternetHop(token)
+                guard let self, self.internetHop.owns(token) else { return false }
+                return admission() && self.internetHop.owns(token)
             },
             complete: { [weak self] accepted in
                 guard let self else { return }
@@ -5682,7 +5515,7 @@ final class NativeAppModel {
                         self.externalInternetLinkSawBackground = false
                         self.externalInternetLinkHandoffActive = false
                     }
-                    await self.restoreInternetHop(token)
+                    await self.internetHop.end(token)?.value
                 }
             })
     }
@@ -5707,11 +5540,7 @@ final class NativeAppModel {
         externalInternetLinkToken = nil
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = false
-        if let captured {
-            _ = endInternetHopCaptured(captured)
-        } else if externalInternetLinkToken == nil {
-            endInternetHop()
-        }
+        if let captured { internetHop.end(captured) }
     }
 
     /// Records that an accepted external page really took OpenZCine into the background. A mere
@@ -5733,11 +5562,7 @@ final class NativeAppModel {
         externalInternetLinkToken = nil
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = false
-        if let captured {
-            _ = endInternetHopCaptured(captured)
-        } else if externalInternetLinkToken == nil {
-            endInternetHop()
-        }
+        if let captured { internetHop.end(captured) }
     }
 
     /// Re-applies the camera AP config (throttled) while waiting for a just-paired camera to return,
@@ -6795,7 +6620,8 @@ final class NativeAppModel {
     }
 
     private func disconnectCameraSession(
-        resetConnection: Bool, preserveMonitorSurface: Bool = false
+        resetConnection: Bool, preserveMonitorSurface: Bool = false,
+        cover: ShellModel.CoverRetention = .dismiss
     ) {
         // A lent multicam member returns to its tile instead of closing; a recovery
         // (`preserveMonitorSurface`) still replaces its link, and the tile takes the replacement.
@@ -6805,7 +6631,7 @@ final class NativeAppModel {
         }
         let session = cameraSession
         let runtime = monitorRuntime
-        if !preserveMonitorSurface, shell.monitor != nil { shell.close() }
+        if !preserveMonitorSurface, shell.monitor != nil { shell.close(cover) }
         clearCameraSessionState(
             resetConnection: resetConnection, preserveMonitorSurface: preserveMonitorSurface)
         if !preserveMonitorSurface, let runtime {
@@ -13710,7 +13536,6 @@ extension MonitorAssistTool {
 
 struct NativeAppRoot: View {
     @State private var model = NativeAppModel()
-    @State private var deliveryCoordinator = MediaDeliveryCoordinator()
     @State private var showsLaunchSplash = true
     @State private var showsReliabilityPrompt = false
     @Environment(\.scenePhase) private var scenePhase
@@ -13735,7 +13560,9 @@ struct NativeAppRoot: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
 
-            deliveryCoordinator.chrome(.root).zIndex(150)
+            MonitorOperatorDeliveryChrome(
+                model: model.delivery.lifetime, scope: .root, remoteDisplayName: "Frame.io"
+            ).zIndex(150)
 
             if let destinationTitle = model.internetDestinationPreparationTitle {
                 InternetDestinationPreparationOverlay(destinationTitle: destinationTitle)
@@ -13749,8 +13576,10 @@ struct NativeAppRoot: View {
                     .zIndex(100)
             }
         }
+        // The one share sheet, above every cover (A2-52).
+        .monitorDeliverySharePresenter(model.delivery.lifetime)
         .environment(model)
-        .environment(deliveryCoordinator)
+        .environment(model.delivery)
         .observeMonitorWindowGeometry()
         .task {
             try? await Task.sleep(for: LaunchSplashTiming.visibleDuration)
@@ -14122,7 +13951,8 @@ extension NativeAppModel {
     func captureOperatorMediaCacheSource() -> MonitorSettingsCacheSource {
         let root = mediaClipStore.root
         let revision = mediaActionStoreGeneration
-        return .init(
+        // Delivery exports nothing holds count and clear with it (A2-58).
+        return delivery.cacheSource(.init(
             identity: .init(namespace: root.path, source: nil), revision: revision,
             isCurrent: { [weak self] in self?.mediaClipStore.root == root },
             count: { [weak self] in self?.totalMediaCacheByteCount() ?? 0 },
@@ -14133,7 +13963,7 @@ extension NativeAppModel {
                     throw CancellationError()
                 }
                 self.clearAllMediaCaches()
-            })
+            }))
     }
 
     /// UI actions keep the actual relay source, lease revision and request peer they displayed.

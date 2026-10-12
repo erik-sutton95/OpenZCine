@@ -2601,17 +2601,14 @@ struct OperatorSettingsPanel: View {
             disconnect: { [weak model] in if account.isCurrent { model?.disconnectFrameio() } },
             beginInternet: { [weak model] admission in
                 guard let model,
-                    let token = await model.beginInternetHopCaptured(admission: admission)
+                    let token = model.internetHop.begin(model.hopRoute(), admission: admission)
                 else { return nil }
                 return .init(
                     isCurrent: { [weak model] in
-                        model?.ownsInternetHop(token) == true && account.isCurrent
+                        model?.internetHop.owns(token) == true && account.isCurrent
                     },
-                    wait: { [weak model] in
-                        await model?.waitForInternetPath(captured: token, timeoutSeconds: 30)
-                            == true
-                    },
-                    restore: { [weak model] in await model?.restoreInternetHop(token) })
+                    wait: { [weak model] in await model?.internetHop.waitForInternet(token) == true },
+                    restore: { [weak model] in await model?.internetHop.end(token)?.value })
             },
             internetFailure:
                 "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi."

@@ -4,6 +4,7 @@ import MonitorPresentation
 import MonitorUI
 import Observation
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineMedia
 import SwiftUI
@@ -898,7 +899,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(fixture.model.isClipDownloaded(clip))
         XCTAssertFalse(library.browsing, "The actual catalog must start this fresh offline library")
 
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let host = UIHostingController(
             rootView: MediaBrowserView().environment(fixture.model).environment(coordinator))
@@ -994,7 +995,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         fixture.model.refreshMediaClips()
         let library = try XCTUnwrap(fixture.model.mediaLibrary)
         library.begin()
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
@@ -1240,7 +1241,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         fixture.store.upsertBatch(clips, cameraID: MediaClipStore.localBucketID)
         fixture.model.refreshMediaClips()
         let library = try XCTUnwrap(fixture.model.mediaLibrary)
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
@@ -1387,7 +1388,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         library.begin()
         fixture.model.connection = .connected
         let catalog = try XCTUnwrap(fixture.store.catalogBytes(cameraID: bucket))
-        let coordinator = MediaDeliveryCoordinator(); defer { coordinator.close() }
+        let coordinator = MonitorDeliveryCoordinator(); defer { coordinator.close() }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first { $0.isKeyWindow }
@@ -1463,7 +1464,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         let clip = try fixture.clip("SIMULATED-PHOTO.JPG", expected: 64, bytes: 64)
         fixture.model.refreshMediaClips()
         let library = try XCTUnwrap(fixture.model.mediaLibrary)
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
@@ -1501,6 +1502,42 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(offered, "Photo Share must open the shared delivery choices")
         XCTAssertNil(
             host.presentedViewController, "Photo Share must not bypass delivery with a direct sheet")
+        await library.dispose()
+    }
+
+    /// A2-44: with no camera the rating read answers nil, so the viewer falls back to Favorite
+    /// instead of showing neither control.
+    func testAPhotoWithoutAStarRatingOffersFavorite() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let clip = try fixture.clip("SIMULATED-PHOTO.JPG", expected: 64, bytes: 64)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(
+            rootView: MediaPhotoViewer(clip: clip).environment(fixture.model).environment(
+                fixture.model.delivery))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let favorite = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return Self.galleryScrollObjects(host.view).contains {
+                $0.accessibilityLabel == "Add to favorites"
+            }
+        }
+        XCTAssertTrue(favorite, "A photo without stars must still offer Favorite")
         await library.dispose()
     }
 }

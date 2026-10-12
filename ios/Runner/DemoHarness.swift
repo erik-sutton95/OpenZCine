@@ -19,7 +19,8 @@ enum DemoHarness {
     // MARK: Hook registry — every env toggle, one place.
 
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
-    /// first downloaded clip (read in `MediaBrowserView`).
+    /// first downloaded clip and `share` opens the delivery popup over it (read in
+    /// `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")

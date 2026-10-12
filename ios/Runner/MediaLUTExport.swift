@@ -9,22 +9,11 @@ import OpenZCineCore
 import UIKit
 import os
 
-/// LUT baking for media playback preview and export. Builds the same `CIColorCube` pipeline the live
-/// view uses (`cube.rgbaComponents` + `inputCubeDimension`, display-encoded sRGB working space,
-/// 16-bit half-float intermediates) and applies it either as a playback `AVVideoComposition`
-/// (preview) or baked into a new file via `AVAssetReader` / `AVAssetWriter` (export).
+/// The playback look: builds the same `CIColorCube` pipeline the live view uses
+/// (`cube.rgbaComponents` + `inputCubeDimension`, display-encoded sRGB working space, 16-bit
+/// half-float intermediates) as a playback `AVVideoComposition`. Exports are the shared
+/// delivery owner's (`NikonMediaDeliveryCapture.export`).
 enum MediaLUT {
-    private static let logger = Logger(subsystem: "OpenZCine", category: "media-export")
-
-    private static func describe(_ error: Error) -> String {
-        let ns = error as NSError
-        return "\(ns.domain) code=\(ns.code) \(ns.localizedDescription)"
-    }
-
-    private static func trace(_ message: String) {
-        logger.info("\(message, privacy: .public)")
-    }
-
     // Match `LiveFrameProcessor`: RGBAh working buffers in display-encoded sRGB so cube
     // trilinear interpolation doesn't posterize when AVFoundation composites 8-bit source frames.
     private static let displayColorSpace =
@@ -34,25 +23,6 @@ enum MediaLUT {
         .workingColorSpace: displayColorSpace,
         .highQualityDownsample: true,
     ])
-
-    enum ExportError: LocalizedError {
-        case sessionSetupFailed
-        case failed(String)
-        case invalidFilename
-
-        var errorDescription: String? {
-            switch self {
-            case .sessionSetupFailed: "Couldn't create the export session for this clip."
-            case .failed(let reason): "Export failed: \(reason)"
-            case .invalidFilename: "Enter a valid filename."
-            }
-        }
-    }
-
-    struct ExportResult: Sendable {
-        let videoURL: URL
-        let metadataURL: URL?
-    }
 
     /// Mutable effects holder for a single stable `AVVideoComposition` during clip playback.
     ///
@@ -201,101 +171,4 @@ enum MediaLUT {
             }
         }
     }
-
-    /// Exports a clip to `Documents/exports/` with optional LUT bake and metadata sidecar.
-    /// Runs off the main actor. `progress` (0…1) is `@Sendable`; the caller marshals it to the main actor.
-    static func export(
-        sourceURL: URL,
-        outputFilename: String,
-        format: MediaExportFormat,
-        cube: CubeLUT?,
-        metadata: MediaClipDeliveryMetadata?,
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> ExportResult {
-        let outputURL = try makeExportURL(filename: outputFilename, format: format)
-        do {
-            let result = try await MonitorReaderWriterMediaExporter.export(
-                sourceURL: sourceURL,
-                outputURL: outputURL,
-                format: sharedFormat(format),
-                cube: cube?.preparedForRenderer(),
-                metadata: metadata,
-                diagnostics: { trace($0) },
-                timecodeDiagnostics: { traceTimecode($0) },
-                progress: progress)
-            return ExportResult(videoURL: result.videoURL, metadataURL: result.metadataURL)
-        } catch let error as MonitorReaderWriterMediaExporter.ExportError {
-            throw appExportError(error)
-        }
-    }
-
-    static func audioVisualExportAsset(from asset: AVAsset) async throws -> AVMutableComposition {
-        do {
-            return try await MonitorReaderWriterMediaExporter.audioVisualExportAsset(
-                from: asset, diagnostics: { traceComposition($0) })
-        } catch let error as MonitorReaderWriterMediaExporter.ExportError {
-            throw appExportError(error)
-        }
-    }
-
-    private static let timecodeLogger = Logger(subsystem: "OpenZCine", category: "media-timecode")
-
-    private static func traceTimecode(_ diagnostic: MonitorMovieTimecode.Diagnostic) {
-        switch diagnostic.level {
-        case .information: timecodeLogger.info("\(diagnostic.message, privacy: .public)")
-        case .error: timecodeLogger.error("\(diagnostic.message, privacy: .public)")
-        }
-    }
-
-    private static func traceComposition(_ message: String) {
-        if message.hasPrefix("video insert failed:") || message.hasPrefix("audio insert failed:") {
-            logger.error("\(message, privacy: .public)")
-        } else {
-            trace(message)
-        }
-    }
-
-    private static func sharedFormat(_ format: MediaExportFormat)
-        -> MonitorReaderWriterMediaExporter.Format
-    {
-        switch format {
-        case .mov: .mov
-        case .mp4: .mp4
-        }
-    }
-
-    private static func appExportError(_ error: MonitorReaderWriterMediaExporter.ExportError)
-        -> ExportError
-    {
-        switch error {
-        case .sessionSetupFailed: .sessionSetupFailed
-        case .failed(let reason): .failed(reason)
-        }
-    }
-
-    private static func makeExportURL(filename: String, format: MediaExportFormat) throws -> URL {
-        let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw ExportError.invalidFilename }
-
-        let exports = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("exports", isDirectory: true)
-        try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
-
-        var name = trimmed
-        if (name as NSString).pathExtension.isEmpty {
-            name = "\(name).\(format.rawValue)"
-        }
-        let url = exports.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: url)
-        return url
-    }
-}
-
-/// Options passed from the delivery sheet into the Frame.io upload path.
-struct MediaDeliveryUploadOptions: Sendable {
-    let filename: String
-    let bakeLUT: Bool
-    let cube: CubeLUT?
-    let metadata: MediaClipDeliveryMetadata?
-    var forceReupload: Bool = false
 }

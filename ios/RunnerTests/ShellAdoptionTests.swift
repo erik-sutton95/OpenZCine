@@ -1,9 +1,13 @@
+import Observation
 import OpenCineAppKit
 import OpenCineCore
 import OpenZCineCore
 import Testing
 
 @testable import Runner
+
+/// Whether an observed property was written; the observation callback may run off the main actor.
+private final class CoverWrite: @unchecked Sendable { var seen = false }
 
 /// The Nikon root on the shared `ShellModel`: which cover shows and how a connect and the monitor
 /// treat it. SIMULATED sessions; nothing dials a camera.
@@ -90,25 +94,39 @@ struct ShellAdoptionTests {
         #expect(model.shell.monitor == nil)
     }
 
-    /// The Frame.io sign-in and the RED LUT download keep their surface through the hop.
-    @Test("An internet hop re-hosts the monitor's panel once the monitor has gone")
-    func hopRehostsThePanel() {
+    /// The open page keeps its identity through the hop (A2-07): the cover is never cleared, so
+    /// the gallery's scroll, selection and open delivery popup survive the monitor leaving.
+    @Test("An internet hop keeps the monitor's panel page without re-hosting it")
+    func hopKeepsThePanelPage() async {
         for panel in [NativeAppModel.ActivePanel.settings, .media] {
             let model = NativeAppModel()
+            model.hopNative = .init(
+                currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _ in }, rejoin: { _, _ in })
             model.shell.present(camera())
             model.isMonitorPresented = true
             model.activePanel = panel
-            model.leaveMonitorForInternetHop(rehostActivePanel: true)
+            let cover = model.shell.cover
+            let coverWritten = CoverWrite()
+            withObservationTracking { _ = model.shell.cover } onChange: { coverWritten.seen = true }
+            let token = model.internetHop.begin(model.hopRoute(rehostActivePanel: true))
+            #expect(token != nil)
+            for _ in 0..<500 where model.shell.monitor != nil { await Task.yield() }
             #expect(model.shell.monitor == nil && model.activePanel == nil)
+            #expect(model.shell.cover == cover && !coverWritten.seen, "the page is never torn down")
             #expect(model.isStandaloneSettingsPresented == (panel == .settings))
             #expect(model.isStandaloneMediaLibraryPresented == (panel == .media))
+            if let token { model.internetHop.end(token) }
         }
         let model = NativeAppModel()
+        model.hopNative = .init(
+            currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _ in }, rejoin: { _, _ in })
         model.shell.present(camera())
         model.isMonitorPresented = true
         model.activePanel = .settings
-        model.leaveMonitorForInternetHop(rehostActivePanel: false)
-        #expect(model.shell.cover == nil)
+        let token = model.internetHop.begin(model.hopRoute(rehostActivePanel: false))
+        for _ in 0..<500 where model.shell.monitor != nil { await Task.yield() }
+        #expect(model.shell.cover == nil, "a support link leaves nothing behind")
+        if let token { model.internetHop.end(token) }
     }
 
     @Test("A pending common edit shows over the reported value without being written into it")
