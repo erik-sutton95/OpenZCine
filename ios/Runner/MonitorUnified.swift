@@ -153,6 +153,47 @@ extension NativeAppModel {
     }
 }
 
+/// A monitor source with a picture and no camera control here: a relay watcher, a capture card
+/// or the demo. The shell owns it like a camera, so `AppShell` hosts every monitor (A1-01). It
+/// reports a ready, read-only link and refuses every command; closing ends it.
+@MainActor
+final class NikonPictureSourceSession: CameraSession {
+    nonisolated let id = CameraSessionID()
+    private var snapshot: CameraSnapshot
+    private var subscribers: [AsyncStream<CameraSnapshot>.Continuation] = []
+
+    init() { snapshot = CameraSnapshot(session: id, connection: .ready, authority: .readOnly) }
+
+    func snapshots() async -> AsyncStream<CameraSnapshot> {
+        let (stream, continuation) = AsyncStream<CameraSnapshot>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
+        continuation.yield(snapshot)
+        if case .disconnected = snapshot.connection {
+            continuation.finish()
+        } else {
+            subscribers.append(continuation)
+        }
+        return stream
+    }
+    func submit(_ command: CameraCommand) async -> CommandReceipt {
+        CommandReceipt(
+            operation: command.operation, session: id, intent: command.intent,
+            stage: .rejected(.readOnly))
+    }
+    func outcome(of operation: OperationID) async -> CommandReceipt? { nil }
+    func receipt(of operation: OperationID) async -> CommandReceipt? { nil }
+    func close(_ reason: SessionCloseReason) async {
+        if case .disconnected = snapshot.connection { return }
+        snapshot.connection = .disconnected(reason)
+        snapshot.revision = snapshot.revision.next()
+        for subscriber in subscribers {
+            subscriber.yield(snapshot)
+            subscriber.finish()
+        }
+        subscribers.removeAll()
+    }
+}
+
 struct NikonMonitorShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -215,7 +256,7 @@ struct NikonMonitorShell: View {
                 } ?? "")
         }
     }
-    /// A relay or demo monitor has no common session; it forwards the host's recording state.
+    /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
     private var forwardedRecording: Bool? {
         model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil
     }
@@ -223,7 +264,7 @@ struct NikonMonitorShell: View {
         let photo = model.isPhotographyMode
         // The common session publishes the header timecode at frame precision (A5-04).
         let recording =
-            model.shell.control.session == nil
+            model.pictureOnlyMonitor
             ? MonitorStatusPresentation(
                 recording: forwardedRecording,
                 timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil)
@@ -319,7 +360,7 @@ struct NikonMonitorShell: View {
         .init(
             photo: model.isPhotographyMode, confirm: model.preferences.recordConfirmationEnabled,
             busy: false, openMode: nil,
-            external: model.shell.control.session == nil
+            external: model.pictureOnlyMonitor
                 ? .init(
                     recording: forwardedRecording, confirmation: model.pendingRecordConfirmation,
                     request: model.toggleRecording, cancel: model.cancelRecordToggle,

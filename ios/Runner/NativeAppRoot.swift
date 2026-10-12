@@ -967,14 +967,11 @@ final class NativeAppModel {
                 updateBluetoothShutter()
                 AppDiagnostics.shared.record(
                     isMonitorPresented ? .monitorPresented : .monitorDismissed)
-                // The shell shows the camera monitor exactly while it is up (the relay watcher,
-                // HDMI and demo monitors are not the shell's: no camera session).
-                if isMonitorPresented {
-                    ensureShellMonitor()
-                } else if shell.monitor != nil {
-                    shell.close()
-                }
+                if !isMonitorPresented, shell.monitor != nil { shell.close() }
             }
+            // The shell shows every monitor exactly while it is up; a camera taking over a
+            // picture-only monitor replaces it.
+            if isMonitorPresented { ensureShellMonitor() }
         }
     }
     var isMediaPlaybackActive = false {
@@ -11259,7 +11256,7 @@ final class NativeAppModel {
             cameraState = cameraState.updating(recordState: isRecording ? .recording : .standby)
             return
         }
-        guard shell.control.session != nil else {
+        guard shell.control.session != nil, !pictureOnlyMonitor else {
             showMonitorNotice("Start live view before recording.")
             return
         }
@@ -12755,7 +12752,7 @@ final class NativeAppModel {
         if picker == .iso, isISORecordingLocked { return }
         if let nikon = picker.nikonControlSetting,
             let setting = NikonCameraSession.setting(nikon, label: value),
-            shell.control.session != nil
+            shell.control.session != nil, !pictureOnlyMonitor
         {
             refreshCommonControlFacts()
             if let admission {
@@ -12980,17 +12977,24 @@ extension NativeAppModel {
         refreshCommonControlFacts()
     }
 
+    /// Every monitor is the shell's, so `AppShell` is its one mount and its covers serve every
+    /// source (A1-01, A2-01): the camera's own session, or a picture-only session for a relay
+    /// watcher, a capture card or the demo.
     private func ensureShellMonitor() {
-        guard let cameraSession, let controlSession else { return }
+        guard isMonitorPresented else { return }
+        guard let cameraSession, let controlSession else {
+            guard shell.monitor == nil else { return }
+            shell.present(
+                ConnectedCamera(saved: pictureSourceRecord, session: NikonPictureSourceSession()))
+            return
+        }
         guard shell.monitor?.session.id != controlSession.id else { return }
         cameras.reloadSaved()
         let identity = cameraSession.identity
-        guard
-            let saved = Self.shellCamera(
-                host: cameraSession.host, name: identity.displayName, model: identity.model,
-                serial: identity.serialNumber, saved: cameras.saved,
-                legacy: NikonSavedRecordsV0.cameras(from: savedCameras))
-        else { return }
+        let saved = Self.shellCamera(
+            host: cameraSession.host, name: identity.displayName, model: identity.model,
+            serial: identity.serialNumber, saved: cameras.saved,
+            legacy: NikonSavedRecordsV0.cameras(from: savedCameras))
         let camera = ConnectedCamera(
             saved: saved, session: controlSession, services: currentMediaServices())
         if multicam.lentMember != nil {
@@ -13000,15 +13004,42 @@ extension NativeAppModel {
         }
     }
 
-    /// The saved camera the shell presents for a session on `host`.
+    /// The saved camera the shell presents for a session on `host`. A camera nothing saved yet
+    /// is presented by its session's own identity, never persisted here (A2-01).
     static func shellCamera(
         host: String, name: String, model: String, serial: String, saved: [SavedCamera],
         legacy: [SavedCamera]
-    ) -> SavedCamera? {
-        (saved + legacy).first { camera in
+    ) -> SavedCamera {
+        if let camera = (saved + legacy).first(where: { camera in
             camera.routes.contains { $0.extras[NikonSavedRecordsV0.Extra.host] == host }
+        }) {
+            return camera
         }
+        let serial = serial.trimmingCharacters(in: .whitespaces)
+        return SavedCamera(
+            id: serial.isEmpty ? "session:" + host : "serial:" + serial,
+            integration: NikonCameraSession.integration,
+            device: serial.isEmpty
+                ? nil : .durable(serial, integration: NikonCameraSession.integration),
+            advertisedName: name, model: model)
     }
+
+    /// The shell's record for a picture-only monitor; never saved.
+    private var pictureSourceRecord: SavedCamera {
+        let name =
+            switch videoSource {
+            case .relay: relayJoinTarget?.name ?? "Relay"
+            case .hdmiCapture: "HDMI capture"
+            case .cameraLiveView: cameraState.cameraName
+            }
+        return SavedCamera(
+            id: "picture:" + videoSource.rawValue, integration: NikonCameraSession.integration,
+            advertisedName: name, model: "")
+    }
+
+    /// The monitor shows a picture with no camera control here: a relay watcher forwards its
+    /// commands over the relay, and a capture card or the demo has none.
+    var pictureOnlyMonitor: Bool { shell.control.session is NikonPictureSourceSession }
 
     private func refreshCommonControlFacts() {
         monitorRuntime?.updateFacts(nikonControlFacts)
@@ -13592,14 +13623,12 @@ extension MonitorAssistTool {
 }
 
 /// The root's live tree: the multicam stage, or the shell with its monitor, pages and covers.
+/// Every monitor is the shell's, so this is its one mount (A1-01).
 struct NativeRootContent: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if model.isMonitorPresented, model.shell.monitor == nil {
-            // Monitors that are not the shell's: the relay watcher, HDMI capture, the demo.
-            MonitorExperience()
-        } else if model.multicam.isPresented, model.shell.monitor == nil {
+        if model.multicam.isPresented, model.shell.monitor == nil {
             MulticamStage(
                 coordinator: model.multicam,
                 confirmsRecord: model.preferences.recordConfirmationEnabled,

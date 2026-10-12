@@ -93,6 +93,60 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         .environment(model).environment(MediaDeliveryCoordinator())
     }
 
+    // MARK: A1-01, A2-01
+
+    /// A1-01 / A2-01: rail Settings on a relay watcher, a capture card or the demo opened a cover
+    /// nothing rendered, because those monitors mounted outside `AppShell`. Every monitor is now
+    /// the shell's, so its cover renders over it and closes back to the live monitor.
+    func testSettingsOpensItsCoverFromEveryMonitorSource() async throws {
+        for source in ["hdmi", "relay", "demo"] {
+            let model = NativeAppModel()
+            model.preferences = OperatorPreferences.defaults
+            switch source {
+            case "hdmi":
+                model.isMonitorPresented = true
+                model.videoSource = .hdmiCapture
+            case "relay":
+                model.videoSource = .relay
+                model.isMonitorPresented = true
+            default:
+                model.startDemoSession()
+            }
+            let hosted = try Hosted(
+                NativeRootContent().environment(model).environment(MediaDeliveryCoordinator()))
+            defer { hosted.close() }
+            let monitorShown = try await hosted.settle {
+                hosted.element("monitor.system.settings") != nil
+            }
+            XCTAssertTrue(monitorShown, "\(source): the live monitor must be up")
+            XCTAssertNotNil(model.shell.monitor, "\(source): the monitor must be the shell's")
+
+            model.activePanel = .settings
+            let coverShown = try await hosted.settle {
+                hosted.element("monitor.settings.tabs") != nil
+            }
+            XCTAssertTrue(coverShown, "\(source): Settings must render its cover")
+
+            model.activePanel = nil
+            let backToLive = try await hosted.settle {
+                hosted.element("monitor.settings.tabs") == nil
+                    && hosted.element("monitor.system.settings") != nil
+            }
+            XCTAssertTrue(backToLive, "\(source): closing Settings must return to the monitor")
+        }
+    }
+
+    /// A2-01: a camera with no saved record still gets a shell monitor, named by its session.
+    func testACameraWithoutASavedRecordStillGetsAShellMonitor() throws {
+        let saved = try XCTUnwrap(
+            NativeAppModel.shellCamera(
+                host: "192.0.2.10", name: "SIMULATED Z", model: "SIMULATED", serial: "",
+                saved: [], legacy: []))
+        XCTAssertEqual(saved.displayName, "SIMULATED Z")
+        XCTAssertEqual(saved.integration, NikonCameraSession.integration)
+        XCTAssertNil(saved.device, "no serial was reported, so no durable identity is claimed")
+    }
+
     // MARK: A1-02
 
     /// A1-02: a monitor-time failure went to `connectionMessage`, which only the connect screens
@@ -203,5 +257,47 @@ final class LiveSurfaceRegressionTests: XCTestCase {
 
         XCTAssertFalse(model.isRecording)
         XCTAssertNil(model.pendingRecordConfirmation, "no prompt may stand in for a refused press")
+    }
+}
+
+/// The demo monitor as the root mounts it, in both phone orientations: it is the shell's
+/// monitor, and each frame is attached for visual review.
+@MainActor
+final class LiveSurfaceScreens: XCTestCase {
+    func testTheDemoMonitorInBothOrientations() async throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        for (name, size) in [
+            ("portrait", CGSize(width: 402, height: 874)), ("landscape", CGSize(width: 874, height: 402)),
+        ] {
+            let model = NativeAppModel()
+            model.preferences = OperatorPreferences.defaults
+            model.startDemoSession()
+            let host = UIHostingController(
+                rootView: AnyView(
+                    NativeRootContent().environment(model).environment(MediaDeliveryCoordinator())))
+            host.safeAreaRegions = []
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: size)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.frame = window.bounds
+            for _ in 0..<60 {
+                host.view.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTAssertNotNil(model.shell.monitor, "\(name): the demo monitor is the shell's")
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "after-z-demo-monitor-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
     }
 }
