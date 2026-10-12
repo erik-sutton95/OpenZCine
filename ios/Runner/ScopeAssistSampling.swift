@@ -21,9 +21,8 @@ import OpenZCineCore
 ///   deliberately ONE sampler and ONE renderer per scope on every surface (live-vs-playback
 ///   parity is a product requirement).
 ///
-/// - **Guides / grid / crosshair / level / grain** — SwiftUI `Canvas` / shapes on the feed overlay;
-///   level also reads PTP virtual-horizon angles (~10 Hz). Grain is rasterized once via
-///   `.drawingGroup()`.
+/// - **Guides / grid / crosshair / level**: SwiftUI `Canvas` / shapes on the feed overlay;
+///   level also reads PTP virtual-horizon angles (~10 Hz).
 /// - **Focus boxes** — SwiftUI `Canvas` from live-view header metadata (~15 Hz).
 ///
 /// **Debug memory:** Xcode scheme `enableGPUFrameCaptureMode` / `enableGPUValidationMode` retain

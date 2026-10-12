@@ -111,7 +111,6 @@ public class LiveFeedPresentationState {
     /** Bumped when the feed Canvas should redraw; feed Canvas is the only intended reader. */
     private var frameEpoch by mutableLongStateOf(0L)
     private var latestBitmap: Bitmap? = null
-    private var textureSourceGeometry: FeedTextureSourceGeometry? by mutableStateOf(null)
     private var presentedColorMode: LiveFeedColorMode by mutableStateOf(LiveFeedColorMode.UNKNOWN)
     private var focusGestureGeometrySignature: FocusGestureGeometrySignature? = null
     private var retainedSourceWidth by mutableIntStateOf(0)
@@ -122,10 +121,6 @@ public class LiveFeedPresentationState {
     /** Changes only when source or camera focus-coordinate geometry changes. */
     internal var focusGestureGeometryGeneration: Long by mutableLongStateOf(0L)
         private set
-
-    /** Resolution-only state observed by the cached presentation texture. */
-    internal val feedTextureSourceGeometry: FeedTextureSourceGeometry?
-        get() = textureSourceGeometry
 
     /**
      * Latest decoded bitmap. Reading this also observes [frameEpoch] so the
@@ -190,15 +185,6 @@ public class LiveFeedPresentationState {
         // frame and ran at 12.5 fps; against 30 fps it ran at 15. It cost far more than the ~20 it
         // claimed to keep. Same aliasing that silently halved the iOS feed in 4ae1544.
         frameEpoch += 1
-        val nextTextureGeometry =
-            retainedFeedTextureSourceGeometry(
-                current = textureSourceGeometry,
-                width = bitmap.width,
-                height = bitmap.height,
-            )
-        if (nextTextureGeometry !== textureSourceGeometry) {
-            textureSourceGeometry = nextTextureGeometry
-        }
     }
 
     internal fun clear() {
@@ -212,7 +198,6 @@ public class LiveFeedPresentationState {
         if (retainedSourceHeight != 0) retainedSourceHeight = 0
         if (retainedFocus != null) retainedFocus = null
         if (retainedLevel != null) retainedLevel = null
-        textureSourceGeometry = null
         presentedColorMode = LiveFeedColorMode.UNKNOWN
     }
 
