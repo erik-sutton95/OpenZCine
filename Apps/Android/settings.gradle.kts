@@ -1,4 +1,6 @@
 pluginManagement {
+    // OpenCine's Gradle plugins (the reporting adapter's DSN), from the same sibling checkout.
+    includeBuild("../../../OpenCine/Android/build-logic")
     repositories {
         google()
         mavenCentral()

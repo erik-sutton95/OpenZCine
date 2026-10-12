@@ -3,6 +3,8 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
+    // BuildConfig.SENTRY_DSN_ANDROID: the CI secret, else the ignored .local/reliability.properties.
+    id("com.opencapture.opencine.reporting")
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -98,8 +100,6 @@ android {
             "FRAMEIO_REDIRECT_SCHEME",
             quotedBuildConfig(frameioRedirectScheme),
         )
-        // Empty unless a build supplies one (below); without a DSN no report can be sent.
-        buildConfigField("String", "SENTRY_DSN_ANDROID", "\"\"")
         buildConfigField("String", "SOURCE_REVISION", "\"unknown\"")
         // Play CI sets it before bundleRelease and uploads the R8 mapping under the same UUID
         // (OpenCine scripts/sentry); the adapter's manifest binds it to io.sentry.proguard-uuid.
@@ -349,20 +349,6 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
 }
 
-// Non-empty SENTRY_DSN_ANDROID wins; otherwise optional ignored repo-root properties (as Pocket).
-val sentryDsnAndroidField =
-    providers.environmentVariable("SENTRY_DSN_ANDROID")
-        .orElse("")
-        .zip(
-            providers.of(LocalReliabilityDsnValueSource::class.java) {
-                parameters.propertiesFile.set(repositoryRoot.resolve(".local/reliability.properties"))
-            },
-        ) { env, file ->
-            val raw = env.trim().ifEmpty { file.trim() }
-            val escaped = raw.replace("\\", "\\\\").replace("\"", "\\\"")
-            com.android.build.api.variant.BuildConfigField("String", "\"$escaped\"", "optional Sentry Android DSN")
-        }
-
 // The commit this build came from (+ when the checkout is dirty), as Pocket and Insta stamp it.
 val sourceRevisionField =
     providers.exec {
@@ -395,7 +381,6 @@ val pythonExecutable: Provider<String> =
 
 androidComponents {
     onVariants { variant ->
-        variant.buildConfigFields?.put("SENTRY_DSN_ANDROID", sentryDsnAndroidField)
         variant.buildConfigFields?.put("SOURCE_REVISION", sourceRevisionField)
         // Content identity of the build inputs this app lists in tools/build-identity.json (OpenCine
         // scripts/sentry). Exec output participates in configuration-cache validation.
@@ -413,23 +398,5 @@ androidComponents {
             )
         }
         variant.buildConfigFields?.put("BUILD_IDENTITY", identity)
-    }
-}
-
-abstract class LocalReliabilityDsnValueSource :
-    ValueSource<String, LocalReliabilityDsnValueSource.Params> {
-    interface Params : ValueSourceParameters {
-        @get:org.gradle.api.tasks.Optional
-        @get:InputFile
-        @get:PathSensitive(PathSensitivity.NONE)
-        val propertiesFile: RegularFileProperty
-    }
-
-    override fun obtain(): String {
-        val file = parameters.propertiesFile.orNull?.asFile ?: return ""
-        if (!file.isFile) return ""
-        val props = Properties()
-        file.inputStream().use { props.load(it) }
-        return props.getProperty("SENTRY_DSN_ANDROID")?.trim().orEmpty()
     }
 }
