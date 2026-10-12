@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
 import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.opencine.appkit.MonitorOperatorPreferences
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.openzcine.R
 
@@ -308,14 +309,16 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
     public inner class Toggle internal constructor(
         public val key: String,
         public val default: Boolean,
+        private val load: () -> Boolean = { preferences.getBoolean(key, default) },
+        private val store: (Boolean) -> Unit = { preferences.edit().putBoolean(key, it).apply() },
     ) {
-        private val state = mutableStateOf(preferences.getBoolean(key, default))
+        private val state = mutableStateOf(load())
 
         public var value: Boolean
             get() = state.value
             set(new) {
                 state.value = new
-                preferences.edit().putBoolean(key, new).apply()
+                store(new)
             }
 
         public fun toggle() {
@@ -529,15 +532,26 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         displaySession.finishEditing(enabledDisplayModeOrder)
     }
 
+    /**
+     * The shared operator choices on Z's existing keys, so stored values carry over unchanged.
+     * Z has no HDR display or originals-cache choice; those keys are never written.
+     */
+    public val operatorPreferences: MonitorOperatorPreferences = MonitorOperatorPreferences(preferences,
+        MonitorOperatorPreferences.Keys(keepScreenAwake = "controls.keepScreenAwake", hdrDisplay = "display.hdr",
+            recordConfirmation = "controls.recordConfirmation", haptics = "controls.haptics",
+            cacheOriginals = "cache.originals"))
+
     // Controls — all four are app-local behavior and therefore safe to expose
     // before Android has camera-property writes.
-    public val recordConfirmationEnabled: Toggle =
-        Toggle("controls.recordConfirmation", default = true)
+    public val recordConfirmationEnabled: Toggle = Toggle("controls.recordConfirmation", default = true,
+        load = { operatorPreferences.recordConfirmation }, store = { operatorPreferences.recordConfirmation = it })
     /** Foreground hardware shutter, including volume keys while the live monitor is armed. */
     public val mediaRemoteShutterEnabled: Toggle =
         Toggle("controls.mediaRemoteShutter.v1", default = true)
-    public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true)
-    public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true)
+    public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true,
+        load = { operatorPreferences.haptics }, store = { operatorPreferences.haptics = it })
+    public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true,
+        load = { operatorPreferences.keepScreenAwake }, store = { operatorPreferences.keepScreenAwake = it })
     /**
      * Turns the monitoring image upright from the body's live-view orientation. Off
      * keeps the picture in the camera's native landscape sensor orientation. Display
