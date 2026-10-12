@@ -79,11 +79,12 @@ swift-lint:
 swift-test:
     swift test
 
-# Demo/screenshot env hooks (ZC_DEMO_*, ZC_METAL_FEED, ZC_GPU_SCOPES) must stay inside
-# ios/Runner/DemoHarness.swift, whose Release stubs compile them out of TestFlight builds.
-# Doc-comment mentions elsewhere are allowed; code reads are not.
+# Demo/screenshot env hooks (ZC_DEMO_*, ZC_METAL_FEED, ZC_GPU_SCOPES) and the shared review staging
+# (OPV_UI_REVIEW_*, `ReviewLaunch`) must stay inside ios/Runner/DemoHarness.swift, whose Release
+# stubs compile them out of TestFlight builds. Doc-comment mentions elsewhere are allowed; code
+# reads are not.
 check-demo-isolation:
-    ! grep -rn 'ZC_DEMO\|ZC_METAL_FEED\|ZC_GPU_SCOPES' Sources ios/Runner ios/OpenZCineWatch --include='*.swift' | grep -v '^ios/Runner/DemoHarness.swift:' | grep -vE ':[0-9]+: *///?' | grep .
+    ! grep -rn 'ZC_DEMO\|ZC_METAL_FEED\|ZC_GPU_SCOPES\|OPV_UI_REVIEW_\|ReviewLaunch' Sources ios/Runner ios/OpenZCineWatch --include='*.swift' | grep -v '^ios/Runner/DemoHarness.swift:' | grep -vE ':[0-9]+: *///?' | grep .
 
 # Run all Swift-only checks.
 swift-check: swift-lint swift-test

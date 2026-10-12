@@ -99,7 +99,12 @@ enum DemoHarness {
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
     #if DEBUG
-        private static let environment = ProcessInfo.processInfo.environment
+        /// The shared conformance kit's staging (`ReviewLaunch`, OpenCine
+        /// docs/conformance/SCENARIOS.md), said in the hooks below; an explicit `ZC_*` value wins.
+        private static let review = ReviewLaunch.current
+        private static let environment = ProcessInfo.processInfo.environment.merging(
+            review.map(hooks(for:)) ?? [:]
+        ) { explicit, _ in explicit }
         private static func flag(_ name: String) -> Bool { environment[name] == "1" }
         private static func value(_ name: String) -> String? { environment[name] }
     #else
@@ -109,7 +114,7 @@ enum DemoHarness {
 
     #if !DEBUG
         /// Release stub — the launch harness does not exist outside Debug builds.
-        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {}
+        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) async {}
     #endif
 
     // MARK: Live-view frame capture
@@ -234,10 +239,40 @@ enum DemoHarness {
             return env["ZC_DEMO_DISP"].flatMap(DispMode.init(rawValue:))
         }
 
+        /// The existing hooks a review screen means: the demo session for the monitor screens, with
+        /// the EV meter on as every app's review shows it (the camera's reading in sixths when the
+        /// review names one). The cameras page and the staged clips have none;
+        /// `applyLaunchEnvironment` stages them.
+        private static func hooks(for review: ReviewLaunch) -> [String: String] {
+            var session = [
+                "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_ASSIST_ON": "EV",
+            ]
+            session["ZC_DEMO_EV"] = review.meteredEV.map { String(Int(($0 * 6).rounded())) }
+            switch review.screen {
+            case .cameras: return [:]
+            case .pair: return ["ZC_DEMO_WIZARD_STEP": "0"]
+            case .live: return session
+            case .settings:
+                // The tab hook takes the case name ("storage").
+                let tab = review.settingsTab.map { String(describing: $0) } ?? "link"
+                return session.merging(["ZC_DEMO_PANEL": "settings", "ZC_DEMO_PANEL_TAB": tab]) {
+                    $1
+                }
+            case .chromeEdit: return session.merging(["ZC_DEMO_CHROME_EDIT": "live"]) { $1 }
+            case .media, .playback:
+                let open = ["ZC_DEMO_OPEN_MEDIA": review.screen == .playback ? "play" : "1"]
+                return review.connected ? session.merging(open) { $1 } : open
+            }
+        }
+
         /// Stages the model from the launch environment (`SIMCTL_CHILD_ZC_DEMO_*` via
         /// `simctl launch`). No effect in normal launches.
-        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {
+        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) async {
             let env = environment
+            if let review, review.screen == .media || review.screen == .playback {
+                // The clips exist before anything below lists them.
+                await stageReviewMedia(review, in: model)
+            }
             // Load the numbered feed before checking AUTOSTART so a later ⌘O entry can use it. A
             // normal Xcode Run gets the checkout fallback; simctl may override it with
             // ZC_DEMO_FEED_DIR. The personal stills are read locally and never enter the app bundle.
@@ -936,6 +971,70 @@ enum DemoHarness {
             if let count = env["ZC_DEMO_MULTICAM"].flatMap(Int.init) {
                 stageMulticam(count: count, env: env, model: model)
             }
+            switch review?.screen {
+            case .cameras?:
+                stageReviewCamera(model)
+            case .media?, .playback?:
+                if review?.connected == true {
+                    // The demo session has no card to list, so the Media panel it opened begins
+                    // on the staged index, as a finished listing pass would.
+                    model.mediaLibrary?.begin()
+                } else {
+                    // The startup screen's Media: everything cached on this phone.
+                    model.openCachedMediaLibrary()
+                }
+            default:
+                break
+            }
+        }
+
+        /// `ReviewLaunch` media: `mediaCount` copies of one generated playable movie in the bucket
+        /// the browser lists, indexed with card handles when they stand for a camera's card. A
+        /// review starts from exactly these clips.
+        @MainActor private static func stageReviewMedia(
+            _ review: ReviewLaunch, in model: NativeAppModel
+        ) async {
+            let store = model.mediaClipStore
+            let bucket = model.mediaBucketID
+            let files = FileManager.default
+            try? files.removeItem(at: store.root)
+            do {
+                let directory = store.directory(for: bucket)
+                try files.createDirectory(at: directory, withIntermediateDirectories: true)
+                let names = (1...review.mediaCount).map { String(format: "REVIEW_%04d.MOV", $0) }
+                let first = directory.appendingPathComponent(names[0])
+                try await ReviewClip.write(to: first)
+                for name in names.dropFirst() {
+                    try files.copyItem(at: first, to: directory.appendingPathComponent(name))
+                }
+                let size = UInt64(try first.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+                let card = review.source == .camera
+                // A minute apart: card clips a second apart would read as one burst series.
+                let clips = names.enumerated().map { index, name in
+                    MediaClip(
+                        cameraID: bucket, filename: name, handle: card ? UInt32(index + 1) : nil,
+                        storageID: card ? 65_537 : nil, sizeBytes: size,
+                        captureDate: String(
+                            format: "20261011T%02d%02d00", 8 + index / 60, index % 60))
+                }
+                store.upsertBatch(clips, cameraID: bucket)
+            } catch {
+                assertionFailure("The review clips could not be staged: \(error)")
+            }
+            model.mediaBrowserSource = review.source == .camera ? .camera : .iPhone
+            model.mediaBrowserLayout = review.layout
+        }
+
+        /// `ReviewLaunch` cameras page: the shared kit's single saved setup, "Travel camera" on
+        /// its own Wi-Fi.
+        @MainActor private static func stageReviewCamera(_ model: NativeAppModel) {
+            let store = NativeCameraConnectionStore.shared
+            for camera in store.savedCameras() { store.forgetKnownPairing(host: camera.host) }
+            store.upsertSavedCamera(
+                host: "192.168.1.1", displayName: "Travel camera", transport: "Wi-Fi",
+                onCameraAccessPoint: true, serialNumber: "REVIEW-TRAVEL",
+                path: .cameraAccessPoint(ssid: nil))
+            model.showSavedCameras()
         }
 
         /// Demo/screenshot affordance: `ZC_DEMO_MULTICAM=<1-4>` opens the multicam stage with that
