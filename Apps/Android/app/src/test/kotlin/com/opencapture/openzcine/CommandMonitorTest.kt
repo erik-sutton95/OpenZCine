@@ -592,11 +592,10 @@ class CommandMonitorTest {
 
         val iris = presentation.tiles.first { it.kind == CommandTileKind.IRIS }
         assertEquals("f/2.8", iris.value)
-        // iOS/shared-core ladder keeps IRIS writable when the body has not
-        // advertised an f-number enum yet (was permanently grayed out before).
-        val request = assertNotNull(iris.request)
-        assertContains(request.options, "f/2.8")
-        assertNull(iris.unavailableReason)
+        // A3-20: no advertised f-number enum means no invented ladder. The facade supplies the
+        // lens ladder itself where the body accepts that write.
+        assertNull(iris.request)
+        assertNotNull(iris.unavailableReason)
     }
 
     @Test

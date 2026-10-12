@@ -401,32 +401,16 @@ internal fun monitorCaptureSettings(
         ),
         run {
             val irisTile = primary[CommandTileKind.IRIS]
-            val cameraOpts = irisTile?.request?.options.orEmpty()
-            val options =
-                cameraOpts.ifEmpty {
-                    IrisPickerPolicy.options(forLensDescriptor = null)
-                }
-            // Open IRIS whenever we have a live f-number, using the lens/core ladder
-            // if the body did not advertise a writable enum (same as iOS).
-            val live = irisTile?.value?.takeIf { it != "—" }
+            // Only the f-numbers the facade reports. Core already falls back to the lens ladder
+            // where the body allows that write; a body that advertises none leaves IRIS read-only.
             val presentation =
-                if (live != null && options.isNotEmpty()) {
-                    val request =
-                        irisTile.request?.copy(options = options)
-                            ?: CommandControlRequest(
-                                title = strings.resolve(R.string.camera_label_iris),
-                                control = CameraControl.IRIS,
-                                currentValue = if (live in options) live else options.first(),
-                                options = options,
-                            )
+                irisTile?.request?.takeIf { it.options.isNotEmpty() }?.let { request ->
                     MonitorPickerPresentation(
                         kind = MonitorPickerKind.IRIS,
                         title = strings.resolve(R.string.camera_label_iris),
                         subtitle = strings.resolve(R.string.camera_subtitle_iris),
                         modes = listOf(MonitorPickerModePresentation(request.title, request)),
                     )
-                } else {
-                    null
                 }
             MonitorCaptureSettingPresentation(
                 kind = MonitorPickerKind.IRIS,

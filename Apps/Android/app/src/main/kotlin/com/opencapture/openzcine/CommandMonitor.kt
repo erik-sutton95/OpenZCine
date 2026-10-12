@@ -634,13 +634,9 @@ internal fun commandDashboardPresentation(
                 ),
             CommandTileKind.IRIS to
                 run {
-                    val cameraIris = capabilities.options(CameraControl.IRIS)
-                    // Match iOS: when the body omits an f-number enum, still offer the
-                    // shared-core / lens ladder so IRIS is not permanently grayed out.
-                    val irisOptions =
-                        cameraIris.ifEmpty {
-                            IrisPickerPolicy.options(forLensDescriptor = snapshot.lens)
-                        }
+                    // The facade already substitutes the lens ladder where the body accepts it
+                    // and fails closed otherwise, so an empty list stays read-only here.
+                    val irisOptions = capabilities.options(CameraControl.IRIS)
                     editable(
                         kind = CommandTileKind.IRIS,
                         title = strings.resolve(R.string.command_title_iris),
