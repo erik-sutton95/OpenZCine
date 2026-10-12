@@ -20,6 +20,7 @@ import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.regex.Pattern
 import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -122,7 +123,7 @@ class MediaHostMainActivityTest {
         launch()
         device.waitForCamerasAction("Media library").click()
         device.waitForText(first.clip.filename).click()
-        assertNotNull(device.wait(Until.findObject(By.text("Source error")), UI_TIMEOUT_MILLIS))
+        device.wait(Until.findObject(By.text("Source error")), UI_TIMEOUT_MILLIS) ?: failWithState("The player did not open")
         device.pressBack()
         assertTrue("Back closes the player", device.wait(Until.gone(By.text("Source error")), UI_TIMEOUT_MILLIS))
         assertNotNull("Back returns to the gallery", device.waitForText(first.clip.filename))
@@ -141,8 +142,17 @@ class MediaHostMainActivityTest {
         assertNotNull(device.waitForText(second.clip.filename))
     }
 
+    /** The page heading's camera line is uppercased on the iOS-parity chrome, so text matches ignore case. */
     private fun UiDevice.waitForText(text: String): UiObject2 =
-        wait(Until.findObject(By.text(text)), UI_TIMEOUT_MILLIS) ?: throw AssertionError("Timed out waiting for text: $text")
+        wait(Until.findObject(By.text(Pattern.compile(Pattern.quote(text), Pattern.CASE_INSENSITIVE))), UI_TIMEOUT_MILLIS)
+            ?: failWithState("Timed out waiting for text: $text")
+
+    private fun failWithState(message: String): Nothing {
+        val name = "failure-" + System.nanoTime()
+        screenshot(name)
+        File(File(context.getExternalFilesDir(null), "f16m"), "$name.xml").outputStream().use(device::dumpWindowHierarchy)
+        throw AssertionError("$message (state: $name)")
+    }
 
     private fun UiDevice.waitForCamerasAction(description: String): UiObject2 {
         wait(Until.findObject(By.desc(description)), UI_TIMEOUT_MILLIS)
