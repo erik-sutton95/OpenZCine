@@ -518,6 +518,7 @@ internal fun LiveFeedView(
                 stats = stats,
                 timestampNanos = { it.timestampNanos },
                 isCurrent = isCurrent,
+                presentationDispatcher = Dispatchers.Main.immediate,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.
                 decode = { frame ->
