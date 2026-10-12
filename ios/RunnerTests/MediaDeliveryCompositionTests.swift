@@ -106,7 +106,10 @@ final class MediaDeliveryCompositionTests: XCTestCase {
             defer { retire(window, restoring: originalKeyWindow) }
             for (index, state) in states.enumerated() {
                 host.rootView = AnyView(
-                    MediaDeliveryOverlay(state: state, onCancel: { cancels += 1 }).padding(20))
+                    MonitorMediaDeliveryProgressPanel(
+                        value: state.monitorProgressValue, onCancel: { cancels += 1 },
+                        destinationIcon: { EmptyView() }
+                    ).frame(maxWidth: 420).padding(20))
                 _ = try await element(label: state.statusLine, in: host)
                 let cancel = try await element(label: "Cancel", in: host, button: true)
                 XCTAssertTrue(contained(cancel, in: window))

@@ -13726,9 +13726,7 @@ struct NativeAppRoot: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
 
-            MediaDeliveryGlobalOverlay()
-                .environment(deliveryCoordinator)
-                .zIndex(150)
+            deliveryCoordinator.chrome(.root).zIndex(150)
 
             if let destinationTitle = model.internetDestinationPreparationTitle {
                 InternetDestinationPreparationOverlay(destinationTitle: destinationTitle)
