@@ -173,7 +173,8 @@ import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.runtime.nativeFeedContentRect
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
-import com.opencapture.opencine.nikon.ProductionSessionRetryScheduleBridge
+import com.opencapture.opencine.nikon.MonitorPictureClock
+import android.os.SystemClock
 
 /** Gives the live quick-settings panel first refusal on the system Back action. */
 @Composable
@@ -411,6 +412,9 @@ internal fun MonitorScreen(
     var sessionRecoveryState by
         remember(session) { mutableStateOf<SessionRecoveryUi>(SessionRecoveryUi.Idle) }
     var sessionRecoveryRetryTicket by remember(session) { mutableIntStateOf(0) }
+    // Recovery ends on a fresh camera frame the monitor presents, never on a returned control
+    // session alone (A6-02). The frame and present paths below stamp it.
+    val recoveryPictures = remember(session) { MonitorPictureClock(SystemClock::elapsedRealtime) }
     // The session is Disconnected while recovering, so the affordance needs the name from before
     // the drop rather than the live identity.
     var lastConnectedCameraName by remember(session) { mutableStateOf("") }
@@ -421,6 +425,7 @@ internal fun MonitorScreen(
     }
     MonitorSessionRecoveryEffect(
         session,
+        pictures = recoveryPictures,
         enabled = sessionRecoveryEnabled,
         retryTicket = sessionRecoveryRetryTicket,
         onRecoveryState = { sessionRecoveryState = it },
@@ -1767,6 +1772,20 @@ internal fun MonitorScreen(
                     }
                 }
         }
+        // Recovery picture proof: frames of the current native stream only (a replayed JPEG from
+        // the dropped session proves nothing). Command presents the frame header, not its image,
+        // so there the delivery is the presented picture (iOS `consumeCameraFrame` parity). Keyed
+        // like the timecode collector, which already holds the stream open in every DISP mode.
+        LaunchedEffect(timecodeFrameSource, isCommand, recoveryPictures) {
+            val source = timecodeFrameSource ?: return@LaunchedEffect
+            val frames = (source as? SwiftCoreLiveFrameSource)?.currentStreamFrames ?: source.frames
+            withContext(Dispatchers.Default) {
+                frames.collect {
+                    recoveryPictures.noteSourceFrame()
+                    if (isCommand) recoveryPictures.notePresented()
+                }
+            }
+        }
         LaunchedEffect(actualLinkHealth, propertyRefreshStatus) {
             actualLinkHealth.reportPropertyRefresh(propertyRefreshStatus)
         }
@@ -2623,6 +2642,7 @@ internal fun MonitorScreen(
                             // path only drives FPS + wear (decode can lag a take).
                             fpsSampler.accept(System.nanoTime())
                             hasPresentedFrame = true
+                            recoveryPictures.notePresented()
                             inspectorPreview.accept(pictureFrameSource, bitmap)
                             wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
                         },
@@ -2829,9 +2849,8 @@ internal fun MonitorScreen(
             state = recoveryStateOverride ?: sessionRecoveryState,
             cameraName = recoveryStateOverride?.let { "Nikon ZR" } ?: lastConnectedCameraName,
             onRetry = {
-                // Operator intent clears the storm ledger: the retry is not a drop, and the
-                // next pause should take a fresh cluster of drops to earn (iOS parity).
-                ProductionSessionRetryScheduleBridge.resetDropStormGuard()
+                // Operator intent: a fresh drop ledger and a fresh episode (iOS parity). The
+                // recovery effect hands the ticket to its coordinator.
                 sessionRecoveryRetryTicket += 1
             },
             onBackToOperatorMenu = onBackToOperatorMenu,
