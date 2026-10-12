@@ -30,7 +30,8 @@ import org.junit.runner.RunWith
 
 /**
  * The offline gallery on the shared media host: its header names the camera (A4-30), cached clips
- * carry the shared source tag (A4-17), Back from the player returns to the gallery (A4-31), and the
+ * carry the shared source tag (A4-17: a cached playable proxy reads PROXY, an original CACHED, an
+ * uncached clip ON CAMERA), Back from the player returns to the gallery (A4-31), and the
  * camera set follows caches that complete after launch (A4-32). SIMULATED saved cameras and cache
  * bytes; the actual activity, shell and gallery.
  */
@@ -109,11 +110,11 @@ class MediaHostMainActivityTest {
         device.waitForCamerasAction("Media library").click()
         assertNotNull(device.waitForText(first.clip.filename))
         assertNotNull("The header names the camera", device.waitForText(first.record.displayTitle))
-        assertNotNull("A cached clip carries the shared source tag", device.waitForText("CACHED"))
+        assertNotNull("A cached clip carries the shared source tag", device.waitForText("PROXY"))
         screenshot("media-host-gallery-portrait")
         device.setOrientationLeft()
         assertNotNull(device.waitForText(first.clip.filename))
-        assertNotNull(device.waitForText("CACHED"))
+        assertNotNull(device.waitForText("PROXY"))
         screenshot("media-host-gallery-landscape")
     }
 
@@ -123,9 +124,10 @@ class MediaHostMainActivityTest {
         launch()
         device.waitForCamerasAction("Media library").click()
         device.waitForText(first.clip.filename).click()
-        device.wait(Until.findObject(By.text("Source error")), UI_TIMEOUT_MILLIS) ?: failWithState("The player did not open")
+        // The player page, whatever its four-byte fixture reports (Media3's raw failure is replaced by the app copy).
+        device.wait(Until.findObject(By.desc("Back to media")), UI_TIMEOUT_MILLIS) ?: failWithState("The player did not open")
         device.pressBack()
-        assertTrue("Back closes the player", device.wait(Until.gone(By.text("Source error")), UI_TIMEOUT_MILLIS))
+        assertTrue("Back closes the player", device.wait(Until.gone(By.desc("Back to media")), UI_TIMEOUT_MILLIS))
         assertNotNull("Back returns to the gallery", device.waitForText(first.clip.filename))
         assertTrue("Back does not close the gallery", device.findObject(By.desc("Media library")) == null)
     }

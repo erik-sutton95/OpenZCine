@@ -130,7 +130,8 @@ class OfflineMediaMainActivityTest {
         // An unopened offline library leaves the borrowed shared player preparing forever.
         assertNotNull(
             "The actual cached player must enter native preparation and publish its failure",
-            device.wait(Until.findObject(By.text("Source error")), UI_TIMEOUT_MILLIS),
+            // The app's failure copy replaces Media3's raw "Source error" message.
+            device.wait(Until.findObject(By.textStartsWith("Couldn't play this camera proxy")), UI_TIMEOUT_MILLIS),
         )
     }
 
@@ -147,6 +148,13 @@ class OfflineMediaMainActivityTest {
         device.waitForText("Operator Setup")
         device.revealSettingsTab("Storage").click()
         device.waitForText("Clear").click()
+        // Clearing asks first on every app (A4-06); confirm inside the dialog's own window.
+        var dialog: UiObject2 = device.wait(Until.findObject(By.text("Clear cache?")), UI_TIMEOUT_MILLIS)
+            ?: throw AssertionError("Clearing the cache asks first")
+        while (dialog.findObject(By.text("Clear")) == null) {
+            dialog = dialog.parent ?: throw AssertionError("The clear dialog has no confirmation")
+        }
+        dialog.findObject(By.text("Clear")).click()
         assertNotNull(
             device.wait(
                 Until.findObject(By.textStartsWith("Removed ")),
