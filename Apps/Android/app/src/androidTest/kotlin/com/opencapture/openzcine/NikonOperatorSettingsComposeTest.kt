@@ -10,7 +10,10 @@ import com.opencapture.monitorui.MonitorZebraUnit
 import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.opencine.media.MonitorCrushClipCompensation
 import com.opencapture.opencine.media.MonitorPeakingSense
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
@@ -392,18 +395,17 @@ class NikonOperatorSettingsComposeTest {
         show(OperatorSettings(preferences), MonitorSettingsTab.DISPLAY)
         composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
         for ((id, label) in listOf("LIVE.CAMERA_VALUES" to "Camera Values", "LIVE.FORMAT" to "Format")) {
-            val tag = "monitor.settings.display.toggle.$id"
-            val row = composeRule.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo()
-            val text = composeRule.onNode(hasText(label) and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true)
-            text.assertIsDisplayed()
-            val cardBounds = row.fetchSemanticsNode().boundsInRoot
-            val textBounds = text.fetchSemanticsNode().boundsInRoot
-            val density = context.resources.displayMetrics.density
-            // Actual native text must leave the existing 39dp switch, both 7dp row gaps,
-            // and the 9dp trailing inset inside the rendered card.
-            assertTrue("$label must leave room for its complete switch",
-                textBounds.right + 62f * density <= cardBounds.right + 1f)
-            assertTrue("$label stays inside the leading inset", textBounds.left >= cardBounds.left + 9f * density - 1f)
+            // The shared row (iOS MonitorDisplaySections twin): the full label leads, its switch trails on the
+            // same line and is named by the label.
+            val toggle = composeRule.onNodeWithTag("monitor.settings.display.toggle.$id", useUnmergedTree = true)
+                .performScrollTo().assertIsDisplayed().assertContentDescriptionEquals(label)
+            val switch = toggle.fetchSemanticsNode().boundsInRoot
+            val text = composeRule.onAllNodes(hasText(label), useUnmergedTree = true).fetchSemanticsNodes()
+                .single { it.boundsInRoot.center.y in switch.top..switch.bottom }
+            val layout = mutableListOf<TextLayoutResult>()
+            text.config[SemanticsActions.GetTextLayoutResult].action?.invoke(layout)
+            assertTrue("$label is drawn whole on one line", layout.single().let { it.lineCount == 1 && !it.isLineEllipsized(0) })
+            assertTrue("$label must leave room for its complete switch", text.boundsInRoot.right <= switch.left)
         }
         preferences.edit().clear().commit()
     }
