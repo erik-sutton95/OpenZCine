@@ -1017,3 +1017,23 @@ extension NikonMediaLibraryAdoptionTests {
         await owner.dispose()
     }
 }
+
+extension NikonMediaLibraryAdoptionTests {
+    /// A2-43: offline, Delete is offered only where deletion removes something.
+    func testOfflineDeleteIsOfferedOnlyForPhoneOnlyCopies() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(mediaClipStore: MediaClipStore(root: root))
+        let onCamera = MediaClip(
+            cameraID: "SIMULATED-CAMERA", filename: "SIMULATED-CAMERA.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 10, captureDate: "20261012T120000")
+        let phoneOnly = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-PHONE.MOV", handle: nil,
+            storageID: nil, sizeBytes: 10, captureDate: "20261012T120000")
+        XCTAssertFalse(model.isConnected)
+        XCTAssertFalse(
+            model.canDeleteMedia([onCamera]), "Offline, a camera object cannot be removed")
+        XCTAssertTrue(model.canDeleteMedia([phoneOnly]))
+        XCTAssertTrue(model.canDeleteMedia([onCamera, phoneOnly]))
+    }
+}

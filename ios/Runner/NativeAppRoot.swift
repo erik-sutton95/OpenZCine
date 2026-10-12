@@ -10638,6 +10638,15 @@ final class NativeAppModel {
         }
     }
 
+    /// Delete is offered only where deletion removes something: a phone-only copy, or camera
+    /// objects while the camera session is up (the same rule as `deleteMediaClips`' canRemove).
+    /// ponytail: requested rows only; an offline camera shot's phone-only RAW sibling is not
+    /// offered on its own.
+    func canDeleteMedia(_ clips: [MediaClip]) -> Bool {
+        let connected = cameraSession != nil
+        return clips.contains { $0.allLocations.isEmpty || connected }
+    }
+
     /// Expands a deletion request to the full set of objects it honestly removes: each shot's
     /// RAW sibling and its hidden camera master. Backup copies ride on the shot's own row (the
     /// locations model folds both cards into one row), so they need no separate widening — they

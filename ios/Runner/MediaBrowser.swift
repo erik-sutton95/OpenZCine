@@ -301,7 +301,7 @@ struct MediaBrowserView: View {
                 .init(
                     download: model.isConnected && record.payload.handle != nil
                         && !model.isClipDownloaded(record.payload),
-                    share: true, delete: true)
+                    share: true, delete: model.canDeleteMedia([record.payload]))
             }, deletionMessage: { model.deletionConfirmMessage(for: $0.map(\.payload)) },
             openNotice: { record in
                 MediaClipFilename.isR3D(record.payload.filename)
@@ -861,7 +861,10 @@ struct MediaPhotoViewer: View {
                 perform: { rows, authority in
                     _ = await model.deleteMediaClips(
                         rows.map(\.payload), deleteLocation: nil, admitted: authority)
-                }), access: { _ in .init(share: true, delete: true) },
+                }),
+            access: { record in
+                .init(share: true, delete: model.canDeleteMedia([record.payload]))
+            },
             deletionMessage: { rows in
                 if rows.count > 1, !collection.isEmpty {
                     return burstDeletionMessage(rows.map(\.payload))
