@@ -1293,7 +1293,11 @@ extension NikonPlaybackOwnerAdoptionTests {
                 }
             }
         }
-        let presented = await cachedCatalogSettled { host.presentedViewController != nil }
+        // Return only once the cover has finished presenting, as an operator can: UIKit ignores
+        // a dismissal sent while the presentation transition is still running.
+        let presented = await cachedCatalogSettled {
+            host.presentedViewController.map { !$0.isBeingPresented } ?? false
+        }
         XCTAssertTrue(presented)
         observation.invalidate()
         for offset in openingOffsets.values { XCTAssertEqual(offset, before, accuracy: 1) }
@@ -1302,6 +1306,18 @@ extension NikonPlaybackOwnerAdoptionTests {
         let returned = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(returned)
         host.view.layoutIfNeeded()
+        if returningLayout != nil {
+            // A changed layout remounts the gallery. Sample it once the update has landed and the
+            // outgoing scroll view, animated out over 0.2 s, has left the window.
+            let remounted = await cachedCatalogSettled {
+                host.view.layoutIfNeeded()
+                return scroll.window == nil
+                    && Self.galleryScrollViews(host.view).contains {
+                        $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
+                    }
+            }
+            XCTAssertTrue(remounted, "A changed layout must replace the outgoing gallery")
+        }
         let returnedScroll = try XCTUnwrap(
             Self.galleryScrollViews(host.view).first {
                 $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
