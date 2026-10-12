@@ -9,7 +9,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ) -> Bool {
         AppDiagnostics.shared.start()
         ReliabilityDiagnostics.incidents.install()
+        #if DEBUG
+            ReliabilityDiagnostics.verification.prepareIfRequested()
+        #endif
         ReliabilityDiagnostics.reporting.install()
+        #if DEBUG
+            ReliabilityDiagnostics.verification.runIfRequested()
+        #endif
         // The camera transports live in OpenCineNikon; their milestones land in this app's
         // connection log and diagnostics journal, wired before any transport exists.
         PTPIPTransport.connectionLog = { logConnection($0) }

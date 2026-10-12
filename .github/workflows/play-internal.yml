@@ -115,6 +115,16 @@ jobs:
         id: version
         run: |
           echo "version_code=$(( ANDROID_VERSION_CODE_OFFSET + GITHUB_RUN_NUMBER ))" >> "$GITHUB_OUTPUT"
+          # The R8 mapping's Sentry ID, bound into the bundle (io.sentry.proguard-uuid) and the upload.
+          echo "SENTRY_PROGUARD_UUID=$(python3 -c 'import uuid; print(uuid.uuid4())')" >> "$GITHUB_ENV"
+
+      # Presence only when symbol upload is on; the DSN's shape is checked by Gradle and the SDK.
+      # OpenCine scripts/sentry, as Pocket and Insta.
+      - name: Require Sentry Android DSN
+        env:
+          SENTRY_UPLOAD_ENABLED: ${{ vars.SENTRY_UPLOAD_ENABLED }}
+          SENTRY_DSN_ANDROID: ${{ secrets.SENTRY_DSN_ANDROID }}
+        run: bash ../OpenCine/scripts/sentry/sentry-require-android-dsn.sh
 
       - name: Validate release credentials
         env:
@@ -177,6 +187,25 @@ jobs:
           ./scripts/verify-android-bundle-signing.sh \
             Apps/Android/app/build/outputs/bundle/release/app-release.aab \
             Apps/Android/wear/build/outputs/bundle/release/wear-release.aab
+
+      # Mapping and native symbols reach openzcine-android before Play gets the bundle. No-op unless
+      # SENTRY_UPLOAD_ENABLED is exactly true; when on, a missing token or symbol fails the release.
+      - name: Upload Sentry debug files
+        env:
+          SENTRY_UPLOAD_ENABLED: ${{ vars.SENTRY_UPLOAD_ENABLED }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_DSN_ANDROID: ${{ secrets.SENTRY_DSN_ANDROID }}
+        run: |
+          set -euo pipefail
+          if [ "${SENTRY_UPLOAD_ENABLED:-}" != "true" ]; then
+            echo "Sentry symbol upload skipped (SENTRY_UPLOAD_ENABLED is not true)."
+            exit 0
+          fi
+          test -s Apps/Android/app/build/outputs/mapping/release/mapping.txt
+          bash ../OpenCine/scripts/sentry/sentry-install.sh --install-dir "${RUNNER_TEMP}/sentry-cli"
+          export PATH="${RUNNER_TEMP}/sentry-cli:${PATH}"
+          python3 ../OpenCine/scripts/sentry/sentry-upload.py --platform android --project openzcine-android
 
       # r0adkll/upload-google-play over alternatives: Google publishes no official
       # GitHub Action for Play uploads (its official paths are Gradle Play Publisher

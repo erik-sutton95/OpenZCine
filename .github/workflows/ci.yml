@@ -180,6 +180,9 @@ jobs:
       # published. Delete when the app pins it by url + version.
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
+      # OpenCine's shared Sentry release tooling, run against this app's Xcode Cloud archive hook.
+      - name: Sentry release configuration
+        run: just sentry-test
       - name: Prepare a private iOS test simulator with real accessibility
         run: |
           mkdir -p "$RUNNER_TEMP/native-ios"

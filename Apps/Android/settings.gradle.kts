@@ -31,6 +31,8 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:nikon")).using(project(":nikon"))
         // The shared cameras page, connection model and saved-camera document (SHELL-02).
         substitute(module("com.opencapture.opencine:appkit")).using(project(":appkit"))
+        // The optional reporting adapter: appkit's reporting on the Sentry SDK.
+        substitute(module("com.opencapture.opencine:appkit-sentry")).using(project(":appkit-sentry"))
         // The shared capture sheets over the camera vocabulary (LadderSheet).
         substitute(module("com.opencapture.opencine:camera-controls")).using(project(":camera-controls"))
         substitute(module("com.opencapture.opencine:native-runtime")).using(project(":native-runtime"))

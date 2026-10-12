@@ -104,6 +104,18 @@ xcodebuild -project ios/Runner.xcodeproj \
   "${xcode_auth_args[@]+"${xcode_auth_args[@]}"}" \
   archive
 
+# Every archive carries the reporting destination (OpenCine scripts/sentry, as Pocket and Insta):
+# no DSN, no upload. With SENTRY_UPLOAD_ENABLED=true its dSYMs go to openzcine-ios first.
+sentry="../OpenCine/scripts/sentry"
+python3 "$sentry/sentry-verify-ios-dsn.py" \
+  --plist "$archive_path/Products/Applications/Runner.app/Info.plist" --require
+if [[ "${SENTRY_UPLOAD_ENABLED:-}" == "true" ]]; then
+  sentry_cli_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/opc-sentry-cli"
+  bash "$sentry/sentry-install.sh" --install-dir "$sentry_cli_dir"
+  PATH="$sentry_cli_dir:$PATH" CI_ARCHIVE_PATH="$archive_path" \
+    python3 "$sentry/sentry-upload.py" --platform ios --project openzcine-ios
+fi
+
 echo "Exporting (${export_plist})…"
 rm -rf "$export_path"
 xcodebuild -exportArchive \

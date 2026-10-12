@@ -222,7 +222,12 @@ privately to OpenCapture through Sentry, not to a public GitHub issue, and sends
 left camera Wi-Fi and has internet. Optional automatic crash and error reports (off by default,
 asked once at launch) take the same route. A build without a Sentry DSN (`SENTRY_DSN` on iOS,
 `SENTRY_DSN_ANDROID` on Android, both empty in the repository) shows both as unavailable. The
-Sentry and OkHttp adapters are per-app copies because OpenCine takes no third-party package.
+Sentry and OkHttp adapters are OpenCine's optional reporting adapter, the one documented exception
+to "OpenCine takes no third-party package": the Swift package `Packages/OpenCineSentryApple`
+(sentry-cocoa) and the Android module `:appkit-sentry` (sentry-android, OkHttp), which no shared
+module imports. This app links them and keeps only its host values (`ReliabilityDiagnostics`,
+Android `AppDiagnostics`); its release tooling (DSN check, dSYM, R8 mapping and native symbol
+upload to `openzcine-ios` and `openzcine-android`) is OpenCine's `scripts/sentry/`.
 Bug reports stay a platform-shell concern, not a portable-core feature.
 
 `services/bug-relay`, the Cloudflare Worker behind the earlier anonymous public-issue path, has no

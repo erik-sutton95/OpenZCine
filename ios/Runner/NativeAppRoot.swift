@@ -484,6 +484,14 @@ final class NativeAppModel {
         case preparingLiveView
         case connected
 
+        /// A camera link is being paired, prepared, recovered or held.
+        var holdsCameraPath: Bool {
+            switch self {
+            case .disconnected, .scanning: false
+            case .pairing, .reconnecting, .preparingLiveView, .connected: true
+            }
+        }
+
         var label: String {
             switch self {
             case .disconnected: "Disconnected"
@@ -797,6 +805,7 @@ final class NativeAppModel {
 
     var connection: ConnectionState = .disconnected {
         didSet {
+            syncReportingCameraPath()
             publishWatchState()
             guard oldValue != connection else { return }
             AppDiagnostics.shared.record(connection.diagnosticEvent)
@@ -3551,7 +3560,22 @@ final class NativeAppModel {
 
     /// True while a connection is being established — single-flights `connectToCamera` so overlapping
     /// Init attempts can't stack (see the guard inside).
-    @ObservationIgnored private var isEstablishingConnection = false
+    @ObservationIgnored private var isEstablishingConnection = false {
+        didSet { syncReportingCameraPath() }
+    }
+    /// Reports stay held back (A6-08) from a connect attempt through pairing, live view and
+    /// recovery, until no attempt, no session and no held connection state remain.
+    @ObservationIgnored private var reportingCameraPath: ReliabilityCameraPathLease?
+
+    private func syncReportingCameraPath() {
+        let held = isEstablishingConnection || cameraSession != nil || connection.holdsCameraPath
+        if held, reportingCameraPath == nil {
+            reportingCameraPath = ReliabilityDiagnostics.reporting.beginCameraPath()
+        } else if !held, let lease = reportingCameraPath {
+            reportingCameraPath = nil
+            lease.end()
+        }
+    }
 
     /// Whether THIS connection attempt applied a camera access-point Wi-Fi configuration.
     /// Feeds the saved record's `pairedViaCameraAccessPoint` evidence on connect success.
@@ -4338,6 +4362,7 @@ final class NativeAppModel {
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
         var debugIsEstablishingConnection: Bool { isEstablishingConnection }
         var debugHasCameraSession: Bool { cameraSession != nil }
+        var debugHoldsReportingCameraPath: Bool { reportingCameraPath != nil }
         var debugConnectionGeneration: Int { connectionGeneration }
         var debugHasSessionRecoveryTask: Bool { sessionRecoveryTask != nil }
         var debugPendingCameraWriteCount: Int { pendingCameraWrites.count }
@@ -4531,7 +4556,10 @@ final class NativeAppModel {
     @ObservationIgnored private var rendererHoldsBakedFrame = false
     private let scopeSampler = MonitorUIImageScopeSampler()
     private var cameraSession: NativeCameraSession? {
-        didSet { if oldValue !== cameraSession { retireMediaProducer() } }
+        didSet {
+            if oldValue !== cameraSession { retireMediaProducer() }
+            syncReportingCameraPath()
+        }
     }
     @ObservationIgnored private var mediaProducer:
         (io: NikonMediaCatalogAdapter, service: NikonMediaService)?
@@ -13774,10 +13802,6 @@ struct NativeAppRoot: View {
             }
         }
         .onChange(of: scenePhase) { _, _ in ReliabilityDiagnostics.problemReporting.tick() }
-        // Nothing uploads while a camera session is live (the camera's own Wi-Fi has no route).
-        .onChange(of: model.isConnected, initial: true) { _, live in
-            ReliabilityDiagnostics.reporting.setCameraSessionActive(live)
-        }
         .onChange(of: model.shell.cover) { old, new in
             model.noteShellCoverChange(from: old, to: new)
         }

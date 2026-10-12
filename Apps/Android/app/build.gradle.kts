@@ -100,6 +100,10 @@ android {
         )
         // Empty unless a build supplies one (below); without a DSN no report can be sent.
         buildConfigField("String", "SENTRY_DSN_ANDROID", "\"\"")
+        buildConfigField("String", "SOURCE_REVISION", "\"unknown\"")
+        // Play CI sets it before bundleRelease and uploads the R8 mapping under the same UUID
+        // (OpenCine scripts/sentry); the adapter's manifest binds it to io.sentry.proguard-uuid.
+        manifestPlaceholders["sentryProguardUuid"] = System.getenv("SENTRY_PROGUARD_UUID").orEmpty()
 
         ndk {
             abiFilters += supportedAndroidAbi
@@ -298,9 +302,9 @@ dependencies {
     implementation("com.opencapture.opencine:relay-runtime:0.1.0-SNAPSHOT")
     implementation("com.opencapture.opencine:watch-runtime:0.1.0-SNAPSHOT")
     implementation("com.opencapture.opencine:nikon-wire:0.1.0-SNAPSHOT")
-    // Sentry adapters for the shared problem report and reliability reporting (as Pocket).
-    implementation(libs.okhttp)
-    implementation(libs.sentry.android)
+    // The shared reporting adapter: appkit's reporting sink, transport and problem report upload on
+    // the Sentry SDK (sentry-android comes with it, at the version OpenCine pins).
+    implementation("com.opencapture.opencine:appkit-sentry:0.1.0-SNAPSHOT")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -359,8 +363,57 @@ val sentryDsnAndroidField =
             com.android.build.api.variant.BuildConfigField("String", "\"$escaped\"", "optional Sentry Android DSN")
         }
 
+// The commit this build came from (+ when the checkout is dirty), as Pocket and Insta stamp it.
+val sourceRevisionField =
+    providers.exec {
+        workingDir = repositoryRoot
+        commandLine("git", "rev-parse", "--short=12", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText
+        .zip(
+            providers.exec {
+                workingDir = repositoryRoot
+                commandLine("git", "status", "--porcelain")
+                isIgnoreExitValue = true
+            }.standardOutput.asText,
+        ) { rev, status ->
+            val cleaned =
+                (System.getenv("GITHUB_SHA")?.take(12) ?: rev.trim())
+                    .filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }
+                    .ifEmpty { "unknown" }
+            val value = if (status.isNotBlank()) "$cleaned+" else cleaned
+            com.android.build.api.variant.BuildConfigField("String", "\"$value\"", "git source revision")
+        }
+
+// Windows CPython installs put `python` on PATH and no `python3`. `PYTHON` overrides both.
+val pythonExecutable: Provider<String> =
+    providers.environmentVariable("PYTHON").orElse(
+        providers.systemProperty("os.name").map { osName ->
+            if (osName.startsWith("Windows", ignoreCase = true)) "python" else "python3"
+        }
+    )
+
 androidComponents {
-    onVariants { variant -> variant.buildConfigFields?.put("SENTRY_DSN_ANDROID", sentryDsnAndroidField) }
+    onVariants { variant ->
+        variant.buildConfigFields?.put("SENTRY_DSN_ANDROID", sentryDsnAndroidField)
+        variant.buildConfigFields?.put("SOURCE_REVISION", sourceRevisionField)
+        // Content identity of the build inputs this app lists in tools/build-identity.json (OpenCine
+        // scripts/sentry). Exec output participates in configuration-cache validation.
+        val identity = providers.exec {
+            workingDir = repositoryRoot
+            commandLine(
+                pythonExecutable.get(),
+                repositoryRoot.resolve("../OpenCine/scripts/sentry/build-identity.py").absolutePath,
+                "--root", repositoryRoot.absolutePath, "--platform", "android", "--configuration",
+                "${variant.name}-$resolvedVersionName-$resolvedVersionCode-${gradle.gradleVersion}",
+            )
+        }.standardOutput.asText.map { value ->
+            com.android.build.api.variant.BuildConfigField(
+                "String", "\"${value.trim()}\"", "content identity of build inputs",
+            )
+        }
+        variant.buildConfigFields?.put("BUILD_IDENTITY", identity)
+    }
 }
 
 abstract class LocalReliabilityDsnValueSource :

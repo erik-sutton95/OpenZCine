@@ -166,7 +166,7 @@ struct ExternalBetaDiagnosticsTests {
         #expect(details.contains("body=z6iii"))
     }
 
-    @Test("Reports use this app's names and support address, held back only by the live session")
+    @Test("Reports use this app's names, support address, adapter, redaction and source identity")
     func reliabilityHolder() {
         let host = ReliabilityDiagnostics.host
         #expect(host.product == "OpenZCine")
@@ -182,6 +182,19 @@ struct ExternalBetaDiagnosticsTests {
         #expect(ReliabilityDiagnostics.reporting.gate === ReliabilityDiagnostics.gate)
         #expect(ReliabilityDiagnostics.reporting.consent === ReliabilityDiagnostics.consent)
         #expect(ReliabilityReportingConsent.defaultsKey == "opc.reliabilityReporting.optIn")
+        // The SDK's session forwards through OpenCine's URL protocol, named for this app (A6-04).
+        #expect(AppReliabilityURLProtocol.forwarder === ReliabilityDiagnostics.forwarder)
+        let session = AppReliabilityURLProtocol.makeSDKSession()
+        let protocols = (session.configuration.protocolClasses ?? []).map(ObjectIdentifier.init)
+        #expect(protocols == [ObjectIdentifier(AppReliabilityURLProtocol.self)])
+        // Nikon keeps no network readable (A6-10); Android redacts the same table identically.
+        for ssid in ["NIKON_Z_8_12345678", "OsmoPocket3-A1B2", "EdgeRouter-5G", "CafeWiFi"] {
+            #expect(host.redact("ssid=\(ssid)") == "ssid=<redacted>")
+        }
+        // The build stamps its source identity (A6-07).
+        #expect(host.sourceRevision != "unknown")
+        let identity = Bundle.main.object(forInfoDictionaryKey: "OPCBuildIdentity") as? String
+        #expect(identity?.hasPrefix("ios-") == true)
     }
 
     @Test("USB handshake stages round-trip through the closed diagnostic vocabulary")
