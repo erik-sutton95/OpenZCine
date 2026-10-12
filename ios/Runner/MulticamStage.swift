@@ -117,7 +117,10 @@ struct MulticamStage: View {
         }
         return MultiviewTile(
             name: member.displayName, model: SavedCameraPathGroups.pathLabel(for: member.record),
-            battery: member.batteryPercent,
+            // The body's five-step gauge (A5-01): bars, never a percent it did not report.
+            batteryBars: member.batteryPercent.map(CameraBatteryGauge.gauge(rawBatteryLevel:))
+                .flatMap { $0 == .unknown ? nil : $0.filledBars },
+            batteryBarCount: CameraBatteryGauge.barCount,
             storage: member.storage.map { "\($0.gigabytesFree) GB" } ?? MultiviewTally.unavailable,
             timecode: member.timecode?.monitorLabel,
             tally: MultiviewTally.text(recording: rolling, waiting: coordinator.groupBusy),
