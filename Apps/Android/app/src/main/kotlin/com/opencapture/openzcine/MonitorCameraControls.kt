@@ -89,6 +89,9 @@ import kotlin.math.min
 import kotlinx.coroutines.withTimeoutOrNull
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
+import com.opencapture.opencine.cameracontrols.chromeClickable
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /**
  * iOS `panelRevealCurve`: CSS cubic-bezier(0.16, 1, 0.3, 1), 0.20s ease-out-expo
@@ -1236,7 +1239,7 @@ internal fun PickerPanelBody(
             Modifier
                 .then(if (chromeless) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
                     .heightIn(max = frame.height.dp)
-                    .overlayGlass(ChromeShape)
+                    .monitorMaterial(MonitorMaterial.Expanded, ChromeShape)
                     .border(1.dp, LiveDesign.hairlineStrong, ChromeShape))
                 // iOS PickerPanel: long-press anywhere (incl. lock banner) toggles shutter
                 // control lock. requireUnconsumed=false so the drum still scrolls.
@@ -1753,7 +1756,7 @@ internal fun MFDriveStrip(
             Modifier
                 .width(28.dp)
                 .fillMaxHeight()
-                .glass(CircleShape)
+                .monitorMaterial(MonitorMaterial.Compact, CircleShape)
                 .background(
                     Color.White.copy(alpha = if (dragging) 0.14f else 0f),
                     CircleShape,

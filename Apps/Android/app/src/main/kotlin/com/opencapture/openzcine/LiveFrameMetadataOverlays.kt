@@ -64,6 +64,8 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import com.opencapture.opencine.runtime.NativeFeedContentRect
 import com.opencapture.opencine.runtime.nativeFeedContentRect
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /** A floating-point feed-local rectangle used by focus and level overlay math. */
 internal data class LiveOverlayRect(
@@ -538,7 +540,7 @@ internal fun EVMeterView(sixths: Int, modifier: Modifier = Modifier) {
     Row(
         modifier
             // CircleShape renders as a capsule on a wide row, like iOS's Capsule.
-            .glass(CircleShape)
+            .monitorMaterial(MonitorMaterial.Compact, CircleShape)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

@@ -50,6 +50,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.opencapture.monitorui.MonitorFalseColorReference
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 import com.opencapture.opencine.cameracontrols.FalseColorReference as CommonFalseColorReference
 import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
 import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
@@ -274,11 +276,11 @@ const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
  * The frame state is read inside the [Canvas] draw lambda only, so a new
  * frame costs one draw invalidation — no recomposition, no layout.
  *
- * [onFrame] observes each presented frame on the decode thread — the glass
- * backdrop producer hooks in here ([MonitorGlass.submit]). The bitmap is
+ * [onFrame] observes each presented frame on the decode thread. The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
  * [onPresentedFrame] observes the exact source [LiveFrame], decoded bitmap,
- * and optional [MonitorBitmapPreviewBaker] accepted for display. The
+ * optional [MonitorBitmapPreviewBaker] and live look accepted for display; the
+ * shared material's backdrop samples the picture there. The
  * phone-mediated Wear relay uses this callback rather than collecting [source]
  * itself, so it cannot keep camera live view running while the monitor is
  * hidden or backgrounded. When image assists are visible, the baker reuses the
@@ -288,26 +290,24 @@ const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
  *
  * [effects] bakes the GPU assist chain (LUT / false colour / peaking / zebra)
  * into the drawn frame. The default preserves the plain feed. Presentation:
- * - **FLAT glass / no glass:** graded frames go to a GLES/Vulkan [SurfaceView]
- *   (A12-class path; AGSL live grade janked ~99% frames with LUT).
- * - **FULL liquid glass:** Compose [Canvas] (+ AGSL [FeedEffectsRenderer] when
- *   graded). Kyant `layerBackdrop` only records HWUI/Compose draw commands —
- *   a SurfaceView is a separate buffer and never appears under glass blur.
+ * graded frames go to a GLES/Vulkan [SurfaceView] (A12-class path; AGSL live
+ * grade janked ~99% frames with LUT); [preferComposablePresentation] keeps
+ * them on a Compose [Canvas] (+ AGSL [FeedEffectsRenderer]).
  * Builds without the staged Swift core, and frames outside original SDR,
  * always render plain.
  * [configuration] is local operator choice only; [cameraInput] is forwarded
  * unchanged to Swift, which owns camera curve/clip policy for both the
  * renderer and the optional false-colour reference key.
  *
- * @param preferComposablePresentation When true (FULL liquid glass), force the
- *   Compose Canvas present path so chrome/popups can blur the live feed.
+ * @param preferComposablePresentation When true (a rotated vertical feed), force
+ *   the Compose Canvas present path: SurfaceView buffers never rotate with Compose.
  */
 @Composable
 internal fun LiveFeedView(
     source: LiveFrameSource,
     modifier: Modifier = Modifier,
     onFrame: ((Bitmap) -> Unit)? = null,
-    onPresentedFrame: ((LiveFrame, Bitmap, MonitorBitmapPreviewBaker?) -> Unit)? = null,
+    onPresentedFrame: ((LiveFrame, Bitmap, MonitorBitmapPreviewBaker?, com.opencapture.opencine.media.FeedEffectsRenderPlan?) -> Unit)? = null,
     incidentObserver: com.opencapture.openzcine.diagnostics.NikonFeedIncidentProducer? = null,
     presentationState: LiveFeedPresentationState? = null,
     effects: FeedEffects,
@@ -331,8 +331,7 @@ internal fun LiveFeedView(
     val applicationContext = LocalContext.current.applicationContext
     val fallbackFrame = remember(source) { mutableStateOf<ImageBitmap?>(null) }
     val fallbackColorMode = remember(source) { mutableStateOf(LiveFeedColorMode.UNKNOWN) }
-    // GPU present (Vulkan preferred, GLES fallback) for FLAT glass. FULL glass
-    // must stay on Compose Canvas so Kyant can sample the feed.
+    // GPU present (Vulkan preferred, GLES fallback); a rotated feed stays on Compose Canvas.
     val gpuBackend = remember(source) { LiveFeedGpuBackendFactory.create(applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
@@ -371,8 +370,7 @@ internal fun LiveFeedView(
     var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     // Wear / small preview baker only (not the live monitor path).
     var previewBaker by remember { mutableStateOf<MonitorBitmapPreviewBaker?>(null) }
-    // AGSL grade for the Compose present path (FULL glass). Mid/high devices
-    // only — A12 stays on FLAT + GPU SurfaceView.
+    // AGSL grade for the Compose present path (a rotated vertical feed), API 33+.
     var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
         effects,
@@ -441,8 +439,6 @@ internal fun LiveFeedView(
             gpuBackend.updatePlan(plan, aspectFill, mirrored, mirroredVertical)
         }
     }
-    // SurfaceView is a separate buffer — Kyant layerBackdrop cannot sample it.
-    // FULL liquid glass therefore stays on Compose Canvas even when graded.
     // Keep the GPU surface mounted whenever the Swift core can grade so toggles
     // never remount AndroidView (another source of flash).
     val gpuSurfaceActive =
@@ -474,6 +470,7 @@ internal fun LiveFeedView(
     }
     val ownedPreviewBaker = previewBaker
     val latestPreviewBaker = rememberUpdatedState(ownedPreviewBaker)
+    val latestRenderPlan = rememberUpdatedState(renderPlan)
     DisposableEffect(ownedPreviewBaker) {
         onDispose { (ownedPreviewBaker as? AutoCloseable)?.close() }
     }
@@ -550,6 +547,7 @@ internal fun LiveFeedView(
                         latestPreviewBaker.value.takeIf {
                             frameColorMode == LiveFeedColorMode.SDR
                         },
+                        latestRenderPlan.value?.nativePlan,
                     )
                 },
             )
@@ -575,8 +573,7 @@ internal fun LiveFeedView(
             onRelease = { view -> gpuBackend.detach(view) },
         )
     } else {
-        // Compose Canvas is what Kyant layerBackdrop records for liquid glass.
-        // Graded FULL glass uses AGSL; plain feed is a direct bitmap blit.
+        // Graded composable presentation uses AGSL; plain feed is a direct bitmap blit.
         val agslRenderer = composableEffectsRenderer
         Canvas(modifier) {
             val androidBitmap =
@@ -653,7 +650,7 @@ internal fun LiveFeedColorModeNotice(
         }
     Box(
         modifier
-            .glass(ChromeShape)
+            .monitorMaterial(MonitorMaterial.Compact, ChromeShape)
             .semantics { contentDescription = copy.lowercase() }
             .padding(horizontal = 10.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,

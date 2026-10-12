@@ -69,7 +69,6 @@ class RecordCameraFlowComposeTest {
                     assists = assists,
                     operatorSettings = operatorSettings,
                     liveViewEnabled = false,
-                    glassTierOverride = GLASS_TIER_FLAT,
                 )
             }
         }
@@ -165,7 +164,6 @@ class RecordCameraFlowComposeTest {
     }
 
     private companion object {
-        const val GLASS_TIER_FLAT = "flat"
         const val START_RECORDING = "Start recording"
         const val STOP_RECORDING = "Stop recording"
         const val CONFIRM_START = "Start"

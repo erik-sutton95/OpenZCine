@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.monitorui.monitorBackdropSource
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -91,13 +92,12 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.appkit.MonitorPhotoRelease
 import com.opencapture.opencine.appkit.MonitorPhotoTimer
 import com.opencapture.opencine.appkit.MonitorNativeWrites
 import com.opencapture.opencine.appkit.rememberPhoneBatteryReadout
+import com.opencapture.opencine.appkit.MonitorBackdropActivation
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.statusPresentation
 import com.opencapture.opencine.appkit.MonitorCaptureField
@@ -243,9 +243,8 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
  * typed CameraSession/Swift command seam; descriptor-dependent controls stay
  * read-only rather than receiving guessed options.
  *
- * Chrome glass runs the GPU treatment (GlassChrome.kt) at this device's
- * [resolveTier] ceiling (FULL on API 33+ with enough RAM, else FLAT);
- * [glassTierOverride] (`zc.glass.tier` debug intent extra) can only lower.
+ * [liveBackdrop] is the presented picture every shared material panel samples; without it the
+ * panels show the shared material's plain fill.
  *
  * [assist] is shared with Operator Settings so toolbar and settings changes
  * immediately drive the same feed-effects and scope state.
@@ -267,7 +266,7 @@ internal fun MonitorScreen(
      */
     frameioController: com.opencapture.openzcine.frameio.FrameioDeliveryController? = null,
     liveViewEnabled: Boolean = true,
-    glassTierOverride: String? = null,
+    liveBackdrop: NikonLiveBackdrop? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
     isMonitorFront: Boolean = true,
     sessionRecoveryEnabled: Boolean = true,
@@ -410,54 +409,6 @@ internal fun MonitorScreen(
         retryTicket = sessionRecoveryRetryTicket,
         onRecoveryState = { sessionRecoveryState = it },
     )
-
-    // Kyant layer-backdrop glass (AndroidLiquidGlass):
-    //  • feedBackdrop — live view only; bars/chips sample with Modifier.glass.
-    //  • sceneBackdrop — feed + chrome; pickers/assist use Modifier.overlayGlass
-    //    so UI under a popup actually blurs (sibling-overlay pattern).
-    // Older APIs fall back to FLAT opaque fill (see resolveTier).
-    val feedBackdrop = rememberLayerBackdrop()
-    val sceneBackdrop =
-        rememberLayerBackdrop {
-            drawRect(LiveDesign.background)
-            drawContent()
-        }
-    val activityManager =
-        remember(appContext) {
-            appContext.getSystemService(android.content.Context.ACTIVITY_SERVICE)
-                as android.app.ActivityManager
-        }
-    val totalRamBytes =
-        remember(activityManager) {
-            android.app.ActivityManager.MemoryInfo()
-                .also(activityManager::getMemoryInfo)
-                .totalMem
-        }
-    val glass =
-        remember(
-            glassTierOverride,
-            feedBackdrop,
-            sceneBackdrop,
-            totalRamBytes,
-            activityManager.isLowRamDevice,
-        ) {
-            val tier =
-                resolveTier(
-                    sdkInt = android.os.Build.VERSION.SDK_INT,
-                    override = glassTierOverride,
-                    isLowRamDevice = activityManager.isLowRamDevice,
-                    totalRamBytes = totalRamBytes,
-                )
-            MonitorGlass(
-                tier,
-                layerBackdrop = feedBackdrop,
-                overlayBackdrop = sceneBackdrop,
-                // Pin FULL only when the operator explicitly forces it; otherwise
-                // allow frame-budget demote so borderline devices still fall back.
-                allowDemote = glassTierOverride?.lowercase() != "full",
-            )
-        }
-    MonitorGlassBudgetLoop(glass)
 
     // The display owner is the shared session's. Command (DISP 3) is a camera-control dashboard: a
     // stills body (its dashboard is movie-shaped) or a session with no camera behind it (a watcher
@@ -1328,6 +1279,13 @@ internal fun MonitorScreen(
         // Raster/overlay fit: the rotated 9:16 picture pillarboxes inside the fill frame:
         // aspect-filling it would centre-crop the top and bottom of the vertical shot.
         val portraitRasterFill = isPortraitFill && !isVerticalFeed
+        // The shared material samples the presented picture; a vertical feed (its geometry is
+        // rotated) and the dashboard (no picture) keep the material's plain fill.
+        if (liveBackdrop != null) {
+            MonitorBackdropActivation(pictureFrameSource != null && liveViewEnabled && isMonitorFront &&
+                !isVerticalFeed && !isCommand, liveBackdrop::setActive)
+            DisposableEffect(liveBackdrop, pictureFrameSource) { onDispose { liveBackdrop.sourceChanged() } }
+        }
         // Portrait fit stacks the first two eligible scopes in canonical order under the picture; the
         // others stay active and return in fill and landscape.
         val portraitScopes =
@@ -1842,14 +1800,6 @@ internal fun MonitorScreen(
                 if (focusPointLocked) R.string.focus_unlock_position
                 else R.string.focus_lock_position,
             )
-        // Full-scene recording so overlay glass (pickers) blurs chrome + feed.
-        // Kyant sibling pattern: this box records; popups are drawn *outside* it.
-        val sceneLayer =
-            if (glass.tier == GlassTier.FULL && glass.overlayBackdrop != null) {
-                Modifier.layerBackdrop(glass.overlayBackdrop)
-            } else {
-                Modifier
-            }
         val openSharedPicker: (MonitorPickerKind) -> Unit = { kind ->
             assists.shared.configureTool = null
             activeCommandControl = null
@@ -2133,20 +2083,12 @@ internal fun MonitorScreen(
                     )
                 } else null,
                 resetFocus = reset, comparison = comparison),
-            modifier = Modifier.fillMaxSize().then(sceneLayer),
+            modifier = Modifier.fillMaxSize(),
             portraitAspect = portraitAspect,
             setPortraitAspect = { operatorSettings.portraitFeedAspect = it },
             picture = {
             Box(
                 Modifier.zone(effectiveFeed)
-                    // Feed-only recording for bar/chip glass (over the video).
-                    .then(
-                        if (glass.tier == GlassTier.FULL && glass.layerBackdrop != null) {
-                            Modifier.layerBackdrop(glass.layerBackdrop)
-                        } else {
-                            Modifier
-                        },
-                    )
                     .clipToBounds()
                     // Canvas content is not exposed as an accessibility node
                     // by every Android view bridge. The feed container is the
@@ -2166,6 +2108,17 @@ internal fun MonitorScreen(
                     .testTag("monitor_live_feed"),
                 contentAlignment = Alignment.Center,
             ) {
+            liveBackdrop?.let { backdrop ->
+                // Passive geometry for the shared material: where the picture draws in this zone. It
+                // stays outside the punch-in layer, so a zoomed picture samples unzoomed (blurred anyway).
+                Box(Modifier.matchParentSize().monitorBackdropSource(backdrop.source,
+                    imageRect = liveBackdropImageRect(effectiveFeed.width * density.density,
+                        effectiveFeed.height * density.density, liveFeedPresentation.sourceWidth,
+                        liveFeedPresentation.sourceHeight, portraitRasterFill,
+                        localFraming.horizontalPresentationScale, localFraming.verticalPresentationScale),
+                    mirrored = renderedFraming.mirrorsHorizontally,
+                    flippedVertically = renderedFraming.flipsVertically))
+            }
             Box(
                 // Vertical mode first: the whole feed stack — raster, AF boxes, punch-in,
                 // gestures — lays out in the camera's own frame and rotates upright as one,
@@ -2238,13 +2191,14 @@ internal fun MonitorScreen(
                             scaleY = localFraming.verticalPresentationScale
                         },
                         incidentObserver = incidentProducer,
-                        onPresentedFrame = { frame, bitmap, baker ->
+                        onPresentedFrame = { frame, bitmap, baker, look ->
                             // TC is owned by the stream collector above; present
                             // path only drives FPS + wear (decode can lag a take).
                             fpsSampler.accept(System.nanoTime())
                             hasPresentedFrame = true
                             inspectorPreview.accept(pictureFrameSource, bitmap)
                             wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
+                            liveBackdrop?.accept(pictureFrameSource, bitmap, look)
                         },
                         presentationState = liveFeedPresentation,
                         collectFrames = monitorFrameSource != null,
@@ -2258,13 +2212,9 @@ internal fun MonitorScreen(
                         // the pin exactly as every other framing tool does.
                         mirrored = renderedFraming.mirrorsHorizontally,
                         mirroredVertical = renderedFraming.flipsVertically,
-                        // SurfaceView graded feed is invisible to Kyant
-                        // layerBackdrop — FULL glass must present via Compose. A rotated
-                        // (vertical) feed must too: SurfaceView buffers composite outside
-                        // the Compose layer and never rotate with it.
-                        preferComposablePresentation =
-                            glass.tier == GlassTier.FULL ||
-                                displayedFeedRotation != LiveFeedRotation.LANDSCAPE,
+                        // A rotated (vertical) feed presents via Compose: SurfaceView buffers
+                        // composite outside the Compose layer and never rotate with it.
+                        preferComposablePresentation = displayedFeedRotation != LiveFeedRotation.LANDSCAPE,
                     )
                     // Nothing draws over the picture here: the waiting plate is the surface's, and the
                     // picture carries no texture (A3-04).
@@ -2311,8 +2261,7 @@ internal fun MonitorScreen(
             },
             cameraPanel = { key, pickerFrame, isTopDropDown, _ ->
                 activeMonitorPicker?.takeIf { it.kind.name == key }?.let { picker ->
-                    CompositionLocalProvider(LocalMonitorGlass provides glass,
-                        com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
+                    CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
                     MonitorControlPickerPanel(
                         picker = picker,
                         frame = pickerFrame,
@@ -2359,8 +2308,7 @@ internal fun MonitorScreen(
                     }
                 }
                 activeCommandControl?.takeIf { "command:${it.control.name}" == key }?.let { request ->
-                    CompositionLocalProvider(LocalMonitorGlass provides glass,
-                        com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
+                    CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
                         CommandControlDialog(
                             request = request,
                             controlsEnabled = commandControlsEnabled,

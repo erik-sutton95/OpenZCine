@@ -149,7 +149,7 @@ class NikonCaptureQuickComposeTest {
                 val assists = remember { idleNikonAssists() }
                 MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), frameSource = null,
                     assists = assists, operatorSettings = settings, liveViewEnabled = false, sessionRecoveryEnabled = false,
-                    glassTierOverride = "flat", controlsSurrendered = surrendered())
+                    controlsSurrendered = surrendered())
             }
         }
         composeRule.mainClock.advanceTimeByFrame()

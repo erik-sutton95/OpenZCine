@@ -79,7 +79,7 @@ class NikonMonitorHostLifetimeComposeTest {
                     val assists = remember { idleNikonAssists() }
                     MonitorScreen(session = session, frameSource = source, commonSession = common, commonControl = control,
                         operatorSession = rememberTestOperatorSession(assists, settings), assists = assists, operatorSettings = settings,
-                        isMonitorFront = front.value, liveViewEnabled = true, sessionRecoveryEnabled = false, glassTierOverride = "flat")
+                        isMonitorFront = front.value, liveViewEnabled = true, sessionRecoveryEnabled = false)
                 }
             }
         }
@@ -146,7 +146,7 @@ class NikonMonitorHostLifetimeComposeTest {
             OpenZCineTheme {
                 Box(Modifier.requiredSize(400.dp, 840.dp)) {
                     MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), source, assists,
-                        settings, liveViewEnabled = true, sessionRecoveryEnabled = false, glassTierOverride = "flat")
+                        settings, liveViewEnabled = true, sessionRecoveryEnabled = false)
                 }
             }
         }
@@ -193,7 +193,7 @@ class NikonMonitorHostLifetimeComposeTest {
                 Box(Modifier.requiredSize(840.dp, 400.dp)) {
                     MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), selectedSource.value,
                         assists, settings, isMonitorFront = front.value, liveViewEnabled = true,
-                        sessionRecoveryEnabled = false, glassTierOverride = "flat")
+                        sessionRecoveryEnabled = false)
                 }
             }
         }

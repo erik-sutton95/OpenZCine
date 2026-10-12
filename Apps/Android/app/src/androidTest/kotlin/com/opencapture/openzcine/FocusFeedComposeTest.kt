@@ -285,7 +285,6 @@ class FocusFeedComposeTest {
                     frameSource = source,
                     assists = assists,
                     operatorSettings = settings,
-                    glassTierOverride = "flat",
                 )
             }
         }

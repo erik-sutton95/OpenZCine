@@ -141,18 +141,6 @@ object DemoHarness {
      */
     const val EXTRA_USB_STATE = "zc.demo.usbState"
 
-    /** String intent extra forcing a glass tier (`full`/`flat`) for testing. */
-    const val EXTRA_GLASS_TIER = "zc.glass.tier"
-
-    /**
-     * Glass-tier override: `--es zc.glass.tier flat` (or `full`) pins chrome
-     * glass. FLAT is the opaque-fill floor; legacy `blur` maps to FLAT. Null
-     * (default / release) lets [resolveTier] pick the platform ceiling. The
-     * override can only lower the tier — low-RAM devices stay FLAT even if
-     * `"full"` is requested.
-     */
-    fun glassTierOverride(intent: Intent): String? = intent.getStringExtra(EXTRA_GLASS_TIER)
-
     /**
      * Stages the dropped-session recovery affordance over the held frame
      * (`--es zc.demo.sessionLost retrying|lost`), mirroring iOS

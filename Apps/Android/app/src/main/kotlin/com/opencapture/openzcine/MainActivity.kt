@@ -44,6 +44,7 @@ import com.opencapture.monitorui.settings.MonitorSettingsTab
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import com.opencapture.monitorui.LocalMonitorBackdrops
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -240,7 +241,11 @@ class MainActivity : ComponentActivity() {
             OpenZCineTheme {
                 val operatorHaptics =
                     rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
-                CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics) {
+                // The presented picture under every shared material panel; the monitor feeds and activates it.
+                val liveBackdrop = remember { NikonLiveBackdrop(applicationContext) }
+                DisposableEffect(liveBackdrop) { onDispose { liveBackdrop.close() } }
+                CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics,
+                    LocalMonitorBackdrops provides listOf(liveBackdrop.source)) {
                 Box(Modifier.fillMaxSize()) {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 // The HDMI capture feed beside a capture-only session. Non-null
@@ -1134,7 +1139,7 @@ class MainActivity : ComponentActivity() {
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
                                 liveViewEnabled = overlay == null,
-                                glassTierOverride = DemoHarness.glassTierOverride(intent),
+                                liveBackdrop = liveBackdrop,
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == null,
                                 sessionRecoveryEnabled =

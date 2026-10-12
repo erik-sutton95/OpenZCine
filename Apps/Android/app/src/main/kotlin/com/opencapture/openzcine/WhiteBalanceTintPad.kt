@@ -47,6 +47,7 @@ import android.graphics.Rect as AndroidRect
 import android.graphics.Typeface
 import kotlin.math.roundToInt
 import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.opencine.cameracontrols.chromeClickable
 
 /**
  * iOS `WhiteBalanceTintPad` — 1:1 geometry and interaction:

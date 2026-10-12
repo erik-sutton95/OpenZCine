@@ -312,10 +312,6 @@ dependencies {
     implementation(libs.compose.material3)
     // Playback transport SF-symbol stand-ins (play/pause/share/volume/star).
     implementation(libs.compose.material.icons.extended)
-    // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
-    implementation(libs.kyant.backdrop)
-    // Runtime of backdrop, pinned here.
-    implementation(libs.kyant.shapes)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)

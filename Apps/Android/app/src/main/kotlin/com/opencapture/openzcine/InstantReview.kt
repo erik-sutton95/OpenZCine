@@ -42,6 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import com.opencapture.opencine.cameracontrols.chromeClickable
 
 /** How the shell reacts to a body-fired capture-complete event. */
 internal enum class BodyCaptureSync {

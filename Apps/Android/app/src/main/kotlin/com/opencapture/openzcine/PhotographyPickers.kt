@@ -32,6 +32,9 @@ import androidx.compose.ui.unit.sp
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.openzcine.settings.PanelCloseButton
+import com.opencapture.opencine.cameracontrols.chromeClickable
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /**
  * Mode-aware write gates and drive rules for the photography (stills) pickers. The ladders the
@@ -726,7 +729,7 @@ internal fun QualityPickerPanelBody(
     Column(
         Modifier
             .then(if (chromeless) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
-                .overlayGlass(ChromeShape)
+                .monitorMaterial(MonitorMaterial.Expanded, ChromeShape)
                 .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
                 .padding(horizontal = 20.dp, vertical = 14.dp)),
         verticalArrangement = Arrangement.spacedBy(10.dp),

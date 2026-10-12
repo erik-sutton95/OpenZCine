@@ -64,6 +64,7 @@ import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.nikonAssistSection
 import kotlinx.coroutines.launch
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
+import com.opencapture.opencine.cameracontrols.chromeClickable
 
 /** A palette chip: a shared assist, or PLAY (photography's instant review, this camera's own). */
 internal sealed interface NikonAssistChip {
@@ -627,7 +628,7 @@ private fun CapsuleActionButton(
             .background(LiveDesign.background.copy(alpha = 0.38f), ChromeShape)
             .border(1.dp, if (enabled) tint.copy(alpha = 0.6f) else LiveDesign.hairline, ChromeShape)
             .alpha(if (enabled) 1f else 0.45f)
-            .chromeClickable(enabled, onClick)
+            .chromeClickable(enabled, onClick = onClick)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {

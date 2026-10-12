@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.sp
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import java.util.Locale
+import com.opencapture.opencine.cameracontrols.chromeClickable
 
 // The photography capture strip renders through the shared `MonitorCaptureStrip`
 // over `photographyCaptureSettings` (PhotographyPickers.kt) — iOS reuses
