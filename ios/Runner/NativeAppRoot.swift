@@ -13791,7 +13791,7 @@ struct NativeAppRoot: View {
         }
         .task {
             // Demo/screenshot staging (ZC_DEMO_* launch env) — a Debug-only no-op elsewhere.
-            DemoHarness.applyLaunchEnvironment(to: model)
+            await DemoHarness.applyLaunchEnvironment(to: model)
         }
         // At the root, not on the wizard: the pairing list and the saved-camera list both reach
         // the same connect, and a confirmation that only exists on one screen turns a tap on the

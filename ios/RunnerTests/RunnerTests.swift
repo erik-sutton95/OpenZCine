@@ -8,6 +8,7 @@ import OpenCineApple
 import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCore
+import OpenCineHostedAccessibility
 import OpenCineMedia
 import SwiftUI
 import Testing
@@ -49,7 +50,8 @@ final class RunnerTests: XCTestCase {
             let end = try await nativeFilterElement("End", host: host)
             XCTAssertEqual(start.accessibilityValue, "Any")
             XCTAssertEqual(end.accessibilityValue, "Any")
-            let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
+            let labels = Set(
+                HostedAccessibility.elements(in: host.view).compactMap(\.accessibilityLabel))
             XCTAssertFalse(labels.contains("SIZE"))
             XCTAssertFalse(labels.contains("STORAGE"))
             XCTAssertFalse(labels.contains("TODAY"))
@@ -76,29 +78,6 @@ final class RunnerTests: XCTestCase {
     }
 
     @MainActor
-    private func nativeFilterElements(_ root: NSObject) -> [NSObject] {
-        var seen = Set<ObjectIdentifier>()
-        var result: [NSObject] = []
-        func visit(_ object: NSObject) {
-            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-            result.append(object)
-            let count = object.accessibilityElementCount()
-            if count > 0 && count < 256 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject {
-                        visit(child)
-                    }
-                }
-            }
-            if let view = object as? UIView {
-                for child in view.subviews { visit(child) }
-            }
-        }
-        visit(root)
-        return result
-    }
-
-    @MainActor
     private func nativeFilterElement(_ label: String, host: UIViewController) async throws
         -> NSObject
     {
@@ -106,7 +85,7 @@ final class RunnerTests: XCTestCase {
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
             await Task.yield()
-            if let element = nativeFilterElements(host.view).first(where: {
+            if let element = HostedAccessibility.elements(in: host.view).first(where: {
                 $0.accessibilityLabel == label && $0.accessibilityTraits.contains(.button)
             }) {
                 return element
@@ -114,7 +93,7 @@ final class RunnerTests: XCTestCase {
         }
         XCTFail("Default common form did not expose its native \(label) button")
         return try XCTUnwrap(
-            nativeFilterElements(host.view).first { $0.accessibilityLabel == label })
+            HostedAccessibility.elements(in: host.view).first { $0.accessibilityLabel == label })
     }
 
     @MainActor
@@ -432,28 +411,9 @@ final class RunnerTests: XCTestCase {
             previousKey?.makeKeyAndVisible()
         }
         func renderedElement(_ identifier: String) -> NSObject? {
-            var seen = Set<ObjectIdentifier>()
-            func find(_ object: NSObject) -> NSObject? {
-                guard seen.insert(ObjectIdentifier(object)).inserted else { return nil }
-                let getter = NSSelectorFromString("accessibilityIdentifier")
-                if object.responds(to: getter),
-                    object.perform(getter)?.takeUnretainedValue() as? String
-                        == identifier
-                {
-                    return object
-                }
-                var children = object.accessibilityElements as? [NSObject] ?? []
-                let count = object.accessibilityElementCount()
-                if count > 0 && count < 512 {
-                    children += (0..<count).compactMap {
-                        object.accessibilityElement(at: $0) as? NSObject
-                    }
-                }
-                if let view = object as? UIView { children += view.subviews }
-                for child in children { if let result = find(child) { return result } }
-                return nil
+            HostedAccessibility.elements(in: host.view).first {
+                HostedAccessibility.identifier($0) == identifier
             }
-            return find(host.view)
         }
         func previewElement() -> NSObject? { renderedElement("monitor.inspector.preview") }
         func mountedElement(_ identifier: String) async throws -> NSObject {
@@ -3718,7 +3678,8 @@ extension RunnerTests {
             originalKeyWindow?.makeKeyAndVisible()
         }
         let favorite = try await nativeFilterElement("Add favorite", host: host)
-        let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
+        let labels = Set(
+            HostedAccessibility.elements(in: host.view).compactMap(\.accessibilityLabel))
         XCTAssertTrue(labels.contains("ON CAMERA"))
         XCTAssertTrue(labels.contains("RAW+J"))
         XCTAssertTrue(labels.contains("4 frames"))
@@ -3780,31 +3741,12 @@ extension RunnerTests {
             }
         }
         func elements(_ root: NSObject) -> [NSObject] {
-            var seen = Set<ObjectIdentifier>()
-            var result: [NSObject] = []
-            func visit(_ object: NSObject) {
-                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-                result.append(object)
-                // SwiftUI vends its nodes through `accessibilityElements`; `accessibilityElement(at:)`
-                // can answer nil for them.
-                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
-                let count = object.accessibilityElementCount()
-                if count > 0 && count < 512 {
-                    for index in 0..<count {
-                        if let child = object.accessibilityElement(at: index) as? NSObject {
-                            visit(child)
-                        }
-                    }
-                }
-                if let view = object as? UIView { for child in view.subviews { visit(child) } }
+            HostedAccessibility.elements(in: root).filter {
+                $0.isAccessibilityElement && !$0.accessibilityFrame.isEmpty
             }
-            visit(root)
-            return result.filter { $0.isAccessibilityElement && !$0.accessibilityFrame.isEmpty }
         }
         func identifier(_ object: NSObject) -> String {
-            let getter = NSSelectorFromString("accessibilityIdentifier")
-            guard object.responds(to: getter) else { return "" }
-            return object.perform(getter)?.takeUnretainedValue() as? String ?? ""
+            HostedAccessibility.identifier(object) ?? ""
         }
         func render() -> CGImage? {
             let format = UIGraphicsImageRendererFormat()

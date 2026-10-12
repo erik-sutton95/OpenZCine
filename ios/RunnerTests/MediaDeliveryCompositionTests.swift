@@ -2,6 +2,7 @@ import AVFoundation
 import CoreVideo
 import MonitorPresentation
 import MonitorUI
+import OpenCineHostedAccessibility
 import SwiftUI
 import UIKit
 import XCTest
@@ -38,7 +39,9 @@ final class MediaDeliveryCompositionTests: XCTestCase {
             let format = try await element(label: "MP4", in: host, button: true, scroll: true)
             XCTAssertTrue(format.accessibilityActivate())
             XCTAssertTrue(
-                elements(host.view).contains { $0.accessibilityLabel == "Include metadata" })
+                HostedAccessibility.elements(in: host.view).contains {
+                    $0.accessibilityLabel == "Include metadata"
+                })
             let save = try await element(label: "Save to Photos", in: host, button: true)
             XCTAssertTrue(save.accessibilityActivate())
             let begin = try await element(identifier: "monitor.share.begin", in: host, button: true)
@@ -156,7 +159,8 @@ final class MediaDeliveryCompositionTests: XCTestCase {
                 MonitorMediaDeliveryProgressPanel(value: zero, destinationIcon: { EmptyView() })
                     .frame(maxWidth: 420).padding(20))
             _ = try await element(label: zero.status, in: host)
-            let labels = Set(elements(host.view).compactMap(\.accessibilityLabel))
+            let labels = Set(
+                HostedAccessibility.elements(in: host.view).compactMap(\.accessibilityLabel))
             XCTAssertFalse(labels.contains("SIMULATED.MOV"))
             XCTAssertFalse(labels.contains("Destination: SIMULATED destination"))
             XCTAssertFalse(labels.contains("Collapse"))
@@ -214,27 +218,6 @@ final class MediaDeliveryCompositionTests: XCTestCase {
     }
 
     @MainActor
-    private func elements(_ root: NSObject) -> [NSObject] {
-        var seen = Set<ObjectIdentifier>()
-        var result: [NSObject] = []
-        func visit(_ object: NSObject) {
-            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-            result.append(object)
-            let count = object.accessibilityElementCount()
-            if count > 0 && count < 256 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject {
-                        visit(child)
-                    }
-                }
-            }
-            if let view = object as? UIView { for child in view.subviews { visit(child) } }
-        }
-        visit(root)
-        return result
-    }
-
-    @MainActor
     private func activate(
         label: String? = nil, identifier: String? = nil, in host: UIViewController
     ) async throws {
@@ -252,7 +235,7 @@ final class MediaDeliveryCompositionTests: XCTestCase {
         while ContinuousClock.now < deadline {
             host.view.layoutIfNeeded()
             await Task.yield()
-            let matches = elements(host.view).filter { object in
+            let matches = HostedAccessibility.elements(in: host.view).filter { object in
                 (label == nil || object.accessibilityLabel == label)
                     && (identifier == nil || publicIdentifier(of: object) == identifier)
                     && (!button || object.accessibilityTraits.contains(.button))
@@ -273,8 +256,9 @@ final class MediaDeliveryCompositionTests: XCTestCase {
                     return object
                 }
                 if scroll,
-                    let viewport = elements(host.view).compactMap({ $0 as? UIScrollView }).first(
-                        where: {
+                    let viewport = HostedAccessibility.elements(in: host.view)
+                        .compactMap({ $0 as? UIScrollView })
+                        .first(where: {
                             $0.contentSize.height > $0.bounds.height && !$0.isHidden
                         })
                 {
@@ -307,7 +291,7 @@ final class MediaDeliveryCompositionTests: XCTestCase {
         let window = host.view.window
         let identifierGetter = NSSelectorFromString("accessibilityIdentifier")
         var candidates = 0
-        let rows: [[String: Any]] = elements(host.view).map { object in
+        let rows: [[String: Any]] = HostedAccessibility.elements(in: host.view).map { object in
             let supportsIdentifierGetter = object.responds(to: identifierGetter)
             let identification = object as? UIAccessibilityIdentification
             let actualIdentifier = publicIdentifier(of: object)

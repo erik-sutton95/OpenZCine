@@ -79,14 +79,21 @@ swift-lint:
 swift-test:
     swift test
 
-# Demo/screenshot env hooks (ZC_DEMO_*, ZC_METAL_FEED, ZC_GPU_SCOPES) must stay inside
-# ios/Runner/DemoHarness.swift, whose Release stubs compile them out of TestFlight builds.
-# Doc-comment mentions elsewhere are allowed; code reads are not.
+# Demo/screenshot env hooks (ZC_DEMO_*, ZC_METAL_FEED, ZC_GPU_SCOPES) and the shared review staging
+# (OPV_UI_REVIEW_*, `ReviewLaunch`) must stay inside ios/Runner/DemoHarness.swift, whose Release
+# stubs compile them out of TestFlight builds. Doc-comment mentions elsewhere are allowed; code
+# reads are not.
 check-demo-isolation:
-    ! grep -rn 'ZC_DEMO\|ZC_METAL_FEED\|ZC_GPU_SCOPES' Sources ios/Runner ios/OpenZCineWatch --include='*.swift' | grep -v '^ios/Runner/DemoHarness.swift:' | grep -vE ':[0-9]+: *///?' | grep .
+    ! grep -rn 'ZC_DEMO\|ZC_METAL_FEED\|ZC_GPU_SCOPES\|OPV_UI_REVIEW_\|ReviewLaunch' Sources ios/Runner ios/OpenZCineWatch --include='*.swift' | grep -v '^ios/Runner/DemoHarness.swift:' | grep -vE ':[0-9]+: *///?' | grep .
 
 # Run all Swift-only checks.
 swift-check: swift-lint swift-test
+
+# The shared conformance scenarios and kit suites (RunnerUIReview: RunnerUITests without the
+# physical camera classes) on one simulator, made with accessibility enabled by
+# ../OpenCine/scripts/ios-private-simulator.py create <name>.
+conformance-ios udid result="":
+    xcodebuild -project ios/Runner.xcodeproj -scheme RunnerUIReview -destination 'platform=iOS Simulator,id={{udid}}' -parallel-testing-enabled NO {{ if result != "" { "-resultBundlePath " + result } else { "" } }} test
 
 # Build the native iOS app for the simulator.
 ios-build:
