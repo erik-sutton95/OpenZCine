@@ -14,9 +14,11 @@ struct WatchMonitorView: View {
         let state = controller.state
         let photography = state?.isPhotography == true
         let shots = (state?.shotsRemaining).flatMap { $0.isEmpty ? nil : $0 } ?? "\u{2014}"
-        let header =
-            photography
-            ? shots : (controller.frameTimecode ?? state?.timecode)?.label ?? "--:--:--:--"
+        // A body with its timecode off still reports 00:00:00:00; that reads as absent (A5-05).
+        let timecode = (controller.frameTimecode ?? state?.timecode).flatMap {
+            $0.on ? $0.label : nil
+        }
+        let header = photography ? shots : timecode ?? "--:--:--:--"
         return WatchMonitorPresentation(
             sourceRevision: controller.presentationRevision,
             header: header, headerAccessibility: photography ? "Shots remaining \(shots)" : nil,
