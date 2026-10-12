@@ -209,7 +209,7 @@ struct FeedAlignedAssists: View {
             ZStack {
                 MonitorOperatorFramingMarks(
                     assist: model.assist, feed: feed,
-                    visible: Set(visible.map(\.selection)),
+                    visible: Set(visible.map(\.selection)), guideFallback: model.assist.guideAspect,
                     comparison: LUTResolution.splitComparison(
                         visibleTools: visible,
                         enabled: model.assist.splitComparison, vertical: model.assist.splitVertical,
