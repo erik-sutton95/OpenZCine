@@ -58,7 +58,8 @@ import OpenZCineCore
     typealias Payload = MediaClip
     let store: MediaClipStore
     let bucket: String
-    let service: NikonMediaService?
+    /// The library owner's current source; a new camera service rebinds it, never replaces it.
+    var service: NikonMediaService?
     private let downloaded: (MediaClip) -> Bool
     // Immutable captured tombstones are checked against current bytes, never filename alone.
     private var acceptedRemovals: [NikonMediaObjectRecord] = []

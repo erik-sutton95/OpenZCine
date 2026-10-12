@@ -35,24 +35,7 @@ struct ChromeEditorReturnTests {
         #expect(model.chromeEditorMode == nil)
         #expect(model.activePanel == .settings)
         #expect(model.operatorSettingsTab == .display)
-        #expect(model.chromeEditorReturnMode == .clean)
-    }
-
-    @MainActor
-    @Test("The rail plan the monitor renders follows the camera's capture side")
-    func railPlanFollowsTheCaptureSide() {
-        let model = NativeAppModel()
-        // No camera attached in a unit run, so the body reports video.
-        #expect(model.captureLayoutMode == .video)
-
-        // Set rather than toggle: `NativeAppModel()` loads the persisted preferences, so a stored
-        // value from a previous run would make a toggle flip the wrong way.
-        model.preferences = OperatorPreferences.defaults
-        model.preferences.displayChrome.railMediaVisible = false
-        #expect(!model.monitorSideRailPlan.media)
-        #expect(
-            model.preferences.chrome(for: .live, capture: .photo).railMediaVisible,
-            "the stills layout keeps its own answer")
+        #expect(model.operatorSession.returnedMode == .clean)
     }
 }
 
@@ -63,17 +46,17 @@ struct ChromeEditBadgePlacementTests {
     func editBadgesTakeAPlaceOnTheirOwnElementAndNeverStackUp() throws {
         // Real measured landscape boxes from an iPhone 15 Pro (852x393): the four readouts nest
         // inside the status bar, and the rail and camera-value strip sit flush against the edges.
-        let boxes: [(key: DisplayChromeVisibility.Section, frame: CGRect)] = [
+        let boxes: [(key: MonitorDisplayChrome.Section, frame: CGRect)] = [
             (.statusBar, CGRect(x: 69, y: 16, width: 678, height: 42)),
-            (.sideRails, CGRect(x: 763, y: 14, width: 83, height: 289)),
-            (.assistToolbar, CGRect(x: 16, y: 321, width: 344, height: 58)),
+            (.railSettings, CGRect(x: 763, y: 14, width: 83, height: 289)),
+            (.toolBar, CGRect(x: 16, y: 321, width: 344, height: 58)),
             (.cameraValues, CGRect(x: 368, y: 321, width: 466, height: 58)),
             (.lockButton, CGRect(x: 16, y: 17, width: 40, height: 40)),
-            (.batteryIndicators, CGRect(x: 8, y: 63, width: 41, height: 35)),
+            (.batteries, CGRect(x: 8, y: 63, width: 41, height: 35)),
             (.recReadout, CGRect(x: 81, y: 23, width: 67, height: 27)),
-            (.codecReadout, CGRect(x: 377, y: 22, width: 98, height: 30)),
-            (.mediaReadout, CGRect(x: 485, y: 22, width: 132, height: 30)),
-            (.fpsReadout, CGRect(x: 627, y: 22, width: 108, height: 29)),
+            (.codec, CGRect(x: 377, y: 22, width: 98, height: 30)),
+            (.storage, CGRect(x: 485, y: 22, width: 132, height: 30)),
+            (.fps, CGRect(x: 627, y: 22, width: 108, height: 29)),
         ]
 
         let frames = MonitorChromeEditBadgeLayout.badgeFrames(
@@ -107,7 +90,7 @@ struct ChromeEditBadgePlacementTests {
     func editBadgeLayoutSkipsUnmeasuredElements() {
         let frames = MonitorChromeEditBadgeLayout.badgeFrames(
             keyed: [
-                (key: DisplayChromeVisibility.Section.statusBar, frame: CGRect.zero),
+                (key: MonitorDisplayChrome.Section.statusBar, frame: CGRect.zero),
                 (key: .lockButton, frame: CGRect(x: 16, y: 17, width: 40, height: 40)),
             ],
             viewport: CGSize(width: 852, height: 393))
@@ -116,24 +99,21 @@ struct ChromeEditBadgePlacementTests {
         #expect(frames[.lockButton] != nil)
     }
 
+    /// A1-08: one owner. The badge writes the shared per-DISP chrome every app reads.
     @MainActor
-    @Test("A badge shows and hides its element on the capture side the body reports")
-    func badgesFollowTheCaptureSide() {
+    @Test("A badge shows and hides its element in the shared per-DISP chrome")
+    func badgesWriteTheSharedChrome() {
         let model = NativeAppModel()
-        let capture = model.captureLayoutMode
         let before = model.isChromeVisible(.lockButton, in: .live)
-        #expect(
-            before == model.preferences.chrome(for: .live, capture: capture).isVisible(.lockButton))
+        #expect(before == model.operatorSession.chrome(for: .live).lockButton)
 
         model.toggleChrome(.lockButton, for: .live)
 
         #expect(model.isChromeVisible(.lockButton, in: .live) == !before)
-        #expect(
-            model.preferences.chrome(for: .live, capture: capture).isVisible(.lockButton) == !before
-        )
+        #expect(model.operatorSession.chrome(for: .live).lockButton == !before)
         #expect(
             model.isChromeConfigurable(.focusBox, in: .live)
-                == DisplayChromeVisibility.isConfigurable(.focusBox, in: .live))
+                == MonitorDisplayChrome.isConfigurable(.focusBox, in: .live))
         model.toggleChrome(.lockButton, for: .live)
     }
 }

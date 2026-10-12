@@ -258,9 +258,9 @@ struct NikonPrePage: View {
     }
 }
 
-/// The Media and Settings covers: the cameras page's, a panel an internet hop re-hosts once the
-/// monitor has gone, or the panel of a monitor that is not the shell's (`NativeAppRoot`).
-struct NikonCoverPage: View {
+/// The standalone Media and Settings covers: the cameras page's, or a panel an internet hop
+/// re-hosts once the monitor has gone.
+private struct NikonCoverPage: View {
     @Environment(NativeAppModel.self) private var model
     let cover: ShellModel.Cover
 

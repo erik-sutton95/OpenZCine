@@ -11,10 +11,16 @@ import com.opencapture.opencine.appkit.diagnostics.ReliabilityReportingConsent
 import com.opencapture.opencine.appkit.diagnostics.ReliabilityReportingDSN
 import com.opencapture.opencine.appkit.diagnostics.ReliabilityReportingGate
 import com.opencapture.opencine.appkit.diagnostics.ReliabilityReportingHostPolicy
+import com.opencapture.opencine.appkit.sentry.OkHttpManualReportUpload
+import com.opencapture.opencine.appkit.sentry.SentryReliabilitySink
 import com.opencapture.opencine.vocabulary.PrivacyRedactor
 import com.opencapture.openzcine.BuildConfig
 
-/** The app's diagnostics: OpenCine's runtime with this app's names, destination, Sentry and OkHttp. */
+/**
+ * The app's diagnostics: OpenCine's runtime with this app's names and destination over OpenCine's
+ * Sentry adapter. Nikon keeps no network readable: the neutral redactor removes every SSID, as on
+ * iOS.
+ */
 internal object AppDiagnostics {
     val host =
         DiagnosticsHost(
@@ -23,8 +29,7 @@ internal object AppDiagnostics {
             versionName = BuildConfig.VERSION_NAME,
             versionCode = BuildConfig.VERSION_CODE,
             debug = BuildConfig.DEBUG,
-            // ponytail: no git revision stamp in this build yet; Pocket's SOURCE_REVISION task if wanted.
-            sourceRevision = "unknown",
+            sourceRevision = BuildConfig.SOURCE_REVISION,
             reportingDsn = BuildConfig.SENTRY_DSN_ANDROID,
             reportingClient = "openzcine-android",
             // iOS ReliabilityDiagnostics.supportEmail (unconfirmed); named only when a report cannot be sent.
@@ -38,7 +43,7 @@ internal object AppDiagnostics {
     // The camera access point is 192.168.1.x, the most common home-router subnet, so an address
     // prefix would hold reports forever at home. The camera path is the process binding instead.
     val gate = ReliabilityReportingGate(consent, ReliabilityReportingHostPolicy(), cameraIPv4Prefix = "camera-path-is-bound")
-    val origin = FeedIncidentOrigin({ null }, host.redact)
+    val origin = FeedIncidentOrigin({ BuildConfig.BUILD_IDENTITY }, host.redact)
     val reporting =
         ReliabilityReporting(host, consent, dsn, gate, origin, ::SentryReliabilitySink) {
             manualReport.noteCameraPathClear()

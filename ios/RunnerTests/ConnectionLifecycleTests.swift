@@ -46,6 +46,28 @@ struct ConnectionLifecycleTests {
         #expect(model.sessionRecovery == .idle)
     }
 
+    @Test("Reports stay held back from connect start through recovery until the attempt retires")
+    func connectAttemptHoldsReportUploads() async {
+        let model = model()
+        #expect(model.debugHoldsReportingCameraPath == false)
+        model.connectToCamera()
+        #expect(model.debugHoldsReportingCameraPath)
+        model.cancelConnectionAttempt()
+        #expect(model.debugHoldsReportingCameraPath == false)
+
+        // A drop into recovery keeps the hold; leaving it releases it (A6-08).
+        model.connection = .reconnecting
+        #expect(model.debugHoldsReportingCameraPath)
+        model.connection = .disconnected
+        #expect(model.debugHoldsReportingCameraPath == false)
+
+        // A failed attempt releases the hold with its latch.
+        model.connectToCamera()
+        #expect(model.debugHoldsReportingCameraPath)
+        await settle(model)
+        #expect(model.debugHoldsReportingCameraPath == false)
+    }
+
     @Test("A retry immediately after a cancel is not swallowed")
     func retryAfterCancelIsAccepted() async {
         let model = model()

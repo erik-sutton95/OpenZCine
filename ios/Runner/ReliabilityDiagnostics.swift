@@ -2,13 +2,15 @@ import Foundation
 import MonitorUI
 import OpenCineAppKit
 import OpenCineMedia
+import OpenCineSentryApple
 import SafariServices
 import SwiftUI
 import UIKit
 
 /// The app's reliability and problem reports: OpenCine's reporting runtime with this app's names,
-/// destination, camera network and Sentry, wired as Pocket and Insta wire theirs. With no DSN in
-/// the build (`SENTRY_DSN` in Frameio.xcconfig) both stay unavailable and nothing is sent.
+/// destination, camera network and OpenCine's Sentry adapter, wired as Pocket and Insta wire
+/// theirs. With no DSN in the build (`SENTRY_DSN` in Frameio.xcconfig) both stay unavailable and
+/// nothing is sent. Nikon keeps no network readable: the neutral redactor removes every SSID.
 enum ReliabilityDiagnostics {
     static let host = DiagnosticsHost(
         product: "OpenZCine", listingName: "OpenZCine",
@@ -31,16 +33,30 @@ enum ReliabilityDiagnostics {
         ]
     }
     /// A Z body serves 192.168.1.x, the most common home network, so no address prefix marks the
-    /// camera path: the live camera session alone holds reports back (`NativeAppRoot`).
+    /// camera path: the model's camera path lease alone holds reports back (`NativeAppRoot`).
     static let gate = ReliabilityReportingGate(cameraIPv4Prefix: nil)
     /// Canonical live connection observations use the current run origin; no injection is installed.
-    static let origin = FeedIncidentOrigin(
-        derivesTestSource: false, verification: false,
-        buildIdentity: Bundle.main.object(forInfoDictionaryKey: "OPCBuildIdentity") as? String,
-        injectionActivated: { false })
+    static let origin: FeedIncidentOrigin = {
+        #if DEBUG
+            let verification = ReliabilityReportingVerification.mode != nil
+        #else
+            let verification = false
+        #endif
+        return FeedIncidentOrigin(
+            derivesTestSource: false, verification: verification,
+            buildIdentity: Bundle.main.object(forInfoDictionaryKey: "OPCBuildIdentity") as? String,
+            injectionActivated: { false })
+    }()
     static let reporting = ReliabilityReporting(
         host: host, consent: consent, dsn: dsn, gate: gate, origin: origin,
-        sink: SentryReliabilitySink())
+        sink: SentryReliabilitySink(
+            host: host, consent: consent, urlProtocol: AppReliabilityURLProtocol.self))
+    /// The SDK transport's forwarding session over this runtime (`AppReliabilityURLProtocol`).
+    static let forwarder = ReliabilityReportingForwarder(reporting: reporting)
+    #if DEBUG
+        static let verification = ReliabilityReportingVerification(
+            sentry: reporting, isActive: { UIApplication.shared.applicationState == .active })
+    #endif
     static let incidents = FeedIncidentRuntime(reporting: reporting,
         directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("OpenZCine/Diagnostics/incidents", isDirectory: true))
@@ -50,12 +66,17 @@ enum ReliabilityDiagnostics {
 
     private static var environment: String {
         #if DEBUG
-            return "development"
+            return ReliabilityReportingVerification.mode == nil ? "development" : "verification"
         #else
             return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
                 ? "testflight" : "production"
         #endif
     }
+}
+
+/// The Sentry SDK's URL protocol over this app's reporting runtime.
+final class AppReliabilityURLProtocol: ReliabilityReportingURLProtocol, @unchecked Sendable {
+    override class var forwarder: ReliabilityReportingForwarder { ReliabilityDiagnostics.forwarder }
 }
 
 /// The shared report form on this app's reporting, support address, accent and privacy page.

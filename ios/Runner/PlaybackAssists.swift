@@ -8,29 +8,31 @@ import OpenZCineCore
 
 private let playbackAudioLogger = Logger(subsystem: "OpenZCine", category: "media-playback-audio")
 
-/// The measured source axis and selected monitor cube travel with each derivation.
+/// The Nikon facts the shared scope derivation reads for a clip: its transfer and clip, the
+/// operator's lamp threshold and the VECTOR look. One derivation for live and playback.
 struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
-    let trafficLightsCrushClip: MonitorCrushClipCompensation
-    let mapping: ExposureSignalMapping
-    let vectorscopeCube: CubeLUT?
+    let transfer: MonitorTransfer
+    let clipByte: Int
+    let trafficThreshold: Double
+    let vectorscope: Bool
+    let look: CubeLUT?
 
-    var transfer: MonitorTransfer {
-        switch mapping.curve {
-        case .redLog3G10: .log3G10
-        case .nikonNLog: .nlog
-        case .srgb: .srgb
-        case .hlg: .hdr
-        }
+    init(
+        mapping: ExposureSignalMapping, compensation: MonitorCrushClipCompensation,
+        vectorscope: Bool, look: CubeLUT?
+    ) {
+        transfer = mapping.curve.monitorTransfer
+        clipByte = mapping.clipByte
+        trafficThreshold = compensation.pixelFractionThreshold
+        self.vectorscope = vectorscope
+        self.look = look
     }
 
     func bundle(samples: ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
-        var result = ScopeAssistSampling.bundle(
-            samples: samples,
-            trafficLightsCrushClip: trafficLightsCrushClip, mapping: mapping,
-            vectorscopeCube: vectorscopeCube, previous: previous)
-        result.transfer = transfer
-        result.levelAxis = mapping.scopeLevelAxis
-        return result
+        OpenCineMedia.ScopeSampler.bundle(
+            samples: samples, transfer: transfer, clipByte: clipByte, includePoints: true,
+            includeVectorPoints: vectorscope, look: look, trafficThreshold: trafficThreshold,
+            previous: previous)
     }
 }
 
@@ -65,17 +67,13 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
     @ObservationIgnored private var activated = false
     @ObservationIgnored private var closed = false
 
+    /// Before the first derivation the empty bundle still names the clip's transfer and clip.
     var scopeBundle: ScopeAssistBundle {
         var value = scopes.bundle
-        if value.levelAxis == nil, let model {
+        if value.revision == 0, let model {
             let mapping = model.playbackExposureSignalMapping
-            value.levelAxis = mapping.scopeLevelAxis
-            value.transfer =
-                NikonPlaybackScopeConfiguration(
-                    trafficLightsCrushClip: model.assist.crushClipCompensation,
-                    mapping: mapping, vectorscopeCube: nil
-                ).transfer
-            value.clipByte = Int(mapping.clipNative.rounded())
+            value.transfer = mapping.curve.monitorTransfer
+            value.clipByte = mapping.clipByte
         }
         return value
     }
@@ -179,14 +177,16 @@ struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
 
     private func synchronizeSamples(item: MonitorPlaybackItemToken, revision captured: UUID) {
         guard current(item, revision: captured), let model else { return }
+        let mapping = model.playbackExposureSignalMapping
+        let tools = model.assist.playbackTools
         let configuration = NikonPlaybackScopeConfiguration(
-            trafficLightsCrushClip: model.assist.crushClipCompensation,
-            mapping: model.playbackExposureSignalMapping,
-            vectorscopeCube: model.vectorscopeMonitorCube(
-                visibleTools: model.assist.playbackTools,
-                curve: model.playbackExposureSignalMapping.curve))
+            mapping: mapping, compensation: model.assist.crushClipCompensation,
+            vectorscope: tools.contains(.vectorscope),
+            look: tools.contains(.vectorscope)
+                ? model.armedScopeLUT(visibleTools: tools)?.cube
+                    ?? NikonScopeLook.display(for: mapping.curve.monitorTransfer) : nil)
         guard current(item, revision: captured) else { return }
-        box.setScopesActive(scopesVisible)
+        box.setScopesActive(scopesVisible, transfer: configuration.transfer)
         scopes.synchronize(
             item: item, enabled: scopesVisible, configuration: configuration,
             read: { [weak self] in

@@ -113,6 +113,20 @@ jobs:
             echo "::warning::FRAMEIO_CLIENT_ID secret is not set — Frame.io login will be disabled in this build."
           fi
 
+      # Sentry public DSN for the Cocoa SDK, written to the ignored Reliability.local.xcconfig by
+      # OpenCine's shared script (xcconfig-safe encoding, never echoed). The archive step requires
+      # it in the packaged Info.plist. Contract: docs/testflight-ci.md.
+      - name: Configure Sentry DSN
+        env:
+          SENTRY_UPLOAD_ENABLED: ${{ vars.SENTRY_UPLOAD_ENABLED }}
+          SENTRY_DSN_IOS: ${{ secrets.SENTRY_DSN_IOS }}
+        run: |
+          if [ "${SENTRY_UPLOAD_ENABLED:-}" = "true" ]; then
+            python3 ../OpenCine/scripts/sentry/sentry-dsn-xcconfig.py --out ios/Runner/Reliability.local.xcconfig --require
+          else
+            python3 ../OpenCine/scripts/sentry/sentry-dsn-xcconfig.py --out ios/Runner/Reliability.local.xcconfig
+          fi
+
       - name: Load reviewed release notes
         run: |
           mkdir -p build/ios
@@ -128,6 +142,10 @@ jobs:
           IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
           IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
           IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64 }}
+          # dSYM upload to openzcine-ios after the archive, only when SENTRY_UPLOAD_ENABLED is true.
+          SENTRY_UPLOAD_ENABLED: ${{ vars.SENTRY_UPLOAD_ENABLED }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ./scripts/ios-testflight-upload.sh
 
       - name: Summary

@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 
+import enum OpenCineMedia.MonitorTransfer
+
 @testable import OpenZCineCore
 
 @Suite("Exposure scale conversions")
@@ -305,5 +307,33 @@ struct ExposureScaleTests {
             #expect(mapping.blackNative == 0)
             #expect(mapping.monitorPercent(signalNative: 255) == 100)
         }
+    }
+
+    @Test("Each camera curve names its shared transfer and ceiling")
+    func sharedSignal() {
+        let pairs: [(ExposureToneCurve, MonitorTransfer)] = [
+            (.redLog3G10, .log3G10), (.nikonNLog, .nlog), (.srgb, .srgb), (.hlg, .hdr),
+        ]
+        for (curve, transfer) in pairs { #expect(curve.monitorTransfer == transfer) }
+        func r3d(_ iso: UInt32) -> Int {
+            ExposureSignalMapping.camera(codec: "R3D NE", iso: iso, baseISO: nil).clipByte
+        }
+        #expect(r3d(800) == 180)
+        #expect(r3d(3200) == 215)
+        #expect(ExposureSignalMapping(curve: .nikonNLog).clipByte == 234)
+    }
+
+    @Test("Native zebra codes are the shared zebra's codes on the camera's ceiling")
+    func zebraNativeUnit() {
+        let mapping = ExposureSignalMapping(curve: .redLog3G10)
+        let unit = AssistConfiguration.Zebra.Unit.native
+        // 0 is log black (Log3G10 native 23), 100 the clip warning code.
+        #expect(unit.displayValue(for: 0, mapping: mapping) == 23)
+        #expect(unit.displayValue(for: 100, mapping: mapping) == 180)
+        for code in [40, 85, 128, 170] {
+            let percent = unit.monitorPercent(fromDisplay: code, mapping: mapping)
+            #expect(unit.displayValue(for: percent, mapping: mapping) == code)
+        }
+        #expect(unit.monitorPercent(fromDisplay: 255, mapping: mapping) == 100)
     }
 }

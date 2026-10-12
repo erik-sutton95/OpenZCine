@@ -217,24 +217,6 @@ struct MediaStorageSlotDisplay: Identifiable, Equatable, Sendable {
     }
 }
 
-enum MediaClipFormatting {
-    static func byteLabel(_ bytes: UInt64) -> String {
-        guard bytes > 0 else { return "0 B" }
-        let mb = Double(bytes) / 1_000_000
-        if mb < 1_000 { return String(format: "%.0fMB", mb) }
-        return String(format: "%.1fGB", mb / 1_000)
-    }
-
-    static func durationLabel(seconds: Double) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0:00" }
-        let total = Int(seconds.rounded())
-        if total >= 3_600 {
-            return String(format: "%d:%02d:%02d", total / 3_600, (total % 3_600) / 60, total % 60)
-        }
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
 /// Counts active chip/sheet filters for the Media browser badge (excludes category tabs).
 enum MediaBrowserFilterMetrics {
     static func activeCount(

@@ -1,4 +1,5 @@
 import Foundation
+import enum OpenCineMedia.ScopeDisplayScale
 
 /// Whether view-assist tool visibility applies to the live monitor or media playback.
 public enum ViewAssistContext: String, Codable, Equatable, Sendable {
@@ -824,11 +825,16 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             case native = "Native"
             case ire = "IRE"
 
-            /// Operator-facing value of a normalized threshold.
+            /// Operator-facing value of a normalized threshold. A native code is the one the
+            /// shared zebra compares on this camera's transfer and ceiling.
             public func displayValue(for ire: Double, mapping: ExposureSignalMapping) -> Int {
                 switch self {
                 case .ire: Int(ire.rounded())
-                case .native: Int(mapping.signalNative(monitorPercent: ire).rounded())
+                case .native:
+                    Int(
+                        (OpenCineMedia.ScopeDisplayScale.signalNative(
+                            monitorPercent: ire, transfer: mapping.curve.monitorTransfer,
+                            clipByte: mapping.clipByte) * 255).rounded())
                 }
             }
 
@@ -838,7 +844,10 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             {
                 switch self {
                 case .ire: Double(value)
-                case .native: mapping.monitorPercent(signalNative: Double(value))
+                case .native:
+                    OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                        Double(min(255, max(0, value))) / 255,
+                        transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte)
                 }
             }
         }
@@ -980,30 +989,5 @@ public enum CommandGridOrder {
         let clamped = min(max(index, 0), result.count)
         result.insert(kind, at: clamped)
         return result
-    }
-}
-
-extension MonitorAssistTool {
-    /// Assist tools that apply to still photography: the exposure aids (peaking, false
-    /// color, zebra, histogram) plus the composition aids photographers actually use
-    /// (grid, level, de-squeeze). Everything else is cinema-only, which keeps the photo toolbar
-    /// deliberately shorter so the stills strip gets the bar width.
-    ///
-    /// De-squeeze is here because anamorphic lenses are used for stills too, and a squeezed
-    /// preview makes faces, framing and edge behaviour impossible to judge on a tethered shoot.
-    /// It is a display transform in every surface it reaches; the camera original is never
-    /// touched.
-    public var appliesToPhotography: Bool {
-        switch self {
-        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
-            .desqueeze, .mirror, .magnification:
-            // Mirror joins de-squeeze for the same reason: a body turned back at the subject is
-            // just as common on a stills shoot, and both are display transforms that never reach
-            // the camera original.
-            true
-        case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
-            .guides, .crosshair:
-            false
-        }
     }
 }

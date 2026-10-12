@@ -48,10 +48,11 @@
 		331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */; };
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
 		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
+		F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */; };
+		F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */; };
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
 		331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */; };
 		7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */; };
-		7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */; };
 		46C255DF9F950970DD29C3C8 /* LiveFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705C589D7D31926D41CEF6A /* LiveFrameProcessor.swift */; };
 		4D5E6F708192A3B4C5D6E7F8 /* ImageEffectsCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6F708192A3B4C5D6E7F809 /* ImageEffectsCompositor.swift */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
@@ -61,7 +62,6 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
-		A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */; };
 		A652A40C5850105E136F0739 /* LiveFrameRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852060CB19F3A779DA73A8F3 /* LiveFrameRenderer.swift */; };
 		B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */; };
 		BRND00000000000000000002 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BRND00000000000000000001 /* Branding.swift */; };
@@ -75,8 +75,6 @@
 		LDDR0000000000000000001A /* LadderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = LDDR0000000000000000001B /* LadderPicker.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
 		C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* SharedCameraControls.swift */; };
-		F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */; };
-		F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000004 /* SentryReliabilitySink.swift */; };
 		F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000002 /* ReliabilityDiagnostics.swift */; };
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
 		C0DE00000000000000000030 /* DesignShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000031 /* DesignShared.swift */; };
@@ -92,7 +90,7 @@
 		C0DE000000000000000000C6 /* DemoHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C7 /* DemoHarness.swift */; };
 		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
-		F2D000000000000000000008 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F2D000000000000000000009 /* Sentry */; };
+		F2D000000000000000000008 /* OpenCineSentryApple in Frameworks */ = {isa = PBXBuildFile; productRef = F2D000000000000000000009 /* OpenCineSentryApple */; };
 		C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000000ED1A02 /* OpenCineMedia */; };
 		CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */; };
 		DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DIAG00000000000000000001 /* AppDiagnostics.swift */; };
@@ -223,10 +221,11 @@
 		331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStoreTests.swift; sourceTree = "<group>"; };
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
 		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
+		F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSurfaceRegressionTests.swift; sourceTree = "<group>"; };
+		F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistEngineAdoptionTests.swift; sourceTree = "<group>"; };
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTimecodeTests.swift; sourceTree = "<group>"; };
-		7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPopupPlacementTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPopup.swift; sourceTree = "<group>"; };
 		43398C0B64AE0344D7602746 /* MetalLiveView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalLiveView.swift; sourceTree = "<group>"; };
@@ -253,7 +252,6 @@
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9B8454460465D3532DE04016 /* Version.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Version.xcconfig; path = ../Config/Version.xcconfig; sourceTree = "<group>"; };
 		9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RedDownloadView.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScopeAssistSampling.swift; sourceTree = "<group>"; };
 		B47FA7E6D89EF63D0B2B27B2 /* FrameDecoder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FrameDecoder.swift; sourceTree = "<group>"; };
 		B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModel.swift; path = Frameio/FrameioModel.swift; sourceTree = "<group>"; };
 		B99B47BB1FB3BC66DC16FAC8 /* Frameio.local.xcconfig.example */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Frameio.local.xcconfig.example; sourceTree = "<group>"; };
@@ -268,8 +266,6 @@
 		LDDR0000000000000000001B /* LadderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LadderPicker.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F8 /* SharedCameraControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCameraControls.swift; sourceTree = "<group>"; };
-		F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityReportingNetwork.swift; sourceTree = "<group>"; };
-		F2D000000000000000000004 /* SentryReliabilitySink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryReliabilitySink.swift; sourceTree = "<group>"; };
 		F2D000000000000000000002 /* ReliabilityDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityDiagnostics.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000031 /* DesignShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignShared.swift; sourceTree = "<group>"; };
@@ -341,7 +337,7 @@
 			files = (
 				OZC000000000000000000003 /* OpenZCineCore in Frameworks */,
 				C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */,
-				F2D000000000000000000008 /* Sentry in Frameworks */,
+				F2D000000000000000000008 /* OpenCineSentryApple in Frameworks */,
 				OCC000000000000000000003 /* OpenCineCore in Frameworks */,
 				C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */,
 				F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */,
@@ -399,10 +395,11 @@
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
 				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
+				F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */,
+				F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */,
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
 				331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */,
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
-				7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */,
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
 				TEST00000000000000000105 /* ShellAdoptionTests.swift */,
@@ -494,8 +491,6 @@
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
 				C0DE000000000000000000F8 /* SharedCameraControls.swift */,
-				F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */,
-				F2D000000000000000000004 /* SentryReliabilitySink.swift */,
 				F2D000000000000000000002 /* ReliabilityDiagnostics.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
 				C0DE00000000000000000F11 /* NikonAssists.swift */,
@@ -511,7 +506,6 @@
 				B47FA7E6D89EF63D0B2B27B2 /* FrameDecoder.swift */,
 				A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */,
 				43398C0B64AE0344D7602746 /* MetalLiveView.swift */,
-				A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */,
 				644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */,
 				C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */,
 				1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */,
@@ -587,6 +581,7 @@
 				97C146EC1CF9000F007C117D /* Resources */,
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				WTCH00000000000000000080 /* Embed Watch Content */,
+				F01000000000000000000001 /* Stamp source revision */,
 			);
 			buildRules = (
 			);
@@ -596,7 +591,7 @@
 			name = Runner;
 			packageProductDependencies = (
 				9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */,
-				F2D000000000000000000009 /* Sentry */,
+				F2D000000000000000000009 /* OpenCineSentryApple */,
 				OCC000000000000000000002 /* OpenCineCore */,
 				C0DE00000000000000ED1A02 /* OpenCineMedia */,
 				F10000000000000000000A02 /* OpenCineFrameIO */,
@@ -682,8 +677,8 @@
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
 				C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
-				F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */,
+				F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */,
 				OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
@@ -732,6 +727,25 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		F01000000000000000000001 /* Stamp source revision */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Stamp source revision";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "bash \"${SRCROOT}/../../OpenCine/scripts/sentry/stamp-source-revision.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		331C807D294A63A400263BE5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -753,10 +767,11 @@
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
 				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
+				F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */,
+				F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */,
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
 				331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */,
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,
-				7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */,
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
 				TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */,
@@ -814,8 +829,6 @@
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
 				C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */,
-				F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */,
-				F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */,
 				F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
 				C0DE00000000000000000F01 /* NikonAssists.swift in Sources */,
@@ -838,7 +851,6 @@
 				78BE124BA79C2860F3D7D6EA /* FrameDecoder.swift in Sources */,
 				A25000555EDE55EDE0000002 /* NikonFeedIncidentProducer.swift in Sources */,
 				0F8144A1310FEEE9A63795A8 /* MetalLiveView.swift in Sources */,
-				A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */,
 				B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */,
 				079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */,
 				0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */,
@@ -1370,6 +1382,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../OpenCine;
 		};
+		F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../OpenCine/Packages/OpenCineSentryApple;
+		};
 		OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ..;
@@ -1377,14 +1393,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
-			requirement = {
-				kind = exactVersion;
-				version = 9.24.0;
-			};
-		};
 		C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
@@ -1396,10 +1404,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		F2D000000000000000000009 /* Sentry */ = {
+		F2D000000000000000000009 /* OpenCineSentryApple */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
+			package = F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */;
+			productName = OpenCineSentryApple;
 		};
 		OCC000000000000000000002 /* OpenCineCore */ = {
 			isa = XCSwiftPackageProductDependency;
