@@ -3,55 +3,26 @@ import OpenZCineCore
 
 /// Versioned, platform-neutral wire helpers for Android's app-private LUT library.
 ///
-/// The Android shell owns the Storage Access Framework, file lifecycle, and presentation. This
-/// facade is deliberately the only path that accepts source bytes as a `.cube`: it decodes strict
-/// UTF-8, invokes the shared `CubeLUT` parser, resolves the shared `LUTSelection.cacheKey`, and
-/// packs the cube through the same `FeedEffectsWire` path as built-in looks. Kotlin never parses
-/// cube text, implements LUT sampling, or derives a second identity format.
+/// The Android shell owns the Storage Access Framework, file lifecycle, and presentation; the
+/// shared OpenCine `MonitorLutLibrary` owns names and storage. Import trust lives in the shared
+/// `CubeLUT.validatedImport` gate, so this facade only packs what that gate accepts through the
+/// same `FeedEffectsWire` path as built-in looks. Kotlin never parses cube text or implements LUT
+/// sampling.
 public enum LUTLibraryWire {
-    /// Maximum Android import size. This belongs at the Android trust boundary so adding the
-    /// platform guard does not change the existing iOS `.cube` parser's accepted inputs.
-    public static let maximumSourceBytes = 16 * 1024 * 1024
-
-    /// Stable record version for `validateImportedLUT`. Fields are separated with ASCII Unit
-    /// Separator so user-controlled file labels cannot be ambiguously split by a display delimiter.
-    public static let validationRecordVersion = "1"
+    /// Separator for the compact records returned to Android (ASCII Unit Separator).
     public static let fieldSeparator = "\u{001F}"
 
-    /// Stable version for the compact RED policy record returned to Android. It intentionally uses
-    /// the same separator as the import record so Kotlin can reject a stale or malformed JNI
-    /// result before presenting an availability state.
+    /// Stable version for the compact RED policy record returned to Android. Kotlin rejects a
+    /// stale or malformed JNI result before presenting an availability state.
     public static let redAvailabilityRecordVersion = "1"
 
-    /// Android category ordinals. Keep these private to the cross-platform selection mapping:
-    /// 0 = Custom, 1 = RED. Built-ins never cross this import wire.
-    public enum CategoryOrdinal {
-        public static let custom = 0
-        public static let red = 1
-    }
-
-    /// Validates an Android-proposed stored file name, strict UTF-8 source, and cube data, then
-    /// returns `[version, cubeSize, LUTSelection.cacheKey]`. Nil is intentionally fail-closed: the
-    /// shell must not copy any bytes into app-private storage when validation fails.
-    public static func validatedImport(
-        utf8: [UInt8], categoryOrdinal: Int, fileName: String
-    ) -> String? {
-        guard let category = category(categoryOrdinal), isSafeStoredFileName(fileName),
-            let cube = validatedCube(utf8)
-        else { return nil }
-        let selection = LUTSelection.stored(category: category, fileName: fileName)
-        return [validationRecordVersion, String(cube.size), selection.cacheKey]
-            .joined(separator: fieldSeparator)
-    }
-
-    /// Re-validates an app-private cube and converts it to the exact packed RGBA8 texture layout
-    /// used by Android's existing feed-effects renderer. The caller must reject a nil result rather
-    /// than attempting a Kotlin fallback; that preserves the shared parser/colour pipeline as the
-    /// sole implementation.
+    /// Validates an app-private cube through the shared import gate and converts it to the exact
+    /// packed RGBA8 texture layout used by Android's feed-effects renderer. The renderer-safe
+    /// table keeps a 65³ Resolve cube inside the Android 8×8 atlas and iOS `CIColorCube` (both cap
+    /// at 64). The caller must reject a nil result rather than attempting a Kotlin fallback.
     public static func packedImportedLUT(utf8: [UInt8]) -> [UInt8]? {
-        guard let cube = validatedCube(utf8)
-        else { return nil }
-        return FeedEffectsWire.packedRGBA(cube: cube)
+        guard let cube = CubeLUT.validatedImport(utf8) else { return nil }
+        return FeedEffectsWire.packedRGBA(cube: cube.preparedForRenderer())
     }
 
     /// Android's strict RED network guard. The shell supplies platform reachability and whether its
@@ -70,83 +41,5 @@ public enum LUTLibraryWire {
         case .blockedNoInternet: state = 2
         }
         return [redAvailabilityRecordVersion, String(state)].joined(separator: fieldSeparator)
-    }
-
-    private static func category(_ ordinal: Int) -> LUTCategory? {
-        switch ordinal {
-        case CategoryOrdinal.custom: .custom
-        case CategoryOrdinal.red: .red
-        default: nil
-        }
-    }
-
-    private static func validatedCube(_ utf8: [UInt8]) -> CubeLUT? {
-        guard utf8.count <= maximumSourceBytes,
-            let text = String(bytes: utf8, encoding: .utf8),
-            isStrictAndroidImport(text),
-            let cube = try? CubeLUT.parse(text)
-        else { return nil }
-        // Report and pack the renderer-safe table so a 65³ Resolve cube does not break the
-        // Android 8×8 atlas or iOS `CIColorCube` (both cap at 64).
-        return cube.preparedForRenderer()
-    }
-
-    /// Android imports fail closed on duplicate declarations and non-finite samples.
-    ///
-    /// Sample range is intentionally **not** a hard `[0, 1]` gate: official RED IPP2
-    /// Output Presets (size‑33 cubes) export many lattice points as `1.000001` from float
-    /// precision. The shared `CubeLUT` parser accepts those values, and `FeedEffectsWire`
-    /// already clamps when packing RGBA8. A hard 0–1 reject made every RED download fail
-    /// validation while iOS importZip succeeded. We still reject NaN/Inf and values far
-    /// outside a displayable domain so hostile tables cannot pass the preflight.
-    private static func isStrictAndroidImport(_ text: String) -> Bool {
-        var foundSize = false
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix("#") { continue }
-            if line.hasPrefix("LUT_3D_SIZE") {
-                guard !foundSize else { return false }
-                foundSize = true
-                continue
-            }
-            if line.hasPrefix("DOMAIN_MIN") || line.hasPrefix("DOMAIN_MAX") { continue }
-
-            guard let first = line.first else { continue }
-            let startsData =
-                ("0"..."9").contains(first) || first == "+" || first == "-" || first == "."
-            if !startsData { continue }
-
-            let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
-            guard fields.count >= 3,
-                let red = Float(fields[0]), let green = Float(fields[1]),
-                let blue = Float(fields[2])
-            else { continue }
-            guard red.isFinite, green.isFinite, blue.isFinite,
-                Self.displayableSampleRange.contains(red),
-                Self.displayableSampleRange.contains(green),
-                Self.displayableSampleRange.contains(blue)
-            else { return false }
-        }
-        return true
-    }
-
-    /// Accepts RED float-export overshoot (`1.000001`) while rejecting clearly broken tables.
-    private static let displayableSampleRange: ClosedRange<Float> = -0.05...1.05
-
-    /// Android generates this name after sanitising the picked display label. Keep this mirror at
-    /// the trust boundary as well: no `..`, slash, Unicode lookalike, or path-like value can ever
-    /// turn a persisted LUT selection into a file-system traversal on either platform.
-    private static func isSafeStoredFileName(_ fileName: String) -> Bool {
-        guard fileName.utf8.count <= 128, fileName.lowercased().hasSuffix(".cube"),
-            !fileName.hasPrefix("."), !fileName.contains("..")
-        else { return false }
-        return fileName.unicodeScalars.allSatisfy { scalar in
-            switch scalar.value {
-            case 48...57, 65...90, 97...122, 45, 46, 95:
-                true
-            default:
-                false
-            }
-        }
     }
 }

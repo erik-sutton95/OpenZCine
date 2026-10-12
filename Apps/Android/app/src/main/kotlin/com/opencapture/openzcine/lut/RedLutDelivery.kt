@@ -79,11 +79,11 @@ data class RedLutDownloadReadiness(
  */
 class RedLutDownloadGate internal constructor(
     private val connectivity: ConnectivityManager,
-    private val core: LutCoreBridge,
+    private val availability: (hasInternetPath: Boolean, isOnCameraAccessPoint: Boolean) -> String?,
 ) {
     constructor(context: Context) : this(
         context.getSystemService(ConnectivityManager::class.java),
-        SwiftLutCoreBridge,
+        ::swiftRedDownloadAvailability,
     )
 
     /** Resolves network safety first, then reports whether an authorized delivery workflow exists. */
@@ -97,7 +97,7 @@ class RedLutDownloadGate internal constructor(
             bound != null && capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) != true
         val hasInternetPath =
             capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        val native = core.redDownloadAvailability(hasInternetPath, isOnCameraAccessPoint)
+        val native = availability(hasInternetPath, isOnCameraAccessPoint)
         val availability = redNetworkAvailability(native)
         return RedLutDownloadReadiness(availability, configuration)
     }
