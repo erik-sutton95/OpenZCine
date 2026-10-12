@@ -8133,7 +8133,7 @@ final class NativeAppModel {
     ///
     /// `isStillCurrent` is re-checked after the async sample so a source torn down mid-sample
     /// cannot publish a reading for a picture that has already left the screen.
-    private func sampleScopesIfDue(
+    func sampleScopesIfDue(
         clean: UIImage, isStillCurrent: @escaping @MainActor () -> Bool
     ) {
         let visibleScopes = scopeSamplingLiveAssistTools

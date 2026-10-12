@@ -391,16 +391,16 @@ struct NikonMonitorShell: View {
             note: Binding(get: { model.monitorNote }, set: { model.monitorNote = $0 }),
             settings: { model.activePanel = .settings }, media: model.openMediaBrowser)
     }
-    private var haptics: OperatorHaptics {
-        .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true })
-    }
-    private var scopes: MonitorOperatorLiveAssistSource {
+    /// The scope source the shared surface reads: the model's published samples and facts.
+    static func assistSource(_ model: NativeAppModel) -> MonitorOperatorLiveAssistSource {
         .init(
             stores: model.scopePanels.operatorStores,
             looks: .init(
                 scaleHelp: "The reported source selects its exposure curve.",
                 rec709LookCurve: { _ in nil }),
-            haptics: haptics,
+            haptics: .init(isEnabled: { [weak model] in
+                model?.preferences.hapticsEnabled == true
+            }),
             readBundle: {
                 var value = model.scopeAssist
                 value.levelAxis = model.exposureSignalMapping.scopeLevelAxis
@@ -415,7 +415,8 @@ struct NikonMonitorShell: View {
         @Bindable var model = model
         let menus = NikonAssistMenuAdapter(model: model, compact: false)
         return .init(
-            scopes: scopes, tools: { model.liveAssistPaletteTools.map(\.selection) },
+            scopes: Self.assistSource(model),
+            tools: { model.liveAssistPaletteTools.map(\.selection) },
             rendered: {
                 Set(
                     model.renderedLiveAssistTools.filter {
