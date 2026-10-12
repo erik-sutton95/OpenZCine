@@ -7,6 +7,7 @@ import Observation
 import OpenCineApple
 import OpenCineAppKit
 import OpenCineCameraControls
+import OpenCineCameraVocabulary
 import OpenCineCore
 import OpenCineHostedAccessibility
 import OpenCineMedia

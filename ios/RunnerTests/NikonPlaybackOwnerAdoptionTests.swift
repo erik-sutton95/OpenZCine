@@ -1405,3 +1405,82 @@ extension NikonPlaybackOwnerAdoptionTests {
         await library.dispose()
     }
 }
+
+// SIMULATED local photo; actual photo viewer composition (A2-06).
+extension NikonPlaybackOwnerAdoptionTests {
+    /// A2-06: photo Share offers the same delivery choices as clips, not a direct share sheet.
+    func testPhotoShareOffersTheDeliveryChoices() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let clip = try fixture.clip("SIMULATED-PHOTO.JPG", expected: 64, bytes: 64)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        let coordinator = MediaDeliveryCoordinator()
+        defer { coordinator.close() }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(
+            rootView: MediaPhotoViewer(clip: clip).environment(fixture.model).environment(
+                coordinator))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let share: () -> NSObject? = {
+            Self.galleryScrollObjects(host.view).first { $0.accessibilityLabel == "Share photo" }
+        }
+        let mounted = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return share() != nil
+        }
+        XCTAssertTrue(mounted, "The photo viewer must offer Share")
+        XCTAssertTrue(try XCTUnwrap(share()).accessibilityActivate())
+        let offered = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return Self.galleryScrollObjects(host.view).contains {
+                Self.galleryScrollIdentifier($0)?.hasPrefix("monitor.share.destination.") == true
+            }
+        }
+        XCTAssertTrue(offered, "Photo Share must open the shared delivery choices")
+        XCTAssertNil(
+            host.presentedViewController, "Photo Share must not bypass delivery with a direct sheet")
+        await library.dispose()
+    }
+}
+
+/// Test fixture: the shared playback owner over the actual gallery lifetime and a caller
+/// playlist (the app composes it through NikonOperatorPlaybackContext).
+@MainActor final class NikonPlaybackSession {
+    let owner: MonitorMediaPlaybackModel<MediaClip, String>
+    let native: NikonPlaybackNativePort
+
+    init(
+        clips: [MediaClip], startingAt clip: MediaClip, model: NativeAppModel,
+        native: NikonPlaybackNativePort = NikonPlaybackNativePort()
+    ) throws {
+        guard let library = model.mediaLibrary else { throw MonitorPlaybackError.unavailable }
+        let codec = NikonMediaLibraryCodec(
+            store: model.mediaClipStore, bucket: clip.cameraID, service: nil,
+            downloaded: { model.isClipDownloaded($0) })
+        let records = try clips.map(codec.record)
+        guard let first = records.first(where: { $0.payload.id == clip.id }) else {
+            throw MonitorPlaybackError.unavailable
+        }
+        self.native = native
+        owner = MonitorMediaPlaybackModel<MediaClip, String>(
+            library: library, native: native, readyTimeout: nil, retryNativeFailures: false,
+            startTiming: .afterNativeItemInstallation,
+            candidates: { record in native.candidates(for: record.payload, model: model) })
+        native.isScrubbing = { [weak owner] in owner?.scrubbing ?? true }
+        owner.load(first, playlist: records)
+    }
+}

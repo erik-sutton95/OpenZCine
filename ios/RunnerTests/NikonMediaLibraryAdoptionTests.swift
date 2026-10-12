@@ -966,3 +966,74 @@ private actor LargeTransferTransport: CameraTransport {
         return Data(bytes)
     }
 }
+
+/// SIMULATED source identity only; no camera IO is performed.
+@MainActor private final class RebindIO: NikonMediaIO {
+    let session = CameraSessionID()
+    let native = NSObject()
+    let cameraNamespace = "SIMULATED-CAMERA"
+    var sourceIdentity: NikonMediaSourceIdentity? {
+        .init(native: ObjectIdentifier(native), session: session, epoch: ControlEpoch(1))
+    }
+    func storage(source _: NikonMediaSourceIdentity) async throws -> [NikonMediaStorageRecord] {
+        []
+    }
+    func handles(source _: NikonMediaSourceIdentity) async throws -> NikonMediaHandleSnapshot {
+        .init(handles: [], authoritativeStorages: [], storageListAuthoritative: true)
+    }
+    func handles(formats _: [UInt32], source _: NikonMediaSourceIdentity) async throws
+        -> [MediaObjectHandle]
+    { [] }
+    func object(_ location: MediaObjectHandle, source _: NikonMediaSourceIdentity) async throws
+        -> NikonMediaObjectRecord?
+    { nil }
+    func header(_ location: MediaObjectHandle, source _: NikonMediaSourceIdentity) async throws
+        -> Data?
+    { nil }
+}
+
+extension NikonMediaLibraryAdoptionTests {
+    /// A2-02: a link change rebinds the open gallery's owner; only a new bucket replaces it.
+    func testServiceChangeRebindsTheGalleryOwnerInsteadOfReplacingIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(mediaClipStore: MediaClipStore(root: root))
+        model.prepareMediaLibrary(rows: [], bucket: "SIMULATED-CAMERA", service: nil)
+        let owner = try XCTUnwrap(model.mediaLibrary)
+        XCTAssertFalse(owner.canRefresh)
+        let io = RebindIO()
+        model.prepareMediaLibrary(
+            rows: [], bucket: "SIMULATED-CAMERA",
+            service: NikonMediaService(session: io.session, io: io))
+        XCTAssertTrue(
+            model.mediaLibrary === owner, "A link change must rebind, not replace, the owner")
+        XCTAssertTrue(owner.canRefresh)
+        model.prepareMediaLibrary(rows: [], bucket: "SIMULATED-CAMERA", service: nil)
+        XCTAssertTrue(model.mediaLibrary === owner)
+        XCTAssertFalse(owner.canRefresh)
+        model.prepareMediaLibrary(rows: [], bucket: MediaClipStore.localBucketID, service: nil)
+        XCTAssertFalse(model.mediaLibrary === owner, "A different bucket is a different owner")
+        await model.mediaLibrary?.dispose()
+        await owner.dispose()
+    }
+}
+
+extension NikonMediaLibraryAdoptionTests {
+    /// A2-43: offline, Delete is offered only where deletion removes something.
+    func testOfflineDeleteIsOfferedOnlyForPhoneOnlyCopies() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(mediaClipStore: MediaClipStore(root: root))
+        let onCamera = MediaClip(
+            cameraID: "SIMULATED-CAMERA", filename: "SIMULATED-CAMERA.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 10, captureDate: "20261012T120000")
+        let phoneOnly = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-PHONE.MOV", handle: nil,
+            storageID: nil, sizeBytes: 10, captureDate: "20261012T120000")
+        XCTAssertFalse(model.isConnected)
+        XCTAssertFalse(
+            model.canDeleteMedia([onCamera]), "Offline, a camera object cannot be removed")
+        XCTAssertTrue(model.canDeleteMedia([phoneOnly]))
+        XCTAssertTrue(model.canDeleteMedia([onCamera, phoneOnly]))
+    }
+}
