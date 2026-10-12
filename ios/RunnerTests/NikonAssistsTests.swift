@@ -120,6 +120,9 @@ final class NikonAssistsTests: XCTestCase {
         for connected in [true, false] {
             let model = NativeAppModel(assist: relaunch())
             model.connection = connected ? .connected : .disconnected
+            // SIMULATED: a body that reports R3D NE. The chrome no longer starts from the
+            // preview fixture (A1-03), so the reported codec is stated here.
+            model.cameraState = .preview
             model.applyDemoProperty(.liveViewSelector, data: Data([0]))
             XCTAssertTrue(model.isPhotographyMode)
             XCTAssertFalse(model.isDemoSession)
