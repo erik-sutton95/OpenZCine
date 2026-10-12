@@ -333,6 +333,8 @@ dependencies {
     testImplementation(libs.json)
     testImplementation(libs.kotlinx.coroutines.test)
 
+    // NikonFeedIncidentProducerTest asserts with kotlin.test, as the unit tests do.
+    androidTestImplementation(libs.kotlin.test.junit)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
