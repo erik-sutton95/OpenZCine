@@ -3,6 +3,7 @@ package com.opencapture.openzcine.pairing
 import com.opencapture.opencine.nikon.NikonHosts
 import com.opencapture.openzcine.R
 import com.opencapture.opencine.nikon.CameraConnectionPhase
+import com.opencapture.opencine.nikon.CameraConnectionProgress
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.UsbPtpOpenResult
@@ -222,7 +223,7 @@ internal class SavedCameraConnector(
                     cameraApKey ?: environment.credentials.passphrase(ssid)
                         ?: throw SavedCameraConnectException(copy.text(R.string.conn_ap_key_missing, ssid))
                 _phase.value = SavedCameraPhase.Joining(record.displayTitle)
-                // Pre-scan + fail-fast retries live inside joinWithFallback.
+                // Pre-scan + fail-fast retries live inside NikonCameraAp.join.
                 environment.primeCameraApScan(ssid)
                 if (!environment.joinCameraAp(ssid, key)) {
                     // Wi-Fi toggled off after the join was staged: the joiner bails in
@@ -249,7 +250,7 @@ internal class SavedCameraConnector(
 
             val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
             val maxAttempts = if (isCameraAp) CAMERA_AP_CONNECT_ATTEMPTS else 1
-            var lastFailureDetail: String? = null
+            var lastFailure: CameraConnectionProgress? = null
             var pairedCamera: PairedCamera? = null
             var attempt = 0
             while (pairedCamera == null && attempt < maxAttempts) {
@@ -259,7 +260,7 @@ internal class SavedCameraConnector(
                 // Restore-then-pair; on the last camera-AP attempt after a handshake rejection,
                 // force first-time pairing so a forgotten camera-side profile can be recreated.
                 val useFirstTimePairing =
-                    isCameraAp && attempt == maxAttempts && indicatesSavedProfileUnavailable(lastFailureDetail)
+                    isCameraAp && attempt == maxAttempts && lastFailure?.failure?.savedProfileUnavailable == true
                 val attemptSession =
                     session
                         ?: if (useFirstTimePairing) {
@@ -270,7 +271,7 @@ internal class SavedCameraConnector(
                 session = attemptSession
                 var pairingWasConfirmed = false
                 var pairingPin: String? = null
-                var failureDetail: String? = null
+                var failed: CameraConnectionProgress? = null
                 val progressWatcher =
                     scope.launch(start = CoroutineStart.UNDISPATCHED) {
                         attemptSession.connectionProgress.collect { progress ->
@@ -281,7 +282,7 @@ internal class SavedCameraConnector(
                                     pairingPin = progress.detail.ifBlank { null }
                                     _phase.value = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, pairingPin)
                                 }
-                                CameraConnectionPhase.FAILED -> failureDetail = progress.detail.ifBlank { null }
+                                CameraConnectionPhase.FAILED -> failed = progress
                                 else -> Unit
                             }
                         }
@@ -321,8 +322,8 @@ internal class SavedCameraConnector(
                             }
                         }
                     if (pairedCamera == null) {
-                        lastFailureDetail =
-                            failureDetail ?: attemptSession.connectionProgress.value.detail.takeIf { it.isNotBlank() }
+                        lastFailure =
+                            failed ?: attemptSession.connectionProgress.value.takeIf { it.detail.isNotBlank() }
                         withContext(NonCancellable) { attemptSession.disconnect() }
                         session = null
                     }
@@ -330,7 +331,7 @@ internal class SavedCameraConnector(
                     progressWatcher.cancel()
                 }
             }
-            if (pairedCamera == null) throw unreachable(record, lastFailureDetail)
+            if (pairedCamera == null) throw unreachable(record, lastFailure)
             handoffSucceeded = true
             return pairedCamera
         } catch (error: SavedCameraConnectException) {
@@ -338,7 +339,7 @@ internal class SavedCameraConnector(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            throw unreachable(record, detail = null)
+            throw unreachable(record, last = null)
         } finally {
             _phase.value = SavedCameraPhase.Idle
             if (!handoffSucceeded) {
@@ -395,8 +396,12 @@ internal class SavedCameraConnector(
      * found is overwhelmingly a phone on the wrong network, so those setups add that hint; access
      * point setups never do, their remedy is the join flow reconnect already runs.
      */
-    private fun unreachable(record: SavedCameraRecord, detail: String?): SavedCameraConnectException {
-        val message = friendlyCameraConnectionFailure(detail ?: copy.text(R.string.conn_unreachable_detail, record.displayTitle))
+    private fun unreachable(record: SavedCameraRecord, last: CameraConnectionProgress?): SavedCameraConnectException {
+        val message =
+            friendlyCameraConnectionFailure(
+                last?.failure,
+                last?.detail?.ifBlank { null } ?: copy.text(R.string.conn_unreachable_detail, record.displayTitle),
+            )
         val hint =
             when (record.transport) {
                 SavedCameraTransport.INFRASTRUCTURE, SavedCameraTransport.PHONE_HOTSPOT -> " " + copy.text(R.string.conn_wrong_network_hint)

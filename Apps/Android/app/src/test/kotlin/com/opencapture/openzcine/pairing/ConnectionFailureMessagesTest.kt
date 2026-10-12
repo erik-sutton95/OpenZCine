@@ -1,40 +1,47 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.CameraConnectionFailure
+import java.nio.file.Path
+import kotlin.io.path.readText
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** The copy for a failed connect comes from the typed failure, never from its message (A4-45). */
 class ConnectionFailureMessagesTest {
     @Test
-    fun `rejectedInitiator maps to operator guidance about Connect to PC`() {
-        val message =
-            friendlyCameraConnectionFailure(
-                "The camera rejected the PTP-IP handshake: rejectedInitiator.",
-            )
+    fun `a refused initiator maps to guidance about Connect to PC, whatever the message says`() {
+        val message = friendlyCameraConnectionFailure(CameraConnectionFailure.REJECTED_INITIATOR, "Init_Fail 1")
         assertTrue(message.contains("didn't recognize this phone"))
         assertTrue(message.contains("Connect to PC"))
     }
 
     /**
-     * The escalation classifier, mirroring iOS `isSavedProfileUnavailable`: a hangup during a
-     * saved-profile attempt means the camera-side profile never met this initiator — the field
-     * shape (`pairing=skipped → "The camera ended the connection"`) that motivated the iOS
-     * re-pair fallback. Refusal tokens escalate too; ordinary reachability failures do not.
+     * An unspecified Init_Fail is not a forgotten phone (iOS `isRejectedInitiator` reads only
+     * rejectedInitiator); the old text classifier matched its "rejected the PTP-IP handshake".
      */
     @Test
-    fun `saved profile unavailable covers hangups and refusals but not reachability`() {
-        assertEquals(true, indicatesSavedProfileUnavailable("The camera closed the connection."))
-        assertEquals(true, indicatesSavedProfileUnavailable("handshake rejectedInitiator (1)"))
-        assertEquals(true, indicatesSavedProfileUnavailable("savedProfileRequired"))
-        assertEquals(false, indicatesSavedProfileUnavailable("Connection timed out"))
-        assertEquals(false, indicatesSavedProfileUnavailable(null))
+    fun `an unreachable camera gets reachability guidance and no packet text`() {
+        assertEquals(
+            "Couldn't reach the camera. Check Wi‑Fi and try again.",
+            friendlyCameraConnectionFailure(
+                CameraConnectionFailure.UNREACHABLE,
+                "The camera rejected the PTP-IP handshake: unspecified.",
+            ),
+        )
+        assertFalse(CameraConnectionFailure.UNREACHABLE.savedProfileUnavailable)
     }
 
     @Test
     fun `empty failure falls back to reachability guidance`() {
         assertEquals(
             "Couldn't reach the camera. Check Wi‑Fi and try again.",
-            friendlyCameraConnectionFailure(null),
+            friendlyCameraConnectionFailure(null, null),
+        )
+        assertEquals(
+            "Couldn't reach the camera. Check Wi‑Fi and try again.",
+            friendlyCameraConnectionFailure(CameraConnectionFailure.OTHER, " "),
         )
     }
 
@@ -45,21 +52,49 @@ class ConnectionFailureMessagesTest {
      */
     @Test
     fun `numeric IPv4 transport refusal maps to rejoin guidance`() {
-        val message =
-            friendlyCameraConnectionFailure(
-                "Enter a numeric IPv4 camera address. Host names are not supported yet.",
-            )
         assertEquals(
             "Couldn't find the camera's address on its network. Rejoin the camera's Wi‑Fi and try again.",
-            message,
+            friendlyCameraConnectionFailure(CameraConnectionFailure.NON_NUMERIC_HOST, "anything"),
+        )
+    }
+
+    @Test
+    fun `typed failures with their own copy`() {
+        assertEquals(
+            "The camera didn't respond in time. Check Wi‑Fi and try again.",
+            friendlyCameraConnectionFailure(CameraConnectionFailure.TIMEOUT, "Init timed out."),
+        )
+        assertEquals(
+            "The camera ended the connection. Try again.",
+            friendlyCameraConnectionFailure(CameraConnectionFailure.CONNECTION_CLOSED, null),
+        )
+        assertTrue(
+            friendlyCameraConnectionFailure(CameraConnectionFailure.PAIRING_CHALLENGE_UNAVAILABLE, null)
+                .contains("did not provide a pairing code"),
+        )
+        assertTrue(
+            friendlyCameraConnectionFailure(CameraConnectionFailure.SAVED_PROFILE_REQUIRED, null)
+                .contains("needs to pair with this phone again"),
         )
     }
 
     @Test
     fun `plain operator text is preserved`() {
-        assertEquals(
-            "USB cable unplugged.",
-            friendlyCameraConnectionFailure("USB cable unplugged."),
-        )
+        assertEquals("USB cable unplugged.", friendlyCameraConnectionFailure(null, "USB cable unplugged."))
+        val busy = "Another device is connected to this camera. Disconnect it there, then try again."
+        assertEquals(busy, friendlyCameraConnectionFailure(CameraConnectionFailure.BUSY, busy))
+    }
+
+    /** No pairing source classifies failure words again (the producer types them). */
+    @Test
+    fun `no connect failure is classified by its text`() {
+        val pairing = Path.of(requireNotNull(System.getProperty("openzcine.repositoryRoot")))
+            .resolve("Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/pairing")
+        for (name in listOf("ConnectionFailureMessages.kt", "SavedCameraConnector.kt", "PairingExperience.kt")) {
+            val source = pairing.resolve(name).readText()
+            for (token in listOf("rejectedinitiator", "closed the connection", "savedprofilerequired", "numeric ipv4")) {
+                assertFalse("$name classifies \"$token\"", source.lowercase().contains("contains(\"$token"))
+            }
+        }
     }
 }

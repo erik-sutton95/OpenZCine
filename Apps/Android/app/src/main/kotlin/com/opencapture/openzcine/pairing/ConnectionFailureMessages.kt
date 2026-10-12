@@ -1,71 +1,37 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.CameraConnectionFailure
+
 /**
- * Maps raw session/native failure strings to operator-facing copy, the Android
- * counterpart of iOS `StartupConnectionCopy.friendly` plus the
- * `rejectedInitiator` guidance in `NativeAppRoot`.
+ * Operator copy for a failed camera connect, the Android counterpart of iOS
+ * `StartupConnectionCopy.friendly` plus the `rejectedInitiator` guidance in `NativeAppRoot`.
  *
- * Device logs show camera-AP Wi‑Fi often succeeds (Android may silently rejoin a
- * previously approved SSID) while the PTP-IP handshake fails with
- * `rejectedInitiator` — never bury that under a generic "Couldn't reach".
+ * It reads the typed [CameraConnectionFailure] the Swift session layer sends, never the failure
+ * message's words (A4-45). Device logs show camera-AP Wi-Fi often succeeds (Android may silently
+ * rejoin a previously approved SSID) while the PTP-IP handshake refuses this initiator, so that
+ * refusal gets its own guidance instead of a generic "Couldn't reach".
+ *
+ * [detail] is shown as is only when the failure has no copy of its own (another device holds the
+ * camera, or an untyped failure); a blank detail reads as unreachable.
  */
-/**
- * Whether a failure detail says the CAMERA no longer recognizes this phone — the signal that a
- * fresh pairing, not another saved-profile retry, is the remedy. `rejectedInitiator` is the
- * shared core's own `PTPIPHandshake` case name riding in the detail string; this is THE one
- * classifier — reconnect escalation and operator copy must never grow separate copies of it.
- */
-internal fun indicatesCameraForgotThisPhone(detail: String?): Boolean {
-    val lower = detail?.trim()?.lowercase().orEmpty()
-    if (lower.isEmpty()) return false
-    return lower.contains("rejectedinitiator") ||
-        (lower.contains("rejected") && lower.contains("handshake")) ||
-        lower.contains("rejected the ptp-ip")
-}
+internal fun friendlyCameraConnectionFailure(failure: CameraConnectionFailure?, detail: String?): String =
+    when (failure) {
+        CameraConnectionFailure.REJECTED_INITIATOR ->
+            "The camera didn't recognize this phone. On the camera, open Connect to PC and create or choose a profile for this phone, then try again."
+        CameraConnectionFailure.TIMEOUT -> "The camera didn't respond in time. Check Wi‑Fi and try again."
+        CameraConnectionFailure.CONNECTION_CLOSED -> "The camera ended the connection. Try again."
+        CameraConnectionFailure.PAIRING_CHALLENGE_UNAVAILABLE ->
+            "The camera did not provide a pairing code. Restart Connect to PC on the camera, then pair again."
+        CameraConnectionFailure.SAVED_PROFILE_REQUIRED ->
+            "This camera needs to pair with this phone again. Use Pair new camera, or create a Connect to PC profile for this phone."
+        // The transport refusing a non-numeric dial target means some path handed the dialer a
+        // non-address key (#327); the operator's remedy is the rejoin/rediscover flow.
+        CameraConnectionFailure.NON_NUMERIC_HOST ->
+            "Couldn't find the camera's address on its network. Rejoin the camera's Wi‑Fi and try again."
+        // Never surface socket errors or PTP-IP packet dumps to the operator.
+        CameraConnectionFailure.UNREACHABLE -> UNREACHABLE_COPY
+        CameraConnectionFailure.BUSY, CameraConnectionFailure.OTHER, null ->
+            detail?.trim()?.takeIf { it.isNotEmpty() } ?: UNREACHABLE_COPY
+    }
 
-/**
- * Whether a saved-profile attempt's failure says the profile itself is unusable and a fresh
- * pairing is the remedy — the Android twin of iOS `isSavedProfileUnavailable`. Beyond the
- * refusals above, a body that HANGS UP mid-establishment is a camera whose newly created
- * network profile has never met this initiator (the field diagnostics that motivated the iOS
- * fix: `pairing=skipped → "The camera ended the connection"`).
- */
-internal fun indicatesSavedProfileUnavailable(detail: String?): Boolean {
-    if (indicatesCameraForgotThisPhone(detail)) return true
-    val lower = detail?.trim()?.lowercase().orEmpty()
-    return lower.contains("closed the connection") || lower.contains("savedprofilerequired")
-}
-
-internal fun friendlyCameraConnectionFailure(raw: String?): String {
-    val message = raw?.trim().orEmpty()
-    if (message.isEmpty()) {
-        return "Couldn't reach the camera. Check Wi‑Fi and try again."
-    }
-    val lower = message.lowercase()
-    if (indicatesCameraForgotThisPhone(message)) {
-        return "The camera didn't recognize this phone. On the camera, open Connect to PC and create or choose a profile for this phone, then try again."
-    }
-    if (lower.contains("timed out") || lower.contains("timeout")) {
-        return "The camera didn't respond in time. Check Wi‑Fi and try again."
-    }
-    if (lower.contains("closed the connection")) {
-        return "The camera ended the connection. Try again."
-    }
-    if (lower.contains("pairing") && lower.contains("code")) {
-        return "The camera did not provide a pairing code. Restart Connect to PC on the camera, then pair again."
-    }
-    if (lower.contains("first-time pairing") || lower.contains("savedprofilerequired")) {
-        return "This camera needs to pair with this phone again. Use Pair new camera, or create a Connect to PC profile for this phone."
-    }
-    // The transport refusing a non-numeric dial target is an implementation detail (#327):
-    // it means some path handed the dialer a non-address key, and the operator's remedy is
-    // the rejoin/rediscover flow — never address formatting.
-    if (lower.contains("numeric ipv4") || lower.contains("host names are not supported")) {
-        return "Couldn't find the camera's address on its network. Rejoin the camera's Wi‑Fi and try again."
-    }
-    // Never surface raw PTP opcode dumps to the operator.
-    if (lower.contains("ptp-ip") || lower.contains("0x")) {
-        return "Couldn't reach the camera. Check Wi‑Fi and try again."
-    }
-    return message
-}
+private const val UNREACHABLE_COPY = "Couldn't reach the camera. Check Wi‑Fi and try again."

@@ -791,7 +791,7 @@ public fun PairingExperience(
                             onDiagnosticPhase("failed.reconnect")
                             phase =
                                 PairingPhase.Error(
-                                    friendlyCameraConnectionFailure(unreachableMessage),
+                                    friendlyCameraConnectionFailure(null, unreachableMessage),
                                 )
                         }
                     } else if (connected != null) {
@@ -808,13 +808,14 @@ public fun PairingExperience(
                         )
                     } else {
                         withContext(NonCancellable) { session.disconnect() }
-                        val detail = session.connectionProgress.value.detail
+                        val failed = session.connectionProgress.value
                         // Session-layer failures already emit closed phase tokens via
                         // phaseLogger (failed.usb / failed.ptp). Do not double-record here.
                         phase =
                             PairingPhase.Error(
                                 friendlyCameraConnectionFailure(
-                                    detail.takeIf { it.isNotBlank() } ?: unreachableMessage,
+                                    failed.failure,
+                                    failed.detail.takeIf { it.isNotBlank() } ?: unreachableMessage,
                                 ),
                             )
                     }
@@ -832,7 +833,7 @@ public fun PairingExperience(
                         onDiagnosticPhase("failed.ptp")
                     }
                     phase =
-                        PairingPhase.Error(friendlyCameraConnectionFailure(unreachableMessage))
+                        PairingPhase.Error(friendlyCameraConnectionFailure(null, unreachableMessage))
                 } finally {
                     progressWatcher.cancel()
                 }
