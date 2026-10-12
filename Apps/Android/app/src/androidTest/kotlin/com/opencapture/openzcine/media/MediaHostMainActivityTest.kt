@@ -14,8 +14,8 @@ import androidx.test.uiautomator.Until
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.MainActivity
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.io.File
 import java.nio.file.Files
