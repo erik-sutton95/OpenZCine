@@ -82,12 +82,17 @@ class NikonNativeDeliveryLeaseTest {
             withTimeout(10_000) { f.hop.returnEntered.await() }
             val successor = Hop(f.network, "SIMULATED-B")
             f.controller.attachCameraHop(successor)
-            val next = f.controller.claimInternetHop { true }!!
+            // No successor route exists while the old one is still returning, so the late return
+            // can never restore or publish to one.
+            assertNull(f.controller.claimInternetHop { true })
             f.hop.returnRelease.complete(Unit)
             withTimeout(10_000) { handle.awaitEnteredCleanup() }
-            assertTrue(f.controller.ownsInternetHop(next))
             assertEquals(0, successor.leaves); assertEquals(0, successor.joins)
             assertEquals(1, f.hop.joins)
+            assertEquals(1, f.state.share!!.payload.urls.size)
+            // Once the old return has ended, a successor claims its own route.
+            val next = f.controller.claimInternetHop { true }!!
+            assertTrue(f.controller.ownsInternetHop(next))
             f.controller.endInternetHop(next)
         } }
     }

@@ -90,7 +90,9 @@ class NikonRemoteDeliveryAdmissionTest {
             f.controller.loadProjects()
             val request = popup.takeRequest()!!
             assertNull(f.selection.begin(f.coordinator, request))
-            assertNull(f.coordinator.capturedRun)
+            // The refusal says why through the shared outcome toast, as on iOS; nothing is entered.
+            f.join()
+            assertEquals("Upload is unavailable.", f.coordinator.lifetime.state.value.toast)
             assertFalse(f.entryEntered.isCompleted)
             f.assertNoDeliveryIO()
         } }
@@ -144,8 +146,9 @@ class NikonRemoteDeliveryAdmissionTest {
             f.join()
             assertEquals(1, f.hop.leaves)
             assertEquals(1, f.hop.joins)
-            // The refused run ends through the shared outcome toast (no upload was made).
-            assertEquals("Cancelled.", f.coordinator.lifetime.state.value.toast)
+            // The refused run ends through the shared outcome toast (no upload was made), which also
+            // reports the verified camera rejoin of its route.
+            assertEquals("Cancelled; camera rejoined.", f.coordinator.lifetime.state.value.toast)
         } }
     }
     @Test fun oldBeforeEntryCancellationCannotRestoreASuccessorRoute() = runBlocking {
