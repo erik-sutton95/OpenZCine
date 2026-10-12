@@ -676,6 +676,7 @@ class MainActivity : ComponentActivity() {
                                 mediaCacheStore = mediaCacheStore,
                                 frameioController = frameioController,
                                 accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
+                                savedCameras = camerasState.saved,
                                 // The Link tab's "Held By" reads the token off this state.
                                 // Without it the row falls back to "The broadcaster" forever —
                                 // including while THIS device holds control, which is the one
@@ -1083,6 +1084,7 @@ class MainActivity : ComponentActivity() {
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
                                         accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
+                                        savedCameras = camerasState.saved,
                                         linkHealth = monitorLinkHealth,
                                         relaySharing = relayBroadcastController,
                                         relaySharingEnabled = relayBroadcastEnabled,
@@ -1224,6 +1226,7 @@ class MainActivity : ComponentActivity() {
                             mediaCacheStore = mediaCacheStore,
                             frameioController = frameioController,
                             accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
+                            savedCameras = camerasState.saved,
                             // iOS's startup Settings lands on Link; a debug
                             // intent can still force a specific tab.
                             initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,

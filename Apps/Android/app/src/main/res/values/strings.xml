@@ -836,6 +836,7 @@
     <string name="settings_help">Help</string>
     <string name="settings_control_this_device">This device</string>
     <string name="settings_control_broadcaster">The broadcaster</string>
+    <string name="help_link_saved_cameras">Saved setups on this phone. Pair, rename or forget a camera from Your cameras.</string>
     <string name="help_link_transport">Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.</string>
     <string name="help_link_held_by">Which device the camera is currently taking commands from.</string>
     <string name="help_link_stream_preset">Combines Nikon live-view stream size and compression grade into three operator-facing choices.</string>
