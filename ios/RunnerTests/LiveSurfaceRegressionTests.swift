@@ -93,6 +93,28 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         .environment(model).environment(MediaDeliveryCoordinator())
     }
 
+    // MARK: A1-02
+
+    /// A1-02: a monitor-time failure went to `connectionMessage`, which only the connect screens
+    /// render. A capture card that drops while the monitor is up now says so on the monitor.
+    func testAMonitorTimeFailureShowsInTheMonitorNote() async throws {
+        let model = NativeAppModel()
+        model.preferences = OperatorPreferences.defaults
+        model.isMonitorPresented = true
+        model.videoSource = .hdmiCapture
+        let hosted = try Hosted(monitor(model))
+        defer { hosted.close() }
+        try await hosted.settle()
+
+        model.applyHDMICaptureState(.failed(reason: "SIMULATED capture card unplugged"))
+
+        let shown = try await hosted.settle {
+            (hosted.element("monitor.note")?.accessibilityLabel ?? "")
+                .contains("SIMULATED capture card unplugged")
+        }
+        XCTAssertTrue(shown, "the failure must read on the mounted monitor")
+    }
+
     // MARK: A1-03
 
     /// A1-03: the live chrome started from the `.preview` fixture (ISO 800, "6K · 25p", a battery

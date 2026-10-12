@@ -7134,9 +7134,11 @@ final class NativeAppModel {
                 lastGoodFrameAt = health.lastGoodFrameAt
                 consecutiveBadLiveFrames = health.badFrames
                 if health.bodyBusy {
+                    if liveFPS != "BUSY" {
+                        showMonitorNotice(
+                            "The camera is busy on the body - the feed resumes automatically.")
+                    }
                     liveFPS = "BUSY"
-                    connectionMessage =
-                        "The camera is busy on the body - the feed resumes automatically."
                 }
             },
             event: { [weak self] event in
@@ -7368,6 +7370,9 @@ final class NativeAppModel {
         hdmiCaptureState = state
         guard videoSource == .hdmiCapture else { return }
         connectionMessage = state.message
+        // The connect screens read the progress; a capture that stops while the monitor is up
+        // says so on the monitor (A1-02).
+        if !state.isStreaming { showMonitorNotice(state.message) }
         // Nothing is arriving, so the feed must not keep the last captured frame on screen
         // pretending to be live.
         if !state.isStreaming {
@@ -7615,7 +7620,7 @@ final class NativeAppModel {
                     let error =
                         event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) }
                         ?? "unknown"
-                    connectionMessage = "Recording was interrupted by the camera (error \(error))."
+                    showMonitorNotice("Recording was interrupted by the camera (error \(error)).")
                     await refreshWarningStatus(session: session)
                 } else if let recordState = event.inferredRecordState {
                     applyCameraRecordState(isRecording: recordState == .recording)
@@ -7936,18 +7941,17 @@ final class NativeAppModel {
                     return
                 }
                 if case NativeCameraSessionError.commandAuthorityExpired = error {
-                    connectionMessage = error.localizedDescription
+                    showMonitorNotice(error.localizedDescription)
                     logConnection("focus point authority expired before the next command")
                     return
                 }
-                // `connectionMessage` is written all over the monitor and rendered nowhere on it —
-                // it surfaces on the connect screens only. A focus point the camera refused was
-                // therefore completely silent to the operator, and indistinguishable from a tap
-                // that never registered. Log it too, with the body's own response code.
+                // A focus point the camera refused must read on the monitor (A1-02), or it is
+                // indistinguishable from a tap that never registered. Logged with the body's own
+                // response code too.
                 let reason =
                     (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 logConnection("focus point rejected at (\(point.0),\(point.1)): \(reason)")
-                connectionMessage = "Camera rejected the focus point: \(reason)"
+                showMonitorNotice("Camera rejected the focus point: \(reason)")
             }
             return
         }
@@ -8240,8 +8244,8 @@ final class NativeAppModel {
                 try await session.endTracking()
                 logConnection("focus reset: EndTracking PTP OK")
             } catch {
-                connectionMessage =
-                    "Camera rejected end-tracking: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                showMonitorNotice(
+                    "Camera rejected end-tracking: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
                 focusResetStep = nil
                 return
             }
@@ -8265,8 +8269,8 @@ final class NativeAppModel {
                             + "(saved \(context.savedFocusSubject))"
                     )
                 } catch {
-                    connectionMessage =
-                        "Camera rejected subject-detection suspend: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                    showMonitorNotice(
+                        "Camera rejected subject-detection suspend: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
                 }
             }
             try? await session.waitUntilDeviceReady()
@@ -8389,8 +8393,8 @@ final class NativeAppModel {
                         "focus reset: restored subject \(context.savedFocusSubject) PTP OK"
                     )
                 } catch {
-                    connectionMessage =
-                        "Camera rejected subject-detection restore: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                    showMonitorNotice(
+                        "Camera rejected subject-detection restore: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
                 }
             }
             try? await session.waitUntilDeviceReady()
@@ -8621,7 +8625,7 @@ final class NativeAppModel {
                 publishCameraDisplayState()
                 syncFocusFromSnapshot()
                 syncShutterLockFromSnapshot()
-                connectionMessage = error.localizedDescription
+                showMonitorNotice(error.localizedDescription)
                 return true
             }
             // The camera refused the write — the body's "Control lock" has this control locked
@@ -8651,10 +8655,10 @@ final class NativeAppModel {
                 syncFocusFromSnapshot()
                 syncShutterLockFromSnapshot()
                 let locking = pending.write.data.first == 1
-                connectionMessage =
+                showMonitorNotice(
                     locking
-                    ? "Could not lock shutter control on camera."
-                    : "Could not unlock shutter control on camera."
+                        ? "Could not lock shutter control on camera."
+                        : "Could not unlock shutter control on camera.")
             } else if isShutterModeWrite || isBaseISOWrite {
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
                     guard cameraSession === session, connectionGeneration == sourceGeneration else {
@@ -8668,12 +8672,10 @@ final class NativeAppModel {
                     return true
                 }
                 syncShutterLockFromSnapshot()
-                if isShutterModeWrite {
-                    connectionMessage =
-                        "Shutter angle/speed mode change was rejected by the camera."
-                } else {
-                    connectionMessage = "ISO base circuit change was rejected by the camera."
-                }
+                showMonitorNotice(
+                    isShutterModeWrite
+                        ? "Shutter angle/speed mode change was rejected by the camera."
+                        : "ISO base circuit change was rejected by the camera.")
             } else {
                 lockedControls.insert(pending.picker)
                 if let actual = try? await session.readCameraProperty(pending.write.property) {
@@ -8688,14 +8690,11 @@ final class NativeAppModel {
                     return true
                 }
                 syncShutterLockFromSnapshot()
-                if isFocusModeWrite {
-                    connectionMessage = focusModeWriteFailureMessage(
-                        requested: pending.value,
-                        reported: cameraPropertySnapshot.focusMode)
-                } else {
-                    connectionMessage =
-                        "\(pending.picker.title) is locked on the camera (Control lock)."
-                }
+                showMonitorNotice(
+                    isFocusModeWrite
+                        ? focusModeWriteFailureMessage(
+                            requested: pending.value, reported: cameraPropertySnapshot.focusMode)
+                        : "\(pending.picker.title) is locked on the camera (Control lock).")
             }
         }
         return true
