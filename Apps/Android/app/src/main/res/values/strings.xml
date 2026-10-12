@@ -161,6 +161,15 @@
     <string name="conn_connected_detail">%1$s is ready.</string>
     <string name="conn_failed_title">Couldn\'t connect</string>
     <string name="conn_failed_detail">Check your network and try again.</string>
+    <!-- Saved-setup reconnect failures (SavedCameraConnector). -->
+    <string name="conn_usb_not_ready">Connect your saved USB-C camera and approve Android access before reconnecting.</string>
+    <string name="conn_wifi_off_detail">Joining the camera\'s Wi‑Fi needs Wi‑Fi turned on. Turn on Wi‑Fi, then try again.</string>
+    <string name="conn_ap_ssid_missing">This camera needs its Wi‑Fi network name. Pair it again to refresh the profile.</string>
+    <string name="conn_ap_key_missing">The Wi‑Fi key for %1$s is not available on this phone. Pair again to save it.</string>
+    <string name="conn_ap_join_failed">Couldn\'t join %1$s. Keep the camera\'s network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-pair with a fresh SSID/key scan.</string>
+    <string name="conn_ap_camera_not_found">Joined %1$s but couldn\'t find the camera on its network. Keep the camera on its connection screen and try again.</string>
+    <string name="conn_unreachable_detail">Couldn\'t reach %1$s. Check the camera connection and try again.</string>
+    <string name="conn_wrong_network_hint">If the camera is on a router or hotspot, make sure this device is on the same network, where it was reached last time.</string>
 
     <!-- Saved cameras: the add-setup card and the cameras page rows. -->
     <string name="saved_your_cameras">Your cameras</string>

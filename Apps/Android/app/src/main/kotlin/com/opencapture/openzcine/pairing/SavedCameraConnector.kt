@@ -1,11 +1,11 @@
 package com.opencapture.openzcine.pairing
 
 import com.opencapture.opencine.nikon.NikonHosts
+import com.opencapture.openzcine.R
 import com.opencapture.opencine.nikon.CameraConnectionPhase
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.UsbPtpOpenResult
-import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -98,6 +98,8 @@ internal class SavedCameraConnector(
     /** Whether the phone is on a camera's own access point ([isOnCameraAccessPointNetwork]). */
     private val onCameraAccessPoint: () -> Boolean,
     private val scope: CoroutineScope,
+    /** The failure copy, from the app's string resources. */
+    private val copy: PortCopy,
     private val listDiscovery: CameraListDiscovery = CameraListDiscovery(),
 ) {
     private val _phase = MutableStateFlow<SavedCameraPhase>(SavedCameraPhase.Idle)
@@ -146,12 +148,7 @@ internal class SavedCameraConnector(
     }
 
     /** The live discovery this saved setup would be dialling, when there is one. */
-    fun discoveryFor(record: SavedCameraRecord): DiscoveredCamera? {
-        if (record.transport == SavedCameraTransport.USB_C) return null
-        return discoveredCameras.value.firstOrNull { camera ->
-            camera.host == record.host || SavedCameraRecords.cameraNamesMatch(camera.name, record.cameraName)
-        }
-    }
+    fun discoveryFor(record: SavedCameraRecord): DiscoveredCamera? = discoveredCameras.value.discoveryFor(record)
 
     /**
      * Whether this setup is reachable now (the setup chip's light): an access point only from its
@@ -179,110 +176,8 @@ internal class SavedCameraConnector(
                 }
         }
 
-    /**
-     * The address this setup may dial right now, or null when nothing is dialable yet: a camera-AP
-     * record holding the pending key must rediscover on the live link after join, never hand the
-     * key itself to the transport (#327).
-     */
-    private fun resolvedHost(record: SavedCameraRecord): String? {
-        if (record.transport == SavedCameraTransport.USB_C) return record.host
-        return CameraDiscovery.dialableSavedHost(record.host, discoveryFor(record)?.host)
-    }
-
-    /** Same session shape as a normal reconnect (restore-then-pair). */
-    private fun createPostConfirmReconnectSession(record: SavedCameraRecord): CameraSession? =
-        when (record.transport) {
-            SavedCameraTransport.CAMERA_ACCESS_POINT,
-            SavedCameraTransport.PHONE_HOTSPOT,
-            SavedCameraTransport.INFRASTRUCTURE,
-            // A null host means discovery has not named the camera yet: report "no session" so
-            // the owning retry loop keeps waiting instead of dialling a non-address.
-            -> resolvedHost(record)?.let(environment.createSession)
-            SavedCameraTransport.USB_C -> {
-                val source = environment.usbCameraSource ?: return null
-                val camera =
-                    usbCameras.value.firstOrNull { it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host }
-                        ?: return null
-                when (val opened = source.open(camera)) {
-                    is UsbPtpOpenResult.Opened -> environment.createUsbSession(opened)
-                    is UsbPtpOpenResult.Rejected -> null
-                }
-            }
-        }
-
-    private suspend fun reconnectAfterNikonPairing(record: SavedCameraRecord, confirmPin: String? = null): PairedCamera? {
-        val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT
-        _phase.value = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, confirmPin)
-        if (isCameraAp) {
-            awaitCameraApReadyAfterConfirm(
-                awaitReassociation = environment.awaitCameraApRestart,
-                isProcessBound = environment.isCameraApProcessBound,
-            )
-        } else {
-            delay(FIRST_PAIR_HOTSPOT_SETTLE_MILLIS)
-        }
-        val rejoinSsid = record.wifiSsid?.takeIf { isCameraAp && it.isNotBlank() }
-        val rejoinKey = rejoinSsid?.let(environment.credentials::passphrase)
-
-        if (!isCameraAp) {
-            return withTimeoutOrNull(FIRST_PAIR_RECONNECT_TIMEOUT_MILLIS) {
-                while (true) {
-                    _phase.value = SavedCameraPhase.Reconnecting(record.displayTitle)
-                    val paired = createPostConfirmReconnectSession(record)?.let { tryConnected(it, record) }
-                    if (paired != null) return@withTimeoutOrNull paired
-                    delay(FIRST_PAIR_RECONNECT_INTERVAL_MILLIS)
-                }
-                @Suppress("UNREACHABLE_CODE")
-                null
-            }
-        }
-
-        var paired: PairedCamera? = null
-        val ok =
-            reconnectCameraApAfterConfirm(
-                rejoinSsid = rejoinSsid,
-                rejoinKey = rejoinKey,
-                isProcessBound = environment.isCameraApProcessBound,
-                alwaysForceJoinFirst = true,
-                ensureJoined = environment.ensureCameraApJoined,
-                forceJoin = { ssid, key, timeout ->
-                    environment.releaseCameraAp()
-                    environment.ensureCameraApJoined(ssid, key, timeout)
-                },
-                connectSavedProfile = {
-                    val session = createPostConfirmReconnectSession(record) ?: return@reconnectCameraApAfterConfirm false
-                    paired = tryConnected(session, record)
-                    paired != null
-                },
-                onPhaseReconnecting = { _phase.value = SavedCameraPhase.Reconnecting(record.displayTitle) },
-            )
-        return if (ok) paired else null
-    }
-
-    /** Connects [session]; hands it over only when it is live and past the body confirmation. */
-    private suspend fun tryConnected(session: CameraSession, record: SavedCameraRecord): PairedCamera? {
-        var handedOffSession = false
-        try {
-            session.connect()
-            val connected = session.state.value as? CameraSessionState.Connected
-            val phaseNow = session.connectionProgress.value.phase
-            if (connected != null && phaseNow != CameraConnectionPhase.CONFIRM_ON_CAMERA && phaseNow != CameraConnectionPhase.PAIRING) {
-                handedOffSession = true
-                return PairedCamera(
-                    session = session,
-                    savedCamera =
-                        record.copy(
-                            host = resolvedHost(record) ?: record.host,
-                            cameraName = connected.identity.name,
-                            lastSeenAtEpochMillis = System.currentTimeMillis(),
-                        ),
-                )
-            }
-            return null
-        } finally {
-            if (!handedOffSession) withContext(NonCancellable) { session.disconnect() }
-        }
-    }
+    /** The address this setup may dial right now, or null when nothing is dialable yet (#327). */
+    private fun resolvedHost(record: SavedCameraRecord): String? = discoveredCameras.value.dialableHostFor(record)
 
     /**
      * Connects [record] (camera AP: joins [cameraApSsid] with [cameraApKey], else the stored SSID
@@ -299,12 +194,10 @@ internal class SavedCameraConnector(
         try {
             if (record.transport == SavedCameraTransport.USB_C) {
                 val source =
-                    environment.usbCameraSource ?: throw SavedCameraConnectException("USB-C camera support is unavailable on this device.")
+                    environment.usbCameraSource ?: throw SavedCameraConnectException(copy.text(R.string.pairing_error_usb_unsupported))
                 val camera =
                     usbCameras.value.firstOrNull { it.access == UsbPtpCameraAccess.READY && it.hostKey == record.host }
-                        ?: throw SavedCameraConnectException(
-                            "Connect your saved USB-C camera and approve Android access before reconnecting.",
-                        )
+                        ?: throw SavedCameraConnectException(copy.text(R.string.conn_usb_not_ready))
                 when (val opened = source.open(camera)) {
                     is UsbPtpOpenResult.Opened -> {
                         host = opened.hostKey
@@ -321,27 +214,21 @@ internal class SavedCameraConnector(
                     is UsbPtpOpenResult.Rejected -> throw SavedCameraConnectException(opened.message)
                 }
             } else if (record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT) {
-                if (!wifiEnabled()) throw SavedCameraConnectException(WIFI_OFF_MESSAGE, wifiOff = true)
+                if (!wifiEnabled()) throw wifiOff()
                 val ssid =
                     cameraApSsid ?: record.wifiSsid
-                        ?: throw SavedCameraConnectException(
-                            "This camera needs its Wi‑Fi network name. Pair it again to refresh the profile.",
-                        )
+                        ?: throw SavedCameraConnectException(copy.text(R.string.conn_ap_ssid_missing))
                 val key =
                     cameraApKey ?: environment.credentials.passphrase(ssid)
-                        ?: throw SavedCameraConnectException(
-                            "The Wi‑Fi key for $ssid is not available on this phone. Pair again to save it.",
-                        )
+                        ?: throw SavedCameraConnectException(copy.text(R.string.conn_ap_key_missing, ssid))
                 _phase.value = SavedCameraPhase.Joining(record.displayTitle)
                 // Pre-scan + fail-fast retries live inside joinWithFallback.
                 environment.primeCameraApScan(ssid)
                 if (!environment.joinCameraAp(ssid, key)) {
                     // Wi-Fi toggled off after the join was staged: the joiner bails in
                     // milliseconds, and the generic copy would be misleading.
-                    if (!wifiEnabled()) throw SavedCameraConnectException(WIFI_OFF_MESSAGE, wifiOff = true)
-                    throw SavedCameraConnectException(
-                        "Couldn't join $ssid. Keep the camera's network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-pair with a fresh SSID/key scan.",
-                    )
+                    if (!wifiEnabled()) throw wifiOff()
+                    throw SavedCameraConnectException(copy.text(R.string.conn_ap_join_failed, ssid))
                 }
                 // The encrypted store is the only place a confirmed key lives: a key that arrived
                 // from the add-setup scan has never been written anywhere else.
@@ -356,9 +243,7 @@ internal class SavedCameraConnector(
                         withTimeoutOrNull(CAMERA_AP_DISCOVER_AFTER_JOIN_MILLIS) {
                             environment.hotspotCameras.first { it.isNotEmpty() }.first().host
                         }
-                            ?: throw SavedCameraConnectException(
-                                "Joined $ssid but couldn't find the camera on its network. Keep the camera on its connection screen and try again.",
-                            )
+                            ?: throw SavedCameraConnectException(copy.text(R.string.conn_ap_camera_not_found, ssid))
                 }
             }
 
@@ -412,14 +297,16 @@ internal class SavedCameraConnector(
                             _phase.value = SavedCameraPhase.ConfirmOnCamera(record.displayTitle, pairingPin)
                             withContext(NonCancellable) { attemptSession.disconnect() }
                             session = null
-                            reconnectAfterNikonPairing(
+                            reconnectAfterBodyConfirm(
+                                environment,
                                 record.copy(
                                     host = host,
                                     cameraName = connected?.identity?.name ?: record.cameraName,
                                     lastSeenAtEpochMillis = System.currentTimeMillis(),
                                 ),
-                                confirmPin = pairingPin,
-                            )
+                                discovered = { discoveredCameras.value },
+                                usbCameras = { usbCameras.value },
+                            ) { _phase.value = SavedCameraPhase.Reconnecting(record.displayTitle) }
                         } else {
                             connected?.let {
                                 PairedCamera(
@@ -443,13 +330,7 @@ internal class SavedCameraConnector(
                     progressWatcher.cancel()
                 }
             }
-            if (pairedCamera == null) {
-                throw SavedCameraConnectException(
-                    friendlyCameraConnectionFailure(
-                        lastFailureDetail ?: "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
-                    ) + wrongNetworkHint(record),
-                )
-            }
+            if (pairedCamera == null) throw unreachable(record, lastFailureDetail)
             handoffSucceeded = true
             return pairedCamera
         } catch (error: SavedCameraConnectException) {
@@ -457,11 +338,7 @@ internal class SavedCameraConnector(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            throw SavedCameraConnectException(
-                friendlyCameraConnectionFailure(
-                    "Couldn't reach ${record.displayTitle}. Check the camera connection and try again.",
-                ) + wrongNetworkHint(record),
-            )
+            throw unreachable(record, detail = null)
         } finally {
             _phase.value = SavedCameraPhase.Idle
             if (!handoffSucceeded) {
@@ -511,24 +388,20 @@ internal class SavedCameraConnector(
         }
     }
 
-    companion object {
-        const val WIFI_OFF_MESSAGE: String = "Joining the camera's Wi‑Fi needs Wi‑Fi turned on. Turn on Wi‑Fi, then try again."
+    private fun wifiOff() = SavedCameraConnectException(copy.text(R.string.conn_wifi_off_detail), wifiOff = true)
 
-        /**
-         * The forgot-to-switch-networks case: a router or hotspot camera that cannot be found is
-         * overwhelmingly a phone on the wrong network. AP setups are excluded; their remedy is the
-         * join flow, which reconnect already runs.
-         */
-        fun wrongNetworkHint(record: SavedCameraRecord): String =
+    /**
+     * The card's copy for a setup that did not connect. A router or hotspot camera that cannot be
+     * found is overwhelmingly a phone on the wrong network, so those setups add that hint; access
+     * point setups never do, their remedy is the join flow reconnect already runs.
+     */
+    private fun unreachable(record: SavedCameraRecord, detail: String?): SavedCameraConnectException {
+        val message = friendlyCameraConnectionFailure(detail ?: copy.text(R.string.conn_unreachable_detail, record.displayTitle))
+        val hint =
             when (record.transport) {
-                SavedCameraTransport.INFRASTRUCTURE,
-                SavedCameraTransport.PHONE_HOTSPOT,
-                ->
-                    " If the camera is on a router or hotspot, make sure this device is on the same " +
-                        "network, where it was reached last time."
-                SavedCameraTransport.CAMERA_ACCESS_POINT,
-                SavedCameraTransport.USB_C,
-                -> ""
+                SavedCameraTransport.INFRASTRUCTURE, SavedCameraTransport.PHONE_HOTSPOT -> " " + copy.text(R.string.conn_wrong_network_hint)
+                SavedCameraTransport.CAMERA_ACCESS_POINT, SavedCameraTransport.USB_C -> ""
             }
+        return SavedCameraConnectException(message + hint)
     }
 }

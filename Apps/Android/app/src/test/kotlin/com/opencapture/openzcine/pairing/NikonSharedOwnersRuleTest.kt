@@ -10,7 +10,9 @@ import kotlin.test.assertEquals
 /**
  * What OpenCine owns, this app only calls: the camera access-point join and Wi-Fi lock (platform,
  * A4-22), the Nikon network and saved-setup policies (nikon module, pinned to Swift by vectors,
- * A4-23), and the saved records' codec, written by one store (A4-24).
+ * A4-23), and the saved records' codec, written by one store (A4-24). Within the app, the
+ * wizard and the saved-setup connector share one post-confirm reconnect, and the connector's copy
+ * lives in string resources (A4-42).
  */
 class NikonSharedOwnersRuleTest {
     private fun sourcesContaining(token: String): List<String> {
@@ -43,5 +45,17 @@ class NikonSharedOwnersRuleTest {
         // The record keys live in OpenCine's NikonSavedRecordsV0 only.
         assertEquals(emptyList(), sourcesContaining("\"camera-name\""))
         assertEquals(listOf("SavedCameraStore.kt"), sourcesContaining("RECORDS_KEY"))
+    }
+
+    @Test
+    fun onePostConfirmReconnectAndNoHardCodedConnectorCopy() {
+        assertEquals(listOf("CameraApReconnect.kt"), sourcesContaining("reconnectCameraApAfterConfirm("))
+        assertEquals(listOf("CameraApReconnect.kt"), sourcesContaining("awaitCameraApReadyAfterConfirm("))
+        assertEquals(
+            listOf("CameraApReconnect.kt", "PairingExperience.kt", "SavedCameraConnector.kt"),
+            sourcesContaining("reconnectAfterBodyConfirm("),
+        )
+        assertEquals(emptyList(), sourcesContaining("SavedCameraConnectException(\""))
+        assertEquals(emptyList(), sourcesContaining("Couldn't reach \${record"))
     }
 }

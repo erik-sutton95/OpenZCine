@@ -34,6 +34,8 @@ class AppNikonConnectPortTest {
     private val ap =
         SavedCameraRecord("192.168.1.1", "ZR_3001234", SavedCameraTransport.CAMERA_ACCESS_POINT, 2_000, "NIKON_ZR_3001234")
 
+    private val connectCopy = PortCopy { id, args -> "$id ${args.joinToString()}".trim() }
+
     private fun environment() =
         PairingEnvironment(
             joinCameraAp = { _, _ -> true },
@@ -54,7 +56,7 @@ class AppNikonConnectPortTest {
 
     @Test
     fun aHeldSavedSetupAsksBeforeTakingOver() = runTest {
-        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope)
+        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope, connectCopy)
         connector.discoveredCameras.value = listOf(DiscoveredCamera("ZR_3001234", "192.168.1.30", 15740, "Phone B"))
         var paired: PairedCamera? = null
         val port =
@@ -79,7 +81,7 @@ class AppNikonConnectPortTest {
 
     @Test
     fun wifiOffAsksForSettings() = runTest {
-        val connector = SavedCameraConnector(environment(), { false }, { false }, backgroundScope)
+        val connector = SavedCameraConnector(environment(), { false }, { false }, backgroundScope, connectCopy)
         val port =
             AppNikonConnectPort(
                 { id, _ -> "$id" }, connector, { listOf(ap) }, { null }, onPaired = {}, onForget = {},
@@ -95,7 +97,7 @@ class AppNikonConnectPortTest {
 
     @Test
     fun sightingsNameSavedSetupsAndPhasesCarryTheAppCopy() = runTest {
-        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope)
+        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope, connectCopy)
         val port =
             AppNikonConnectPort(
                 { id, _ -> "$id" }, connector, { listOf(studio, ap) }, { null }, onPaired = {}, onForget = {},
@@ -135,7 +137,7 @@ class AppNikonConnectPortTest {
             }
         val connector =
             SavedCameraConnector(
-                environment(), { true }, { false }, backgroundScope,
+                environment(), { true }, { false }, backgroundScope, connectCopy,
                 CameraListDiscovery(dialer, { listOf(NikonLocalInterface("wlan0", "192.168.1.42")) }),
             )
         val port =

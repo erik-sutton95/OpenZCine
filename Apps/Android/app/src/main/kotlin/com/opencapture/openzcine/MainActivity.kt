@@ -87,6 +87,7 @@ import com.opencapture.openzcine.pairing.AppNikonConnectPort
 import com.opencapture.openzcine.pairing.CameraWifiScannerOverlay
 import com.opencapture.openzcine.pairing.FILTER_NOTICE_ID
 import com.opencapture.openzcine.pairing.RELAY_ROW_PREFIX
+import com.opencapture.openzcine.pairing.PortCopy
 import com.opencapture.openzcine.pairing.SavedCameraConnector
 import com.opencapture.openzcine.pairing.isOnCameraAccessPointNetwork
 import com.opencapture.openzcine.pairing.isWifiRadioEnabled
@@ -439,6 +440,7 @@ class MainActivity : ComponentActivity() {
                 // connect, pairing and settings code keeps writing with its own rules through
                 // savedCameraStore, the one writer; every such write is merged into the document
                 // at once (bind below).
+                val connectCopy = remember { PortCopy { id, args -> applicationContext.getString(id, *args) } }
                 val savedCameraConnector =
                     remember(pairingEnvironment) {
                         SavedCameraConnector(
@@ -446,6 +448,7 @@ class MainActivity : ComponentActivity() {
                             wifiEnabled = { isWifiRadioEnabled(applicationContext) },
                             onCameraAccessPoint = { isOnCameraAccessPointNetwork(applicationContext) },
                             scope = connectionScope,
+                            copy = connectCopy,
                         )
                     }
                 var scanningAccessPointFor by remember { mutableStateOf<SavedCamera?>(null) }
@@ -453,7 +456,7 @@ class MainActivity : ComponentActivity() {
                 val nikonPort =
                     remember(savedCameraConnector) {
                         AppNikonConnectPort(
-                            copy = { id, args -> applicationContext.getString(id, *args) },
+                            copy = connectCopy,
                             connector = savedCameraConnector,
                             records = { savedCameras },
                             recordsJson = savedCameraStore::recordsJson,
