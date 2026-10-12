@@ -127,7 +127,8 @@ class NikonBitmapGlesPixelParityTest {
     )
 
     @Test fun magnifiedAndMinifiedOnePassLookMatchesFrozenDonorExactly() {
-        for ((name, plan) in plans()) {
+        // Zebra left the donor's luma measure for the shared one (A3-11); covered below.
+        for ((name, plan) in plans() - "zebra") {
             for ((width, height) in listOf(61 to 35, 11 to 6)) {
                 for (mirrored in listOf(false, true)) {
                     val label = "$name ${width}x$height mirrored=$mirrored"
@@ -136,6 +137,14 @@ class NikonBitmapGlesPixelParityTest {
                     assertArrayEquals(label, expected, shared(plan, width, height, mirrored, onePass = true))
                 }
             }
+        }
+    }
+
+    /** A3-11: the saturated bars stripe on their maximum component, which the donor's luma never reached. */
+    @Test fun zebraStripesOnTheSharedMeasureNotTheDonorLuma() {
+        val plan = plans().getValue("zebra")
+        for (mirrored in listOf(false, true)) {
+            assertFalse(donor(plan, 61, 35, mirrored).contentEquals(shared(plan, 61, 35, mirrored, onePass = true)))
         }
     }
 

@@ -6,7 +6,6 @@ import android.graphics.RenderEffect
 import androidx.annotation.RequiresApi
 import com.opencapture.opencine.runtime.MonitorBitmapEffects
 import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
-import com.opencapture.opencine.media.MonitorZebraMaskPolicy
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 
 /** Native primitive adapter; the shared owner holds shader, bitmap bindings and preview target. */
@@ -29,7 +28,6 @@ class FeedEffectsRenderer private constructor(private val native: MonitorBitmapE
             return create(plan)
         }
         internal fun create(plan: FeedEffectsRenderPlan): FeedEffectsRenderer = FeedEffectsRenderer(
-            MonitorBitmapEffects.create(plan.nativePlan, plan.falseColorReady,
-                MonitorZebraMaskPolicy(MonitorZebraMaskPolicy.HighlightMeasure.REC709_LUMA, 0.0)))
+            MonitorBitmapEffects.create(plan.nativePlan, plan.falseColorReady, plan.nativePlan.zebraMaskPolicy))
     }
 }

@@ -6,6 +6,7 @@ import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
+import com.opencapture.opencine.media.MonitorZebraMaskPolicy
 import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import kotlin.test.Test
@@ -192,6 +193,13 @@ class FeedEffectsTest {
         )
         // No cube resolved (core refused, or a stored file went missing): nothing to split.
         assertNull(plan(FeedEffects(lut = lut, splitComparison = split), cube = null).splitComparison)
+    }
+
+    /** A3-11: Z stripes on the shared zebra measure, as Pocket, Insta and Z iOS do. */
+    @Test
+    fun `zebra uses the shared measure`() {
+        val plan = FeedEffectsRenderPlan(FeedEffects(zebra = true), testRenderConfiguration(), null, null, null)
+        assertEquals(MonitorZebraMaskPolicy(), plan.nativePlan.zebraMaskPolicy)
     }
 
     private fun testCube(): MonitorLUTCube = MonitorLUTCube(2, ByteArray(2 * 2 * 2 * 4))

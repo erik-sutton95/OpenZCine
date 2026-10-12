@@ -36,10 +36,7 @@ internal class FeedEffectsRenderPlan(
             zebraMidtoneColor = configuration.midtoneColor,
             splitComparison = splitComparison != null,
             splitVertical = splitComparison == FeedSplitOrientation.VERTICAL,
-            zebraMaskPolicy = com.opencapture.opencine.media.MonitorZebraMaskPolicy(
-                highlightMeasure = com.opencapture.opencine.media.MonitorZebraMaskPolicy.HighlightMeasure.REC709_LUMA,
-                rampBias = 0.0,
-            ),
+            // A3-11: the shared zebra measure (maximum component), as Pocket, Insta and Z iOS stripe.
         )
     }
 

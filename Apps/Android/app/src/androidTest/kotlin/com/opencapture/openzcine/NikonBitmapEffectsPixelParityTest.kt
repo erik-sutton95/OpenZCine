@@ -69,13 +69,20 @@ class NikonBitmapEffectsPixelParityTest {
         bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
     }
 
+    /**
+     * The adopter against the frozen donor graph. Zebra left the donor's luma measure for the
+     * shared one (A3-11), so a zebra plan is held to the shared default renderer instead.
+     */
     private fun renderPair(source: Bitmap, plan: FeedEffectsRenderPlan, width: Int): IntArray {
-        val donor = FrozenNikonFeedEffectsRenderer.create(plan)
+        val shared = if (plan.effects.zebra) MonitorBitmapEffects.create(plan.nativePlan, plan.falseColorReady) else null
+        val frozen = if (shared == null) FrozenNikonFeedEffectsRenderer.create(plan) else null
+        val donor: AutoCloseable = shared ?: requireNotNull(frozen)
+        fun bakeDonor(w: Int) = shared?.bakePreview(source, w) ?: frozen?.bakePreview(source, w)
         val adopter = FeedEffectsRenderer.create(plan)
         var before: Bitmap? = null
         var after: Bitmap? = null
         try {
-            before = requireNotNull(donor.bakePreview(source, width)) { "donor hardware render absent" }
+            before = requireNotNull(bakeDonor(width)) { "donor hardware render absent" }
             after = requireNotNull(adopter.bakePreview(source, width)) { "shared hardware render absent" }
             assertEquals(before.width, after.width)
             assertEquals(before.height, after.height)
@@ -135,29 +142,29 @@ class NikonBitmapEffectsPixelParityTest {
         } finally { image.recycle() }
     }
 
-    @Test fun explicitLumaPolicyDiffersFromNeutralDefaultAndCloseIsTerminal() {
+    /** A3-11: Z zebra is the shared measure, which differs from the donor's luma on colour. */
+    @Test fun zebraIsTheSharedMeasureNotTheDonorLumaAndCloseIsTerminal() {
         val image = source(63, 41)
         val plan = FeedEffectsRenderPlan(FeedEffects(zebra = true), configuration(), null, null, null)
-        val explicit = MonitorBitmapEffects.create(
-            plan.nativePlan, false,
-            MonitorZebraMaskPolicy(MonitorZebraMaskPolicy.HighlightMeasure.REC709_LUMA, 0.0),
-        )
-        val defaults = MonitorBitmapEffects.create(plan.nativePlan, false)
+        val donor = FrozenNikonFeedEffectsRenderer.create(plan)
+        val adopter = FeedEffectsRenderer.create(plan)
+        val defaults = MonitorBitmapEffects.create(plan.nativePlan, false, MonitorZebraMaskPolicy())
         var luma: Bitmap? = null
+        var z: Bitmap? = null
         var maximum: Bitmap? = null
         try {
-            luma = requireNotNull(explicit.bakePreview(image, image.width))
+            luma = requireNotNull(donor.bakePreview(image, image.width))
+            z = requireNotNull(adopter.bakePreview(image, image.width))
             maximum = requireNotNull(defaults.bakePreview(image, image.width))
-            assertFalse("default maximum/bias control must differ on colored raster", pixels(luma).contentEquals(pixels(maximum)))
-            val donorPixels = renderPair(image, plan, image.width)
-            assertArrayEquals(donorPixels, pixels(luma))
-            explicit.close()
-            assertNull(explicit.bakePreview(image, image.width))
+            assertArrayEquals("Z zebra is the shared default measure", pixels(maximum), pixels(z))
+            assertFalse("the donor luma measure differs on the coloured raster", pixels(luma).contentEquals(pixels(z)))
+            adopter.close()
+            assertNull(adopter.bakePreview(image, image.width))
             defaults.close()
             assertNull(defaults.bakePreview(image, image.width))
         } finally {
-            luma?.recycle(); maximum?.recycle()
-            explicit.close(); defaults.close(); image.recycle()
+            luma?.recycle(); z?.recycle(); maximum?.recycle()
+            donor.close(); adopter.close(); defaults.close(); image.recycle()
         }
     }
 }

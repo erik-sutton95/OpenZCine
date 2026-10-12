@@ -270,7 +270,8 @@ class NikonBitmapVulkanPixelParityTest {
             Triple(61 to 35, false, false), Triple(61 to 35, false, true),
             Triple(35 to 61, false, false), Triple(35 to 61, true, false),
         )
-        for ((name, plan) in plans()) {
+        // Zebra left the donor's luma measure for the shared one (A3-11); covered below.
+        for ((name, plan) in plans() - "zebra") {
             for ((size, fill, mirrored) in surfaces) {
                 val (width, height) = size
                 val label = "$name ${width}x$height fill=$fill mirrored=$mirrored"
@@ -312,16 +313,15 @@ class NikonBitmapVulkanPixelParityTest {
         }
     }
 
-    @Test fun sharedNeutralZebraPolicyIsNotTheDonorOnSaturatedColour() {
-        // Nonvacuity: the gate above holds because the app passes the donor's luma policy; the
-        // shared neutral default (maximum component, ramp bias) paints the saturated red bar.
+    /** A3-11: Z stripes on the shared measure (maximum component), not the donor's luma. */
+    @Test fun zebraIsTheSharedNeutralPolicyNotTheDonorOnSaturatedColour() {
         val plan = plans().getValue("zebra")
         val donor = single({ DonorFeed() }, plan, 61, 35, aspectFill = false, mirrored = false).last()
         val adopted = single({ SharedFeed() }, plan, 61, 35, aspectFill = false, mirrored = false).last()
         val neutral = single(
             { SharedFeed(MonitorZebraMaskPolicy()) }, plan, 61, 35, aspectFill = false, mirrored = false,
         ).last()
-        assertArrayEquals(donor, adopted)
-        assertFalse(donor.contentEquals(neutral))
+        assertArrayEquals(neutral, adopted)
+        assertFalse(donor.contentEquals(adopted))
     }
 }
