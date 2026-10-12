@@ -135,6 +135,7 @@
 		520CDF33C1C22713AA3E4328 /* OpenCineWatch in Frameworks */ = {isa = PBXBuildFile; productRef = 178DF1758616937177B63BF7 /* OpenCineWatch */; };
 		AB7E9A926DB463CB0A2E51A9 /* SharedAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A98F6D85E2F0268F4C37FA1 /* SharedAppUITests.swift */; };
 		83C7A1BB02DD54D4E3E0A4C7 /* OpenCineAppUITesting in Frameworks */ = {isa = PBXBuildFile; productRef = B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */; };
+		A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */ = {isa = PBXBuildFile; productRef = 63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */; };
 		300E5F949AB41695CC76538F /* OpenCineWatch in Frameworks */ = {isa = PBXBuildFile; productRef = 178DF1758616937177B63BF7 /* OpenCineWatch */; };
 		E7EE7B3544C67B943E782CF8 /* NikonMediaDeliverySource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87DF525504BD912A28C21E4F /* NikonMediaDeliverySource.swift */; };
 		1E7BB623225B594944ABE027 /* NikonFrameioDeliveryPorts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8C047563B8391682432DAD /* NikonFrameioDeliveryPorts.swift */; };
@@ -362,6 +363,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		823003F875DF0491C4710777 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9A7E3B528B69AC98C5D4448A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -555,6 +562,7 @@
 			buildConfigurationList = 331C8087294A63A400263BE5 /* Build configuration list for PBXNativeTarget "RunnerTests" */;
 			buildPhases = (
 				331C807D294A63A400263BE5 /* Sources */,
+				823003F875DF0491C4710777 /* Frameworks */,
 				331C807F294A63A400263BE5 /* Resources */,
 			);
 			buildRules = (
@@ -563,6 +571,7 @@
 				331C8086294A63A400263BE5 /* PBXTargetDependency */,
 			);
 			name = RunnerTests;
+			packageProductDependencies = (63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */,);
 			productName = RunnerTests;
 			productReference = 331C8081294A63A400263BE5 /* RunnerTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -1458,6 +1467,7 @@
 			productName = OpenCineWatch;
 		};
 		B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineAppUITesting; };
+		63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineHostedAccessibility; };
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 97C146E61CF9000F007C117D /* Project object */;

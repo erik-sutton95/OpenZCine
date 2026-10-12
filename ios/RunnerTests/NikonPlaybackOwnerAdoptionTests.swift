@@ -5,6 +5,7 @@ import MonitorUI
 import Observation
 import OpenCineAppKit
 import OpenCineApple
+import OpenCineHostedAccessibility
 import OpenCineMedia
 import SwiftUI
 import UIKit
@@ -1016,12 +1017,13 @@ extension NikonPlaybackOwnerAdoptionTests {
         host.view.frame = window.bounds
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
-            return Self.playbackCompositionElements(host.view).contains {
-                $0.accessibilityLabel == "Favorite clip"
+            return HostedAccessibility.elements(in: host.view).contains {
+                $0.isAccessibilityElement && $0.accessibilityLabel == "Favorite clip"
             }
         }
         XCTAssertTrue(mounted)
-        let labels = Self.playbackCompositionElements(host.view).compactMap(\.accessibilityLabel)
+        let labels = HostedAccessibility.elements(in: host.view).filter(\.isAccessibilityElement)
+            .compactMap(\.accessibilityLabel)
         for required in [
             "Favorite clip", "Clip information", "Share clip", "Conform preview",
             "Mute", "Loop playback", "Previous clip", "Next clip",
@@ -1031,7 +1033,7 @@ extension NikonPlaybackOwnerAdoptionTests {
                 "Actual Nikon composition omits shared control: " + required)
         }
         let retainedFavorite = try XCTUnwrap(
-            Self.playbackCompositionElements(host.view).first {
+            HostedAccessibility.elements(in: host.view).filter(\.isAccessibilityElement).first {
                 $0.accessibilityLabel == "Favorite clip"
             })
         XCTAssertTrue(retainedFavorite.accessibilityActivate())
@@ -1183,22 +1185,6 @@ extension NikonPlaybackOwnerAdoptionTests {
         await library.dispose()
     }
 
-    private static func playbackCompositionElements(_ object: NSObject) -> [NSObject] {
-        if object.accessibilityElementsHidden { return [] }
-        if let view = object as? UIView, view.isHidden || view.alpha < 0.01 { return [] }
-        if object.isAccessibilityElement { return [object] }
-        if let elements = object.accessibilityElements as? [NSObject], !elements.isEmpty {
-            return elements.flatMap(playbackCompositionElements)
-        }
-        let count = object.accessibilityElementCount()
-        if count > 0, count != NSNotFound {
-            let elements = (0..<count).compactMap {
-                object.accessibilityElement(at: $0) as? NSObject
-            }
-            if !elements.isEmpty { return elements.flatMap(playbackCompositionElements) }
-        }
-        return ((object as? UIView)?.subviews ?? []).flatMap(playbackCompositionElements)
-    }
 }
 
 // SIMULATED local bytes, actual app gallery and its actual fullScreenCover opening callback.
@@ -1279,15 +1265,15 @@ extension NikonPlaybackOwnerAdoptionTests {
         // The actual visible clip action must enter Nikon's real opening callback.
         let found = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
-            return Self.galleryScrollObjects(host.view).contains {
-                Self.galleryScrollIdentifier($0)?.hasPrefix("monitor.media.clip.") == true
+            return HostedAccessibility.elements(in: host.view).contains {
+                HostedAccessibility.identifier($0)?.hasPrefix("monitor.media.clip.") == true
                     && $0.accessibilityFrame.intersects(scroll.convert(scroll.bounds, to: nil))
             }
         }
         XCTAssertTrue(found)
         let element = try XCTUnwrap(
-            Self.galleryScrollObjects(host.view).first {
-                Self.galleryScrollIdentifier($0)?.hasPrefix("monitor.media.clip.") == true
+            HostedAccessibility.elements(in: host.view).first {
+                HostedAccessibility.identifier($0)?.hasPrefix("monitor.media.clip.") == true
                     && $0.accessibilityFrame.intersects(scroll.convert(scroll.bounds, to: nil))
             })
         XCTAssertTrue(
@@ -1338,29 +1324,6 @@ extension NikonPlaybackOwnerAdoptionTests {
     private static func galleryScrollViews(_ view: UIView) -> [UIScrollView] {
         ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap(galleryScrollViews)
     }
-    private static func galleryScrollObjects(_ object: NSObject) -> [NSObject] {
-        if object.accessibilityElementsHidden { return [] }
-        if let view = object as? UIView, view.isHidden || view.alpha < 0.01 { return [] }
-        let children: [NSObject]
-        if let values = object.accessibilityElements as? [NSObject], !values.isEmpty {
-            children = values
-        } else {
-            let count = object.accessibilityElementCount()
-            if count > 0, count != NSNotFound {
-                children = (0..<count).compactMap {
-                    object.accessibilityElement(at: $0) as? NSObject
-                }
-            } else {
-                children = (object as? UIView)?.subviews ?? []
-            }
-        }
-        return [object] + children.flatMap(galleryScrollObjects)
-    }
-    private static func galleryScrollIdentifier(_ object: NSObject) -> String? {
-        let getter = NSSelectorFromString("accessibilityIdentifier")
-        guard object.responds(to: getter) else { return nil }
-        return object.perform(getter)?.takeUnretainedValue() as? String
-    }
 }
 
 @MainActor private final class PlaybackGalleryOffsetCapture {
@@ -1398,10 +1361,11 @@ extension NikonPlaybackOwnerAdoptionTests {
         defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKeyAndVisible() }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
-            return Self.deletionCompositionElements(host.view).contains { $0.accessibilityLabel == "Delete clip from camera" }
+            return HostedAccessibility.elements(in: host.view)
+                .contains { $0.accessibilityLabel == "Delete clip from camera" }
         }
         XCTAssertTrue(mounted, "Actual connected Nikon playback must compose the shared deletion service")
-        let button = try XCTUnwrap(Self.deletionCompositionElements(host.view)
+        let button = try XCTUnwrap(HostedAccessibility.elements(in: host.view)
             .first { $0.accessibilityLabel == "Delete clip from camera" })
         XCTAssertTrue(button.accessibilityActivate())
         let presented = await cachedCatalogSettled { host.presentedViewController != nil }
@@ -1414,10 +1378,11 @@ extension NikonPlaybackOwnerAdoptionTests {
         let destructive = try XCTUnwrap(dialog.actions.first { $0.style == .destructive }?.title)
         let rendered = await cachedCatalogSettled {
             dialog.view.layoutIfNeeded()
-            return Self.deletionCompositionElements(dialog.view).contains { $0.accessibilityLabel == destructive }
+            return HostedAccessibility.elements(in: dialog.view)
+                .contains { $0.accessibilityLabel == destructive }
         }
         XCTAssertTrue(rendered)
-        if let cancelButton = Self.deletionCompositionElements(dialog.view)
+        if let cancelButton = HostedAccessibility.elements(in: dialog.view)
             .first(where: { $0.accessibilityLabel == cancel }) {
             XCTAssertTrue(cancelButton.accessibilityActivate())
         } else {
@@ -1433,23 +1398,10 @@ extension NikonPlaybackOwnerAdoptionTests {
         fixture.model.connection = .disconnected
         let hidden = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
-            return !Self.deletionCompositionElements(host.view).contains { $0.accessibilityLabel == "Delete clip from camera" }
+            return !HostedAccessibility.elements(in: host.view)
+                .contains { $0.accessibilityLabel == "Delete clip from camera" }
         }
         XCTAssertTrue(hidden, "Offline cached playback must not advertise camera-card deletion")
         await library.dispose()
-    }
-
-    private static func deletionCompositionElements(_ object: NSObject) -> [NSObject] {
-        if object.accessibilityElementsHidden { return [] }
-        var values = [object]
-        if let elements = object.accessibilityElements as? [NSObject], !elements.isEmpty {
-            values += elements.flatMap(deletionCompositionElements)
-        } else if case let count = object.accessibilityElementCount(), count > 0, count != NSNotFound {
-            values += (0..<count).compactMap { object.accessibilityElement(at: $0) as? NSObject }
-                .flatMap(deletionCompositionElements)
-        } else if let view = object as? UIView {
-            values += view.subviews.flatMap(deletionCompositionElements)
-        }
-        return values
     }
 }
