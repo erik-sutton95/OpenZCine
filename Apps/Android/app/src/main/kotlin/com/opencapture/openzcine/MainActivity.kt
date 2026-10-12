@@ -1,31 +1,28 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkit.MonitorActivityLaunch
+import com.opencapture.opencine.appkit.rememberMonitorLaunchSplash
+import com.opencapture.opencine.appkit.MonitorKeepScreenAwake
+import com.opencapture.opencine.appkit.MonitorLaunchSplash
+import com.opencapture.opencine.appkit.MonitorAutomaticReportsOffer
+import com.opencapture.opencine.appkit.MonitorReportsOffer
+import com.opencapture.opencine.appkit.MonitorLaunchBrand
 import android.content.Intent
 import android.graphics.Color
 import android.net.nsd.NsdManager
 import android.os.Bundle
 import android.view.KeyEvent
-import android.view.WindowManager
 import android.widget.Toast
-import androidx.activity.SystemBarStyle
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -36,7 +33,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,7 +42,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +53,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import java.util.concurrent.atomic.AtomicBoolean
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -72,7 +66,6 @@ import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioDeliveryController
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
 import com.opencapture.openzcine.diagnostics.AppDiagnostics
-import com.opencapture.opencine.appkit.diagnostics.AutomaticReportsPrompt
 import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportDialog
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.openzcine.diagnostics.AndroidSystemSettingsActions
@@ -189,15 +182,11 @@ class MainActivity : ComponentActivity() {
     // PKCE state before it ever makes a network request.
     private val frameioRedirectCallback = MutableStateFlow<FrameioRedirectCallback?>(null)
 
-    /**
-     * Holds the solid system SplashScreen until the first Compose frame so we
-     * never flash a second (platform) logo — only [LaunchSplashOverlay] brands.
-     */
-    private val composeFirstFrameDrawn = AtomicBoolean(false)
+    /** Holds the solid system SplashScreen until the first Compose frame; the root brands from then on. */
+    private val launch = MonitorActivityLaunch()
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val splashScreen = installSplashScreen()
-        splashScreen.setKeepOnScreenCondition { !composeFirstFrameDrawn.get() }
+        installSplashScreen().setKeepOnScreenCondition { !launch.firstFrameDrawn }
         super.onCreate(savedInstanceState)
         // Load the Swift core (and with it OpenCine's NikonNative) before any camera session.
         SwiftCore.isAvailable
@@ -206,19 +195,6 @@ class MainActivity : ComponentActivity() {
         AppDiagnostics.install(applicationContext)
         publishFrameioRedirect(intent)
         if (BuildConfig.DEBUG) SwiftCoreSmoke.run()
-        // Camera-monitor chrome owns the whole panel, like the iOS shell:
-        // sticky-immersive system bars (hidden; a swipe reveals them
-        // transiently and they re-hide), forced-dark transparent bar styling
-        // so the transient overlay is never an opaque white band, and
-        // shortEdges cutout mode so the feed draws under the punch-hole (the
-        // cutout arrives as a safe-area inset for the zone map).
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-        )
-        window.isNavigationBarContrastEnforced = false
-        window.attributes.layoutInDisplayCutoutMode =
-            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         val demo = DemoHarness.demoLiveFeed(intent, applicationContext)
         val debugAssistEffects = DemoHarness.assistEffects(intent)
         val debugScopes = DemoHarness.scopeKinds(intent)
@@ -233,10 +209,11 @@ class MainActivity : ComponentActivity() {
             }
         // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
         DemoHarness.chromeEditMode(intent)?.let(operatorSettings::beginChromeEditing)
-        setContent {
-            // Drop the solid system hold as soon as Compose paints; the only
-            // branded splash is LaunchSplashOverlay (rounded logo + wordmark).
-            SideEffect { composeFirstFrameDrawn.set(true) }
+        // Camera-monitor chrome owns the whole panel, like the iOS shell: the shared launch draws
+        // edge to edge with forced-dark transparent bars (the transient overlay is never an opaque
+        // white band) and the feed under the punch-hole (the cutout arrives as a safe-area inset
+        // for the zone map); the bars themselves are sticky-immersive.
+        launch.setContent(this) {
             OpenZCineTheme {
                 val operatorHaptics =
                     rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
@@ -470,25 +447,12 @@ class MainActivity : ComponentActivity() {
                             decoder = ::multicamDecoder,
                         )
                     }
-                // Branded launch splash (iOS `LaunchSplashTiming`: fully
-                // visible 2250ms, then a 350ms ease-out fade). Debug demo and
-                // scripted launches skip it so screenshots stay deterministic.
-                var launchSplashVisible by
-                    rememberSaveable {
-                        // Debug settings deep-links skip splash so tab screenshots stay deterministic
-                        // (mirrors demo/scripted launches).
-                        mutableStateOf(
-                            debugSession == null &&
-                                pairingScript == null &&
-                                debugInitialSettingsTab == null,
-                        )
-                    }
-                LaunchedEffect(Unit) {
-                    if (launchSplashVisible) {
-                        delay(2_250)
-                        launchSplashVisible = false
-                    }
-                }
+                // Debug demo, scripted and settings deep-link launches skip the splash so
+                // screenshots stay deterministic.
+                val launchSplash =
+                    rememberMonitorLaunchSplash(
+                        enabled = debugSession == null && pairingScript == null && debugInitialSettingsTab == null,
+                    )
                 /**
                  * Saves a Nikon-confirmed profile before the temporary pairing
                  * session is released. The monitor is deliberately not entered
@@ -755,13 +719,7 @@ class MainActivity : ComponentActivity() {
                     if (wirelessSessionLive) wifiLowLatencyLock.acquire()
                     onDispose { wifiLowLatencyLock.release() }
                 }
-                LaunchedEffect(immersive, operatorSettings.keepScreenAwake.value) {
-                    if (operatorSettings.shouldKeepScreenAwake(immersive)) {
-                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    } else {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    }
-                }
+                MonitorKeepScreenAwake(operatorSettings.shouldKeepScreenAwake(immersive))
                 // Bind the HDMI capture device once its monitor session exists.
                 // CameraX pauses/resumes delivery with the activity lifecycle on
                 // its own; explicit close happens on monitor exit.
@@ -1615,22 +1573,13 @@ class MainActivity : ComponentActivity() {
                                 close = multicam::end,
                             )
                         }
-                        LaunchSplashOverlay(visible = launchSplashVisible)
-                        var showAutomaticPrompt by remember {
-                            mutableStateOf(AppDiagnostics.consent.shouldOfferAutomaticPrompt())
-                        }
-                        if (!launchSplashVisible && !multicam.presented && showAutomaticPrompt) {
-                            AutomaticReportsPrompt(
-                                product = AppDiagnostics.host.product,
-                                onPrivacy = { systemSettingsActions.openPrivacy() },
-                                onEnable = {
-                                    AppDiagnostics.reporting.setConsent(true)
-                                    showAutomaticPrompt = false
-                                },
-                                onNotNow = {
-                                    AppDiagnostics.reporting.setConsent(false)
-                                    showAutomaticPrompt = false
-                                },
+                        MonitorLaunchSplash(LAUNCH_BRAND, launchSplash)
+                        if (!launchSplash.visible && !multicam.presented) {
+                            MonitorAutomaticReportsOffer(
+                                MonitorReportsOffer(
+                                    AppDiagnostics.consent, AppDiagnostics.reporting, AppDiagnostics.host.product,
+                                    onPrivacy = { systemSettingsActions.openPrivacy() },
+                                ),
                             )
                         }
                     }
@@ -1768,80 +1717,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/**
- * The **only** branded cold-start splash (iOS `LaunchSplashContent`):
- * solid brand backdrop, full-bleed AppLogo clipped to continuous rounded
- * corners (size × 0.22), and the OpenZCine wordmark. The system SplashScreen
- * is a matching solid hold with a transparent icon so it never shows a
- * second square logo.
- */
-@Composable
-private fun LaunchSplashOverlay(visible: Boolean) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = androidx.compose.animation.EnterTransition.None,
-        exit = fadeOut(tween(durationMillis = 350)),
-    ) {
-        BoxWithConstraints(
-            Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xFF0A0908)),
-        ) {
-            val landscape = maxWidth >= maxHeight
-            // iOS: min(width * (landscape ? 0.16 : 0.28), 96)
-            val logoSize =
-                minOf(
-                    maxWidth * if (landscape) 0.16f else 0.28f,
-                    96.dp,
-                )
-            // iOS AppLogoMark continuous corner: size * 0.22
-            val logoCorner = logoSize * 0.22f
-            val wordmarkSp = if (landscape) 34.sp else 30.sp
-            @Composable
-            fun RoundedAppLogo() {
-                Image(
-                    painter = painterResource(R.drawable.openzcine_app_logo),
-                    contentDescription = "OpenZCine",
-                    contentScale = ContentScale.Crop,
-                    modifier =
-                        Modifier
-                            .size(logoSize)
-                            .clip(RoundedCornerShape(logoCorner)),
-                )
-            }
-            if (landscape) {
-                Row(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = maxOf(32.dp, maxWidth * 0.08f)),
-                    horizontalArrangement =
-                        Arrangement.spacedBy(
-                            maxOf(32.dp, maxWidth * 0.06f),
-                            Alignment.CenterHorizontally,
-                        ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RoundedAppLogo()
-                    Text(
-                        "OpenZCine",
-                        color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
-                        fontSize = wordmarkSp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            } else {
-                Column(
-                    Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically),
-                ) {
-                    RoundedAppLogo()
-                    Text(
-                        "OpenZCine",
-                        color = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
-                        fontSize = wordmarkSp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-        }
-    }
-}
+/** The launch splash (iOS `LaunchSplashContent`) over the matching solid system hold. */
+private val LAUNCH_BRAND =
+    MonitorLaunchBrand(
+        R.drawable.openzcine_app_logo, "OpenZCine",
+        background = androidx.compose.ui.graphics.Color(0xFF0A0908),
+        ink = androidx.compose.ui.graphics.Color(0xFFF2ECE2),
+        logoScale = ContentScale.Crop,
+    )
