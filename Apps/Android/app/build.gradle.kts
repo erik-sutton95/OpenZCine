@@ -288,6 +288,8 @@ dependencies {
     implementation(libs.opencine.camera.controls)
     // Shared prepared PCM sampling and decoded-audio source lifetime.
     implementation(libs.opencine.native.runtime)
+    // Shared Media3 player recipe, port, transport mapping and audio meter tap.
+    implementation(libs.opencine.media3)
     // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.
     implementation(libs.opencine.vulkan)
     // Keystore sealing for the camera Wi-Fi keys.

@@ -31,26 +31,6 @@
         return javaString(env, "OpenZCineCore swift-android/\(arch)")
     }
 
-    /// `SwiftCore.playbackAudioMeterStep(...)` — advances decoded-playback stereo
-    /// peaks through the shared dBFS conversion and attack/decay/peak-hold policy.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_playbackAudioMeterStep")
-    public func swiftCorePlaybackAudioMeterStep(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, previousPayload: jfloatArray?,
-        leftPeakLinear: jfloat, rightPeakLinear: jfloat, deltaTimeSeconds: jfloat
-    ) -> jfloatArray? {
-        let previous =
-            swiftFloats(
-                env, previousPayload, maximumCount: PlaybackAudioMeterWire.scalarCount)
-            ?? []
-        let next = PlaybackAudioMeterWire.advance(
-            previousPayload: previous,
-            leftPeakLinear: leftPeakLinear,
-            rightPeakLinear: rightPeakLinear,
-            deltaTimeSeconds: deltaTimeSeconds
-        )
-        return javaFloatArray(env, next.payload)
-    }
-
     // MARK: - Frame.io OAuth + request policy
 
     /// `SwiftCore.frameioBeginAuthorization(clientID, redirectURI): String?`
