@@ -110,4 +110,40 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         model.clearCameraSessionState(resetConnection: true)
         XCTAssertEqual(model.cameraState, .blank)
     }
+
+    // MARK: A1-04
+
+    /// A1-04: a vignette and grain sat above the processed raster, shading corners and assist
+    /// paint. The live picture adds no light or shade of its own: with no frame it is uniform.
+    func testThePictureAddsNoTextureOverTheRaster() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "F03-A1-04-\(UUID().uuidString)"))
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        for tool in MonitorAssistTool.allCases {
+            model.assist.set(tool, visible: false, context: .liveView)
+        }
+        let renderer = ImageRenderer(
+            content: LiveFeedModule(viewportWidth: 320, fixedContentHeight: 180)
+                .environment(model)
+                .frame(width: 320, height: 180))
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        let width = image.width
+        let height = image.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { buffer in
+            let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        var lowest = UInt8.max
+        var highest = UInt8.min
+        for (index, value) in bytes.enumerated() where index % 4 != 3 {
+            lowest = min(lowest, value)
+            highest = max(highest, value)
+        }
+        XCTAssertLessThanOrEqual(
+            Int(highest) - Int(lowest), 1, "the picture must not texture or shade the raster")
+    }
 }

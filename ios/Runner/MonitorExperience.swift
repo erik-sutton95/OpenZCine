@@ -233,8 +233,6 @@ struct LiveFeedModule: View {
                     Color.black
                     rotatedFeedImage(
                         width: imageWidth, height: imageHeight, rotation: feedRotation)
-                    FeedVignette()
-                    FeedGrain()
                 }
                 .frame(width: imageWidth, height: imageHeight, alignment: .leading)
                 .position(x: imageWidth / 2, y: imageHeight / 2)
@@ -1108,38 +1106,5 @@ struct LiveFocusBoxOverlay: View, Equatable {
         return liveFocusBoxRect(
             box, focus: focus, in: size, desqueeze: desqueeze, mirrored: mirrored,
             mirroredVertically: mirroredVertically)
-    }
-}
-
-struct FeedVignette: View {
-    var body: some View {
-        RadialGradient(
-            colors: [.clear, .black.opacity(0.46)],
-            center: .center,
-            startRadius: 70,
-            endRadius: 620
-        )
-        .blendMode(.multiply)
-        .allowsHitTesting(false)
-    }
-}
-
-struct FeedGrain: View {
-    var body: some View {
-        Canvas { context, size in
-            // Deterministic pseudo-random speckle positions relative to the canvas size.
-            for index in 0..<180 {
-                let x = CGFloat((index * 73) % 791) / 791 * size.width
-                let y = CGFloat((index * 47) % 367) / 367 * size.height
-                let opacity = 0.016 + Double(index % 5) * 0.004
-                context.fill(
-                    Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
-                    with: .color(.white.opacity(opacity))
-                )
-            }
-        }
-        // Rasterize once per layout pass — the grain is static relative to the feed rect.
-        .drawingGroup()
-        .allowsHitTesting(false)
     }
 }
