@@ -223,6 +223,21 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             Int(highest) - Int(lowest), 1, "the picture must not texture or shade the raster")
     }
 
+    // MARK: A1-56
+
+    /// A1-56: a tap before any live-view header sent the camera a point in an invented
+    /// 1000-wide space. With no coordinate space from the camera the tap is refused, and the
+    /// monitor says why.
+    func testATapBeforeTheCameraStatesItsCoordinateSpaceIsRefused() {
+        let model = NativeAppModel()
+        model.isMonitorPresented = true
+        XCTAssertNil(model.liveViewFocus)
+
+        model.setFocusPoint(at: CGPoint(x: 50, y: 50), feedSize: CGSize(width: 160, height: 90))
+
+        XCTAssertEqual(model.monitorNote, "Focus point waits for the camera's live view.")
+    }
+
     // MARK: A1-24, A1-25
 
     /// A1-24: a volume key or Bluetooth remote started a take under the interface lock and in

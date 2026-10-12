@@ -9623,8 +9623,18 @@ final class NativeAppModel {
         // forwards and the haptic stands.
         if videoSource == .relay, !relayHoldsControl { return }
         guard feedSize.width > 0, feedSize.height > 0 else { return }
-        // Light tap confirming the AF point moved; after the guards so locked taps stay silent.
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // The camera's coordinate space: the latest live-view header, then the last one the
+        // camera reported (which outlives a switch to a source that carries no header). Before
+        // either, a tap has no camera point; only the SIMULATED demo assumes one (A1-56).
+        guard
+            let coordinateWidth = liveViewFocus?.coordinateWidth
+                ?? lastFocusCoordinateSpace?.width ?? (isDemoSession ? 1000 : nil)
+        else {
+            showMonitorNotice("Focus point waits for the camera's live view.")
+            return
+        }
+        // Light tap confirming the AF point moved; after the guards so refused taps stay silent.
+        if preferences.hapticsEnabled { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         // What the operator touched is the PRESENTED picture, which is not the whole frame: the
         // raster carries the de-squeeze as a centred scale (`LiveFrameRaster.feedScale`), so an
         // anamorphic setup paints into a narrower sub-rect with dead margins either side.
@@ -9641,11 +9651,6 @@ final class NativeAppModel {
             flippedVertically: liveFeedMirroredVertically)
         let normalizedX = cameraPoint.x
         let normalizedY = cameraPoint.y
-        // Coordinate space from the latest live-view header, then the last one the camera reported
-        // (which outlives a switch to a source that carries no header), then a 16:9 default before
-        // any frame has stated one.
-        let coordinateWidth =
-            liveViewFocus?.coordinateWidth ?? lastFocusCoordinateSpace?.width ?? 1000
         let coordinateHeight =
             liveViewFocus?.coordinateHeight ?? lastFocusCoordinateSpace?.height
             ?? Int((Double(coordinateWidth) * feedSize.height / feedSize.width).rounded())
