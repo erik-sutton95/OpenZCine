@@ -1,4 +1,5 @@
 import Foundation
+import enum OpenCineMedia.ScopeDisplayScale
 
 /// Whether view-assist tool visibility applies to the live monitor or media playback.
 public enum ViewAssistContext: String, Codable, Equatable, Sendable {
@@ -824,11 +825,16 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             case native = "Native"
             case ire = "IRE"
 
-            /// Operator-facing value of a normalized threshold.
+            /// Operator-facing value of a normalized threshold. A native code is the one the
+            /// shared zebra compares on this camera's transfer and ceiling.
             public func displayValue(for ire: Double, mapping: ExposureSignalMapping) -> Int {
                 switch self {
                 case .ire: Int(ire.rounded())
-                case .native: Int(mapping.signalNative(monitorPercent: ire).rounded())
+                case .native:
+                    Int(
+                        (OpenCineMedia.ScopeDisplayScale.signalNative(
+                            monitorPercent: ire, transfer: mapping.curve.monitorTransfer,
+                            clipByte: mapping.clipByte) * 255).rounded())
                 }
             }
 
@@ -838,7 +844,10 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             {
                 switch self {
                 case .ire: Double(value)
-                case .native: mapping.monitorPercent(signalNative: Double(value))
+                case .native:
+                    OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                        Double(min(255, max(0, value))) / 255,
+                        transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte)
                 }
             }
         }

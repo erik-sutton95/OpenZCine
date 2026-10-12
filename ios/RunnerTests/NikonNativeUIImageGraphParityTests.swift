@@ -10,7 +10,9 @@ import enum OpenCineMedia.MonitorZebraPaint
 
 /// SIMULATED actual PNG decode and CI evaluation; no camera or physical qualification.
 @MainActor final class NikonNativeUIImageGraphParityTests: XCTestCase {
-    func testDecodedColoredZebraPreservesDonorLumaRampAndFixedNativeBand() throws {
+    /// A1-40: Nikon zebra is the shared zebra (hottest-channel highlight to the clip shelf,
+    /// luma midtone band) on the camera's transfer and clip, as Pocket and Insta paint it.
+    func testDecodedColoredZebraPaintsTheSharedZones() throws {
         let image = try decodedFixture()
         let source = try XCTUnwrap(CIImage(image: image, options: [.colorSpace: NSNull()]))
         let contexts = [CIFormat.BGRA8, .RGBAf].map { format in
@@ -33,8 +35,15 @@ import enum OpenCineMedia.MonitorZebraPaint
                     for zone in 0..<3 {
                         settings.highlightEnabled = zone != 1
                         settings.midtoneEnabled = zone != 0
-                        let donor = FrozenNikonRuntimeEffects.applyZebra(
-                            over: source, source: source, settings: settings, extent: source.extent)
+                        let donor = MonitorImageCompositor.applyZebra(
+                            over: source, source: source, extent: source.extent,
+                            zebra: MonitorZebraSpec(
+                                highlightEnabled: settings.highlightEnabled,
+                                highlightIRE: threshold,
+                                highlightColor: MonitorRGB(color.rgb),
+                                midtoneEnabled: settings.midtoneEnabled, midtoneIRE: threshold,
+                                midtoneColor: MonitorRGB(settings.midtoneColor.rgb)),
+                            transfer: .srgb, clipByte: 255)
                         let composed = ImageEffectsCompositor.applyZebra(
                             over: source, source: source, settings: settings, extent: source.extent)
                         let before = pixels(donor, context: context)
