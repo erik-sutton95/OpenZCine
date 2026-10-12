@@ -187,6 +187,56 @@ final class MediaDeliveryCompositionTests: XCTestCase {
         }
     }
 
+    /// A2-52: the app's one root share presenter shows the sheet above a photo or player cover,
+    /// also when the share finishes while the cover is still arriving, and the sheet's completion
+    /// acknowledges its share once and releases its lease.
+    @MainActor
+    func testTheRootPresenterSharesAboveACoverThatIsStillArriving() async throws {
+        let coordinator = MonitorDeliveryCoordinator(
+            exports: .init(
+                root: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "SIMULATED-presenter-\(UUID().uuidString)", isDirectory: true)))
+        defer {
+            coordinator.close()
+            try? FileManager.default.removeItem(at: coordinator.exports.root)
+        }
+        let host = UIHostingController(
+            rootView: Color.black.monitorDeliverySharePresenter(coordinator.lifetime))
+        let (window, originalKeyWindow) = try mount(host, size: CGSize(width: 402, height: 874))
+        defer { retire(window, restoring: originalKeyWindow) }
+        try await Task.sleep(for: .milliseconds(300))
+        let source = coordinator.exports.root.appendingPathComponent("SIMULATED.mp4")
+        try FileManager.default.createDirectory(
+            at: coordinator.exports.root, withIntermediateDirectories: true)
+        try Data([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]).write(to: source)
+        let staged = try coordinator.exports.stage([source])
+        let lease = try XCTUnwrap(staged.stagingCleanupURL)
+        // A player or photo cover over the root, still animating in when the share is ready.
+        let cover = UIViewController()
+        cover.modalPresentationStyle = .fullScreen
+        host.present(cover, animated: true)
+        coordinator.begin { _, _ in
+            .share(urls: staged.urls, metadataText: "SIMULATED.mp4", stagingCleanupURL: lease)
+        }
+        var shown = false
+        for _ in 0..<200 where !shown {
+            try await Task.sleep(for: .milliseconds(25))
+            shown = cover.presentedViewController is UIActivityViewController
+        }
+        XCTAssertTrue(shown, "The sheet shows above the cover")
+        let sheet = try XCTUnwrap(cover.presentedViewController as? UIActivityViewController)
+        XCTAssertNotNil(coordinator.lifetime.state.share)
+        sheet.completionWithItemsHandler?(nil, false, nil, nil)
+        sheet.completionWithItemsHandler?(nil, false, nil, nil)
+        XCTAssertNil(coordinator.lifetime.state.share, "The sheet's completion acknowledges its share")
+        for _ in 0..<200 where FileManager.default.fileExists(atPath: lease.path) {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lease.path))
+        sheet.dismiss(animated: false)
+        cover.dismiss(animated: false)
+    }
+
     private var geometries: [CGSize] {
         [CGSize(width: 402, height: 874), CGSize(width: 874, height: 402)]
     }
