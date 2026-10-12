@@ -22,7 +22,7 @@ public data class InfrastructureSearchReport(
  * Operator-facing sentence for a miss.
  *
  * Short, and in the operator's words. The first iOS cut named the subnet in dotted notation,
- * spelled the camera's menus out as arrow chains and explained port 15740 — all true, and none
+ * spelled the camera's menus out as arrow chains and explained port 15740: all true, and none
  * of it what somebody standing in front of a camera needs. One thing to go and do, and the
  * address stays in the log where it is actually useful.
  *
@@ -45,7 +45,7 @@ public fun InfrastructureMissReason.operatorCopy(cameraName: String? = null): St
             // not bridge: same network, same subnet, addresses from the same DHCP server, and
             // no packet between them. Days went into that one, with the app saying
             // "Searching…" throughout. Naming a band an operator can switch off is worth it.
-            "Nothing on this network answered. Check both are on the same Wi‑Fi — a guest network or a 6 GHz band can keep them apart."
+            "Nothing on this network answered. Check both are on the same Wi‑Fi: a guest network or a 6 GHz band can keep them apart."
         is InfrastructureMissReason.HostsVisibleNoPtp ->
             "Other devices answer here, but $body doesn't. On the camera, start Connect to computer."
         is InfrastructureMissReason.CameraNotFound ->
