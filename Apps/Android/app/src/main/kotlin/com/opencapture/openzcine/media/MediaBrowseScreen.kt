@@ -1,11 +1,12 @@
 package com.opencapture.openzcine.media
 
-import com.opencapture.opencine.cameracontrols.MonitorOperatorCatalogScreen
+import com.opencapture.opencine.cameracontrols.MonitorOperatorMediaDelivery
+import com.opencapture.opencine.cameracontrols.MonitorOperatorMediaPresentation
+import com.opencapture.opencine.cameracontrols.MonitorOperatorMediaScreen
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryPresentation
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryEmpty
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilters
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFileFacts
-import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryNavigation
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilterAction
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryStorage
 import com.opencapture.opencine.appkit.MonitorMediaGalleryOperations
@@ -19,19 +20,14 @@ import com.opencapture.opencine.appkit.MonitorMediaLibraryActionToken
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorMediaFilterChoice
 import com.opencapture.monitorui.MonitorThumbnailSize
-import com.opencapture.monitorui.MonitorMediaSelectionConfiguration
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonMediaDeletionPlan
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,7 +61,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -323,9 +318,6 @@ internal fun MediaBrowseScreen(
     val libraryActions = remember(cameraID, mediaService, offlineCameraIDs, libraryIndex, cacheStore) {
         NikonMediaLibraryActions(libraryIndex, cacheStore, { library }, { libraryCodec })
     }
-    var deletionAction by remember(cameraID, mediaService, libraryIndex) {
-        mutableStateOf<NikonMediaLibraryActions.Capture?>(null)
-    }
     val emptyLibraryState = remember(cameraID) { kotlinx.coroutines.flow.MutableStateFlow(MonitorMediaLibraryState<NikonLibraryClip>()) }
     val libraryState by (library?.state ?: emptyLibraryState).collectAsState()
     DisposableEffect(library, mediaService) {
@@ -367,24 +359,10 @@ internal fun MediaBrowseScreen(
             internetHopState,
             rejoinedConnectionObserved,
         )
-    // Connection owns source. Category / layout / sort still restore from prefs.
+    // Connection owns source. Category / layout / sort / thumbnail size are the library's, persisted.
     val librarySource = mediaLibrarySourceForConnection(effectiveCameraConnected)
-    var options by
-        remember(cameraID) {
-            val restored = libraryIndex.viewOptions(MediaLibrarySource.CAMERA)
-            mutableStateOf(
-                restored.copy(
-                    source = librarySource,
-                    category = initialCategory ?: restored.category,
-                ),
-            )
-        }
-    LaunchedEffect(librarySource) {
-        if (options.source != librarySource) {
-            options = options.copy(source = librarySource)
-        }
-    }
-    var favorites by remember(cameraID) { mutableStateOf(emptySet<String>()) }
+    // Videos from cinema, Photos from photography: applied once to the first library of this open.
+    var pendingCategory by remember(cameraID) { mutableStateOf(initialCategory) }
     // Offline multi-camera library: object key → owning cache bucket cameraID.
     var offlineClipOwners by
         remember(cameraID, offlineCameraIDs) { mutableStateOf(emptyMap<String, String>()) }
@@ -393,50 +371,20 @@ internal fun MediaBrowseScreen(
     fun clipKey(clip: NikonMediaClipRecord): String = clip.libraryKey(ownerCameraID(clip))
     var state by remember(cameraID) { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var reloadKey by remember { mutableIntStateOf(0) }
-    // Camera-card deletion in flight: the listing effect stays cancelled while
-    // non-null so an already-enumerated page cannot re-add the deleted rows.
-    var pendingDeletion by remember(cameraID) { mutableStateOf<List<NikonMediaClipRecord>?>(null) }
-    // Deletion progress (completed, total) while a batch delete runs — drives the progress bar
-    // and keeps the grid steady until the run finishes (the listing restarts once, at the end).
-    var deletionProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    // Shots the operator selected (smaller than the file total when RAW+JPEG pairs / masters /
-    // backups ride along) — kept so the progress bar can explain the inflated file count.
-    var deletionSelectedCount by remember { mutableStateOf(0) }
-    var deleteConfirmTargets by remember { mutableStateOf<List<NikonMediaClipRecord>?>(null) }
-    var playingClip by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
-    var viewingPhoto by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
-    var openedPhotoLibrary by remember { mutableStateOf<MonitorMediaLibraryModel<NikonLibraryClip>?>(null) }
-    var photoOpening by remember { mutableStateOf<MonitorMediaGalleryOpen<NikonLibraryClip>?>(null) }
-    var seriesFrames by remember { mutableStateOf<List<MonitorMediaRecord<NikonLibraryClip>>>(emptyList()) }
-    // The representative of a burst series whose members are being browsed (Manage series).
-    var seriesRepresentative by remember { mutableStateOf<NikonMediaClipRecord?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var autoPlayHandled by remember { mutableStateOf(false) }
+    var autoPlay by remember { mutableStateOf<MonitorMediaGalleryOpen<NikonLibraryClip>?>(null) }
     var deliverySelection by remember(cameraID) { mutableStateOf<List<NikonLibraryClip>>(emptyList()) }
     var deliveryAdmission by remember(cameraID) { mutableStateOf<MonitorMediaLibraryActionToken?>(null) }
     var deliveryHost by remember { mutableStateOf<NikonMediaDeliveryHost?>(null) }
     val deliveryDisplay by mediaDeliveryCoordinator.display.collectAsState()
     val shareInProgress = deliveryDisplay.overlay != null
-    var shareMessage by remember { mutableStateOf<String?>(null) }
     var filters by remember(cameraID) { mutableStateOf(MediaLibraryFilters()) }
     var browseStorageSlots by
         remember(cameraID) { mutableStateOf<List<CameraStorageSlotStatus>?>(null) }
 
-    fun updateOptions(updated: MediaLibraryViewOptions) {
-        if (shareInProgress) return
-        // Never let category/layout edits re-stick a stale source preference.
-        val coerced = updated.copy(source = librarySource)
-        options = coerced
-        libraryIndex.saveViewOptions(coerced)
-        shareMessage = null
-    }
-
     fun updateFilters(updated: MediaLibraryFilters) {
         filters = updated
-    }
-
-    fun toggleStorageSlot(storageId: Long) {
-        updateFilters(filters.togglingStorageSlot(storageId))
     }
 
     fun exitSelection() {
@@ -449,18 +397,8 @@ internal fun MediaBrowseScreen(
         if (shareInProgress && outgoing != null) outgoing.cancel() else exitSelection()
     }
 
-    LaunchedEffect(cameraID, offlineCameraIDs) {
-        favorites =
-            withContext(Dispatchers.IO) {
-                val ids =
-                    offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
-                ids.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
-            }
-    }
-
     LaunchedEffect(cameraID, mediaService, offlineCameraIDs, librarySource,
-        effectiveCameraConnected, reloadKey, cacheRevision, pendingDeletion != null) {
-        if (pendingDeletion != null) return@LaunchedEffect
+        effectiveCameraConnected, reloadKey, cacheRevision) {
         // The old listing retires before local IO can suspend; deletion retires it at request capture.
         library?.let { previous ->
             previous.binding?.let { librarySourceOwner?.retireBrowse(it) }
@@ -492,8 +430,10 @@ internal fun MediaBrowseScreen(
                 cacheScanning = MonitorMediaCacheScanning.BACKGROUND,
                 catalogPersistence = MonitorMediaCatalogPersistence.LISTING_COMPLETE_OR_NON_CANCEL_FAILURE,
                 initialCatalog = MediaCatalog(), initialRecords = initialRows.map(codec::record),
-                catalogBase = MonitorMediaCatalogBase.FRESH_LISTING)
+                catalogBase = MonitorMediaCatalogBase.FRESH_LISTING,
+                viewOptions = libraryIndex.mediaPreferences(cameraID))
             owner.visibility(MonitorMediaLibraryVisibility.ALL_RECORDS)
+            pendingCategory?.let { owner.filter(category = MonitorMediaCategoryFilter.valueOf(it.name)); pendingCategory = null }
             libraryCodec = codec; librarySourceOwner = connectedSource; library = owner
         } else if (librarySourceOwner !== connectedSource) {
             // Producer replacement also replaces its pure binding-capture codec.
@@ -541,63 +481,12 @@ internal fun MediaBrowseScreen(
                     val first = snapshot.records.firstOrNull {
                         it.payload.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY
                     }
-                    if (first != null) {
-                        openedPhotoLibrary = actual
-                        photoOpening = MonitorMediaGalleryOpen(first,
-                            snapshot.records.filter { it.facts.playbackEligible != false &&
-                                (it.facts.presentationKind ?: it.asset.kind) == first.asset.kind }, actual.actionToken)
-                        playingClip = first.payload.clip
-                    }
+                    if (first != null) autoPlay = MonitorMediaGalleryOpen(first,
+                        snapshot.records.filter { it.facts.playbackEligible != false &&
+                            (it.facts.presentationKind ?: it.asset.kind) == first.asset.kind }, actual.actionToken)
                 }
             }
         }
-    }
-
-    // Runs one confirmed camera-card deletion after the listing effect above
-    // cancelled: delete each object on the card, then purge every local trace
-    // the list scan could resurrect an item from — cached bytes, resumable
-    // partials, the index row, and the favorite. Clearing [pendingDeletion]
-    // restarts the listing so the fresh enumeration confirms the deletions.
-    LaunchedEffect(pendingDeletion) {
-        val targets = pendingDeletion ?: return@LaunchedEffect
-        val action = deletionAction ?: return@LaunchedEffect
-        // The existing stop joins the native pump before the first admitted delete.
-        withContext(Dispatchers.IO) {
-            if (SwiftCore.isAvailable) connectionOwner?.let(NikonNative::sessionStopMediaTransfer)
-        }
-        if (action.isCurrent) deletionProgress = 0 to targets.size
-        action.deleteBatch(targets.map { NikonLibraryClip(ownerCameraID(it), it) },
-            deleteObject = { value ->
-                withContext(Dispatchers.IO) {
-                    SwiftCore.isAvailable && connectionOwner != null &&
-                        NikonNative.sessionDeleteObject(connectionOwner, value.clip.handle.toInt())
-                }
-            }, onProgress = { completed, total -> deletionProgress = completed to total })
-        if (!action.isCurrent || deletionAction !== action) return@LaunchedEffect
-        deletionProgress = null
-        favorites = withContext(Dispatchers.IO) {
-            val ids = offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID)
-            ids.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
-        }
-        if (!action.isCurrent || deletionAction !== action) return@LaunchedEffect
-        exitSelection()
-        pendingDeletion = null; deletionAction = null
-    }
-
-    fun requestDeletion(selection: List<NikonMediaClipRecord>) {
-        if (selection.isEmpty() || pendingDeletion != null) return
-        val catalog = (state as? BrowseState.Loaded)?.clips.orEmpty()
-        deleteConfirmTargets = null
-        viewingPhoto = null
-        deletionSelectedCount = selection.size
-        val targets = NikonMediaDeletionPlan.of(catalog, selection, ::ownerCameraID).targets
-        deletionAction = libraryActions.beginDeletion(targets.map { NikonLibraryClip(ownerCameraID(it), it) }) {
-            library?.let { owner ->
-                owner.binding?.let { librarySourceOwner?.retireBrowse(it) }
-                owner.close()
-            }
-        }
-        pendingDeletion = targets
     }
 
     val loadedClips = (state as? BrowseState.Loaded)?.clips.orEmpty()
@@ -617,29 +506,31 @@ internal fun MediaBrowseScreen(
             )
         if (retained != filters) filters = retained
     }
+    // The library's records carry the favorite flag (local favorites and mirrored star writes).
+    val favorites = remember(libraryState.records) {
+        libraryState.records.filter { it.favorite }.mapTo(linkedSetOf()) { it.payload.clip.libraryKey(it.payload.bucket) }
+    }
     // A captured neutral pass supplies options, sorted survivors and grid representatives together.
-    val projection = remember(loadedClips, options.category, favorites, cameraID,
-        options.sortOrder, filters, offlineClipOwners, libraryState.records) {
+    val projection = remember(loadedClips, libraryState.category, favorites, cameraID,
+        libraryState.sort, filters, offlineClipOwners, libraryState.records) {
         val actualIDs = libraryState.records.associate {
             it.payload.clip.libraryKey(it.payload.bucket) to it.asset.id
         }
-        NikonAppGalleryProjection(loadedClips, actualIDs, options.category, favorites,
-            cameraID, options.sortOrder, filters, libraryKey = ::clipKey, ownerOf = ::ownerCameraID)
+        NikonAppGalleryProjection(loadedClips, actualIDs, MediaLibraryCategory.valueOf(libraryState.category.name), favorites,
+            cameraID, libraryState.sort, filters, libraryKey = ::clipKey, ownerOf = ::ownerCameraID)
     }
     val displayedClips = projection.displayedClips
     val filterOptions = projection.filterOptions
     // Only an operator navigation prunes, never a discovery batch: chips derived from a listing
     // that is still streaming in must not clear a selection the operator just made.
-    LaunchedEffect(options.category, librarySource) {
+    LaunchedEffect(libraryState.category, librarySource) {
         val retained = filters.retainingOfferedChips(filterOptions)
         if (retained != filters) filters = retained
     }
-    val gridClips = projection.gridClips
     val burstSeries = projection.legacyGroups
     val burstByRepresentative = remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
     fun burstMembers(representative: NikonMediaClipRecord): List<NikonMediaClipRecord> =
         projection.members(representative, ::clipKey)
-    fun hasRawSibling(clip: NikonMediaClipRecord): Boolean = projection.hasRawSibling(clip, ::clipKey)
     val selectedClips = deliverySelection.map { it.clip }
     val selectedLut = assists.lut
     val selectedLutLabel =
@@ -648,32 +539,23 @@ internal fun MediaBrowseScreen(
             is FeedLutSelection.Stored -> lutLibrary.displayName(selectedLut.value)
         }
 
-    // Re-merge favorites across offline buckets so the star stays accurate after a change.
-    fun mergedFavorites(updated: Set<String>): Set<String> =
-        if (offlineCameraIDs.isEmpty()) {
-            updated
-        } else {
-            offlineCameraIDs.flatMap { id -> libraryIndex.favoriteIDs(id) }.toSet()
-        }
-
     // The heart is a local flag, as in Pocket and Insta. It never writes the camera's star rating:
     // that is the operator's data on the card. A star write still mirrors into the favorites.
     fun toggleFavorite(clip: NikonMediaClipRecord) {
         val value = NikonLibraryClip(ownerCameraID(clip), clip)
-        val action = libraryActions.capture(listOf(value))
-        val updated = action.toggleFavorite(value)
-        if (updated != null && action.isCurrent) favorites = mergedFavorites(updated)
+        libraryActions.capture(listOf(value)).toggleFavorite(value)
     }
 
     // Mirrors a camera star write (viewer/player, seed-read or set) into the local favorite set
     // so the Favorites tab surfaces rated shots. iOS `mirrorRatingIntoIndex`.
-    fun captureRatingCompletion(clip: NikonMediaClipRecord): NikonMediaRatingCompletion {
-        val value = NikonLibraryClip(ownerCameraID(clip), clip)
-        return libraryActions.captureRatingCompletion(value) { favorites = mergedFavorites(it) }
-    }
+    fun captureRatingCompletion(clip: NikonMediaClipRecord): NikonMediaRatingCompletion =
+        libraryActions.captureRatingCompletion(NikonLibraryClip(ownerCameraID(clip), clip)) {}
     fun mirrorRating(clip: NikonMediaClipRecord, stars: Int) { captureRatingCompletion(clip).mirror(stars) }
 
-    fun galleryOperations(actual: MonitorMediaLibraryModel<NikonLibraryClip>): MonitorMediaGalleryOperations<NikonLibraryClip> = MonitorMediaGalleryOperations<NikonLibraryClip>(
+    /** [presentation] keeps a still viewer's own deletion from closing it when the gallery relists. */
+    fun galleryOperations(actual: MonitorMediaLibraryModel<NikonLibraryClip>,
+        presentation: MonitorOperatorMediaPresentation<NikonLibraryClip>? = null,
+    ): MonitorMediaGalleryOperations<NikonLibraryClip> = MonitorMediaGalleryOperations<NikonLibraryClip>(
         favorite = { record -> toggleFavorite(record.payload.clip) },
         access = { record -> MonitorMediaGalleryAccess(
             share = !shareInProgress,
@@ -697,62 +579,27 @@ internal fun MediaBrowseScreen(
                 val nativeOwner = connectionOwner
                 val browseBinding = actual.binding
                 val browseSource = librarySourceOwner
-                // SDK drain stays source-specific; the Library retires all gallery work itself.
-                if (authority.isCurrent && action.isCurrent) withContext(Dispatchers.IO) {
-                    if (SwiftCore.isAvailable && authority.isCurrent) nativeOwner?.let(NikonNative::sessionStopMediaTransfer)
-                }
-                action.deleteBatch(targets, deleteObject = { value ->
-                    withContext(Dispatchers.IO) {
-                        SwiftCore.isAvailable && nativeOwner != null &&
-                            NikonNative.sessionDeleteObject(nativeOwner, value.clip.handle.toInt())
+                suspend fun run() {
+                    // SDK drain stays source-specific; the Library retires all gallery work itself.
+                    if (authority.isCurrent && action.isCurrent) withContext(Dispatchers.IO) {
+                        if (SwiftCore.isAvailable && authority.isCurrent) nativeOwner?.let(NikonNative::sessionStopMediaTransfer)
                     }
-                }, onProgress = { _, _ -> }, accepted = authority,
-                    preparation = MonitorMediaDeletionPreparation.RETIRE_GALLERY,
-                    prepare = { browseBinding?.let { browseSource?.retireBrowse(it) } },
-                    afterFinish = { completed ->
-                        if (completed.isCompleting && action.sourceIsCurrent) {
-                            val updated = withContext(Dispatchers.IO) {
-                                (offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID))
-                                    .flatMap { libraryIndex.favoriteIDs(it) }.toSet()
-                            }
-                            if (completed.isCompleting && action.sourceIsCurrent) {
-                                favorites = updated
-                                actual.relist(after = completed)
-                            }
+                    action.deleteBatch(targets, deleteObject = { value ->
+                        withContext(Dispatchers.IO) {
+                            SwiftCore.isAvailable && nativeOwner != null &&
+                                NikonNative.sessionDeleteObject(nativeOwner, value.clip.handle.toInt())
                         }
-                    })
+                    }, onProgress = { _, _ -> }, accepted = authority,
+                        preparation = MonitorMediaDeletionPreparation.RETIRE_GALLERY,
+                        prepare = { browseBinding?.let { browseSource?.retireBrowse(it) } },
+                        afterFinish = { completed ->
+                            if (completed.isCompleting && action.sourceIsCurrent) actual.relist(after = completed)
+                        })
+                }
+                if (presentation != null) presentation.retaining { run() } else run()
             },
         ),
     )
-
-    fun open(clip: NikonMediaClipRecord, captured: MonitorMediaGalleryOpen<NikonLibraryClip>? = null) {
-        val actual = library ?: return
-        val record = captured?.record ?: actual.state.value.records.firstOrNull {
-            it.payload.clip.libraryKey(it.payload.bucket) == clipKey(clip)
-        } ?: return
-        val opening = captured ?: MonitorMediaGalleryOpen(record,
-            actual.displayedRecords.filter { it.facts.playbackEligible != false &&
-                (it.facts.presentationKind ?: it.asset.kind) == (record.facts.presentationKind ?: record.asset.kind) }, actual.actionToken)
-        if (!actual.isCurrent(opening.admission)) return
-        openedPhotoLibrary = actual
-        photoOpening = opening
-        // A burst representative opens the series view (its other frames are hidden in the grid).
-        if (burstByRepresentative[clipKey(clip)] != null) {
-            seriesRepresentative = clip
-            seriesFrames = burstMembers(clip).mapNotNull { member -> actual.state.value.records.firstOrNull {
-                it.payload.clip.libraryKey(it.payload.bucket) == clipKey(member)
-            } }
-            return
-        }
-        when (clip.contentKind) {
-            NikonMediaContentKind.PLAYABLE_PROXY -> playingClip = clip
-            NikonMediaContentKind.STILL_PHOTO -> viewingPhoto = clip
-            NikonMediaContentKind.R3D_MASTER ->
-                shareMessage = "${clip.filename} is a camera master; preview is unavailable."
-            NikonMediaContentKind.UNSUPPORTED ->
-                shareMessage = "${clip.filename} has no Android preview yet."
-        }
-    }
 
     fun presentNativeDelivery() {
         val actual = library ?: return
@@ -783,34 +630,21 @@ internal fun MediaBrowseScreen(
         if (!closeRequested) return@LaunchedEffect
         val outgoing = deliveryHost
         outgoing?.cancelAndJoin()
-        library?.close()
         onClose()
     }
-    BackHandler(enabled = shareInProgress && playingClip == null && viewingPhoto == null) {
-        cancelActiveShareOrExitSelection()
-    }
     Box(Modifier.fillMaxSize().background(LiveDesign.background)) {
-        val selectionHaptics = LocalOperatorHaptics.current
         library?.let { actual ->
-            val catalogOperations = galleryOperations(actual)
+            val host = remember(actual) { MonitorOperatorMediaHost(actual) }
+            LaunchedEffect(host, autoPlay) { autoPlay?.let { if (host.open(it) || !actual.isCurrent(it.admission)) autoPlay = null } }
             val sourcePresentation = MonitorMediaGalleryPresentation(
                 projection.result,
-                category = com.opencapture.opencine.vocabulary.MediaLibraryTab.valueOf(options.category.name),
-                layout = com.opencapture.monitorui.MonitorMediaLayout.valueOf(options.layout.name),
-                thumbnailSize = com.opencapture.monitorui.MonitorThumbnailSize.valueOf(options.thumbnailSize.name),
-                sort = com.opencapture.opencine.vocabulary.MediaLibrarySort.valueOf(options.sortOrder.name),
+                category = com.opencapture.opencine.vocabulary.MediaLibraryTab.valueOf(libraryState.category.name),
+                layout = libraryState.layout, thumbnailSize = libraryState.thumbnailSize,
+                sort = com.opencapture.opencine.vocabulary.MediaLibrarySort.valueOf(libraryState.sort.name),
                 activeFilterCount = filters.activeCount,
-                filters = MonitorMediaGalleryFilters(
-                    formats = filterOptions.formats.map { it.title }, resolutions = filterOptions.resolutions.map { it.title },
-                    photoSizes = filterOptions.photoSizes.map { MonitorMediaFilterChoice(it.name, it.title) },
-                    dateWindows = filterOptions.dateWindows.map { MonitorMediaFilterChoice(it.name, it.title) },
-                    storage = visibleStorageSlots.map { MonitorMediaFilterChoice(it.storageId.toString(), "SLOT ${it.slotNumber}") },
-                    formatSelection = filters.formats.mapTo(linkedSetOf()) { it.title },
-                    resolutionSelection = filters.resolutions.mapTo(linkedSetOf()) { it.title },
-                    photoSizeSelection = filters.photoSizes.mapTo(linkedSetOf()) { it.name },
-                    dateWindow = filters.dateWindow?.name, storageID = filters.storageId?.toString(), dialog = true,
-                ), storage = mediaGalleryStorageValues(visibleStorageSlots, filters.storageId),
-                navigationClearsSelection = true, filterClearsSelection = true, retainsVisibleSelection = true,
+                filters = nikonGalleryFilters(filters, filterOptions,
+                    visibleStorageSlots.map { MonitorMediaFilterChoice(it.storageId.toString(), "SLOT ${it.slotNumber}") }),
+                storage = mediaGalleryStorageValues(visibleStorageSlots, filters.storageId),
                 empty = when (val load = state) {
                     BrowseState.Loading -> MonitorMediaGalleryEmpty(
                         if (librarySource == MediaLibrarySource.CAMERA) "Listing clips on camera…" else "Opening local library…",
@@ -825,49 +659,182 @@ internal fun MediaBrowseScreen(
                     )
                 },
             )
-            MonitorOperatorCatalogScreen(library = actual, brand = "OpenZCine", sourceAvailable = effectiveCameraConnected,
-                operations = catalogOperations, presentation = sourcePresentation,
-                selectionConfiguration = rememberSelectionInputPolicy(),
-                selectionChanged = selectionHaptics::tick,
-                navigation = { action -> when (action) {
-                    is MonitorMediaGalleryNavigation.Category -> updateOptions(options.copy(category = MediaLibraryCategory.valueOf(action.value.name)))
-                    is MonitorMediaGalleryNavigation.Layout -> updateOptions(options.copy(layout = com.opencapture.monitorui.MonitorMediaLayout.valueOf(action.value.name)))
-                    is MonitorMediaGalleryNavigation.ThumbnailSize -> updateOptions(options.copy(thumbnailSize = MonitorThumbnailSize.valueOf(action.value.name)))
-                    MonitorMediaGalleryNavigation.CycleSort -> {
-                        val all = MediaLibrarySortOrder.entries
-                        updateOptions(options.copy(sortOrder = all[(all.indexOf(options.sortOrder) + 1) % all.size]))
-                    }
-                } }, sourceFilter = { action -> when (action) {
-                    is MonitorMediaGalleryFilterAction.Format -> filterOptions.formats.firstOrNull { it.title == action.id }
-                        ?.let { updateFilters(filters.copy(formats = filters.formats.toMutableSet().apply { if (!add(it)) remove(it) })) }
-                    is MonitorMediaGalleryFilterAction.Resolution -> filterOptions.resolutions.firstOrNull { it.title == action.id }
-                        ?.let { updateFilters(filters.copy(resolutions = filters.resolutions.toMutableSet().apply { if (!add(it)) remove(it) })) }
-                    is MonitorMediaGalleryFilterAction.PhotoSize -> filterOptions.photoSizes.firstOrNull { it.name == action.id }
-                        ?.let { updateFilters(filters.copy(photoSizes = filters.photoSizes.toMutableSet().apply { if (!add(it)) remove(it) })) }
-                    is MonitorMediaGalleryFilterAction.DateWindow -> filterOptions.dateWindows.firstOrNull { it.name == action.id }
-                        ?.let { updateFilters(filters.copy(dateWindow = it.takeUnless { it == filters.dateWindow })) }
-                    is MonitorMediaGalleryFilterAction.Storage -> action.id.toLongOrNull()?.let(::toggleStorageSlot)
-                    MonitorMediaGalleryFilterAction.Reset -> updateFilters(MediaLibraryFilters())
-                } }, facts = { record -> MonitorMediaGalleryFileFacts(record.payload.clip.badgeLabel) },
+            val thumbnail: @Composable (MonitorMediaRecord<NikonLibraryClip>, Modifier, () -> Boolean) -> Unit = { record, modifier, admitted ->
+                ClipArtwork(clip = record.payload.clip, source = librarySource,
+                    cameraID = record.payload.bucket, cameraConnected = effectiveCameraConnected,
+                    connectionOwner = connectionOwner, cacheStore = cacheStore, modifier = modifier, admission = admitted)
+            }
+            MonitorOperatorMediaScreen(library = actual, title = cameraDisplayName ?: "OpenZCine",
+                sourceAvailable = effectiveCameraConnected, operations = galleryOperations(actual),
+                facts = { record -> MonitorMediaGalleryFileFacts(record.payload.clip.badgeLabel) },
+                close = { closeRequested = true }, begin = {},
+                // A camera listing refreshes in place and keeps the grid; anything else lists anew.
+                refresh = { if (actual.state.value.browsing && actual.binding != null) actual.refresh() else reloadKey += 1 },
+                delivery = MonitorOperatorMediaDelivery(
+                    presented = shareInProgress && deliveryHost?.capturedRun != null,
+                    share = { records, token ->
+                        if (actual.isCurrent(token) && !shareInProgress) {
+                            deliverySelection = records.map { it.payload }; deliveryAdmission = token; presentNativeDelivery()
+                        }
+                    }, dismiss = ::cancelActiveShareOrExitSelection),
+                presentation = sourcePresentation,
+                sourceFilter = { action -> updateFilters(filters.applying(action, filterOptions)) },
                 cell = { record, cell -> mediaClipCellPresentation(record.payload.clip, record.payload.bucket,
-                    record.favorite, hasRawSibling(record.payload.clip), burstByRepresentative[clipKey(record.payload.clip)]?.count,
-                    cell.list, cell.selecting, cell.selected) },
+                    record.favorite, projection.hasRawSibling(record.payload.clip, ::clipKey),
+                    burstByRepresentative[clipKey(record.payload.clip)]?.count, cell.list, cell.selecting, cell.selected) },
                 deletionDetail = { progress -> if (progress.total > progress.selectedCount)
                     "${progress.completed} of ${progress.total} files · incl. RAW + copies" else null },
-                begin = {}, refresh = { reloadKey += 1 }, close = { closeRequested = true },
-                open = { request -> if (actual.isCurrent(request.admission)) open(request.record.payload.clip, request) },
-                share = { records, token ->
-                    if (actual.isCurrent(token) && !shareInProgress) {
-                        deliverySelection = records.map { it.payload }; deliveryAdmission = token; presentNativeDelivery()
+                host = host,
+                thumbnail = { request ->
+                    key(request.admission) { thumbnail(request.record, Modifier.fillMaxSize()) { request.isCurrent } }
+                },
+                player = { presentation ->
+                    val opening = presentation.request
+                    val clip = opening.record.payload.clip
+                    val action = remember(actual, opening.id) { libraryActions.capture(listOf(opening.record.payload)) }
+                    var playbackDeletionReturn by remember(actual, opening.id) {
+                        mutableStateOf<MonitorMediaDeletionCompletion?>(null)
+                    }
+                    MediaPlaybackScreen(
+                        cacheStore = cacheStore,
+                        library = actual,
+                        playbackRecords = opening.playlist,
+                        initialClip = clip,
+                        filteredClips = displayedClips,
+                        cameraID = ownerCameraID(clip),
+                        cameraTransferAvailable = cameraConnected,
+                        connectionOwner = connectionOwner,
+                        favoriteIDs = favorites,
+                        assists = assists,
+                        exposureAssistCameraInput = exposureAssistCameraInput,
+                        operatorSettings = operatorSettings,
+                        lutLibrary = lutLibrary,
+                        frameioController = frameioController,
+                        mediaDeliveryCoordinator = mediaDeliveryCoordinator,
+                        onToggleFavorite = ::toggleFavorite,
+                        onRatingMirrored = ::mirrorRating,
+                        onCaptureRatingCompletion = ::captureRatingCompletion,
+                        onRatingDiagnostic = onRatingDiagnostic,
+                        onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                            libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
+                        },
+                        // The library stays live under the player; a delete inside it relists by itself.
+                        onClose = presentation::close,
+                        opening = opening,
+                        sourceCurrent = { library === actual && action.sourceIsCurrent },
+                        captureRecord = { record ->
+                            val captured = libraryActions.capture(listOf(record.payload))
+                            val completed = playbackDeletionReturn
+                            val admission = completed?.admission ?: opening.admission
+                            MonitorPlaybackAdmission {
+                                library === actual && actual.isCurrent(admission) &&
+                                    (completed == null || completed.isCurrent) && captured.sourceIsCurrent &&
+                                    library === actual && actual.isCurrent(admission) &&
+                                    (completed == null || completed.isCurrent)
+                            }
+                        },
+                        captureDeletion = { record, cleanup ->
+                            if (librarySource != MediaLibrarySource.CAMERA || !effectiveCameraConnected ||
+                                shareInProgress || library !== actual || connectionOwner == null) null else {
+                                val selected = listOf(record.payload.clip)
+                                val plan = NikonMediaDeletionPlan.of(loadedClips, selected, ::ownerCameraID)
+                                val targets = plan.targets.map { NikonLibraryClip(ownerCameraID(it), it) }
+                                val capturedAction = libraryActions.capture(targets)
+                                val authority = capturedAction.captureDeletionAuthority()
+                                val nativeOwner = connectionOwner
+                                val browseBinding = actual.binding
+                                val browseSource = librarySourceOwner
+                                if (authority == null || !authority.isCurrent || !capturedAction.sourceIsCurrent) null else {
+                                    MonitorOperatorPlaybackDeletionRequest(
+                                        com.opencapture.opencine.media.MonitorPlaybackDeletionConfirmation(
+                                            title = "Delete clip from camera?",
+                                            message = deleteConfirmationMessage(selected, plan)), authority,
+                                        perform = perform@{
+                                            fun accepted() = librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected &&
+                                                library === actual && connectionOwner == nativeOwner &&
+                                                authority.isCurrent && capturedAction.sourceIsCurrent &&
+                                                sameDeletionPlan(plan, NikonMediaDeletionPlan.of(loadedClips, selected, ::ownerCameraID)) &&
+                                                library === actual && connectionOwner == nativeOwner && authority.isCurrent
+                                            if (!accepted() || !cleanup() || !accepted()) return@perform
+                                            // The player's own deletion relists the gallery; it stays presented across it.
+                                            presentation.retaining {
+                                                capturedAction.deleteBatch(targets, deleteObject = { value ->
+                                                    withContext(Dispatchers.IO) {
+                                                        SwiftCore.isAvailable && nativeOwner != null && authority.isCurrent &&
+                                                            NikonNative.sessionDeleteObject(nativeOwner, value.clip.handle.toInt())
+                                                    }
+                                                }, onProgress = { _, _ -> }, accepted = authority,
+                                                    preparation = MonitorMediaDeletionPreparation.RETIRE_GALLERY,
+                                                    prepare = { browseBinding?.let { browseSource?.retireBrowse(it) } },
+                                                    afterFinish = { completed ->
+                                                        if (completed.isCompleting && capturedAction.sourceIsCurrent) actual.relist(after = completed)
+                                                    })
+                                                val completed = authority.completion
+                                                if (completed != null && completed.claim == authority.id && completed.isCurrent &&
+                                                    library === actual && connectionOwner == nativeOwner &&
+                                                    actual.isCurrent(completed.admission) && completed.isCurrent) {
+                                                    playbackDeletionReturn = completed
+                                                    presentation.readmit(completed.admission)
+                                                }
+                                            }
+                                        })
+                                }
+                            }
+                        },
+                    )
+                },
+                photo = { presentation ->
+                    val opening = presentation.request
+                    val clip = opening.record.payload.clip
+                    val actualState by actual.state.collectAsState()
+                    val operations = galleryOperations(actual, presentation)
+                    fun recordOf(member: NikonMediaClipRecord, bucket: String) =
+                        actualState.records.firstOrNull { it.payload.clip.libraryKey(it.payload.bucket) == member.libraryKey(bucket) }
+                    if (burstByRepresentative[clipKey(clip)] != null) {
+                        // A burst representative opens the series view (its other frames are hidden in the grid).
+                        var members by remember(opening.id) {
+                            mutableStateOf(burstMembers(clip).mapNotNull { recordOf(it, ownerCameraID(it)) })
+                        }
+                        var selectedFrameKey by remember(opening.id) { mutableStateOf<String?>(null) }
+                        val selected = members.firstOrNull { it.asset.id.rawValue == selectedFrameKey } ?: members.firstOrNull()
+                        if (selected != null) {
+                            val target = selected.payload
+                            val raw = NikonMediaDeletionPlan.rawSibling(loadedClips, target.clip, ::ownerCameraID)?.let { recordOf(it, target.bucket) }
+                            val action = remember(actual, presentation.admission, selected.asset.id) {
+                                libraryActions.capture((listOf(selected) + listOfNotNull(raw) + members).map { it.payload })
+                            }
+                            MediaStillViewer(cacheStore = cacheStore, library = actual, record = selected, admission = presentation.admission,
+                                sourceCurrent = { library === actual && action.sourceIsCurrent }, operations = operations,
+                                assist = assists.shared, cameraTransferAvailable = cameraConnected, connectionOwner = connectionOwner,
+                                rawRecord = raw, collection = members, selectRecord = { selectedFrameKey = it.asset.id.rawValue },
+                                thumbnail = { request, modifier -> thumbnail(request.record, modifier) { request.isCurrent() } },
+                                onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
+                                onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                                    libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
+                                }, onDeletedReturning = { admission ->
+                                    if (library !== actual || !actual.isCurrent(admission)) return@MediaStillViewer
+                                    val index = members.indexOfFirst { it.asset.id == selected.asset.id }.coerceAtLeast(0)
+                                    members = members.mapNotNull { actual.record(it.asset.id) }
+                                    if (members.isEmpty() || !presentation.readmit(admission)) presentation.close()
+                                    else selectedFrameKey = members[minOf(index, members.lastIndex)].asset.id.rawValue
+                                }, onClose = presentation::close)
+                        }
+                    } else {
+                        val raw = NikonMediaDeletionPlan.rawSibling(loadedClips, clip, ::ownerCameraID)?.let { recordOf(it, opening.record.payload.bucket) }
+                        val action = remember(actual, presentation.admission, opening.record.asset.id) {
+                            libraryActions.capture((listOf(opening.record) + listOfNotNull(raw)).map { it.payload })
+                        }
+                        MediaStillViewer(cacheStore = cacheStore, library = actual, record = opening.record, admission = presentation.admission,
+                            sourceCurrent = { library === actual && action.sourceIsCurrent }, operations = operations,
+                            assist = assists.shared, cameraTransferAvailable = cameraConnected, connectionOwner = connectionOwner,
+                            rawRecord = raw, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
+                            onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
+                                libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
+                            }, onClose = presentation::close)
                     }
                 },
-            ) { request ->
-                key(request.admission) {
-                    ClipArtwork(clip = request.record.payload.clip, source = librarySource,
-                        cameraID = request.record.payload.bucket, cameraConnected = effectiveCameraConnected,
-                        connectionOwner = connectionOwner, cacheStore = cacheStore, modifier = Modifier.fillMaxSize(),
-                        admission = { request.isCurrent })
-                }
+            ) {
+                deliveryHost?.let { NikonMediaDeliveryHostView(it) }
             }
         }
         if (library == null) com.opencapture.opencine.cameracontrols.MediaEmptyState(
@@ -875,238 +842,42 @@ internal fun MediaBrowseScreen(
             subtitle = if (librarySource == MediaLibrarySource.CAMERA) "Querying card storage…" else "Checking persisted complete cache entries…",
             title = if (librarySource == MediaLibrarySource.CAMERA) "Listing clips on camera…" else "Opening local library…",
         )
-        shareMessage?.let { message ->
-            MediaStatusMessage(
-                message = message,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-            )
-        }
-
-        deliveryHost?.let { NikonMediaDeliveryHostView(it) }
-
-        seriesRepresentative?.let { representative ->
-            val actual = openedPhotoLibrary
-            val opening = photoOpening
-            val members = seriesFrames
-            var selectedFrameKey by remember(representative) { mutableStateOf<String?>(null) }
-            val selected = members.firstOrNull { it.asset.id.rawValue == selectedFrameKey } ?: members.firstOrNull()
-            if (actual != null && opening != null && selected != null) {
-                val actualState by actual.state.collectAsState()
-                val target = selected.payload
-                val raw = NikonMediaDeletionPlan.rawSibling(loadedClips, target.clip, ::ownerCameraID)?.let { sibling ->
-                    actualState.records.firstOrNull { it.payload.clip.libraryKey(it.payload.bucket) == sibling.libraryKey(target.bucket) }
-                }
-                val action = remember(actual, opening.admission, selected.asset.id) {
-                    libraryActions.capture((listOf(selected) + listOfNotNull(raw) + members).map { it.payload })
-                }
-                MediaStillViewer(cacheStore = cacheStore, library = actual, record = selected, admission = opening.admission,
-                    sourceCurrent = { library === actual && action.sourceIsCurrent }, operations = galleryOperations(actual),
-                    assist = assists.shared, cameraTransferAvailable = cameraConnected, connectionOwner = connectionOwner,
-                    rawRecord = raw, collection = members, selectRecord = { selectedFrameKey = it.asset.id.rawValue },
-                    thumbnail = { request, modifier ->
-                        ClipArtwork(clip = request.record.payload.clip, source = librarySource,
-                            cameraID = request.record.payload.bucket, cameraConnected = effectiveCameraConnected,
-                            connectionOwner = connectionOwner, cacheStore = cacheStore, modifier = modifier,
-                            admission = { request.isCurrent() })
-                    }, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
-                    onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                        libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
-                    }, onDeletedReturning = { admission ->
-                        if (library !== actual || !actual.isCurrent(admission)) return@MediaStillViewer
-                        val index = members.indexOfFirst { it.asset.id == selected.asset.id }.coerceAtLeast(0)
-                        seriesFrames = members.mapNotNull { actual.record(it.asset.id) }
-                        photoOpening = MonitorMediaGalleryOpen(opening.record, opening.playlist, admission)
-                        if (seriesFrames.isEmpty()) seriesRepresentative = null
-                        else selectedFrameKey = seriesFrames[minOf(index, seriesFrames.lastIndex)].asset.id.rawValue
-                    }, onClose = { seriesRepresentative = null })
-            }
-        }
-
-        deleteConfirmTargets?.let { targets ->
-            MediaDeleteConfirmDialog(
-                // Context-aware: pair/master/backup notes appear only when this selection
-                // actually pulls those companions in (videos never see stills wording).
-                message = deleteConfirmationMessage(loadedClips, targets, ::ownerCameraID),
-                onDelete = { requestDeletion(targets) },
-                onDismiss = { deleteConfirmTargets = null },
-            )
-        }
-
-        playingClip?.let { clip ->
-            val actual = openedPhotoLibrary
-            val opening = photoOpening
-            if (actual != null && opening != null) {
-                val owner = ownerCameraID(clip)
-                val action = remember(actual, opening.id) { libraryActions.capture(listOf(opening.record.payload)) }
-                var playbackDeletionReturn by remember(actual, opening.id) {
-                    mutableStateOf<MonitorMediaDeletionCompletion?>(null)
-                }
-                MediaPlaybackScreen(
-                    cacheStore = cacheStore,
-                    library = actual,
-                    playbackRecords = opening.playlist,
-                    initialClip = clip,
-                    filteredClips = displayedClips,
-                    cameraID = owner,
-                    cameraTransferAvailable = cameraConnected,
-                    connectionOwner = connectionOwner,
-                    favoriteIDs = favorites,
-                    assists = assists,
-                    exposureAssistCameraInput = exposureAssistCameraInput,
-                    operatorSettings = operatorSettings,
-                    lutLibrary = lutLibrary,
-                    frameioController = frameioController,
-                    mediaDeliveryCoordinator = mediaDeliveryCoordinator,
-                    onToggleFavorite = ::toggleFavorite,
-                    onRatingMirrored = ::mirrorRating,
-                    onCaptureRatingCompletion = ::captureRatingCompletion,
-                    onRatingDiagnostic = onRatingDiagnostic,
-                    onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                        libraryIndex.rememberResolvedObjectSize(
-                            ownerCameraID(resolvedClip),
-                            resolvedClip,
-                            resolvedSize,
-                        )
-                    },
-                    // The library stays live under the player; a delete inside it relists by itself.
-                    onClose = {
-                        if (photoOpening?.id == opening.id && openedPhotoLibrary === actual) {
-                            playingClip = null; photoOpening = null; openedPhotoLibrary = null
-                        }
-                    },
-                    opening = opening,
-                    sourceCurrent = { library === actual && action.sourceIsCurrent },
-                    captureRecord = { record ->
-                        val captured = libraryActions.capture(listOf(record.payload))
-                        val completed = playbackDeletionReturn
-                        val admission = completed?.admission ?: opening.admission
-                        MonitorPlaybackAdmission {
-                            library === actual && actual.isCurrent(admission) &&
-                                (completed == null || completed.isCurrent) && captured.sourceIsCurrent &&
-                                library === actual && actual.isCurrent(admission) &&
-                                (completed == null || completed.isCurrent)
-                        }
-                    },
-                    captureDeletion = { record, cleanup ->
-                        if (librarySource != MediaLibrarySource.CAMERA || !effectiveCameraConnected ||
-                            shareInProgress || library !== actual || connectionOwner == null) null else {
-                            val selected = listOf(record.payload.clip)
-                            val plan = NikonMediaDeletionPlan.of(loadedClips, selected, ::ownerCameraID)
-                            val targets = plan.targets.map { NikonLibraryClip(ownerCameraID(it), it) }
-                            val capturedAction = libraryActions.capture(targets)
-                            val authority = capturedAction.captureDeletionAuthority()
-                            val nativeOwner = connectionOwner
-                            val browseBinding = actual.binding
-                            val browseSource = librarySourceOwner
-                            if (authority == null || !authority.isCurrent || !capturedAction.sourceIsCurrent) null else {
-                                MonitorOperatorPlaybackDeletionRequest(
-                                    com.opencapture.opencine.media.MonitorPlaybackDeletionConfirmation(
-                                        title = "Delete clip from camera?",
-                                        message = deleteConfirmationMessage(selected, plan)), authority,
-                                    perform = perform@{
-                                        fun accepted() = librarySource == MediaLibrarySource.CAMERA && effectiveCameraConnected &&
-                                            library === actual && connectionOwner == nativeOwner &&
-                                            authority.isCurrent && capturedAction.sourceIsCurrent &&
-                                            sameDeletionPlan(plan, NikonMediaDeletionPlan.of(loadedClips, selected, ::ownerCameraID)) &&
-                                            library === actual && connectionOwner == nativeOwner && authority.isCurrent
-                                        if (!accepted() || !cleanup() || !accepted()) return@perform
-                                        capturedAction.deleteBatch(targets, deleteObject = { value ->
-                                            withContext(Dispatchers.IO) {
-                                                SwiftCore.isAvailable && nativeOwner != null && authority.isCurrent &&
-                                                    NikonNative.sessionDeleteObject(nativeOwner, value.clip.handle.toInt())
-                                            }
-                                        }, onProgress = { _, _ -> }, accepted = authority,
-                                            preparation = MonitorMediaDeletionPreparation.RETIRE_GALLERY,
-                                            prepare = { browseBinding?.let { browseSource?.retireBrowse(it) } },
-                                            afterFinish = { completed ->
-                                                if (completed.isCompleting && capturedAction.sourceIsCurrent) {
-                                                    val updated = withContext(Dispatchers.IO) {
-                                                        (offlineCameraIDs.takeIf { it.isNotEmpty() } ?: listOf(cameraID))
-                                                            .flatMap { libraryIndex.favoriteIDs(it) }.toSet()
-                                                    }
-                                                    if (completed.isCompleting && capturedAction.sourceIsCurrent) {
-                                                        favorites = updated
-                                                        actual.relist(after = completed)
-                                                    }
-                                                }
-                                            })
-                                        val completed = authority.completion
-                                        if (completed != null && completed.claim == authority.id && completed.isCurrent &&
-                                            library === actual && connectionOwner == nativeOwner &&
-                                            actual.isCurrent(completed.admission) && completed.isCurrent) {
-                                            playbackDeletionReturn = completed
-                                        }
-                                    })
-                            }
-                        }
-                    },
-                )
-            }
-        }
-        viewingPhoto?.let { clip ->
-            val actual = openedPhotoLibrary
-            val opening = photoOpening
-            if (actual != null && opening != null) {
-                val actualState by actual.state.collectAsState()
-                val raw = NikonMediaDeletionPlan.rawSibling(loadedClips, clip, ::ownerCameraID)?.let { sibling ->
-                    actualState.records.firstOrNull { it.payload.clip.libraryKey(it.payload.bucket) == sibling.libraryKey(opening.record.payload.bucket) }
-                }
-                val action = remember(actual, opening.admission, opening.record.asset.id) {
-                    libraryActions.capture((listOf(opening.record) + listOfNotNull(raw)).map { it.payload })
-                }
-                MediaStillViewer(cacheStore = cacheStore, library = actual, record = opening.record, admission = opening.admission,
-                    sourceCurrent = { library === actual && action.sourceIsCurrent }, operations = galleryOperations(actual),
-                    assist = assists.shared, cameraTransferAvailable = cameraConnected, connectionOwner = connectionOwner,
-                    rawRecord = raw, onRatingMirrored = ::mirrorRating, onCaptureRatingCompletion = ::captureRatingCompletion,
-                    onRatingDiagnostic = onRatingDiagnostic, onResolvedObjectSize = { resolvedClip, resolvedSize ->
-                        libraryIndex.rememberResolvedObjectSize(ownerCameraID(resolvedClip), resolvedClip, resolvedSize)
-                    }, onClose = { viewingPhoto = null })
-            }
-        }
-
-        // Batch-delete progress: the grid holds steady behind this until the run finishes.
-        deletionProgress?.let { (done, total) ->
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .chromeClickable(onClick = {}),  // swallow taps mid-delete
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    Modifier
-                        .glass(RoundedCornerShape(16.dp))
-                        .padding(horizontal = 24.dp, vertical = 20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    val picks = deletionSelectedCount.coerceAtLeast(1)
-                    Text(
-                        "Deleting $picks ${if (picks == 1) "item" else "items"}…",
-                        style = chromeStyle(14f, FontWeight.SemiBold),
-                        color = LiveDesign.text,
-                    )
-                    // Explain the inflated file count: 8 picks can be 16 files once each
-                    // RAW+JPEG pair (and any backup copies) are counted.
-                    Text(
-                        if (total > picks) "$done of $total files · incl. RAW + copies"
-                        else "$done of $total",
-                        style = chromeStyle(11f, FontWeight.Normal),
-                        color = LiveDesign.muted,
-                    )
-                    LinearProgressIndicator(
-                        progress = { if (total > 0) done.toFloat() / total else 0f },
-                        modifier = Modifier.width(220.dp).padding(top = 6.dp),
-                    )
-                }
-            }
-        }
     }
+}
+
+/** The Nikon filter facts as the shared form's values; storage chips are the inserted card slots. */
+internal fun nikonGalleryFilters(filters: MediaLibraryFilters, options: MediaFilterOptions,
+    storage: List<MonitorMediaFilterChoice>): MonitorMediaGalleryFilters = MonitorMediaGalleryFilters(
+    formats = options.formats.map { it.title }, resolutions = options.resolutions.map { it.title },
+    photoSizes = options.photoSizes.map { MonitorMediaFilterChoice(it.name, it.title) },
+    dateWindows = options.dateWindows.map { MonitorMediaFilterChoice(it.name, it.title) },
+    storage = storage,
+    formatSelection = filters.formats.mapTo(linkedSetOf()) { it.title },
+    resolutionSelection = filters.resolutions.mapTo(linkedSetOf()) { it.title },
+    photoSizeSelection = filters.photoSizes.mapTo(linkedSetOf()) { it.name },
+    dateWindow = filters.dateWindow?.name, storageID = filters.storageId?.toString(), dialog = true,
+)
+
+/** One shared filter form action applied to the Nikon filter facts. */
+internal fun MediaLibraryFilters.applying(action: MonitorMediaGalleryFilterAction, options: MediaFilterOptions): MediaLibraryFilters {
+    fun <T> Set<T>.toggled(value: T): Set<T> = if (value in this) this - value else this + value
+    return when (action) {
+        is MonitorMediaGalleryFilterAction.Format -> options.formats.firstOrNull { it.title == action.id }
+            ?.let { copy(formats = formats.toggled(it)) }
+        is MonitorMediaGalleryFilterAction.Resolution -> options.resolutions.firstOrNull { it.title == action.id }
+            ?.let { copy(resolutions = resolutions.toggled(it)) }
+        is MonitorMediaGalleryFilterAction.PhotoSize -> options.photoSizes.firstOrNull { it.name == action.id }
+            ?.let { copy(photoSizes = photoSizes.toggled(it)) }
+        is MonitorMediaGalleryFilterAction.DateWindow -> options.dateWindows.firstOrNull { it.name == action.id }
+            ?.let { copy(dateWindow = it.takeUnless { it == dateWindow }) }
+        is MonitorMediaGalleryFilterAction.Storage -> action.id.toLongOrNull()?.let(::togglingStorageSlot)
+        MonitorMediaGalleryFilterAction.Reset -> MediaLibraryFilters()
+    } ?: this
 }
 
 /** Existing source APIs map values into the same storage/navigation/form owners used in production. */
 @Composable
-private fun mediaGalleryStorageValues(slots: List<MediaStorageSlotPresentation>, selected: Long?): List<MonitorMediaGalleryStorage> =
+internal fun mediaGalleryStorageValues(slots: List<MediaStorageSlotPresentation>, selected: Long?): List<MonitorMediaGalleryStorage> =
     slots.map { slot ->
         val label = stringResource(R.string.media_storage_slot_label, slot.slotNumber)
         val summary = if (slot.totalGigabytes > 0) stringResource(R.string.media_storage_slot_summary,
@@ -1117,73 +888,6 @@ private fun mediaGalleryStorageValues(slots: List<MediaStorageSlotPresentation>,
             else R.string.media_storage_slot_filter_description, slot.slotNumber, summary)
         MonitorMediaGalleryStorage(slot.storageId.toString(), label, summary, active, description)
     }
-
-@Composable
-internal fun MediaStorageSlotSelector(slots: List<MediaStorageSlotPresentation>, selectedStorageId: Long?,
-    horizontal: Boolean, onSelect: (Long) -> Unit, modifier: Modifier = Modifier) {
-    com.opencapture.opencine.cameracontrols.MonitorMediaGalleryStorageCards(
-        mediaGalleryStorageValues(slots, selectedStorageId),
-        select = { it.toLongOrNull()?.let(onSelect) }, horizontal = horizontal, modifier = modifier)
-}
-
-@Composable
-internal fun MediaLibraryRail(category: MediaLibraryCategory, storageSlots: List<MediaStorageSlotPresentation>,
-    selectedStorageId: Long?, onCategoryChange: (MediaLibraryCategory) -> Unit, onStorageSelect: (Long) -> Unit,
-    showsGridControls: Boolean, layout: MonitorMediaLayout, thumbnailSize: MonitorThumbnailSize,
-    onLayoutChange: (MonitorMediaLayout) -> Unit, onThumbnailSizeChange: (MonitorThumbnailSize) -> Unit,
-    modifier: Modifier = Modifier) {
-    com.opencapture.opencine.cameracontrols.MonitorMediaGalleryNavigationRail(
-        category = com.opencapture.opencine.vocabulary.MediaLibraryTab.valueOf(category.name),
-        storage = mediaGalleryStorageValues(storageSlots, selectedStorageId),
-        selectCategory = { onCategoryChange(MediaLibraryCategory.valueOf(it.name)) },
-        selectStorage = { it.toLongOrNull()?.let(onStorageSelect) }, layout = layout, thumbnailSize = thumbnailSize,
-        selectLayout = onLayoutChange, selectThumbnailSize = onThumbnailSizeChange,
-        showsDisplayControls = showsGridControls, modifier = modifier)
-}
-
-@Composable
-internal fun MediaFilterDialog(filters: MediaLibraryFilters, options: MediaFilterOptions, storageIds: List<Long>,
-    onFiltersChanged: (MediaLibraryFilters) -> Unit, onDismiss: () -> Unit) {
-    val haptics = LocalOperatorHaptics.current
-    com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilterDialog(
-        filters = MonitorMediaGalleryFilters(formats = options.formats.map { it.title }, resolutions = options.resolutions.map { it.title },
-            photoSizes = options.photoSizes.map { MonitorMediaFilterChoice(it.name, it.title) },
-            dateWindows = options.dateWindows.map { MonitorMediaFilterChoice(it.name, it.title) },
-            storage = storageIds.mapIndexed { index, id -> MonitorMediaFilterChoice(id.toString(), "SLOT ${index + 1}") },
-            formatSelection = filters.formats.mapTo(linkedSetOf()) { it.title },
-            resolutionSelection = filters.resolutions.mapTo(linkedSetOf()) { it.title },
-            photoSizeSelection = filters.photoSizes.mapTo(linkedSetOf()) { it.name },
-            dateWindow = filters.dateWindow?.name, storageID = filters.storageId?.toString(), dialog = true),
-        hasActiveFilters = filters.activeCount > 0, close = onDismiss,
-        action = { action ->
-            if (action != MonitorMediaGalleryFilterAction.Reset) haptics.selection()
-            when (action) {
-                is MonitorMediaGalleryFilterAction.Format -> options.formats.firstOrNull { it.title == action.id }
-                    ?.let { onFiltersChanged(filters.copy(formats = filters.formats.toMutableSet().apply { if (!add(it)) remove(it) })) }
-                is MonitorMediaGalleryFilterAction.Resolution -> options.resolutions.firstOrNull { it.title == action.id }
-                    ?.let { onFiltersChanged(filters.copy(resolutions = filters.resolutions.toMutableSet().apply { if (!add(it)) remove(it) })) }
-                is MonitorMediaGalleryFilterAction.PhotoSize -> options.photoSizes.firstOrNull { it.name == action.id }
-                    ?.let { onFiltersChanged(filters.copy(photoSizes = filters.photoSizes.toMutableSet().apply { if (!add(it)) remove(it) })) }
-                is MonitorMediaGalleryFilterAction.DateWindow -> options.dateWindows.firstOrNull { it.name == action.id }
-                    ?.let { onFiltersChanged(filters.copy(dateWindow = it.takeUnless { it == filters.dateWindow })) }
-                is MonitorMediaGalleryFilterAction.Storage -> action.id.toLongOrNull()?.let { onFiltersChanged(filters.togglingStorageSlot(it)) }
-                MonitorMediaGalleryFilterAction.Reset -> onFiltersChanged(MediaLibraryFilters())
-            }
-        })
-}
-
-/** Platform input facts only; the common selection owner performs hold/sweep/edge policy. */
-@Composable
-private fun rememberSelectionInputPolicy(): MonitorMediaSelectionConfiguration {
-    val density = LocalDensity.current.density
-    val input = LocalViewConfiguration.current
-    return remember(input.longPressTimeoutMillis, input.touchSlop, density) {
-        MonitorMediaSelectionConfiguration(holdMilliseconds = input.longPressTimeoutMillis,
-            movementTolerance = input.touchSlop / density, allowsSelectionEntry = true,
-            sweepsSideways = false, edgeBand = 72f, maximumEdgeSpeed = 620f,
-            edgeCurve = MonitorMediaSelectionConfiguration.EdgeCurve.LINEAR, viewportEdgeLimitRatio = null)
-    }
-}
 
 /** Thumbnail policy: camera thumbnails when connected, final cached stills only otherwise. */
 @Composable
@@ -1216,7 +920,7 @@ private fun ClipArtwork(
                                 MediaExifOrientation.fromBytes(jpeg)
                                     ?.also { MediaExifOrientation.learn(key, it) }
                                     ?: MediaExifOrientation.learned(key)
-                            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                            MonitorBitmapDecoder.decode(jpeg, MonitorBitmapDecoder.THUMBNAIL_EDGE)
                                 ?.upright(orientation)
                                 ?.asImageBitmap()
                         }
@@ -1256,43 +960,12 @@ private fun cachedStillThumbnail(
             )
         }.getOrNull() ?: return null
     if (!java.nio.file.Files.isRegularFile(entry.finalPath, LinkOption.NOFOLLOW_LINKS)) return null
-    return try {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(entry.finalPath.toString(), bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sampleSize = 1
-        while (bounds.outWidth / sampleSize > 640 || bounds.outHeight / sampleSize > 640) {
-            sampleSize *= 2
+    // The full file carries the orientation header: learn it for the object so the
+    // connected grid's (possibly EXIF-stripped) camera thumbs rotate too.
+    val orientation =
+        MediaExifOrientation.fromFile(entry.finalPath)?.also {
+            MediaExifOrientation.learn(clip.libraryKey(cameraID), it)
         }
-        // The full file carries the orientation header — learn it for the object so the
-        // connected grid's (possibly EXIF-stripped) camera thumbs rotate too.
-        val orientation =
-            MediaExifOrientation.fromFile(entry.finalPath)?.also {
-                MediaExifOrientation.learn(clip.libraryKey(cameraID), it)
-            }
-        BitmapFactory.decodeFile(
-            entry.finalPath.toString(),
-            BitmapFactory.Options().apply {
-                inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            },
-        )?.upright(orientation)?.asImageBitmap()
-    } catch (_: OutOfMemoryError) {
-        null
-    } catch (_: RuntimeException) {
-        null
-    }
-}
-
-/** A brief in-app result message that remains above the safe bottom edge. */
-@Composable
-private fun MediaStatusMessage(message: String, modifier: Modifier = Modifier) {
-    Text(
-        message,
-        modifier = modifier.glass(RoundedCornerShape(LiveDesign.CORNER_RADIUS_DP.dp)).padding(12.dp),
-        style = chromeStyle(12f, FontWeight.Medium),
-        color = LiveDesign.text,
-        maxLines = 3,
-        overflow = TextOverflow.Ellipsis,
-    )
+    return MonitorBitmapDecoder.decode(entry.finalPath.toFile(), MonitorBitmapDecoder.THUMBNAIL_EDGE)
+        ?.upright(orientation)?.asImageBitmap()
 }

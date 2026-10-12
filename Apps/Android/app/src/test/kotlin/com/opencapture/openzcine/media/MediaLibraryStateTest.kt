@@ -22,6 +22,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import com.opencapture.monitorui.MonitorThumbnailSize
+import com.opencapture.opencine.appkit.MonitorMediaCategoryFilter
+import com.opencapture.opencine.appkit.MonitorMediaSort
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
 import com.opencapture.monitorui.MonitorMediaLayout
 import com.opencapture.opencine.nikon.SavedCameraRecord
 import com.opencapture.opencine.nikon.SavedCameraRecords
@@ -556,7 +559,7 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.FAVORITES,
                 favorites,
                 cameraID,
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
             ),
         )
     }
@@ -590,7 +593,7 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.VIDEOS,
                 emptySet(),
                 cameraID,
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
             ),
         )
         assertEquals(
@@ -600,7 +603,7 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.PHOTOS,
                 emptySet(),
                 cameraID,
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
             ),
         )
         assertEquals(
@@ -610,7 +613,7 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.FAVORITES,
                 setOf(master.libraryKey(cameraID)),
                 cameraID,
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
             ),
         )
     }
@@ -633,7 +636,7 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.ALL,
                 emptySet(),
                 cameraID,
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
             ),
         )
         // Suppression is keyed on the filter survivors: when a chip keeps only
@@ -646,7 +649,7 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.FAVORITES,
                 setOf(raw.libraryKey(cameraID)),
                 cameraID,
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
             ),
         )
         // Offline multi-camera library: two cameras' formulaic DSC_0001 stems
@@ -658,56 +661,10 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.ALL,
                 emptySet(),
                 cameraID,
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
                 ownerOf = { if (it.handle == 1L) "camera-a" else "camera-b" },
             ),
         )
-    }
-
-    @Test
-    fun `sweep selection only adds items and visibility changes prune safely`() {
-        val first = MediaLibrarySelection.begin("one")
-        val swept = MediaLibrarySelection.addSweep(first, listOf("one", "two", "three"))
-
-        assertEquals(setOf("one", "two", "three"), swept)
-        assertEquals(setOf("two"), MediaLibrarySelection.retainVisible(swept, setOf("two")))
-        assertEquals(emptySet(), MediaLibrarySelection.toggle(setOf("one"), "one"))
-    }
-
-    @Test
-    fun `paint range restores trailing cells from the pre-sweep snapshot`() {
-        val ordered = listOf("a", "b", "c", "d")
-        val snapshot = setOf("a")
-        // Anchor on b (unselected → paint select), drag to d.
-        val painted =
-            MediaLibrarySelection.paintRange(
-                snapshot = snapshot,
-                orderedIDs = ordered,
-                anchorIndex = 1,
-                currentIndex = 3,
-                paintSelect = true,
-            )
-        assertEquals(setOf("a", "b", "c", "d"), painted)
-        // Shrink range back to b only — c/d leave again.
-        val shrunk =
-            MediaLibrarySelection.paintRange(
-                snapshot = snapshot,
-                orderedIDs = ordered,
-                anchorIndex = 1,
-                currentIndex = 1,
-                paintSelect = true,
-            )
-        assertEquals(setOf("a", "b"), shrunk)
-        // Paint-deselect from a snapshot that already has a–d.
-        val deselect =
-            MediaLibrarySelection.paintRange(
-                snapshot = setOf("a", "b", "c", "d"),
-                orderedIDs = ordered,
-                anchorIndex = 1,
-                currentIndex = 2,
-                paintSelect = false,
-            )
-        assertEquals(setOf("a", "d"), deselect)
     }
 
     @Test
@@ -723,27 +680,36 @@ class MediaLibraryStateTest {
                 ),
             )
 
-        assertEquals(
-            MediaLibraryViewOptions(source = MediaLibrarySource.CAMERA),
-            MediaLibraryIndex(preferences).viewOptions(MediaLibrarySource.CAMERA),
-        )
+        assertEquals(MonitorMediaViewOptions(), MediaLibraryIndex(preferences).mediaPreferences("camera").viewOptions())
     }
 
     @Test
-    fun `view controls persist source category layout and sort`() {
-        val preferences = MemoryPreferences()
-        val options =
-            MediaLibraryViewOptions(
-                source = MediaLibrarySource.LOCAL,
-                category = MediaLibraryCategory.FAVORITES,
-                layout = MonitorMediaLayout.LIST,
-                sortOrder = MediaLibrarySortOrder.NAME,
-                thumbnailSize = MonitorThumbnailSize.LARGE,
+    fun `existing favorites and view controls read back through the shared media preferences`() {
+        // The shared owner keeps the keys and newline separator this index always wrote: nothing to rewrite.
+        val favoritesKey = "favorites." + java.security.MessageDigest.getInstance("SHA-256")
+            .digest("camera-a".toByteArray()).joinToString("") { "%02x".format(it) }
+        val preferences =
+            MemoryPreferences(
+                mapOf(
+                    favoritesKey to "b-key\na-key",
+                    "view.category" to "FAVORITES",
+                    "view.layout" to "LIST",
+                    "view.sort" to "NAME",
+                    "view.thumbnail-size" to "LARGE",
+                ),
             )
+        val shared = MediaLibraryIndex(preferences).mediaPreferences("camera-a")
 
-        MediaLibraryIndex(preferences).saveViewOptions(options)
-
-        assertEquals(options, MediaLibraryIndex(preferences).viewOptions(MediaLibrarySource.CAMERA))
+        assertEquals(setOf("a-key", "b-key"), shared.favorites())
+        assertEquals(setOf("a-key", "b-key"), MediaLibraryIndex(preferences).favoriteIDs("camera-a"))
+        assertEquals(
+            MonitorMediaViewOptions(MonitorMediaCategoryFilter.FAVORITES, MonitorMediaSort.NAME,
+                MonitorMediaLayout.LIST, MonitorThumbnailSize.LARGE),
+            shared.viewOptions(),
+        )
+        shared.saveFavorites(setOf("c-key", "a-key"))
+        assertEquals("a-key\nc-key", preferences.value(favoritesKey))
+        assertTrue(MediaLibraryIndex(preferences).favoriteIDs("camera-b").isEmpty())
     }
 
     @Test
@@ -774,7 +740,7 @@ class MediaLibraryStateTest {
                 category = MediaLibraryCategory.ALL,
                 favoriteIDs = emptySet(),
                 cameraID = "camera",
-                sortOrder = MediaLibrarySortOrder.NAME,
+                sortOrder = MonitorMediaSort.NAME,
                 filters = filters,
                 today = LocalDate.of(2026, 7, 15),
             )
@@ -823,7 +789,7 @@ class MediaLibraryStateTest {
                 MediaLibraryCategory.ALL,
                 emptySet(),
                 "camera",
-                MediaLibrarySortOrder.NAME,
+                MonitorMediaSort.NAME,
                 filters,
                 LocalDate.of(2026, 7, 15),
             ),
@@ -1100,6 +1066,8 @@ class MediaLibraryStateTest {
 
         override fun getString(key: String): String? = values[key]
 
+        fun value(key: String): String? = values[key]
+
         override fun putString(key: String, value: String?) {
             writeCount += 1
             if (value == null) values.remove(key) else values[key] = value
@@ -1110,7 +1078,7 @@ class MediaLibraryStateTest {
 /** The chips the production gallery projection offers for [clips]. */
 private fun filterOptions(clips: List<NikonMediaClipRecord>, today: LocalDate): MediaFilterOptions =
     NikonAppGalleryProjection(
-        clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MediaLibrarySortOrder.NEWEST, today = today,
+        clips, emptyMap(), MediaLibraryCategory.ALL, emptySet(), "camera", MonitorMediaSort.NEWEST, today = today,
     ).filterOptions
 
 private fun NikonMediaClipRecord.resolutionFilter(): MediaResolutionFilter? =

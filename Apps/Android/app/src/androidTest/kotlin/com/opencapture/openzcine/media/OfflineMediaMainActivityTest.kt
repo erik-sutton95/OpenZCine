@@ -21,6 +21,8 @@ import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
+import com.opencapture.opencine.appkit.MonitorMediaCategoryFilter
 import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
@@ -161,7 +163,8 @@ class OfflineMediaMainActivityTest {
     @Test
     fun actualSharedMediaShellKeepsCategoriesLayoutAndDensityAcrossRotationAndRelaunch() {
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
-        index.saveViewOptions(MediaLibraryViewOptions(source = MediaLibrarySource.LOCAL))
+        val preferences = index.mediaPreferences("view-only")
+        preferences.saveViewOptions(MonitorMediaViewOptions())
         try {
             scenario = ActivityScenario.launch(
                 Intent(context, MainActivity::class.java)
@@ -171,24 +174,24 @@ class OfflineMediaMainActivityTest {
             device.setOrientationLeft()
             device.waitForDescription("Show Photos media").click()
             device.waitForIdle()
-            assertEquals(MediaLibraryCategory.PHOTOS, index.viewOptions(MediaLibrarySource.LOCAL).category)
+            assertEquals(MonitorMediaCategoryFilter.PHOTOS, preferences.viewOptions().category)
             device.waitForDescription("Show Videos media").click()
             assertNotNull(device.waitForText(CACHED_FILENAME))
             device.waitForDescription("List view").click()
             device.waitForIdle()
-            assertEquals(MonitorMediaLayout.LIST, index.viewOptions(MediaLibrarySource.LOCAL).layout)
+            assertEquals(MonitorMediaLayout.LIST, preferences.viewOptions().layout)
             device.waitForDescription("Grid view").click()
             for ((size, label) in MonitorThumbnailSize.entries.zip(listOf("Small", "Medium", "Large"))) {
                 device.waitForDescription("$label thumbnails").click()
                 device.waitForIdle()
-                assertEquals(size, index.viewOptions(MediaLibrarySource.LOCAL).thumbnailSize)
+                assertEquals(size, preferences.viewOptions().thumbnailSize)
             }
             device.setOrientationNatural()
             assertNotNull(device.waitForText(CACHED_FILENAME))
             device.waitForDescription("List view").click()
             device.waitForIdle()
-            val retained = index.viewOptions(MediaLibrarySource.LOCAL)
-            assertEquals(MediaLibraryCategory.VIDEOS, retained.category)
+            val retained = preferences.viewOptions()
+            assertEquals(MonitorMediaCategoryFilter.VIDEOS, retained.category)
             assertEquals(MonitorMediaLayout.LIST, retained.layout)
             assertEquals(MonitorThumbnailSize.LARGE, retained.thumbnailSize)
             scenario?.close()
@@ -198,7 +201,7 @@ class OfflineMediaMainActivityTest {
             )
             device.waitForCamerasAction("Media library").click()
             assertNotNull(device.waitForText(CACHED_FILENAME))
-            assertEquals(retained, index.viewOptions(MediaLibrarySource.LOCAL))
+            assertEquals(retained, preferences.viewOptions())
         } finally {
             device.setOrientationNatural()
             device.unfreezeRotation()

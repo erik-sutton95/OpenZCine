@@ -57,7 +57,7 @@ internal class NikonMediaLibraryCodec(
         val candidate = records.filter { it.payload.bucket == bucket }.map {
             mergeAuthoritativeObjectSize(byIdentity[it.payload.clip.libraryKey(bucket)], it.payload.clip)
         }
-        val ordered = MediaLibraryFiltering.sort(candidate, MediaLibrarySortOrder.NEWEST)
+        val ordered = MediaLibraryFiltering.sort(candidate, MonitorMediaSort.NEWEST)
         // Same no-change checkpoint rule, one encode only after reconciliation says it is dirty.
         if (current.associateBy { it.libraryKey(bucket) } == ordered.associateBy { it.libraryKey(bucket) }) return null
         return encodeMediaLibraryCatalogBytes(ordered)
@@ -122,36 +122,6 @@ internal class NikonMediaLibraryCodec(
 
 }
 
-/** Synchronous native action state while the caller keeps its Compose subscription. */
-internal class NikonMediaLibrarySelection(
-    private val owner: () -> MonitorMediaLibraryModel<NikonLibraryClip>?,
-    private val observe: () -> MonitorMediaLibraryState<NikonLibraryClip>,
-) {
-    var selecting: Boolean
-        get() {
-            observe()
-            return owner()?.state?.value?.selecting ?: false
-        }
-        set(value) {
-            owner()?.let { it.select(it.state.value.selectedIDs, selecting = value) }
-        }
-    var selectedKeys: Set<String>
-        get() {
-            observe()
-            val snapshot = owner()?.state?.value ?: return emptySet()
-            return snapshot.records.filter { it.asset.id in snapshot.selectedIDs }
-                .map { it.payload.clip.libraryKey(it.payload.bucket) }.toSet()
-        }
-        set(value) {
-            owner()?.let { actual ->
-                val snapshot = actual.state.value
-                actual.select(snapshot.records.filter {
-                    it.payload.clip.libraryKey(it.payload.bucket) in value
-                }.map { it.asset.id }.toSet(), selecting = snapshot.selecting)
-            }
-        }
-}
-
 /** Actual host action completion; native calls retain their existing owner/admission and wire order. */
 internal class NikonMediaLibraryActions(
     private val index: MediaLibraryIndex,
@@ -165,10 +135,6 @@ internal class NikonMediaLibraryActions(
         return NikonMediaRatingCompletion({ captured.canPublish(value) }) { stars ->
             captured.mirrorRating(value, stars)?.let { onFavorites(it); true } ?: false
         }
-    }
-    fun beginDeletion(values: List<NikonLibraryClip>, retireListing: () -> Unit): Capture {
-        retireListing()
-        return capture(values)
     }
     inner class Capture(values: List<NikonLibraryClip>) {
         private val owner = currentOwner()

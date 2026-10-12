@@ -26,6 +26,8 @@ import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Comparator
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
+import com.opencapture.opencine.appkit.MonitorMediaSort
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -84,9 +86,8 @@ class GalleryCoverReturnMainActivityTest {
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
         index.rememberCameraListing(bucket, clips)
         index.rememberCameraBucket(record.id, bucket, record.displayTitle)
-        index.saveViewOptions(MediaLibraryViewOptions(
-            source = MediaLibrarySource.CAMERA, layout = MonitorMediaLayout.LIST,
-            sortOrder = MediaLibrarySortOrder.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
+        index.mediaPreferences(bucket).saveViewOptions(MonitorMediaViewOptions(
+            layout = MonitorMediaLayout.LIST, sort = MonitorMediaSort.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
         ))
         clips.forEach { clip ->
             cache.openEntry(bucket, MediaCacheObjectIdentity(clip), clip.sizeBytes).apply {

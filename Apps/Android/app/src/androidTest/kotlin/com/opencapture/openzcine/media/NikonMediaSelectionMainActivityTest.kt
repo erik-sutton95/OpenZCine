@@ -38,6 +38,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONObject
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
+import com.opencapture.opencine.appkit.MonitorMediaSort
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -95,9 +97,8 @@ class NikonMediaSelectionMainActivityTest {
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
         index.rememberCameraListing(bucket, clips)
         index.rememberCameraBucket(record.id, bucket, record.displayTitle)
-        index.saveViewOptions(MediaLibraryViewOptions(
-            source = MediaLibrarySource.CAMERA, layout = MonitorMediaLayout.LIST,
-            sortOrder = MediaLibrarySortOrder.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
+        index.mediaPreferences(bucket).saveViewOptions(MonitorMediaViewOptions(
+            layout = MonitorMediaLayout.LIST, sort = MonitorMediaSort.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
         ))
         clips.forEach { clip ->
             cache.openEntry(bucket, MediaCacheObjectIdentity(clip), clip.sizeBytes).apply {
@@ -606,7 +607,7 @@ class NikonMediaSelectionMainActivityTest {
         if (includeFavorites) receipt.put("persistedFavoriteIDs", JSONArray(
             MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context)).favoriteIDs(bucket).sorted()))
         receipt.put("storedViewOptions", MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
-            .viewOptions(MediaLibrarySource.CAMERA).toString())
+            .mediaPreferences(bucket).viewOptions().toString())
         directory.resolve("$name.json").writeText(receipt.toString(2))
         println("SIMULATED_SELECTION_DIAGNOSTIC=" + JSONObject()
             .put("name", name).put("rotation", device.displayRotation).put("elapsedMs", elapsed)
