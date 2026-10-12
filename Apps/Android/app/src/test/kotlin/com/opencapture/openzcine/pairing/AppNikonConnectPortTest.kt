@@ -25,6 +25,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** The app's `NikonConnectPort`: held setups ask first, failures are typed, sightings name setups. */
 class AppNikonConnectPortTest {

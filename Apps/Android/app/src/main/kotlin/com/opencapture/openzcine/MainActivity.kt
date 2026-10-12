@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.platform.WifiLowLatencyLock
 import com.opencapture.opencine.appkit.retainedMonitorRoot
 import com.opencapture.opencine.appkit.MonitorActivityLaunch
 import com.opencapture.opencine.appkit.rememberMonitorLaunchSplash
@@ -80,9 +81,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingExperience
 import com.opencapture.openzcine.pairing.ConnectedNetworkName
-import com.opencapture.openzcine.pairing.SavedCameraRecords
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 import com.opencapture.openzcine.pairing.AppNikonConnectPort
 import com.opencapture.openzcine.pairing.CameraWifiScannerOverlay
 import com.opencapture.openzcine.pairing.FILTER_NOTICE_ID
@@ -96,9 +96,6 @@ import com.opencapture.openzcine.pairing.mayAutoReconnectUsb
 import com.opencapture.openzcine.pairing.nearbyBroadcastItems
 import com.opencapture.openzcine.pairing.nikonIntegrationSlots
 import com.opencapture.openzcine.pairing.CAMERAS_DOCUMENT_PREFERENCES
-import com.opencapture.openzcine.pairing.nikonCamerasStore
-import com.opencapture.openzcine.pairing.recordsAfterSharedEdit
-import com.opencapture.openzcine.pairing.recordsForgetting
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.opencine.appkit.AppIntegration
 import com.opencapture.opencine.appkit.AppShell
@@ -128,7 +125,6 @@ import com.opencapture.openzcine.multicam.MulticamPickerRow
 import com.opencapture.openzcine.multicam.MulticamStage
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
-import com.opencapture.openzcine.transport.WifiLowLatencyLock
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
 import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.relay.monitorRelayNearbyOwner
@@ -362,7 +358,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                var savedCameras by remember { mutableStateOf(savedCameraStore.records()) }
+                val savedCameras by savedCameraStore::current
                 // Every complete on-device cache, for the startup Media Library
                 // (iOS `openCachedMediaLibrary` / listAllCachedClips).
                 var completedMediaBuckets by
@@ -383,38 +379,13 @@ class MainActivity : ComponentActivity() {
                  * after the camera applies its body-side confirmation.
                  */
                 fun persistPairedCameraProfile(saved: SavedCameraRecord): SavedCameraRecord {
-                    val before = savedCameras
-                    val updated =
-                        SavedCameraRecords.upserting(
-                            host = saved.host,
-                            cameraName = saved.cameraName,
-                            transport = saved.transport,
-                            lastSeenAtEpochMillis = saved.lastSeenAtEpochMillis,
-                            wifiSsid = saved.wifiSsid,
-                            records = savedCameras,
-                            // Read at SAVE time, which is the only moment this device is
-                            // demonstrably on the network the setup describes. Null whenever the
-                            // operator has not allowed the read, and an unnamed network joins
-                            // whatever router setup exists — the behaviour everyone had before.
-                            networkName = ConnectedNetworkName.read(this@MainActivity),
-                        )
-                    savedCameras = updated
-                    savedCameraStore.replace(updated)
+                    // The network is read at SAVE time, the only moment this device is
+                    // demonstrably on the network the setup describes.
+                    val (record, created) = savedCameraStore.savePaired(saved, ConnectedNetworkName.read(this@MainActivity))
                     // The wizard saves here BEFORE the body confirmation, so remember a row this
-                    // pairing created — an abandoned pairing takes it back out again. A camera
-                    // that already had this setup refreshed a row instead, and that one is not
-                    // ours to remove: a failed re-pair must never cost a working setup.
-                    pairingCreatedSetup = SavedCameraRecords.createdSetup(before, updated)
-                    return updated.firstOrNull { candidate ->
-                            candidate.transport == saved.transport &&
-                                (
-                                    candidate.host == saved.host ||
-                                        SavedCameraRecords.cameraNamesMatch(
-                                            candidate.cameraName,
-                                            saved.cameraName,
-                                        )
-                                )
-                        } ?: saved
+                    // pairing created: an abandoned pairing takes it back out again.
+                    pairingCreatedSetup = created
+                    return record
                 }
 
                 /**
@@ -430,28 +401,19 @@ class MainActivity : ComponentActivity() {
                     operatorSettings.adoptSetupStreamSettings(
                         streamPreset =
                             SetupStreamSettings.streamPreset(
-                                stored = record.streamPreset,
+                                stored = LiveViewStreamPreset.fromStoredName(record.streamPreset),
                                 transport = record.transport,
                                 seed = LiveViewStreamPreset.SHIPPED_DEFAULT,
                             ),
                         qualityBias =
                             SetupStreamSettings.qualityBias(
-                                stored = record.qualityBias,
+                                stored = LiveViewQualityBias.fromStoredName(record.qualityBias),
                                 transport = record.transport,
                                 seed = LiveViewQualityBias.SHIPPED_DEFAULT,
                             ),
                     )
                     operatorSettings.activeSetupStreamSettingsWriter = { preset, bias ->
-                        val updated =
-                            SavedCameraRecords.updatingStreamSettings(
-                                host = record.host,
-                                transport = record.transport,
-                                streamPreset = preset,
-                                qualityBias = bias,
-                                records = savedCameras,
-                            )
-                        savedCameras = updated
-                        savedCameraStore.replace(updated)
+                        savedCameraStore.saveStreamSettings(record, preset?.name, bias?.name)
                     }
                 }
 
@@ -470,20 +432,13 @@ class MainActivity : ComponentActivity() {
                     pairingCreatedSetup = null
                     // A live session means the setup earned its place whatever the card is doing.
                     if (monitorSession != null) return
-                    val updated =
-                        SavedCameraRecords.removing(
-                            host = created.host,
-                            cameraName = created.cameraName,
-                            records = savedCameras,
-                            transport = created.transport,
-                        )
-                    savedCameras = updated
-                    savedCameraStore.replace(updated)
+                    savedCameraStore.discard(created)
                 }
                 // The shared cameras page (SHELL-02): saved setups live in OpenCine's saved-camera
                 // document ("openzcine.cameras"), mirrored to this app's own records, which its
-                // connect, pairing and settings code keeps writing with its own rules; every such
-                // write is merged into the document at once (onReplaced below).
+                // connect, pairing and settings code keeps writing with its own rules through
+                // savedCameraStore, the one writer; every such write is merged into the document
+                // at once (bind below).
                 val savedCameraConnector =
                     remember(pairingEnvironment) {
                         SavedCameraConnector(
@@ -503,10 +458,7 @@ class MainActivity : ComponentActivity() {
                             records = { savedCameras },
                             recordsJson = savedCameraStore::recordsJson,
                             onPaired = ::acceptPairedCamera,
-                            onForget = { hosts ->
-                                savedCameras = recordsForgetting(hosts, savedCameras, pairingEnvironment.credentials::remove)
-                                savedCameraStore.replace(savedCameras)
-                            },
+                            onForget = savedCameraStore::forget,
                             onExplicitUsbReconnect = { host ->
                                 suppressedUsbAutoReconnectHosts = suppressedUsbAutoReconnectHosts - host
                             },
@@ -531,19 +483,13 @@ class MainActivity : ComponentActivity() {
                                     ),
                                 ),
                             ),
-                            // The shared page patched the records (a rename, a forgotten setup): this
-                            // app reads them back, and a removed access-point setup takes its key.
-                            nikonCamerasStore(
-                                getSharedPreferences(CAMERAS_DOCUMENT_PREFERENCES, MODE_PRIVATE),
-                                getSharedPreferences(SharedPreferencesSavedCameraStore.PREFERENCES_NAME, MODE_PRIVATE),
-                            ) {
-                                savedCameras =
-                                    recordsAfterSharedEdit(savedCameras, savedCameraStore, pairingEnvironment.credentials::remove)
-                            },
+                            // The shared page patches the records (a rename, a forgotten setup): the
+                            // store reads them back, and a removed access-point setup takes its key.
+                            savedCameraStore.camerasStore(getSharedPreferences(CAMERAS_DOCUMENT_PREFERENCES, MODE_PRIVATE)),
                             connectionScope,
                             // A reachable setup beats a newer offline one (Nikon main's row rule).
                             CamerasModel.RoutePolicy.PREFER_REACHABLE,
-                        ).also { model -> savedCameraStore.onReplaced = model::reloadSaved }
+                        ).also { model -> savedCameraStore.bind(model, pairingEnvironment.credentials::remove) }
                     }
                 val shell = remember(camerasModel, connectionScope) {
                     ShellModel(camerasModel, MonitorControlModel(connectionScope)).also {

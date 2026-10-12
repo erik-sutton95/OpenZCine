@@ -9,7 +9,7 @@ package com.opencapture.openzcine.pairing
  *
  * The two paths are HARD-separated (this cost real bugs on iOS):
  * - [CAMERA_ACCESS_POINT]: the phone joins the camera's own network via
- *   [CameraApJoiner] — the only class that requests or binds a Wi-Fi network.
+ *   the platform `CameraApJoiner`, the only class that requests or binds a Wi-Fi network.
  * - [PHONE_HOTSPOT]: the CAMERA joins the phone's hotspot; the phone hosts
  *   and must never scan or join anything — this path only ever watches NSD
  *   discovery for the camera to appear.

@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.NikonHosts
 import com.opencapture.opencine.nikon.CameraConnectionPhase
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -24,6 +25,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** Where a saved-setup reconnect is (the phases the connect card shows). */
 internal sealed interface SavedCameraPhase {
@@ -347,7 +351,7 @@ internal class SavedCameraConnector(
                 delay(CAMERA_AP_POST_JOIN_SETTLE_MILLIS)
                 // Discover on the live link with a FRESH browse: results from the pre-join
                 // network are stale here (#327).
-                if (!CameraDiscovery.isDialableHost(host)) {
+                if (!NikonHosts.isDialableHost(host)) {
                     host =
                         withTimeoutOrNull(CAMERA_AP_DISCOVER_AFTER_JOIN_MILLIS) {
                             environment.hotspotCameras.first { it.isNotEmpty() }.first().host

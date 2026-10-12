@@ -53,8 +53,8 @@ import com.opencapture.opencine.core.MonitorEntryID
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
-import com.opencapture.openzcine.pairing.SavedCameraRecord
 import kotlinx.coroutines.delay
+import com.opencapture.opencine.nikon.SavedCameraRecord
 
 /** One saved body offered by Add camera; [refusal] says why it cannot join, null when it can. */
 data class MulticamPickerRow(val record: SavedCameraRecord, val refusal: String?)

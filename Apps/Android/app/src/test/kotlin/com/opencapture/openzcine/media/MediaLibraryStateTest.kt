@@ -9,9 +9,6 @@ import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.frameio.FrameioCameraRejoinEvidence
 import com.opencapture.openzcine.frameio.FrameioDeliveryState
 import com.opencapture.openzcine.frameio.FrameioInternetHopState
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraRecords
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.LocalDate
@@ -26,6 +23,9 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaLayout
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** JVM coverage for the persisted, core-authorized Android library state. */
 class MediaLibraryStateTest {

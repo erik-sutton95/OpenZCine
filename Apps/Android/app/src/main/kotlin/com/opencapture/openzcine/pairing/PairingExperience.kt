@@ -76,8 +76,9 @@ import com.opencapture.openzcine.transport.AndroidUsbPtpCameraSource
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.InfrastructureCameraFinder
-import com.opencapture.openzcine.transport.InfrastructureDiscovery
-import com.opencapture.openzcine.transport.InfrastructureMissReason
+import com.opencapture.openzcine.transport.operatorCopy
+import com.opencapture.opencine.nikon.InfrastructureMissReason
+import com.opencapture.opencine.nikon.NikonCameraAp
 import com.opencapture.openzcine.transport.InfrastructureSearchReport
 import com.opencapture.openzcine.transport.UsbPtpCamera
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
@@ -99,6 +100,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** Saved camera-AP credential surface the wizard needs (real: [CameraWifiCredentialStore]). */
 public interface PairingCredentials {
@@ -180,7 +184,7 @@ public class PairingEnvironment(
     public val isCameraApProcessBound: () -> Boolean = { false },
     /**
      * Joins the camera AP unless already process-bound. Production uses
-     * [CameraApJoiner.ensureJoined]; demos may just call [joinCameraAp].
+     * [NikonCameraAp.ensureJoined]; demos may just call [joinCameraAp].
      */
     public val ensureCameraApJoined: suspend (ssid: String, passphrase: String?, timeoutMillis: Int) -> Boolean =
         { ssid, passphrase, _ -> joinCameraAp(ssid, passphrase) },
@@ -202,7 +206,7 @@ public fun realPairingEnvironment(
     context: Context,
     phaseLogger: (String, String) -> Unit = { _, _ -> },
 ): PairingEnvironment {
-    val joiner = CameraApJoiner(context)
+    val joiner = NikonCameraAp.joiner(context)
     val discovery =
         CameraDiscovery(AndroidNsdBrowser(context.getSystemService(NsdManager::class.java)))
     val initiatorGuid = PtpIpInitiatorIdentity.guid
@@ -219,10 +223,10 @@ public fun realPairingEnvironment(
             onDiagnosticPhase = { phase -> combinedPhaseLogger(phase, "") },
         )
     return PairingEnvironment(
-        // joinWithFallback owns pre-scan + fail-fast retries + NIKON_ZR_ prefix.
-        joinCameraAp = { ssid, passphrase -> joiner.joinWithFallback(ssid, passphrase) },
+        // NikonCameraAp.join owns pre-scan + fail-fast retries + the Nikon model prefix.
+        joinCameraAp = { ssid, passphrase -> NikonCameraAp.join(joiner, ssid, passphrase) },
         releaseCameraAp = joiner::release,
-        primeCameraApScan = joiner::primeScan,
+        primeCameraApScan = { joiner.primeScan() },
         hotspotCameras = discovery.cameras(),
         createSession = { host ->
             SwiftCoreCameraSession(
@@ -277,7 +281,7 @@ public fun realPairingEnvironment(
         awaitCameraApRestart = joiner::awaitReassociation,
         isCameraApProcessBound = joiner::isProcessBound,
         ensureCameraApJoined = { ssid, passphrase, timeoutMillis ->
-            joiner.ensureJoined(ssid, passphrase, timeoutMillis)
+            NikonCameraAp.ensureJoined(joiner, ssid, passphrase, timeoutMillis)
         },
     )
 }
@@ -1094,7 +1098,7 @@ public fun PairingExperience(
         onDiagnosticPhase("joiningWifi")
         work.value =
             scope.launch {
-                // Retries + pre-scan live inside joinWithFallback — one call only.
+                // Retries + pre-scan live inside NikonCameraAp.join: one call only.
                 val joined = environment.joinCameraAp(ssid, passphrase)
                 if (joined) {
                     // The encrypted store is the only place a confirmed key
@@ -1760,7 +1764,7 @@ private fun discoveryPane(
                 // or busy with nothing serving PTP, "still looking" withholds what the operator
                 // could act on.
                 if (cameras.isEmpty()) {
-                    wifiSearchMiss?.let { InfrastructureDiscovery.operatorCopy(it) }
+                    wifiSearchMiss?.operatorCopy()
                         ?: stringResource(R.string.pairing_waiting_hotspot_detail)
                 } else {
                     ""

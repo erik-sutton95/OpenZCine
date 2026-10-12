@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.transport
 
+import com.opencapture.opencine.nikon.NikonHosts
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -60,7 +61,7 @@ class CameraDiscoveryTest {
         // shared core scans it — excluding it here made such cameras Android-invisible.
         listOf("10.0.0.7", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.1.7")
             .forEach { host ->
-                assertTrue(CameraDiscovery.isSupportedPtpIpDiscoveryHost(host), host)
+                assertTrue(NikonHosts.isPrivateIPv4(host), host)
             }
     }
 
@@ -81,7 +82,7 @@ class CameraDiscoveryTest {
             "192.168.1.7 ",
             "camera.local",
         ).forEach { host ->
-            assertFalse(CameraDiscovery.isSupportedPtpIpDiscoveryHost(host), host)
+            assertFalse(NikonHosts.isPrivateIPv4(host), host)
         }
     }
 
@@ -148,10 +149,10 @@ class CameraDiscoveryTest {
 
     @Test
     fun `pending access point host keys are not dialable`() {
-        val key = CameraDiscovery.pendingAccessPointHostKey("NIKON_ZR_01234")
-        assertTrue(CameraDiscovery.isAccessPointHostKey(key))
-        assertFalse(CameraDiscovery.isDialableHost(key))
-        assertTrue(CameraDiscovery.isDialableHost("192.168.1.246"))
+        val key = NikonHosts.pendingAccessPointHostKey("NIKON_ZR_01234")
+        assertTrue(NikonHosts.isAccessPointHostKey(key))
+        assertFalse(NikonHosts.isDialableHost(key))
+        assertTrue(NikonHosts.isDialableHost("192.168.1.246"))
     }
 
     // The #327 resolution rule: a saved setup's dial target is a live discovery first, else
@@ -173,7 +174,7 @@ class CameraDiscoveryTest {
 
     @Test
     fun `pending key resolves only via discovery`() {
-        val key = CameraDiscovery.pendingAccessPointHostKey("NIKON_Z50_2ABC")
+        val key = NikonHosts.pendingAccessPointHostKey("NIKON_Z50_2ABC")
         assertEquals("192.168.1.1", CameraDiscovery.dialableSavedHost(key, "192.168.1.1"))
         assertEquals(null, CameraDiscovery.dialableSavedHost(key, null))
     }

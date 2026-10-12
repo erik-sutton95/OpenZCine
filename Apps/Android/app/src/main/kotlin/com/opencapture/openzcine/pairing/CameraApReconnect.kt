@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.NikonHosts
 import com.opencapture.openzcine.transport.CameraDiscovery
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -67,7 +68,7 @@ internal suspend fun awaitCameraApReadyAfterConfirm(
             async(Dispatchers.IO) {
                 awaitReassociation(timeoutMillis)
             }
-        val probeHost = host?.takeIf { CameraDiscovery.isDialableHost(it) }
+        val probeHost = host?.takeIf { NikonHosts.isDialableHost(it) }
         val probe =
             async(Dispatchers.IO) {
                 if (probeHost == null) return@async false

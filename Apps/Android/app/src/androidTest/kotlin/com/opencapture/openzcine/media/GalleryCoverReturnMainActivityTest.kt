@@ -22,8 +22,6 @@ import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.PreferencesSnapshot
 import com.opencapture.openzcine.pairing.CAMERAS_DOCUMENT_PREFERENCES
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
@@ -36,6 +34,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * Closing the still viewer or the player returns to the same gallery: no relist, no Loading, the

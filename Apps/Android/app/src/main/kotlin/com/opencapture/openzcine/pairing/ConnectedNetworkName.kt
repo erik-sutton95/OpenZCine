@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.NikonAccessPointSsid
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -47,7 +48,7 @@ public object ConnectedNetworkName {
      * clients, so some joins cannot work from there). False when no name can be read.
      */
     public fun isCameraAccessPoint(context: Context): Boolean =
-        currentSsids(context).any { unquoted(it)?.let(::looksLikeNikonAccessPointSsid) == true }
+        currentSsids(context).any { unquoted(it)?.let(NikonAccessPointSsid::isNikonZAccessPoint) == true }
 
     /**
      * Strips the quotes the platform wraps an SSID in, and rejects the placeholders it returns
@@ -56,7 +57,7 @@ public object ConnectedNetworkName {
      */
     public fun sanitized(rawSsid: String?): String? =
         // A camera's own access point is never an infrastructure network, whatever else is true.
-        unquoted(rawSsid)?.takeUnless(::looksLikeNikonAccessPointSsid)
+        unquoted(rawSsid)?.takeUnless(NikonAccessPointSsid::isNikonZAccessPoint)
 
     private fun unquoted(rawSsid: String?): String? {
         val trimmed = rawSsid?.trim() ?: return null

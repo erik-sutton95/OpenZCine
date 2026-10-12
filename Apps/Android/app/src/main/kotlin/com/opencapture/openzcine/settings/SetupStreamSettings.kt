@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.settings
 
-import com.opencapture.openzcine.pairing.SavedCameraTransport
+import com.opencapture.opencine.nikon.SavedCameraTransport
+
 
 /**
  * What one camera setup asks the camera to send, and what it starts at before anyone asks.

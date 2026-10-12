@@ -15,7 +15,7 @@ import com.opencapture.openzcine.R
 
 /**
  * Choose-time gate for every camera-AP flow: joining the camera's own network
- * needs the Wi‑Fi radio on, and with it off [CameraApJoiner] can only fail
+ * needs the Wi‑Fi radio on, and with it off the camera access-point join can only fail
  * silently after its scan waits. Defaults to `true` when the service is
  * missing — never block a join on a broken probe.
  */
