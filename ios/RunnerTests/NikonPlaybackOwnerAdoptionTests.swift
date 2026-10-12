@@ -1436,7 +1436,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             previous?.makeKeyAndVisible()
         }
         let share: () -> NSObject? = {
-            Self.galleryScrollObjects(host.view).first { $0.accessibilityLabel == "Share photo" }
+            HostedAccessibility.elements(in: host.view).first { $0.accessibilityLabel == "Share photo" }
         }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
@@ -1446,8 +1446,8 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(try XCTUnwrap(share()).accessibilityActivate())
         let offered = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
-            return Self.galleryScrollObjects(host.view).contains {
-                Self.galleryScrollIdentifier($0)?.hasPrefix("monitor.share.destination.") == true
+            return HostedAccessibility.elements(in: host.view).contains {
+                HostedAccessibility.identifier($0)?.hasPrefix("monitor.share.destination.") == true
             }
         }
         XCTAssertTrue(offered, "Photo Share must open the shared delivery choices")
