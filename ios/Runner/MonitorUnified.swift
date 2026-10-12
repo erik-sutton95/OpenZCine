@@ -401,11 +401,7 @@ struct NikonMonitorShell: View {
             haptics: .init(isEnabled: { [weak model] in
                 model?.preferences.hapticsEnabled == true
             }),
-            readBundle: {
-                var value = model.scopeAssist
-                value.levelAxis = model.exposureSignalMapping.scopeLevelAxis
-                return value
-            }, readTransfer: { model.scopeAssist.transfer },
+            readBundle: { model.scopeAssist }, readTransfer: { model.scopeAssist.transfer },
             readClipByte: { _ in model.scopeAssist.clipByte },
             audioAvailable: model.monitorAvailability.audioMeters,
             configurableTools: Set(model.liveAssistPaletteTools.map(\.selection)),

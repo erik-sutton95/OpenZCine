@@ -617,14 +617,14 @@ enum DemoHarness {
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
                     // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
-                    // view capture with a pinned scope still gets samples.
+                    // view capture with a pinned scope still gets samples (hence every scope).
                     let scopesOn = MonitorAssistTool.scopeTools.contains {
                         model.assist.liveTools.contains($0)
                     }
                     if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
                     {
-                        Task { await model.refreshScopes(from: mock) }
+                        Task { await model.refreshScopes(from: mock, full: true) }
                     }
                 }
                 if env["ZC_DEMO_SCOPE_SAMPLES"] == "1",

@@ -1470,7 +1470,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(MonitorAudioMetrics.panelSize.height, 168)
     }
 
-    /// Live view samples the feed JPEG's raw codes straight through UIKit; playback taps the
+    /// Live view samples the feed JPEG's raw codes on the shared working raster; playback taps the
     /// composition through Core Image with an explicit BT.709 output space to undo AVFoundation's
     /// working-space conversion. This pins the two pipelines to each other: the same pixels
     /// sampled through both must produce (near-)identical scope readings. [1:1 live/playback]
@@ -1497,14 +1497,18 @@ final class RunnerTests: XCTestCase {
                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
                 provider: data, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
 
-        // Path A — live view: straight UIKit decode into the untagged sampling context.
-        let live = try XCTUnwrap(
-            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: 256))
-        let liveSamples = OpenCineMedia.ScopeSampler.sampleRaw(
-            bytes: live.data, width: live.width, height: live.height,
-            bytesPerRow: live.bytesPerRow, transfer: .rec709, includePoints: true, layout: .rgba,
-            stride: ScopeAssistSampling.pointStride, includeSampleCoordinates: true,
-            requireCompleteRows: true)
+        // Both paths end on the shared engine's tap: the working raster and its 200-wide copy.
+        let raster = MonitorWorkingRaster()
+        func tap(_ image: CGImage) throws -> OpenCineMedia.ScopeSamples {
+            let buffer = try XCTUnwrap(raster.prepared(image))
+            let tap = try XCTUnwrap(
+                LiveFrameTap.copyBGRA8(buffer, maxWidth: OpenCineMedia.ScopeSampler.maxWidth))
+            return OpenCineMedia.ScopeSampler.sampleRaw(
+                bytes: tap.bytes, width: tap.width, height: tap.height,
+                bytesPerRow: tap.bytesPerRow, transfer: .rec709, includePoints: true)
+        }
+        // Path A (live view): the decoded frame's own codes.
+        let liveSamples = try tap(cgImage)
 
         // Path B — playback: through the composition render context (working sRGB) with the
         // BT.709 output space, exactly like the player's scope tap.
@@ -1513,13 +1517,7 @@ final class RunnerTests: XCTestCase {
             MediaLUT.renderContext.createCGImage(
                 ciImage, from: ciImage.extent, format: .RGBA8,
                 colorSpace: MonitorImageSampling.fileCodeColorSpace))
-        let playback = try XCTUnwrap(
-            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: rendered), maxWidth: 256))
-        let playbackSamples = OpenCineMedia.ScopeSampler.sampleRaw(
-            bytes: playback.data, width: playback.width, height: playback.height,
-            bytesPerRow: playback.bytesPerRow, transfer: .rec709, includePoints: true,
-            layout: .rgba, stride: ScopeAssistSampling.pointStride,
-            includeSampleCoordinates: true, requireCompleteRows: true)
+        let playbackSamples = try tap(rendered)
 
         XCTAssertEqual(
             liveSamples.histogramLuma.reduce(0, +), playbackSamples.histogramLuma.reduce(0, +),
@@ -1544,43 +1542,51 @@ final class RunnerTests: XCTestCase {
         }
     }
 
-    func testScopeBundleKeepsRawSamples() {
+    /// Playback scopes are the shared derivation on the clip's Nikon transfer and clip.
+    func testPlaybackScopeBundleIsTheSharedDerivation() {
         let point = OpenCineMedia.ScopePoint(
             xRatio: 0.5, yRatio: 0, red: 112, green: 68, blue: 62, luma: 82)
         var luma = Array(repeating: 0, count: 256)
         luma[82] = 1
+        var red = Array(repeating: 0, count: 256)
+        red[112] = 1
+        var green = Array(repeating: 0, count: 256)
+        green[68] = 1
+        var blue = Array(repeating: 0, count: 256)
+        blue[62] = 1
         let samples = OpenCineMedia.ScopeSamples(
-            histogramLuma: luma,
-            histogramRed: Array(repeating: 0, count: 256),
-            histogramGreen: Array(repeating: 0, count: 256),
-            histogramBlue: Array(repeating: 0, count: 256),
+            histogramLuma: luma, histogramRed: red, histogramGreen: green, histogramBlue: blue,
             points: [point])
-        let mapping = ExposureSignalMapping(curve: .redLog3G10)
+        let configuration = NikonPlaybackScopeConfiguration(
+            mapping: ExposureSignalMapping(curve: .redLog3G10), compensation: .quarter,
+            vectorscope: false, look: nil)
 
-        let bundle = ScopeAssistSampling.bundle(
-            samples: samples,
-            trafficLightsCrushClip: .quarter,
-            mapping: mapping)
-        // Every scope — vectorscope included — reads the untouched source/log points.
+        let bundle = configuration.bundle(samples: samples, previous: .empty)
+        // Every scope reads the untouched source/log points.
         XCTAssertEqual(bundle.samples, samples)
         XCTAssertEqual(bundle.revision, 1)
-        // The shared histogram is drawn on this camera's axis, not a shared transfer curve.
+        XCTAssertEqual(bundle.transfer, .log3G10)
+        XCTAssertEqual(bundle.clipByte, 180)
+        XCTAssertNil(bundle.levelAxis, "the shared axis follows the transfer and clip")
         XCTAssertEqual(
             bundle.histogramDisplay,
             OpenCineMedia.ScopeSampler.histogramDisplay(
-                samples: samples, previous: .empty, axis: mapping.scopeLevelAxis))
-        let next = ScopeAssistSampling.bundle(
-            samples: samples, trafficLightsCrushClip: .quarter, mapping: mapping,
-            previous: bundle)
+                samples: samples, previous: .empty, transfer: .log3G10, clipByte: 180))
+        XCTAssertEqual(
+            bundle.traffic,
+            ScopeTrafficLights.reading(
+                red: red, green: green, blue: blue, luma: luma, transfer: .log3G10, clipByte: 180,
+                threshold: MonitorCrushClipCompensation.quarter.pixelFractionThreshold))
+        let next = configuration.bundle(samples: samples, previous: bundle)
         XCTAssertEqual(next.revision, 2)
         XCTAssertEqual(next.trailSamples, samples)
     }
 
     func testWaveformAndParadePaletteUsesCalibratedBrightness() {
-        // The intensity the Nikon scope plot hands the shared plots.
-        XCTAssertEqual(NikonScopePlot.traceIntensity(0), 0)
-        XCTAssertEqual(NikonScopePlot.traceIntensity(100), 0.25)
-        XCTAssertEqual(NikonScopePlot.traceIntensity(200), 0.5)
+        // The intensity the shared surface hands the waveform and parade plots.
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(0), 0)
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(100), 0.25)
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(200), 0.5)
         // The vectorscope keeps its unity baseline.
         XCTAssertEqual(MonitorScopeGeometry.vectorscopeIntensity(100), 1)
     }

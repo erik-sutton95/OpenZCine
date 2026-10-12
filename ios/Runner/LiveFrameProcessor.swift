@@ -313,77 +313,98 @@ extension NativeAppModel {
         renderedLiveAssistTools.contains(.level)
     }
 
-    /// The cube the vectorscope pushes its sampled points through so it reads the MONITOR image:
-    /// the operator's active LUT when the LUT tool is on, else the built-in display tone map for
-    /// the current signal curve. `nil` when the vectorscope is hidden (skips the transform).
-    func vectorscopeMonitorCube(
-        visibleTools: Set<MonitorAssistTool>, curve: ExposureToneCurve
-    ) -> CubeLUT? {
-        guard visibleTools.contains(.vectorscope) else { return nil }
-        let fallback: MonitorLUT = curve == .redLog3G10 ? .log3G10Rec709 : .nLogRec709
-        let selection =
-            LUTResolution.active(
-                visibleTools: visibleTools, selected: assistConfiguration.selectedLUT)
-            ?? .builtIn(fallback)
-        return LUTCubeCache.cube(forKey: selection.cacheKey) {
-            switch selection {
-            case .builtIn(let look): return look.cube()
-            case .stored(let category, let fileName):
-                return self.lutFileStore.cube(category: category, fileName: fileName)
+    /// The shared assist engine's policy for the scopes shown now (and an open scope inspector),
+    /// on the operator's crush/clip compensation. The picture effects stay on the Nikon image
+    /// graph; only an armed LUT rides along, so VECTOR reads the graded monitor picture as on
+    /// every app. `full` samples every scope regardless of the tools on (demo seeds).
+    func liveScopePolicy(full: Bool = false) -> MonitorAssistPolicy {
+        let visible = scopeSamplingLiveAssistTools
+        var policy = MonitorAssistPolicy()
+        policy.histogram = full || visible.contains(.histogram)
+        policy.waveform = full || visible.contains(.waveform)
+        policy.parade = full || visible.contains(.parade)
+        policy.vectorscope = full || visible.contains(.vectorscope)
+        policy.trafficLights = full || visible.contains(.trafficLights)
+        policy.trafficThreshold = assist.crushClipCompensation.pixelFractionThreshold
+        if policy.vectorscope, let armed = armedScopeLUT(visibleTools: visible) {
+            let packed = armedScopeLUTMemo.withLock { memo -> PackedScopeLUT in
+                if let memo, memo.key == armed.key { return memo }
+                let rgba = armed.cube.rgbaComponents.withUnsafeBytes { Data($0) }
+                let next: PackedScopeLUT = (armed.key, armed.cube.size, rgba)
+                memo = next
+                return next
             }
+            policy.image.lutDimension = packed.size
+            policy.image.lutRGBA = packed.rgba
         }
+        return policy
     }
 
-    /// Publishes scope bins/points and derived traffic-light readings in one assignment.
-    /// Heavy derivation runs off the main actor; only the final `scopeAssist` assignment is main-bound.
-    func publishScopeAssist(
-        samples: OpenCineMedia.ScopeSamples,
-        publish: @MainActor (ScopeAssistBundle) -> Void
-    ) async {
-        let trafficLightsCrushClip = assist.crushClipCompensation
-        let mapping = exposureSignalMapping
-        let vectorscopeCube = vectorscopeMonitorCube(
-            visibleTools: scopeSamplingLiveAssistTools,
-            curve: mapping.curve)
-        let previous = scopeAssist
-        let bundle = await Task.detached(priority: .userInitiated) {
-            ScopeAssistSampling.bundle(
-                samples: samples,
-                trafficLightsCrushClip: trafficLightsCrushClip,
-                mapping: mapping,
-                vectorscopeCube: vectorscopeCube,
-                previous: previous)
-        }.value
-        guard !Task.isCancelled, exposureSignalMapping == mapping,
-            assist.crushClipCompensation == trafficLightsCrushClip
-        else { return }
-        publish(bundle)
+    /// The operator's LUT when the LUT tool is on, so VECTOR reads the graded monitor picture,
+    /// keyed by its stored revision.
+    func armedScopeLUT(visibleTools: Set<MonitorAssistTool>) -> (key: String, cube: CubeLUT)? {
+        guard
+            let selection = LUTResolution.active(
+                visibleTools: visibleTools, selected: assistConfiguration.selectedLUT),
+            let cube = LUTCubeCache.cube(
+                forKey: selection.cacheKey,
+                {
+                    switch selection {
+                    case .builtIn(let look): return look.cube()
+                    case .stored(let category, let fileName):
+                        return self.lutFileStore.cube(category: category, fileName: fileName)
+                    }
+                })
+        else { return nil }
+        return (LUTCubeCache.versionedKey(forKey: selection.cacheKey), cube)
     }
 
     func clearScopeAssist() {
         publishLiveScopeBundle(.empty)
     }
 
-    /// Demo / mock-feed path: sample a `UIImage` (no live JPEG loop). `full` forces scatter points
-    /// and a fine stride regardless of which live-view assist tools are visible — for scope
-    /// surfaces that don't register as assist tools (e.g. the portrait scopes frame).
+    /// Demo / mock-feed path: the still runs the live scope tap once (no live JPEG loop) and
+    /// this waits for its bundle. `full` samples every scope regardless of the tools on, for
+    /// screenshot seeds.
     func refreshScopes(from image: UIImage, full: Bool = false) async {
-        guard let buffer = MonitorImageSampling.rgbaBuffer(from: image, maxWidth: 200) else {
-            return
-        }
         openStillScopeSource()
-        let visible = renderedLiveAssistTools
-        let includePoints =
-            full || ScopeAssistSampling.needsPointSamples(visible: visible)
-        let stride = ScopeAssistSampling.pointStride
-        let samples = OpenCineMedia.ScopeSampler.sampleRaw(
-            bytes: buffer.data, width: buffer.width, height: buffer.height,
-            bytesPerRow: buffer.bytesPerRow, transfer: .rec709, includePoints: includePoints,
-            layout: .rgba, stride: stride, includeSampleCoordinates: true, requireCompleteRows: true
-        )
-        await publishScopeAssist(samples: samples, publish: captureLiveScopePublication())
+        let before = scopeAssist.revision
+        // ponytail: bounded polling; the engine may drop a still that lands inside its cadence,
+        // so a missed one is offered again. Demo and tests only.
+        for _ in 0..<8 where scopeAssist.revision == before {
+            sampleScopesIfDue(clean: image, full: full) { true }
+            for _ in 0..<15 where scopeAssist.revision == before {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
     }
 }
+
+/// The Nikon source facts the shared assist engine reads (A1-05). The transfer and the clip
+/// travel with each frame; this supplies the display cube VECTOR maps log through when no
+/// operator LUT is armed.
+extension MonitorAssistConfiguration {
+    static let nikonMonitor = MonitorAssistConfiguration(
+        defaultScopeLook: { NikonScopeLook.display(for: $0) }, logSubsystem: "OpenZCine")
+}
+
+enum NikonScopeLook {
+    /// The built-in log to Rec.709 look for a camera log curve; display-referred stills need
+    /// none.
+    static func display(for transfer: MonitorTransfer) -> CubeLUT? {
+        let look: MonitorLUT
+        switch transfer {
+        case .log3G10: look = .log3G10Rec709
+        case .nlog: look = .nLogRec709
+        default: return nil
+        }
+        return LUTCubeCache.cube(forKey: LUTSelection.builtIn(look).cacheKey) { look.cube() }
+    }
+}
+
+/// One packed copy of the armed LUT for the scope policy, which is rebuilt per frame.
+private typealias PackedScopeLUT = (key: String, size: Int, rgba: Data)
+private let armedScopeLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialState: nil)
 
 /// Source cube and calibration facts; shared native runtime owns the complete image graph and memo.
 final class LiveFrameProcessor {

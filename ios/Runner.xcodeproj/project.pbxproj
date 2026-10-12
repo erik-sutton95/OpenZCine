@@ -49,6 +49,7 @@
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
 		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
 		F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */; };
+		F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */; };
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
 		331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */; };
 		7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */; };
@@ -62,7 +63,6 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
-		A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */; };
 		A652A40C5850105E136F0739 /* LiveFrameRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852060CB19F3A779DA73A8F3 /* LiveFrameRenderer.swift */; };
 		B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */; };
 		BRND00000000000000000002 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BRND00000000000000000001 /* Branding.swift */; };
@@ -223,6 +223,7 @@
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
 		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
 		F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSurfaceRegressionTests.swift; sourceTree = "<group>"; };
+		F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistEngineAdoptionTests.swift; sourceTree = "<group>"; };
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTimecodeTests.swift; sourceTree = "<group>"; };
@@ -253,7 +254,6 @@
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9B8454460465D3532DE04016 /* Version.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Version.xcconfig; path = ../Config/Version.xcconfig; sourceTree = "<group>"; };
 		9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RedDownloadView.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScopeAssistSampling.swift; sourceTree = "<group>"; };
 		B47FA7E6D89EF63D0B2B27B2 /* FrameDecoder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FrameDecoder.swift; sourceTree = "<group>"; };
 		B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModel.swift; path = Frameio/FrameioModel.swift; sourceTree = "<group>"; };
 		B99B47BB1FB3BC66DC16FAC8 /* Frameio.local.xcconfig.example */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Frameio.local.xcconfig.example; sourceTree = "<group>"; };
@@ -393,6 +393,7 @@
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
 				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
 				F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */,
+				F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */,
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
 				331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */,
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
@@ -505,7 +506,6 @@
 				B47FA7E6D89EF63D0B2B27B2 /* FrameDecoder.swift */,
 				A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */,
 				43398C0B64AE0344D7602746 /* MetalLiveView.swift */,
-				A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */,
 				644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */,
 				C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */,
 				1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */,
@@ -746,6 +746,7 @@
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
 				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
 				F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */,
+				F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */,
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
 				331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */,
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,
@@ -831,7 +832,6 @@
 				78BE124BA79C2860F3D7D6EA /* FrameDecoder.swift in Sources */,
 				A25000555EDE55EDE0000002 /* NikonFeedIncidentProducer.swift in Sources */,
 				0F8144A1310FEEE9A63795A8 /* MetalLiveView.swift in Sources */,
-				A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */,
 				B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */,
 				079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */,
 				0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */,

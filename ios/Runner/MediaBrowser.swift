@@ -1217,10 +1217,7 @@ struct MediaPlayerView: View {
             availability: model.isClipDownloaded(clip) ? .original : .camera,
             progress: model.mediaDownloadProgress[clip.id],
             colorLabel: mapping.curve.rawValue,
-            transfer: NikonPlaybackScopeConfiguration(
-                trafficLightsCrushClip: model.assist.crushClipCompensation, mapping: mapping,
-                vectorscopeCube: nil
-            ).transfer, clipByte: Int(mapping.clipNative.rounded()),
+            transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
             metadata: rows, clockStyle: .roundedMinutesSeconds, bufferedThroughSeconds: buffered)
     }
     private func synchronizeNativeFacts() {

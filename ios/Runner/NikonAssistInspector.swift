@@ -338,11 +338,7 @@ struct NikonAssistInspectorPreview: View {
                 tool: tool.selection, assist: model.assist,
                 stores: model.scopePanels.operatorStores,
                 haptics: .init(isEnabled: { model.preferences.hapticsEnabled }),
-                readBundle: {
-                    var bundle = model.scopeAssist
-                    bundle.levelAxis = model.exposureSignalMapping.scopeLevelAxis
-                    return bundle
-                },
+                readBundle: { model.scopeAssist },
                 fittedSize: CGSize(
                     width: availableWidth,
                     height: CGFloat(

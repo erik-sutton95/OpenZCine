@@ -2364,7 +2364,8 @@ struct OperatorSettingsPanel: View {
             operatorHaptics: .init(isEnabled: { [weak model] in
                 model?.preferences.hapticsEnabled == true
             }),
-            transfer: model.scopeAssist.transfer, clipByte: model.scopeAssist.clipByte,
+            transfer: model.exposureSignalMapping.curve.monitorTransfer,
+            clipByte: model.exposureSignalMapping.clipByte,
             lookLabel: lookLabel, lookCatalog: { AnyView(LUTPickerContent().environment(model)) },
             input: .init(
                 remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),

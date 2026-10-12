@@ -2174,14 +2174,14 @@ final class NativeAppModel {
     /// Publishes one bundle for the current picture source; a stale source is rejected.
     func publishLiveScopeBundle(_ bundle: ScopeAssistBundle) {
         nativePictureBus.publish(
-            nativePictureSource, source: nil, transfer: .rec709, bundle: bundle)
+            nativePictureSource, source: nil, transfer: bundle.transfer, bundle: bundle)
     }
     /// Async scope derivation retains its original lease, never the source current at completion.
     func captureLiveScopePublication() -> @MainActor (ScopeAssistBundle) -> Void {
         let captured = nativePictureSource
         return { [weak self] bundle in
             _ = self?.nativePictureBus.publish(
-                captured, source: nil, transfer: .rec709, bundle: bundle)
+                captured, source: nil, transfer: bundle.transfer, bundle: bundle)
         }
     }
     /// A still sampled with no live picture (the demo's mock feed) opens the live source the
@@ -4483,7 +4483,8 @@ final class NativeAppModel {
     /// Whether the CPU renderer's memo may hold a baked frame — lets the identity/Metal display
     /// path skip the per-frame eviction actor hop and evict once on transition instead.
     @ObservationIgnored private var rendererHoldsBakedFrame = false
-    private let scopeSampler = MonitorUIImageScopeSampler()
+    /// The shared assist engine every live picture source's scopes run through (A1-05).
+    @ObservationIgnored private let scopeEngine = MonitorAssistEngine(configuration: .nikonMonitor)
     private var cameraSession: NativeCameraSession? {
         didSet { if oldValue !== cameraSession { retireMediaProducer() } }
     }
@@ -4781,9 +4782,8 @@ final class NativeAppModel {
     /// Property values exactly as read from the camera. `cameraPropertySnapshot` also carries the
     /// pickers' optimistic bytes; the seam reports only these.
     @ObservationIgnored private var reportedPropertySnapshot = PTPCameraPropertySnapshot()
-    @ObservationIgnored private var lastScopeSampleTime: CFAbsoluteTime = 0
-    /// True while `sampleLiveScopeAssist` is in flight — skip starting another decode-heavy sample.
-    @ObservationIgnored private var scopeSampleInFlight = false
+    /// The picture source whose ceiling the scope engine measures; a new one resets the engine.
+    @ObservationIgnored private weak var scopeEngineSource: LiveFrameSampleBus.Source?
     @ObservationIgnored private var lastLevelUpdateTime: CFAbsoluteTime = 0
     /// Thermal-shedding-only display gate; NOT a general cap (see `publishLiveFrameDisplay`). A
     /// wall-clock "every N seconds" gate against a ~fixed-period source (the ZR delivers ~30 fps)
@@ -7124,7 +7124,6 @@ final class NativeAppModel {
             resetCadence: { [weak self] in
                 frameRate = FrameRateSampler()
                 self?.lastLevelUpdateTime = 0
-                self?.lastScopeSampleTime = 0
             },
             health: { [weak self] health in
                 guard let self, cameraSession === session else { return }
@@ -8029,21 +8028,6 @@ final class NativeAppModel {
         }
     }
 
-    /// One shared scope sample for every histogram / waveform (CPU) / parade (CPU) / TL assist.
-    /// `image` must be the clean decoded camera frame — never the assist-baked display frame.
-    private func sampleLiveScopeAssist(
-        image: UIImage, visibleScopes: Set<MonitorAssistTool>, thermalTier: ThermalTier
-    ) async -> OpenCineMedia.ScopeSamples {
-        // ONE sampler for every surface — the same 200px/stride-2 CPU pipeline playback uses;
-        // binning the full-resolution frame reads subtly differently from the shared downsampled
-        // tap. [1:1 live/playback invariant]
-        let stride = ScopeAssistSampling.pointStride
-        let includePoints = ScopeAssistSampling.needsPointSamples(visible: visibleScopes)
-        return await scopeSampler.sample(
-            from: image, maxWidth: 200, stride: stride, includePoints: includePoints,
-            includeSampleCoordinates: true)
-    }
-
     /// Bakes active monitor assists into a decoded frame off the main actor so the feed view only
     /// swaps a finished bitmap. Display-only: scopes must keep sampling the clean input frame.
     private func liveFrameRenderer() -> LiveFrameRenderer {
@@ -8121,43 +8105,42 @@ final class NativeAppModel {
         dismissInstantReview()
     }
 
-    /// One shared scope sample per throttle tick, feeding histogram, waveform, parade and traffic
-    /// lights (see `ScopeAssistSampling`); the portrait scopes stack renders exactly these tools,
-    /// so this set already covers it. Mode-filtered: a clean view with nothing pinned samples no
-    /// scopes at all.
+    /// One shared scope tap per due frame, through the shared assist engine (A1-05): its cadence,
+    /// sampler, traffic lights and bundle, on this camera's transfer and stated clip. The portrait
+    /// scopes stack renders exactly these tools. Mode-filtered: a clean view with nothing pinned
+    /// samples no scopes at all.
     ///
     /// Always metered on the CLEAN frame — false colour, LUT, zebra and peaking are display-only
-    /// assists and must not shift histogram, waveform, parade or traffic-light readings. Both
-    /// picture sources land here, so the scopes read identically whether the frame came off the
-    /// camera's own stream or an HDMI capture device.
+    /// assists and must not shift histogram, waveform, parade or traffic-light readings. Every
+    /// picture source lands here (camera stream, HDMI capture, relay, the demo still), so the
+    /// scopes read identically whichever delivered the frame.
     ///
-    /// `isStillCurrent` is re-checked after the async sample so a source torn down mid-sample
-    /// cannot publish a reading for a picture that has already left the screen.
+    /// `isStillCurrent` is re-checked when the bundle returns, and the bus refuses a retired
+    /// source's lease, so a source torn down mid-tap cannot publish for a gone picture.
     func sampleScopesIfDue(
-        clean: UIImage, isStillCurrent: @escaping @MainActor () -> Bool
+        clean: UIImage, full: Bool = false, isStillCurrent: @escaping @MainActor () -> Bool
     ) {
-        let visibleScopes = scopeSamplingLiveAssistTools
-        guard ScopeAssistSampling.shouldSample(visible: visibleScopes) else {
+        let policy = liveScopePolicy(full: full)
+        guard policy.needsScopes else {
             if scopeAssist != .empty { clearScopeAssist() }
             return
         }
-        let scopeInterval = ScopeAssistSampling.thermalScopeInterval(
-            activeScopeCount: ScopeAssistSampling.activeScopeCount(visible: visibleScopes),
-            thermalTier: thermalTier)
-        let now = CFAbsoluteTimeGetCurrent()
-        guard !scopeSampleInFlight, now - lastScopeSampleTime >= scopeInterval else { return }
-        lastScopeSampleTime = now
-        scopeSampleInFlight = true
-        let tier = thermalTier
+        guard let source = nativePictureSource, let image = clean.cgImage else { return }
+        if scopeEngineSource !== source {
+            scopeEngine.reset()
+            scopeEngine.adopt(exposureCeiling: source.exposureCeiling)
+            scopeEngineSource = source
+        }
+        let mapping = exposureSignalMapping
+        let transfer = mapping.curve.monitorTransfer
+        source.exposureCeiling.declare(clipByte: mapping.clipByte, for: transfer)
         let publish = captureLiveScopePublication()
-        Task {
-            // `defer` so an early exit can never leave the in-flight gate stuck true (which would
-            // silently stop all scope sampling).
-            defer { scopeSampleInFlight = false }
-            let samples = await sampleLiveScopeAssist(
-                image: clean, visibleScopes: visibleScopes, thermalTier: tier)
-            guard isStillCurrent(), !Task.isCancelled else { return }
-            await publishScopeAssist(samples: samples, publish: publish)
+        scopeEngine.sample(image, effects: policy, transfer: transfer) { result in
+            guard let bundle = result.bundle else { return }
+            Task { @MainActor in
+                guard isStillCurrent() else { return }
+                publish(bundle)
+            }
         }
     }
 

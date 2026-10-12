@@ -72,6 +72,8 @@ enum MediaLUT {
             var revision: UInt64 = 0
             var samples: OpenCineMedia.ScopeSamples = .empty
             var isActive = false
+            /// The clip's transfer: the shared tap weighs luma by it, as live view does.
+            var transfer = MonitorTransfer.rec709
             var activationGeneration: UInt64 = 0
             var compositionGeneration: UInt64 = 0
             var nextRequestSequence: UInt64 = 0
@@ -79,6 +81,7 @@ enum MediaLUT {
         }
 
         private struct ScopeSamplingTicket: Sendable {
+            let transfer: MonitorTransfer
             let activationGeneration: UInt64
             let compositionGeneration: UInt64
             let requestSequence: UInt64
@@ -87,6 +90,8 @@ enum MediaLUT {
         private let effects = OSAllocatedUnfairLock<ImageEffectsCompositor.ResolvedEffects>(
             initialState: ImageEffectsCompositor.ResolvedEffects())
         private let scopeState = OSAllocatedUnfairLock<ScopeState>(initialState: ScopeState())
+        /// The shared working raster the scope tap reads, as in live view.
+        private let raster = MonitorWorkingRaster()
 
         /// Updates the composition payload in place. Returns `true` when the effects actually
         /// changed, so the player can force a paused frame to re-render only when needed (and
@@ -99,12 +104,13 @@ enum MediaLUT {
             }
         }
 
-        func setScopesActive(_ active: Bool) {
+        func setScopesActive(_ active: Bool, transfer: MonitorTransfer = .rec709) {
             scopeState.withLock {
                 if $0.isActive != active {
                     $0.activationGeneration &+= 1
                 }
                 $0.isActive = active
+                $0.transfer = transfer
                 if !active {
                     $0.revision &+= 1
                     $0.samples = .empty
@@ -168,6 +174,7 @@ enum MediaLUT {
                 // real time, matching the live scopes' ~30 Hz cadence.
                 state.nextRequestSequence &+= 1
                 return ScopeSamplingTicket(
+                    transfer: state.transfer,
                     activationGeneration: state.activationGeneration,
                     compositionGeneration: compositionGeneration,
                     requestSequence: state.nextRequestSequence)
@@ -176,19 +183,20 @@ enum MediaLUT {
             // Render the scope tap in the ASSET's own transfer space (BT.709 for camera files),
             // not the composition's sRGB working space: AVFoundation converts 709->sRGB on decode,
             // and without undoing that here playback scopes read systematically different values
-            // than live view (which samples raw JPEG codes). [1:1 live/playback invariant]
+            // than live view (which samples raw JPEG codes). The tap is the shared engine's
+            // (working raster, decimated 200-wide copy, the clip transfer's luma), so a clip
+            // reads exactly as live view. [1:1 live/playback invariant]
             guard
                 let cgImage = MediaLUT.renderContext.createCGImage(
                     source, from: source.extent, format: .RGBA8,
                     colorSpace: MonitorImageSampling.fileCodeColorSpace),
-                let buffer = MonitorImageSampling.rgbaBuffer(
-                    from: UIImage(cgImage: cgImage), maxWidth: 200)
+                let buffer = raster.prepared(cgImage),
+                let tap = LiveFrameTap.copyBGRA8(
+                    buffer, maxWidth: OpenCineMedia.ScopeSampler.maxWidth)
             else { return }
             let samples = OpenCineMedia.ScopeSampler.sampleRaw(
-                bytes: buffer.data, width: buffer.width, height: buffer.height,
-                bytesPerRow: buffer.bytesPerRow, transfer: .rec709, includePoints: true,
-                layout: .rgba, stride: ScopeAssistSampling.pointStride,
-                includeSampleCoordinates: true, requireCompleteRows: true)
+                bytes: tap.bytes, width: tap.width, height: tap.height,
+                bytesPerRow: tap.bytesPerRow, transfer: ticket.transfer, includePoints: true)
             scopeState.withLock { state in
                 guard state.isActive,
                     state.activationGeneration == ticket.activationGeneration,
