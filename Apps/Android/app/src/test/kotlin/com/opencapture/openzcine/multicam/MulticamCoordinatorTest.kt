@@ -137,13 +137,13 @@ class MulticamCoordinatorTest {
         val plan = stage.groupPlan()
         assertEquals(RecordDirection.START, plan.direction)
         assertEquals(3, plan.targets.size)
-        stage.run(plan)
+        stage.run(plan, together = true)
         assertEquals(true, bodies.getValue("h0").reported.value)
         assertEquals(true, bodies.getValue("h2").reported.value)
         assertEquals(false, bodies.getValue("h1").reported.value)
-        assertEquals(MulticamCopy.COULDNT_REC, stage.memberAt(1)?.note)
-        assertNull(stage.memberAt(0)?.note)
-        assertEquals("2 of 3 rolling. ZR h1 didn't start.", stage.toast)
+        assertEquals("Recording command rejected · check camera", stage.memberAt(1)?.note)
+        assertEquals("Recording", stage.memberAt(0)?.note)
+        assertEquals("2 of 3 confirmed · check camera tiles", stage.toast)
         // Partial success is not a transaction: nothing stops the cameras that started.
         assertFalse("stop" in bodies.getValue("h0").log)
     }
@@ -166,7 +166,6 @@ class MulticamCoordinatorTest {
         assertEquals(frames, bodies.getValue("h1").frames, "the lent member's stage feed stands down")
         val during = stage.groupPlan()
         assertEquals(listOf<ExclusionReason>(ExclusionReason.Busy), during.exclusions.map { it.reason })
-        assertEquals(2, during.targets.size)
 
         stage.reclaim()
         settle()
@@ -176,12 +175,33 @@ class MulticamCoordinatorTest {
         assertFalse("disconnect" in bodies.getValue("h1").log, "no CloseSession")
     }
 
+    /** A4-19: Record all is strict in every app, so a camera lent to Live View holds the whole press. */
+    @Test
+    fun recordAllWithOneCameraInLiveViewCommandsNone() = runTest {
+        val stage = stage()
+        for (index in 0 until 3) stage.add(record("h$index"), reachable = true)
+        settle()
+        assertNotNull(stage.lend(assertNotNull(stage.memberAt(1)).id))
+        val plan = stage.groupPlan()
+        assertTrue(plan.isRefused)
+        assertFalse(plan.isExecutable)
+        stage.run(plan, together = true)
+        for (body in bodies.values) assertFalse("start" in body.log)
+        assertEquals("Cameras changed · try again", stage.toast)
+        // A tile's own press still records that camera alone.
+        val own = stage.plan(assertNotNull(stage.memberAt(0)).id)
+        assertTrue(own.isExecutable)
+        stage.run(own, together = false)
+        assertEquals(listOf("start"), bodies.getValue("h0").log.filter { it == "start" })
+        assertFalse("start" in bodies.getValue("h2").log)
+    }
+
     @Test
     fun removeAndEndCloseLinksWithoutStoppingRecording() = runTest {
         val stage = stage()
         for (index in 0 until 2) stage.add(record("h$index"), reachable = true)
         settle()
-        stage.run(stage.groupPlan())
+        stage.run(stage.groupPlan(), together = true)
         assertEquals(true, bodies.getValue("h0").reported.value)
         stage.remove(assertNotNull(stage.memberAt(0)).id)
         stage.end()

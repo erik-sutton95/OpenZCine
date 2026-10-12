@@ -115,12 +115,9 @@ fun MulticamStage(
                 close = { leaving = true },
                 recordContext = { slot ->
                     val plan = slot?.let(coordinator::memberAt)?.let { coordinator.plan(it.id) } ?: coordinator.groupPlan()
-                    MultiviewRecordContext(
-                        plan, busy = coordinator.groupBusy,
-                        prompt = MulticamCopy.confirm(plan.direction, coordinator.names(plan)),
-                    )
+                    MultiviewRecordContext(plan, busy = coordinator.groupBusy)
                 },
-                record = { plan, _ -> coordinator.start(plan) },
+                record = { plan, slot -> coordinator.start(plan, together = slot == null) },
                 // The value the operator picked, by the name shown: one no longer advertised writes nothing.
                 choose = { slot, readout, choice ->
                     coordinator.memberAt(slot)?.takeIf { readout == 0 || readout == 2 }?.let { member ->
