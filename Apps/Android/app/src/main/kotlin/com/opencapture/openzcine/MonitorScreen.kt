@@ -44,7 +44,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
@@ -94,6 +93,8 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.appkit.MonitorPhotoRelease
+import com.opencapture.opencine.appkit.MonitorPhotoTimer
+import com.opencapture.opencine.appkit.MonitorNativeWrites
 import com.opencapture.opencine.appkit.rememberPhoneBatteryReadout
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.statusPresentation
@@ -156,7 +157,6 @@ import com.opencapture.openzcine.wear.androidWatchRelayState
 import com.opencapture.openzcine.wear.executeWearRecordCommand
 import com.opencapture.openzcine.wearrelay.WatchCommandResult
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -596,16 +596,42 @@ internal fun MonitorScreen(
             assists.shared.configureTool = null
         }
     }
-    /**
-     * Latest desired label per control while an apply is in flight (iOS write-queue
-     * coalesce). Scrolling the drum must never drop intermediate settles — only the
-     * last value for each property is sent once the prior write finishes.
-     */
-    val desiredControlWrites =
-        remember { mutableStateMapOf<CameraControl, Pair<CommandControlRequest, String>>() }
-    var pendingCommandControl by remember { mutableStateOf<CameraControl?>(null) }
     var commandControlFeedback by remember { mutableStateOf<CommandControlFeedback?>(null) }
-    var controlApplyLoopRunning by remember { mutableStateOf(false) }
+    /**
+     * Native control writes through the Core latest-wins queue (iOS write-queue coalesce): the drum lands
+     * optimistically, an in-flight write never blocks it, and only the last label per control goes out.
+     */
+    val nativeWrites = remember(session) {
+        MonitorNativeWrites<CameraControl, Pair<CommandControlRequest, String>>(
+            recordScope,
+            write = { control, (_, label) ->
+                // Facade applyControl already confirms the write on the wire. Do not soft-fail from a
+                // lagging property poll (see docs/android-control-writes.md).
+                if (control in NikonOpenCineSession.CONTROLS && (!prefersPhotographyChrome(session.cameraProperties.value) ||
+                        control !in setOf(CameraControl.SHUTTER, CameraControl.IRIS))) {
+                    NikonOpenCineSession.settingValue(control, label)?.let { commonControl.set(it, label) }
+                } else {
+                    session.applyControl(control, label)
+                }
+                // One refresh keeps tiles and bar honest; settles still enqueue while this runs.
+                session.refreshProperties()
+            },
+            // Already matches the readback (scrolled back, or a coalesced write landed): skip the wire trip.
+            // REC and codec always write, like iOS: a soft label match can lag behind the body.
+            confirmed = { control, (_, label) ->
+                control != CameraControl.RESOLUTION_FRAMERATE && control != CameraControl.CODEC &&
+                    cameraPropertyConfirmsSelection(session.cameraProperties.value, control, label)
+            },
+            refused = { _, (request, _), error ->
+                commandControlFeedback = CommandControlFeedback(
+                    appContext.getString(R.string.control_error, request.title,
+                        error.message ?: appContext.getString(R.string.control_change_rejected)),
+                    isError = true,
+                )
+            },
+        )
+    }
+    val pendingCommandControl = nativeWrites.pending
     val resources = LocalResources.current
     val stringResolver = remember(resources) { resources.phoneStringResolver() }
     // Drop optimistic override once the body reports the same lock state (iOS poll settle).
@@ -740,73 +766,6 @@ internal fun MonitorScreen(
         activeCommandControl = if (kind == null) request else null
         commandControlFeedback = null
     }
-    /**
-     * iOS-style apply: optimistic UI (caller already landed the drum), never block the
-     * wheel on an in-flight write, coalesce rapid settles to the latest label per control.
-     */
-    fun drainCameraControlWrites() {
-        if (controlApplyLoopRunning) return
-        controlApplyLoopRunning = true
-        recordScope.launch {
-            try {
-                while (desiredControlWrites.isNotEmpty()) {
-                    val control = desiredControlWrites.keys.first()
-                    val (req, desiredLabel) = desiredControlWrites.remove(control) ?: continue
-                    // Already matches live readback (operator scrolled back, or a prior
-                    // coalesced write landed) — skip the wire trip. Always send REC/codec
-                    // like iOS (exact advertised pack write); never skip those on a soft
-                    // label match that can lag behind the body.
-                    val alwaysWrite =
-                        control == CameraControl.RESOLUTION_FRAMERATE
-                            || control == CameraControl.CODEC
-                    if (!alwaysWrite
-                        && cameraPropertyConfirmsSelection(
-                            session.cameraProperties.value,
-                            control,
-                            desiredLabel,
-                        )
-                    ) {
-                        continue
-                    }
-                    pendingCommandControl = control
-                    try {
-                        // Facade applyControl already confirms the write on the wire. Do not
-                        // soft-fail from a lagging property poll (see docs/android-control-writes.md).
-                        if (control in NikonOpenCineSession.CONTROLS &&
-                            (!isPhotographyMode || control !in setOf(CameraControl.SHUTTER, CameraControl.IRIS))) {
-                            NikonOpenCineSession.settingValue(control, desiredLabel)?.let { commonControl.set(it, desiredLabel) }
-                        } else {
-                            session.applyControl(control, desiredLabel)
-                        }
-                        // One refresh keeps tiles/bar honest; settles still enqueue while this runs.
-                        session.refreshProperties()
-                    } catch (error: CameraControlException) {
-                        if (desiredControlWrites[control] == null) {
-                            commandControlFeedback =
-                                CommandControlFeedback(
-                                    appContext.getString(
-                                        R.string.control_error,
-                                        req.title,
-                                        error.message
-                                            ?: appContext.getString(
-                                                R.string.control_change_rejected,
-                                            ),
-                                    ),
-                                    isError = true,
-                                )
-                        }
-                    }
-                }
-            } finally {
-                pendingCommandControl = null
-                controlApplyLoopRunning = false
-                // Settle may land in the map after the while-check empties it.
-                if (desiredControlWrites.isNotEmpty()) {
-                    drainCameraControlWrites()
-                }
-            }
-        }
-    }
     val applyCameraControl: (CommandControlRequest, String) -> Unit =
         applyCameraControl@{ request, label ->
             if (!commandControlsEnabled) return@applyCameraControl
@@ -853,7 +812,7 @@ internal fun MonitorScreen(
                 request.control == CameraControl.ISO &&
                     IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto, codecForISO)
             ) {
-                desiredControlWrites[CameraControl.ISO_AUTO] =
+                nativeWrites.submit(CameraControl.ISO_AUTO,
                     CommandControlRequest(
                         title = "ISO",
                         control = CameraControl.ISO_AUTO,
@@ -863,14 +822,13 @@ internal fun MonitorScreen(
                                 IsoPickerPolicy.AUTO_ISO_ON_LABEL,
                                 IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
                             ),
-                    ) to IsoPickerPolicy.AUTO_ISO_OFF_LABEL
+                    ) to IsoPickerPolicy.AUTO_ISO_OFF_LABEL)
             }
-            desiredControlWrites[request.control] = request to label
             commandControlFeedback = null
             if (activeCommandControl?.control == request.control) {
                 activeCommandControl = request.copy(currentValue = label)
             }
-            drainCameraControlWrites()
+            nativeWrites.submit(request.control, request to label)
         }
     /**
      * Photography write router (iOS `applyPicker` stills paths): the DRIVE
@@ -931,71 +889,27 @@ internal fun MonitorScreen(
     // through usage-media playback so it stays audible per the device's silent
     // behaviour, a white tally pulse per tick, and the shots run chained after
     // the countdown. A second press cancels the countdown or remaining run.
-    var photoTimerRemaining by remember { mutableStateOf<Int?>(null) }
-    var photoTimerJob by remember { mutableStateOf<Job?>(null) }
+    val photoTimer = remember(session) { MonitorPhotoTimer(recordScope) }
+    val photoTimerRemaining = photoTimer.remaining
     val photoTimerTone =
         remember { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 80) }
     DisposableEffect(Unit) { onDispose { photoTimerTone.release() } }
-    fun firePhotoTimerShots(): Job =
-        recordScope.launch {
-            repeat(maxOf(1, photoTimerShotCount)) { index ->
-                if (index > 0) {
-                    // Each shot waits out the previous one's completion.
-                    var waitedMillis = 0
-                    while (stillCapture.isCapturing.value && waitedMillis < 20_000) {
-                        delay(150)
-                        waitedMillis += 150
-                    }
-                    if (stillCapture.isCapturing.value) return@launch
-                }
-                stillCapture.pressed(
-                    recordScope,
-                    continuousDrive = false,
-                    preserveFocus = mfDrive.focusManuallyDialed,
-                )
-                delay(150)
-            }
-        }
+    fun startPhotoTimer(seconds: Int) = photoTimer.start(
+        seconds, photoTimerShotCount, capturing = { stillCapture.isCapturing.value },
+        release = { stillCapture.pressed(recordScope, continuousDrive = false, preserveFocus = mfDrive.focusManuallyDialed) },
+        onTick = { left ->
+            if (left > 0) photoTimerTone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 70)
+            else photoTimerTone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 200)
+        },
+    )
     // Photography shutter press/release (iOS shutterButtonPressed/Released):
     // countdown/timer runs first; continuous drives latch the burst for the
     // duration of the hold.
     val photoShutterPressed: () -> Unit = pressed@{
-        if (photoTimerJob?.isActive == true) {
-            // Second press cancels a running countdown (or the remaining shot
-            // run), matching body behaviour.
-            photoTimerJob?.cancel()
-            photoTimerJob = null
-            photoTimerRemaining = null
-            return@pressed
-        }
+        // A second press cancels a running countdown (or the remaining shot run), matching the body.
+        if (photoTimer.cancel()) return@pressed
         if (photoTimerDelaySeconds > 0 && !stillCapturing) {
-            photoTimerJob =
-                recordScope.launch {
-                    try {
-                        var remaining = photoTimerDelaySeconds
-                        photoTimerRemaining = remaining
-                        photoTimerTone.startTone(
-                            android.media.ToneGenerator.TONE_PROP_BEEP, 70,
-                        )
-                        while (remaining > 0) {
-                            delay(1000)
-                            remaining -= 1
-                            photoTimerRemaining = remaining
-                            if (remaining > 0) {
-                                photoTimerTone.startTone(
-                                    android.media.ToneGenerator.TONE_PROP_BEEP, 70,
-                                )
-                            }
-                        }
-                        photoTimerTone.startTone(
-                            android.media.ToneGenerator.TONE_PROP_BEEP2, 200,
-                        )
-                        photoTimerRemaining = null
-                        firePhotoTimerShots().join()
-                    } finally {
-                        photoTimerRemaining = null
-                    }
-                }
+            startPhotoTimer(photoTimerDelaySeconds)
             return@pressed
         }
         if (
@@ -1004,7 +918,7 @@ internal fun MonitorScreen(
         ) {
             // Built-in timer engaged: its countdown never runs for command
             // releases, so the shots field drives a straight run from the press.
-            photoTimerJob = firePhotoTimerShots()
+            startPhotoTimer(0)
             return@pressed
         }
         stillCapture.pressed(
