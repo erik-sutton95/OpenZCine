@@ -41,59 +41,6 @@ private func feedOutsideCenter(
     return CGPoint(x: x, y: y)
 }
 
-/// Floating scope panels for media playback — same layout as the live monitor but fed from sampled
-/// `AVPlayer` frames instead of the live-view loop.
-struct PlaybackAssistOverlayModule: View {
-    @Environment(NativeAppModel.self) private var model
-    let scopeAssist: ScopeAssistBundle
-    /// Aspect-fit video rectangle in the overlay coordinate space.
-    let videoRect: CGRect
-    /// Metered playback audio; absent before a real sample or when the tool is off.
-    var audioLevels: MonitorAudioMeterLevels?
-    let onOptions: (MonitorAssistTool) -> Void
-
-    var body: some View {
-        let visible = model.assist.playbackTools
-        GeometryReader { proxy in
-            let screenBounds = CGRect(origin: .zero, size: proxy.size)
-            let feedRect = videoRect
-            ZStack(alignment: .topLeading) {
-                NikonScopeOverlay(
-                    tools: visible, bundle: scopeAssist,
-                    mapping: model.playbackExposureSignalMapping, canvas: screenBounds,
-                    onOptions: onOptions)
-                if visible.contains(.audioMeters) {
-                    let size = MonitorAudioMetrics.panelSize
-                    MovablePanel(
-                        id: "playback-audio", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .bottomTrailing, bounds: screenBounds),
-                        bounds: screenBounds
-                    ) {
-                        NikonAudioMeter(levels: audioLevels, sensitivity: nil)
-                    }
-                }
-                if visible.contains(.falseColor)
-                    && model.assist.falseColorReference
-                {
-                    let size = MonitorFalseColorReference.panelSize
-                    MovablePanel(
-                        id: "playback-fcref", size: size,
-                        defaultCenter: CGPoint(x: screenBounds.midX, y: screenBounds.midY),
-                        bounds: screenBounds
-                    ) {
-                        MonitorFalseColorReference(
-                            values: FalseColorReference.values(
-                                scale: model.assist.falseColorScale.nikonScale,
-                                mapping: model.playbackExposureSignalMapping))
-                    }
-                }
-            }
-        }
-        .allowsHitTesting(true)
-    }
-}
-
 /// Nikon's saved panel identities adapt to the common drag owner without a resize control.
 struct MovablePanel<Content: View>: View {
     @Environment(NativeAppModel.self) private var model
@@ -561,18 +508,3 @@ enum FalseColorReference {
     }
 }
 
-/// The shared Pocket / Insta audio meter over this camera's levels. A source that has not
-/// reported yet draws at the floor, as on Pocket.
-struct NikonAudioMeter: View {
-    let levels: MonitorAudioMeterLevels?
-    let sensitivity: String?
-
-    var body: some View {
-        let floor = MonitorAudioMeterBallistics.floorDB
-        let label = sensitivity?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        MonitorAudioMeter(
-            left: levels?.left.levelDB ?? floor, leftPeak: levels?.left.peakDB ?? floor,
-            right: levels?.right.levelDB ?? floor, rightPeak: levels?.right.peakDB ?? floor,
-            sensitivityLabel: label?.isEmpty == false ? label : nil)
-    }
-}

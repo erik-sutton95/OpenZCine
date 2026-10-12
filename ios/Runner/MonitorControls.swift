@@ -167,24 +167,6 @@ struct CloseButton: View {
     }
 }
 
-struct CircleIconButton: View {
-    let systemName: String
-    let size: CGFloat
-
-    init(systemName: String, size: CGFloat = 52) {
-        self.systemName = systemName
-        self.size = size
-    }
-
-    var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: 18, weight: .medium))
-            .frame(width: size, height: size)
-            .glassCircle(interactive: true)
-            .minTapTarget()
-    }
-}
-
 struct GlassPanel<Content: View>: View {
     let cornerRadius: CGFloat
     let padding: EdgeInsets
