@@ -5,6 +5,7 @@ import MonitorUI
 import Network
 import Observation
 import OpenCineApple
+import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
@@ -616,8 +617,9 @@ final class RunnerTests: XCTestCase {
             for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
                 window.frame.size = size
                 host.view.frame.size = size
-                for mode in [DispMode.live, .clean, .command] {
-                    model.displayMode = mode
+                model.operatorSession.declare(modes: [.live, .clean, .command])
+                for mode in [MonitorDisplayMode.live, .clean, .command] {
+                    model.setDisplayMode(mode)
                     host.view.setNeedsLayout()
                     host.view.layoutIfNeeded()
                     let next = try await picture(in: host)
@@ -626,7 +628,7 @@ final class RunnerTests: XCTestCase {
                         "Rotation and DISP must preserve the actual native picture view")
                 }
             }
-            model.displayMode = .live
+            model.setDisplayMode(.live)
             for panel in [NativeAppModel.ActivePanel.settings, .media] {
                 model.activePanel = panel
                 let coveredPicture = try await picture(in: host)
@@ -3245,7 +3247,7 @@ struct NikonSettingsScrollTests {
         }
         let display = try await scroll(in: host) { abs($0.contentOffset.y - 180) < 1 }
         #expect(model.operatorSettingsTab == .display)
-        #expect(model.chromeEditorReturnMode == nil)
+        #expect(model.operatorSession.returnedMode == nil)
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
         try await settle(in: host) { model.operatorSettingsScrollOffsets["Display"] == 320 }
         model.operatorSettingsTab = .controls
@@ -3824,7 +3826,8 @@ extension RunnerTests {
             "Exposed: \(elements(host.view).map(identifier).filter { !$0.isEmpty })")
         XCTAssertTrue(expand.accessibilityActivate())
         try await settle()
-        let bar = model.captureBarFrame
+        let bar = elements(host.view).filter { identifier($0).hasPrefix("monitor.capture.") }
+            .map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
         let covered = elements(host.view).filter { identifier($0).hasPrefix("monitor.assist.") }
             .map { $0.accessibilityFrame.intersection(bar) }
             .filter { !$0.isNull && $0.width >= 8 && $0.height >= 8 }
@@ -3845,7 +3848,7 @@ extension RunnerTests {
             resolutionFrameRate: state.resolutionFrameRate, codec: state.codec,
             media: state.media, liveFPS: state.liveFPS,
             cameraBatteryPercent: state.cameraBatteryPercent,
-            phoneBatteryPercent: state.phoneBatteryPercent, cameraName: state.cameraName,
+            cameraName: state.cameraName,
             lens: state.lens, temperature: state.temperature,
             values: state.values.map { CameraValue(label: $0.label, value: "8888") },
             mediaStatus: state.mediaStatus)

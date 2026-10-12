@@ -242,7 +242,8 @@ final class NikonAssistsTests: XCTestCase {
     func testCommandShowsNoFeedTool() {
         let model = NativeAppModel(assist: .restore(storage: defaults))
         model.assist.set(.peaking, visible: true, context: .liveView)
-        model.displayMode = .command
+        model.operatorSession.declare(modes: [.live, .clean, .command])
+        model.setDisplayMode(.command)
         XCTAssertTrue(model.renderedLiveAssistTools.isEmpty)
     }
 
@@ -319,9 +320,23 @@ final class NikonAssistsTests: XCTestCase {
     // MARK: - Palette
 
     func testPhotographyLeadsWithInstantPlaybackThenTheEVMeter() {
-        let photo = MonitorAssistTool.activeCases.filter(\.appliesToPhotography).map(\.rawValue)
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        let photo = model.liveAssistPaletteTools.map(\.rawValue)
         let ranked = MonitorToolUsage().rankedIDs(in: photo, seed: nikonAssistUsageSeed)
         XCTAssertEqual(Array(ranked.prefix(2)), ["PLAY", "EV"])
+    }
+
+    /// A1-19: photography keeps the display tools Pocket, Insta and the Pocket baseline keep.
+    func testPhotographyKeepsTheDisplayTools() {
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.isPhotographyMode)
+        for tool in [MonitorAssistTool.lut, .waveform, .parade, .vectorscope, .guides, .crosshair] {
+            XCTAssertTrue(model.liveAssistPaletteTools.contains(tool), "\(tool) leaves photo mode")
+        }
+        model.assist.set(.waveform, visible: true, context: .liveView)
+        XCTAssertTrue(model.renderedLiveAssistTools.contains(.waveform))
     }
 
     func testPlaybackOffersNoCameraFedTool() {

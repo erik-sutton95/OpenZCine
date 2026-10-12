@@ -2,6 +2,7 @@ import CoreImage
 import MonitorPresentation
 import MonitorUI
 import OpenCineApple
+import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCore
 import OpenZCineCore
@@ -64,15 +65,11 @@ struct MonitorExperience: View {
                     .animation(
                         .easeOut(duration: 0.2), value: model.relayPendingControlRequest)
             }
-            // Haptics: tap on panel open/close, tick on DISP cycle / assist toggle, firm thump on
-            // record start/stop. (Value wheels add their own per-detent feedback.)
-            .sensoryFeedback(.selection, trigger: model.activePanel)
-            .sensoryFeedback(.selection, trigger: model.displayMode)
-            .sensoryFeedback(.selection, trigger: model.assist.liveTools)
-            .sensoryFeedback(.impact(weight: .heavy), trigger: model.isRecording)
-            // Confirm the focus-point app-lock on release — a firm thump locking, a light tap freeing.
+            // The shared controls own their feedback and the haptics preference (A1-33). The
+            // focus-point app lock is Nikon's own: a firm thump locking, a light tap freeing.
             .sensoryFeedback(trigger: model.focusPointLocked) { _, locked in
-                locked ? .impact(weight: .heavy) : .impact(weight: .light)
+                guard model.preferences.hapticsEnabled else { return nil }
+                return locked ? .impact(weight: .heavy) : .impact(weight: .light)
             }
     }
 }
@@ -211,8 +208,9 @@ struct LiveFeedModule: View {
             flippedVertically: model.liveFeedMirroredVertically,
             squeeze: desqueezeScale(model.liveDesqueeze))
     }
+    /// The shared surface's admission, applied to the picture's own focus, zoom and swipe.
     private var pictureInteractive: Bool {
-        !model.interfaceLocked && model.chromeEditorMode == nil
+        !model.interfaceLocked && model.chromeEditorMode == nil && model.operatorSession.interactive
             && model.activePanel?.coversFullScreen != true && model.displayMode != .command
     }
 
@@ -315,7 +313,6 @@ struct LiveFeedModule: View {
             ZStack {
                 LiveFrameRaster(width: width, height: height)
                 LiveFeedFocusOverlay(lockProgress: progress)
-                LiveFeedWaitingOverlay()
                 if model.demoUIMode {
                     DemoFocusPointerSurface(model: model, size: size)
                 }
@@ -568,10 +565,9 @@ private struct LiveFeedFocusOverlay: View {
     /// operator sees it is off and can switch it back on from its badge.
     private var focusBoxEditDimmed: Bool {
         guard let mode = model.chromeEditorMode,
-            DisplayChromeVisibility.isConfigurable(.focusBox, in: mode)
+            MonitorDisplayChrome.isConfigurable(.focusBox, in: mode)
         else { return false }
-        return !model.preferences.chrome(for: mode, capture: model.captureLayoutMode)
-            .focusBoxVisible
+        return !model.operatorSession.chrome(for: mode).focusBox
     }
 
     /// A zero-content proxy sized to the primary AF box, so the Edit view's outline and badge land
@@ -823,46 +819,33 @@ private struct RelayControlRequestOverlay: View {
     }
 }
 
-/// Shown until the first decoded frame arrives.
-private struct LiveFeedWaitingOverlay: View {
+/// Why a relay picture is missing and how to get it back, under the shared waiting plate. The
+/// watchdog is already retrying; the button is for the human who wants it now.
+struct RelayJoinRecovery: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if model.liveFrameImage == nil && !model.isDemoSession {
+        if let reason = model.relayFailureReason {
             VStack(spacing: 10) {
-                Image(systemName: "viewfinder")
-                    .font(.system(size: 28, weight: .light))
-                    .foregroundStyle(LiveDesign.text.opacity(0.28))
-                Text("WAITING FOR LIVE VIEW")
-                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.28))
-                // A viewer session says WHY the picture is missing, where the operator is
-                // looking — the FPS chip can only say FAIL. The watchdog is already retrying;
-                // the button is for the human who wants it now.
-                if model.videoSource == .relay, let reason = model.relayFailureReason {
-                    Text(reason)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(LiveDesign.text.opacity(0.55))
-                        .frame(maxWidth: 400)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if model.relayJoinNeedsPasscode {
-                        RelayJoinPasscodeEntry()
-                            .padding(.top, 2)
-                    } else {
-                        Button {
-                            model.retryRelayJoin()
-                        } label: {
-                            Text("Try again")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(LiveDesign.text.opacity(0.8))
-                                .padding(.horizontal, 18)
-                                .padding(.vertical, 8)
-                                .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 2)
+                Text(reason)
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(LiveDesign.text.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                if model.relayJoinNeedsPasscode {
+                    RelayJoinPasscodeEntry()
+                } else {
+                    Button {
+                        model.retryRelayJoin()
+                    } label: {
+                        Text("Try again")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(LiveDesign.text.opacity(0.8))
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }

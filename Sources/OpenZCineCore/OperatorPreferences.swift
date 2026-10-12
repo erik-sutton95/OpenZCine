@@ -982,28 +982,3 @@ public enum CommandGridOrder {
         return result
     }
 }
-
-extension MonitorAssistTool {
-    /// Assist tools that apply to still photography: the exposure aids (peaking, false
-    /// color, zebra, histogram) plus the composition aids photographers actually use
-    /// (grid, level, de-squeeze). Everything else is cinema-only, which keeps the photo toolbar
-    /// deliberately shorter so the stills strip gets the bar width.
-    ///
-    /// De-squeeze is here because anamorphic lenses are used for stills too, and a squeezed
-    /// preview makes faces, framing and edge behaviour impossible to judge on a tethered shoot.
-    /// It is a display transform in every surface it reaches; the camera original is never
-    /// touched.
-    public var appliesToPhotography: Bool {
-        switch self {
-        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
-            .desqueeze, .mirror, .magnification:
-            // Mirror joins de-squeeze for the same reason: a body turned back at the subject is
-            // just as common on a stills shoot, and both are display transforms that never reach
-            // the camera original.
-            true
-        case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
-            .guides, .crosshair:
-            false
-        }
-    }
-}

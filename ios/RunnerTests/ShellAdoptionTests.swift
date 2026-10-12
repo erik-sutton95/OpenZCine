@@ -141,7 +141,7 @@ struct ShellAdoptionTests {
             model.assist.configureTool = options
         }
         model.isMonitorPresented = true
-        model.displayMode = .live
+        model.setDisplayMode(.live)
         model.monitorIsPortrait = true
         model.preferences.portraitFeedAspect = .fit16x9
         for tool in MonitorAssistTool.scopeTools {
@@ -149,7 +149,7 @@ struct ShellAdoptionTests {
         }
         model.setAssist(.waveform, visible: true)
         model.setAssist(.histogram, visible: true)
-        let trigger = model.monitorNoticeTrigger
+        model.monitorNote = nil
 
         model.setAssist(.parade, visible: true)
 
@@ -158,7 +158,7 @@ struct ShellAdoptionTests {
             model.renderedFitScopes == [
                 .waveform, .parade,
             ])
-        #expect(model.monitorNoticeTrigger == trigger)
+        #expect(model.monitorNote == nil)
         model.showAssist(.vectorscope)
         #expect(model.assist.configureTool == MonitorAssistTool.vectorscope.selection)
         model.toggleAssist(.vectorscope)

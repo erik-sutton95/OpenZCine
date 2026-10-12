@@ -12,14 +12,12 @@ import SwiftUI
 let nikonAssistUsageSeed = MonitorToolUsage.fieldMonitorSeed.merging(["PLAY": 8, "EV": 7]) { $1 }
 
 extension NativeAppModel {
-    /// The live palette for this camera: the cinema set, or the photo toolset with PLAY and the
-    /// camera EV meter.
+    /// The live palette for this camera: every display tool, plus PLAY and the camera EV meter
+    /// in photography. Display tools never depend on the capture mode (A1-19).
     var liveAssistPaletteTools: [MonitorAssistTool] {
         let photography = StillCapturePolicy.prefersPhotographyChrome(
             selector: cameraPropertySnapshot.captureSelector)
-        return MonitorAssistTool.activeCases.filter {
-            photography ? $0.appliesToPhotography : !$0.isPhotographyOnly
-        }
+        return MonitorAssistTool.activeCases.filter { photography || !$0.isPhotographyOnly }
     }
 
     /// Playback drops the camera-fed tools: the horizon and the EV needle need a camera, and PLAY

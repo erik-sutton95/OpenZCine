@@ -1,4 +1,5 @@
 import MonitorUI
+import OpenCineAppKit
 import OpenCineCameraControls
 import OpenZCineCore
 import SwiftUI
@@ -16,33 +17,27 @@ typealias AccentDrumWheel = LUTDrumWheel<LiveDesign>
 /// modes: eye badges laid out together above the monitor, and the banner that names the mode.
 typealias ChromeEditBadgeLayer = ChromeEditBadges<NativeAppModel>
 typealias ChromeEditBanner = ChromeEditDoneBanner<NativeAppModel>
-typealias ChromeEditBoundsKey = ChromeEditSectionBoundsKey<DisplayChromeVisibility.Section>
+typealias ChromeEditBoundsKey = ChromeEditSectionBoundsKey<MonitorDisplayChrome.Section>
 
-/// Per-DISP chrome follows the capture side the body reports (photo or video).
+/// The Edit view edits the shared per-DISP chrome the one display owner keeps.
 extension NativeAppModel: ChromeEditHost {
+    typealias ChromeSection = MonitorDisplayChrome.Section
+    typealias ChromeMode = MonitorDisplayMode
     var hapticsEnabled: Bool { preferences.hapticsEnabled }
-    var chromeEditSections: [DisplayChromeVisibility.Section] {
-        DisplayChromeVisibility.Section.allCases
+
+    func isChromeVisible(_ section: MonitorDisplayChrome.Section, in mode: MonitorDisplayMode) -> Bool {
+        operatorSession.chrome(for: mode).isVisible(section)
     }
 
-    func chromeSectionTitle(_ section: DisplayChromeVisibility.Section) -> String { section.title }
-    func chromeSectionID(_ section: DisplayChromeVisibility.Section) -> String { section.rawValue }
-    func chromeModeTitle(_ mode: DispMode) -> String { mode.title }
-
-    func isChromeConfigurable(_ section: DisplayChromeVisibility.Section, in mode: DispMode) -> Bool
-    {
-        DisplayChromeVisibility.isConfigurable(section, in: mode)
-    }
-
-    func isChromeVisible(_ section: DisplayChromeVisibility.Section, in mode: DispMode) -> Bool {
-        preferences.chrome(for: mode, capture: captureLayoutMode).isVisible(section)
+    func toggleChrome(_ section: MonitorDisplayChrome.Section, for mode: MonitorDisplayMode) {
+        operatorSession.toggle(section, in: mode)
     }
 }
 
 extension View {
     /// Outlines a monitor element while the Edit view is open on a mode that offers it (dimmed
     /// when hidden) and measures it for its eye badge. Outside the editor this is a no-op.
-    func chromeEditable(_ section: DisplayChromeVisibility.Section, editing mode: DispMode?)
+    func chromeEditable(_ section: MonitorDisplayChrome.Section, editing mode: MonitorDisplayMode?)
         -> some View
     {
         modifier(ChromeEditableModifier<NativeAppModel>(section: section, mode: mode))
