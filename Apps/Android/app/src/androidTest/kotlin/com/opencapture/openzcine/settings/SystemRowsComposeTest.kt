@@ -14,6 +14,7 @@ import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.openzcine.OpenZCineTheme
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.idleNikonAssists
+import com.opencapture.openzcine.rememberTestOperatorSession
 import com.opencapture.openzcine.media.MediaCacheStore
 import java.nio.file.Files
 import org.junit.After
@@ -40,6 +41,7 @@ class SystemRowsComposeTest {
                 OperatorSettingsScreen(
                     session = null,
                     assists = assists,
+                    operatorSession = rememberTestOperatorSession(assists, settings),
                     settings = settings,
                     mediaCacheStore = cache,
                     systemSettingsActions = actions,

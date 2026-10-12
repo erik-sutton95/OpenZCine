@@ -7,8 +7,8 @@ import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.media.MediaGalleryFailureInjection
 import com.opencapture.openzcine.pairing.PairingScript
-import com.opencapture.openzcine.settings.PortraitFeedAspect
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.cameracontrols.PortraitFeedAspect
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 
 /**

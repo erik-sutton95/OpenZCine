@@ -58,13 +58,15 @@ class RecordCameraFlowComposeTest {
             val scope = rememberCoroutineScope()
             val common = remember(session) { NikonOpenCineSession(session, scope) }
             val control = remember(common) { MonitorControlModel(scope).also { it.bind(common) } }
+            val assists = remember { idleNikonAssists() }
             OpenZCineTheme {
                 MonitorScreen(
                     session = session,
                     commonSession = common,
                     commonControl = control,
+                    operatorSession = rememberTestOperatorSession(assists, operatorSettings),
                     frameSource = null,
-                    assists = idleNikonAssists(),
+                    assists = assists,
                     operatorSettings = operatorSettings,
                     liveViewEnabled = false,
                     glassTierOverride = GLASS_TIER_FLAT,

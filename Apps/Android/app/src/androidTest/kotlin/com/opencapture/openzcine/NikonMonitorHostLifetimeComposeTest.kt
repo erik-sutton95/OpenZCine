@@ -76,8 +76,9 @@ class NikonMonitorHostLifetimeComposeTest {
             OpenZCineTheme {
                 if (mounted.value) Box(Modifier.requiredSize(
                     if (landscape.value) 840.dp else 400.dp, if (landscape.value) 400.dp else 840.dp)) {
+                    val assists = remember { idleNikonAssists() }
                     MonitorScreen(session = session, frameSource = source, commonSession = common, commonControl = control,
-                        assists = idleNikonAssists(), operatorSettings = settings,
+                        operatorSession = rememberTestOperatorSession(assists, settings), assists = assists, operatorSettings = settings,
                         isMonitorFront = front.value, liveViewEnabled = true, sessionRecoveryEnabled = false, glassTierOverride = "flat")
                 }
             }
@@ -144,8 +145,8 @@ class NikonMonitorHostLifetimeComposeTest {
             DisposableEffect(Unit) { onDispose { control.unbind() } }
             OpenZCineTheme {
                 Box(Modifier.requiredSize(400.dp, 840.dp)) {
-                    MonitorScreen(session, common, control, source, assists, settings,
-                        liveViewEnabled = true, sessionRecoveryEnabled = false, glassTierOverride = "flat")
+                    MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), source, assists,
+                        settings, liveViewEnabled = true, sessionRecoveryEnabled = false, glassTierOverride = "flat")
                 }
             }
         }
@@ -190,8 +191,8 @@ class NikonMonitorHostLifetimeComposeTest {
             DisposableEffect(Unit) { onDispose { control.unbind() } }
             OpenZCineTheme {
                 Box(Modifier.requiredSize(840.dp, 400.dp)) {
-                    MonitorScreen(session, common, control, selectedSource.value, assists, settings,
-                        isMonitorFront = front.value, liveViewEnabled = true,
+                    MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), selectedSource.value,
+                        assists, settings, isMonitorFront = front.value, liveViewEnabled = true,
                         sessionRecoveryEnabled = false, glassTierOverride = "flat")
                 }
             }

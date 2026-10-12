@@ -10,9 +10,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
-import com.opencapture.openzcine.settings.CaptureLayoutMode
-import com.opencapture.openzcine.settings.ChromeSection
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplaySection
 import com.opencapture.openzcine.settings.OperatorSettings
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,7 +40,7 @@ class ChromeEditPortraitEyesTest {
                 scenario.onActivity { portrait = it.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
                 portrait
             })
-            for (section in listOf(ChromeSection.BATTERY_INDICATORS, ChromeSection.CODEC_READOUT)) {
+            for (section in listOf(MonitorDisplaySection.BATTERIES, MonitorDisplaySection.CODEC)) {
                 val eye = device.wait(Until.findObject(By.desc(section.title)), TIMEOUT_MILLIS)
                     ?: throw AssertionError("No ${section.title} eye")
                 val centre = eye.visibleCenter
@@ -55,8 +53,8 @@ class ChromeEditPortraitEyesTest {
         }
     }
 
-    private fun visible(section: ChromeSection): Boolean =
-        OperatorSettings(context).chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.VIDEO)[section].value
+    private fun visible(section: MonitorDisplaySection): Boolean =
+        OperatorSettings(context).displayPreferences.live.isVisible(section)
 
     private fun waitFor(condition: () -> Boolean): Boolean {
         val deadline = SystemClock.uptimeMillis() + TIMEOUT_MILLIS

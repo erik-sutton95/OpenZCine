@@ -25,7 +25,7 @@ import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 
 /**
  * The shared [MonitorAssistState] plus this camera's typed assist extensions: the monitor look LUT

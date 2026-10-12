@@ -42,8 +42,7 @@ import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
-import com.opencapture.openzcine.settings.CaptureLayoutMode
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplaySection
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -351,30 +350,36 @@ class NikonOperatorSettingsComposeTest {
         preferences.edit().clear().commit()
     }
 
-    @Test fun actualCommonDisplayKeepsCaptureLayoutsIndependentAndAdmitsOnlyTheCurrentEditor() {
+    @Test fun actualCommonDisplayWritesTheOneSharedLayoutPerMode() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val preferences = context.getSharedPreferences("z2-display-capture", Context.MODE_PRIVATE)
+        val preferences = context.getSharedPreferences("z2-display-shared", Context.MODE_PRIVATE)
         preferences.edit().clear().putString("unrelated.operator.choice", "retained").commit()
         val settings = OperatorSettings(preferences)
-        val videoRecord = settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.VIDEO).railRecord.value
-        val photoRecord = settings.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO).railRecord.value
+        val record = settings.displayPreferences.live.isVisible(MonitorDisplaySection.RAIL_RECORD)
         show(settings, MonitorSettingsTab.DISPLAY)
         composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
-        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").assertIsDisplayed()
-        composeRule.onNodeWithText("Photo").performScrollTo().performClick()
+        // No live monitor under these settings, so Edit view has nothing to open on.
         composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").assertDoesNotExist()
-        composeRule.onNodeWithTag("monitor.settings.display.toggle.RAIL_RECORD").performScrollTo().performClick()
+        composeRule.onNodeWithTag("monitor.settings.display.toggle.LIVE.RAIL_RECORD").performScrollTo().performClick()
         composeRule.runOnIdle {
-            val reloaded = OperatorSettings(preferences)
-            assertEquals(videoRecord, reloaded.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.VIDEO).railRecord.value)
-            assertEquals(!photoRecord, reloaded.chrome(MonitorDisplayMode.LIVE, CaptureLayoutMode.PHOTO).railRecord.value)
+            val reloaded = OperatorSettings(preferences).displayPreferences
+            assertEquals(!record, reloaded.live.isVisible(MonitorDisplaySection.RAIL_RECORD))
+            assertEquals(record, reloaded.command.isVisible(MonitorDisplaySection.RAIL_RECORD))
             assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
         }
-        composeRule.onNodeWithText("Video").performScrollTo().performClick()
-        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("DISP 3 · Command").performScrollTo().performClick()
         composeRule.onNodeWithTag("monitor.settings.display.edit.COMMAND").assertDoesNotExist()
-        composeRule.onNodeWithTag("monitor.settings.display.toggle.RAIL_RECORD").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor.settings.display.toggle.COMMAND.RAIL_RECORD").performScrollTo().assertIsDisplayed()
+        preferences.edit().clear().commit()
+    }
+
+    @Test fun actualCommonDisplayOffersEditViewOverALiveMonitor() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-display-edit", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        show(OperatorSettings(preferences), MonitorSettingsTab.DISPLAY, editsLiveView = true)
+        composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
+        composeRule.onNodeWithTag("monitor.settings.display.edit.LIVE").performScrollTo().assertIsDisplayed()
         preferences.edit().clear().commit()
     }
 
@@ -384,8 +389,7 @@ class NikonOperatorSettingsComposeTest {
         preferences.edit().clear().commit()
         show(OperatorSettings(preferences), MonitorSettingsTab.DISPLAY)
         composeRule.onNodeWithText("DISP 1 · Live").performScrollTo().performClick()
-        composeRule.onNodeWithText("Photo").performScrollTo().performClick()
-        for ((id, label) in listOf("CAMERA_VALUES" to "Camera Values", "RESOLUTION_READOUT" to "RESOLUTION")) {
+        for ((id, label) in listOf("LIVE.CAMERA_VALUES" to "Camera Values", "LIVE.FORMAT" to "Format")) {
             val tag = "monitor.settings.display.toggle.$id"
             val row = composeRule.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo()
             val text = composeRule.onNode(hasText(label) and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true)
@@ -402,7 +406,7 @@ class NikonOperatorSettingsComposeTest {
         preferences.edit().clear().commit()
     }
 
-    @Test fun actualCommonDisplayPreservesEmptyCleanPinsAndLastEnabledMode() {
+    @Test fun actualCommonDisplayPreservesEmptyCleanPins() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("z2-display-pins", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
@@ -412,19 +416,10 @@ class NikonOperatorSettingsComposeTest {
         show(settings, MonitorSettingsTab.DISPLAY, assists = restoreAssists(stores))
         composeRule.onNodeWithText("DISP 2 · Clean").performScrollTo().performClick()
         for (tool in kept) {
-            composeRule.onNodeWithTag("monitor.settings.display.toggle.${tool.name}")
+            composeRule.onNodeWithTag("monitor.settings.display.toggle.clean.pin.${tool.name}")
                 .performScrollTo().performClick()
         }
-        for (mode in MonitorDisplayMode.entries) {
-            composeRule.onNodeWithTag("monitor.settings.display.visibility.${mode.name}")
-                .performScrollTo().performClick()
-        }
-        composeRule.runOnIdle {
-            val reloaded = OperatorSettings(preferences)
-            assertTrue(restoreAssists(stores).shared.pinned.isEmpty())
-            assertEquals(setOf(MonitorDisplayMode.COMMAND), reloaded.enabledDisplayModes)
-            assertEquals(setOf(MonitorDisplayMode.COMMAND), settings.enabledDisplayModes)
-        }
+        composeRule.runOnIdle { assertTrue(restoreAssists(stores).shared.pinned.isEmpty()) }
         preferences.edit().clear().commit()
         stores.forEach { it.edit().clear().commit() }
     }
@@ -432,6 +427,7 @@ class NikonOperatorSettingsComposeTest {
     private fun show(
         settings: OperatorSettings, initial: MonitorSettingsTab, session: CameraSession? = null,
         actions: SystemSettingsActions = NoExternalActions, assists: NikonAssists = idleNikonAssists(),
+        editsLiveView: Boolean = false,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val cache = MediaCacheStore(Files.createTempDirectory(context.cacheDir.toPath(), "z2-settings"))
@@ -439,6 +435,7 @@ class NikonOperatorSettingsComposeTest {
             OpenZCineTheme {
                 OperatorSettingsScreen(
                     session = session, assists = assists,
+                    operatorSession = rememberTestOperatorSession(assists, settings), editsLiveView = editsLiveView,
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,
                     onReportProblem = {},

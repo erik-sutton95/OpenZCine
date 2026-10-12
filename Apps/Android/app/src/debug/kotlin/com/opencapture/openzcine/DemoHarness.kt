@@ -22,8 +22,8 @@ import com.opencapture.openzcine.pairing.PairingFlowState
 import com.opencapture.openzcine.pairing.PairingPath
 import com.opencapture.openzcine.pairing.PairingScript
 import com.opencapture.openzcine.pairing.PairingStep
-import com.opencapture.openzcine.settings.PortraitFeedAspect
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.cameracontrols.PortraitFeedAspect
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.openzcine.transport.CameraDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import com.opencapture.openzcine.transport.UsbPtpCamera
@@ -177,7 +177,7 @@ object DemoHarness {
     /** Debug-only fit/fill override used for deterministic portrait screenshots. */
     fun portraitFeedAspect(intent: Intent): PortraitFeedAspect? =
         when (intent.getStringExtra(EXTRA_PORTRAIT_ASPECT)) {
-            "fit" -> PortraitFeedAspect.FIT_16_9
+            "fit" -> PortraitFeedAspect.FIT_16X9
             "fill" -> PortraitFeedAspect.FILL
             else -> null
         }
@@ -243,7 +243,9 @@ object DemoHarness {
     const val EXTRA_CHROME_EDIT = "zc.demo.chromeEdit"
 
     internal fun chromeEditMode(intent: Intent): MonitorDisplayMode? =
-        intent.getStringExtra(EXTRA_CHROME_EDIT)?.let { MonitorDisplayMode.fromStoredName(it) }
+        intent.getStringExtra(EXTRA_CHROME_EDIT)?.trim()?.let { raw ->
+            MonitorDisplayMode.entries.firstOrNull { it.name.equals(raw, true) || it.title.equals(raw, true) }
+        }
 
     /** Debug-only standalone settings selector; release builds always return null. */
     internal fun settingsTab(intent: Intent): MonitorSettingsTab? =

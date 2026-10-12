@@ -7,7 +7,7 @@ import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
 import com.opencapture.opencine.media.MonitorZebraPaint
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

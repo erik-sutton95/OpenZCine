@@ -12,7 +12,6 @@ import com.opencapture.opencine.nikon.withOptimisticControlValue
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CodecBitDepthOption
-import com.opencapture.openzcine.settings.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -256,48 +255,6 @@ class MonitorCameraControlsTest {
                 MonitorPickerKind.ISO,
                 MonitorPickerKind.IRIS,
                 controlsEnabled = false,
-            ),
-        )
-    }
-
-
-    @Test
-    fun `picker waits for pending camera command before chrome closes it`() {
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.COMMAND,
-                cameraValuesVisible = false,
-                cameraCommandPending = true,
-            ),
-        )
-        assertTrue(
-            !retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.COMMAND,
-                cameraValuesVisible = true,
-                cameraCommandPending = false,
-            ),
-        )
-        assertTrue(
-            !retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = false,
-                cameraCommandPending = false,
-            ),
-        )
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = true,
-                cameraCommandPending = false,
-            ),
-        )
-        // Top-bar resolution/codec pickers stay open without the capture strip.
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = false,
-                cameraCommandPending = false,
-                isTopBarPicker = true,
             ),
         )
     }
