@@ -23,7 +23,6 @@ import com.opencapture.monitorui.MonitorAssistTool
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.graphics.toPixelMap
-import androidx.compose.ui.test.performClick
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -54,6 +53,8 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class NikonMonitorHostLifetimeComposeTest {
     @get:Rule val composeRule = createComposeRule()
+    // The fixed phone-sized boxes below can exceed an emulator window, so clicks are semantics actions:
+    // these tests pin the picture's lifetime, not pointer hit-testing.
 
     @Test fun nativePictureSurvivesModesCoversAndGeometryWhileCommandReleasesPreviewDemand() {
         val source = CountedPictureSource()
@@ -151,9 +152,9 @@ class NikonMonitorHostLifetimeComposeTest {
             }
         }
         composeRule.waitUntil(5_000) { source.collectors.get() >= 2 }
-        composeRule.onNodeWithTag("monitor.assists.expand").performClick()
+        composeRule.onNodeWithTag("monitor.assists.expand").performSemanticsAction(SemanticsActions.OnClick)
         for (tool in listOf(MonitorAssistTool.WAVE, MonitorAssistTool.HISTO, MonitorAssistTool.PARADE)) {
-            composeRule.onNodeWithContentDescription("${tool.title}, off").performClick()
+            composeRule.onNodeWithContentDescription("${tool.title}, off").performSemanticsAction(SemanticsActions.OnClick)
         }
         composeRule.runOnIdle {
             assertTrue(assists.shared.isOn(MonitorAssistTool.WAVE))
@@ -165,7 +166,7 @@ class NikonMonitorHostLifetimeComposeTest {
         composeRule.onNodeWithContentDescription("${MonitorAssistTool.PARADE.title}, on")
             .performSemanticsAction(SemanticsActions.OnLongClick)
         composeRule.runOnIdle { assertEquals(MonitorAssistTool.PARADE, assists.shared.configureTool) }
-        composeRule.onNodeWithContentDescription("Dismiss ${MonitorAssistTool.PARADE.title}").performClick()
+        composeRule.onNodeWithContentDescription("Close ${MonitorAssistTool.PARADE.label}").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.runOnIdle { assertTrue(assists.shared.isOn(MonitorAssistTool.WAVE)) }
     }
 
@@ -198,7 +199,7 @@ class NikonMonitorHostLifetimeComposeTest {
             }
         }
         composeRule.waitUntil(5_000) { first.collectors.get() >= 2 }
-        composeRule.onNodeWithTag("monitor.assists.expand").performClick()
+        composeRule.onNodeWithTag("monitor.assists.expand").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.onNodeWithContentDescription("${MonitorAssistTool.LUT.title}, off")
             .performSemanticsAction(SemanticsActions.OnLongClick)
         fun pixel(): androidx.compose.ui.graphics.Color {
@@ -218,7 +219,7 @@ class NikonMonitorHostLifetimeComposeTest {
             runCatching { pixel().let { kotlin.math.abs(it.red - it.green) < .02f &&
                 kotlin.math.abs(it.green - it.blue) < .02f && it.green > .1f } }.getOrDefault(false)
         }
-        composeRule.onNodeWithContentDescription("Dismiss ${MonitorAssistTool.LUT.title}").performClick()
+        composeRule.onNodeWithContentDescription("Close ${MonitorAssistTool.LUT.label}").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.runOnIdle {
             selectedSource.value = second
             assists.selectLut(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709))
@@ -278,8 +279,7 @@ class NikonMonitorHostLifetimeComposeTest {
     }
 
     private fun changeDisplay() {
-        val label = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.a11y_monitor_disp)
-        composeRule.onNodeWithContentDescription(label).performClick()
+        composeRule.onNodeWithTag("monitor.system.display").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.mainClock.advanceTimeByFrame()
     }
 
