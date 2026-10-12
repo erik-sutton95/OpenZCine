@@ -6,6 +6,7 @@ import Network
 import Observation
 import OpenCineApple
 import OpenCineCameraControls
+import OpenCineCameraVocabulary
 import OpenCineCore
 import OpenCineMedia
 import SwiftUI

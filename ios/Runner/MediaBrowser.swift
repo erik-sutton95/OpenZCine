@@ -6,6 +6,7 @@ import OSLog
 import OpenCineAppKit
 import OpenCineApple
 import OpenCineCameraControls
+import OpenCineCameraVocabulary
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -192,7 +193,8 @@ struct MediaBrowserView: View {
             if let library = model.mediaLibrary {
                 let projection = model.mediaGalleryProjection
                 MonitorOperatorCatalogScreen(
-                    library: library, brand: "OpenZCine", safeArea: resolvedSafeArea,
+                    library: library, brand: model.connectedIdentity?.displayName ?? "OpenZCine",
+                    safeArea: resolvedSafeArea,
                     sourceAvailable: model.isConnected, operations: operations,
                     presentation: model.mediaGalleryPresentation(projection), navigation: navigate,
                     sourceFilter: model.applyMediaGalleryFilter,
@@ -562,7 +564,7 @@ private struct MediaClipThumbnail: View {
         guard !isPhoto, needsDuration, isDownloaded, let localURL else { return }
         let asset = AVURLAsset(url: localURL)
         if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
-            onDuration(MediaClipFormatting.durationLabel(seconds: duration.seconds))
+            onDuration(MediaClipFormatting.durationLabel(seconds: Int(duration.seconds)))
         }
     }
 }
