@@ -1504,3 +1504,31 @@ extension NikonPlaybackOwnerAdoptionTests {
         await library.dispose()
     }
 }
+
+/// Test fixture: the shared playback owner over the actual gallery lifetime and a caller
+/// playlist (the app composes it through NikonOperatorPlaybackContext).
+@MainActor final class NikonPlaybackSession {
+    let owner: MonitorMediaPlaybackModel<MediaClip, String>
+    let native: NikonPlaybackNativePort
+
+    init(
+        clips: [MediaClip], startingAt clip: MediaClip, model: NativeAppModel,
+        native: NikonPlaybackNativePort = NikonPlaybackNativePort()
+    ) throws {
+        guard let library = model.mediaLibrary else { throw MonitorPlaybackError.unavailable }
+        let codec = NikonMediaLibraryCodec(
+            store: model.mediaClipStore, bucket: clip.cameraID, service: nil,
+            downloaded: { model.isClipDownloaded($0) })
+        let records = try clips.map(codec.record)
+        guard let first = records.first(where: { $0.payload.id == clip.id }) else {
+            throw MonitorPlaybackError.unavailable
+        }
+        self.native = native
+        owner = MonitorMediaPlaybackModel<MediaClip, String>(
+            library: library, native: native, readyTimeout: nil, retryNativeFailures: false,
+            startTiming: .afterNativeItemInstallation,
+            candidates: { record in native.candidates(for: record.payload, model: model) })
+        native.isScrubbing = { [weak owner] in owner?.scrubbing ?? true }
+        owner.load(first, playlist: records)
+    }
+}
