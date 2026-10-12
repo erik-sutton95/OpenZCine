@@ -9797,9 +9797,16 @@ final class NativeAppModel {
 
     func toggleRecording() { toggleRecording(admission: nil) }
 
+    /// The surface's record rules for a press that does not come through its own button: a
+    /// remote trigger or a relayed command (A1-24, A1-25). No record under the interface lock,
+    /// while control is surrendered, or in photo mode.
+    private var admitsRecordPress: Bool {
+        !interfaceLocked && !relayControlSurrendered && !isPhotographyMode
+    }
+
     private func toggleRecording(admission: NikonCommandAdmission?) {
         guard admitsCameraCommand(admission) else { return }
-        guard !relayControlSurrendered else { return }
+        guard admitsRecordPress else { return }
         // Who confirms, and whether the owned-session pre-flight applies at all, is one shared
         // rule — see `MonitorDataAvailability.recordPress`. Both answers turn on facts this
         // method used to ignore: that a watcher has no session of its own, and that a relayed
@@ -11352,6 +11359,10 @@ final class NativeAppModel {
     /// Record button: an unseen dialog on the phone would strand the take. The volume monitor has
     /// already debounced the press.
     func remoteShutterToggleRecord() {
+        guard admitsRecordPress else {
+            bluetoothShutterLogger.info("BT-SHUTTER record refused by the monitor's admission")
+            return
+        }
         let wasRecording = isRecording
         let hasSession = cameraSession != nil || isDemoSession
         executeRecord(start: !wasRecording)

@@ -146,4 +146,40 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertLessThanOrEqual(
             Int(highest) - Int(lowest), 1, "the picture must not texture or shade the raster")
     }
+
+    // MARK: A1-24, A1-25
+
+    /// A1-24: a volume key or Bluetooth remote started a take under the interface lock and in
+    /// photo mode. A remote press now takes the same admission as the on-screen button.
+    func testARemoteRecordPressObeysTheLockAndPhotoMode() {
+        let model = NativeAppModel()
+        model.startDemoSession()
+
+        model.interfaceLocked = true
+        model.remoteShutterToggleRecord()
+        XCTAssertFalse(model.isRecording, "a locked monitor refuses a remote record")
+
+        model.interfaceLocked = false
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.isPhotographyMode)
+        model.remoteShutterToggleRecord()
+        XCTAssertFalse(model.isRecording, "photo mode never sends a movie record")
+
+        model.applyDemoProperty(.liveViewSelector, data: Data([1]))
+        model.remoteShutterToggleRecord()
+        XCTAssertTrue(model.isRecording, "an unlocked movie monitor takes the remote press")
+    }
+
+    /// A1-25: a relayed record ran through the shared record entry without the host's interface
+    /// lock, against its own documented contract. That entry now refuses under the lock.
+    func testTheSharedRecordEntryRefusesUnderTheHostLock() {
+        let model = NativeAppModel()
+        model.startDemoSession()
+        model.interfaceLocked = true
+
+        model.toggleRecording()
+
+        XCTAssertFalse(model.isRecording)
+        XCTAssertNil(model.pendingRecordConfirmation, "no prompt may stand in for a refused press")
+    }
 }
