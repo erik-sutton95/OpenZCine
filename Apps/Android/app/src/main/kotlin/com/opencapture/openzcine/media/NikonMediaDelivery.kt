@@ -43,7 +43,9 @@ internal class NikonMediaDelivery(
     galleryGateway: MediaGalleryGateway,
     private val exporter: FrameioArtifactPreparer,
 ) {
-    private val stager = MediaShareStager(appContext.cacheDir.toPath())
+    // Made on the first stage, on the IO dispatcher: composing delivery creates no share folders
+    // and does no disk IO on the main thread.
+    private val stager by lazy { MediaShareStager(appContext.cacheDir.toPath()) }
     private val gallery = MediaGallerySaver(galleryGateway)
     private class Delivered(val share: StagedMediaShare, val captureTimestampMillis: Long?)
     // Delivered files of this process: what the chooser, Gallery and upload name each one.
