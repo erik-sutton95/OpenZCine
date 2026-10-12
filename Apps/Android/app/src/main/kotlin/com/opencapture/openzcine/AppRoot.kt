@@ -20,7 +20,7 @@ import com.opencapture.openzcine.multicam.MulticamCoordinator
 import com.opencapture.openzcine.multicam.multicamDecoder
 import com.opencapture.openzcine.multicam.multicamLink
 import com.opencapture.openzcine.pairing.PairingScript
-import com.opencapture.openzcine.pairing.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecord
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.realPairingEnvironment
 import kotlinx.coroutines.CoroutineScope
