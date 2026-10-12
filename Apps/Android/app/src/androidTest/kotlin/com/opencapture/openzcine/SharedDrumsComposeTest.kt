@@ -34,7 +34,7 @@ class SharedDrumsComposeTest {
         composeRule.setContent {
             OpenZCineTheme {
                 QualityPickerPanelBody(picker, nefCompression = null,
-                    onSelect = { sent, label -> writes += sent.control to label }, onDismiss = {})
+                    onSelect = { sent, label -> writes += sent.control to label })
             }
         }
         composeRule.onNode(hasContentDescription("On") and sharedDrum).assertExists()

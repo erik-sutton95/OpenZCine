@@ -1,19 +1,9 @@
 package com.opencapture.openzcine
 
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.sp
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
-import com.opencapture.opencine.nikon.CameraStorageStatus
 import java.util.Locale
-import com.opencapture.opencine.cameracontrols.chromeClickable
 
 // The photography capture strip renders through the shared `MonitorCaptureStrip`
 // over `photographyCaptureSettings` (PhotographyPickers.kt) — iOS reuses
@@ -124,66 +114,6 @@ private fun stillSizePixelCount(size: String): Long? {
     val width = parts[0].trim().toLongOrNull() ?: return null
     val height = parts[1].trim().toLongOrNull() ?: return null
     return width * height
-}
-
-/**
- * Frames left on the card, in the timecode slot's typography (iOS
- * `ShotsRemainingReadout`) — a tap flips it to the remaining-storage readout
- * (GB + percent), standing in for the MEDIA cell photo mode drops. Counts
- * above four digits compact to "12.3k" the way camera bodies do.
- */
-@Composable
-internal fun ShotsRemainingReadout(
-    shotsRemaining: Int?,
-    modifier: Modifier = Modifier,
-    storage: CameraStorageStatus? = null,
-    showsStorage: Boolean = false,
-    onToggle: (() -> Unit)? = null,
-    /** 20sp in the landscape deck; the portrait bar runs at its own 15sp timecode size. */
-    sizeSp: Float = 20f,
-    /** The " SHOTS" / "%" suffix, sized against [sizeSp]. */
-    labelSp: Float = 12f,
-) {
-    val storageForm = showsStorage && storage != null && storage.totalCapacityBytes > 0
-    Text(
-        buildAnnotatedString {
-            if (storageForm && storage != null) {
-                withStyle(SpanStyle(color = LiveDesign.text)) {
-                    append("${storage.freeSpaceBytes / 1_000_000_000} GB")
-                }
-                withStyle(
-                    SpanStyle(
-                        color = LiveDesign.muted,
-                        fontSize = labelSp.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                ) {
-                    append(
-                        " ${storage.freeSpaceBytes * 100 / storage.totalCapacityBytes}%",
-                    )
-                }
-            } else {
-                val label = shotsRemaining?.let(::shotsRemainingCompactLabel) ?: "—"
-                withStyle(SpanStyle(color = LiveDesign.text)) { append(label) }
-                withStyle(
-                    SpanStyle(
-                        color = LiveDesign.muted,
-                        fontSize = labelSp.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                ) { append(" SHOTS") }
-            }
-        },
-        style = chromeStyle(sizeSp, FontWeight.Medium, mono = true),
-        maxLines = 1,
-        softWrap = false,
-        modifier =
-            if (onToggle != null) {
-                modifier.chromeClickable(onClick = onToggle)
-            } else {
-                modifier
-            },
-    )
 }
 
 /** The instant review's settings line, captured at present time (iOS `presentInstantReview`). */

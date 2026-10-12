@@ -431,19 +431,6 @@ class NikonAssistsTest {
         assertFalse(NikonAssistChip.Tool(MonitorAssistTool.EV) in video)
     }
 
-    @Test
-    fun `live inspector closes when its tool or lifecycle is no longer interactive`() {
-        val tools = listOf(MonitorAssistTool.PEAK, MonitorAssistTool.EV)
-        assertTrue(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(null, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.EV, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.AUDIO, tools + MonitorAssistTool.AUDIO, true, false, true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.WAVE, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = false, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = true, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = false, resumed = false))
-    }
-
     /** Restores from a fresh set of stores holding only [operatorValues] (an old install). */
     private fun migrate(vararg operatorValues: Pair<String, Any>): MonitorAssistState {
         val legacy = TestSharedPreferences()
@@ -596,14 +583,6 @@ class NikonAssistsTest {
         assertEquals(150, restored.vectorBrightness)
         assertEquals(0.8, restored.histoScale)
         assertEquals(1.6, restored.lightsScale)
-    }
-
-    @Test
-    fun `waveform and parade use the common unity brightness scale`() {
-        assertEquals(0.0, waveformParadeIntensity(0))
-        assertEquals(1.0, waveformParadeIntensity(100))
-        assertEquals(2.0, waveformParadeIntensity(200))
-        assertEquals(2.0, waveformParadeIntensity(Int.MAX_VALUE))
     }
 
     @Test

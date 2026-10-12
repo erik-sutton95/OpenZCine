@@ -7,8 +7,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.SemanticsMatcher
-import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
@@ -18,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorCommandHealth
+import com.opencapture.opencine.cameracontrols.MonitorAssistCluster
 import com.opencapture.opencine.nikon.CameraControl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,15 +32,18 @@ class PlaybackAssistLongPressComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
 
+    /** The shared playback palette as `MonitorOperatorPlaybackScreen` mounts it for this camera. */
     @Test
-    fun configurableToolLongClickDoesNotToggleAndAudioRemainsTapOnly() {
+    fun configurableToolLongClickOpensItsOptionsWithoutTogglingAndATapTogglesPlaybackOnly() {
         val assists = idleNikonAssists()
         composeRule.setContent {
             OpenZCineTheme {
-                NikonAssistPalette(
-                    listOf(MonitorAssistTool.WAVE, MonitorAssistTool.AUDIO).map(NikonAssistChip::Tool), assists,
-                    playback = true, portrait = false, locked = false,
-                    modifier = Modifier.size(width = 400.dp, height = 58.dp),
+                MonitorAssistCluster(
+                    usageStore = null, portrait = false, locked = false,
+                    isOn = assists.shared::isPlaybackVisible, onToggle = { assists.shared.togglePlayback(it) },
+                    onLongPress = { assists.shared.configureTool = it },
+                    modifier = Modifier.size(width = 400.dp, height = 58.dp), playback = true,
+                    availableTools = setOf(MonitorAssistTool.WAVE),
                 )
             }
         }
@@ -61,10 +63,6 @@ class PlaybackAssistLongPressComposeTest {
             assertTrue(assists.shared.isPlaybackVisible(MonitorAssistTool.WAVE))
             assertFalse(assists.shared.isOn(MonitorAssistTool.WAVE))
         }
-
-        composeRule
-            .onNodeWithContentDescription(MonitorAssistTool.AUDIO.title, substring = true)
-            .assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
     }
 
     @Test

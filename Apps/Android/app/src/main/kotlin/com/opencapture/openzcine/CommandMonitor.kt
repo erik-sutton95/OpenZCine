@@ -26,7 +26,6 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import com.opencapture.opencine.nikon.CodecBitDepthOption
-import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
 
@@ -1015,7 +1014,6 @@ internal fun CommandControlDialog(
     feedback: CommandControlFeedback?,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
-    chromeless: Boolean = false,
 ) {
     // An in-flight write stays interactive. pendingControl names that write, and it is not a lock.
     val interactive = controlsEnabled &&
@@ -1029,7 +1027,7 @@ internal fun CommandControlDialog(
             if (write.value.isNotBlank()) onSelect(write.value)
         },
         onClose = onDismiss,
-        chromeless = chromeless,
+        chromeless = true,
         error = feedback?.takeIf { it.isError }?.message,
         unavailable = if (interactive) null else stringResource(R.string.camera_controls_unavailable),
         tintLabel = { tint -> WhiteBalanceTint.label(tint.amberBlue ?: 0, tint.greenMagenta) },

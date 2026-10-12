@@ -8,7 +8,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import com.opencapture.opencine.cameracontrols.SheetHeader
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.monitorui.MonitorTypography
 import androidx.compose.ui.text.font.FontWeight
@@ -217,7 +216,6 @@ internal fun VideoLadderBody(
     tintHelp: String?,
     footer: @Composable (LadderTab<LadderTabKey>) -> Unit,
     modifier: Modifier = Modifier,
-    chromeless: Boolean = false,
 ) {
     if (picker.kind == MonitorPickerKind.RESOLUTION) {
         val request = picker.modes.singleOrNull()?.request ?: return
@@ -230,7 +228,6 @@ internal fun VideoLadderBody(
                 frameRate = format.frameRate?.let { CaptureFormatGroup(it, it) })
         }
         Column(modifier.testTag("ladder_sheet"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!chromeless) SheetHeader(picker.title, picker.subtitle, onClose)
             if (!error.isNullOrBlank()) Text(error, style = MonitorTypography.text(11f, FontWeight.Medium), color = StartupColors.destructive, maxLines = 2)
             if (!controlsEnabled && !unavailable.isNullOrBlank()) Text(unavailable, style = MonitorTypography.text(11f, FontWeight.Medium), color = MonitorPalette.muted, maxLines = 2)
             val banner = if (picker.interactionLocked) picker.lockBanner else if (picker.drumInteractionLocked) picker.drumLockBanner else null
@@ -256,7 +253,8 @@ internal fun VideoLadderBody(
         modifier = modifier,
         control = control,
         fromTop = fromTop,
-        chromeless = chromeless,
+        // The live composition supplies the panel header.
+        chromeless = true,
         error = error,
         unavailable = if (controlsEnabled) null else unavailable,
         onHold = onHold,

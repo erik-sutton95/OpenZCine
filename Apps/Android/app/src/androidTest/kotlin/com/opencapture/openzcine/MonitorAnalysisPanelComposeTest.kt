@@ -4,33 +4,39 @@ import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.monitorui.MonitorAssistTool
-import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.monitorui.MonitorRect
-import com.opencapture.monitorui.MonitorScopeStoredCenter
+import com.opencapture.monitorui.MonitorScopePanelSize
+import com.opencapture.monitorui.MonitorScopePoint
+import com.opencapture.monitorui.MonitorScopeRect
+import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.opencine.cameracontrols.MovableAssistPanel
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Device gesture contract for the shared scope panels and the false-colour key placement. */
+/**
+ * Device gesture contract for the shared movable panel the Z monitor mounts for every scope and
+ * the false colour key (the shared surface's `StackedScopePanel` and reference key).
+ */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
 class MonitorAnalysisPanelComposeTest {
@@ -38,35 +44,33 @@ class MonitorAnalysisPanelComposeTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun scopeDragStoresTheSharedCentreReportsItsFrameAndKeepsTheFocusResetClear() {
+    fun scopeDragStoresTheSharedCentreReportsItsFrameAndStaysInsideThePlacement() {
         val assist = MonitorAssistState()
         val visible = mutableStateOf(true)
         var reportedFrame: MonitorRect? = null
-        val layout =
-            MonitorAnalysisPanelLayout(
-                viewport = MonitorRect(0f, 0f, 400f, 300f),
-                safeBounds = MonitorRect(20f, 20f, 360f, 260f),
-            )
+        var canvasPx = MonitorScopeRect(0f, 0f, 0f, 0f)
         composeRule.setContent {
+            val density = LocalDensity.current.density
+            val canvas = MonitorScopeRect(0f, 0f, 400f * density, 300f * density)
+            canvasPx = canvas
             OpenZCineTheme {
                 Box(Modifier.requiredSize(400.dp, 300.dp).testTag("panels")) {
                     if (visible.value) {
-                        FloatingScopePanels(
-                            displayed = listOf(ScopeKind.HISTOGRAM),
-                            panelLayout = layout,
-                            assist = assist,
-                            hapticsEnabled = false,
-                            onPanelFrameChanged = { id, frame ->
-                                if (id == MonitorAnalysisPanelID.HISTOGRAM) reportedFrame = frame
-                            },
-                        ) { _, modifier ->
-                            Box(modifier.background(Color.Black))
+                        MovableAssistPanel(
+                            MonitorAssistTool.HISTO, MonitorScopePanelSize.histogram, assist.histoScale,
+                            assist.centerFor(MonitorAssistTool.HISTO, portrait = false), canvas,
+                            MonitorScopeRect(20f * density, 20f * density, 360f * density, 260f * density),
+                            MonitorScopePoint(canvas.midX, canvas.midY), enabled = true,
+                            onStore = { assist.storeCenter(MonitorAssistTool.HISTO, it, portrait = false) },
+                            onFrameChanged = { reportedFrame = it },
+                        ) { size ->
+                            Box(Modifier.size(size.width.dp, size.height.dp).background(Color.Black).testTag("histo"))
                         }
                     }
                 }
             }
         }
-        val panel = composeRule.onNodeWithContentDescription("HISTO analysis panel, movable")
+        val panel = composeRule.onNodeWithTag("histo")
 
         fun nodeFrame(): MonitorRect {
             val root = composeRule.onNodeWithTag("panels").getBoundsInRoot()
@@ -94,10 +98,14 @@ class MonitorAnalysisPanelComposeTest {
         val moved = composeRule.runOnIdle { requireNotNull(reportedFrame) }
         assertFrameEquals(nodeFrame(), moved)
         composeRule.runOnIdle {
-            assertNotNull(assist.centerFor(MonitorAssistTool.HISTO, portrait = false))
+            val stored = requireNotNull(assist.centerFor(MonitorAssistTool.HISTO, portrait = false))
             assertNull(assist.centerFor(MonitorAssistTool.HISTO, portrait = true))
             assertTrue(moved.x > start.x && moved.y > start.y)
             assertTrue(moved.x + moved.width <= 380f + 0.5f && moved.y + moved.height <= 280f + 0.5f)
+            // The stored centre is a fraction of the canvas that lands on the panel's centre.
+            val centre = stored.center(canvasPx)
+            assertEquals(moved.x + moved.width / 2f, centre.x / density, 0.5f)
+            assertEquals(moved.y + moved.height / 2f, centre.y / density, 0.5f)
             visible.value = false
         }
         composeRule.runOnIdle { assertNull(reportedFrame) }
@@ -110,72 +118,5 @@ class MonitorAnalysisPanelComposeTest {
         assertEquals(expected.y, actual.y, 0.5f)
         assertEquals(expected.width, actual.width, 0.5f)
         assertEquals(expected.height, actual.height, 0.5f)
-    }
-
-    @Test
-    fun falseColorReferenceDragStoresANormalizedCentreInsideTheSafeBounds() {
-        val stored = mutableStateOf<MonitorScopeStoredCenter?>(null)
-        var reportedFrame: MonitorRect? = null
-        val effectsState = LiveFeedEffectsPresentationState()
-        effectsState.present(
-            FeedFalseColorScale.LIMITS,
-            FeedFalseColorReference(
-                curveOrdinal = 0,
-                segments =
-                    listOf(
-                        FeedFalseColorReferenceSegment(
-                            lowerFraction = 0f,
-                            upperFraction = 1f,
-                            color = floatArrayOf(1f, 0f, 0f),
-                        ),
-                    ),
-                stopMarkerFractions = floatArrayOf(),
-            ),
-        )
-        val viewport = MonitorRect(0f, 0f, 360f, 240f)
-        val layout =
-            MonitorAnalysisPanelLayout(
-                viewport = viewport,
-                safeBounds = MonitorRect(40f, 20f, 300f, 190f),
-            )
-        composeRule.setContent {
-            OpenZCineTheme {
-                Box(Modifier.requiredSize(360.dp, 240.dp)) {
-                    FalseColorReferenceOverlay(
-                        effectsState = effectsState,
-                        feed = viewport,
-                        panelLayout = layout,
-                        stored = stored.value,
-                        onStore = { stored.value = it },
-                        hapticsEnabled = false,
-                        onPanelFrameChanged = { id, frame ->
-                            if (id == MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE) reportedFrame = frame
-                        },
-                    )
-                }
-            }
-        }
-        val start = composeRule.runOnIdle { requireNotNull(reportedFrame) }
-        val density = ApplicationProvider.getApplicationContext<Context>().resources.displayMetrics.density
-        composeRule
-            .onNodeWithContentDescription("False color reference, movable panel")
-            .performTouchInput {
-                down(center)
-                advanceEventTime(16)
-                moveBy(Offset(-12f * density, -12f * density))
-                advanceEventTime(16)
-                moveBy(Offset(-1_000f, -1_000f))
-                advanceEventTime(16)
-                up()
-            }
-
-        composeRule.runOnIdle {
-            val moved = requireNotNull(reportedFrame)
-            assertEquals(40f, moved.x, 0.5f)
-            assertTrue(moved.y >= 20f - 0.5f && moved.y < start.y)
-            val center = requireNotNull(stored.value)
-            assertEquals(moved.x + moved.width / 2f, center.xFraction.toFloat() * viewport.width, 0.5f)
-            assertEquals(moved.y + moved.height / 2f, center.yFraction.toFloat() * viewport.height, 0.5f)
-        }
     }
 }

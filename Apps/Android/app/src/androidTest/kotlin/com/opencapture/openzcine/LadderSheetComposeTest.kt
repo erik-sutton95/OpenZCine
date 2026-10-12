@@ -2,14 +2,15 @@ package com.opencapture.openzcine
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
@@ -23,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.opencapture.monitorui.MonitorRect
+import com.opencapture.opencine.appkit.MonitorOperatorCaptureDrawer
 import com.opencapture.opencine.cameracontrols.LocalViewportPortrait
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CodecBitDepthOption
@@ -49,7 +51,6 @@ class LadderSheetComposeTest {
     @Test
     fun kelvinStepsAndTintTabWriteTheHostKey() {
         val harness = harness()
-        saveLegacy(harness, "wb", wb())
         show(harness, wb())
         composeRule.onNodeWithText("KELVIN").assertIsDisplayed()
         composeRule.onNodeWithText("PRESET").assertIsDisplayed()
@@ -67,7 +68,6 @@ class LadderSheetComposeTest {
     @Test
     fun codecDepthsFlankTheRowAndDoNotReplaceIt() {
         val harness = harness()
-        saveLegacy(harness, "codec", codec())
         show(harness, codec())
         composeRule.onNodeWithContentDescription("Record H.265 at 10-bit").performClick()
         composeRule.runOnIdle {
@@ -79,7 +79,6 @@ class LadderSheetComposeTest {
     @Test
     fun shutterLockShowsTheBannerAndKeepsTheTabs() {
         val harness = harness()
-        saveLegacy(harness, "shutter", shutter(locked = true))
         show(harness, shutter(locked = true))
         composeRule.onNodeWithText("Shutter locked on camera", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("ANGLE").assertIsDisplayed()
@@ -91,7 +90,6 @@ class LadderSheetComposeTest {
     @Test
     fun isoDetailAndAutoLockStayOnTheSharedTabs() {
         val harness = harness()
-        saveLegacy(harness, "iso", iso(auto = true))
         show(harness, iso(auto = true))
         composeRule.onNodeWithText("800 / 4000").assertIsDisplayed()
         composeRule.onNodeWithText("ISO is automatic", substring = true).assertIsDisplayed()
@@ -102,14 +100,11 @@ class LadderSheetComposeTest {
     @Test
     fun focusAreaAndResolutionUseTheHorizontalSheet() {
         val harness = harness()
-        saveLegacy(harness, "focus", focus())
         show(harness, focus())
         composeRule.onNodeWithText("Focus dial").assertIsDisplayed()
         composeRule.onNodeWithText("AREA").performClick()
         composeRule.runOnIdle { assertTrue(harness.writes.isEmpty()) }
         save("focus")
-        saveLegacy(harness, "resolution", resolution())
-        saveLegacy(harness, "iris", iris())
         show(harness, resolution())
         composeRule.onNodeWithText("RESOLUTION").assertIsDisplayed()
         save("resolution")
@@ -122,11 +117,6 @@ class LadderSheetComposeTest {
     fun photoModeDriveMeterProfileAndSizeUseTheSheet() {
         val harness = harness()
         val folder = "r2b"
-        saveLegacy(harness, "mode", photoMode(), folder)
-        saveLegacy(harness, "drive", photoDrive(), folder)
-        saveLegacy(harness, "meter", photoMeter(), folder)
-        saveLegacy(harness, "profile", photoProfile(), folder)
-        saveLegacy(harness, "size", photoSize(), folder)
 
         show(harness, photoMode())
         composeRule.onNodeWithText("U MODE").assertIsDisplayed()
@@ -182,19 +172,23 @@ class LadderSheetComposeTest {
         var enabled by mutableStateOf(true)
         var feedback by mutableStateOf<CommandControlFeedback?>(null)
         composeRule.setContent {
-            CommandControlDialog(
-                request = CommandControlRequest(
-                    title = "ISO",
-                    control = CameraControl.ISO,
-                    currentValue = "800",
-                    options = listOf("400", "800", "1600"),
-                ),
-                controlsEnabled = enabled,
-                pendingControl = null,
-                feedback = feedback,
-                onSelect = { writes += it },
-                onDismiss = { dismissed = true },
-            )
+            // The live composition's chrome for a command control (MonitorScreen `panelValue`).
+            MonitorOperatorCaptureDrawer("ISO", stringResource(R.string.command_current_value, "800"), 320f,
+                top = false, portrait = false, close = { dismissed = true }) {
+                CommandControlDialog(
+                    request = CommandControlRequest(
+                        title = "ISO",
+                        control = CameraControl.ISO,
+                        currentValue = "800",
+                        options = listOf("400", "800", "1600"),
+                    ),
+                    controlsEnabled = enabled,
+                    pendingControl = null,
+                    feedback = feedback,
+                    onSelect = { writes += it },
+                    onDismiss = { dismissed = true },
+                )
+            }
         }
         composeRule.onNodeWithTag("ladder_sheet").assertIsDisplayed()
         composeRule.onNodeWithText("ISO").assertIsDisplayed()
@@ -219,7 +213,6 @@ class LadderSheetComposeTest {
 
     /** One setContent for the whole test. The rule rejects a second call. */
     private class Harness {
-        var legacy by mutableStateOf<MonitorPickerPresentation?>(null)
         var live by mutableStateOf<MonitorPickerPresentation?>(null)
         val writes = mutableListOf<Pair<CameraControl, String>>()
         /** Each write by the request's title: several tabs can share one control. */
@@ -227,44 +220,32 @@ class LadderSheetComposeTest {
         val shots = mutableListOf<Int>()
     }
 
+    /** The picker inside the shared camera panel chrome, as the live composition mounts it. */
     private fun harness(): Harness {
         val harness = Harness()
         composeRule.setContent {
-            val legacy = harness.legacy
             val live = harness.live
-            if (legacy != null) {
-                Box(Modifier.testTag("legacy_sheet").size(480.dp, 320.dp)) {
-                    PickerPanelBody(
-                        picker = legacy,
-                        frame = MonitorRect(0f, 0f, 480f, 320f),
-                        controlsEnabled = true,
-                        pendingControl = null,
-                        feedback = null,
-                        onSelect = { _, _ -> },
-                        onDismiss = {},
-                        timerShotsCount = 2,
-                        onAdjustTimerShots = { delta -> harness.shots += delta },
-                    )
-                }
-            }
             if (live != null) {
                 CompositionLocalProvider(LocalViewportPortrait provides false) {
-                    MonitorControlPickerPanel(
-                        picker = live,
-                        frame = frame,
-                        controlsEnabled = true,
-                        pendingControl = null,
-                        feedback = null,
-                        onSelect = { request, label ->
-                            harness.writes += request.control to label
-                            harness.titled += request.title to label
-                        },
-                        onDismiss = {},
-                        slideFromTop = live.kind.isTopBarPicker(),
-                        onToggleMfScrub = {},
-                        timerShotsCount = 2,
-                        onAdjustTimerShots = { delta -> harness.shots += delta },
-                    )
+                    Box(Modifier.offset(frame.x.dp, frame.y.dp).width(frame.width.dp)) {
+                        MonitorOperatorCaptureDrawer(live.title, live.subtitle, frame.height,
+                            top = live.kind.isTopBarPicker(), portrait = false, close = {}) {
+                            MonitorControlPickerPanel(
+                                picker = live,
+                                controlsEnabled = true,
+                                feedback = null,
+                                onSelect = { request, label ->
+                                    harness.writes += request.control to label
+                                    harness.titled += request.title to label
+                                },
+                                onDismiss = {},
+                                slideFromTop = live.kind.isTopBarPicker(),
+                                onToggleMfScrub = {},
+                                timerShotsCount = 2,
+                                onAdjustTimerShots = { delta -> harness.shots += delta },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -272,30 +253,12 @@ class LadderSheetComposeTest {
     }
 
     private fun show(harness: Harness, picker: MonitorPickerPresentation) {
-        composeRule.runOnIdle {
-            harness.legacy = null
-            harness.live = picker
-        }
+        composeRule.runOnIdle { harness.live = picker }
         composeRule.waitForIdle()
     }
 
     private fun save(name: String, folder: String = "r2a") {
         writePng(name, composeRule.onNodeWithTag("ladder_sheet").captureToImage(), folder)
-    }
-
-    /** The vertical accent drum, captured beside the sheet that replaces it. */
-    private fun saveLegacy(
-        harness: Harness,
-        name: String,
-        picker: MonitorPickerPresentation,
-        folder: String = "r2a",
-    ) {
-        composeRule.runOnIdle {
-            harness.live = null
-            harness.legacy = picker
-        }
-        composeRule.waitForIdle()
-        writePng("$name-before", composeRule.onNodeWithTag("legacy_sheet").captureToImage(), folder)
     }
 
     private fun writePng(name: String, image: androidx.compose.ui.graphics.ImageBitmap, folder: String) {

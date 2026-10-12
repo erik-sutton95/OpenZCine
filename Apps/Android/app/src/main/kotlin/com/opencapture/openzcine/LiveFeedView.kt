@@ -49,7 +49,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.opencapture.monitorui.MonitorFalseColorReference
 import com.opencapture.monitorui.MonitorMaterial
 import com.opencapture.monitorui.monitorMaterial
 import com.opencapture.opencine.cameracontrols.FalseColorReference as CommonFalseColorReference
@@ -58,7 +57,6 @@ import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
 import com.opencapture.monitorui.MonitorFalseColorReferenceValues
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorScopePanelSize
-import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusInfo
@@ -663,55 +661,6 @@ internal fun LiveFeedColorModeNotice(
     }
 }
 
-/**
- * The false-colour key on the shared movable panel and ruler. The Swift-calibrated bands, stop
- * markers and curve name arrive as the shared reference values; [stored] and [onStore] keep its
- * centre (live: the shared assist state; playback: its own preference file). Unscaled sibling of
- * [LiveFeedView], outside the feed's de-squeeze layer.
- */
-@Composable
-internal fun FalseColorReferenceOverlay(
-    effectsState: LiveFeedEffectsPresentationState,
-    feed: MonitorRect,
-    panelLayout: MonitorAnalysisPanelLayout,
-    stored: MonitorScopeStoredCenter?,
-    onStore: (MonitorScopeStoredCenter) -> Unit,
-    bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
-    defaultHorizontalFraction: Float = 0f,
-    hapticsEnabled: Boolean = true,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
-) {
-    val presentation = effectsState.falseColorReference ?: return
-    if (presentation.reference.segments.isEmpty()) return
-    val default =
-        remember(feed, panelLayout, bottomChromeClearance, defaultHorizontalFraction) {
-            controlSafeFalseColorReferenceDefaultFrame(
-                feed = feed,
-                layout = panelLayout,
-                bottomChromeClearance = bottomChromeClearance,
-                horizontalFraction = defaultHorizontalFraction,
-            )
-        }
-    val description = stringResource(R.string.false_color_reference_description)
-    val values = presentation.referenceValues(falseColorReferenceCopy(presentation.scale))
-    MovableMonitorPanel(
-        identity = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE.storageKey,
-        base = MonitorScopePanelSize.falseColorReference,
-        panelLayout = panelLayout,
-        stored = stored,
-        onStore = onStore,
-        hapticsEnabled = hapticsEnabled,
-        panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
-        onPanelFrameChanged = onPanelFrameChanged,
-        defaultFrame = default,
-        // The shared ruler draws its own plate.
-        fillPlate = false,
-    ) { modifier ->
-        MonitorFalseColorReference(values, modifier.semantics { contentDescription = description })
-    }
-}
-
-
 /** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
 internal fun controlSafeFalseColorReferenceDefaultFrame(
     feed: MonitorRect,
@@ -728,6 +677,18 @@ internal fun controlSafeFalseColorReferenceDefaultFrame(
         ),
         layout.safeBounds,
     )
+
+/** Keeps a floating panel wholly inside the physical viewport's safe drawing bounds. */
+private fun clampScopeFrame(frame: MonitorRect, bounds: MonitorRect): MonitorRect {
+    val width = min(frame.width, bounds.width)
+    val height = min(frame.height, bounds.height)
+    return MonitorRect(
+        x = frame.x.coerceIn(bounds.x, bounds.x + bounds.width - width),
+        y = frame.y.coerceIn(bounds.y, bounds.y + bounds.height - height),
+        width = width,
+        height = height,
+    )
+}
 
 /** iOS `feedOutsideCenter(.bottomLeading)` translated into the Android zone map. */
 internal fun falseColorReferenceDefaultFrame(

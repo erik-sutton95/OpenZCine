@@ -47,19 +47,6 @@ class MFDriveControllerTest {
     }
 
     @Test
-    fun `strip seats left of the right system rail, vertically centred`() {
-        val viewport = com.opencapture.monitorui.MonitorRect(0f, 0f, 914f, 384f)
-
-        val frame = mfDriveStripFrame(viewport, rightRailLeading = 830f)
-
-        assertEquals(830f - MF_DRIVE_STRIP_WIDTH_DP - 12f, frame.x)
-        assertEquals(MF_DRIVE_STRIP_WIDTH_DP, frame.width)
-        // Vertically centred, capped to the 0.6-viewport height bound.
-        assertEquals(384f * 0.6f, frame.height, 0.01f)
-        assertEquals((384f - frame.height) / 2f, frame.y, 0.01f)
-    }
-
-    @Test
     fun `gesture pulses accumulate while one drive is in flight`() = runTest {
         val session = FakeSession()
         val controller = MFDriveController(session)

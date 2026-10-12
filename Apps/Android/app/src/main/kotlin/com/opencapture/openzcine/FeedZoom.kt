@@ -13,9 +13,6 @@ internal data class FeedZoom(val scale: Float = 1f, val offsetX: Float = 0f, val
         val NONE = FeedZoom()
     }
 }
-internal fun clampFeedPan(offsetX: Float, offsetY: Float, frameWidth: Float, frameHeight: Float,
-    scale: Float, pictureWidth: Float = frameWidth, pictureHeight: Float = frameHeight): Pair<Float, Float> =
-    MonitorPlaybackZoom.boundPan(offsetX, offsetY, frameWidth, frameHeight, scale, pictureWidth, pictureHeight)
 
 internal fun feedZoomAfterTransform(committed: FeedZoom, zoomChange: Float, centroidX: Float, centroidY: Float,
     panChangeX: Float, panChangeY: Float, width: Float, height: Float,
