@@ -276,7 +276,7 @@ const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
  * The frame state is read inside the [Canvas] draw lambda only, so a new
  * frame costs one draw invalidation — no recomposition, no layout.
  *
- * [onFrame] observes each presented frame on the decode thread. The bitmap is
+ * [onFrame] observes each presented frame on Android Main. The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
  * [onPresentedFrame] observes the exact source [LiveFrame], decoded bitmap,
  * optional [MonitorBitmapPreviewBaker] and live look accepted for display; the
