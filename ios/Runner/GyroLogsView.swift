@@ -137,7 +137,7 @@ struct GyroMountView: View {
             List {
                 Section {
                     Text(
-                        "Directions are viewed from behind the upright camera. These presets assume the phone is parallel to the camera's rear screen. An angled holder still needs IMU rotation in Gyroflow."
+                        "Directions are viewed from behind the upright camera. Keep the phone screen parallel to the camera's back, perpendicular to the lens axis. An angled holder still needs IMU rotation in Gyroflow."
                     )
                     .font(.subheadline)
                     Text(

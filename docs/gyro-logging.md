@@ -34,7 +34,8 @@ Logs live outside the downloaded-media cache and are retained until explicitly d
 
 Choose which way the screen faces and where the phone's USB-C edge points. Directions are
 viewed from behind an upright camera. These presets assume the phone screen is parallel to
-the camera's rear screen and the phone has portrait natural sensor axes, as on iPhone.
+the camera's back, perpendicular to the lens axis, and the phone has portrait natural sensor
+axes, as on iPhone. The camera's movable rear screen does not determine this alignment.
 Android devices with another natural sensor frame retain the unconfigured option.
 
 The selection is saved and copied into each take when REC is observed. Changing the setting
