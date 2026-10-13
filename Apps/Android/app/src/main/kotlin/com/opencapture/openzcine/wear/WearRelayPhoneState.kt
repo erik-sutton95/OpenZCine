@@ -141,4 +141,4 @@ internal fun androidWatchRelayState(
     )
 }
 
-private fun storageLabel(storage: CameraStorageStatus): String = storage.readout?.label ?: "—"
+private fun storageLabel(storage: CameraStorageStatus): String = storage.readout?.label ?: "\u2014"
