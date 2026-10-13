@@ -10,15 +10,20 @@ import UIKit
             defaults.set(enabled, forKey: Self.preferenceKey)
             if !enabled { stop(reason: .disabled) }
             if enabled && !oldValue {
+                if loaded { latestRecordingMount = mountPreset }
                 failure = nil
                 reconcile()
             }
         }
     }
+    var mountPreset: GyroMountPreset {
+        didSet { defaults.set(mountPreset.rawValue, forKey: Self.mountPreferenceKey) }
+    }
     private(set) var logs: [GyroLogEntry] = []
     private(set) var failure: String?
     private(set) var storageWarning: String?
     var logsPresented = false
+    var mountPresented = false
     private(set) var motionRunning = false
     private(set) var hasGapWarning = false
     private(set) var eligible = false
@@ -32,14 +37,17 @@ import UIKit
     @ObservationIgnored private var buffer = GyroSampleBuffer()
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var loading: Task<Void, Never>?
-    @ObservationIgnored private var observations: [(Bool, Double, Date, String)] = []
+    @ObservationIgnored private var observations: [(Bool, Double, Date, String, GyroMountPreset)] =
+        []
     @ObservationIgnored private var stopping: GyroLogTermination?
     @ObservationIgnored private var cameraLabel = "Nikon camera"
     @ObservationIgnored private var latestRecording: Bool?
+    @ObservationIgnored private var latestRecordingMount: GyroMountPreset = .unconfigured
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var processing = false
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     static let preferenceKey = "gyroLoggingEnabled.v1"
+    static let mountPreferenceKey = "gyroMountPreset.v1"
 
     init(
         defaults: UserDefaults = .standard,
@@ -54,6 +62,9 @@ import UIKit
         self.now = now
         self.automaticProcessing = automaticProcessing
         enabled = defaults.bool(forKey: Self.preferenceKey)
+        mountPreset =
+            defaults.string(forKey: Self.mountPreferenceKey)
+            .flatMap(GyroMountPreset.init(rawValue:)) ?? .unconfigured
         loading = Task { [weak self] in
             guard let self else { return }
             do {
@@ -82,12 +93,14 @@ import UIKit
     var statusIsFailure: Bool { failure != nil }
 
     func openLogs() { logsPresented = true }
+    func openMount() { mountPresented = true }
 
     func waitUntilLoaded() async { await loading?.value }
 
     func configure(eligible: Bool, cameraLabel: String, recording: Bool?) {
         self.cameraLabel = cameraLabel
         self.eligible = eligible
+        if latestRecording != recording { latestRecordingMount = mountPreset }
         latestRecording = recording
         guard eligible else {
             stop(reason: .disconnected)
@@ -98,6 +111,7 @@ import UIKit
     }
 
     func observeRecording(_ recording: Bool) {
+        if latestRecording != recording { latestRecordingMount = mountPreset }
         latestRecording = recording
         guard motionRunning, stopping == nil, reportedRecording != recording else { return }
         guard observations.count < GyroTakeSession.maximumBufferedSamples else {
@@ -106,7 +120,7 @@ import UIKit
             return
         }
         reportedRecording = recording
-        observations.append((recording, now(), Date(), cameraLabel))
+        observations.append((recording, now(), Date(), cameraLabel, latestRecordingMount))
     }
 
     func stop(reason: GyroLogTermination) {
@@ -172,11 +186,11 @@ import UIKit
         var remaining = batch.samples[...]
         // Interleave camera observations with their sensor-time prefixes. Ingesting a whole
         // delayed batch first would prune pre-roll that belongs to an earlier REC observation.
-        for (recording, timestamp, date, label) in observations {
+        for (recording, timestamp, date, label, mount) in observations {
             let boundary = remaining.firstIndex { $0.timestamp > timestamp } ?? remaining.endIndex
             updates += session.ingest(Array(remaining[..<boundary]))
             updates += session.observeRecording(
-                recording, at: timestamp, date: date, cameraLabel: label)
+                recording, at: timestamp, date: date, cameraLabel: label, mountPreset: mount)
             remaining = remaining[boundary...]
         }
         updates += session.ingest(Array(remaining))

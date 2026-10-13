@@ -74,6 +74,8 @@ struct GyroLogsView: View {
                 format: .dateTime.month(.abbreviated).day().hour().minute().second()
             )
             .font(.subheadline).foregroundStyle(.secondary)
+            Text(entry.descriptor.mount.detail)
+                .font(.caption).foregroundStyle(.secondary)
             if let summary = entry.summary {
                 Text(
                     String(
@@ -122,6 +124,58 @@ struct GyroLogsView: View {
         if summary.termination != .normal { return "Interrupted · partial" }
         if summary.hasGapWarning { return "Gaps detected · partial" }
         return summary.isPartial ? "Partial coverage" : "Complete"
+    }
+}
+
+/// Selects the phone's fixed physical alignment for future motion logs.
+struct GyroMountView: View {
+    @Bindable var coordinator: GyroCaptureCoordinator
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text(
+                        "Directions are viewed from behind the upright camera. These presets assume the phone is parallel to the camera's rear screen. An angled holder still needs IMU rotation in Gyroflow."
+                    )
+                    .font(.subheadline)
+                    Text(
+                        "Keep the phone fixed relative to the camera during each take. Changes apply to new takes."
+                    )
+                    .font(.subheadline)
+                    presetRow(.unconfigured)
+                }
+                ForEach(["Screen toward you", "Screen toward lens"], id: \.self) { group in
+                    Section(group) {
+                        ForEach(GyroMountPreset.allCases.filter { $0.group == group }) { preset in
+                            presetRow(preset)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Phone mount")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func presetRow(_ preset: GyroMountPreset) -> some View {
+        Button {
+            coordinator.mountPreset = preset
+        } label: {
+            HStack {
+                Text(preset.title).foregroundStyle(.primary)
+                Spacer()
+                if coordinator.mountPreset == preset {
+                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                }
+            }
+        }
+        .accessibilityIdentifier("gyro.mount.\(preset.rawValue)")
     }
 }
 

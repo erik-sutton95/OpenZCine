@@ -2388,7 +2388,9 @@ struct OperatorSettingsPanel: View {
                 enabled: Binding(
                     get: { model.gyroCapture.enabled }, set: { model.setGyroCaptureEnabled($0) }),
                 status: model.gyroCapture.failure ?? model.gyroCapture.statusText,
-                openLogs: model.gyroCapture.openLogs)
+                openLogs: model.gyroCapture.openLogs,
+                mountName: model.gyroCapture.mountPreset.shortLabel,
+                configureMount: model.gyroCapture.openMount)
         )
     }
 

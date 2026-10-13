@@ -13578,6 +13578,12 @@ struct NativeAppRoot: View {
                 set: { model.gyroCapture.logsPresented = $0 }
             )
         ) { GyroLogsView(coordinator: model.gyroCapture) }
+        .sheet(
+            isPresented: Binding(
+                get: { model.gyroCapture.mountPresented },
+                set: { model.gyroCapture.mountPresented = $0 }
+            )
+        ) { GyroMountView(coordinator: model.gyroCapture) }
         .sheet(isPresented: bugReportPresented) { ProblemReportView() }
         .sheet(isPresented: $showsReliabilityPrompt) {
             ReliabilityConsentPrompt { enabled in

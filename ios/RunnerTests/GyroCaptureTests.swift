@@ -6,6 +6,77 @@ import Testing
 
 @MainActor @Suite("Phone gyro capture")
 struct GyroCaptureTests {
+    @Test("Mount selection defaults unconfigured and persists across launches")
+    func mountPreference() async {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        #expect(coordinator.mountPreset == .unconfigured)
+        coordinator.mountPreset = .rearLeft
+        #expect(
+            fixture.defaults.string(forKey: GyroCaptureCoordinator.mountPreferenceKey) == "rearLeft"
+        )
+        let reopened = fixture.coordinator()
+        await reopened.waitUntilLoaded()
+        #expect(reopened.mountPreset == .rearLeft)
+        fixture.defaults.set(
+            "unknown future mount", forKey: GyroCaptureCoordinator.mountPreferenceKey)
+        let unknown = fixture.coordinator()
+        await unknown.waitUntilLoaded()
+        #expect(unknown.mountPreset == .unconfigured)
+    }
+
+    @Test("Queued REC snapshots its mount and changes apply only to the next take")
+    func mountSnapshot() async throws {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        coordinator.mountPreset = .rearLeft
+        coordinator.enabled = true
+        coordinator.configure(eligible: true, cameraLabel: "Nikon test camera", recording: false)
+        coordinator.observeRecording(true)
+        coordinator.mountPreset = .frontDown
+        fixture.feed(from: 10, through: 10.1)
+        await coordinator.processPending()
+        let first = try #require(coordinator.logs.first)
+        #expect(first.descriptor.mount == .rearLeft)
+        coordinator.observeRecording(false)
+        await coordinator.processPending()
+        coordinator.mountPreset = .rearRight
+        fixture.feed(from: 10.11, through: 10.2)
+        coordinator.observeRecording(true)
+        await coordinator.processPending()
+        #expect(coordinator.logs.first { $0.id == first.id }?.descriptor.mount == .rearLeft)
+        let second = try #require(coordinator.logs.first { $0.id != first.id })
+        #expect(second.descriptor.mount == .rearRight)
+        coordinator.enabled = false
+        await coordinator.processPending()
+        let exported = try #require(await coordinator.share(first))
+        defer { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+        #expect(
+            try String(contentsOf: exported, encoding: .utf8).contains(
+                "orientation,\(GyroMountPreset.rearLeft.orientation)\n"))
+    }
+
+    @Test("A REC report during recovery keeps its selected mount")
+    func mountBeforeLoad() async throws {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        let coordinator = fixture.coordinator()
+        coordinator.mountPreset = .frontUp
+        coordinator.enabled = true
+        coordinator.configure(eligible: true, cameraLabel: "Nikon test camera", recording: true)
+        coordinator.mountPreset = .rearDown
+        await coordinator.waitUntilLoaded()
+        fixture.feed(from: 10, through: 10.1)
+        await coordinator.processPending()
+        #expect(coordinator.logs.first?.descriptor.mount == .frontUp)
+        coordinator.enabled = false
+        await coordinator.processPending()
+    }
+
     @Test("Opt-in defaults off and is persisted")
     func optIn() async throws {
         let fixture = GyroFixture()
@@ -113,16 +184,20 @@ struct GyroCaptureTests {
         defer { fixture.cleanup() }
         let coordinator = fixture.coordinator()
         await coordinator.waitUntilLoaded()
+        coordinator.mountPreset = .rearLeft
         coordinator.enabled = true
         coordinator.configure(eligible: true, cameraLabel: "Nikon test camera", recording: true)
         fixture.feed(from: 10, through: 10.1)
         await coordinator.processPending()
         coordinator.enabled = false
+        coordinator.mountPreset = .frontRight
         coordinator.enabled = true
         #expect(fixture.driver.starts == 1)
         await coordinator.processPending()
         #expect(fixture.driver.starts == 2)
         #expect(coordinator.logs.first?.summary?.termination == .disabled)
+        await coordinator.processPending()
+        #expect(coordinator.logs.first { $0.active }?.descriptor.mount == .frontRight)
         coordinator.enabled = false
         await coordinator.processPending()
         #expect(!coordinator.motionRunning)
