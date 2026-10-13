@@ -169,6 +169,7 @@ class GyroLogStoreTest {
     private fun reply(vararg updates: JSONObject): JSONObject = JSONObject().put("updates", JSONArray(updates.toList()))
 
     private inner class RecoveryNative : GyroNative {
+        override fun mountPresets(naturalPortrait: Boolean): String = error("Not used")
         val openRecoveries = mutableMapOf<String, Boolean>()
         override fun recoveryCreate(): String = UUID.randomUUID().toString().also { openRecoveries[it] = false }
         override fun recoveryAccept(owner: String, bytes: ByteArray): Long {
@@ -179,7 +180,8 @@ class GyroLogStoreTest {
             if (openRecoveries.remove(owner) == true) summary(JSONObject(descriptor), "recovered").toString() else null
         override fun create(): String = error("Not used")
         override fun ingest(owner: String, bytes: ByteArray): String? = error("Not used")
-        override fun observe(owner: String, recording: Boolean, timestamp: Double, dateSeconds: Double, cameraLabel: String): String? = error("Not used")
+        override fun observe(owner: String, recording: Boolean, timestamp: Double, dateSeconds: Double,
+            cameraLabel: String, mountPreset: String): String? = error("Not used")
         override fun poll(owner: String, timestamp: Double): String? = error("Not used")
         override fun finish(owner: String, reason: String, timestamp: Double): String? = error("Not used")
         override fun close(owner: String) = Unit

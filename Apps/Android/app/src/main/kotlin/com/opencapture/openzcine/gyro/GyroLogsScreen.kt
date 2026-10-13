@@ -74,7 +74,7 @@ internal fun GyroLogsScreen(state: GyroCaptureState, onShare: (GyroLogEntry) -> 
             Text("Gyro logs", color = MonitorPalette.text)
             MonitorSettingsActionPill("Close", onClick = onClose)
         }
-        Text("Select the matching video, lens profile and mount orientation in Gyroflow.",
+        Text("Select the matching video and lens profile in Gyroflow. Each log keeps the mount selected for that take.",
             color = MonitorPalette.muted)
         if (state.logging || state.failed) Text(state.status,
             color = if (state.failed) MonitorPalette.accent else MonitorPalette.text)
@@ -86,6 +86,7 @@ internal fun GyroLogsScreen(state: GyroCaptureState, onShare: (GyroLogEntry) -> 
                 MonitorSettingsRowCard {
                     Text(entry.cameraLabel, color = MonitorPalette.text)
                     Text(DateFormat.getDateTimeInstance().format(Date(entry.startDateMillis)), color = MonitorPalette.muted)
+                    Text("Mount: ${entry.mountDetail(state.mountCatalog)}", color = MonitorPalette.muted)
                     entry.summary?.let { summary ->
                         Text(String.format(Locale.US, "%.1f s · %.1f Hz · %s", summary.getDouble("duration"),
                             summary.getDouble("measuredRate"), entry.health), color = MonitorPalette.text)

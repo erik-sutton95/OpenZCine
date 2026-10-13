@@ -64,6 +64,7 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.gyro.GyroCaptureCoordinator
 import com.opencapture.openzcine.gyro.GyroLogsScreen
+import com.opencapture.openzcine.gyro.GyroMountScreen
 import com.opencapture.openzcine.gyro.shareGyroLog
 import com.opencapture.opencine.cameracontrols.MonitorSettingsGyroSource
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
@@ -250,10 +251,13 @@ class MainActivity : ComponentActivity() {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 val gyroState by gyroCapture.state.collectAsState()
                 var gyroLogsPresented by rememberSaveable { mutableStateOf(false) }
+                var gyroMountPresented by rememberSaveable { mutableStateOf(false) }
                 val gyroSource = MonitorSettingsGyroSource(
                     enabled = gyroState.enabled, setEnabled = gyroCapture::setEnabled,
                     status = gyroState.status, available = gyroState.available || gyroState.enabled,
                     openLogs = { gyroLogsPresented = true },
+                    mountName = gyroState.mountOptions.firstOrNull { it.id == gyroState.mountPreset }?.shortLabel,
+                    configureMount = if (gyroState.mountOptions.isNotEmpty()) ({ gyroMountPresented = true }) else null,
                 )
                 // The HDMI capture feed beside a capture-only session. Non-null
                 // exactly while the monitor is on the HDMI path; closed (CameraX
@@ -1107,10 +1111,10 @@ class MainActivity : ComponentActivity() {
                                 // while Operator Setup is on top; otherwise
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
-                                liveViewEnabled = overlay == null && !gyroLogsPresented,
+                                liveViewEnabled = overlay == null && !gyroLogsPresented && !gyroMountPresented,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
-                                isMonitorFront = overlay == null && !gyroLogsPresented,
+                                isMonitorFront = overlay == null && !gyroLogsPresented && !gyroMountPresented,
                                 sessionRecoveryEnabled =
                                     monitorSessionRecoveryEnabled &&
                                         frameioController.internetHopState
@@ -1689,6 +1693,10 @@ class MainActivity : ComponentActivity() {
                             }
                         }, onDelete = gyroCapture::delete,
                         onClose = { gyroLogsPresented = false })
+                }
+                if (gyroMountPresented) {
+                    GyroMountScreen(gyroState, onSelect = gyroCapture::setMountPreset,
+                        onClose = { gyroMountPresented = false })
                 }
                 } // app-root Box
                 } // LocalOperatorHaptics

@@ -5,9 +5,11 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
+import android.view.Display
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionEvent
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -33,6 +35,9 @@ internal data class GyroCaptureState(
     val failed: Boolean = false,
     val logs: List<GyroLogEntry> = emptyList(),
     val storageWarning: String? = null,
+    val mountPreset: String = "unconfigured",
+    val mountOptions: List<GyroMountOption> = emptyList(),
+    val mountCatalog: Map<String, GyroMountOption> = emptyMap(),
 )
 
 /** App-owned sensor/file adapter; all take boundaries and health rules are Swift-owned. */
@@ -41,6 +46,8 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
     private val preferences = context.getSharedPreferences("gyro-logging", Context.MODE_PRIVATE)
     private val sensorManager = context.getSystemService(SensorManager::class.java)
     private val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    private val naturalPortrait = context.getSystemService(DisplayManager::class.java)
+        ?.getDisplay(Display.DEFAULT_DISPLAY)?.mode?.let { it.physicalWidth < it.physicalHeight } == true
     private val store by lazy { GyroLogStore(File(context.filesDir, "gyro-logs"), native) }
     private val mutableState = MutableStateFlow(GyroCaptureState(enabled = preferences.getBoolean("enabled", false)))
     val state: StateFlow<GyroCaptureState> = mutableState
@@ -63,6 +70,7 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
     private var listener: SensorEventListener? = null
     private var bindingGeneration = 0L
     private var armedTimestamp: Double? = null
+    @Volatile private var selectedMountPreset = "unconfigured"
 
     init {
         scope.launch {
@@ -70,6 +78,20 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
             mutableState.value = mutableState.value.copy(available = available,
                 status = if (available) "Off" else "Gyroscope unavailable on this device.")
             if (SwiftCore.isAvailable) {
+                runCatching {
+                    val catalog = decodeGyroMountPresets(native.mountPresets(true))
+                    val options = if (naturalPortrait) catalog else decodeGyroMountPresets(native.mountPresets(false))
+                    catalog to options
+                }.onSuccess { (catalog, options) ->
+                    val saved = preferences.getString("mountPreset", "unconfigured")
+                    selectedMountPreset = options.firstOrNull { it.id == saved }?.id ?: "unconfigured"
+                    mutableState.value = mutableState.value.copy(mountOptions = options,
+                        mountCatalog = catalog.associateBy { it.id },
+                        mountPreset = selectedMountPreset)
+                }.onFailure {
+                    mutableState.value = mutableState.value.copy(available = false)
+                    fail(it.message ?: "Could not read gyro mount presets.")
+                }
                 runCatching { store.recover() }.onFailure {
                     mutableState.value = mutableState.value.copy(storageWarning = it.message ?: "Some gyro logs could not be recovered.")
                 }
@@ -84,6 +106,13 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
             mutableState.value = mutableState.value.copy(enabled = enabled, failed = false)
             safely { reconcile(if (enabled) "interrupted" else "disabled") }
         }
+    }
+
+    fun setMountPreset(id: String) {
+        require(mutableState.value.mountOptions.any { it.id == id }) { "Unknown gyro mount preset." }
+        preferences.edit().putString("mountPreset", id).apply()
+        selectedMountPreset = id
+        scope.launch { mutableState.value = mutableState.value.copy(mountPreset = id) }
     }
 
     fun setForeground(active: Boolean) { scope.launch { foreground = active; safely { reconcile("backgrounded") } } }
@@ -105,11 +134,13 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
         // These collectors never do file IO. Sensor readings and timestamped REC observations
         // enter the same bounded queue before the serial writer can block on storage.
         observations = scope.launch(Dispatchers.Default) { next.reportedRecording.collect { recording ->
-            enqueue(RecordingObservation(recording, now(), System.currentTimeMillis() / 1_000.0), binding)
+            enqueue(RecordingObservation(recording, now(), System.currentTimeMillis() / 1_000.0,
+                mountPreset = selectedMountPreset), binding)
         } }
         events = scope.launch(Dispatchers.Default) { next.events.collect { event ->
             if (event is CameraSessionEvent.RecordingInterrupted) {
-                enqueue(RecordingObservation(false, now(), System.currentTimeMillis() / 1_000.0, true), binding)
+                enqueue(RecordingObservation(false, now(), System.currentTimeMillis() / 1_000.0, true,
+                    selectedMountPreset), binding)
             }
         } }
         safely { reconcile("disconnected") }
@@ -138,7 +169,9 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
             return
         }
         if (owner != null || mutableState.value.failed) return
-        if (sensor == null || !SwiftCore.isAvailable) { fail("Gyroscope unavailable on this device."); return }
+        if (sensor == null || !SwiftCore.isAvailable || mutableState.value.mountOptions.isEmpty()) {
+            fail("Gyroscope unavailable on this device."); return
+        }
         try {
             owner = native.create()
             stalled = false
@@ -162,7 +195,8 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
 
     private fun observe(recording: Boolean) {
         val active = owner ?: return
-        try { lastReported = recording; apply(native.observe(active, recording, now(), System.currentTimeMillis() / 1_000.0, cameraLabel)) }
+        try { lastReported = recording; apply(native.observe(active, recording, now(),
+            System.currentTimeMillis() / 1_000.0, cameraLabel, selectedMountPreset)) }
         catch (error: Exception) { failCapture(error) }
     }
 
@@ -216,7 +250,8 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
             }
             observation.recording?.let { recording ->
                 lastReported = recording
-                apply(native.observe(owner ?: return@replayGyroIngress, recording, observation.timestamp, observation.date, cameraLabel))
+                apply(native.observe(owner ?: return@replayGyroIngress, recording, observation.timestamp,
+                    observation.date, cameraLabel, observation.mountPreset))
             }
             lastReported = observation.recording
         }

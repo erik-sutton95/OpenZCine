@@ -20,4 +20,18 @@ class GyroIngressTest {
             "samples 100", "false 11.0 false", "samples 10", "false 11.1 true",
             "samples 90", "true 12.0 false", "samples 150"), steps)
     }
+
+    @Test fun `queued starts retain their mount when selection changes before replay`() {
+        var selected = "rearDown"
+        val first = RecordingObservation(true, 10.0, 0.0, mountPreset = selected)
+        selected = "rearLeft"
+        val stop = RecordingObservation(false, 11.0, 0.0, mountPreset = selected)
+        val next = RecordingObservation(true, 12.0, 0.0, mountPreset = selected)
+        selected = "frontUp"
+        val received = mutableListOf<RecordingObservation>()
+        replayGyroIngress(emptyList(), listOf(next, first, stop), ingest = {}, observe = received::add)
+        assertEquals("frontUp", selected)
+        assertEquals(listOf("rearDown", "rearLeft", "rearLeft"), received.map { it.mountPreset })
+        assertEquals(listOf(10.0, 11.0, 12.0), received.map { it.timestamp })
+    }
 }

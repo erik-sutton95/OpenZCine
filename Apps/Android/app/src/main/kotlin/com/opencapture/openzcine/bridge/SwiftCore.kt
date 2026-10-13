@@ -15,13 +15,15 @@ import java.util.TimeZone
  * `Sources/OpenZCineAndroidFacade/SwiftCoreJNI.swift`.
  */
 object SwiftCore {
+    /** Shared mount descriptions and validated GCSV axis mappings. */
+    external fun gyroMountPresets(naturalPortrait: Boolean): String
     /** Creates a process-local owner for the shared gyro take policy. */
     external fun gyroCreate(): String
     /** Sends little-endian sensor timestamp/X/Y/Z Double batches, at most 512 samples. */
     external fun gyroIngest(owner: String, samples: ByteArray): String?
     /** Observes actual camera REC state on the monotonic sensor clock. */
     external fun gyroObserve(owner: String, recording: Boolean, timestamp: Double,
-        dateSeconds: Double, cameraLabel: String): String?
+        dateSeconds: Double, cameraLabel: String, mountPreset: String = "unconfigured"): String?
     /** Advances shared postroll and sensor-health checks. */
     external fun gyroPoll(owner: String, timestamp: Double): String?
     /** Finalizes available motion with an explicit reason, without camera commands. */

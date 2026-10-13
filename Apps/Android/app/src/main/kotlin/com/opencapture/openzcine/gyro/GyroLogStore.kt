@@ -12,6 +12,9 @@ internal data class GyroLogEntry(val descriptor: JSONObject, val summary: JSONOb
     val active: Boolean = false) {
     val id: String get() = descriptor.getString("id")
     val cameraLabel: String get() = descriptor.getString("cameraLabel")
+    val mountPreset: String get() = descriptor.optString("mountPreset", "unconfigured")
+    fun mountDetail(catalog: Map<String, GyroMountOption>): String =
+        (catalog[mountPreset] ?: catalog["unconfigured"])?.detail ?: "Unconfigured · set alignment in Gyroflow"
     val startDateMillis: Long get() = descriptor.getDouble("startDate").toLong()
     val canShare: Boolean get() = summary != null && !active
     val health: String get() = when {
