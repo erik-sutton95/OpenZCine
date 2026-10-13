@@ -108,6 +108,8 @@ final class MulticamMember: Identifiable {
     var displayName: String { record.displayTitle }
     var letter: String { ["A", "B", "C", "D"][min(3, max(0, slot))] }
     var isLive: Bool { status == .live }
+    var batteryReading: BatteryReading? { control?.session.refresh().power.batteryReading }
+
     var batteryPercent: Int? {
         properties.batteryPercent.flatMap { (0...100).contains($0) ? $0 : nil }
     }

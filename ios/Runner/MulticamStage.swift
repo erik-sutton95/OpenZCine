@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMulticam
 import OpenZCineCore
@@ -115,12 +116,12 @@ struct MulticamStage: View {
                 ])
             detail = reason
         }
+        let battery = MonitorOperatorPowerReading.camera(member.batteryReading)
         return MultiviewTile(
             name: member.displayName, model: SavedCameraPathGroups.pathLabel(for: member.record),
             // The body's five-step gauge (A5-01): bars, never a percent it did not report.
-            batteryBars: member.batteryPercent.map(CameraBatteryGauge.gauge(rawBatteryLevel:))
-                .flatMap { $0 == .unknown ? nil : $0.filledBars },
-            batteryBarCount: CameraBatteryGauge.barCount,
+            batteryBars: battery?.bars,
+            batteryBarCount: battery?.barCount ?? 5,
             storage: member.storage.map { "\($0.gigabytesFree) GB" } ?? MultiviewTally.unavailable,
             timecode: member.timecode?.monitorLabel,
             tally: MultiviewTally.text(recording: rolling, waiting: coordinator.groupBusy),

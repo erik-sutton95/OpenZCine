@@ -53,8 +53,6 @@ import com.opencapture.opencine.core.MonitorEntryID
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
-import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
-import com.opencapture.openzcine.nikonCameraBatteryReading
 import com.opencapture.openzcine.pairing.SavedCameraRecord
 import kotlinx.coroutines.delay
 
@@ -208,11 +206,12 @@ internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mul
             ),
         ) to state.reason
     }
+    val battery = com.opencapture.opencine.cameracontrols.cameraPowerReading(member.batteryReading)
     return MultiviewTile(
         name = member.displayName, model = member.record.transport.displayName,
         // The body's five-step gauge (A5-01): bars, never a percent it did not report.
-        batteryBars = nikonCameraBatteryReading(member.batteryPercent, null)?.bars,
-        batteryBarCount = NikonCameraBatteryGauge.BAR_COUNT,
+        batteryBars = battery?.bars,
+        batteryBarCount = battery?.barCount ?: 5,
         timecode = member.timecode,
         tally = MultiviewTally.text(rolling, waiting = coordinator.groupBusy),
         // Nikon reports no take length: the tile times it from the first recording frame.

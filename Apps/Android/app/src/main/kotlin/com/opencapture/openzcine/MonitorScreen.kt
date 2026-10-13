@@ -1400,6 +1400,7 @@ internal fun MonitorScreen(
                 isMonitorFront,
                 lifecycleState,
                 monitorFrameSource,
+                sharedControlState.snapshot?.power,
             ) {
                 androidWatchRelayState(
                     sessionState = sessionState,
@@ -1408,6 +1409,7 @@ internal fun MonitorScreen(
                     monitorFront = isMonitorFront,
                     applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                     liveFeedActive = monitorFrameSource != null && isMonitorFront,
+                    power = sharedControlState.snapshot?.power ?: com.opencapture.opencine.core.PowerStatus.unknown,
                 )
             }
         LaunchedEffect(wearRelay, watchRelayState) {
@@ -1985,7 +1987,12 @@ internal fun MonitorScreen(
                 MonitorDisplaySection.FPS, recordingSection = MonitorDisplaySection.REC_READOUT,
                 timecodeSection = MonitorDisplaySection.TIMECODE),
             // A watcher's camera battery arrives over the relay as the host's raw level (cameraReadouts).
-            cameraBattery = nikonCameraBatteryReading(cameraReadouts.batteryPercent, cameraReadouts.externalPower),
+            cameraBattery = if (relayedState != null) {
+                com.opencapture.opencine.cameracontrols.cameraPowerReading(relayedState.batteryReading,
+                    relayedState.batteryExhausted)
+            } else sharedControlState.snapshot?.power?.let {
+                com.opencapture.opencine.cameracontrols.cameraPowerReading(it)
+            },
             capture = captureInputs,
             record = MonitorOperatorRecordSource(isPhotographyMode, operatorSettings.recordConfirmationEnabled.value,
                 busy = !recordControlEnabled, openMode = null, confirmingChanged = { recordConfirmationOpen = it }),

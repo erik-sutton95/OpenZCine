@@ -82,12 +82,11 @@ internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 
  * never a percent, since `BatteryLevel` reads 60 for anything from 40 to 59 percent. An unread battery is
  * absent, never an empty red cell.
  */
+@Deprecated("Use cameraPowerReading with the common session power snapshot")
 internal fun nikonCameraBatteryReading(rawLevel: Int?, externalPower: Boolean?): MonitorOperatorPowerReading? {
-    val gauge = NikonCameraBatteryGauge.gauge(rawLevel ?: 0)
-    if (gauge == NikonCameraBatteryGauge.Unknown) return null
-    return MonitorOperatorPowerReading(camera = true, percent = null, charging = externalPower,
-        bars = gauge.filledBars, barCount = NikonCameraBatteryGauge.BAR_COUNT,
-        warning = gauge.urgency != NikonCameraBatteryGauge.Urgency.NOMINAL, exhausted = gauge.pulses)
+    val power = NikonCameraBatteryGauge.gauge(rawLevel ?: 0).powerStatus
+    return com.opencapture.opencine.cameracontrols.cameraPowerReading(power.batteryReading,
+        power.exhausted.value, externalPower)
 }
 
 // ── iOS top-bar readout parity (MonitorTextFormat + MediaStatus + FrameRateSampler) ──

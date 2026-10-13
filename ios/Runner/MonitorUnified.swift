@@ -313,14 +313,11 @@ struct NikonMonitorShell: View {
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
     private var cameraBattery: MonitorOperatorPowerReading? {
-        let gauge = CameraBatteryGauge.gauge(
-            rawBatteryLevel: model.cameraState.cameraBatteryPercent)
-        guard gauge != .unknown else { return nil }
-        return .init(
-            id: "camera", title: "Camera battery", camera: true, bars: gauge.filledBars,
-            barCount: CameraBatteryGauge.barCount, warning: gauge.urgency != .nominal,
-            exhausted: gauge.pulses, charging: model.cameraBatteryCharging)
+        .camera(
+            model.cameraBatteryReading, exhausted: model.cameraBatteryExhausted,
+            charging: model.cameraPowerCharging)
     }
+
     private var panel: MonitorOperatorCameraPanel<NikonLiveReadoutKey>? {
         guard case .picker(let picker) = model.activePanel else { return nil }
         return .init(

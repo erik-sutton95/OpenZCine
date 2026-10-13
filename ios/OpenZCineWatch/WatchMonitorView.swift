@@ -31,20 +31,7 @@ struct WatchMonitorView: View {
     }
 
     private var battery: WatchMonitorBattery? {
-        guard let state = controller.state else { return nil }
-        let gauge = CameraBatteryGauge.gauge(rawBatteryLevel: state.cameraBatteryPercent)
-        guard gauge != .unknown else { return nil }
-        let urgency: WatchMonitorBattery.Urgency
-        switch gauge.urgency {
-        case .nominal: urgency = .nominal
-        case .low: urgency = .low
-        case .depleted: urgency = .depleted
-        }
-        return WatchMonitorBattery(
-            filledBars: gauge.filledBars, barCount: CameraBatteryGauge.barCount,
-            urgency: urgency,
-            accessibilityLabel:
-                "Camera battery \(gauge.filledBars) of \(CameraBatteryGauge.barCount) bars")
+        .measured(controller.state?.batteryReading, exhausted: controller.state?.batteryExhausted)
     }
 
     private var placeholder: String? {

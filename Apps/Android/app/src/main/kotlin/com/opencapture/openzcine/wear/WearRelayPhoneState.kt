@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.wear
 
+import com.opencapture.opencine.core.PowerStatus
+import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -115,6 +117,7 @@ internal fun androidWatchRelayState(
     monitorFront: Boolean,
     applicationResumed: Boolean,
     liveFeedActive: Boolean,
+    power: PowerStatus? = null,
 ): WatchRelayState {
     val connectedIdentity = (sessionState as? CameraSessionState.Connected)?.identity
     val foreground = monitorFront && applicationResumed
@@ -125,13 +128,15 @@ internal fun androidWatchRelayState(
             else -> WatchConnectionState.NO_CAMERA
         }
     val hasCamera = connection == WatchConnectionState.CONNECTED
+    val reportedPower = if (hasCamera) power ?: NikonCameraBatteryGauge.gauge(
+        cameraProperties.batteryPercent ?: 0).powerStatus else PowerStatus.unknown
     return WatchRelayState(
         recordState = if (isRecording) WatchRecordState.RECORDING else WatchRecordState.STANDBY,
         timecode = WatchTimecode.unavailable(),
         mediaStatus = null,
         media = if (hasCamera) cameraProperties.storage?.let(::storageLabel) ?: "—" else "—",
-        // The canonical Swift relay model is a non-optional 0...100 value.
-        // Match watchOS by preserving a real zero-percent camera readout.
+        // Retain the deployed raw scalar for old receivers. Active wrist presentation uses
+        // the declared common reading below, including explicit unknown and exhaustion.
         cameraBatteryPercent =
             if (hasCamera) cameraProperties.batteryPercent?.takeIf { it in 0..100 } ?: 0 else 0,
         cameraName = if (hasCamera) connectedIdentity?.name.orEmpty() else "",
@@ -139,6 +144,7 @@ internal fun androidWatchRelayState(
         connection = connection,
         feedLive = hasCamera && liveFeedActive,
         liveFPS = "—",
+        batteryReading = reportedPower.batteryReading, batteryExhausted = reportedPower.exhausted.value,
     )
 }
 

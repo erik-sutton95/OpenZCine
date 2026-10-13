@@ -161,6 +161,7 @@ class MulticamMember internal constructor(val slot: Int, val record: SavedCamera
     val displayName: String get() = record.customName?.takeIf { it.isNotBlank() } ?: record.cameraName
     val letter: String get() = listOf("A", "B", "C", "D")[slot.coerceIn(0, 3)]
     val isLive: Boolean get() = status == MemberStatus.Live
+    val batteryReading: com.opencapture.opencine.core.BatteryReading? get() = control?.refresh()?.power?.batteryReading
     val batteryPercent: Int? get() = properties.batteryPercent?.takeIf { it in 0..100 }
 }
 

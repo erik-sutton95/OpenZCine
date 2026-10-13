@@ -80,7 +80,8 @@ private fun WearMonitorPresentation.neutral(storageStatus: String? = null): Moni
     }
     return MonitorWristPresentation(presentationRevision, phoneReachable, connection, state?.feedLive,
         state?.isRecording, isSendingCommand, commandMessage, frame != null, state?.cameraBatteryPercent,
-        state?.timecode?.takeIf { it.on }?.label(), frameTimecode?.takeIf { it.on }?.label(), storageStatus, state?.media)
+        state?.timecode?.takeIf { it.on }?.label(), frameTimecode?.takeIf { it.on }?.label(), storageStatus, state?.media,
+        batteryReading = state?.batteryReading, batteryExhausted = state?.batteryExhausted)
 }
 
 /** The body's frame timecode by the shared rule (every Z body declares frame precision). */

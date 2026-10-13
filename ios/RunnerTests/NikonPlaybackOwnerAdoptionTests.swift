@@ -1297,10 +1297,24 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(presented)
         observation.invalidate()
         for offset in openingOffsets.values { XCTAssertEqual(offset, before, accuracy: 1) }
+        let outgoingViewports = Set(Self.galleryScrollViews(host.view).map(ObjectIdentifier.init))
         if let returningLayout { fixture.model.mediaBrowserLayout = returningLayout }
         host.dismiss(animated: false)
         let returned = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(returned)
+        if returningLayout != nil {
+            let replaced = await cachedCatalogSettled {
+                host.view.layoutIfNeeded()
+                let mounted = Self.galleryScrollViews(host.view).filter {
+                    $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
+                }
+                return !mounted.isEmpty
+                    && mounted.allSatisfy {
+                        !outgoingViewports.contains(ObjectIdentifier($0))
+                    }
+            }
+            XCTAssertTrue(replaced, "The changed catalog layout must replace its outgoing viewport")
+        }
         host.view.layoutIfNeeded()
         let returnedScroll = try XCTUnwrap(
             Self.galleryScrollViews(host.view).first {

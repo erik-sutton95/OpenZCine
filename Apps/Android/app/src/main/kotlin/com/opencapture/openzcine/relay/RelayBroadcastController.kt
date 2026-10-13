@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.relay
 
 import android.net.nsd.NsdManager
+import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraCommandAdmission
 import com.opencapture.opencine.nikon.CameraFocusPoint
 import com.opencapture.opencine.nikon.CameraRecordingState
@@ -150,6 +151,7 @@ class RelayBroadcastController(
         // hardcoded empty, which is why an Android broadcast arrived with blank codec/media/
         // resolution pills and no camera battery.
         val snapshot = session.cameraProperties.value
+        val power = NikonCameraBatteryGauge.gauge(snapshot.batteryPercent ?: 0).powerStatus
         return MonitorRelayWire.State(
             recordState =
                 if (recording) {
@@ -234,6 +236,7 @@ class RelayBroadcastController(
                     },
             isRecording = recording,
             allowsControlRequests = allowsControlRequests,
+            batteryReading = power.batteryReading, batteryExhausted = power.exhausted.value,
         )
     }
 }
