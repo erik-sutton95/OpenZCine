@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FC5719B6AC51426FBF028301 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FC5719B6AC51426FBF028302 /* PrivacyInfo.xcprivacy */; };
 		5CA01A5203C108E5E0C97A63 /* FrozenNikonRuntimeEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */; };
 		DA09C9A965A9A7BE0DF9AB81 /* FrozenNikonUIImageGraphProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */; };
 		33E5374DD0792544E78B109F /* NikonMetalPresentPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40EB57B1007EDD19FCCD50ED /* NikonMetalPresentPolicyTests.swift */; };
@@ -72,6 +73,10 @@
 		C0DE0000000000000000002A /* MonitorPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002B /* MonitorPanels.swift */; };
 		LDDR0000000000000000001A /* LadderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = LDDR0000000000000000001B /* LadderPicker.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
+		3271ACF11DA7DF3350753C17 /* PhoneMotionDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */; };
+		074A86DAB1B8D28E46443C2C /* GyroLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */; };
+		DB4FDB2DF037F39A473B9D5D /* GyroLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */; };
+		A5FB56DEA1D22E59F06D55FF /* GyroCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */; };
 		C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* SharedCameraControls.swift */; };
 		F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */; };
 		F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000004 /* SentryReliabilitySink.swift */; };
@@ -101,6 +106,8 @@
 		TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000091 /* ConnectionLifecycleTests.swift */; };
 		TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000105 /* ShellAdoptionTests.swift */; };
 		TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000093 /* RelayRecordControlTests.swift */; };
+		D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */; };
+		9AFED89111EB38F38DFF9236 /* GyroCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */; };
 		TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */; };
 		TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */; };
 		TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */; };
@@ -195,6 +202,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		FC5719B6AC51426FBF028302 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonRuntimeEffects.swift; sourceTree = "<group>"; };
 		1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonUIImageGraphProcessor.swift; sourceTree = "<group>"; };
 		40EB57B1007EDD19FCCD50ED /* NikonMetalPresentPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMetalPresentPolicyTests.swift; sourceTree = "<group>"; };
@@ -261,6 +269,10 @@
 		C0DE0000000000000000002B /* MonitorPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPanels.swift; sourceTree = "<group>"; };
 		LDDR0000000000000000001B /* LadderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LadderPicker.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
+		3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneMotionDriver.swift; sourceTree = "<group>"; };
+		E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogsView.swift; sourceTree = "<group>"; };
+		0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogStore.swift; sourceTree = "<group>"; };
+		36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroCaptureCoordinator.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F8 /* SharedCameraControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCameraControls.swift; sourceTree = "<group>"; };
 		F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityReportingNetwork.swift; sourceTree = "<group>"; };
 		F2D000000000000000000004 /* SentryReliabilitySink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryReliabilitySink.swift; sourceTree = "<group>"; };
@@ -288,6 +300,8 @@
 		TEST00000000000000000091 /* ConnectionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLifecycleTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000105 /* ShellAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellAdoptionTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000093 /* RelayRecordControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRecordControlTests.swift; sourceTree = "<group>"; };
+		EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogStoreTests.swift; sourceTree = "<group>"; };
+		5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroCaptureTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFeedNoiseFilterWindowTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryEligibilityTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryOverlayStateTests.swift; sourceTree = "<group>"; };
@@ -394,6 +408,8 @@
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
 				TEST00000000000000000105 /* ShellAdoptionTests.swift */,
 				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
+				EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */,
+				5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */,
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
 				TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */,
 				TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */,
@@ -451,6 +467,7 @@
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
 				97C147021CF9000F007C117D /* Info.plist */,
+				FC5719B6AC51426FBF028302 /* PrivacyInfo.xcprivacy */,
 				E7F2A1B03D4C5E6F7890ABCD /* Runner.entitlements */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
@@ -479,6 +496,10 @@
 				C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */,
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
+				3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */,
+				E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */,
+				0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */,
+				36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */,
 				C0DE000000000000000000F8 /* SharedCameraControls.swift */,
 				F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */,
 				F2D000000000000000000004 /* SentryReliabilitySink.swift */,
@@ -695,6 +716,7 @@
 			files = (
 				97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */,
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
+				FC5719B6AC51426FBF028301 /* PrivacyInfo.xcprivacy in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -744,6 +766,8 @@
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
 				TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */,
 				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
+				D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */,
+				9AFED89111EB38F38DFF9236 /* GyroCaptureTests.swift in Sources */,
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
 				TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */,
 				TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */,
@@ -795,6 +819,10 @@
 				C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */,
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
+				3271ACF11DA7DF3350753C17 /* PhoneMotionDriver.swift in Sources */,
+				074A86DAB1B8D28E46443C2C /* GyroLogsView.swift in Sources */,
+				DB4FDB2DF037F39A473B9D5D /* GyroLogStore.swift in Sources */,
+				A5FB56DEA1D22E59F06D55FF /* GyroCaptureCoordinator.swift in Sources */,
 				C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */,
 				F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */,
 				F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */,

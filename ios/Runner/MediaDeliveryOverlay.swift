@@ -563,6 +563,7 @@ enum MediaShareStaging {
         switch url.pathExtension.lowercased() {
         case "mov": .quickTimeMovie
         case "mp4", "m4v": .mpeg4Movie
+        case "gcsv": .data
         default: .movie
         }
     }
@@ -725,7 +726,7 @@ struct MediaSharePayload: Identifiable {
     }
 }
 
-/// Supplies a typed video file via `NSItemProvider` so Launch Services can resolve share targets.
+/// Supplies a typed file via `NSItemProvider` so Launch Services can resolve share targets.
 ///
 /// Do not pass sandbox `file://` URLs as placeholder items or `LPLinkMetadata.originalURL` —
 /// ShareSheet probes those paths and logs benign `NSOSStatusErrorDomain -10814` / `NSCocoaErrorDomain

@@ -910,6 +910,7 @@ final class NativeAppModel {
             syncScreenWakePolicy()
             publishWatchState()
             if oldValue != isMonitorPresented {
+                if !isMonitorPresented { gyroCapture.stop(reason: .disconnected) }
                 // Record admission follows live-view readiness.
                 refreshCommonControlFacts()
                 updateBluetoothShutter()
@@ -2248,6 +2249,8 @@ final class NativeAppModel {
     var prefersMediaDuration = false
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
+    let gyroCapture = GyroCaptureCoordinator()
+
     var isRecording = false {
         didSet {
             guard oldValue != isRecording else { return }
@@ -6918,6 +6921,7 @@ final class NativeAppModel {
     private func clearCameraSessionState(
         resetConnection: Bool, preserveMonitorSurface: Bool = false
     ) {
+        gyroCapture.stop(reason: .disconnected)
         // Invalidate any in-flight establishment attempt: it re-checks this generation before
         // publishing a session, so a handshake finishing after this clear can't resurrect state.
         connectionGeneration += 1
@@ -7534,6 +7538,7 @@ final class NativeAppModel {
                 if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
                     handleBodyFiredCapture(session: session)
                 } else if event.eventCode == .movieRecordInterrupted {
+                    gyroCapture.stop(reason: .interrupted)
                     applyCameraRecordState(isRecording: false, force: true)
                     let error =
                         event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) }
@@ -7571,6 +7576,7 @@ final class NativeAppModel {
         case .objectAdded, .captureComplete:
             handleBodyFiredCapture(session: session)
         case .movieRecordStarted, .movieRecordComplete, .movieRecordInterrupted:
+            if event.eventCode == .movieRecordInterrupted { gyroCapture.stop(reason: .interrupted) }
             if let state = event.inferredRecordState {
                 applyCameraRecordState(isRecording: state == .recording)
             }
@@ -7632,6 +7638,7 @@ final class NativeAppModel {
     /// worst battery/thermal profile on set, and enough sustained work for iOS to jetsam-kill the
     /// app so it vanishes mid-shoot. The session object is kept so `enterForeground()` can resume.
     func enterBackground() {
+        gyroCapture.stop(reason: .backgrounded)
         AppDiagnostics.shared.record(.enteredBackground)
         screenWakeSuppressedForBackground = true
         syncScreenWakePolicy()
@@ -8353,6 +8360,7 @@ final class NativeAppModel {
 
     /// Applies camera-authoritative record state from the live-view header or async PTP events.
     private func applyCameraRecordState(isRecording recording: Bool, force: Bool = false) {
+        reconcileGyroCapture(recording: recording)
         // The camera's report is recorded even while the button defers to an app command below:
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
@@ -13564,6 +13572,12 @@ struct NativeAppRoot: View {
             RedDownloadView { url in await model.importRedZip(from: url) }
                 .environment(model)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { model.gyroCapture.logsPresented },
+                set: { model.gyroCapture.logsPresented = $0 }
+            )
+        ) { GyroLogsView(coordinator: model.gyroCapture) }
         .sheet(isPresented: bugReportPresented) { ProblemReportView() }
         .sheet(isPresented: $showsReliabilityPrompt) {
             ReliabilityConsentPrompt { enabled in
@@ -14326,5 +14340,23 @@ extension NativeAppModel {
             cameraRecording: reportedRecording,
             cameraISO: reportedPropertySnapshot.iso.map { Int($0) },
             cameraISOIsAuto: reportedPropertySnapshot.isoAuto)
+    }
+}
+
+extension NativeAppModel {
+    /// Keeps the opt-in local to the phone while recording authority remains with the camera.
+    func setGyroCaptureEnabled(_ enabled: Bool) {
+        gyroCapture.enabled = enabled
+        reconcileGyroCapture(recording: reportedRecording)
+    }
+
+    private func reconcileGyroCapture(recording: Bool?) {
+        gyroCapture.configure(
+            eligible: isConnected && cameraSession != nil && isMonitorPresented
+                && UIApplication.shared.applicationState == .active
+                && !isDemoSession && videoSource != .relay
+                && !multicam.isPresented && multicam.lentMember == nil
+                && !isPhotographyMode,
+            cameraLabel: connectedIdentity?.model ?? "Nikon camera", recording: recording)
     }
 }
