@@ -6,7 +6,8 @@ logging feature; stabilization quality still requires validation with the actual
 
 ## Capture
 
-1. Open Operator Setup → Controls and enable **Log gyro with camera recordings**.
+1. Open Operator Setup → Controls → **Phone mount** and configure the phone's fixed position.
+   Enable **Log gyro with camera recordings**.
 2. Keep OpenZCine in the foreground and wait for **GYRO ARMED** on the monitor.
 3. Start and stop recording from the app, camera button, or connected remote. Camera-reported
    recording transitions create one motion log per take.
@@ -29,12 +30,41 @@ logs can be shared.
 V1 supports one directly connected camera. Relay viewers and multicam sessions are excluded.
 Logs live outside the downloaded-media cache and are retained until explicitly deleted.
 
+## Phone mount
+
+Choose which way the screen faces and where the phone's USB-C edge points. Directions are
+viewed from behind an upright camera. These presets assume the phone screen is parallel to
+the camera's rear screen and the phone has portrait natural sensor axes, as on iPhone.
+Android devices with another natural sensor frame retain the unconfigured option.
+
+The selection is saved and copied into each take when REC is observed. Changing the setting
+affects future takes; it never relabels an existing recording or its postroll. Turning the
+whole rig or rotating the app's display does not change the fixed phone-to-camera alignment.
+The take list shows the mount that was used, including after recovery or an app restart.
+
+| USB-C edge points | Screen toward you | Screen toward lens |
+| --- | --- | --- |
+| Down | `YxZ` | `YXz` |
+| Left | `xyZ` | `Xyz` |
+| Right | `XYZ` | `xYz` |
+| Up | `yXZ` | `yxz` |
+
+These mappings follow Gyroflow's camera-up, camera-left, camera-backward coordinate system.
+Raw readings remain in fixed phone axes; the GCSV orientation header tells Gyroflow how to
+apply the selected mapping once. The header marks the mount as operator-selected, rather
+than claiming that it was measured or hardware-calibrated.
+
+**Unconfigured** is the default and also applies to older logs. For a tilted or otherwise
+unsupported holder position, leave the mount unconfigured and set its alignment in Gyroflow.
+A short initial rig test should confirm the selected preset's direction and stabilization.
+The logger does not infer camera mounting from the phone's portrait/landscape display state.
+
 ## Gyroflow
 
 1. Transfer the camera video and its matching `.gcsv` log to the computer.
 2. Open the video in Gyroflow and load the motion log. A log can be longer than the video.
-3. Select the camera/lens profile and set the phone-to-camera IMU orientation and rotation.
-   Exported device axes are marked unverified; screen rotation is not mount calibration.
+3. Select the camera/lens profile. Gyroflow reads a configured mount's IMU orientation from
+   the log automatically. For unconfigured mounts, set the IMU orientation and rotation there.
 4. Use the displayed approximate REC offset as a starting estimate, then synchronize against
    visible camera movement. Check stabilization near the beginning, middle, and end.
 
@@ -49,4 +79,5 @@ avoid motion-blur artifacts in post stabilization.
 
 See the [original idea](https://github.com/erik-sutton95/OpenZCine/discussions/212),
 [Gyroflow synchronization guide](https://docs.gyroflow.xyz/app/getting-started/basic-usage/synchronization),
-and [GCSV specification](https://docs.gyroflow.xyz/app/technical-details/gcsv-format).
+[GCSV specification](https://docs.gyroflow.xyz/app/technical-details/gcsv-format), and
+[IMU orientation guide](https://github.com/gyroflow/docs.gyroflow.xyz/blob/main/advanced-usage/imu-orientation-and-rotation.md).
