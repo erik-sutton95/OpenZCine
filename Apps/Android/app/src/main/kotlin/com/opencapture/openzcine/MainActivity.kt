@@ -1107,10 +1107,10 @@ class MainActivity : ComponentActivity() {
                                 // while Operator Setup is on top; otherwise
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
-                                liveViewEnabled = overlay == null,
+                                liveViewEnabled = overlay == null && !gyroLogsPresented,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
-                                isMonitorFront = overlay == null,
+                                isMonitorFront = overlay == null && !gyroLogsPresented,
                                 sessionRecoveryEnabled =
                                     monitorSessionRecoveryEnabled &&
                                         frameioController.internetHopState
