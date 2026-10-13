@@ -3,6 +3,7 @@ import Network
 import OpenCineApple
 import OpenCineAppKit
 import OpenCineCore
+import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -981,7 +982,12 @@ enum DemoHarness {
             case .media?, .playback?:
                 if review?.connected == true {
                     // The demo session has no card to list, so the Media panel it opened begins
-                    // on the staged index, as a finished listing pass would.
+                    // on the staged index, as a finished listing pass would. Its SIMULATED card (the
+                    // shared ReviewCard over the staged handles) removes what a deletion names.
+                    let card = ReviewCard(clips: (0..<(review?.mediaCount ?? 0)).map {
+                        MediaObjectHandle(storageID: 65_537, handle: UInt32($0 + 1))
+                    })
+                    model.reviewCameraDelete = { @MainActor location in card.delete { $0 == location } }
                     model.mediaLibrary?.begin()
                 } else {
                     // The startup screen's Media: everything cached on this phone.

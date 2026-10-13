@@ -939,6 +939,10 @@ final class NativeAppModel {
     var selectedDiscoveredCameraID: String?
     var pendingPairingChallenge: PTPIPPairingChallenge?
     var isDemoSession = false
+    /// Demo review only (`ReviewLaunch(connected: true)`, set by `DemoHarness`): the SIMULATED
+    /// camera's card, which removes the objects a deletion names, standing in for the camera
+    /// session's delete. Nil everywhere else.
+    var reviewCameraDelete: ((MediaObjectHandle) async -> Bool)?
     /// Demo UI mode (⌘D in a demo session): the feed becomes an interactive stage — drag the eye
     /// marker itself to place it, drag elsewhere to move the AF box, and press 8 to toggle the eye.
     /// Simulator-only tooling for self-serve marketing captures; never reachable outside a demo.
@@ -6926,6 +6930,7 @@ final class NativeAppModel {
         cancelThumbnailWork(resumingWaiters: true)
         resetLinkHealthMeasurements()
         cameraSession = nil
+        reviewCameraDelete = nil
         // Closing reports unfinished seam operations honestly and never sends a camera command.
         if preserveMonitorSurface {
             monitorRuntime?.recovering()
@@ -10433,7 +10438,7 @@ final class NativeAppModel {
     /// ponytail: requested rows only; an offline camera shot's phone-only RAW sibling is not
     /// offered on its own.
     func canDeleteMedia(_ clips: [MediaClip]) -> Bool {
-        let connected = cameraSession != nil
+        let connected = cameraSession != nil || reviewCameraDelete != nil
         return clips.contains { $0.allLocations.isEmpty || connected }
     }
 
@@ -10561,6 +10566,7 @@ final class NativeAppModel {
         frozenPlan: DeletionPlan? = nil
     ) async -> Int {
         let targets = (frozenPlan ?? deletionPlan(for: clips)).targets
+        let deleteLocation = deleteLocation ?? reviewCameraDelete
         let owner = mediaLibrary
         let producer = mediaProducer?.service
         let session = cameraSession

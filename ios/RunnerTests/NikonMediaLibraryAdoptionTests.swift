@@ -1037,3 +1037,24 @@ extension NikonMediaLibraryAdoptionTests {
         XCTAssertTrue(model.canDeleteMedia([onCamera, phoneOnly]))
     }
 }
+
+#if DEBUG
+extension NikonMediaLibraryAdoptionTests {
+    /// SIMULATED card ownership ends with the demo, even if a cached camera row remains.
+    func testReviewCameraDeleteRetiresWithDemoSession() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(mediaClipStore: MediaClipStore(root: root))
+        let onCamera = MediaClip(
+            cameraID: "SIMULATED-CAMERA", filename: "SIMULATED-CAMERA.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 10, captureDate: "20261012T120000")
+        model.isDemoSession = true
+        model.reviewCameraDelete = { _ in true }
+        XCTAssertTrue(model.canDeleteMedia([onCamera]))
+        model.clearCameraSessionState(resetConnection: true)
+        XCTAssertFalse(model.isDemoSession)
+        XCTAssertNil(model.reviewCameraDelete)
+        XCTAssertFalse(model.canDeleteMedia([onCamera]), "Retired review cannot authorize camera deletion")
+    }
+}
+#endif
