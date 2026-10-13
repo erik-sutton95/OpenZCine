@@ -2386,7 +2386,7 @@ struct OperatorSettingsPanel: View {
                 "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact.",
             gyro: .init(
                 enabled: Binding(
-                    get: { model.gyroCapture.enabled }, set: model.setGyroCaptureEnabled),
+                    get: { model.gyroCapture.enabled }, set: { model.setGyroCaptureEnabled($0) }),
                 status: model.gyroCapture.failure ?? model.gyroCapture.statusText,
                 openLogs: model.gyroCapture.openLogs)
         )
