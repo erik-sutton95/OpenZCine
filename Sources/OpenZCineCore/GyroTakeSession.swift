@@ -162,7 +162,8 @@ public struct GyroTakeSession: Sendable {
                     statistics.last.map { GyroStatistics.exceedsGapLimit(end - $0) } ?? true
                 } ?? false
             return statistics.summary(
-                descriptor, reason: reason, incompleteCoverage: missingStart || missingEnd)
+                descriptor, reason: reason, incompleteCoverage: missingStart || missingEnd,
+                origin: origin)
         }
 
         mutating func append(_ samples: [GyroSample]) -> Data {

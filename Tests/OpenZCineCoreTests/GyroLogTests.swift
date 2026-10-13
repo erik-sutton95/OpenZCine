@@ -66,7 +66,28 @@ import Testing
     let summary = try #require(summaries(updates).first)
     #expect(summary.sampleCount == 21)
     #expect(summary.rejectedSampleCount == 0)
+    #expect(abs(summary.approximateStartOffset - 0.1) < 0.000_001)
     #expect(dataRows(updates, id: summary.id).first?.hasPrefix("1900000,") == true)
+}
+
+@Test(arguments: [9.9, 10.1])
+func gyroOffsetMatchesTheFirstRetainedSampleAfterImportAndRecovery(firstTimestamp: Double) throws {
+    var session = GyroTakeSession()
+    _ = observe(&session, false, at: 9)
+    var updates = observe(&session, true, at: 10)
+    updates += session.ingest(samples(from: firstTimestamp, count: 21))
+    updates += session.finish(reason: .interrupted, at: 10.3)
+    let summary = try #require(summaries(updates).first)
+    #expect(summary.descriptor.approximateStartOffset == 2)
+    #expect(abs(summary.approximateStartOffset - (10 - firstTimestamp)) < 0.000_001)
+    var recovery = GyroGCSVRecovery()
+    for update in updates {
+        if case .appended(_, let bytes) = update { try recovery.accept(bytes) }
+    }
+    let recovered = try recovery.finish(descriptor: summary.descriptor)
+    #expect(abs(recovered.approximateStartOffset - summary.approximateStartOffset) < 0.000_001)
+    let encoded = try JSONEncoder().encode(summary)
+    #expect(try JSONDecoder().decode(GyroLogSummary.self, from: encoded) == summary)
 }
 
 @Test func gyroRejectsInvalidAndDuplicateSamplesWithoutPoisoningTheClock() throws {

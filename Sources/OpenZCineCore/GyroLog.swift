@@ -103,8 +103,9 @@ public struct GyroLogSummary: Codable, Equatable, Sendable, Identifiable {
     public var startDate: Date { descriptor.startDate }
     /// Final GCSV filename.
     public var filename: String { descriptor.filename }
-    /// Approximate recording-start offset from the GCSV origin, in seconds.
-    public var approximateStartOffset: Double { descriptor.approximateStartOffset }
+    /// Observed REC start relative to the first retained sample, matching Gyroflow's time origin.
+    /// Negative values mean motion capture began after the observed recording start.
+    public let approximateStartOffset: Double
     /// Whether any encoded interval exceeded 50 milliseconds.
     public var hasGapWarning: Bool { GyroStatistics.exceedsGapLimit(largestGap) }
 }
@@ -139,15 +140,17 @@ struct GyroStatistics: Sendable {
 
     func summary(
         _ descriptor: GyroLogDescriptor, reason: GyroLogTermination,
-        incompleteCoverage: Bool = false
+        incompleteCoverage: Bool = false, origin: Double = 0
     ) -> GyroLogSummary {
         let duration = max(0, (last ?? 0) - (first ?? 0))
+        let firstOffset = (((first ?? origin) - origin) * 1_000_000).rounded() / 1_000_000
         return GyroLogSummary(
             descriptor: descriptor, sampleCount: count, duration: duration,
             measuredRate: count > 1 && duration > 0 ? Double(count - 1) / duration : 0,
             largestGap: largestGap, rejectedSampleCount: rejected, termination: reason,
             isPartial: descriptor.isPartial || reason != .normal || rejected > 0
-                || incompleteCoverage || Self.exceedsGapLimit(largestGap)
+                || incompleteCoverage || Self.exceedsGapLimit(largestGap),
+            approximateStartOffset: descriptor.approximateStartOffset - firstOffset
         )
     }
 }

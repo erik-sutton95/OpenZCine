@@ -83,7 +83,7 @@ struct GyroLogsView: View {
                 .font(.subheadline.monospacedDigit())
                 Text(
                     String(
-                        format: "Approx. REC offset +%.2f s · Largest gap %.0f ms",
+                        format: "Approx. REC offset %+.2f s · Largest gap %.0f ms",
                         summary.approximateStartOffset, summary.largestGap * 1_000)
                 )
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)

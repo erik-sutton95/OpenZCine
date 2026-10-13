@@ -7,7 +7,7 @@ logging feature; stabilization quality still requires validation with the actual
 ## Capture
 
 1. Open Operator Setup → Controls and enable **Log gyro with camera recordings**.
-2. Keep OpenZCine in the foreground and wait for the logger to report **Ready**.
+2. Keep OpenZCine in the foreground and wait for **GYRO ARMED** on the monitor.
 3. Start and stop recording from the app, camera button, or connected remote. Camera-reported
    recording transitions create one motion log per take.
 4. Open Operator Setup → Storage → **Gyro logs** to review, share, or delete completed logs.
@@ -15,7 +15,9 @@ logging feature; stabilization quality still requires validation with the actual
 The logger requests 100 Hz and uses actual sensor timestamps. It keeps two seconds of motion
 before the observed recording start and two seconds after the observed stop. Adjacent takes can
 therefore share some motion samples. The list shows delivered sample rate, largest sample gap,
-and an approximate REC offset; these are capture diagnostics, not proof of synchronization.
+and an approximate REC offset from the first retained sample, matching Gyroflow's imported
+time origin. A negative offset means motion capture began after the observed REC start.
+These are capture diagnostics, not proof of synchronization.
 
 Starting logging during a take creates a partial log. Backgrounding, disconnecting, disabling
 logging, a stalled sensor, or a storage error preserves available samples as interrupted.

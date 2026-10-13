@@ -56,6 +56,31 @@ struct GyroLoggingWireTests {
         #expect(wire.finish(owner: owner, reason: "not-a-reason", timestamp: 1) == nil)
     }
 
+    @Test func idleStallPublishesHealthWithoutOpeningAFile() throws {
+        let wire = GyroLoggingWire()
+        let owner = wire.create()
+        defer { wire.close(owner: owner) }
+        let armed = try object(wire.poll(owner: owner, timestamp: 0))
+        #expect(armed["hasSamples"] as? Bool == false)
+        #expect(armed["finished"] as? Bool == false)
+        let stalled = try object(wire.poll(owner: owner, timestamp: 0.5))
+        #expect((stalled["updates"] as? [[String: Any]])?.isEmpty == true)
+        #expect(stalled["active"] as? Bool == false)
+        #expect(stalled["finished"] as? Bool == true)
+        #expect(stalled["termination"] as? String == "sensorStalled")
+        #expect(stalled["hasSamples"] as? Bool == false)
+    }
+
+    @Test func firstAcceptedSamplePublishesReadyHealth() throws {
+        let wire = GyroLoggingWire()
+        let owner = wire.create()
+        defer { wire.close(owner: owner) }
+        let reply = try object(wire.ingest(owner: owner, bytes: batch(0..<1)))
+        #expect(reply["hasSamples"] as? Bool == true)
+        #expect(reply["finished"] as? Bool == false)
+        #expect(reply["active"] as? Bool == false)
+    }
+
     @Test func streamingRecoveryReturnsActualCompleteRows() throws {
         let wire = GyroLoggingWire()
         let owner = wire.create()
