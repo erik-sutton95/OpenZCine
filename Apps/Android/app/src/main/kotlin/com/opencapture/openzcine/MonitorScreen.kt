@@ -1,5 +1,8 @@
 package com.opencapture.openzcine
 
+import com.opencapture.openzcine.gyro.GyroCaptureState
+import com.opencapture.openzcine.gyro.GyroStatusPill
+
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.opencine.cameracontrols.*
 import android.os.Build
@@ -323,6 +326,8 @@ internal fun MonitorScreen(
      * down (grayed, non-writing) until the operator revokes or the watcher gives it back.
      */
     controlsSurrendered: Boolean = false,
+    gyroState: GyroCaptureState? = null,
+    onOpenGyroLogs: () -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -2753,6 +2758,15 @@ internal fun MonitorScreen(
                 enabled = enabled && !controlsSurrendered, timerRemaining = photoTimerRemaining,
                 bodyShutterPulse = bodyShutterPulse, onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
         )
+
+        gyroState?.takeIf { state ->
+            isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null &&
+                (state.enabled || state.failed) && (!isClean || state.failed)
+        }?.let { state ->
+            GyroStatusPill(state, Modifier.align(Alignment.TopStart)
+                .padding(start = maxOf(16f, safeLeading + 12f).dp, top = (safeTop + 48f).dp),
+                onClick = onOpenGyroLogs)
+        }
 
         // App self-timer tally: a white border pulse at the physical edge per
         // countdown tick (iOS timer tally), fading within each second.

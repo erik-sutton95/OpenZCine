@@ -15,6 +15,25 @@ import java.util.TimeZone
  * `Sources/OpenZCineAndroidFacade/SwiftCoreJNI.swift`.
  */
 object SwiftCore {
+    /** Creates a process-local owner for the shared gyro take policy. */
+    external fun gyroCreate(): String
+    /** Sends little-endian sensor timestamp/X/Y/Z Double batches, at most 512 samples. */
+    external fun gyroIngest(owner: String, samples: ByteArray): String?
+    /** Observes actual camera REC state on the monotonic sensor clock. */
+    external fun gyroObserve(owner: String, recording: Boolean, timestamp: Double,
+        dateSeconds: Double, cameraLabel: String): String?
+    /** Advances shared postroll and sensor-health checks. */
+    external fun gyroPoll(owner: String, timestamp: Double): String?
+    /** Finalizes available motion with an explicit reason, without camera commands. */
+    external fun gyroFinish(owner: String, reason: String, timestamp: Double): String?
+    /** Releases an already-finalized capture owner. */
+    external fun gyroClose(owner: String)
+    /** Creates a streaming shared-core partial-file validator. */
+    external fun gyroRecoveryCreate(): String
+    /** Returns the complete valid prefix length, or -1 for an invalid header. */
+    external fun gyroRecoveryAccept(owner: String, bytes: ByteArray): Long
+    /** Finishes validation using the original descriptor and retires its owner. */
+    external fun gyroRecoveryFinish(owner: String, descriptor: String): String?
     /**
      * True when the Swift core library is bundled and loaded. False (with no
      * crash) when the APK was built without running `just android-core` first.

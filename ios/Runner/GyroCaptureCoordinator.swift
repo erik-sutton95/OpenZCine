@@ -71,7 +71,8 @@ import UIKit
             if hasGapWarning { return "GYRO GAP" }
             return reportedRecording == true ? "GYRO REC" : "GYRO SAVING"
         }
-        return motionRunning ? "GYRO ARMED" : "Starting gyro logger"
+        return motionRunning && session.latestSampleTimestamp != nil
+            ? "GYRO ARMED" : "Starting gyro logger"
     }
     var statusIsFailure: Bool { failure != nil }
 

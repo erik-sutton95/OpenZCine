@@ -150,6 +150,7 @@ internal fun OperatorSettingsScreen(
     relayWatchUi: RelayWatchUiState? = null,
     accountModel: MonitorSettingsAccountModel? = null,
     accountCurrent: (() -> Boolean)? = null,
+    gyro: MonitorSettingsGyroSource? = null,
     onClose: () -> Unit,
 ) {
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
@@ -315,6 +316,7 @@ internal fun OperatorSettingsScreen(
             "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
             "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
             "Current OpenZCine build from the native project metadata."),
+        gyro = gyro,
     )
     MonitorOperatorSettingsScreen(configuration, display, initialTab, cacheOwner)
 }

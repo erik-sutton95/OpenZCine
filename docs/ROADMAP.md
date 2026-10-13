@@ -125,6 +125,11 @@ transport, OCR, and cloud-account adapters remain separate, explicitly scoped fo
 
 Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–5 milestone spine:
 
+- **Phone gyro logging for Gyroflow** (in progress, discussion #212): opt-in, camera-REC-driven
+  motion logs on iOS and Android, with pre/post coverage, capture-health diagnostics, durable
+  recovery, and native sharing. Synchronization and lens/mount selection stay in Gyroflow.
+  See [the workflow and hardware validation requirements](gyro-logging.md).
+
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
 - **Android live focus and virtual-horizon parity** (OPE-58, in review) — carry camera-origin
