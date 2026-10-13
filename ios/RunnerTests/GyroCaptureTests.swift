@@ -6,6 +6,24 @@ import Testing
 
 @MainActor @Suite("Phone gyro capture")
 struct GyroCaptureTests {
+    @Test("Core Motion's gyro handler can run on a background sensor queue")
+    func backgroundGyroCallback() async {
+        let buffer = GyroSampleBuffer()
+        let handler = PhoneMotionDriver.gyroHandler(into: buffer)
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        let ranOnMainThread = await withCheckedContinuation { continuation in
+            queue.addOperation {
+                handler(nil, nil)
+                continuation.resume(returning: Thread.isMainThread)
+            }
+        }
+        #expect(!ranOnMainThread)
+        let result = buffer.drain()
+        #expect(result.samples.isEmpty)
+        #expect(result.failure == .sensorStalled)
+    }
+
     @Test("Mount selection defaults unconfigured and persists across launches")
     func mountPreference() async {
         let fixture = GyroFixture()

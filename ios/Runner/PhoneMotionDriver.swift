@@ -63,7 +63,14 @@ enum PhoneMotionError: LocalizedError {
         guard manager.isGyroAvailable else { throw PhoneMotionError.unavailable }
         manager.stopGyroUpdates()
         manager.gyroUpdateInterval = 1 / GyroTakeSession.requestedRate
-        manager.startGyroUpdates(to: queue) { data, error in
+        manager.startGyroUpdates(to: queue, withHandler: Self.gyroHandler(into: buffer))
+    }
+
+    // Core Motion invokes this on its sensor queue; the handler must not inherit MainActor.
+    nonisolated static func gyroHandler(into buffer: GyroSampleBuffer)
+        -> @Sendable (CMGyroData?, Error?) -> Void
+    {
+        { data, error in
             guard error == nil, let data else {
                 buffer.fail()
                 return
