@@ -9,8 +9,10 @@
 
     /// Supplies the portable mount catalog without duplicating orientation rules in Kotlin.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_gyroMountPresets")
-    public func gyroMountPresetsJNI(_ env: UnsafeMutablePointer<JNIEnv?>, _: jobject?) -> jstring? {
-        javaString(env, GyroLoggingWire.shared.mountPresets())
+    public func gyroMountPresetsJNI(
+        _ env: UnsafeMutablePointer<JNIEnv?>, _: jobject?, naturalPortrait: jboolean
+    ) -> jstring? {
+        javaString(env, GyroLoggingWire.shared.mountPresets(naturalPortrait: naturalPortrait != 0))
     }
 
     /// Delivers one bounded numeric sensor batch to shared take policy.

@@ -18,9 +18,12 @@ public final class GyroLoggingWire: @unchecked Sendable {
         }
     }
 
-    /// Supplies the shared mount choices and axis mappings to the Android shell.
-    public func mountPresets() -> String {
-        let choices = GyroMountPreset.allCases.map { preset in
+    /// Supplies mount choices for phones whose natural sensor axes match portrait iPhones.
+    /// Other device frames remain unconfigured rather than exporting an incorrect alignment.
+    public func mountPresets(naturalPortrait: Bool = true) -> String {
+        let presets: [GyroMountPreset] =
+            naturalPortrait ? GyroMountPreset.allCases : [.unconfigured]
+        let choices = presets.map { preset in
             GyroMountChoice(
                 id: preset.id, title: preset.title, group: preset.group,
                 shortLabel: preset.shortLabel, detail: preset.detail,

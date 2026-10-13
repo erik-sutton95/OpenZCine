@@ -10,6 +10,10 @@ struct GyroLoggingWireTests {
         let choices = try #require(
             JSONSerialization.jsonObject(with: Data(wire.mountPresets().utf8)) as? [[String: Any]])
         #expect(choices.count == 9)
+        let otherFrame = try #require(
+            JSONSerialization.jsonObject(with: Data(wire.mountPresets(naturalPortrait: false).utf8))
+                as? [[String: Any]])
+        #expect(otherFrame.map { $0["id"] as? String } == ["unconfigured"])
         let portrait = try #require(choices.first { $0["id"] as? String == "rearDown" })
         #expect(portrait["orientation"] as? String == "YxZ")
         let owner = wire.create()
