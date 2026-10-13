@@ -144,12 +144,12 @@ internal fun ShotsRemainingReadout(
     /** The " SHOTS" / "%" suffix, sized against [sizeSp]. */
     labelSp: Float = 12f,
 ) {
-    val storageForm = showsStorage && storage != null && storage.totalCapacityBytes > 0
+    val readout = storage?.readout?.takeIf { showsStorage && it.totalBytes != null }
     Text(
         buildAnnotatedString {
-            if (storageForm && storage != null) {
+            if (readout != null) {
                 withStyle(SpanStyle(color = LiveDesign.text)) {
-                    append("${storage.freeSpaceBytes / 1_000_000_000} GB")
+                    append(readout.free)
                 }
                 withStyle(
                     SpanStyle(
@@ -158,9 +158,7 @@ internal fun ShotsRemainingReadout(
                         fontWeight = FontWeight.SemiBold,
                     ),
                 ) {
-                    append(
-                        " ${storage.freeSpaceBytes * 100 / storage.totalCapacityBytes}%",
-                    )
+                    append(" ${readout.percent}")
                 }
             } else {
                 val label = shotsRemaining?.let(::shotsRemainingCompactLabel) ?: "—"

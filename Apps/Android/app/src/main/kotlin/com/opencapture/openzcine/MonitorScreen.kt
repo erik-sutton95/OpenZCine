@@ -1,5 +1,8 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.media.recordingTimeLabel
+import com.opencapture.opencine.media.storageReadout
+import com.opencapture.opencine.media.StorageReadout
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import java.util.concurrent.atomic.AtomicReference
 import com.opencapture.monitorui.MonitorIcon
@@ -1391,12 +1394,13 @@ internal fun MonitorScreen(
                 actualLinkHealth.presentation.signalBars)
         }
         var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
-        val topBarMedia =
-            if (prefersMediaDuration) {
-                readoutRetention.media.durationLabel
-            } else {
-                readoutRetention.media.capacityLabel
-            }
+        val topBarMedia = if (relayedState != null) {
+            if (prefersMediaDuration) readoutRetention.media.durationLabel else readoutRetention.media.capacityLabel
+        } else {
+            val storage = sharedControlState.snapshot?.storage
+            if (prefersMediaDuration) storage?.recordingTimeLabel ?: "-- Min"
+            else storage?.storageReadout?.label ?: StorageReadout.UNAVAILABLE
+        }
         val watchRelayState =
             remember(
                 sessionState,
@@ -1924,9 +1928,9 @@ internal fun MonitorScreen(
         val currentPicture = rememberUpdatedState(pictureFrameSource)
         val statusStorage = if (isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE)) {
             val storage = cameraProperties.storage
-            val capacity = storage?.takeIf { photoPillShowsStorage && it.totalCapacityBytes > 0 }
+            val capacity = storage?.readout?.takeIf { photoPillShowsStorage && it.totalBytes != null }
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
-                if (capacity != null) "${capacity.freeSpaceBytes / 1_000_000_000} GB ${capacity.freeSpaceBytes * 100 / capacity.totalCapacityBytes}%"
+                if (capacity != null) "${capacity.free} ${capacity.percent}"
                 else cameraProperties.shotsRemaining?.let { "${shotsRemainingCompactLabel(it)} SHOTS" },
                 MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage })
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",

@@ -90,7 +90,7 @@ enum NikonDelivery {
                     filename: $0.filename, captureDate: $0.captureDate.isEmpty ? nil : $0.captureDate,
                     sizeBytes: $0.sizeBytes > 0 ? $0.sizeBytes : nil)
             },
-            formatBytes: { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) })
+            formatBytes: ByteCountLabel.label)
     }
 }
 

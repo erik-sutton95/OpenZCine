@@ -84,12 +84,9 @@ class MediaClipsTest {
     fun `labels match the iOS formatting`() {
         val clips = NikonMediaClips.parse(wire)
 
-        assertEquals("1.3GB · MOV", clips[0].badgeLabel)
-        assertEquals("8MB · JPG", clips[1].badgeLabel)
-        assertEquals(
-            "0 B",
-            clips[0].copy(sizeBytes = 0).sizeLabel,
-        )
+        assertEquals("1.28 GB · MOV", clips[0].badgeLabel)
+        assertEquals("8.4 MB · JPG", clips[1].badgeLabel)
+        assertEquals("", clips[0].copy(sizeBytes = 0).sizeLabel)
     }
 
     @Test

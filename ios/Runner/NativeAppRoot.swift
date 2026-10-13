@@ -9239,22 +9239,12 @@ final class NativeAppModel {
     /// Computes the current `MediaStatus` from cached storage + the camera's codec/resolution/fps.
     /// Returns nil when storage isn't known yet.
     private func currentMediaStatus() -> MediaStatus? {
-        guard let storage = lastKnownStorage else { return nil }
-        let gigabytes = storage.gigabytesFree
-        let percent = storage.percentFree
-        let minutes = RecordDurationEstimator.minutesRemaining(
-            codec: MonitorTextFormat.codecShortLabel(cameraPropertySnapshot.fileType ?? ""),
-            resolutionWidth: Int(
-                cameraPropertySnapshot.resolution?.split(separator: "x").first
-                    .flatMap { Int($0) } ?? 0),
-            resolutionHeight: Int(
-                cameraPropertySnapshot.resolution?.split(separator: "x").last
-                    .flatMap { Int($0) } ?? 0),
-            frameRate: cameraPropertySnapshot.fps ?? 0,
-            gigabytesFree: gigabytes
-        )
-        return MediaStatus(
-            gigabytesFree: gigabytes, percentFree: percent, minutesRemaining: minutes)
+        lastKnownStorage.flatMap {
+            MediaStatus(
+                storage: $0, codec: cameraPropertySnapshot.fileType,
+                resolution: cameraPropertySnapshot.resolution, frameRate: cameraPropertySnapshot.fps
+            )
+        }
     }
 
     /// Publishes property snapshot → monitor readouts, including ZR RAW `[FX]` / `[DX]` tags on the
@@ -12398,10 +12388,17 @@ final class NativeAppModel {
 
     /// The MEDIA cell label, respecting the capacity/duration preference.
     var mediaReadout: String {
-        if let status = cameraState.mediaStatus {
-            return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+        // A relayed source supplies its own observations; the local camera uses the common session.
+        if videoSource == .relay {
+            if let status = cameraState.mediaStatus {
+                return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+            }
+            return cameraState.media
         }
-        return cameraState.media
+        let storage = shell.control.snapshot?.storage
+        return prefersMediaDuration
+            ? storage?.recordingTimeLabel ?? "-- Min"
+            : storage?.storageReadout?.label ?? StorageReadout.unavailable
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
@@ -12980,7 +12977,8 @@ extension NativeAppModel {
                 case nil: []
                 }
             }(),
-            apertureLabels: advertisedExposureOptions[.movieFNumber] ?? [])
+            apertureLabels: advertisedExposureOptions[.movieFNumber] ?? [],
+            storage: lastKnownStorage)
     }
 
 }

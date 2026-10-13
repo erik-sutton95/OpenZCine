@@ -120,7 +120,7 @@ internal fun mediaDeliveryMetadataSummary(clips: List<NikonMediaClipRecord>): St
         clips.take(MAXIMUM_SHARE_METADATA_ITEMS).map { clip ->
             val filename = clip.filename.take(MAXIMUM_SHARE_METADATA_FILENAME_CHARACTERS)
             val date = clip.captureDate.ifBlank { "unknown date" }.take(32)
-            "$filename · $date · ${clip.sizeLabel}"
+            "$filename · $date · ${clip.sizeLabel.ifEmpty { "unknown size" }}"
         }.toMutableList()
     val omitted = clips.size - lines.size
     if (omitted > 0) lines += "+$omitted more selected ${if (omitted == 1) "item" else "items"}"
