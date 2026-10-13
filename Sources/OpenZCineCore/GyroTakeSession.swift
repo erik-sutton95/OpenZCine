@@ -11,13 +11,15 @@ public struct GyroTakeSession: Sendable {
     public static let coverageSeconds = 2.0
     /// Maximum input batch and prebuffer size; shells also bound their asynchronous capture queues.
     public static let maximumBufferedSamples = 512
-    /// No-sample interval that terminates an open take as incomplete.
+    /// No-sample interval that ends armed capture and marks any open take incomplete.
     public static let stallTimeout = 0.5
 
     /// Last accepted sensor timestamp, useful for platform health presentation.
     public private(set) var latestSampleTimestamp: Double?
     /// True after interruption, overflow, or an explicit finish; construct a new session to re-arm.
     public private(set) var isFinished = false
+    /// Why capture ended, including failures while armed that produce no file updates.
+    public private(set) var termination: GyroLogTermination?
     /// Whether any take is recording or collecting its postroll.
     public var hasOpenTake: Bool { !takes.isEmpty }
     /// Whether any take is recording or collecting its postroll, for platform status wires.
@@ -30,6 +32,7 @@ public struct GyroTakeSession: Sendable {
     private var prebuffer: [GyroSample] = []
     private var observedRecording: Bool?
     private var takes: [Take] = []
+    private var armedAt: Double?
 
     /// Arms an empty logger. Sensor sampling can precede the first camera-state observation.
     public init() {}
@@ -60,9 +63,9 @@ public struct GyroTakeSession: Sendable {
     public mutating func observeRecording(
         _ recording: Bool, at timestamp: Double, date: Date, cameraLabel: String
     ) -> [GyroLogUpdate] {
-        guard !isFinished, timestamp.isFinite, timestamp >= 0,
-            observedRecording != recording
-        else { return [] }
+        guard !isFinished, timestamp.isFinite, timestamp >= 0 else { return [] }
+        if armedAt == nil { armedAt = timestamp }
+        guard observedRecording != recording else { return [] }
         let wasUnknown = observedRecording == nil
         observedRecording = recording
         var updates = completePostroll(at: timestamp)
@@ -86,13 +89,13 @@ public struct GyroTakeSession: Sendable {
         return updates
     }
 
-    /// Completes elapsed postrolls and detects stalled sensors even when no further samples arrive.
+    /// Completes postrolls and detects stalls even before the first take or sensor sample.
+    /// The first valid poll or recording observation anchors the initial no-sample deadline.
     public mutating func poll(at timestamp: Double) -> [GyroLogUpdate] {
-        guard !isFinished, timestamp.isFinite else { return [] }
-        let oldestStart = takes.first.map { $0.origin + $0.descriptor.approximateStartOffset }
-        if let reference = latestSampleTimestamp ?? oldestStart,
-            !takes.isEmpty, timestamp - reference >= Self.stallTimeout
-        {
+        guard !isFinished, timestamp.isFinite, timestamp >= 0 else { return [] }
+        if armedAt == nil { armedAt = timestamp }
+        let reference = latestSampleTimestamp ?? armedAt ?? timestamp
+        if timestamp - reference >= Self.stallTimeout {
             return finish(reason: .sensorStalled, at: timestamp)
         }
         return completePostroll(at: timestamp)
@@ -102,6 +105,7 @@ public struct GyroTakeSession: Sendable {
     public mutating func finish(reason: GyroLogTermination, at _: Double) -> [GyroLogUpdate] {
         guard !isFinished else { return [] }
         isFinished = true
+        termination = reason
         let updates = takes.map {
             GyroLogUpdate.finished($0.summary(reason: reason))
         }

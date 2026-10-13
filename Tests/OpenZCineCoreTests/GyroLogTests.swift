@@ -122,6 +122,51 @@ import Testing
     #expect(summary.termination == .sensorStalled)
 }
 
+@Test func gyroIdleWatchdogStartsAtFirstValidPollWithoutOpeningAFile() {
+    var session = GyroTakeSession()
+    #expect(session.termination == nil)
+    #expect(session.poll(at: .nan).isEmpty)
+    #expect(session.poll(at: -1).isEmpty)
+    #expect(session.poll(at: 100).isEmpty)
+    #expect(!session.isFinished)
+    #expect(session.poll(at: 100.49).isEmpty)
+    #expect(!session.isFinished)
+    #expect(session.poll(at: 100.5).isEmpty)
+    #expect(session.isFinished)
+    #expect(session.termination == .sensorStalled)
+    #expect(!session.hasActiveTakes)
+}
+
+@Test func gyroIdleObservationAnchorsTheWatchdogAndDuplicatesDoNotExtendIt() {
+    var session = GyroTakeSession()
+    #expect(observe(&session, false, at: 10).isEmpty)
+    #expect(observe(&session, false, at: 10.4).isEmpty)
+    #expect(session.poll(at: 10.5).isEmpty)
+    #expect(session.isFinished)
+    #expect(session.termination == .sensorStalled)
+}
+
+@Test func gyroIdleWatchdogUsesTheLastAcceptedSample() {
+    var session = GyroTakeSession()
+    _ = session.poll(at: 10)
+    _ = session.ingest(samples(from: 10, count: 101))
+    #expect(session.poll(at: 11.49).isEmpty)
+    #expect(!session.isFinished)
+    #expect(session.poll(at: 11.5).isEmpty)
+    #expect(session.isFinished)
+    #expect(session.termination == .sensorStalled)
+    #expect(session.ingest([sample(12)]).isEmpty)
+    #expect(session.finish(reason: .disabled, at: 12).isEmpty)
+    #expect(session.termination == .sensorStalled)
+}
+
+@Test func gyroExplicitIdleFinishPublishesItsTerminationWithoutFileUpdates() {
+    var session = GyroTakeSession()
+    #expect(session.finish(reason: .disabled, at: 10).isEmpty)
+    #expect(session.isFinished)
+    #expect(session.termination == .disabled)
+}
+
 @Test func gyroPollingClosesPostrollWhenNoSampleFallsOnTheBoundary() throws {
     var session = GyroTakeSession()
     _ = observe(&session, false, at: 8)
