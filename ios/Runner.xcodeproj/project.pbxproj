@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */; };
 		A25000555EDE55EDE0000004 /* NikonFeedIncidentProducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000555EDE55EDE0000003 /* NikonFeedIncidentProducerTests.swift */; };
 		A25000555EDE55EDE0000002 /* NikonFeedIncidentProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */; };
 		5CA01A5203C108E5E0C97A63 /* FrozenNikonRuntimeEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */; };
@@ -198,6 +199,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortraitHeaderNativeTests.swift; sourceTree = "<group>"; };
 		A25000555EDE55EDE0000003 /* NikonFeedIncidentProducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFeedIncidentProducerTests.swift; sourceTree = "<group>"; };
 		A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFeedIncidentProducer.swift; sourceTree = "<group>"; };
 		51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonRuntimeEffects.swift; sourceTree = "<group>"; };
@@ -387,6 +389,7 @@
 				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
 				C0DE00000000000000000F12 /* NikonAssistsTests.swift */,
 				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
+				B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
@@ -740,6 +743,7 @@
 				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
 				C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */,
 				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
+				B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,

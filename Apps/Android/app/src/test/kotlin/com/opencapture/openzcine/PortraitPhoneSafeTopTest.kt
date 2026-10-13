@@ -9,10 +9,10 @@ import kotlin.test.assertTrue
 class PortraitPhoneSafeTopTest {
     @Test
     fun aCutoutLessPortraitPhoneGetsThePunchHoleBandAboveTheStatusRow() {
-        // The FPS chip and batteries hang from gauges.y; the chip is 27.5 dp tall.
+        // The FPS chip and batteries hang from telemetry.y; the chip is 27.5 dp tall.
         fun bandGap(safeTop: Float): Float {
             val layout = MonitorLayoutPolicy.fieldMonitor(411f, 914f, safeTop = portraitPhoneSafeTop(safeTop, 411f, 914f))
-            return layout.status.y - (layout.gauges.y + 27.5f)
+            return layout.status.y - (layout.telemetry.y + 27.5f)
         }
         val punchHole = bandGap(52f)
         assertTrue(punchHole > 0f)
