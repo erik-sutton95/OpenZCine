@@ -61,7 +61,8 @@ public struct GyroTakeSession: Sendable {
     /// Observes authoritative camera state; duplicates do nothing and an initial true is partial.
     /// A fixed two-second-before-start origin admits sensor batches delivered after this event.
     public mutating func observeRecording(
-        _ recording: Bool, at timestamp: Double, date: Date, cameraLabel: String
+        _ recording: Bool, at timestamp: Double, date: Date, cameraLabel: String,
+        mountPreset: GyroMountPreset = .unconfigured
     ) -> [GyroLogUpdate] {
         guard !isFinished, timestamp.isFinite, timestamp >= 0 else { return [] }
         if armedAt == nil { armedAt = timestamp }
@@ -78,7 +79,8 @@ public struct GyroTakeSession: Sendable {
         let origin = max(0, timestamp - Self.coverageSeconds)
         let descriptor = GyroLogDescriptor(
             cameraLabel: cameraLabel, startDate: date,
-            approximateStartOffset: timestamp - origin, isPartial: wasUnknown)
+            approximateStartOffset: timestamp - origin, isPartial: wasUnknown,
+            mountPreset: mountPreset)
         var take = Take(descriptor: descriptor, origin: origin)
         updates.append(.opened(descriptor))
         updates.append(

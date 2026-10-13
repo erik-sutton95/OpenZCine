@@ -18,7 +18,7 @@ public enum GyroGCSVError: Error, LocalizedError, Equatable, Sendable {
 
 /// Portable GCSV 1.3 bytes; storage and camera synchronization remain outside this encoder.
 public enum GyroGCSVEncoder {
-    /// Emits a gyro-only header with fixed device axes explicitly marked unverified.
+    /// Emits raw device axes and the take's selected mount alignment for Gyroflow to apply.
     public static func header(descriptor: GyroLogDescriptor) -> Data {
         let camera = descriptor.cameraLabel.replacingOccurrences(of: ",", with: " ")
             .replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
@@ -27,8 +27,9 @@ public enum GyroGCSVEncoder {
             GYROFLOW IMU LOG
             version,1.3
             id,OpenZCine
-            orientation,XYZ
-            orientation_status,unverified
+            orientation,\(descriptor.mount.orientation)
+            orientation_status,\(descriptor.mount == .unconfigured ? "unverified" : "operator_selected")
+            mount_preset,\(descriptor.mount.rawValue)
             camera,\(camera)
             session_uuid,\(descriptor.id.uuidString)
             requested_sample_rate,100
@@ -63,6 +64,7 @@ public struct GyroGCSVRecovery: Sendable {
     private var hasTimeScale = false
     private var hasGyroScale = false
     private var hasOrientation = false
+    private var orientation: String?
     private var headerComplete = false
     private var halted = false
     private var statistics = GyroStatistics()
@@ -93,7 +95,9 @@ public struct GyroGCSVRecovery: Sendable {
 
     /// Summarizes complete validated rows. An unterminated final line is deliberately excluded.
     public func finish(descriptor: GyroLogDescriptor) throws -> GyroLogSummary {
-        guard headerComplete else { throw GyroGCSVError.invalidHeader }
+        guard headerComplete, orientation == descriptor.mount.orientation else {
+            throw GyroGCSVError.invalidHeader
+        }
         return statistics.summary(descriptor, reason: .recovered)
     }
 
@@ -135,10 +139,14 @@ public struct GyroGCSVRecovery: Sendable {
             }
             headerComplete = true
         } else if text.hasPrefix("orientation,") {
-            guard text == "orientation,XYZ", !hasOrientation else {
+            let value = String(text.dropFirst("orientation,".count))
+            guard GyroMountPreset.allCases.contains(where: { $0.orientation == value }),
+                !hasOrientation
+            else {
                 throw GyroGCSVError.invalidHeader
             }
             hasOrientation = true
+            orientation = value
         } else if text.hasPrefix("tscale,") {
             guard text == "tscale,0.000001", !hasTimeScale else {
                 throw GyroGCSVError.invalidHeader

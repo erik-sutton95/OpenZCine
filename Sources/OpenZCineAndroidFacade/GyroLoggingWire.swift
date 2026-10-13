@@ -18,6 +18,21 @@ public final class GyroLoggingWire: @unchecked Sendable {
         }
     }
 
+    /// Supplies the shared mount choices and axis mappings to the Android shell.
+    public func mountPresets() -> String {
+        let choices = GyroMountPreset.allCases.map { preset in
+            GyroMountChoice(
+                id: preset.id, title: preset.title, group: preset.group,
+                shortLabel: preset.shortLabel, detail: preset.detail,
+                orientation: preset.orientation)
+        }
+        // SAFETY: all choices contain only enum-owned strings, which JSONEncoder can encode.
+        guard let data = try? JSONEncoder().encode(choices),
+            let json = String(data: data, encoding: .utf8)
+        else { return "[]" }
+        return json
+    }
+
     /// Decodes bounded little-endian `[timestamp, x, y, z]` Double batches.
     public func ingest(owner: String, bytes: [UInt8]) -> String? {
         guard bytes.count.isMultiple(of: 32), bytes.count <= 512 * 32 else { return nil }
@@ -37,13 +52,17 @@ public final class GyroLoggingWire: @unchecked Sendable {
     /// Supplies a camera observation, not a command target or capture timestamp.
     public func observe(
         owner: String, recording: Bool, timestamp: Double,
-        dateSeconds: Double, cameraLabel: String
+        dateSeconds: Double, cameraLabel: String,
+        mountPreset: String = GyroMountPreset.unconfigured.rawValue
     ) -> String? {
-        guard timestamp.isFinite, dateSeconds.isFinite else { return nil }
+        guard timestamp.isFinite, dateSeconds.isFinite,
+            let mount = GyroMountPreset(rawValue: mountPreset)
+        else { return nil }
         return update(owner: owner) {
             $0.observeRecording(
                 recording, at: timestamp,
-                date: Date(timeIntervalSince1970: dateSeconds), cameraLabel: cameraLabel)
+                date: Date(timeIntervalSince1970: dateSeconds), cameraLabel: cameraLabel,
+                mountPreset: mount)
         }
     }
 
@@ -123,6 +142,15 @@ public final class GyroLoggingWire: @unchecked Sendable {
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
     }
+}
+
+private struct GyroMountChoice: Encodable {
+    let id: String
+    let title: String
+    let group: String?
+    let shortLabel: String
+    let detail: String
+    let orientation: String
 }
 
 private struct GyroWireReply: Encodable {

@@ -5,6 +5,31 @@ import Testing
 
 @Suite("Android gyro wire")
 struct GyroLoggingWireTests {
+    @Test func mountCatalogAndObservationUseTheSharedAlignment() throws {
+        let wire = GyroLoggingWire()
+        let choices = try #require(
+            JSONSerialization.jsonObject(with: Data(wire.mountPresets().utf8)) as? [[String: Any]])
+        #expect(choices.count == 9)
+        let portrait = try #require(choices.first { $0["id"] as? String == "rearDown" })
+        #expect(portrait["orientation"] as? String == "YxZ")
+        let owner = wire.create()
+        defer { wire.close(owner: owner) }
+        #expect(
+            wire.observe(
+                owner: owner, recording: true, timestamp: 2, dateSeconds: 123,
+                cameraLabel: "Test", mountPreset: "unknown") == nil)
+        let reply = try object(
+            wire.observe(
+                owner: owner, recording: true, timestamp: 2, dateSeconds: 123,
+                cameraLabel: "Test", mountPreset: "rearDown"))
+        let updates = try #require(reply["updates"] as? [[String: Any]])
+        let descriptor = try #require(updates.first?["descriptor"] as? [String: Any])
+        #expect(descriptor["mountPreset"] as? String == "rearDown")
+        let header = try #require(updates.last?["data"] as? String)
+        let decoded = try #require(Data(base64Encoded: header))
+        #expect(String(decoding: decoded, as: UTF8.self).contains("orientation,YxZ\n"))
+    }
+
     @Test func numericBatchesPreserveTheSensorClockAndOwnerIsolation() throws {
         let wire = GyroLoggingWire()
         let owner = wire.create()

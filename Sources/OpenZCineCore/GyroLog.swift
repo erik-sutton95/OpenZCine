@@ -58,17 +58,23 @@ public struct GyroLogDescriptor: Codable, Equatable, Sendable, Identifiable {
     public let approximateStartOffset: Double
     /// True when recording was already active at first observation.
     public let isPartial: Bool
+    /// Selected rigid mount at REC start; absent in logs written before mount presets existed.
+    public let mountPreset: GyroMountPreset?
+    /// Effective alignment, preserving the unconfigured behavior of older logs.
+    public var mount: GyroMountPreset { mountPreset ?? .unconfigured }
 
     /// Creates persisted metadata for a take, including its unique export filename.
     public init(
         id: UUID = UUID(), cameraLabel: String, startDate: Date,
-        approximateStartOffset: Double, isPartial: Bool
+        approximateStartOffset: Double, isPartial: Bool,
+        mountPreset: GyroMountPreset = .unconfigured
     ) {
         self.id = id
         self.cameraLabel = cameraLabel
         self.startDate = startDate
         self.approximateStartOffset = approximateStartOffset
         self.isPartial = isPartial
+        self.mountPreset = mountPreset
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)

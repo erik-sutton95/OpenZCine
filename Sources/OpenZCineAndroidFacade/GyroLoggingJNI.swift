@@ -7,6 +7,12 @@
         javaString(env, GyroLoggingWire.shared.create())
     }
 
+    /// Supplies the portable mount catalog without duplicating orientation rules in Kotlin.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_gyroMountPresets")
+    public func gyroMountPresetsJNI(_ env: UnsafeMutablePointer<JNIEnv?>, _: jobject?) -> jstring? {
+        javaString(env, GyroLoggingWire.shared.mountPresets())
+    }
+
     /// Delivers one bounded numeric sensor batch to shared take policy.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_gyroIngest")
     public func gyroIngestJNI(
@@ -24,12 +30,15 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_gyroObserve")
     public func gyroObserveJNI(
         _ env: UnsafeMutablePointer<JNIEnv?>, _: jobject?, owner: jstring?,
-        recording: jboolean, timestamp: jdouble, dateSeconds: jdouble, cameraLabel: jstring?
+        recording: jboolean, timestamp: jdouble, dateSeconds: jdouble, cameraLabel: jstring?,
+        mountPreset: jstring?
     ) -> jstring? {
         guard let owner = swiftString(env, owner), let label = swiftString(env, cameraLabel),
+            let mount = swiftString(env, mountPreset),
             let reply = GyroLoggingWire.shared.observe(
                 owner: owner, recording: recording != 0,
-                timestamp: timestamp, dateSeconds: dateSeconds, cameraLabel: label)
+                timestamp: timestamp, dateSeconds: dateSeconds, cameraLabel: label,
+                mountPreset: mount)
         else { return nil }
         return javaString(env, reply)
     }
