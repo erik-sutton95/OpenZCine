@@ -29,7 +29,7 @@ import org.junit.runner.RunWith
 
 /**
  * Real Vulkan WSI readback, SIMULATED device gate: for the same decoded raster, plan and surface,
- * the shared OpcVulkan Bitmap pipeline presents exactly the swapchain images of the frozen donor
+ * the shared OpcVulkan Bitmap pipeline presents exactly the swapchain images of the input-corrected frozen donor
  * Nikon Vulkan renderer, including how many it presents. No tolerance, no skip.
  */
 @RunWith(AndroidJUnit4::class)
@@ -86,7 +86,19 @@ class NikonBitmapVulkanPixelParityTest {
         override fun pause() = native.pause(session)
         override fun clearFrame() = native.clearFrame(session)
         override fun clearPlan() = native.clearPlan(session)
-        override fun submit(frame: Bitmap) = native.submitBitmap(session, frame)
+        override fun submit(frame: Bitmap): Boolean {
+            // The frozen donor labels RGBA_8888 as BGRA, a known channel defect.
+            // Correct only its fixture input so its unchanged shader/lifetime oracle
+            // sees the same logical RGB as the corrected production Bitmap path.
+            val pixels = IntArray(frame.width * frame.height)
+            frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
+            for (index in pixels.indices) {
+                val pixel = pixels[index]
+                pixels[index] = Color.argb(Color.alpha(pixel), Color.blue(pixel), Color.green(pixel), Color.red(pixel))
+            }
+            val corrected = Bitmap.createBitmap(pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+            return try { native.submitBitmap(session, corrected) } finally { corrected.recycle() }
+        }
         override fun close() = native.destroySession(session)
     }
 

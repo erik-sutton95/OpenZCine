@@ -76,43 +76,80 @@ import XCTest
         let store = MediaClipStore(root: root)
         let model = NativeAppModel(mediaClipStore: store)
         model.mediaBrowserSource = .iPhone
-        var proxy = sample(); proxy.cameraID = MediaClipStore.localBucketID; proxy.filename = "SIMULATED.MOV"
-        store.upsertBatch([proxy], cameraID: proxy.cameraID); model.refreshMediaClips()
-        model.mediaBrowserSource = .camera; model.connection = .connected
+        var proxy = sample()
+        proxy.cameraID = MediaClipStore.localBucketID
+        proxy.filename = "SIMULATED.MOV"
+        store.upsertBatch([proxy], cameraID: proxy.cameraID)
+        model.refreshMediaClips()
+        model.mediaBrowserSource = .camera
+        model.connection = .connected
         let before = try XCTUnwrap(store.catalogBytes(cameraID: proxy.cameraID))
-        var deletes = 0; var cleanups = 0
-        let request = try XCTUnwrap(model.capturePlaybackMediaDeletion(proxy, cleanup: {
-            cleanups += 1; return true
-        }, deleteLocation: { _ in deletes += 1; return true }))
+        var deletes = 0
+        var cleanups = 0
+        let request = try XCTUnwrap(
+            model.capturePlaybackMediaDeletion(
+                proxy,
+                cleanup: {
+                    cleanups += 1
+                    return true
+                },
+                deleteLocation: { _ in
+                    deletes += 1
+                    return true
+                }))
         XCTAssertFalse(request.confirmation.message?.contains("master") ?? true)
-        var master = proxy; master.filename = "SIMULATED.NEV"; master.handle = 99
+        var master = proxy
+        master.filename = "SIMULATED.NEV"
+        master.handle = 99
         // The actually displayed mutable catalog discovers a master after the request was captured.
         model.mediaClips.append(master)
         await request.perform()
-        XCTAssertEqual(cleanups, 0); XCTAssertEqual(deletes, 0)
+        XCTAssertEqual(cleanups, 0)
+        XCTAssertEqual(deletes, 0)
         XCTAssertEqual(try store.catalogBytes(cameraID: proxy.cameraID), before)
-        request.authority.retire(); await model.mediaLibrary?.dispose()
+        request.authority.retire()
+        await model.mediaLibrary?.dispose()
     }
 
     func testPlaybackDeletionSourceRetirementDuringCleanupPerformsNoNativeDelete() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MediaClipStore(root: root); let model = NativeAppModel(mediaClipStore: store)
+        let store = MediaClipStore(root: root)
+        let model = NativeAppModel(mediaClipStore: store)
         model.mediaBrowserSource = .iPhone
-        var clip = sample(); clip.cameraID = MediaClipStore.localBucketID
-        store.upsertBatch([clip], cameraID: clip.cameraID); model.refreshMediaClips()
-        model.mediaBrowserSource = .camera; model.connection = .connected
+        var clip = sample()
+        clip.cameraID = MediaClipStore.localBucketID
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        model.refreshMediaClips()
+        model.mediaBrowserSource = .camera
+        model.connection = .connected
         let library = try XCTUnwrap(model.mediaLibrary)
         let before = try XCTUnwrap(store.catalogBytes(cameraID: clip.cameraID))
-        let entered = LibrarySignal(); let release = LibrarySignal(); var deletes = 0
-        let request = try XCTUnwrap(model.capturePlaybackMediaDeletion(clip, cleanup: {
-            entered.signal(); await release.wait(); return true
-        }, deleteLocation: { _ in deletes += 1; return true }))
-        let task = Task { await request.perform() }; await entered.wait()
+        let entered = LibrarySignal()
+        let release = LibrarySignal()
+        var deletes = 0
+        let request = try XCTUnwrap(
+            model.capturePlaybackMediaDeletion(
+                clip,
+                cleanup: {
+                    entered.signal()
+                    await release.wait()
+                    return true
+                },
+                deleteLocation: { _ in
+                    deletes += 1
+                    return true
+                }))
+        let task = Task { await request.perform() }
+        await entered.wait()
         XCTAssertEqual(deletes, 0)
-        library.close(); release.signal(); await task.value
-        XCTAssertEqual(deletes, 0); XCTAssertEqual(try store.catalogBytes(cameraID: clip.cameraID), before)
-        request.authority.retire(); await library.dispose()
+        library.close()
+        release.signal()
+        await task.value
+        XCTAssertEqual(deletes, 0)
+        XCTAssertEqual(try store.catalogBytes(cameraID: clip.cameraID), before)
+        request.authority.retire()
+        await library.dispose()
     }
 
     func testPlaybackEligibilityPreservesNativeKindAndCanonicalRawMasterIdentity() throws {

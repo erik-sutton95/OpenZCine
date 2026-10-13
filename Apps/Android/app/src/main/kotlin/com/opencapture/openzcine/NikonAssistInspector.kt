@@ -1,40 +1,31 @@
 package com.opencapture.openzcine
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.MonitorAssistTool
-import com.opencapture.monitorui.MonitorLabelWheel
-import com.opencapture.monitorui.settings.MonitorSettingsChoices
-import com.opencapture.monitorui.settings.MonitorSettingsInlineRow
-import com.opencapture.monitorui.settings.MonitorSettingsSwitchInlineRow
+import com.opencapture.opencine.cameracontrols.LUTPicker
+import com.opencapture.opencine.cameracontrols.LutPickerAction
+import com.opencapture.opencine.cameracontrols.LutPickerEmpty
+import com.opencapture.opencine.cameracontrols.LutPickerEntry
+import com.opencapture.opencine.cameracontrols.LutPickerFilter
+import com.opencapture.opencine.cameracontrols.LutPickerLayout
+import com.opencapture.opencine.cameracontrols.LutPickerLibrary
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.StoredLutCategory
+import com.opencapture.openzcine.lut.StoredLutEntry
 import com.opencapture.openzcine.lut.reconciledLutSelectionAfterDeletion
 import kotlinx.coroutines.launch
-import com.opencapture.opencine.appkit.LocalOperatorHaptics
-import com.opencapture.opencine.cameracontrols.chromeClickable
 
 /** A palette chip: a shared assist, or PLAY (photography's instant review, this camera's own). */
 internal sealed interface NikonAssistChip {
@@ -78,72 +69,113 @@ internal val nikonUsageSeed =
     )
 
 @Composable
-private fun OptionLabel(title: String) {
-    Text(title, style = chromeStyle(11.5f, FontWeight.SemiBold), color = LiveDesign.text, maxLines = 1)
-}
-
-@Composable
 private fun OptionCopy(message: String) {
     Text(message, style = chromeStyle(11f, FontWeight.Normal), color = LiveDesign.muted, maxLines = 3,
         overflow = TextOverflow.Ellipsis)
 }
 
-/** iOS `LUTPickerContent` category tabs. */
-private enum class LutPopupCategory(val label: String) {
-    BUILT_IN("Built-in"),
-    RED("RED"),
-    CUSTOM("Custom"),
-}
-
-/** iOS `RedOutputFilter` output-space filter over the RED list (raw file tokens). */
-private enum class RedOutputSpaceFilter(val label: String, val needle: String?) {
+/** iOS `NikonLUTPicker.RedOutputFilter`: one output space of the RED list (raw file tokens). */
+internal enum class RedOutputSpaceFilter(val label: String, val needle: String?) {
     ALL("All", null),
     REC709("Rec.709", "REC709"),
     REC2020("Rec.2020", "REC2020"),
 }
 
-/** One row the LUT drum can land on. */
-private data class LutWheelEntry(
-    val label: String,
-    val selected: Boolean,
-    val apply: () -> Unit,
-    val stored: com.opencapture.openzcine.lut.StoredLutEntry? = null,
-)
+/**
+ * Built-in, RED and Custom as the shared picker's libraries (iOS `NikonLUTPicker.libraries`):
+ * RED is a library value with its output-space filter, starred default and download action;
+ * imported cubes use the shared file list.
+ */
+internal fun nikonLutLibraries(
+    applied: FeedLutSelection,
+    stored: List<StoredLutEntry>,
+    redFilter: RedOutputSpaceFilter,
+    onRedFilter: (RedOutputSpaceFilter) -> Unit,
+    onBuiltIn: (FeedLut) -> Unit,
+    onStored: (StoredLutEntry) -> Unit,
+    onDelete: ((StoredLutEntry) -> Unit)?,
+    onImport: (() -> Unit)?,
+    onOpenRedDownload: () -> Unit,
+): List<LutPickerLibrary> {
+    val builtIn = (applied as? FeedLutSelection.BuiltIn)?.value
+    val appliedStored = (applied as? FeedLutSelection.Stored)?.value
+    fun builtInEntry(lut: FeedLut) = LutPickerEntry(lut.id, lut.label)
+    fun storedIn(category: StoredLutCategory) = stored.filter { it.selection.category == category }
+    fun appliedIn(category: StoredLutCategory) = appliedStored?.takeIf { it.category == category }?.fileName
+    val allRed = storedIn(StoredLutCategory.RED)
+    val red = filteredRedLutEntries(allRed, redFilter)
+    val defaultRed = defaultRedLutEntry(allRed)
+    fun redEntry(entry: StoredLutEntry) =
+        LutPickerEntry(entry.selection.fileName, shortRedPresetName(entry.selection.fileName))
+    val custom = storedIn(StoredLutCategory.CUSTOM)
+    fun customEntry(entry: StoredLutEntry) = LutPickerEntry(entry.selection.fileName, entry.displayName)
+    fun pick(entries: List<StoredLutEntry>): (LutPickerEntry) -> Unit =
+        { look -> entries.firstOrNull { it.selection.fileName == look.id }?.let(onStored) }
+    fun delete(entries: List<StoredLutEntry>): ((LutPickerEntry) -> Unit)? =
+        onDelete?.let { delete -> { look -> entries.firstOrNull { it.selection.fileName == look.id }?.let(delete) } }
+    return listOf(
+        LutPickerLibrary(
+            title = "Built-in", entries = FeedLut.entries.map(::builtInEntry),
+            isCurrent = builtIn != null, selectedId = builtIn?.id,
+            onSelect = { look -> FeedLut.entries.firstOrNull { it.id == look.id }?.let(onBuiltIn) },
+            representative = builtInEntry(FeedLut.LOG3G10_709),
+            // Community-contributed looks are credited here, not in the narrow drum row.
+            caption = builtIn?.credit.orEmpty(),
+        ),
+        LutPickerLibrary(
+            title = "RED", entries = red.map(::redEntry),
+            isCurrent = appliedIn(StoredLutCategory.RED) != null,
+            selectedId = appliedIn(StoredLutCategory.RED)?.takeIf { id -> red.any { it.selection.fileName == id } },
+            onSelect = pick(allRed),
+            representative = defaultRed?.let(::redEntry),
+            filter = if (allRed.isEmpty()) null else LutPickerFilter(
+                RedOutputSpaceFilter.entries.map { it.label }, redFilter.label,
+            ) { label -> RedOutputSpaceFilter.entries.firstOrNull { it.label == label }?.let(onRedFilter) },
+            markedIds = setOfNotNull(defaultRed?.selection?.fileName),
+            empty = LutPickerEmpty(
+                "RED IPP2 LUTs", "Download RED's official looks. You'll accept RED's terms.",
+                // Always tappable: the download screen explains a blocked route.
+                LutPickerAction("Download from RED", onOpenRedDownload),
+            ),
+            onDelete = delete(allRed),
+        ),
+        LutPickerLibrary(
+            title = "Custom", entries = custom.map(::customEntry), layout = LutPickerLayout.FILES,
+            isCurrent = appliedIn(StoredLutCategory.CUSTOM) != null,
+            selectedId = appliedIn(StoredLutCategory.CUSTOM),
+            onSelect = pick(custom),
+            representative = custom.firstOrNull()?.let(::customEntry),
+            empty = LutPickerEmpty(hint = "Import a .cube file to add your own look."),
+            onDelete = delete(custom), onImport = onImport,
+        ),
+    )
+}
 
+/** The RED looks in one output space, the recommended default first so the drum lands on it. */
+internal fun filteredRedLutEntries(red: List<StoredLutEntry>, filter: RedOutputSpaceFilter): List<StoredLutEntry> {
+    val visible = filter.needle?.let { needle -> red.filter { it.selection.fileName.uppercase().contains(needle) } } ?: red
+    val default = defaultRedLutEntry(red)?.takeIf { it in visible } ?: return visible
+    return listOf(default) + (visible - default)
+}
+
+/**
+ * The shared LUT picker on Nikon's looks (iOS `NikonLUTPicker`). The inspector footer pins the
+ * comparison; a stored look applies once its cube is prepared, and a failure reads under it.
+ */
 @Composable
 internal fun NikonLutOptions(
     assists: NikonAssists,
     lutLibrary: AndroidLutLibrary?,
     onOpenRedDownload: () -> Unit,
     onRequestLutImport: (() -> Unit)?,
-    includesComparison: Boolean = true,
 ) {
-    val shared = assists.shared
     val storedEntries = lutLibrary?.entries?.collectAsState()?.value.orEmpty()
     val scope = rememberCoroutineScope()
     var feedback by remember { mutableStateOf<String?>(null) }
-    // iOS opens on the tab of the currently applied LUT.
-    var category by
-        remember {
-            mutableStateOf(
-                when (val applied = assists.lut) {
-                    is FeedLutSelection.Stored ->
-                        if (applied.value.category == StoredLutCategory.RED) {
-                            LutPopupCategory.RED
-                        } else {
-                            LutPopupCategory.CUSTOM
-                        }
-                    else -> LutPopupCategory.BUILT_IN
-                },
-            )
-        }
     var redFilter by remember { mutableStateOf(RedOutputSpaceFilter.ALL) }
-    var pendingDelete by
-        remember { mutableStateOf<com.opencapture.openzcine.lut.StoredLutEntry?>(null) }
-
-    val applyStored: (com.opencapture.openzcine.lut.StoredLutEntry) -> Unit = { entry ->
+    val applyStored: (StoredLutEntry) -> Unit = { entry ->
         val library = lutLibrary
-        if (library != null) {
+        if (library != null && assists.lut != FeedLutSelection.Stored(entry.selection)) {
             scope.launch {
                 if (library.prepare(entry.selection)) {
                     assists.selectLut(FeedLutSelection.Stored(entry.selection))
@@ -156,182 +188,15 @@ internal fun NikonLutOptions(
             }
         }
     }
-    MonitorSettingsChoices(LutPopupCategory.entries, category, accentSelection = true,
-        title = LutPopupCategory::label) { next ->
-        category = next
-        pendingDelete = null
-        // iOS `applyRepresentativeLUT`: switching tabs immediately applies that
-        // tab's current (or first) look and switches the LUT tool on.
-        when (next) {
-            LutPopupCategory.BUILT_IN -> {
-                val current =
-                    (assists.lut as? FeedLutSelection.BuiltIn)?.value
-                        ?: FeedLut.entries.first()
-                assists.selectLut(FeedLutSelection.BuiltIn(current))
-            }
-            LutPopupCategory.RED, LutPopupCategory.CUSTOM -> {
-                val storedCategory =
-                    if (next == LutPopupCategory.RED) {
-                        StoredLutCategory.RED
-                    } else {
-                        StoredLutCategory.CUSTOM
-                    }
-                val current =
-                    (assists.lut as? FeedLutSelection.Stored)
-                        ?.value
-                        ?.takeIf { it.category == storedCategory }
-                val target =
-                    current?.let { active ->
-                        storedEntries.firstOrNull { it.selection == active }
-                    } ?: storedEntries.firstOrNull { it.selection.category == storedCategory }
-                target?.let(applyStored)
-            }
-        }
-    }
-
-    when (category) {
-        LutPopupCategory.BUILT_IN -> {
-            LutDrumWheel(
-                entries =
-                    FeedLut.entries.map { lut ->
-                        LutWheelEntry(
-                            label = lut.label,
-                            selected =
-                                assists.lut ==
-                                    FeedLutSelection.BuiltIn(lut),
-                            apply = {
-                                assists.selectLut(FeedLutSelection.BuiltIn(lut))
-                                feedback = null
-                            },
-                        )
-                    },
-                onDeleteRequest = null,
-            )
-            // iOS `LUTPickerContent`: community-contributed looks are credited under the drum, not
-            // inside the label: the drum row is one narrow monospaced line and a name would push
-            // the look's own name out of it. The drum's height is fixed, so nothing shifts when the
-            // credit appears and disappears with the selection.
-            (assists.lut as? FeedLutSelection.BuiltIn)
-                ?.value
-                ?.credit
-                ?.let { credit ->
-                    Text(
-                        credit,
-                        style = chromeStyle(10.5f, FontWeight.Medium),
-                        color = LiveDesign.muted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
-                }
-        }
-        LutPopupCategory.RED -> {
-            // iOS filters on raw file name tokens (REC709 / REC2020), not display text.
-            val redEntries =
-                storedEntries
-                    .filter { entry ->
-                        entry.selection.category == StoredLutCategory.RED &&
-                            (redFilter.needle == null ||
-                                entry.selection.fileName.uppercase().contains(redFilter.needle!!))
-                    }
-                    .let { list ->
-                        // Float the recommended default to the top (iOS LUTLibraryIndex.defaultRedLUT).
-                        val default = defaultRedLutEntry(list)
-                        if (default == null) list
-                        else listOf(default) + list.filterNot { it.selection == default.selection }
-                    }
-            if (redEntries.isEmpty() && redFilter == RedOutputSpaceFilter.ALL) {
-                // iOS empty RED tab: title + terms subtitle + Download CTA (always tappable).
-                OptionLabel("RED IPP2 LUTs")
-                OptionCopy("Download RED's official looks. You'll accept RED's terms.")
-                CapsuleActionButton("Download from RED", enabled = true) {
-                    onOpenRedDownload()
-                }
-            } else {
-                MonitorSettingsChoices(RedOutputSpaceFilter.entries, redFilter,
-                    title = RedOutputSpaceFilter::label) { redFilter = it }
-                LutDrumWheel(
-                    entries =
-                        redEntries.map { entry ->
-                            val isDefault =
-                                defaultRedLutEntry(redEntries)?.selection == entry.selection
-                            LutWheelEntry(
-                                label =
-                                    shortRedPresetName(entry.selection.fileName).let { short ->
-                                        if (isDefault) "★ $short" else short
-                                    },
-                                selected =
-                                    assists.lut ==
-                                        FeedLutSelection.Stored(entry.selection),
-                                apply = { applyStored(entry) },
-                                stored = entry,
-                            )
-                        },
-                    onDeleteRequest = { pendingDelete = it },
-                )
-            }
-        }
-        LutPopupCategory.CUSTOM -> {
-            val customEntries =
-                storedEntries.filter { it.selection.category == StoredLutCategory.CUSTOM }
-            if (customEntries.isEmpty()) {
-                OptionLabel("No custom LUTs yet")
-                OptionCopy("Import a .cube file to add your own look.")
-            } else {
-                LutDrumWheel(
-                    entries =
-                        customEntries.map { entry ->
-                            LutWheelEntry(
-                                label = entry.displayName,
-                                selected =
-                                    assists.lut ==
-                                        FeedLutSelection.Stored(entry.selection),
-                                apply = { applyStored(entry) },
-                                stored = entry,
-                            )
-                        },
-                    onDeleteRequest = { pendingDelete = it },
-                )
-            }
-            LutImportButton(onRequestLutImport)
-        }
-    }
-    // 50/50 Log-vs-LUT comparison. The orientation row only appears while it is on; the stored
-    // orientation itself survives either way, so switching back on returns to the operator's
-    // choice rather than the default.
-    // Comparison is meaningless with the grade off, so switching it on arms the LUT.
-    if (includesComparison) MonitorSettingsSwitchInlineRow("50/50 Comparison", isOn = shared.splitComparison) {
-        shared.setSplitComparison(!shared.splitComparison)
-    }
-    if (includesComparison && shared.splitComparison) {
-        MonitorSettingsInlineRow("Split",
-            help = "Log on one half, the selected LUT on the other, divided at the centre of the " +
-                "image. Monitor only: nothing is written to the camera or the recording.") {
-            MonitorSettingsChoices(listOf(true, false), shared.splitVertical,
-                title = { if (it) "Left / Right" else "Top / Bottom" }) {
-                shared.setSplitComparison(true, it)
-            }
-        }
-    }
-    pendingDelete?.let { entry ->
-        LutDeleteConfirmRow(
-            entry = entry,
-            onCancel = { pendingDelete = null },
-        ) {
-            val library = lutLibrary ?: return@LutDeleteConfirmRow
+    val deleteStored: ((StoredLutEntry) -> Unit)? = lutLibrary?.let { library ->
+        { entry ->
             scope.launch {
                 if (library.delete(entry.selection)) {
-                    if (
-                        assists.lut ==
-                        FeedLutSelection.Stored(entry.selection)
-                    ) {
+                    if (assists.lut == FeedLutSelection.Stored(entry.selection)) {
                         // iOS: keep LUT tool on; same-category replacement else Log3G10→709.
                         assists.selectLut(
                             reconciledLutSelectionAfterDeletion(
-                                assists.lut,
-                                entry.selection,
-                                library.firstPreparedReplacement(entry.selection),
+                                assists.lut, entry.selection, library.firstPreparedReplacement(entry.selection),
                             ),
                         )
                     }
@@ -339,17 +204,42 @@ internal fun NikonLutOptions(
                 } else {
                     feedback = "This LUT could not be deleted."
                 }
-                pendingDelete = null
             }
         }
     }
-    feedback?.let { message -> OptionCopy(message) }
+    val libraries =
+        nikonLutLibraries(
+            applied = assists.lut, stored = storedEntries, redFilter = redFilter,
+            onRedFilter = { next ->
+                redFilter = next
+                // iOS: the applied RED look stays on the visible drum; one outside the new filter
+                // snaps to the filter's first look.
+                val red = storedEntries.filter { it.selection.category == StoredLutCategory.RED }
+                val visible = filteredRedLutEntries(red, next)
+                val applied = (assists.lut as? FeedLutSelection.Stored)?.value
+                if (applied?.category == StoredLutCategory.RED && visible.none { it.selection == applied }) {
+                    visible.firstOrNull()?.let(applyStored)
+                }
+            },
+            onBuiltIn = { lut ->
+                if (assists.lut != FeedLutSelection.BuiltIn(lut)) {
+                    assists.selectLut(FeedLutSelection.BuiltIn(lut))
+                    feedback = null
+                }
+            },
+            onStored = applyStored,
+            onDelete = deleteStored,
+            onImport = onRequestLutImport,
+            onOpenRedDownload = onOpenRedDownload,
+        )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LUTPicker(libraries, embedded = true)
+        feedback?.let { message -> OptionCopy(message) }
+    }
 }
 
 /** iOS `LUTLibraryIndex.defaultRedLUT` preference order (file-name heuristics). */
-private fun defaultRedLutEntry(
-    entries: List<com.opencapture.openzcine.lut.StoredLutEntry>,
-): com.opencapture.openzcine.lut.StoredLutEntry? {
+private fun defaultRedLutEntry(entries: List<StoredLutEntry>): StoredLutEntry? {
     if (entries.isEmpty()) return null
     fun score(fileName: String): Int {
         val upper = fileName.uppercase()
@@ -374,101 +264,4 @@ private fun shortRedPresetName(fileName: String): String {
             .replace(Regex("\\s+"), " ")
             .trim()
     return name.ifBlank { fileName }
-}
-
-/** iOS "Import .cube" capsule: opens the document picker straight from the popup. */
-@Composable
-private fun LutImportButton(
-    onRequestImport: (() -> Unit)?,
-) {
-    // The document picker pauses the activity and this transient popup dismisses with it, so a
-    // result launcher remembered HERE is disposed exactly when its result arrives, which
-    // silently dropped every picked cube (#295). The monitor owns the launcher and the import;
-    // this button only asks for the picker.
-    CapsuleActionButton("Import .cube", enabled = onRequestImport != null) {
-        onRequestImport?.invoke()
-    }
-}
-
-/** iOS delete confirmation, inlined as a destructive row instead of a system dialog. */
-@Composable
-private fun LutDeleteConfirmRow(
-    entry: com.opencapture.openzcine.lut.StoredLutEntry,
-    onCancel: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 38.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            "Delete ${entry.displayName}?",
-            style = chromeStyle(11.5f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        CapsuleActionButton("Cancel", enabled = true, onClick = onCancel)
-        CapsuleActionButton(
-            "Delete LUT",
-            enabled = true,
-            destructive = true,
-            onClick = onDelete,
-        )
-    }
-}
-
-@Composable
-private fun CapsuleActionButton(
-    label: String,
-    enabled: Boolean,
-    destructive: Boolean = false,
-    onClick: () -> Unit,
-) {
-    val tint = if (destructive) LiveDesign.rec else LiveDesign.accent
-    Box(
-        Modifier.height(32.dp)
-            .background(LiveDesign.background.copy(alpha = 0.38f), ChromeShape)
-            .border(1.dp, if (enabled) tint.copy(alpha = 0.6f) else LiveDesign.hairline, ChromeShape)
-            .alpha(if (enabled) 1f else 0.45f)
-            .chromeClickable(enabled, onClick = onClick)
-            .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = chromeStyle(11.5f, FontWeight.SemiBold),
-            color = if (enabled) tint else LiveDesign.muted,
-            maxLines = 1,
-        )
-    }
-}
-
-/**
- * The looks on the shared label wheel (iOS `LUTDrumWheel`): the settled row applies once the wheel
- * has seated on the current look (or the first, as iOS falls back), a tap applies its row, and a
- * long press asks to delete a stored look.
- */
-@Composable
-private fun LutDrumWheel(
-    entries: List<LutWheelEntry>,
-    onDeleteRequest: ((com.opencapture.openzcine.lut.StoredLutEntry) -> Unit)?,
-) {
-    if (entries.isEmpty()) return
-    val haptics = LocalOperatorHaptics.current
-    fun key(entry: LutWheelEntry) = entry.stored?.selection?.fileName ?: entry.label
-    MonitorLabelWheel(
-        entries = entries,
-        selection = key(entries.firstOrNull(LutWheelEntry::selected) ?: entries.first()),
-        matches = { entry, selection -> key(entry) == selection },
-        key = ::key,
-        label = LutWheelEntry::label,
-        onSelect = { if (!it.selected) it.apply() },
-        rowHeight = 52.dp,
-        wheelHeight = 146.dp,
-        onClickFeedback = { haptics.selection() },
-        onLongPress = onDeleteRequest?.let { delete -> { entry -> entry.stored?.let(delete) } },
-    )
 }

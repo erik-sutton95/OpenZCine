@@ -2,6 +2,8 @@ import CoreImage
 import OpenZCineCore
 import UIKit
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 @testable import Runner
 
 final class FrozenNikonUIImageGraphProcessor {
@@ -16,7 +18,7 @@ final class FrozenNikonUIImageGraphProcessor {
         // 8-bit, not half-float. The half-float working space was chosen to stop LUT
         // banding when the frame was read back and handed to a UIImageView; presenting
         // straight to an 8-bit panel removes that reason and halves the bandwidth of every
-        // Core Image intermediate — which is the dominant per-frame cost. `MediaLUTExport`
+        // Core Image intermediate - which is the dominant per-frame cost. `MediaLUTExport`
         // deliberately stays at RGBAh: it writes files, where banding matters and a
         // millisecond does not.
         .workingFormat: CIFormat.BGRA8,
@@ -24,19 +26,19 @@ final class FrozenNikonUIImageGraphProcessor {
         .cacheIntermediates: false,
     ])
     private let outputColorSpace = displaySpace
-    private let fileStore: LUTFileStore
+    private let fileStore: CustomLUTStore
     // One CIColorCube filter per look, kept for the renderer's life so switching back to a look is
     // instant (the cube tables themselves are memoized process-wide in `LUTCubeCache`).
     private var cubeFilters: [String: CIFilter] = [:]
     /// Memoizes the last GPU bake so unrelated SwiftUI invalidation doesn't repeat `createCGImage`.
     /// Holds a strong ref and compares by identity (`===`): a bare `ObjectIdentifier` could be
-    /// reused by a later allocation and serve a stale bake — a frozen frame reads as a shoot
+    /// reused by a later allocation and serve a stale bake - a frozen frame reads as a shoot
     /// failure, so one retained `UIImage` buys a collision-proof memo.
     private var lastRenderInput: UIImage?
     private var lastRenderEffects: LiveImageEffects?
     private var lastRenderedImage: UIImage?
 
-    init(fileStore: LUTFileStore) {
+    init(fileStore: CustomLUTStore) {
         self.fileStore = fileStore
     }
 
@@ -77,7 +79,7 @@ final class FrozenNikonUIImageGraphProcessor {
     /// Builds the output `CIImage` with every active effect applied, or `nil` when nothing is on or
     /// the frame can't be read. Shared by the `UIImageView` path (→ `createCGImage`, a GPU→CPU
     /// readback) and the Metal path (→ rendered straight to a `CAMetalLayer` drawable, no readback).
-    /// Pure graph-building — uses no `CIContext`, so a Metal renderer can drive it with its own.
+    /// Pure graph-building - uses no `CIContext`, so a Metal renderer can drive it with its own.
     func outputCIImage(for image: UIImage, effects: LiveImageEffects) -> CIImage? {
         // Camera JPEGs and demo stills carry an sRGB tag, but their RGB components are the encoded
         // signal values the monitoring cubes measure. Suppress Core Image's automatic input match
@@ -90,14 +92,14 @@ final class FrozenNikonUIImageGraphProcessor {
 
         // The block filters run on the DISPLAY path only. `input` stays the pristine decode because
         // three things below measure it rather than show it: zebras would under-report clipping if
-        // handed smoothed code values, false colour would mis-assign exposure zones, and peaking —
-        // which measures blur RADIUS since 15d1186 — would end up measuring its own smoothing.
+        // handed smoothed code values, false colour would mis-assign exposure zones, and peaking -
+        // which measures blur RADIUS since 15d1186 - would end up measuring its own smoothing.
         // Splitting here is what lets the operator see a deblocked image while every assist keeps
         // reading what the sensor actually sent, so none of them need recalibrating.
         //
         // Smoothing goes BEFORE the look on purpose: blocking is uniform in the encoded domain, and
         // a shadow-lifting tone curve amplifies it non-uniformly. Filter it where it is still flat.
-        // Dither goes AFTER, for the opposite reason — see `applyDither`.
+        // Dither goes AFTER, for the opposite reason - see `applyDither`.
         var display = input
         if let smoothing = effects.blockSmoothing {
             display = FrozenNikonRuntimeEffects.applyFlatSmoothing(
@@ -145,7 +147,7 @@ final class FrozenNikonUIImageGraphProcessor {
                 over: display, extent: extent, orientation: effects.splitComparison)
         }
 
-        // After the look — the noise has to sit in the same space as the artifact it masks, and the
+        // After the look - the noise has to sit in the same space as the artifact it masks, and the
         // tone curve has already stretched both. Before the overlays, so peaking and zebra paint
         // stays clean rather than picking up grain.
         if let dither = effects.blockDither {

@@ -4,8 +4,9 @@ import MonitorPresentation
 import MonitorUI
 import Network
 import Observation
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineAppKitApple
+import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
@@ -13,6 +14,10 @@ import SwiftUI
 import Testing
 import UIKit
 import XCTest
+
+import class OpenCineCameraVocabulary.CustomLUTStore
+import enum OpenCineCameraVocabulary.CustomLUTStoreError
+import class OpenCineCameraVocabulary.LUTPreferences
 
 @testable import OpenZCineCore
 @testable import Runner
@@ -470,6 +475,13 @@ final class RunnerTests: XCTestCase {
             return try XCTUnwrap(renderedElement(identifier))
         }
         func openRenderedLUTOptions() async throws {
+            if model.assist.configureTool != nil {
+                // A modal owns input; navigate through its actual tool rail instead of covered chrome.
+                let tab = try await mountedElement("monitor.assist.options.LUT")
+                XCTAssertTrue(tab.accessibilityActivate())
+                XCTAssertEqual(model.assist.configureTool, MonitorAssistTool.lut.selection)
+                return
+            }
             if renderedElement("monitor.assists.collapse") == nil {
                 let expand = try await mountedElement("monitor.assists.expand")
                 XCTAssertTrue(expand.accessibilityActivate())
@@ -501,6 +513,7 @@ final class RunnerTests: XCTestCase {
                 "Actual composed LUT inspector did not publish a current native preview: "
                     + "element=\(element != nil), accessibility=\(String(describing: element?.accessibilityValue)), "
                     + "frame=\(model.nativeInspectorFrame != nil), meaning=\(meaning != nil), image=\(hasImage), "
+                    + "sharedRaw=\(model.nativeInspectorImageSource.snapshot != nil), leaseActive=\(model.liveFrameSource?.isActive == true), "
                     + "tool=\(String(describing: model.assist.configureTool)), "
                     + "scene=\(model.assist.inspectorSceneActive), covered=\(model.assist.liveCovered), "
                     + "playback=\(model.assist.gradesClip), locked=\(model.interfaceLocked), "
@@ -895,7 +908,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
-    func testLUTFileStoreImportRejectsUnusableCubeBeforeCopy() throws {
+    func testLUTLibraryImportRejectsUnusableCubeBeforeCopy() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -904,13 +917,13 @@ final class RunnerTests: XCTestCase {
             .appendingPathComponent("\(UUID().uuidString)-bad.cube")
         try Data("LUT_3D_SIZE 66\n0 0 0\n".utf8).write(to: source)
         defer { try? FileManager.default.removeItem(at: source) }
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore.nikon(root: root)
 
-        XCTAssertThrowsError(try store.importFile(from: source, into: .custom))
+        XCTAssertThrowsError(try store.stored(.custom).importFile(from: source))
         XCTAssertTrue(store.list(.custom).isEmpty)
     }
 
-    func testLUTFileStoreImportAcceptsValidCube() throws {
+    func testLUTLibraryImportAcceptsValidCube() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -932,9 +945,9 @@ final class RunnerTests: XCTestCase {
             """.utf8
         ).write(to: source)
         defer { try? FileManager.default.removeItem(at: source) }
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore.nikon(root: root)
 
-        let stored = try store.importFile(from: source, into: .custom)
+        let stored = try store.stored(.custom).importFile(from: source)
         let cube = try XCTUnwrap(store.cube(category: .custom, fileName: stored.fileName))
 
         XCTAssertEqual(stored.fileName, source.lastPathComponent)
@@ -964,7 +977,7 @@ final class RunnerTests: XCTestCase {
             """.utf8
         ).write(to: source)
         defer { try? FileManager.default.removeItem(at: source) }
-        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        let model = NativeAppModel(lutFileStore: CustomLUTStore.nikon(root: root))
 
         try model.importCustomLUT(from: source)
 
@@ -975,7 +988,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertNotNil(model.currentLUTCube())
     }
 
-    func testLUTFileStoreDeletesStoredLUTAndRejectsBuiltInDeletion() throws {
+    func testLUTLibraryDeletesStoredLUTAndRejectsBuiltInDeletion() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let custom = root.appendingPathComponent("custom", isDirectory: true)
@@ -984,29 +997,33 @@ final class RunnerTests: XCTestCase {
         let lut = StoredCustomLUT(fileName: "Operator Look.cube")
         let lutURL = custom.appendingPathComponent(lut.fileName)
         try Data("stored".utf8).write(to: lutURL)
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore.nikon(root: root)
 
-        try store.remove(lut, from: .custom)
+        try store.stored(.custom).remove(lut)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: lutURL.path))
-        XCTAssertThrowsError(try store.remove(lut, from: .builtIn)) { error in
+        XCTAssertThrowsError(try store.stored(.builtIn).remove(lut)) { error in
             XCTAssertEqual(error as? LUTDeletionError, .builtInProtected)
         }
     }
 
-    func testLUTFileStoreRejectsTraversalDeletionAndPreservesOutsideFile() throws {
+    func testLUTLibraryRejectsTraversalDeletionAndPreservesOutsideFile() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let outsideURL = root.appendingPathComponent("outside.cube")
         try Data("keep".utf8).write(to: outsideURL)
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore.nikon(root: root)
 
-        XCTAssertThrowsError(
-            try store.remove(StoredCustomLUT(fileName: "../outside.cube"), from: .custom)
-        ) { error in
-            XCTAssertEqual(error as? LUTDeletionError, .invalidFileName)
+        for name in ["../outside.cube", ".."] {
+            XCTAssertThrowsError(try store.stored(.custom).remove(StoredCustomLUT(fileName: name)))
+            {
+                error in
+                guard case .invalidFileName = error as? CustomLUTStoreError else {
+                    return XCTFail("\(name): \(error)")
+                }
+            }
         }
         XCTAssertEqual(try Data(contentsOf: outsideURL), Data("keep".utf8))
     }
@@ -1039,7 +1056,7 @@ final class RunnerTests: XCTestCase {
         for fileName in ["A.cube", "B.cube"] {
             try Data(fileName.utf8).write(to: custom.appendingPathComponent(fileName))
         }
-        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        let model = NativeAppModel(lutFileStore: CustomLUTStore.nikon(root: root))
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
@@ -1068,7 +1085,7 @@ final class RunnerTests: XCTestCase {
         for fileName in ["A.cube", "B.cube"] {
             try Data(fileName.utf8).write(to: custom.appendingPathComponent(fileName))
         }
-        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        let model = NativeAppModel(lutFileStore: CustomLUTStore.nikon(root: root))
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
@@ -1316,7 +1333,7 @@ final class RunnerTests: XCTestCase {
     func testDeletionConfirmMessageIsContextAware() {
         let model = NativeAppModel()
 
-        // A video names the file and never shows stills (RAW+JPEG) wording — the exact
+        // A video names the file and never shows stills (RAW+JPEG) wording - the exact
         // regression Erik reported.
         let video = MediaClip(
             cameraID: "cam", filename: "C0001.MOV", handle: 10, storageID: 0x0001_0001,
@@ -1335,7 +1352,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertTrue(photoMessage.contains("photo"))
         XCTAssertFalse(photoMessage.contains("other card"))
 
-        // A backup-mode still lives on both cards (one row, two locations) — the confirm names
+        // A backup-mode still lives on both cards (one row, two locations) - the confirm names
         // the cross-card removal.
         var backup = MediaClip(
             cameraID: "cam", filename: "DSC_0002.JPG", handle: 12, storageID: 0x0001_0001,
@@ -1358,7 +1375,7 @@ final class RunnerTests: XCTestCase {
             ).setFill()
             context.cgContext.fill(CGRect(origin: .zero, size: CGSize(width: 8, height: 4)))
         }
-        let renderer = LiveFrameRenderer(fileStore: LUTFileStore())
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore.nikon)
 
         var lutEffects = LiveImageEffects()
         lutEffects.lut = .builtIn(.log3G10Rec709)
@@ -1510,7 +1527,7 @@ final class RunnerTests: XCTestCase {
         // Path A (live view): the decoded frame's own codes.
         let liveSamples = try tap(cgImage)
 
-        // Path B — playback: through the composition render context (working sRGB) with the
+        // Path B - playback: through the composition render context (working sRGB) with the
         // BT.709 output space, exactly like the player's scope tap.
         let ciImage = CIImage(cgImage: cgImage)
         let rendered = try XCTUnwrap(
@@ -1522,7 +1539,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(
             liveSamples.histogramLuma.reduce(0, +), playbackSamples.histogramLuma.reduce(0, +),
             "both taps must sample the same number of pixels")
-        // Mean code value per channel must agree to well under one 8-bit code — the round trip
+        // Mean code value per channel must agree to well under one 8-bit code - the round trip
         // through the working space is only float quantization, never a transfer-curve shift.
         func meanCode(_ histogram: [Int]) -> Double {
             let total = histogram.reduce(0, +)
@@ -1600,7 +1617,7 @@ final class RunnerTests: XCTestCase {
 
     @MainActor
     func testDemoRendererMapsBothCurvesToSharedStopZones() async {
-        let renderer = LiveFrameRenderer(fileStore: LUTFileStore())
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore.nikon)
         for curve in ExposureToneCurve.allCases {
             let encoded = curve.encode(linearLight: 0.18 * 2)
             let source = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 4)).image {
@@ -1753,7 +1770,7 @@ final class RunnerTests: XCTestCase {
         }
         var effects = LiveImageEffects()
         effects.lut = .builtIn(.log3G10Rec709)
-        let renderer = LiveFrameRenderer(fileStore: LUTFileStore())
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore.nikon)
 
         let rawJPEG = await WatchRelay.thumbnailJPEG(
             from: source, maxWidth: 416, quality: 0.32)
@@ -1775,7 +1792,7 @@ final class RunnerTests: XCTestCase {
 
 extension RunnerTests {
     /// The anchor is the operator's own level, not mid-scale. Arming the shutter used to set every
-    /// phone to half volume — remote or not — and drag whatever they were listening to with it.
+    /// phone to half volume - remote or not - and drag whatever they were listening to with it.
     /// All the mechanism needs is a step of room each way, which nearly every real setting has.
     func testTheVolumeAnchorLeavesAnOrdinaryLevelExactlyWhereItIs() {
         // Anything with a step of headroom either side is its own anchor: nothing to hear.
@@ -1812,7 +1829,7 @@ extension RunnerTests {
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
                 newVolume: 0.1875, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
-        // 0.5 is just a volume now — at this anchor it is a press, not a resting place.
+        // 0.5 is just a volume now - at this anchor it is a press, not a resting place.
         XCTAssertTrue(
             BluetoothShutterMonitor.isTrigger(
                 newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
@@ -1895,7 +1912,7 @@ extension RunnerTests {
             BluetoothShutterMonitor.shouldRun(
                 enabled: true, monitorPresented: false, liveViewFront: true,
                 applicationIsActive: true, audioSessionAvailable: true))
-        // Settings / Media / Tool Library covering the monitor must disarm the rocker — a press
+        // Settings / Media / Tool Library covering the monitor must disarm the rocker - a press
         // inside a menu may not start recording.
         XCTAssertFalse(
             BluetoothShutterMonitor.shouldRun(
@@ -1943,7 +1960,7 @@ extension RunnerTests {
     }
 
     /// A shot favorited during a shoot must count under Favorites whether the signal is the
-    /// local heart or a camera star — this is exactly the tab's filter predicate.
+    /// local heart or a camera star - this is exactly the tab's filter predicate.
     func testIsFavoritedCountsLocalHeartOrAnyCameraStar() {
         XCTAssertTrue(mediaClip("A.JPG", favorite: true).isFavorited)
         XCTAssertTrue(mediaClip("B.JPG", stars: 1).isFavorited)
@@ -1977,7 +1994,7 @@ extension RunnerTests {
         XCTAssertTrue(row.isFavorited)
     }
 
-    /// Instant playback rates a raw handle the index has never seen — the mirror must upsert.
+    /// Instant playback rates a raw handle the index has never seen - the mirror must upsert.
     func testMediaIndexUpdateUpsertsRowWhenClipNotYetIndexed() throws {
         let root = mediaRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2015,7 +2032,7 @@ extension RunnerTests {
         XCTAssertFalse(nef.isFavorited)
     }
 
-    /// Index rows written before `starRating` existed decode to nil (additive Codable) — an
+    /// Index rows written before `starRating` existed decode to nil (additive Codable) - an
     /// unrated legacy row is not silently promoted into Favorites.
     func testMediaClipDecodesLegacyIndexRowWithoutStarRatingAsNil() throws {
         let legacy = """
@@ -2093,7 +2110,7 @@ extension RunnerTests {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 
-    /// Camera-bucket cache is not source of truth — clearing it must drop `index.json`.
+    /// Camera-bucket cache is not source of truth - clearing it must drop `index.json`.
     func testClearingCameraCacheDropsTheIndex() {
         let root = mediaRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2120,17 +2137,17 @@ extension RunnerTests {
 
     // MARK: - Fused peaking kernel vs the reference filter chain
 
-    /// The single-pass CIKL detector must reproduce the filter chain exactly — every constant in
+    /// The single-pass CIKL detector must reproduce the filter chain exactly - every constant in
     /// `Peaking` was calibrated against the chain, so any divergence here is the kernel being
     /// WRONG, not different. The frame mixes the four cases that matter: hard sharp edges, fine
     /// texture, a defocused (pre-blurred) region, and per-pixel noise dense enough to exercise the
     /// gate's partial band. Checked at every sensitivity because the gains and biases change with
     /// it.
     /// The frame the peaking equivalence tests measure on: sharp strokes and fine texture on the
-    /// left half, the same content defocused on the right, and sensor-like noise over all of it —
+    /// left half, the same content defocused on the right, and sensor-like noise over all of it -
     /// so a detector that confuses grain for detail, or blur for focus, separates here.
     private func peakingProbeFrame(width w: Int, height h: Int) throws -> CIImage {
-        // Scale pinned to 1 — the renderer defaults to the screen scale, which would silently make
+        // Scale pinned to 1 - the renderer defaults to the screen scale, which would silently make
         // the frame 3x the stated size and every readback a partial crop of it.
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -2160,7 +2177,7 @@ extension RunnerTests {
                 }
             }
         let source = try XCTUnwrap(CIImage(image: frame, options: [.colorSpace: NSNull()]))
-        // Defocus the right half by pre-blurring — the ratio must read it as out of focus.
+        // Defocus the right half by pre-blurring - the ratio must read it as out of focus.
         let blurredHalf =
             source
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3.0])
@@ -2198,8 +2215,8 @@ extension RunnerTests {
             return out
         }
 
-        // `CIContext.render(toBitmap:)` writes buffer row 0 as the image's TOP row — probed, not
-        // assumed — which is the same top-down order `Peaking.overlay` reads, so the operator's
+        // `CIContext.render(toBitmap:)` writes buffer row 0 as the image's TOP row - probed, not
+        // assumed - which is the same top-down order `Peaking.overlay` reads, so the operator's
         // `+y` tap lands on the same neighbour in both. Getting this backwards would shift the
         // whole overlay by one row, which is exactly the sort of thing this test exists to catch.
         let base = rendered(frame)
@@ -2220,7 +2237,7 @@ extension RunnerTests {
                 grey: grey, width: w, height: h, sensitivity: sensitivity)
             let tint = settings.color.rgb
 
-            /// The hairline first, then the stroke over it — `composite`'s two blends.
+            /// The hairline first, then the stroke over it - `composite`'s two blends.
             func expected(_ baseValue: Float, _ darkValue: Double, _ tintValue: Double, _ i: Int)
                 -> Double
             {
@@ -2266,16 +2283,16 @@ extension RunnerTests {
         try XCTSkipIf(
             !ImageEffectsCompositor.fusedPeakingAvailable,
             "fused peaking disabled on this OS (kernel missing or the runtime self-check found it "
-                + "does not reproduce the chain) — chain fallback is in force, nothing to compare")
+                + "does not reproduce the chain) - chain fallback is in force, nothing to compare")
         let w = 320
         let h = 180
         let mixed = try peakingProbeFrame(width: w, height: h)
         let source = mixed
 
         // Float working space, deliberately NOT the shipping BGRA8: this test compares the MATH.
-        // Under BGRA8 the chain quantises every intermediate to 1/255 across its ~25 passes — the
+        // Under BGRA8 the chain quantises every intermediate to 1/255 across its ~25 passes - the
         // detector's own gates sit below one code value there, which is exactly the precision loss
-        // the 8-bit switch was measured to cost — while the fused kernel holds float through its
+        // the 8-bit switch was measured to cost - while the fused kernel holds float through its
         // single pass. Their shipping outputs therefore differ legitimately (the kernel is the
         // more faithful one); equality of the formulas is only decidable where both see exact
         // intermediates.
@@ -2333,7 +2350,7 @@ extension RunnerTests {
     // MARK: - Live-feed bake resolution
 
     /// A 16:9 feed on a 2.17:1 panel bakes the WHOLE source at source resolution: fit, never
-    /// crop (#115) — the present letterboxes, so no source pixel is ever discarded here.
+    /// crop (#115) - the present letterboxes, so no source pixel is ever discarded here.
     func testFeedBakeKeepsSourceResolutionAndItsOwnAspect() {
         let size = MonitorFrameBaker.bakeSize(
             source: CGSize(width: 1_024, height: 576),
@@ -2342,7 +2359,7 @@ extension RunnerTests {
         XCTAssertEqual(size, CGSize(width: 1_024, height: 576))
     }
 
-    /// A source wider than the drawable downscales uniformly — the SOURCE's aspect survives,
+    /// A source wider than the drawable downscales uniformly - the SOURCE's aspect survives,
     /// because the present letterboxes rather than the bake cropping (#115).
     func testFeedBakeDownscalesPreservingTheSourceAspect() {
         let size = MonitorFrameBaker.bakeSize(
@@ -2354,7 +2371,7 @@ extension RunnerTests {
     }
 
     /// Demo stills out-resolve the panel. Baking at their size would render pixels that can never
-    /// be shown — slower than the drawable-sized path this replaced — so it clamps.
+    /// be shown - slower than the drawable-sized path this replaced - so it clamps.
     func testFeedBakeClampsToDrawableWhenSourceOutResolvesThePanel() {
         let drawable = CGSize(width: 1_024, height: 768)
 
@@ -2380,7 +2397,7 @@ extension RunnerTests {
     /// The decoder against a REAL ZR live-view frame, not a synthetic baseline JPEG.
     ///
     /// The MockFeed test below passed while the camera's own frames silently fell back to ImageIO
-    /// on device — camera motion-JPEG differs from `UIImage.jpegData` output (subsampling,
+    /// on device - camera motion-JPEG differs from `UIImage.jpegData` output (subsampling,
     /// restart markers), and a fallback nobody sees means every feature living on the hardware
     /// path (the noise filter) quietly never runs. The peaking corpus carries genuine
     /// LiveViewObjects, so this is the frame class the device actually decodes.
@@ -2412,7 +2429,7 @@ extension RunnerTests {
     // MARK: - Hardware JPEG decode
 
     /// The camera's live view is motion JPEG, and `420v` is what a JPEG already is inside. This
-    /// decoder is the whole reason the super-resolution input needs no colour conversion — so it
+    /// decoder is the whole reason the super-resolution input needs no colour conversion - so it
     /// has to actually produce that format, at the right size, with real content in it.
     func testHardwareJPEGDecodeProducesA420vBufferWithRealPixels() throws {
         let image = try XCTUnwrap(UIImage(named: "MockFeed"), "MockFeed asset missing")
@@ -2430,7 +2447,7 @@ extension RunnerTests {
         XCTAssertEqual(CVPixelBufferGetWidth(buffer), header.width)
         XCTAssertEqual(CVPixelBufferGetHeight(buffer), header.height)
 
-        // A buffer of one constant value is what every failure so far looked like — flat green —
+        // A buffer of one constant value is what every failure so far looked like - flat green -
         // so "it decoded" is not the claim; "it decoded a picture" is.
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
@@ -2449,13 +2466,13 @@ extension RunnerTests {
         }
         XCTAssertGreaterThan(
             Int(highest) - Int(lowest), 16,
-            "the luma plane is nearly uniform — this decoded to a flat field, not a frame")
+            "the luma plane is nearly uniform - this decoded to a flat field, not a frame")
     }
 
     // MARK: - Feed upscaler availability
 
     /// The picker lists only what this device can run, and the Lanczos floor is the one thing every
-    /// device can — the simulator, which has neither MetalFX nor VideoToolbox super resolution,
+    /// device can - the simulator, which has neither MetalFX nor VideoToolbox super resolution,
     /// lists that alone.
     func testOfferedUpscalersAreAllRunnableAndAlwaysIncludeTheFloor() {
         XCTAssertTrue(MonitorUpscaler.supportedOnThisDevice.contains(.off))
@@ -2470,7 +2487,7 @@ extension RunnerTests {
     }
 
     /// A stored choice outlives the device it was made on. Whatever it names, what comes back is
-    /// something this device actually runs — never a setting that reads as active while the
+    /// something this device actually runs - never a setting that reads as active while the
     /// renderer quietly does something else.
     func testAStoredChoiceThisDeviceCannotRunResolvesToOneItCan() {
         XCTAssertTrue(MonitorUpscaler.supported(or: nil).isSupportedOnThisDevice)
@@ -2480,12 +2497,12 @@ extension RunnerTests {
         XCTAssertEqual(MonitorUpscaler.supported(or: .lanczos), .lanczos)
     }
 
-    /// An untouched install starts at the floor, on every device — the picker is how an operator
+    /// An untouched install starts at the floor, on every device - the picker is how an operator
     /// spends GPU on the feed, not something they have to find to stop spending it.
     func testTheDefaultUpscalerIsTheFastFloorEvenWhereBetterOnesExist() {
         XCTAssertEqual(MonitorUpscaler.supported(or: nil), .lanczos)
         XCTAssertEqual(MonitorUpscaler.lanczos.rawValue, "Fast")
-        // A stored choice still wins wherever the device can run it — the default is a starting
+        // A stored choice still wins wherever the device can run it - the default is a starting
         // point, not a cap.
         for upscaler in MonitorUpscaler.supportedOnThisDevice {
             XCTAssertEqual(MonitorUpscaler.supported(or: upscaler), upscaler)
@@ -2494,7 +2511,7 @@ extension RunnerTests {
 
     // MARK: - Super-resolution input size
 
-    /// The low-latency processor tops out at 960×960, and a Quality-preset ZR feed is 1024×576 —
+    /// The low-latency processor tops out at 960×960, and a Quality-preset ZR feed is 1024×576 -
     /// over the ceiling, which is why it offered no scale factor and the option did nothing. A 6%
     /// shrink clears it and buys a ×2 ML upscale of the result.
     func testSuperResolutionShrinksABakeThatOutsizesTheProcessor() {
@@ -2508,7 +2525,7 @@ extension RunnerTests {
             Double(input.width) / Double(input.height), 1_024.0 / 576.0, accuracy: 0.01)
     }
 
-    /// Never an upscale — a source already inside the limit is handed over untouched, and
+    /// Never an upscale - a source already inside the limit is handed over untouched, and
     /// enlarging before the model would only give it invented detail to sharpen.
     func testSuperResolutionLeavesASourceInsideTheLimitAlone() {
         let input = MonitorUpscaler.superResolutionInputSize(
@@ -2527,7 +2544,7 @@ extension RunnerTests {
         XCTAssertEqual(input.width, 540)
     }
 
-    /// A fixed ×4 against a 2347×1320 panel produced 4096×2304 — 75 MB a surface, three deep,
+    /// A fixed ×4 against a 2347×1320 panel produced 4096×2304 - 75 MB a surface, three deep,
     /// and the drawable queue starved until `nextDrawable` timed out on every frame. The input
     /// has to be sized so the model's OUTPUT lands on the panel, not far past it.
     func testSuperResolutionShrinksTheInputSoAFixedFactorLandsOnThePanel() {
@@ -2541,7 +2558,7 @@ extension RunnerTests {
     }
 
     /// When the factor cannot reach the panel even from the whole source, there is nothing to
-    /// give back — the fit enlarges the remainder and the model gets every pixel available.
+    /// give back - the fit enlarges the remainder and the model gets every pixel available.
     func testSuperResolutionKeepsTheWholeSourceWhenTheFactorCannotReachThePanel() {
         let input = MonitorUpscaler.superResolutionInputSize(
             source: (960, 540), target: (2_347, 1_320), scale: 2, maximum: (1_440, 1_080))
@@ -2553,7 +2570,7 @@ extension RunnerTests {
     // MARK: - Super-resolution scale selection
 
     /// The model only offers discrete factors, so the one it runs at has to CLEAR the blow-up the
-    /// present needs — 1024×576 into a 2868×1320 panel is 2.8×, and 2× would leave Lanczos to
+    /// present needs - 1024×576 into a 2868×1320 panel is 2.8×, and 2× would leave Lanczos to
     /// enlarge the model's own output by the rest, which is the whole thing being paid for.
     func testSuperResolutionScaleClearsTheRatioSoTheFitOnlyShrinks() {
         XCTAssertEqual(
@@ -2562,7 +2579,7 @@ extension RunnerTests {
             MonitorUpscaler.superResolutionScale(offered: [1.5, 2, 3], ratio: 2), 2)
     }
 
-    /// When nothing on offer clears the ratio the largest gets as close as the processor allows —
+    /// When nothing on offer clears the ratio the largest gets as close as the processor allows -
     /// a softer last leg beats refusing the model outright.
     func testSuperResolutionScaleFallsToTheLargestOfferedWhenNoneClearsTheRatio() {
         XCTAssertEqual(MonitorUpscaler.superResolutionScale(offered: [1.5, 2], ratio: 2.8), 2)
@@ -2573,13 +2590,13 @@ extension RunnerTests {
         XCTAssertNil(MonitorUpscaler.superResolutionScale(offered: [], ratio: 2.8))
     }
 
-    /// Order comes from the processor, not from us — an unsorted list must not pick a factor that
+    /// Order comes from the processor, not from us - an unsorted list must not pick a factor that
     /// happens to be first.
     func testSuperResolutionScaleDoesNotTrustTheOfferedOrder() {
         XCTAssertEqual(MonitorUpscaler.superResolutionScale(offered: [3, 1.5, 2], ratio: 1.6), 2)
     }
 
-    /// A layout animation walks the drawable through a dozen sizes — a device log caught the
+    /// A layout animation walks the drawable through a dozen sizes - a device log caught the
     /// MetalFX scaler rebuilt five times across one. Changing factor restarts the processor and
     /// loads an ML model on the draw thread, so a running factor that still clears the ratio is
     /// kept rather than traded down.
@@ -2598,7 +2615,7 @@ extension RunnerTests {
     }
 
     /// The Focus dial is opt-in, and switching the default off must not overrule an operator who
-    /// already made the choice — in either direction. The stored key IS the migration: it only
+    /// already made the choice - in either direction. The stored key IS the migration: it only
     /// exists once the FOCUS-popup toggle wrote it.
     @MainActor
     func testFocusDialDefaultsOffAndPreservesAnExplicitOperatorChoice() {
@@ -2612,7 +2629,7 @@ extension RunnerTests {
             }
         }
 
-        // Fresh install / settings reset: nothing stored, so the dial is off — and a new model
+        // Fresh install / settings reset: nothing stored, so the dial is off - and a new model
         // (the relaunch case) reads the same answer.
         UserDefaults.standard.removeObject(forKey: key)
         XCTAssertFalse(PreferencesStore.loadMFScrubEnabled())
@@ -2629,7 +2646,7 @@ extension RunnerTests {
         XCTAssertFalse(NativeAppModel().mfDriveScrubEnabled)
     }
 
-    /// Preference off hides the dial whatever else is true — mode included, since the chrome no
+    /// Preference off hides the dial whatever else is true - mode included, since the chrome no
     /// longer gates it. (Visible-when-on needs a live focus mode from a camera; that is the
     /// simulator/hardware check.)
     @MainActor
@@ -2673,7 +2690,7 @@ extension RunnerTests {
     private static let hevcBothDepthsEnum: [UInt32] = [0x0000_0801, 0x0001_0800, 0x0001_0A00]
 
     /// The codec drum lists ONE H.265 row, and the depth beside it is whatever the body's own
-    /// readback reports — never a remembered UI choice that could disagree with the camera.
+    /// readback reports - never a remembered UI choice that could disagree with the camera.
     /// Picking a depth writes that exact advertised value; settling the drum on a family carries
     /// the depth the body is currently recording at, and only falls back to the family's lowest
     /// advertised depth when the body's current depth is not one it offers.
@@ -2701,7 +2718,7 @@ extension RunnerTests {
         XCTAssertEqual(model.cameraValue(for: .codec), "H.265")
 
         // Settling the drum on a family row carries the depth the body is on: H.264 is 8-bit, so
-        // coming back to H.265 records 8-bit, and the pair — not a second row — moves it to 10.
+        // coming back to H.265 records 8-bit, and the pair - not a second row - moves it to 10.
         model.applyPickerValue("H.264", for: .codec)
         XCTAssertEqual(model.cameraValue(for: .codec), "H.264")
         model.applyPickerValue("H.265", for: .codec)
@@ -2711,7 +2728,7 @@ extension RunnerTests {
     }
 
     /// A depth the body is on but does not advertise for the codec being selected must not be
-    /// carried across — the row falls back to that family's lowest advertised depth instead of
+    /// carried across - the row falls back to that family's lowest advertised depth instead of
     /// writing a combination the body never offered.
     @MainActor
     func testAFamilyThatCannotHoldTheCurrentDepthFallsBackToItsLowest() {
@@ -2727,7 +2744,7 @@ extension RunnerTests {
         XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0800)
     }
 
-    /// A body that advertises one variant of a codec gets no depth buttons at all — a dead button
+    /// A body that advertises one variant of a codec gets no depth buttons at all - a dead button
     /// for a depth the body cannot record is exactly what this feature must not ship.
     @MainActor
     func testASingleVariantCodecOffersNoBitDepthChoice() {
@@ -2741,7 +2758,7 @@ extension RunnerTests {
     // MARK: - Picker option sourcing (#274)
 
     /// Every function picker must name the PTP property whose descriptor drives its drum. A nil
-    /// here is a picker silently rendering the app's fixed union again — the whole #274 defect.
+    /// here is a picker silently rendering the app's fixed union again - the whole #274 defect.
     /// (Which property each one names is asserted in the shared core's `PickerOptionPolicyTests`,
     /// where the descriptor decoders live; this target does not link the core module.)
     func testEveryFunctionPickerNamesItsDescriptorProperty() {
@@ -2757,7 +2774,7 @@ extension RunnerTests {
                 "\(picker.rawValue) mode \(mode) is not sourced from the camera")
         }
         // Focus mode / area / subject are three separate Nikon settings, so the three tabs must
-        // read three different properties — never collapsed onto one.
+        // read three different properties - never collapsed onto one.
         for picker: CameraPicker in [.focus, .stillFocus] {
             let properties = (0...2).compactMap { picker.optionProperty(forMode: $0) }
             XCTAssertEqual(Set(properties).count, 3, "\(picker.rawValue) conflates its focus tabs")
@@ -2819,12 +2836,12 @@ extension RunnerTests {
         let stillsKelvin = PTPCameraPropertySnapshot(
             wbMode: "Cloudy", stillWBMode: "Color temp", wbKelvin: 3_200)
         XCTAssertEqual(wbTile(stillsKelvin), "3200K")
-        // A body that has only ever pushed the movie side still reads out rather than showing "—".
+        // A body that has only ever pushed the movie side still reads out rather than showing "-".
         let movieOnly = PTPCameraPropertySnapshot(wbMode: "Sunny")
         XCTAssertEqual(wbTile(movieOnly), "Sunny")
     }
 
-    /// The AF box maps onto the PRESENTED picture, which de-squeeze narrows to a centred sub-rect —
+    /// The AF box maps onto the PRESENTED picture, which de-squeeze narrows to a centred sub-rect -
     /// mapping into the whole frame is what drifted the box off its subject.
     func testFocusBoxFollowsTheDesqueezedPicture() throws {
         let focus = PTPLiveViewFocusInfo(
@@ -2878,7 +2895,7 @@ final class WatchFrameEncodingTests: XCTestCase {
         let isJPEG =
             data.count >= 2 && data[data.startIndex] == 0xFF
             && data[data.startIndex + 1] == 0xD8
-        XCTAssertFalse(isJPEG, "still JPEG — the HEIC destination silently fell back")
+        XCTAssertFalse(isJPEG, "still JPEG - the HEIC destination silently fell back")
         let ftyp = data.count >= 8 ? Array(data[(data.startIndex + 4)..<(data.startIndex + 8)]) : []
         XCTAssertEqual(ftyp, Array("ftyp".utf8), "not an ISOBMFF container")
     }
@@ -2905,7 +2922,7 @@ final class WatchFrameEncodingTests: XCTestCase {
 
 extension RunnerTests {
     /// The app target compiles the shared core from its OWN file references, so a rule the SPM
-    /// suite proves is not thereby proven here — and the store the app writes through is this
+    /// suite proves is not thereby proven here - and the store the app writes through is this
     /// target's. Two routers on different subnets are two setups.
     func testTwoRoutersOnDifferentSubnetsStaySeparateInTheAppTarget() {
         let records = PTPIPSavedCameraRecords.canonicalized([
@@ -2924,7 +2941,7 @@ extension RunnerTests {
 
 extension RunnerTests {
     /// Failure copy is matched on the TEXT of a status, which carries no idea which path produced
-    /// it — so a cable failure used to be answered with "check Wi-Fi", sending the operator to
+    /// it - so a cable failure used to be answered with "check Wi-Fi", sending the operator to
     /// inspect a radio the attempt never used.
     func testCableFailuresAreNotToldToCheckWiFi() {
         let timedOut = "PTP-IP connect timed out"
@@ -2944,7 +2961,7 @@ extension RunnerTests {
     }
 
     /// The wizard's step headings describe the SHAPE of the wizard, not what any one path does in
-    /// it — "Set up the network" over a cable is a different instruction from the one on screen.
+    /// it - "Set up the network" over a cable is a different instruction from the one on screen.
     func testEveryPathsNetworkStepIsTitledForWhatItActuallyDoes() {
         // The generic title survives only where it is still true.
         XCTAssertEqual(
@@ -2955,7 +2972,7 @@ extension RunnerTests {
             NativeAppModel.FirstPairWizardStep.sequence(
                 transport: .hdmiCapture, skipsPermissions: false
             ).contains(.connectNetwork))
-        // Camera-AP pairing ends at the network step — nothing to find afterwards.
+        // Camera-AP pairing ends at the network step - nothing to find afterwards.
         XCTAssertFalse(
             NativeAppModel.FirstPairWizardStep.sequence(
                 transport: .cameraAccessPoint, skipsPermissions: false
@@ -2970,8 +2987,8 @@ extension RunnerTests {
     ///
     /// `CameraInUseBeacon` advertises under a distinct "<name> in-use" service name while its
     /// presence line carries the plain one, so it can never match its own browsed row by name.
-    /// Counting it told every operator whose colleague merely HELD a camera — without sharing
-    /// anything — that their network filters discovery.
+    /// Counting it told every operator whose colleague merely HELD a camera - without sharing
+    /// anything - that their network filters discovery.
     @MainActor
     func testAnInUseShieldNeverProvesTheNetworkFiltersDiscovery() {
         let model = NativeAppModel()
@@ -2986,7 +3003,7 @@ extension RunnerTests {
     }
 
     /// A stopped broadcast's stale mDNS row is pruned even while that device keeps holding a
-    /// camera — the in-use answer proves the DEVICE is there, never that it is still sharing.
+    /// camera - the in-use answer proves the DEVICE is there, never that it is still sharing.
     @MainActor
     func testAnInUseAnswerDoesNotKeepAStoppedBroadcastRowAlive() {
         let model = NativeAppModel()
@@ -3039,7 +3056,7 @@ extension RunnerTests {
         XCTAssertFalse(offlineCopy.contains("camera"))
     }
 
-    /// When the app genuinely knows the phone is on the camera's Wi-Fi, it says so — the diagnosis
+    /// When the app genuinely knows the phone is on the camera's Wi-Fi, it says so - the diagnosis
     /// is read from the availability policy, never guessed from an error code.
     @MainActor
     func testRedDownloadFailureUsesTheAvailabilityVerdictWhenThereIsOne() {
@@ -3921,5 +3938,172 @@ extension RunnerTests {
                 #expect(scale.height == (vertical ? -squeeze.height : squeeze.height))
             }
         }
+    }
+}
+
+/// SIMULATED native compatibility and rendering through the public picker/preview interfaces.
+@MainActor
+final class SharedLUTPickerCompatibilityTests: XCTestCase {
+    func testTheOriginalGenericPickerStillRendersItsSuppliedFooter() async throws {
+        let name = "lut-picker-compatibility." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer {
+            storage.removePersistentDomain(forName: name)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let preferences = LUTPreferences(storage: storage, namespace: name)
+        let looks = MonitorLUTLooks(
+            official: OfficialLUTs(catalog: { _ in [.officialAuto] }, cube: { _ in nil }),
+            preferences: preferences,
+            customLUTs: CustomLUTStore(root: root, preferences: preferences))
+        let assist = MonitorAssistState(
+            looks: looks, storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        let picker: LUTPickerView<MonitorDefaultLivePalette, Text> = LUTPickerView(
+            assist: assist,
+            context: .init(
+                colorMode: nil, isPhoto: false, inPlayback: false,
+                family: .fallback, cameraName: nil, isWatching: false),
+            copy: .init(
+                officialTab: "Camera", officialLockedCaption: "", officialCaption: "",
+                customEmptyHint: "Import a look"), palette: MonitorDefaultLivePalette.self
+        ) {
+            Text("Legacy supplied footer")
+        }
+        let hosted = try Hosted(picker)
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if hosted.labels.contains("Legacy supplied footer") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(
+            hosted.labels.contains("Legacy supplied footer"), hosted.labels.joined(separator: ", "))
+    }
+
+    func testAnIndependentLookProviderRendersTheSharedAudioPreview() async throws {
+        let name = "look-preview-compatibility." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { storage.removePersistentDomain(forName: name) }
+        let looks = IndependentLooks()
+        let assist = MonitorAssistState(
+            looks: looks, storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        let samples = LiveFrameSampleBus()
+        let renderer = MonitorInspectorImageRenderer(lookCurves: [:])
+        var audioReads = 0
+        let preview = MonitorLookInspectorPreview(
+            tool: .audioMeters, assist: assist,
+            stores: AssistPanelStores(storage: storage, namespace: name),
+            haptics: OperatorHaptics(isEnabled: { false }),
+            source: MonitorInspectorImageSource(renderer: renderer, samples: samples),
+            readCustomName: { nil }, readLookContext: { nil },
+            prepareEffects: { frame in
+                assist.inspectorImageEffects(
+                    tool: .audioMeters, transfer: frame.transfer,
+                    clipByte: frame.exposureCeiling.clipByte(transfer: frame.transfer))
+            }, readBundle: { .empty },
+            readAudio: {
+                audioReads += 1
+                return MonitorAudioMeterLevels(
+                    left: .init(levelDB: -18, peakDB: -12), right: .init(levelDB: -12, peakDB: -6))
+            })
+        let hosted = try Hosted(preview.frame(width: 300))
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if audioReads > 0 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertGreaterThan(audioReads, 0, "The generic preview must use the actual audio source")
+        let image = UIGraphicsImageRenderer(bounds: hosted.window.bounds).image { _ in
+            hosted.window.drawHierarchy(in: hosted.window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "SIMULATED-independent-look-audio-preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(
+            try greenPixels(image), 20, "The native shared meter must actually draw its signal")
+    }
+
+    private final class IndependentLooks: MonitorLookProvider {
+        var selection = 7
+        var cube: CubeLUT? { nil }
+        var transfer: MonitorTransfer { .rec709 }
+        var referenceClipByte: Int { 255 }
+        func lutExposureTransfer(for transfer: MonitorTransfer) -> MonitorTransfer { transfer }
+        var appliesLUTExposure: Bool { false }
+    }
+
+    @MainActor
+    private final class Hosted {
+        let host: UIHostingController<AnyView>
+        let window: UIWindow
+        let previous: UIWindow?
+        init(_ view: some View) throws {
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }.first {
+                        $0.activationState == .foregroundActive
+                    })
+            previous = scene.keyWindow
+            host = UIHostingController(rootView: AnyView(view))
+            host.safeAreaRegions = []
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 420, height: 900)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.frame = window.bounds
+        }
+        func close() {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        var labels: [String] {
+            var seen = Set<ObjectIdentifier>()
+            var result: [String] = []
+            @MainActor func visit(_ object: NSObject) {
+                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+                if object.isAccessibilityElement, let label = object.accessibilityLabel {
+                    result.append(label)
+                }
+                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
+                let count = object.accessibilityElementCount()
+                if count > 0 && count < 512 {
+                    for index in 0..<count {
+                        if let child = object.accessibilityElement(at: index) as? NSObject {
+                            visit(child)
+                        }
+                    }
+                }
+                if let view = object as? UIView { for child in view.subviews { visit(child) } }
+            }
+            visit(window)
+            return result
+        }
+    }
+
+    private func greenPixels(_ image: UIImage) throws -> Int {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
+        try bytes.withUnsafeMutableBytes { raw in
+            let context = try XCTUnwrap(
+                CGContext(
+                    data: raw.baseAddress, width: cgImage.width,
+                    height: cgImage.height, bitsPerComponent: 8, bytesPerRow: cgImage.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(
+                cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+        }
+        return stride(from: 0, to: bytes.count, by: 4).filter {
+            Int(bytes[$0 + 1]) > 90 && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0]) * 13
+                && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0 + 2]) * 13
+        }.count
     }
 }

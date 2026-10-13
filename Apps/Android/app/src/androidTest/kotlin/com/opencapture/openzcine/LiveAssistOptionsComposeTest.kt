@@ -58,11 +58,12 @@ class LiveAssistOptionsComposeTest {
 
         tools.forEach { tool ->
             composeRule.runOnIdle { assists.shared.configureTool = tool }
-            composeRule.waitUntilAtLeastOneExists(hasContentDescription("Close ${tool.label}"), 5_000)
-            composeRule.onNodeWithContentDescription("Close ${tool.label}").assertIsDisplayed()
+            // The shared inspector names a tool by its palette chip (DE-SQ, not DESQ).
+            composeRule.waitUntilAtLeastOneExists(hasContentDescription("Close ${tool.chipLabel}"), 5_000)
+            composeRule.onNodeWithContentDescription("Close ${tool.chipLabel}").assertIsDisplayed()
             // The shared inspector drops a tool the monitor does not offer; this one stays.
             composeRule.runOnIdle { assertEquals(tool, assists.shared.configureTool) }
-            composeRule.onNodeWithContentDescription("Close ${tool.label}")
+            composeRule.onNodeWithContentDescription("Close ${tool.chipLabel}")
                 .performSemanticsAction(SemanticsActions.OnClick)
             composeRule.runOnIdle { assertNull(assists.shared.configureTool) }
         }
@@ -90,17 +91,24 @@ class LiveAssistOptionsComposeTest {
         composeRule.waitUntilAtLeastOneExists(off, 5_000)
         composeRule.onNode(off).performSemanticsAction(SemanticsActions.OnClick)
         composeRule.runOnIdle { assertEquals(true, assists.shared.isOn(MonitorAssistTool.LEVEL)) }
+        // The live level follows the device's sensors and never settles, so the clock steps by hand.
+        composeRule.mainClock.autoAdvance = false
         composeRule.onNodeWithContentDescription("${MonitorAssistTool.LEVEL.title}, on")
             .performSemanticsAction(SemanticsActions.OnLongClick)
+        composeRule.mainClock.advanceTimeBy(1_000)
         composeRule.runOnIdle {
             assertEquals(MonitorAssistTool.LEVEL, assists.shared.configureTool)
             assertEquals(true, assists.shared.isOn(MonitorAssistTool.LEVEL))
         }
         // #228 dropped the "Style" header for iOS parity: the panel is the Horizon/Gauge choice.
         composeRule.onAllNodesWithText("Style").assertCountEquals(0)
-        composeRule.onNodeWithText("Horizon").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Horizon").performScrollTo()
+        composeRule.mainClock.advanceTimeBy(1_000)
+        composeRule.onNodeWithText("Horizon").assertIsDisplayed()
         composeRule.onNodeWithText("Gauge").assertIsDisplayed().performClick()
+        composeRule.mainClock.advanceTimeBy(1_000)
         composeRule.runOnIdle { assertEquals(LocalLevelStyle.GAUGE, settings.levelStyle) }
+        composeRule.mainClock.autoAdvance = true
 
         assertEquals(true, restored().shared.isOn(MonitorAssistTool.LEVEL))
         assertEquals(LocalLevelStyle.GAUGE, OperatorSettings(preferences).levelStyle)

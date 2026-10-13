@@ -8,6 +8,8 @@ import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// The approved palette defaults, with the between-shots PLAY and EV leading the photo toolset.
 let nikonAssistUsageSeed = MonitorToolUsage.fieldMonitorSeed.merging(["PLAY": 8, "EV": 7]) { $1 }
 
@@ -84,7 +86,7 @@ struct NikonAssistOptions: View {
                     }
                 }, onFinish: { model.assist.persist() })
         case .lut:
-            LUTPickerContent()
+            NikonLUTPicker()
         case .crosshair:
             Text("Tap the palette button to show or hide the centre crosshair.")
                 .font(.system(size: 13))
@@ -173,182 +175,49 @@ extension NativeAppModel {
     }
 }
 
-/// One bounded job across closing, tab changes and reopening. The app's renderer preserves the
-/// Nikon calibration; shared admission owns cadence and keeps retired work occupying its slot.
+/// Read-only render receipts for native composition checks. Core owns rendering and admission.
 @MainActor @Observable final class NikonLiveInspectorPreview {
-    @ObservationIgnored private let renderer: LiveFrameRenderer
-    @ObservationIgnored private var admission = MonitorPreviewAdmission()
-    @ObservationIgnored private var owner: UUID?
-    @ObservationIgnored private var meaning: NikonInspectorImageMeaning?
-    @ObservationIgnored private var publishedMeaning: NikonInspectorImageMeaning?
-    private(set) var image: CGImage?
+    private var publishedMeaning: NikonInspectorImageMeaning?
+    private var image: CGImage?
 
-    init(fileStore: LUTFileStore) { renderer = LiveFrameRenderer(fileStore: fileStore) }
+    func receive(_ image: CGImage?, meaning: NikonInspectorImageMeaning?) {
+        self.image = image
+        publishedMeaning = image == nil ? nil : meaning
+    }
 
     func image(matching meaning: NikonInspectorImageMeaning) -> CGImage? {
-        let retained = image
-        return publishedMeaning == meaning ? retained : nil
-    }
-
-    func synchronize(_ next: NikonInspectorImageMeaning?) {
-        guard meaning != next else { return }
-        meaning = next
-        if let owner { admission.invalidate(owner: owner) }
-        publishedMeaning = nil
-        image = nil
-    }
-
-    func run(model: NativeAppModel, tool: MonitorAssistTool) async {
-        guard !Task.isCancelled else { return }
-        let capturedOwner = UUID()
-        owner = capturedOwner
-        admission.activate(owner: capturedOwner)
-        publishedMeaning = nil
-        image = nil
-        defer {
-            admission.deactivate(owner: capturedOwner)
-            if owner == capturedOwner {
-                owner = nil
-                meaning = nil
-                publishedMeaning = nil
-                image = nil
-            }
-        }
-        while !Task.isCancelled, owner == capturedOwner {
-            synchronize(model.nativeInspectorMeaning(tool: tool))
-            if let meaning, let frame = model.nativeInspectorFrame,
-                let ticket = admission.acquire(
-                    owner: capturedOwner, nowNanoseconds: DispatchTime.now().uptimeNanoseconds)
-            {
-                let rendered = await renderer.renderInspectorFrame(
-                    frame.image, effects: meaning.effects)
-                // Keep the slot through adoption/discard, including synchronous observation callbacks.
-                defer { admission.complete(ticket) }
-                if !Task.isCancelled, admission.isCurrent(ticket), frame.source.isActive,
-                    owner == capturedOwner, model.nativeInspectorMeaning(tool: tool) == meaning,
-                    let rendered
-                {
-                    publishedMeaning = meaning
-                    image = rendered
-                }
-            }
-            guard !Task.isCancelled, owner == capturedOwner else { return }
-            do {
-                try await Task.sleep(
-                    nanoseconds: MonitorPreviewAdmission.minimumIntervalNanoseconds)
-            } catch { return }
-        }
+        publishedMeaning == meaning ? image : nil
     }
 }
 
-/// Draw-only preview composed in the existing shared inspector slot. Scopes use the existing
-/// immutable sample bundle; image previews consume the accepted clean native raster.
+/// The app supplies source facts; the actual native preview and its render owner are shared.
 struct NikonAssistInspectorPreview: View {
     @Environment(NativeAppModel.self) private var model
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var availableWidth: CGFloat = 0
     let tool: MonitorAssistTool
 
-    private var meaning: NikonInspectorImageMeaning? {
-        scenePhase == .active ? model.nativeInspectorMeaning(tool: tool) : nil
-    }
-    private var activity: NikonInspectorImageMeaning? {
-        MonitorInspectorPreviewPolicy.isImage(tool.selection) ? meaning : nil
-    }
-
     var body: some View {
-        preview
-            .frame(maxWidth: .infinity)
-            .frame(
-                height: CGFloat(
-                    MonitorInspectorPreviewPolicy.height(
-                        width: Double(availableWidth), tool: tool.selection))
-            )
-            .onGeometryChange(for: CGFloat.self) {
-                $0.size.width
-            } action: {
-                availableWidth = $0
+        MonitorLookInspectorPreview(
+            tool: tool.selection, assist: model.assist,
+            stores: model.scopePanels.operatorStores,
+            haptics: .init(isEnabled: { model.preferences.hapticsEnabled }),
+            source: model.nativeInspectorImageSource,
+            readCustomName: {
+                LUTCubeCache.versionedKey(forKey: model.assistConfiguration.selectedLUT.cacheKey)
+            }, readLookContext: { nil },
+            prepareEffects: { frame in
+                model.assist.inspectorImageEffects(
+                    tool: tool.selection, transfer: frame.transfer,
+                    clipByte: frame.exposureCeiling.clipByte(transfer: frame.transfer))
+            }, readBundle: { model.scopeAssist },
+            readAudio: { model.observedLiveAudioLevels },
+            onImage: { image in
+                model.nativeInspectorPreview.receive(
+                    image, meaning: model.nativeInspectorMeaning(tool: tool))
             }
-            .background(MonitorTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(MonitorTheme.border))
-            .allowsHitTesting(false)
-            .accessibilityElement(children: .ignore)
-            .accessibilityAddTraits(.isImage)
-            .accessibilityLabel("\(tool.title) preview")
-            .accessibilityValue(previewAvailable ? "Picture" : "Waiting for picture")
-            .accessibilityIdentifier("monitor.inspector.preview")
-            .task(id: activity) {
-                guard activity != nil else { return }
-                await model.nativeInspectorPreview.run(model: model, tool: tool)
-            }
-            .onChange(of: meaning) { _, next in model.nativeInspectorPreview.synchronize(next) }
-    }
-
-    private var previewAvailable: Bool {
-        guard let meaning else { return false }
-        if MonitorInspectorPreviewPolicy.isImage(tool.selection) {
-            return model.nativeInspectorPreview.image(matching: meaning) != nil
+        )
+        .task(id: tool.selection) {
+            guard let frame = model.nativeInspectorFrame else { return }
+            model.sampleScopesIfDue(clean: frame.image) { frame.source.isActive }
         }
-        return model.scopeAssist != .empty
-    }
-
-    @ViewBuilder private var preview: some View {
-        if MonitorInspectorPreviewPolicy.isImage(tool.selection) {
-            if let meaning, let image = model.nativeInspectorPreview.image(matching: meaning) {
-                Image(decorative: image, scale: 1).resizable()
-                    .aspectRatio(
-                        CGFloat(image.width) / CGFloat(max(1, image.height))
-                            * (meaning.desqueezeHorizontal
-                                ? CGFloat(meaning.desqueeze) : 1 / CGFloat(meaning.desqueeze)),
-                        contentMode: .fit
-                    )
-                    .scaleEffect(x: meaning.mirrored ? -1 : 1, y: meaning.flipped ? -1 : 1)
-                    .overlay {
-                        GeometryReader { proxy in
-                            let aspect = CGFloat(image.width) / CGFloat(max(1, image.height))
-                            let width = min(proxy.size.width, proxy.size.height * aspect)
-                            let height = width / aspect
-                            let frame = CGRect(
-                                x: (proxy.size.width - width) / 2,
-                                y: (proxy.size.height - height) / 2, width: width, height: height)
-                            switch tool {
-                            case .guides:
-                                GuidesAssist.overlay(
-                                    feed: frame, assist: model.assist,
-                                    fallback: model.assist.guideAspect)
-                            case .grid:
-                                GridAssist.overlay(
-                                    feed: frame, thirds: model.assist.gridThirds,
-                                    phi: model.assist.gridPhi, diagonal: model.assist.gridDiagonal)
-                            case .crosshair: CrosshairAssist.overlay(feed: frame)
-                            default: EmptyView()
-                            }
-                        }
-                    }
-            } else {
-                waiting
-            }
-        } else if [.waveform, .parade, .histogram, .vectorscope, .trafficLights].contains(tool),
-            meaning != nil, model.scopeAssist != .empty
-        {
-            MonitorScopeOverlay(
-                tool: tool.selection, assist: model.assist,
-                stores: model.scopePanels.operatorStores,
-                haptics: .init(isEnabled: { model.preferences.hapticsEnabled }),
-                readBundle: { model.scopeAssist },
-                fittedSize: CGSize(
-                    width: availableWidth,
-                    height: CGFloat(
-                        MonitorInspectorPreviewPolicy.height(
-                            width: Double(availableWidth), tool: tool.selection))),
-                paradeIntensityScale: 1)
-        } else {
-            waiting
-        }
-    }
-
-    private var waiting: some View {
-        Text("Waiting for picture").font(MonitorTheme.font(11)).foregroundStyle(MonitorTheme.muted)
     }
 }

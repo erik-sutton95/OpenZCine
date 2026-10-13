@@ -407,21 +407,13 @@ struct NikonMonitorShell: View {
             configurableTools: Set(model.liveAssistPaletteTools.map(\.selection)),
             paradeIntensityScale: 1)
     }
-    private func assists(_ layout: FieldMonitorLayout) -> MonitorOperatorLiveAssists {
+    private var assists: MonitorOperatorLiveAssists {
         @Bindable var model = model
         let menus = NikonAssistMenuAdapter(model: model, compact: false)
         return .init(
             scopes: Self.assistSource(model),
             tools: { model.liveAssistPaletteTools.map(\.selection) },
-            rendered: {
-                Set(
-                    model.renderedLiveAssistTools.filter {
-                        !layout.portrait || layout.fillsPicture
-                            || !MonitorAssistTool.scopeTools.contains($0)
-                            || model.renderedFitScopes.contains($0)
-                    }.map(\.selection))
-            },
-            fitted: { model.renderedFitScopes.map(\.selection) },
+            rendered: { Set(model.renderedLiveAssistTools.map(\.selection)) },
             signalOptions: .init(
                 falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
                 reference: menus.falseColorReference,
@@ -470,7 +462,7 @@ struct NikonMonitorShell: View {
             ?? FieldMonitorLayout(width: context.viewportWidth, height: context.viewportHeight)
         MonitorOperatorLiveSurface(
             host: model, control: model.shell.control, session: model.operatorSession,
-            layout: live, source: source, assists: assists(layout), views: bodyViews(layout),
+            layout: live, source: source, assists: assists, views: bodyViews(layout),
             portraitAspect: portraitAspect,
             picture: {
                 GeometryReader { picture in
@@ -490,11 +482,12 @@ struct NikonMonitorShell: View {
                     NikonAssistInspectorPreview(tool: tool)
                 }
             },
-            lookMenu: { LUTPickerContent() }
+            lookMenu: { NikonLUTPicker() }
         )
         .overlay { MonitorRecoveryOverlay() }
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
-        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value }
+        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value
+        }
         .onChange(of: model.shell.monitor?.id, initial: true) { _, monitor in
             model.operatorSession.synchronize(source: monitor)
         }

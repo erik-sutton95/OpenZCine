@@ -19,6 +19,39 @@ final class AssistEngineAdoptionTests: XCTestCase {
     private static let width = 200
     private static let height = 100
 
+    func testTheLiveLookProviderCarriesTheActualSourceTransferAndCube() async throws {
+        let model = NativeAppModel(assist: .scratch())
+        model.startDemoSession()
+        model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        let image = try Self.image(Self.frame(hotColumns: 0))
+        model.liveFrameImage = image
+        await model.refreshScopes(from: image, full: true)
+        XCTAssertEqual(
+            model.assist.looks.transfer, model.exposureSignalMapping.curve.monitorTransfer)
+        XCTAssertEqual(model.assist.looks.referenceClipByte, model.exposureSignalMapping.clipByte)
+        XCTAssertNotNil(
+            model.assist.looks.cube, "The shared provider must prepare the actual selected look")
+    }
+
+    func testTheSharedInspectorBorrowsTheActualRawPictureSource() async throws {
+        let model = NativeAppModel(assist: .scratch())
+        model.startDemoSession()
+        model.assist.set(.histogram, visible: true, context: .liveView)
+        let image = try Self.image(Self.frame(hotColumns: 0))
+        model.liveFrameImage = image
+        await model.refreshScopes(from: image, full: true)
+        let source = model.nativeInspectorImageSource
+        let snapshot = try XCTUnwrap(
+            source.snapshot, "The real scope producer must lend raw pixels to Core's preview")
+        XCTAssertEqual(snapshot.transfer, model.exposureSignalMapping.curve.monitorTransfer)
+        XCTAssertEqual(
+            snapshot.exposureCeiling.clipByte(transfer: snapshot.transfer),
+            model.exposureSignalMapping.clipByte)
+        model.liveFrameImage = nil
+        XCTAssertNil(
+            source.snapshot, "Retiring the actual picture must also retire the borrowed preview")
+    }
+
     /// One RGBA frame of four column bands: Log3G10 grey, a dark band, a band whose red channel
     /// sits on the clip shelf (`hot` columns of it), and a bright neutral.
     private static func frame(hotColumns: Int) -> [UInt8] {

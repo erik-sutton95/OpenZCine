@@ -9,7 +9,6 @@ import OpenZCineCore
 import PhotosUI
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 /// The command-monitor primary grid (DISP 3): eight ride-along controls the operator can reorder by
 /// long-press-dragging a tile. Tiles are absolutely positioned so a dragged tile follows the finger
@@ -26,7 +25,7 @@ struct CommandPrimaryGrid: View {
     private let spacing: CGFloat = 9
     private static let space = "commandGrid"
 
-    /// Spring used for both the live shuffle and the drop — smooth with a touch of life.
+    /// Spring used for both the live shuffle and the drop - smooth with a touch of life.
     private let shuffle = Animation.spring(response: 0.3, dampingFraction: 0.72)
 
     /// One resolved grid tile. Video tiles carry their `CommandTileKind` (long-press reorder);
@@ -61,7 +60,7 @@ struct CommandPrimaryGrid: View {
         GeometryReader { proxy in
             let tiles = self.tiles
             let rows = max(1, Int((Double(tiles.count) / Double(columns)).rounded(.up)))
-            // Fill the height on phones, but never stretch a tile past a readable card —
+            // Fill the height on phones, but never stretch a tile past a readable card -
             // the leftover breathing room reads better than title-and-value islands adrift
             // in an empty slab (the iPad complaint).
             let rowHeight = min(
@@ -89,7 +88,7 @@ struct CommandPrimaryGrid: View {
             .contentShape(Rectangle())
             .coordinateSpace(.named(Self.space))
             // Quick tap opens the tile's picker; a 0.3s long-press picks it up to reorder. The tap
-            // MUST be a `.simultaneousGesture` — `.onTapGesture` / `.exclusively(before:)` are
+            // MUST be a `.simultaneousGesture` - `.onTapGesture` / `.exclusively(before:)` are
             // subordinate to `.gesture(reorderGesture)`, whose long-press+drag swallows the touch
             // (the popups-don't-open bug). The drag stays on the *stable* container so it survives
             // every shuffle; `draggingKind` guards a stray tap mid-reorder.
@@ -145,7 +144,7 @@ struct CommandPrimaryGrid: View {
         LongPressGesture(minimumDuration: 0.3)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
             .onChanged { value in
-                // Photography tiles ride the stills strip's fixed order — no reorder.
+                // Photography tiles ride the stills strip's fixed order - no reorder.
                 guard !model.isPhotographyMode else { return }
                 guard case .second(true, let drag?) = value else { return }
                 if draggingKind == nil {
@@ -199,10 +198,10 @@ struct CommandPrimaryGrid: View {
     private func value(_ kind: CommandTileKind) -> String {
         switch kind {
         case .mode: model.commandExposureMode
-        case .iso: cameraValue("ISO", fallback: "—")
-        case .shutter: cameraValue("SHUTTER", fallback: "—")
-        case .iris: cameraValue("IRIS", fallback: "—")
-        case .whiteBalance: cameraValue("WB", fallback: "—")
+        case .iso: cameraValue("ISO", fallback: "-")
+        case .shutter: cameraValue("SHUTTER", fallback: "-")
+        case .iris: cameraValue("IRIS", fallback: "-")
+        case .whiteBalance: cameraValue("WB", fallback: "-")
         case .resolutionFramerate: model.cameraState.resolutionFrameRate
         case .codec: model.cameraState.codec
         case .ibis: model.commandStabilizationLabel
@@ -287,7 +286,7 @@ struct CommandSideColumn: View {
                 CommandSection(title: "Image") {
                     CmdRow {
                         CommandSmallTile(title: "Tone", value: model.commandToneLabel)
-                        CommandSmallTile(title: "Picture Profile", value: "—", muted: true)
+                        CommandSmallTile(title: "Picture Profile", value: "-", muted: true)
                     }
                 }
 
@@ -295,7 +294,7 @@ struct CommandSideColumn: View {
                     CmdRow {
                         CommandSmallTile(
                             title: "Mode",
-                            value: cameraValue("FOCUS", fallback: "—"),
+                            value: cameraValue("FOCUS", fallback: "-"),
                             picker: .focus,
                             pickerMode: 0)
                         CommandSmallTile(
@@ -352,7 +351,7 @@ struct CommandSideColumn: View {
                 CommandSection(title: "Monitor") {
                     CmdRow {
                         // Grid reads the camera's framing-grid setting (GridDisplay 0xD16C), not the
-                        // app's local overlay toggle. Assist / DISP / Guides tiles were removed —
+                        // app's local overlay toggle. Assist / DISP / Guides tiles were removed -
                         // they reflect app-only state with no camera connection point.
                         CommandSmallTile(title: "Grid", value: model.commandGridLabel)
                     }
@@ -419,7 +418,7 @@ private struct SideColumnBottomKey: PreferenceKey {
     }
 }
 
-/// Presentational only — `CommandPrimaryGrid` owns the tap (open picker) and the long-press-drag
+/// Presentational only - `CommandPrimaryGrid` owns the tap (open picker) and the long-press-drag
 /// (reorder) on one container gesture, so a reorder never also fires a tap.
 struct CommandTile: View {
     let title: String
@@ -467,9 +466,9 @@ struct CommandSmallTile: View {
     var picker: CameraPicker?
     /// Segmented mode tab to open when `picker` is presented (e.g. FOCUS Area = 1).
     var pickerMode: Int = 0
-    /// Accent-tinted value (the prototype's `.cmd-stile.amber`) — used for the audio readouts.
+    /// Accent-tinted value (the prototype's `.cmd-stile.amber`) - used for the audio readouts.
     var amber: Bool = false
-    /// Dimmed value (the prototype's `.cmd-stile.muted`) — used for the placeholder picture profile.
+    /// Dimmed value (the prototype's `.cmd-stile.muted`) - used for the placeholder picture profile.
     var muted: Bool = false
 
     private var valueColor: Color {
@@ -534,7 +533,7 @@ struct CommandSection<Content: View>: View {
     }
 }
 
-/// One row of the command side column — one tile fills the width, two split it evenly.
+/// One row of the command side column - one tile fills the width, two split it evenly.
 struct CmdRow<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -557,7 +556,7 @@ struct PickerHeader: View {
                     .font(.system(size: 18, weight: .heavy, design: .default))
                     .kerning(2)
                     .foregroundStyle(LiveDesign.text)
-                    // The setting name is the anchor of the header — never let it wrap to a second
+                    // The setting name is the anchor of the header - never let it wrap to a second
                     // line (e.g. "RESOLUTION" in the narrower top-bar popdown).
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
@@ -585,7 +584,7 @@ struct PickerPanel: View {
     /// seed) doesn't fire a redundant write.
     @State private var lastApplied = ""
     /// IRIS apertures the mounted lens can reach, captured on appear (never read from camera state
-    /// in `body` — that reassigns every live-view frame and would jog the wheel mid-spin).
+    /// in `body` - that reassigns every live-view frame and would jog the wheel mid-spin).
     @State private var lensApertures: [String] = []
     /// Recording modes the camera advertises, captured on appear so the resolution wheel only
     /// offers values the body will accept.
@@ -605,7 +604,7 @@ struct PickerPanel: View {
     }
 
     /// Auto ISO On or non-M (non-R3D): value drum is camera-owned.
-    /// R3D NE dual-base is always manual — never locked by exposure mode.
+    /// R3D NE dual-base is always manual - never locked by exposure mode.
     private var isISOAutoValueLocked: Bool {
         picker == .iso && model.showsAutoISOPicker && model.isISOValueCameraOwned
     }
@@ -635,14 +634,14 @@ struct PickerPanel: View {
             && activePickerModes[selectedMode].title == "Tint"
     }
 
-    /// WB's "Kelvin" tab — dial ladder plus −10 / +10 beside the selected value.
+    /// WB's "Kelvin" tab - dial ladder plus −10 / +10 beside the selected value.
     private var isKelvinMode: Bool {
         picker == .whiteBalance
             && activePickerModes.indices.contains(selectedMode)
             && activePickerModes[selectedMode].title == "Kelvin"
     }
 
-    /// The advertised bit depths flanking the settled CODEC row — 8-bit left, 10-bit right, the
+    /// The advertised bit depths flanking the settled CODEC row - 8-bit left, 10-bit right, the
     /// same shape as WB Kelvin's −10 / +10 (Erik's ask on #276). Nil for every codec the body
     /// advertises at a single depth, so a depth the connected body cannot record is never a
     /// button. Both sides write an exact advertised value; the filled one is the depth the
@@ -699,7 +698,7 @@ struct PickerPanel: View {
             }
         }
 
-        // Seed once on appear — NOT in `body`. Camera state is reassigned every live-view frame, so
+        // Seed once on appear - NOT in `body`. Camera state is reassigned every live-view frame, so
         // reading it per render would re-render the drum mid-spin and break its momentum. Open on the
         // mode the current value lives in (e.g. ISO 800 → Low Base, focus AF-C → AF Mode).
         .onAppear {
@@ -724,7 +723,7 @@ struct PickerPanel: View {
             } else if picker == .whiteBalance {
                 // The body's WB mode picks the opening tab: a named preset opens PRESET;
                 // colour temperature (or an unknown mode) opens KELVIN. The camera stays
-                // source of truth — never a remembered tab.
+                // source of truth - never a remembered tab.
                 let mode = model.cameraPropertySnapshot.wbMode
                 selectedMode = (mode == nil || mode == "Color temp") ? 0 : 1
             } else if selection.isEmpty {
@@ -753,7 +752,7 @@ struct PickerPanel: View {
             selection = value
             lastApplied = value
         }
-        // Keep the photo Auto/Manual tab aligned with the body's Auto ISO readback — the
+        // Keep the photo Auto/Manual tab aligned with the body's Auto ISO readback - the
         // camera stays ground truth for a toggle flipped in its own menus.
         .onChange(of: model.stillISOPickerModeIndex) { _, modeIndex in
             guard picker == .stillISO, selectedMode != modeIndex else { return }
@@ -789,7 +788,7 @@ struct PickerPanel: View {
             // A descriptor refresh (60 s cadence, lens swap, shutter-circuit switch) can reshape
             // the option list while the picker is open. When the centred value leaves the list,
             // SwiftUI re-resolves `.scrollPosition` onto a neighbouring row and writes it back
-            // through the binding — that is the LIST moving, not the operator, and pushing it to
+            // through the binding - that is the LIST moving, not the operator, and pushing it to
             // the camera would change a setting nobody touched. Re-baseline silently instead.
             guard currentOptions.contains(oldValue) else {
                 lastApplied = newValue
@@ -821,13 +820,13 @@ struct PickerPanel: View {
         }
     }
 
-    /// Banner shown when the camera's shutter control lock is engaged — the drum is dimmed and
+    /// Banner shown when the camera's shutter control lock is engaged - the drum is dimmed and
     /// non-interactive until the operator long-presses to queue an unlock write.
     private var shutterLockBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 11, weight: .semibold))
-            Text("Shutter locked on camera — hold anywhere to unlock")
+            Text("Shutter locked on camera - hold anywhere to unlock")
                 .font(.system(size: 11.5, weight: .medium, design: .default))
                 .lineLimit(2)
                 .minimumScaleFactor(0.85)
@@ -952,7 +951,7 @@ struct PickerPanel: View {
                 .id(selectedMode)
             }
             if picker == .stillDrive, selectedMode == 1 || selectedMode == 2 {
-                // The timers' shared shot count rides inside both timer tabs — fired by
+                // The timers' shared shot count rides inside both timer tabs - fired by
                 // the app after the countdown (the body's own count is menu-only).
                 timerShotsRow
             }
@@ -1079,7 +1078,7 @@ struct PickerPanel: View {
                         model.switchShutterMode(speedMode: index == 1)
                     }
                     // Switching a circuit is itself a camera change, so confirm the mode's value
-                    // right away — no drum nudge needed. Exceptions: shutter ANGLE/SPEED only
+                    // right away - no drum nudge needed. Exceptions: shutter ANGLE/SPEED only
                     // selects the active stored circuit (`movieShutterMode`; a value write here
                     // can fail and falsely engage lock), and FOCUS / photo SIZE / photo DRIVE
                     // tabs are independent settings, so switching writes nothing. `lastApplied`
@@ -1148,7 +1147,7 @@ struct PickerPanel: View {
     private var isoAutoLockBannerText: String {
         if model.allowsManualISO {
             return
-                "Auto ISO is on — the camera sets sensitivity. "
+                "Auto ISO is on - the camera sets sensitivity. "
                 + "Switch to Auto Off to choose a value."
         }
         return
@@ -1184,21 +1183,21 @@ struct PickerPanel: View {
             return WhiteBalanceKelvinPolicy.options(including: selection)
         }
         // Camera-advertised options for the active mode (focus tabs, shutter angle/speed, WB preset)
-        // take precedence over the hardcoded list. Read live from the model — the ZR refreshes the
+        // take precedence over the hardcoded list. Read live from the model - the ZR refreshes the
         // speed enum only after switching to speed mode, so a one-shot capture on appear would stick
         // on the single placeholder value advertised while in angle mode.
         if var property = picker.optionProperty(forMode: selectedMode) {
-            // The photography WB popup reuses the movie picker — its preset enum comes from
+            // The photography WB popup reuses the movie picker - its preset enum comes from
             // the stills WB property instead.
             if property == .movieWhiteBalance, model.isPhotographyMode {
                 property = .whiteBalance
             }
-            // A body advertising exactly one value means exactly one value is selectable — show
+            // A body advertising exactly one value means exactly one value is selectable - show
             // that, not the app's union. (The shutter circuits' single-value PLACEHOLDER enum is
             // filtered upstream in `refreshControlOption`, so it never reaches this cache.)
             if let cameraMode = model.cameraControlOptions[property], !cameraMode.isEmpty {
                 // R3D NE forbids automatic WB, and the codec can change after the enum was
-                // cached — filter at read time, not cache time. Movie chrome only: stills WB
+                // cached - filter at read time, not cache time. Movie chrome only: stills WB
                 // keeps its autos regardless of the movie codec left behind.
                 if property == .movieWhiteBalance {
                     return PTPCameraPropertyDecoders.whiteBalanceOptions(
@@ -1259,7 +1258,7 @@ struct StabilizationPickerPanel: View {
                 onDisabledTap: { evrBlockedNotice += 1 }
             ) { model.setElectronicVR(on: $0 == "ON") }
         }
-        // No outer padding — `pickerBodyContent` already wraps this in a padded GlassPanel, so an
+        // No outer padding - `pickerBodyContent` already wraps this in a padded GlassPanel, so an
         // extra .padding(16) doubled the inset to ~36pt. The toast floats ABOVE the sheet header
         // so it's never cut off at the bottom edge.
         .overlay(alignment: .top) {
@@ -1314,7 +1313,7 @@ struct StabilizationPickerPanel: View {
 /// by hairlines and faded at the edges. The centred value is reported through `selection`, updating
 /// as the drum locks onto each detent.
 /// A pair of buttons flanking the settled drum value: WB Kelvin's −10 / +10, and the CODEC
-/// drum's advertised bit depths (8-bit left, 10-bit right — same idiom, Erik's ask on #276).
+/// drum's advertised bit depths (8-bit left, 10-bit right - same idiom, Erik's ask on #276).
 /// The captions default to the Kelvin pair so that call site stays as it was.
 struct DrumSideAdjust {
     var minusEnabled: Bool
@@ -1333,7 +1332,7 @@ struct DrumSideAdjust {
     var hint: String = "Use minus 10 and plus 10 beside the selected value to fine-adjust"
 }
 
-/// The photo Quality picker: two side-by-side drums — RAW on/off and the JPEG/HEIF tier —
+/// The photo Quality picker: two side-by-side drums - RAW on/off and the JPEG/HEIF tier -
 /// each with its sub-option beneath (NEF compression under RAW, the ★ optimal-quality toggle
 /// under the tier). The pair composes one image-quality write; NEF compression writes its own
 /// property. There is no nothing-selected quality on the body, so turning the last active half
@@ -1341,7 +1340,7 @@ struct DrumSideAdjust {
 struct QualityPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
     var embedded = false
-    /// The composed pair, seeded from the camera once on appear (never re-read in `body` —
+    /// The composed pair, seeded from the camera once on appear (never re-read in `body` -
     /// the wheels would jog mid-spin like every other drum).
     @State private var config = StillQualityConfiguration(
         rawEnabled: true, tier: .fine, starred: false)
@@ -1352,7 +1351,7 @@ struct QualityPickerPanel: View {
 
     private static let rawOptions = ["On", "Off"]
     private static let tierOptions = StillQualityConfiguration.Tier.allCases.map(\.rawValue)
-    /// Conservative fallback only — the body's own `RawCompressionType` enum wins below.
+    /// Conservative fallback only - the body's own `RawCompressionType` enum wins below.
     /// First-generation Z bodies use the Compressed/Uncompressed pair and reject this trio, so
     /// offering it unconditionally is the same "options the body does not have" defect (#274).
     private static let nefOptions = [
@@ -1376,7 +1375,7 @@ struct QualityPickerPanel: View {
             guard enabled != config.rawEnabled else { return }
             config.rawEnabled = enabled
             if !enabled, config.tier == .off {
-                // Dropping RAW with the tier off would select nothing — bounce the tier on.
+                // Dropping RAW with the tier off would select nothing - bounce the tier on.
                 config.tier = .fine
                 tierSelection = config.tier.rawValue
             }
@@ -1390,7 +1389,7 @@ struct QualityPickerPanel: View {
             if tier == .off {
                 config.starred = false
                 if !config.rawEnabled {
-                    // Tier off with RAW off would select nothing — bounce RAW on.
+                    // Tier off with RAW off would select nothing - bounce RAW on.
                     config.rawEnabled = true
                     rawSelection = "On"
                 }
@@ -1438,7 +1437,7 @@ struct QualityPickerPanel: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// The NEF (RAW) recording compression rows — a RAW setting, parked while RAW is off.
+    /// The NEF (RAW) recording compression rows - a RAW setting, parked while RAW is off.
     private var nefRows: some View {
         let enabled = config.rawEnabled
         let current = model.cameraPropertySnapshot.rawCompression
@@ -1454,7 +1453,7 @@ struct QualityPickerPanel: View {
         .disabled(!enabled)
     }
 
-    /// The ★ optimal-quality toggle — meaningless with the tier off, so it dims there.
+    /// The ★ optimal-quality toggle - meaningless with the tier off, so it dims there.
     private var starToggle: some View {
         let enabled = config.tier != .off
         return optionChip("★ Optimal quality", active: config.starred, enabled: enabled) {
@@ -1538,7 +1537,7 @@ struct DrumSideAdjustButton: View {
                 )
         }
         // 56×40 draws smaller than the 44pt HIG minimum on one axis, and the panel's glass
-        // ripples past the drawn edge — pad the hit test out to it (`minTapTarget`).
+        // ripples past the drawn edge - pad the hit test out to it (`minTapTarget`).
         .buttonStyle(.monitorTapTarget)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
@@ -1737,26 +1736,10 @@ struct DrumSideAdjustButton: View {
     }
 }
 
-/// Tabbed LUT picker in the assist panel: category tabs over a drum of that category's looks.
-struct LUTPickerContent: View {
-    private struct PendingLUTDeletion: Identifiable {
-        let category: LUTCategory
-        let lut: StoredCustomLUT
-        var id: String { "\(category.rawValue):\(lut.fileName)" }
-    }
-
-    @Environment(NativeAppModel.self) private var model
-    @State private var category: LUTCategory = .builtIn
-    @State private var importing = false
-    @State private var redFilter: RedOutputFilter = .all
-    @State private var pendingDeletion: PendingLUTDeletion?
-    @State private var deletionErrorMessage: String?
-    @State private var importErrorMessage: String?
-    /// Tracks whether a usable internet path exists, so the RED download (which needs the public
-    /// internet) is blocked while the phone is on the camera's local-only Wi‑Fi AP.
-    /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
-    private var reachability: InternetReachability { .shared }
-
+/// The shared LUT picker on Nikon's looks: the built-in Log3G10 and N-Log conversions, RED's
+/// downloaded IPP2 presets as a typed library (A2-60) and imported cubes. `embedded` is the
+/// inspector and media look menu; the settings sheet adds the look comparison under it.
+struct NikonLUTPicker: View {
     /// Narrows the RED drum to one output color space (it ships ~16 looks per space).
     enum RedOutputFilter: String, CaseIterable {
         case all = "All"
@@ -1772,398 +1755,152 @@ struct LUTPickerContent: View {
         }
     }
 
-    /// Fixed height of the region below the tabs so the popup is the same size on every tab.
-    ///
-    /// Landscape is ~400pt tall and this panel had no headroom left, so the 50/50 row below is
-    /// paid for out of the drum rather than added to the panel — at 180 the panel's own header
-    /// and the category tabs went off the top of the screen.
-    private let contentHeight: CGFloat = 146
-    private let footerHeight: CGFloat = 44
+    @Environment(NativeAppModel.self) private var model
+    var embedded = true
+    @State private var redFilter: RedOutputFilter = .all
+    /// Shared instance: see `InternetReachability.shared` for why a per-view `@State` is banned.
+    private var reachability: InternetReachability { .shared }
 
     var body: some View {
-        VStack(spacing: 8) {
-            SegmentedButtons(
-                items: LUTCategory.allCases.map(\.rawValue),
-                selected: category.rawValue
-            ) { raw in
-                guard let next = LUTCategory(rawValue: raw), next != category else { return }
-                category = next
-                // Switching tabs immediately applies that tab's look, so the live preview tracks the
-                // tab without the operator having to nudge the drum first.
-                applyRepresentativeLUT(for: next)
-            }
-            tabContent
-                .frame(height: contentHeight)
-            splitComparisonControls
-        }
-        .onAppear {
-            model.refreshCustomLUTs()
-            model.refreshRedLUTs()
-            // Open on the tab of whatever's currently applied, so the drum lands on the live look.
-            category = currentCategory
-            // Warm the built-in cubes off the main thread so the first scroll doesn't hitch.
-            Task.detached(priority: .utility) { LUTCubeCache.prewarmBuiltIns() }
-        }
-        .confirmationDialog(
-            pendingDeletion.map { "Delete \($0.lut.displayName)?" } ?? "Delete LUT?",
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }),
-            titleVisibility: .visible
-        ) {
-            if let pendingDeletion {
-                Button("Delete LUT", role: .destructive) {
-                    delete(pendingDeletion)
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingDeletion = nil }
-        } message: {
-            Text("This removes the stored LUT from this device. This action cannot be undone.")
-        }
-        .alert(
-            "Couldn’t Delete LUT",
-            isPresented: Binding(
-                get: { deletionErrorMessage != nil },
-                set: { if !$0 { deletionErrorMessage = nil } })
-        ) {
-            Button("OK") { deletionErrorMessage = nil }
-        } message: {
-            Text(deletionErrorMessage ?? "The LUT could not be deleted.")
-        }
-        .alert(
-            "Couldn’t Import LUT",
-            isPresented: Binding(
-                get: { importErrorMessage != nil },
-                set: { if !$0 { importErrorMessage = nil } })
-        ) {
-            Button("OK") { importErrorMessage = nil }
-        } message: {
-            Text(importErrorMessage ?? "The LUT could not be imported.")
-        }
-    }
-
-    /// The 50/50 Log-vs-LUT comparison: an off-by-default toggle, with its orientation revealed
-    /// beside it only while it is on. The orientation stays persisted either way, so switching the
-    /// comparison off and back on returns to the operator's own choice.
-    ///
-    /// One row, not a stacked toggle-then-picker: landscape is ~400pt tall and this panel already
-    /// spends most of it on the drum, so the two-row version pushed the category tabs off the top
-    /// of the screen.
-    private var splitComparisonControls: some View {
-        MonitorOperatorLookComparison(
-            assist: model.assist,
+        MonitorLUTPickerView(
+            assist: model.assist, embedded: embedded,
             haptics: OperatorHaptics(isEnabled: { model.preferences.hapticsEnabled }),
-            exposureAvailable: nil,
-            onArm: {
-                model.splitComparisonMuted = false
-                model.setAssist(.lut, visible: true)
-            })
-    }
-
-    /// The tab matching the currently-applied LUT, so the picker opens where the operator left off.
-    private var currentCategory: LUTCategory {
-        switch model.assistConfiguration.selectedLUT {
-        case .builtIn: return .builtIn
-        case .stored(let category, _): return category
+            palette: LiveDesign.self,
+            prepare: {
+                model.refreshCustomLUTs()
+                model.refreshRedLUTs()
+                // Warm the built-in cubes off the main thread so the first scroll doesn't hitch.
+                Task.detached(priority: .utility) { LUTCubeCache.prewarmBuiltIns() }
+            }
+        ) {
+            Self.libraries(
+                model: model, redFilter: $redFilter,
+                redDownload: reachability.redLUTDownloadAvailability)
+        }
+        // The shared comparison arms the look; a split the operator hid on the picture shows again.
+        .onChange(of: model.assist.splitComparison) { _, on in
+            if on { model.splitComparisonMuted = false }
         }
     }
 
-    /// Applies a representative look when the operator switches to a tab: the current built-in (or
-    /// Log3G10→709), the recommended RED default, or the first custom import. No-ops for an empty
-    /// RED/Custom tab — its placeholder and import/download button shows instead.
-    private func applyRepresentativeLUT(for category: LUTCategory) {
-        switch category {
-        case .builtIn:
-            if case .builtIn = model.assistConfiguration.selectedLUT { return }
-            model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
-        case .red:
-            guard let lut = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs) else { return }
-            model.assistConfiguration.selectedLUT = .stored(category: .red, fileName: lut.fileName)
-        case .custom:
-            guard let lut = model.customLUTs.first else { return }
-            model.assistConfiguration.selectedLUT = .stored(
-                category: .custom, fileName: lut.fileName)
+    /// Built-in, RED and Custom as the shared picker's libraries.
+    static func libraries(
+        model: NativeAppModel, redFilter: Binding<RedOutputFilter>,
+        redDownload: RedLUTDownloadAvailability
+    ) -> [LUTPickerLibrary] {
+        func apply(_ look: LUTSelection) {
+            model.assistConfiguration.selectedLUT = look
+            // Picking a look turns the LUT on; the bar toggle is the only "off".
+            model.setAssist(.lut, visible: true)
         }
-        model.setAssist(.lut, visible: true)
-    }
-
-    /// Height reserved under the built-in drum for the contributor credit. Always reserved, never
-    /// conditional: a line that appears only on the contributed look would resize the drum mid-scroll.
-    private let creditHeight: CGFloat = 16
-
-    /// The look the built-in drum is currently on — `nil` while a stored LUT is applied.
-    private var selectedBuiltIn: MonitorLUT? {
-        guard case .builtIn(let look) = model.assistConfiguration.selectedLUT else { return nil }
-        return look
-    }
-
-    @ViewBuilder private var tabContent: some View {
-        switch category {
-        case .builtIn:
-            VStack(spacing: 0) {
-                AccentDrumWheel(
-                    options: MonitorLUT.allCases.map(\.rawValue),
-                    selection: Binding(
-                        get: {
-                            selectedBuiltIn?.rawValue
-                                ?? MonitorLUT.allCases.first?.rawValue ?? ""
-                        },
-                        set: { name in
-                            guard let look = MonitorLUT(rawValue: name) else { return }
-                            model.assistConfiguration.selectedLUT = .builtIn(look)
-                            // Picking a look turns the LUT on; the bar toggle is the only "off".
-                            model.setAssist(.lut, visible: true)
-                        }
-                    ),
-                    wheelHeight: contentHeight - creditHeight
-                )
-                // Community-contributed looks are credited here rather than in the label — the drum
-                // is one narrow monospaced line and a name would push the look's own name out.
-                Text(selectedBuiltIn?.credit ?? "")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(LiveDesign.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(height: creditHeight)
-            }
-        case .custom:
-            customTab
-        case .red:
-            redTab
+        func stored(_ category: LUTCategory) -> String? {
+            guard case .stored(let stored, let fileName) = model.assistConfiguration.selectedLUT,
+                stored == category
+            else { return nil }
+            return fileName
         }
-    }
-
-    /// Whether the RED download may be entered right now. Blocked (with a reason) while the phone
-    /// is on the camera's Wi‑Fi AP or otherwise has no internet path, so the operator never lands
-    /// on a broken/black download screen with no route to RED's servers.
-    private var redDownloadAvailability: RedLUTDownloadAvailability {
-        reachability.redLUTDownloadAvailability
-    }
-
-    @ViewBuilder private var redTab: some View {
-        if model.redLUTs.isEmpty {
-            VStack(spacing: 8) {
-                placeholder(
-                    "RED IPP2 LUTs",
-                    redDownloadAvailability.blockedReason
-                        ?? "Download RED's official looks — you'll accept RED's terms.")
-                downloadRedButton
-                    .frame(height: footerHeight)
+        var builtIn: MonitorLUT? {
+            guard case .builtIn(let look) = model.assistConfiguration.selectedLUT else {
+                return nil
             }
-        } else {
-            // Already downloaded — a color-space filter over the drum, no download button.
-            VStack(spacing: 8) {
-                redFilterRow
-                redDrum
-            }
+            return look
         }
-    }
-
-    private var redFilterRow: some View {
-        HStack(spacing: 6) {
-            ForEach(RedOutputFilter.allCases, id: \.self) { filter in
-                let isOn = redFilter == filter
-                Button {
-                    redFilter = filter
-                } label: {
-                    Text(filter.rawValue)
-                        .font(.system(size: 12, weight: .semibold, design: .default))
-                        .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(isOn ? LiveDesign.accentDim : LiveDesign.glass, in: Capsule())
-                }
-                .buttonStyle(.monitorTapTarget)
-            }
+        func entry(_ look: MonitorLUT) -> LUTPickerLibrary.Entry {
+            LUTPickerLibrary.Entry(id: look.rawValue, title: look.rawValue)
         }
-        .frame(maxWidth: .infinity)
-        .onChange(of: redFilter) { _, _ in
-            // Keep the applied RED LUT in sync with the visible drum: if the current selection falls
-            // outside the new filter, snap to the filter's first item so the displayed and applied
-            // looks can't diverge.
-            guard case .stored(.red, let fileName) = model.assistConfiguration.selectedLUT else {
-                return
-            }
-            if !filteredRedLUTs.contains(where: { $0.fileName == fileName }),
-                let first = filteredRedLUTs.first
-            {
-                model.assistConfiguration.selectedLUT = .stored(
-                    category: .red, fileName: first.fileName)
-            }
+        func redEntry(_ lut: StoredCustomLUT) -> LUTPickerLibrary.Entry {
+            LUTPickerLibrary.Entry(id: lut.fileName, title: RedPresetName.short(lut.fileName))
         }
-    }
-
-    private var filteredRedLUTs: [StoredCustomLUT] {
-        let base =
-            redFilter.match.map { needle in
-                model.redLUTs.filter { $0.fileName.uppercased().contains(needle) }
-            } ?? model.redLUTs
-        // Float the recommended default (REC.709 Medium Contrast Soft) to the top so it's the first
-        // item — and the one the drum lands on after a fresh download.
-        guard let defaultLUT = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs),
-            let index = base.firstIndex(of: defaultLUT)
-        else { return base }
-        var reordered = base
-        reordered.remove(at: index)
-        reordered.insert(defaultLUT, at: 0)
-        return reordered
-    }
-
-    /// The short name of the recommended default, flagged with a star in the drum.
-    private var defaultRedShortName: String? {
-        LUTLibraryIndex.defaultRedLUT(from: model.redLUTs).map { RedPresetName.short($0.fileName) }
-    }
-
-    private var redDrum: some View {
-        AccentDrumWheel(
-            options: filteredRedLUTs.map { RedPresetName.short($0.fileName) },
+        func customEntry(_ lut: StoredCustomLUT) -> LUTPickerLibrary.Entry {
+            LUTPickerLibrary.Entry(id: lut.fileName, title: lut.displayName)
+        }
+        let red = filteredRedLUTs(model.redLUTs, filter: redFilter.wrappedValue)
+        let defaultRed = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs)
+        let redFilterRow = LUTPickerLibrary.Filter(
+            options: RedOutputFilter.allCases.map(\.rawValue),
             selection: Binding(
-                get: {
-                    if case .stored(.red, let fileName) = model.assistConfiguration.selectedLUT,
-                        filteredRedLUTs.contains(where: { $0.fileName == fileName }),
-                        let lut = model.redLUTs.first(where: { $0.fileName == fileName })
+                get: { redFilter.wrappedValue.rawValue },
+                set: { raw in
+                    guard let next = RedOutputFilter(rawValue: raw) else { return }
+                    redFilter.wrappedValue = next
+                    // The applied RED look stays on the visible drum: one outside the new filter
+                    // snaps to the filter's first look.
+                    let visible = filteredRedLUTs(model.redLUTs, filter: next)
+                    if let fileName = stored(.red),
+                        !visible.contains(where: { $0.fileName == fileName }),
+                        let first = visible.first
                     {
-                        return RedPresetName.short(lut.fileName)
+                        model.assistConfiguration.selectedLUT = .stored(
+                            category: .red, fileName: first.fileName)
                     }
-                    return filteredRedLUTs.first.map { RedPresetName.short($0.fileName) } ?? ""
+                }))
+        return [
+            LUTPickerLibrary(
+                title: LUTCategory.builtIn.rawValue, entries: MonitorLUT.allCases.map(entry),
+                isCurrent: builtIn != nil, selectedID: builtIn?.rawValue,
+                representative: entry(.log3G10Rec709),
+                // Community-contributed looks are credited here, not in the narrow drum row.
+                caption: builtIn?.credit ?? "",
+                select: { look in
+                    if let builtIn = MonitorLUT(rawValue: look.id) { apply(.builtIn(builtIn)) }
+                }),
+            LUTPickerLibrary(
+                title: LUTCategory.red.rawValue, entries: red.map(redEntry),
+                isCurrent: stored(.red) != nil,
+                selectedID: stored(.red).flatMap { name in
+                    red.first { $0.fileName == name }?.fileName
                 },
-                set: { shortName in
-                    // Resolve within the *filtered* list so colliding short names across output
-                    // spaces (Rec.709 vs Rec.2020) can't select the wrong stored file.
-                    guard
-                        let lut = filteredRedLUTs.first(where: {
-                            RedPresetName.short($0.fileName) == shortName
-                        })
-                    else { return }
-                    model.assistConfiguration.selectedLUT = .stored(
-                        category: .red, fileName: lut.fileName)
-                    model.setAssist(.lut, visible: true)
-                }
-            ),
-            markedValues: defaultRedShortName.map { [$0] } ?? [],
-            wheelHeight: contentHeight - 36,
-            onDeleteOption: { shortName in
-                guard
-                    let lut = filteredRedLUTs.first(where: {
-                        RedPresetName.short($0.fileName) == shortName
-                    })
-                else { return }
-                pendingDeletion = PendingLUTDeletion(category: .red, lut: lut)
-            }
-        )
-    }
-
-    private var downloadRedButton: some View {
-        // Enabled even while blocked: the download screen's gateway explains the block and, on
-        // the camera AP, offers the internet hop (leave camera Wi‑Fi → download → reconnect).
-        let isAvailable = redDownloadAvailability.isAvailable
-        return Button {
-            model.isRedDownloadPresented = true
-        } label: {
-            Label(
-                "Download from RED",
-                systemImage: isAvailable ? "arrow.down.circle" : "wifi.slash"
-            )
-            .font(.system(size: 13, weight: .semibold, design: .default))
-            .foregroundStyle(LiveDesign.text)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(LiveDesign.glassBright, in: Capsule())
-        }
-        .buttonStyle(.monitorTapTarget)
-    }
-
-    @ViewBuilder private var customTab: some View {
-        VStack(spacing: 8) {
-            if model.customLUTs.isEmpty {
-                placeholder("No custom LUTs yet", "Import a .cube file to add your own look.")
-            } else {
-                AccentDrumWheel(
-                    options: model.customLUTs.map(\.displayName),
-                    selection: Binding(
-                        get: {
-                            if case .stored(.custom, let fileName) = model.assistConfiguration
-                                .selectedLUT,
-                                let lut = model.customLUTs.first(where: { $0.fileName == fileName })
-                            {
-                                return lut.displayName
-                            }
-                            return model.customLUTs.first?.displayName ?? ""
-                        },
-                        set: { displayName in
-                            guard
-                                let lut = model.customLUTs.first(where: {
-                                    $0.displayName == displayName
-                                })
-                            else { return }
-                            model.assistConfiguration.selectedLUT = .stored(
-                                category: .custom, fileName: lut.fileName)
-                            model.setAssist(.lut, visible: true)
-                        }
-                    ),
-                    wheelHeight: contentHeight - footerHeight - 8,
-                    onDeleteOption: { displayName in
-                        guard
-                            let lut = model.customLUTs.first(where: {
-                                $0.displayName == displayName
-                            })
-                        else { return }
-                        pendingDeletion = PendingLUTDeletion(category: .custom, lut: lut)
+                representative: defaultRed.map(redEntry),
+                filter: model.redLUTs.isEmpty ? nil : redFilterRow,
+                markedIDs: Set(defaultRed.map { [$0.fileName] } ?? []),
+                empty: LUTPickerLibrary.Empty(
+                    title: "RED IPP2 LUTs",
+                    hint: redDownload.blockedReason
+                        ?? "Download RED's official looks. You'll accept RED's terms.",
+                    // Enabled even while blocked: the download screen's gateway explains the
+                    // block and, on the camera AP, offers the internet hop.
+                    action: LUTPickerLibrary.Action(
+                        title: "Download from RED",
+                        systemImage: redDownload.isAvailable ? "arrow.down.circle" : "wifi.slash"
+                    ) { model.isRedDownloadPresented = true }),
+                select: { apply(.stored(category: .red, fileName: $0.id)) },
+                delete: { look in
+                    try model.deleteStoredLUT(StoredCustomLUT(fileName: look.id), from: .red)
+                    if filteredRedLUTs(model.redLUTs, filter: redFilter.wrappedValue).isEmpty,
+                        !model.redLUTs.isEmpty
+                    {
+                        redFilter.wrappedValue = .all
                     }
-                )
-            }
-            importButton
-                .frame(height: footerHeight)
-        }
+                }),
+            LUTPickerLibrary(
+                title: LUTCategory.custom.rawValue, layout: .files,
+                entries: model.customLUTs.map(customEntry),
+                isCurrent: stored(.custom) != nil, selectedID: stored(.custom),
+                representative: model.customLUTs.first.map(customEntry),
+                empty: LUTPickerLibrary.Empty(hint: "Import a .cube file to add your own look."),
+                select: { apply(.stored(category: .custom, fileName: $0.id)) },
+                delete: {
+                    try model.deleteStoredLUT(StoredCustomLUT(fileName: $0.id), from: .custom)
+                },
+                importCube: { try model.importCustomLUT(from: $0) }),
+        ]
     }
 
-    private var importButton: some View {
-        Button {
-            importing = true
-        } label: {
-            Label("Import .cube", systemImage: "square.and.arrow.down")
-                .font(.system(size: 13, weight: .semibold, design: .default))
-                .foregroundStyle(LiveDesign.text)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(LiveDesign.glassBright, in: Capsule())
+    /// The RED looks in one output space, the recommended default (REC.709 Medium Contrast Soft)
+    /// first, so the drum lands on it after a fresh download.
+    static func filteredRedLUTs(_ luts: [StoredCustomLUT], filter: RedOutputFilter)
+        -> [StoredCustomLUT]
+    {
+        var visible =
+            filter.match.map { needle in luts.filter { $0.fileName.uppercased().contains(needle) } }
+            ?? luts
+        if let defaultLUT = LUTLibraryIndex.defaultRedLUT(from: luts),
+            let index = visible.firstIndex(of: defaultLUT)
+        {
+            visible.remove(at: index)
+            visible.insert(defaultLUT, at: 0)
         }
-        .buttonStyle(.monitorTapTarget)
-        .fileImporter(
-            isPresented: $importing,
-            allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data]
-        ) { result in
-            if case .success(let url) = result {
-                do {
-                    try model.importCustomLUT(from: url)
-                } catch {
-                    importErrorMessage = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func delete(_ pending: PendingLUTDeletion) {
-        pendingDeletion = nil
-        do {
-            try model.deleteStoredLUT(pending.lut, from: pending.category)
-            if pending.category == .red, filteredRedLUTs.isEmpty, !model.redLUTs.isEmpty {
-                redFilter = .all
-            }
-        } catch {
-            deletionErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func placeholder(_ title: String, _ subtitle: String) -> some View {
-        VStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold, design: .default))
-                .foregroundStyle(LiveDesign.text)
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(LiveDesign.muted)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        return visible
     }
 }
 
@@ -2366,7 +2103,8 @@ struct OperatorSettingsPanel: View {
             }),
             transfer: model.exposureSignalMapping.curve.monitorTransfer,
             clipByte: model.exposureSignalMapping.clipByte,
-            lookLabel: lookLabel, lookCatalog: { AnyView(LUTPickerContent().environment(model)) },
+            lookLabel: lookLabel,
+            lookCatalog: { AnyView(NikonLUTPicker(embedded: false).environment(model)) },
             input: .init(
                 remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
                 remoteTitle: "Bluetooth Remote Shutter",
@@ -2443,7 +2181,7 @@ struct OperatorSettingsPanel: View {
                 choice(
                     id: "picture.source", title: "Picture Source",
                     help:
-                        "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device — full rate, no live-view compression — while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it.",
+                        "Where the monitor's image comes from. HDMI shows the camera's clean output through a USB capture device - full rate, no live-view compression - while exposure, focus, record and the media browser keep working over the camera link. The AF boxes, the camera's audio meter and its timecode travel inside the live-view stream, so they leave with it.",
                     options: selectableVideoSources.map(\.title), value: model.videoSource.title
                 ) { value in
                     if let kind = selectableVideoSources.first(where: { $0.title == value }) {
@@ -2456,7 +2194,7 @@ struct OperatorSettingsPanel: View {
                 .init(
                     id: "picture.capture", title: "Capture Device",
                     help:
-                        "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto — 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI — apply your monitoring LUT, or set the camera's HDMI output to SDR.",
+                        "The attached USB capture device, the format it is sending, and what the signal claims to be (primaries/transfer/matrix). If the picture shows the device's own \"No Signal\" card while this still reads a healthy rate, the camera's HDMI output resolution is one the device cannot lock onto - 4K is the usual culprit, and 1080p is the safe choice. Set the camera to a clean output too, or its overlays arrive as part of the picture. And if the image looks flat or green-tinted next to the camera's own live view, the camera is sending its recording gamma (N-Log/HLG) over HDMI - apply your monitoring LUT, or set the camera's HDMI output to SDR.",
                     value: .reported(model.hdmiCaptureState.shortStatus)))
         }
         if model.videoSource == .relay {
@@ -2506,7 +2244,7 @@ struct OperatorSettingsPanel: View {
                 choice(
                     id: "processing.upscaler", title: "Feed Upscaler",
                     help:
-                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
+                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented - plausible rather than real - so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
                     options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue),
                     value: FeedUpscaleSwitch.shared.upscaler.rawValue,
                     compact: true
@@ -2529,7 +2267,7 @@ struct OperatorSettingsPanel: View {
                     .init(
                         id: "processing.denoise", title: "Feed Noise Reduction",
                         help:
-                            "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames — the blocky structure of a compressed stream stays put — and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
+                            "Averages the live view against the frames either side of it to reduce sensor noise, which is worth having on a dim high-ISO set. It only removes grain that CHANGES between frames - the blocky structure of a compressed stream stays put - and it holds two frames back to see ahead, so the picture lags the camera slightly. The recording is never affected.",
                         value: .toggle(
                             .init(
                                 value: Binding(
@@ -2556,7 +2294,7 @@ struct OperatorSettingsPanel: View {
         .init(
             enabled: model.videoSource != .relay,
             unavailableHelp:
-                "This device is watching another device's broadcast. Sharing is done from the broadcasting device — re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.",
+                "This device is watching another device's broadcast. Sharing is done from the broadcasting device - re-sharing a received feed would stack a second encode and a second hop of delay on everyone downstream.",
             sharing: Binding(
                 get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
             passcode: Binding(
@@ -2753,8 +2491,8 @@ struct OperatorSettingsPanel: View {
 
 /// The "Focus dial": a thin vertical drum on the live view beside the right system rail, shown
 /// while an AF focus mode is active on a focus-by-wire lens. Drag up toward ∞, down toward NEAR;
-/// the drum's ticks scroll with the drive so it reads like a physical focus ring, and — once a
-/// full near↔∞ sweep calibrates the travel — a relative position (0 = near, 100 = ∞) is shown
+/// the drum's ticks scroll with the drive so it reads like a physical focus ring, and - once a
+/// full near↔∞ sweep calibrates the travel - a relative position (0 = near, 100 = ∞) is shown
 /// (the camera exposes no absolute distance for AF lenses). Travel ends light their label with a
 /// haptic. [verify-on-HW: pulses-per-point feel per lens]
 struct MFDriveVerticalScrub: View {
@@ -2767,10 +2505,10 @@ struct MFDriveVerticalScrub: View {
     /// Was 4, which a real video pull found too coarse to trim focus with: at 4, and with the
     /// speed ramp reaching ×3 after only a 12pt/frame move, a careful nudge already moved the lens
     /// further than the operator wanted. 2 makes a slow drag genuinely fine and keeps the flick
-    /// useful — see `speedRampDivisor`.
+    /// useful - see `speedRampDivisor`.
     ///
     /// ponytail: this is a calibration knob, not a derived constant. It is tuned against how a
-    /// focus-by-wire lens actually travels, which no test can tell us — raise it if a full sweep
+    /// focus-by-wire lens actually travels, which no test can tell us - raise it if a full sweep
     /// cannot cross the range on a real body, lower it if trimming still overshoots.
     private static let pulsesPerPoint = 2
     /// Points of per-frame travel that buy one extra multiple of gain, up to `maxSpeedFactor`.
@@ -2781,7 +2519,7 @@ struct MFDriveVerticalScrub: View {
     private static let tickSpacing: CGFloat = 11
     private static let pulsesPerTick: CGFloat = 220
 
-    /// Pulses for one drag frame. Extracted so the gain curve is unit-testable — the sensitivity
+    /// Pulses for one drag frame. Extracted so the gain curve is unit-testable - the sensitivity
     /// is the whole point of this control and a real pull found the old curve too coarse.
     static func pulses(forDelta delta: CGFloat) -> Int {
         let speedFactor = min(1 + abs(delta) / speedRampDivisor, maxSpeedFactor)

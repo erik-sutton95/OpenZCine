@@ -9,7 +9,9 @@ useDefault = true
 [allowlist]
 description = "Repo-specific known-safe values and paths"
 regexes = [
-  # Functional PTP-IP pairing friendly-name handed to the camera — not a secret.
+  # Exact persisted Frame.io destination preference identifier, not credential material.
+  '''^frameio\.destination\.v1$''',
+  # Functional PTP-IP pairing friendly-name handed to the camera - not a secret.
   '''WTU-iPhone''',
   # Fixed RFC 4122 UUID used only as an idempotency fixture in the relay test history.
   '''123e4567-e89b-12d3-a456-426614174000''',

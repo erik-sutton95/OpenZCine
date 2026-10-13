@@ -1,4 +1,5 @@
 import Foundation
+
 import enum OpenCineMedia.ScopeDisplayScale
 
 /// Whether view-assist tool visibility applies to the live monitor or media playback.
@@ -37,11 +38,11 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
     public var id: String { rawValue }
 
     /// Retired from every operator-facing surface; the case survives only so stored payloads
-    /// decode. Magnification became direct manipulation (pinch the feed) — a toolbar/settings
+    /// decode. Magnification became direct manipulation (pinch the feed) - a toolbar/settings
     /// row for it is a control for a tool that no longer exists.
     public var isRetired: Bool { self == .magnification }
 
-    /// The tool set UI and defaults build from — `allCases` minus retired tools. Decode paths
+    /// The tool set UI and defaults build from - `allCases` minus retired tools. Decode paths
     /// filter through this too, so a blob persisted before a retirement stops resurfacing it.
     public static var activeCases: [MonitorAssistTool] { allCases.filter { !$0.isRetired } }
 
@@ -61,7 +62,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         }
     }
 
-    /// Tools that only exist in the photography toolset — the cinema strip never offers them.
+    /// Tools that only exist in the photography toolset - the cinema strip never offers them.
     /// The EV meter mirrors the body's stills exposure indicator, so it is a photography tool.
     public var isPhotographyOnly: Bool {
         self == .instantReview || self == .evMeter
@@ -102,7 +103,7 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
 /// Which capture side of the camera a monitor layout belongs to.
 ///
 /// A cinema operator and a stills shooter want different chrome on the same phone, and the body
-/// switches between the two on its own mode dial — so every chrome configuration is keyed by DISP
+/// switches between the two on its own mode dial - so every chrome configuration is keyed by DISP
 /// mode **and** this. See ``OperatorPreferences/chrome(for:capture:)``.
 public enum CaptureLayoutMode: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
     case video
@@ -120,7 +121,7 @@ public enum CaptureLayoutMode: String, CaseIterable, Codable, Equatable, Sendabl
 }
 
 /// Visibility preferences for the live monitor chrome. One of these per DISP mode per capture
-/// mode — see ``OperatorPreferences/chrome(for:capture:)``.
+/// mode - see ``OperatorPreferences/chrome(for:capture:)``.
 public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
     public enum Section: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
         case statusBar
@@ -139,7 +140,7 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         case codecReadout
         case mediaReadout
         case fpsReadout
-        // Third pass — appended, never inserted. The remaining two status-bar cells, the four rail
+        // Third pass - appended, never inserted. The remaining two status-bar cells, the four rail
         // controls the `sideRails` blob used to swallow, and the AF box.
         case timecodeReadout
         case resolutionReadout
@@ -177,7 +178,7 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
 
         /// The status-bar cells, so a shell can nest their badges inside the deck.
         ///
-        /// In photography the same three slots carry SHOTS, image area and quality — one cell,
+        /// In photography the same three slots carry SHOTS, image area and quality - one cell,
         /// one switch, whichever capture mode the body is in.
         public static let statusBarReadouts: [Section] = [
             .recReadout, .timecodeReadout, .resolutionReadout, .codecReadout, .mediaReadout,
@@ -256,28 +257,28 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
     public var assistToolbarVisible: Bool
     public var cameraValuesVisible: Bool
     // Per-readout visibility within the top status bar (Settings ▸ Display ▸ Live Status Readouts).
-    // Independent of the DISP `Section` cycling above — the operator hides individual readouts they
+    // Independent of the DISP `Section` cycling above - the operator hides individual readouts they
     // don't ride during a take.
     public var recReadoutVisible: Bool
     public var codecReadoutVisible: Bool
     public var mediaReadoutVisible: Bool
     public var fpsReadoutVisible: Bool
-    /// The rail's lock key. Hiding it is honoured only while controls are unlocked — see
+    /// The rail's lock key. Hiding it is honoured only while controls are unlocked - see
     /// ``MonitorChromePolicy/showsLockControl(mode:preferences:interfaceLocked:)``.
     public var lockButtonVisible: Bool
     /// The camera/phone battery cluster on the lock-side rail.
     public var batteryIndicatorsVisible: Bool
-    /// The timecode cell — the SHOTS-remaining cell in photography, same slot.
+    /// The timecode cell - the SHOTS-remaining cell in photography, same slot.
     public var timecodeReadoutVisible: Bool
-    /// The resolution/frame-rate cell — the image-area/size cell in photography, same slot.
+    /// The resolution/frame-rate cell - the image-area/size cell in photography, same slot.
     public var resolutionReadoutVisible: Bool
     /// The rail's record control (photography: the shutter). Hiding it is honoured only while
-    /// nothing is rolling — see ``MonitorChromePolicy/sideRailPlan(mode:preferences:capture:interfaceLocked:recordingOrPending:)``.
+    /// nothing is rolling - see ``MonitorChromePolicy/sideRailPlan(mode:preferences:capture:interfaceLocked:recordingOrPending:)``.
     public var railRecordVisible: Bool
     /// The rail's Media key.
     public var railMediaVisible: Bool
     /// The rail's Settings key. Hiding it is honoured only while some enabled DISP mode still
-    /// carries one — Settings is the only route back to these switches.
+    /// carries one - Settings is the only route back to these switches.
     public var railSettingsVisible: Bool
     /// The rail's DISP key. The feed swipe (down → clean, up → live) is its second way out.
     public var railDispVisible: Bool
@@ -306,19 +307,19 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         mediaReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible) ?? true
         fpsReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .fpsReadoutVisible) ?? true
         // Same story for the lock key and the battery cluster: added after these blobs were
-        // written, so an absent key means "the operator never chose" — keep them visible.
+        // written, so an absent key means "the operator never chose" - keep them visible.
         lockButtonVisible = try c.decodeIfPresent(Bool.self, forKey: .lockButtonVisible) ?? true
         batteryIndicatorsVisible =
             try c.decodeIfPresent(Bool.self, forKey: .batteryIndicatorsVisible) ?? true
         // Third pass. The two remaining status-bar cells and the AF box were never switchable, so
-        // an absent key means "the operator never chose" — keep them visible.
+        // an absent key means "the operator never chose" - keep them visible.
         timecodeReadoutVisible =
             try c.decodeIfPresent(Bool.self, forKey: .timecodeReadoutVisible) ?? true
         resolutionReadoutVisible =
             try c.decodeIfPresent(Bool.self, forKey: .resolutionReadoutVisible) ?? true
         focusBoxVisible = try c.decodeIfPresent(Bool.self, forKey: .focusBoxVisible) ?? true
         // The four rail controls were one `sideRails` blob, so a stored blob's single value is the
-        // operator's choice for all four — expand it rather than defaulting them on and putting a
+        // operator's choice for all four - expand it rather than defaulting them on and putting a
         // hidden rail back on their monitor.
         railRecordVisible =
             try c.decodeIfPresent(Bool.self, forKey: .railRecordVisible) ?? sideRailsVisible
@@ -346,7 +347,7 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
 
     /// Whether `section` is configurable for `mode`.
     ///
-    /// Live and clean offer the **same** list — clean is DISP 1 with different defaults, not a
+    /// Live and clean offer the **same** list - clean is DISP 1 with different defaults, not a
     /// smaller feature. Command (DISP 3) replaces the feed with the dashboard, so it only owns the
     /// rail cluster. `sideRails` is configurable nowhere: it is the retired whole-rail blob, kept
     /// only so a stored value can expand into the four rail controls.
@@ -354,14 +355,14 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         if section == .sideRails { return false }
         // The DISP key is never hideable, in any mode or configuration. It was briefly offered as
         // a switch with the feed swipe as the fallback, but an escape route the operator has to
-        // already know about is not an escape route — hiding the only visible way to change mode
+        // already know about is not an escape route - hiding the only visible way to change mode
         // is a trap whatever else is on screen.
         if section == .railDisp { return false }
         switch mode {
         case .live, .clean:
             return true
         case .command:
-            // No feed, so no status bar, no readouts, no strips and no AF box — the rail only.
+            // No feed, so no status bar, no readouts, no strips and no AF box - the rail only.
             return section == .lockButton || section == .batteryIndicators
                 || Section.railControls.contains(section)
         }
@@ -426,7 +427,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         streamPreset: LiveViewStreamPreset,
         qualityBias: LiveViewQualityBias,
         portraitFeedAspect: PortraitFeedAspect = .fit16x9,
-        scopeActivationOrder: [MonitorAssistTool] = [],
         cleanChrome: DisplayChromeVisibility = .cleanDefaults,
         commandChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
         photoDisplayChrome: DisplayChromeVisibility = DisplayChromeVisibility(),
@@ -447,7 +447,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.streamPreset = streamPreset
         self.qualityBias = qualityBias
         self.portraitFeedAspect = portraitFeedAspect
-        self.scopeActivationOrder = scopeActivationOrder
         self.cleanChrome = cleanChrome
         self.commandChrome = commandChrome
         self.photoDisplayChrome = photoDisplayChrome
@@ -458,7 +457,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         self.relayAllowsControlRequests = relayAllowsControlRequests
     }
 
-    /// Stock defaults — forwards to ``defaults``.
+    /// Stock defaults - forwards to ``defaults``.
     public init() {
         self = Self.defaults
     }
@@ -467,7 +466,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     /// DISP modes included when the monitor DISP key cycles layouts. Order follows ``dispOrder``.
     public var enabledDispModes: Set<DispMode>
     /// DISP 1's chrome. Predates the per-mode split, so it keeps its original key and an older
-    /// saved blob loads straight into it — see ``chrome(for:)``.
+    /// saved blob loads straight into it - see ``chrome(for:)``.
     public var displayChrome: DisplayChromeVisibility
     public var recordConfirmationEnabled: Bool
     /// A Bluetooth HID shutter remote's volume press toggles recording while the live monitor is
@@ -477,17 +476,14 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var hapticsEnabled: Bool
     public var keepScreenAwake: Bool
     /// Turns the monitoring image upright from the body's live-view orientation. Off keeps the
-    /// picture in the camera's native landscape sensor orientation. Display only — the recording
+    /// picture in the camera's native landscape sensor orientation. Display only - the recording
     /// is never affected.
     public var autoRotateFeedEnabled: Bool
     public var streamPreset: LiveViewStreamPreset
     public var qualityBias: LiveViewQualityBias
     /// Which aspect the portrait feed renders at (operator pinch, persisted).
     public var portraitFeedAspect: PortraitFeedAspect
-    /// Exactly the live-view-active scope tools (``MonitorAssistTool/scopeTools``), oldest to
-    /// newest activation. Drives the portrait-fit recency-based 2-scope display selection.
-    public var scopeActivationOrder: [MonitorAssistTool]
-    /// DISP 2's chrome. Defaults to ``DisplayChromeVisibility/cleanDefaults`` — the bare image.
+    /// DISP 2's chrome. Defaults to ``DisplayChromeVisibility/cleanDefaults`` - the bare image.
     public var cleanChrome: DisplayChromeVisibility
     /// DISP 3's chrome. Command replaces the feed with the dashboard, so only the rail cluster
     /// (rail, lock, batteries) is meaningful here.
@@ -535,7 +531,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     }
 
     /// Flips one chrome section for one DISP mode on one capture side. Sections the mode does not
-    /// own are ignored — see ``DisplayChromeVisibility/isConfigurable(_:in:)``.
+    /// own are ignored - see ``DisplayChromeVisibility/isConfigurable(_:in:)``.
     public mutating func toggleChrome(
         _ section: DisplayChromeVisibility.Section, for mode: DispMode, capture: CaptureLayoutMode
     ) {
@@ -550,27 +546,13 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         setChrome(Self.defaults.chrome(for: mode, capture: capture), for: mode, capture: capture)
     }
 
-    /// Records a live scope switching on (it becomes the newest) or off. Other tools are ignored;
-    /// playback toggles never call this, so the live recency survives a review session.
-    public mutating func recordScopeActivation(_ tool: MonitorAssistTool, on: Bool) {
-        guard MonitorAssistTool.scopeTools.contains(tool) else { return }
-        scopeActivationOrder.removeAll { $0 == tool }
-        if on { scopeActivationOrder.append(tool) }
-    }
-
-    /// First two eligible active scopes in the common canonical order. Remaining selections
-    /// stay active and return in fill or landscape; stored activation history does not choose fit.
-    public func displayedFitScopes(on: Set<MonitorAssistTool>) -> [MonitorAssistTool] {
-        Array(MonitorAssistTool.scopeTools.filter { on.contains($0) }.prefix(2))
-    }
-
     private enum CodingKeys: String, CodingKey {
         // The assist toolbar order and bar visibility keys an older build wrote are ignored: the
-        // shared palette ranks tools by use.
+        // shared palette ranks tools by use. So is the scope activation order the retired portrait
+        // fit stack kept (A1-20).
         case dispOrder, enabledDispModes, displayChrome
         case recordConfirmationEnabled, recordHoldEnabled, bluetoothShutterEnabled, hapticsEnabled,
-            keepScreenAwake, autoRotateFeedEnabled, streamPreset, qualityBias, portraitFeedAspect,
-            scopeActivationOrder
+            keepScreenAwake, autoRotateFeedEnabled, streamPreset, qualityBias, portraitFeedAspect
         case cleanChrome, commandChrome
         case cleanChromeV2
         case photoDisplayChrome, photoCleanChrome, photoCommandChrome
@@ -616,10 +598,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         portraitFeedAspect =
             try container.decodeIfPresent(PortraitFeedAspect.self, forKey: .portraitFeedAspect)
             ?? .fit16x9
-        // Older saved payloads predate this preference — tolerate absence, default to empty.
-        scopeActivationOrder =
-            try Self.decodeAssistToolArrayIfPresent(from: container, forKey: .scopeActivationOrder)
-            ?? []
         // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
         // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
         // the documented bare image, and DISP 3 inherits the old global set so a rail or battery
@@ -638,7 +616,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
             ?? displayChrome
         // Chrome went per-capture-mode after these blobs were written. Everything the operator
         // configured carries into BOTH sides, so a DISP 1 they built for video looks identical the
-        // moment the body switches to stills — until they deliberately diverge the two.
+        // moment the body switches to stills - until they deliberately diverge the two.
         photoDisplayChrome =
             try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoDisplayChrome)
             ?? displayChrome
@@ -670,7 +648,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         try container.encode(streamPreset, forKey: .streamPreset)
         try container.encode(qualityBias, forKey: .qualityBias)
         try container.encode(portraitFeedAspect, forKey: .portraitFeedAspect)
-        try container.encode(scopeActivationOrder, forKey: .scopeActivationOrder)
         try container.encode(cleanChrome, forKey: .cleanChromeV2)
         try container.encode(commandChrome, forKey: .commandChrome)
         try container.encode(photoDisplayChrome, forKey: .photoDisplayChrome)
@@ -689,7 +666,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         hapticsEnabled: true,
         keepScreenAwake: true,
         autoRotateFeedEnabled: true,
-        // The smallest preset is ~320x240 — too little real detail for the focus and exposure
+        // The smallest preset is ~320x240 - too little real detail for the focus and exposure
         // assists to read, and most of what a detector finds there is compression structure
         // rather than the lens. Default to the largest stream the body will send; the operator
         // can still drop to Balanced or Fast for latency. Quality bias stays at the body-default
@@ -703,17 +680,7 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         photoCommandChrome: DisplayChromeVisibility()
     )
 
-    /// Drops unknown and retired assist tool IDs; `nil` when the key is absent.
-    private static func decodeAssistToolArrayIfPresent<K: CodingKey>(
-        from container: KeyedDecodingContainer<K>, forKey key: K
-    ) throws -> [MonitorAssistTool]? {
-        guard container.contains(key) else { return nil }
-        let raw = try container.decode([String].self, forKey: key)
-        let valid = Set(MonitorAssistTool.activeCases)
-        return raw.compactMap(MonitorAssistTool.init(rawValue:)).filter { valid.contains($0) }
-    }
-
-    /// Enabled DISP modes in persisted order — used by the monitor DISP key and its segment dots.
+    /// Enabled DISP modes in persisted order - used by the monitor DISP key and its segment dots.
     public var enabledDispOrder: [DispMode] {
         let base = Self.isValidDisplayOrder(dispOrder) ? dispOrder : Self.defaults.dispOrder
         let filtered = base.filter { enabledDispModes.contains($0) }
@@ -790,7 +757,7 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
     /// back out to the identical framing they left.
     ///
     /// Only the factor is persisted. Whether the view is currently punched in is transient by
-    /// design — coming back to a session already magnified, with no memory of having done it,
+    /// design - coming back to a session already magnified, with no memory of having done it,
     /// would read as a broken feed rather than a restored preference.
     public struct Magnification: Codable, Equatable, Sendable {
         /// The punch-in factors offered. Deliberately a closed set: this is a focus check, and a

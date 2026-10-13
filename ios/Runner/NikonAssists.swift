@@ -5,18 +5,32 @@ import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 
-/// Nikon's looks for the shared assist state. The Nikon image graph resolves and caches cubes by
-/// `LUTSelection.cacheKey` itself, so the shared state never prepares one here.
+/// The app's typed look selection over the actual source calibration and shared file store.
 @MainActor @Observable
 final class NikonMonitorLooks: MonitorLookProvider {
-    /// Mirrors `AssistConfiguration.selectedLUT` (the model keeps them in step).
     var selection: LUTSelection = .builtIn(.log3G10Rec709)
-    // ponytail: no shared cube preparation; add one when a shared surface (inspector preview,
-    // export) renders Nikon looks through `MonitorAssistState`.
-    var cube: CubeLUT? { nil }
-    var transfer: MonitorTransfer { .rec709 }
-    var referenceClipByte: Int { 255 }
+    @ObservationIgnored var readSource: () -> (transfer: MonitorTransfer, clipByte: Int) = {
+        (.rec709, 255)
+    }
+    @ObservationIgnored var readStoredCube: (LUTCategory, String) -> CubeLUT? = { _, _ in nil }
+    @ObservationIgnored private var builtIns: [MonitorLUT: CubeLUT] = [:]
+
+    var cube: CubeLUT? {
+        switch selection {
+        case .builtIn(let look):
+            if let cached = builtIns[look] { return cached }
+            let cube = look.cube()
+            builtIns[look] = cube
+            return cube
+        case .stored(let category, let fileName):
+            return readStoredCube(category, fileName)
+        }
+    }
+    var transfer: MonitorTransfer { readSource().transfer }
+    var referenceClipByte: Int { readSource().clipByte }
     func lutExposureTransfer(for transfer: MonitorTransfer) -> MonitorTransfer { transfer }
+    /// This source applies the selected look without operator input exposure.
+    var appliesLUTExposure: Bool { false }
 }
 
 /// The shared Pocket / Insta assist state, owned by the Nikon app model.

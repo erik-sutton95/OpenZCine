@@ -1311,10 +1311,24 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(presented)
         observation.invalidate()
         for offset in openingOffsets.values { XCTAssertEqual(offset, before, accuracy: 1) }
+        let outgoingViewports = Set(Self.galleryScrollViews(host.view).map(ObjectIdentifier.init))
         if let returningLayout { fixture.model.mediaBrowserLayout = returningLayout }
         host.dismiss(animated: false)
         let returned = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(returned)
+        if returningLayout != nil {
+            let replaced = await cachedCatalogSettled {
+                host.view.layoutIfNeeded()
+                let mounted = Self.galleryScrollViews(host.view).filter {
+                    $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
+                }
+                return !mounted.isEmpty
+                    && mounted.allSatisfy {
+                        !outgoingViewports.contains(ObjectIdentifier($0))
+                    }
+            }
+            XCTAssertTrue(replaced, "The changed catalog layout must replace its outgoing viewport")
+        }
         host.view.layoutIfNeeded()
         let returnedScroll = try XCTUnwrap(
             Self.galleryScrollViews(host.view).first {
@@ -1326,8 +1340,10 @@ extension NikonPlaybackOwnerAdoptionTests {
                 "Returning from playback must preserve the operator's gallery position even if UIKit remounted it"
             )
         } else {
-            XCTAssertEqual(returnedScroll.contentOffset.y, -returnedScroll.adjustedContentInset.top,
-                accuracy: 1, "A changed layout must not inherit the outgoing layout's captured position")
+            XCTAssertEqual(
+                returnedScroll.contentOffset.y, -returnedScroll.adjustedContentInset.top,
+                accuracy: 1,
+                "A changed layout must not inherit the outgoing layout's captured position")
         }
         // Restoration is consumed once. A subsequent operator scroll must stay independent.
         returnedScroll.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
@@ -1375,10 +1391,12 @@ extension NikonPlaybackOwnerAdoptionTests {
         defer { fixture.remove() }
         let bucket = "SIMULATED-DELETE-CAMERA"
         let url = try fixture.store.localURL(cameraID: bucket, filename: "SIMULATED-DELETE.MOV")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try await NikonGrowingMovieFixture.write(at: url)
         let bytes = try Data(contentsOf: url)
-        let clip = MediaClip(cameraID: bucket, filename: url.lastPathComponent, handle: 42,
+        let clip = MediaClip(
+            cameraID: bucket, filename: url.lastPathComponent, handle: 42,
             storageID: 65_537, sizeBytes: UInt64(bytes.count), captureDate: "20261011T120000")
         fixture.store.upsertBatch([clip], cameraID: bucket)
         fixture.model.mediaBrowserSource = .camera
@@ -1387,22 +1405,36 @@ extension NikonPlaybackOwnerAdoptionTests {
         library.begin()
         fixture.model.connection = .connected
         let catalog = try XCTUnwrap(fixture.store.catalogBytes(cameraID: bucket))
-        let coordinator = MediaDeliveryCoordinator(); defer { coordinator.close() }
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive })
+        let coordinator = MediaDeliveryCoordinator()
+        defer { coordinator.close() }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first { $0.isKeyWindow }
-        let host = UIHostingController(rootView: MediaPlayerView(clips: [clip], startingAt: clip)
-            .environment(fixture.model).environment(coordinator))
-        let window = UIWindow(windowScene: scene); window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
-        window.rootViewController = host; window.makeKeyAndVisible(); host.view.frame = window.bounds
-        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKeyAndVisible() }
+        let host = UIHostingController(
+            rootView: MediaPlayerView(clips: [clip], startingAt: clip)
+                .environment(fixture.model).environment(coordinator))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
-            return Self.deletionCompositionElements(host.view).contains { $0.accessibilityLabel == "Delete clip from camera" }
+            return Self.deletionCompositionElements(host.view).contains {
+                $0.accessibilityLabel == "Delete clip from camera"
+            }
         }
-        XCTAssertTrue(mounted, "Actual connected Nikon playback must compose the shared deletion service")
-        let button = try XCTUnwrap(Self.deletionCompositionElements(host.view)
-            .first { $0.accessibilityLabel == "Delete clip from camera" })
+        XCTAssertTrue(
+            mounted, "Actual connected Nikon playback must compose the shared deletion service")
+        let button = try XCTUnwrap(
+            Self.deletionCompositionElements(host.view)
+                .first { $0.accessibilityLabel == "Delete clip from camera" })
         XCTAssertTrue(button.accessibilityActivate())
         let presented = await cachedCatalogSettled { host.presentedViewController != nil }
         XCTAssertTrue(presented)
@@ -1414,17 +1446,21 @@ extension NikonPlaybackOwnerAdoptionTests {
         let destructive = try XCTUnwrap(dialog.actions.first { $0.style == .destructive }?.title)
         let rendered = await cachedCatalogSettled {
             dialog.view.layoutIfNeeded()
-            return Self.deletionCompositionElements(dialog.view).contains { $0.accessibilityLabel == destructive }
+            return Self.deletionCompositionElements(dialog.view).contains {
+                $0.accessibilityLabel == destructive
+            }
         }
         XCTAssertTrue(rendered)
         if let cancelButton = Self.deletionCompositionElements(dialog.view)
-            .first(where: { $0.accessibilityLabel == cancel }) {
+            .first(where: { $0.accessibilityLabel == cancel })
+        {
             XCTAssertTrue(cancelButton.accessibilityActivate())
         } else {
             // iOS 26 anchors this sheet as a popover with no Cancel row; the accessibility
             // escape gesture is that presentation's real cancel path.
             XCTAssertNotNil(dialog.popoverPresentationController)
-            XCTAssertTrue([dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
+            XCTAssertTrue(
+                [dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
         }
         let dismissed = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(dismissed)
@@ -1433,7 +1469,9 @@ extension NikonPlaybackOwnerAdoptionTests {
         fixture.model.connection = .disconnected
         let hidden = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
-            return !Self.deletionCompositionElements(host.view).contains { $0.accessibilityLabel == "Delete clip from camera" }
+            return !Self.deletionCompositionElements(host.view).contains {
+                $0.accessibilityLabel == "Delete clip from camera"
+            }
         }
         XCTAssertTrue(hidden, "Offline cached playback must not advertise camera-card deletion")
         await library.dispose()
@@ -1444,7 +1482,9 @@ extension NikonPlaybackOwnerAdoptionTests {
         var values = [object]
         if let elements = object.accessibilityElements as? [NSObject], !elements.isEmpty {
             values += elements.flatMap(deletionCompositionElements)
-        } else if case let count = object.accessibilityElementCount(), count > 0, count != NSNotFound {
+        } else if case let count = object.accessibilityElementCount(), count > 0,
+            count != NSNotFound
+        {
             values += (0..<count).compactMap { object.accessibilityElement(at: $0) as? NSObject }
                 .flatMap(deletionCompositionElements)
         } else if let view = object as? UIView {

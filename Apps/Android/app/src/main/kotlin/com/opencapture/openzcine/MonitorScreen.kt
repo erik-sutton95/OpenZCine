@@ -18,9 +18,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,9 +27,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
@@ -55,9 +50,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -76,7 +69,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.platform.testTag
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
@@ -96,18 +88,9 @@ import com.opencapture.opencine.appkit.statusPresentation
 import com.opencapture.opencine.appkit.MonitorCaptureField
 import com.opencapture.opencine.appkit.captureField
 import com.opencapture.opencine.appkit.commit
-import com.opencapture.opencine.appkit.quickControl
-import com.opencapture.opencine.appkit.MonitorCaptureDrum
-import com.opencapture.opencine.appkit.MonitorCaptureButton
 import com.opencapture.monitorui.monitorBottomInsetDp
 import com.opencapture.monitorui.monitorLeadingInsetDp
 import com.opencapture.monitorui.MonitorRect
-import com.opencapture.monitorui.MonitorCameraValues
-import com.opencapture.monitorui.MonitorValue
-import com.opencapture.monitorui.MonitorSystemControls
-import com.opencapture.monitorui.MonitorSystemControlsVisibility
-import com.opencapture.monitorui.MonitorStatusChrome
-import com.opencapture.monitorui.MonitorStatusPresentation
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.opencine.nikon.NikonOpenCineSession
@@ -1273,15 +1256,6 @@ internal fun MonitorScreen(
                 !isVerticalFeed && !isCommand, liveBackdrop::setActive)
             DisposableEffect(liveBackdrop, pictureFrameSource) { onDispose { liveBackdrop.sourceChanged() } }
         }
-        // Portrait fit stacks the first two eligible scopes in canonical order under the picture; the
-        // others stay active and return in fill and landscape.
-        val portraitScopes =
-            if (isPortrait && !isPortraitFill && !isCommand) {
-                assists.shared.portraitScopes(scopesShown {
-                    assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode)
-                })
-            } else { emptyList() }
-        val scopeZone = monitorOperatorFittedScopeZone(fieldLayout)
         // Local framing is deliberately read from the operator store rather
         // than the camera session: grid/crosshair/guides are composited over
         // the existing feed zone and never alter the Nikon Grid Display.
@@ -1817,8 +1791,8 @@ internal fun MonitorScreen(
         val scopes = scopesShown { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }
         val emptyScopes = remember { MutableStateFlow(com.opencapture.opencine.media.ScopeAssistBundle.EMPTY) }
         val scopeSource = monitorFrameSource?.let { source -> rememberNikonLiveScopeBundles(scopes,
-            portraitScopes, assists.shared, exposureAssistCameraInput, renderedEffects.lut, lutLibrary,
-            thermalTier, source, isPortrait, isPortraitFill, scopeZone) } ?: emptyScopes
+            assists.shared, exposureAssistCameraInput, renderedEffects.lut, lutLibrary,
+            thermalTier, source) } ?: emptyScopes
         val floating = MonitorAnalysisPanelLayout(physicalViewport, geometry.scopePlacement)
         val reference = liveFeedEffectsPresentation.falseColorReference?.let { value ->
             value.referenceValues(falseColorReferenceCopy(value.scale)).takeIf { it.segments.isNotEmpty() }
@@ -1863,8 +1837,8 @@ internal fun MonitorScreen(
                 exposureAssistCameraInput, lutLibrary, inspectorSourceIdentity, liveFeedPresentation.colorMode) },
             lookMenu = { NikonLutOptions(assists, lutLibrary,
                 onOpenRedDownload = { assists.shared.configureTool = null; redDownloadPresented = true },
-                onRequestLutImport = lutLibrary?.let { { lutImportLauncher.launch(arrayOf("*/*", "application/octet-stream")) } },
-                includesComparison = false) }, paradeIntensityScale = 1.0)
+                onRequestLutImport = lutLibrary?.let { { lutImportLauncher.launch(arrayOf("*/*", "application/octet-stream")) } }) },
+            paradeIntensityScale = 1.0)
         val haptics = com.opencapture.opencine.appkit.LocalOperatorHaptics.current
         val signal = MonitorOperatorSignalOptions(
             falseColor = { com.opencapture.openzcine.settings.nikonAssistSection(MonitorAssistTool.FALSE,
@@ -1982,8 +1956,13 @@ internal fun MonitorScreen(
             capture = captureInputs,
             record = MonitorOperatorRecordSource(isPhotographyMode, operatorSettings.recordConfirmationEnabled.value,
                 busy = !recordControlEnabled, openMode = null, confirmingChanged = { recordConfirmationOpen = it }),
-            // The Nikon EV needle and level stay native instruments (F04, A3-25).
-            exposure = null, level = null, levelViewFlip = false, audio = null,
+            // The body's stills exposure indicator, in its own sixths (A3-15); cinema has no meter. Unlit
+            // reads as unknown. The level stays a native instrument (F04, A3-25).
+            exposure = if (isPhotographyMode) ({
+                cameraProperties.evIndicatorSixths?.takeIf { cameraProperties.evIndicatorLit != false }
+                    ?.div(6.0)
+            }) else null,
+            level = null, levelViewFlip = false, audio = null,
             // Control held by a watcher, a camera this device cannot drive, or a card transfer that owns
             // the command channel: presentation stays, commands are refused.
             readOnly = controlsSurrendered || !availability.canDriveCamera || mediaOwnsCommandChannel ||
@@ -2000,18 +1979,16 @@ internal fun MonitorScreen(
                 audioMeterStateDescription(resources.phoneStringResolver(), liveAudioLevels,
                     cameraProperties.microphoneSensitivity)) else null,
         )
-        // Scopes that are not fitted float; GUIDES, GRID and CROSS ride the picture in the camera's own
+        // Scopes float, in portrait fit too (A1-20); GUIDES, GRID and CROSS ride the picture in the camera's own
         // orientation (they rotate with a vertical body), so the shared overlay leaves them alone.
         val rendered = liveAssistTools.filter { tool ->
             tool !in setOf(MonitorAssistTool.GUIDES, MonitorAssistTool.GRID, MonitorAssistTool.CROSS) &&
                 assists.shared.rendersLive(tool, effectiveDisplayMode, isPhotographyMode) &&
-                (tool !in ScopeKind.canonical.map { it.assistTool } ||
-                    (scopeSource !== emptyScopes && (!isPortrait || isPortraitFill || tool.scopeKind in portraitScopes)))
+                (tool !in ScopeKind.canonical.map { it.assistTool } || scopeSource !== emptyScopes)
         }.toSet()
         MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
             MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
-                { usage = it; usageStore.value = it }, nikonUsageSeed,
-                fitted = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList()),
+                { usage = it; usageStore.value = it }, nikonUsageSeed),
             MonitorOperatorBodyViews(
                 dashboard = { accepts ->
                     CommandDashboard(commandPresentation, isPortrait, commandControlsEnabled && accepts,
@@ -2201,10 +2178,8 @@ internal fun MonitorScreen(
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,
                     configuration = renderedFraming,
-                    cleanMode = isClean,
                     isPortrait = isPortrait,
                     aspectFill = portraitRasterFill,
-                    isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
@@ -2213,8 +2188,6 @@ internal fun MonitorScreen(
                     // The editor's outline, dimming and badge, through the surface's one editor.
                     focusBoxEditModifier = if (editingDisplay == null) null
                         else Modifier.monitorOperatorChromeEditable(MonitorDisplaySection.FOCUS_BOX),
-                    evIndicatorSixths = cameraProperties.evIndicatorSixths,
-                    evIndicatorLit = cameraProperties.evIndicatorLit,
                 )
             }
                 // Outside the rotated stack: reads as screen chrome, never sideways text.

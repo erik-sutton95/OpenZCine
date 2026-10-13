@@ -271,13 +271,16 @@ class NikonOperatorSettingsComposeTest {
         }
         composeRule.onNode(hasContentDescription("1.0") and hasAnyAncestor(hasTestTag("settings.assist.trafficLights")))
             .performScrollTo().performClick()
-        composeRule.onNodeWithText("Read").assertDoesNotExist()
-        composeRule.onNodeWithText("LOG").assertDoesNotExist()
+        // The camera's False Color reads LOG or its Rec.709 look, as on iOS (read709); unsupported Read stays
+        // absent only for a source without that control (unsupportedReadAndUnknownCalibrationOmitCommonControls).
+        composeRule.onNode(hasText("Read") and hasAnyAncestor(hasTestTag("settings.assist.falseColor")))
+            .performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("REFERENCE KEY").performScrollTo().assertIsDisplayed()
         val key = composeRule.onNodeWithTag("monitor.false-color.reference")
             .performScrollTo().fetchSemanticsNode().boundsInRoot
         val density = context.resources.displayMetrics.density
-        for (label in listOf("Min", "−3", "18%", "Skin", "+2", "Max")) {
+        // Shared source ruler for the real SIMULATED R3D NE/ISO800 mapping: every second stop, then clip.
+        for (label in listOf("−6", "−4", "−2", "18%", "+2", "clip")) {
             val caption = composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
             assertTrue("$label must fit in the caption band without inherited body line spacing",
                 caption.height <= key.height - 40f * density + 1f)
@@ -294,6 +297,28 @@ class NikonOperatorSettingsComposeTest {
         }
         preferences.edit().clear().commit()
         stores.forEach { it.edit().clear().commit() }
+    }
+
+    /**
+     * A4-06: View Assist is the one shared recipe every app renders; this camera supplies only its own
+     * false colour and zebra cards (its curve, clip and native codes), as on iOS.
+     */
+    @Test fun viewAssistTabIsTheSharedRecipeWithTheCamerasSignalCards() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("z2-settings-recipe", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val session = FakeCameraSession(CameraIdentity("SIMULATED", "SIMULATED", "settings-recipe"))
+        runBlocking { session.connect() }
+        show(OperatorSettings(preferences), MonitorSettingsTab.ASSIST, session)
+        val missing = VIEW_ASSIST_ROWS.flatMap { (card, rows) ->
+            rows.filter { row ->
+                composeRule.onAllNodes(hasText(row) and hasAnyAncestor(hasTestTag("settings.assist.$card")))
+                    .fetchSemanticsNodes().isEmpty()
+            }.map { "$card: $it" }
+        }
+        assertEquals("View Assist rows missing from the shared recipe", emptyList<String>(), missing)
+        composeRule.onNodeWithText("EV Meter").performScrollTo().assertIsDisplayed()
+        preferences.edit().clear().commit()
     }
 
     @Test fun actualZebraEditorClampsOnDoneAndKeepsKnownNativeConversion() {
@@ -451,6 +476,20 @@ class NikonOperatorSettingsComposeTest {
                 )
             }
         }
+    }
+
+    private companion object {
+        /** The declared View Assist recipe: the shared cards' rows, and this camera's signal cards. */
+        val VIEW_ASSIST_ROWS = mapOf(
+            "falseColor" to listOf("Scale", "Read", "Reference Display"),
+            "zebra" to listOf("Units", "Highlight", "Midtone"),
+            "waveform" to listOf("Mode", "Brightness", "Safe Border Clip", "Safe Border Crush", "Middle Gray"),
+            "parade" to listOf("Mode", "Brightness", "Safe Border Clip", "Safe Border Crush", "Middle Gray"),
+            "histogram" to listOf("Traffic Lights", "Crush/Clip Compensation"),
+            "vectorscope" to listOf("Trace Zoom", "Brightness"),
+            "peaking" to listOf("Sensitivity", "Color"),
+            "trafficLights" to listOf("Crush/Clip Compensation"),
+        )
     }
 
     private lateinit var assistsShown: NikonAssists

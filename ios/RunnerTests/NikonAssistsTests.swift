@@ -312,14 +312,6 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertFalse(reloaded.splitVertical)
     }
 
-    func testPlaybackToolsDoNotTouchTheScopeOrder() {
-        let model = NativeAppModel(assist: .restore(storage: defaults))
-        // The preferences live in the host app's defaults, which a demo launch may have written.
-        model.preferences.scopeActivationOrder = []
-        model.setAssist(.waveform, visible: true, context: .playback)
-        XCTAssertTrue(model.preferences.scopeActivationOrder.isEmpty)
-    }
-
     // MARK: - Palette
 
     func testPhotographyLeadsWithInstantPlaybackThenTheEVMeter() {

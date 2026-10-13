@@ -123,10 +123,6 @@ internal fun MonitorAssistState.rendersLive(
 internal fun scopesShown(visible: (MonitorAssistTool) -> Boolean): Set<ScopeKind> =
     ScopeKind.canonical.filter { visible(it.assistTool) }.toSet()
 
-/** The common portrait-fit policy: first two eligible scopes in canonical order. */
-internal fun MonitorAssistState.portraitScopes(selected: Set<ScopeKind>): List<ScopeKind> =
-    portraitDisplayedScopes(selected)
-
 /** What the GPU chain bakes for one visibility predicate (live or playback). */
 internal fun NikonAssists.feedEffects(visible: (MonitorAssistTool) -> Boolean): FeedEffects =
     FeedEffects(

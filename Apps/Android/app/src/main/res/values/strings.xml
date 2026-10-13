@@ -451,7 +451,6 @@
     <string name="portrait_aspect_fit">Fit the whole picture</string>
     <string name="magnification_key_enter">Magnify %1$s</string>
     <string name="magnification_key_exit">Exit %1$s magnification</string>
-    <string name="scope_fit_limit">2 scopes max in fit view — close one or pinch to fill</string>
     <string name="display_mode_live">Live</string>
     <string name="display_mode_clean">Clean</string>
     <string name="display_mode_command">Command</string>

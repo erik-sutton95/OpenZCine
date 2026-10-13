@@ -50,8 +50,7 @@ class SharedDrumsComposeTest {
         composeRule.setContent {
             OpenZCineTheme {
                 Column {
-                    NikonLutOptions(assists, lutLibrary = null, onOpenRedDownload = {}, onRequestLutImport = null,
-                        includesComparison = false)
+                    NikonLutOptions(assists, lutLibrary = null, onOpenRedDownload = {}, onRequestLutImport = null)
                 }
             }
         }

@@ -4,6 +4,8 @@ import OpenCineApple
 import UIKit
 import os
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Source calibration and diagnostic adapter; shared native runtime owns bake work and targets.
 final class MetalFeedFrameBaker: @unchecked Sendable {
     let native: MonitorFrameBaker
@@ -11,7 +13,7 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     private let processor: LiveFrameProcessor
     private var lastCropSignature: String?
 
-    init(device: MTLDevice, fileStore: LUTFileStore) {
+    init(device: MTLDevice, fileStore: CustomLUTStore) {
         native = MonitorFrameBaker(
             device: device, workingSpace: .encodedSRGB,
             scheduling: .waitForGPUCompletion, unavailableTarget: .drop)
@@ -35,7 +37,7 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
                 let extent = source.extent
                 // #115 witness: with fit semantics an aspect disagreement now shows as bars in the
                 // present rather than lost frame edges, but it still means a layout upstream lied
-                // about the aspect — one line per signature says which numbers disagree.
+                // about the aspect - one line per signature says which numbers disagree.
                 if extent.height > 0, drawableSize.height > 0 {
                     let sourceAspect = extent.width / extent.height
                     let drawableAspect = drawableSize.width / drawableSize.height

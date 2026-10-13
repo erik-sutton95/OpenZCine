@@ -186,8 +186,8 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   the curve as the shared `MonitorTransfer` and its stated clip warning code, which the Swift facade
   resolves from the codec and ISO (`resolveExposureAssistMapping`). The operator's crush/clip
   compensation (`0`, `¼`, `½`, `¾`, `1` stop) is the shared lamps' threshold. The vectorscope reads
-  the operator LUT, or the curve's built-in Rec.709 look. Portrait fit stacks the first two active
-  scopes under the picture. Debug intent selections are
+  the operator LUT, or the curve's built-in Rec.709 look. Every active scope floats as the shared
+  movable panel, in portrait fit too (A1-20). Debug intent selections are
   comma-separated:
 
   ```sh

@@ -12,6 +12,7 @@
 
 import OpenZCineCore
 
+import struct OpenCineMedia.MonitorFalseColorReferencePlan
 import enum OpenCineMedia.MonitorZebraPaint
 
 /// Bakes monitor looks, false-colour cubes, and assist thresholds into flat
@@ -187,6 +188,49 @@ public enum FeedEffectsWire {
             cube: FalseColorMap.limitsWeightCube(mapping: mapping, read709: selection.read709))
     }
 
+    /// Current monitor pixels use the shared signal projection. Legacy public bakers above
+    /// retain their pinned compatibility vectors until their consumers migrate.
+    public static func bakedMonitorFalseColor(
+        scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double? = nil
+    ) -> [UInt8]? {
+        guard let selection = falseColorSelection(scaleOrdinal), selection.scale != .limits,
+            let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: NikonMonitorSignal.lattice(
+                scale: selection.scale, mapping: mapping,
+                read709: selection.read709
+            ).cube(.composite))
+    }
+
+    /// Shared monitor limits paint paired with the weight payload.
+    public static func bakedMonitorFalseColorLimitsPaint(curveOrdinal: Int, clipNative: Double)
+        -> [UInt8]?
+    {
+        guard let selection = falseColorCurveSelection(curveOrdinal),
+            let mapping = mapping(curveOrdinal: selection.ordinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: NikonMonitorSignal.lattice(
+                scale: .limits, mapping: mapping,
+                read709: selection.read709
+            ).cube(.paint))
+    }
+
+    /// Shared monitor limits weight paired with the paint payload.
+    public static func bakedMonitorFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Double)
+        -> [UInt8]?
+    {
+        guard let selection = falseColorCurveSelection(curveOrdinal),
+            let mapping = mapping(curveOrdinal: selection.ordinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: NikonMonitorSignal.lattice(
+                scale: .limits, mapping: mapping,
+                read709: selection.read709
+            ).cube(.weight))
+    }
+
     /// Renderer-ready false-colour reference geometry:
     /// `[version, curveOrdinal, segmentCount, markerCount,
     /// (lowerFraction, upperFraction, red, green, blue) × segmentCount,
@@ -195,6 +239,37 @@ public enum FeedEffectsWire {
     /// Segment and marker placement use the exact camera-aware scale domain as
     /// the iOS reference panel. Android only lays out this returned geometry;
     /// it never recreates exposure bands or curve policy.
+    /// Version 2 source ruler: the shared bands plus typed stop/clip marker records.
+    /// The version 1 compatibility entry remains available beside this monitor entry.
+    public static func bakedMonitorFalseColorReference(
+        scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double
+    ) -> [Float]? {
+        guard let selection = falseColorSelection(scaleOrdinal),
+            let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative)
+        else { return nil }
+        let plan = MonitorFalseColorReferencePlan(
+            scale: selection.scale.sharedScale,
+            transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
+            lookCurve: NikonMonitorSignal.lookCurves[mapping.curve.monitorTransfer],
+            readThroughLook: selection.read709)
+        var result: [Float] = [
+            2, Float(Self.curveOrdinal(mapping.curve)),
+            Float(plan.segments.count), Float(plan.markers.count),
+        ]
+        for segment in plan.segments {
+            result += [
+                Float(segment.lowerFraction), Float(segment.upperFraction),
+                Float(segment.band.red), Float(segment.band.green), Float(segment.band.blue),
+            ]
+        }
+        for marker in plan.markers {
+            result += [
+                marker.kind == .clip ? 1 : 0, Float(marker.sceneStop), Float(marker.fraction),
+            ]
+        }
+        return result
+    }
+
     public static func falseColorReference(
         scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double
     ) -> [Float]? {
@@ -302,7 +377,7 @@ public enum FeedEffectsWire {
     /// highlightR, highlightG, highlightB, midtoneOn, midtoneCode, midtoneR,
     /// midtoneG, midtoneB]`. The five de-log values are the quarter-axis tone-curve
     /// samples of the active curve; peaking no longer consumes them (it measures a
-    /// blur ratio on the raw source — see `Peaking`), and the slots are kept so the
+    /// blur ratio on the raw source - see `Peaking`), and the slots are kept so the
     /// record layout and the Vulkan uniform block stay put.
     ///
     /// `peakingNoiseGate` arrives already scaled for the feed's own encoding, so the shaders
@@ -338,14 +413,8 @@ public enum FeedEffectsWire {
             Float(mapping.clipNative),
         ]
         record += deLog
-        // The ratio threshold is transfer-curve invariant; the noise gate is not. A display-referred
-        // stills preview hands the detector larger gradients than the log video feed the gate was
-        // calibrated on, so the gate moves with the mode — the same correction iOS applies through
-        // `PeakingSettings.gateScale`, and `stillsToneMode` is the same photography-mode
-        // discriminator `cameraMapping` above routes on.
-        let gateScale =
-            stillsToneMode == nil
-            ? 1 : Peaking.gateScale(gradientScale: Peaking.displayReferredGradientScale)
+        // The shared gate follows the resolved source curve, also used by scopes and zebra.
+        let gateScale = mapping.curve.monitorTransfer.peakingGateScale
         record.append(Float(sensitivity.ratioThreshold))
         record.append(Float(sensitivity.noiseGate * gateScale))
         record += [Float(peak.0), Float(peak.1), Float(peak.2)]

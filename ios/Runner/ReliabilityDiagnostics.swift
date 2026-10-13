@@ -41,7 +41,8 @@ enum ReliabilityDiagnostics {
     static let reporting = ReliabilityReporting(
         host: host, consent: consent, dsn: dsn, gate: gate, origin: origin,
         sink: SentryReliabilitySink())
-    static let incidents = FeedIncidentRuntime(reporting: reporting,
+    static let incidents = FeedIncidentRuntime(
+        reporting: reporting,
         directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("OpenZCine/Diagnostics/incidents", isDirectory: true))
     @MainActor static let problemReporting = ProblemReporting(

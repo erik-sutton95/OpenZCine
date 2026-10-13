@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.ui.res.stringResource
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorFalseColorReadChoice
 import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
@@ -17,10 +16,8 @@ import com.opencapture.monitorui.MonitorZebraNumberEntry
 import com.opencapture.monitorui.MonitorZebraNumberZone
 import com.opencapture.monitorui.MonitorZebraUnit
 import com.opencapture.monitorui.settings.MonitorAssistSettingsSection
-import com.opencapture.monitorui.settings.MonitorViewAssistSettings
 import android.os.Build
 import com.opencapture.opencine.appkit.MonitorAssistState
-import com.opencapture.openzcine.R
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.ExposureCurveOrdinals
@@ -40,27 +37,6 @@ import kotlin.math.roundToInt
 /** Whether this phone can render the image assists (API 33 settings floor and the Swift core). */
 internal val nikonImageProcessingAvailable: Boolean
     get() = Build.VERSION.SDK_INT >= 33 && SwiftCore.isAvailable
-
-/** The settings cards: the shared cards over the shared state, with this camera's calibration. */
-@Composable
-internal fun NikonViewAssistSettings(
-    state: MonitorAssistState,
-    cameraInput: ExposureAssistCameraInput,
-    onInteraction: () -> Unit,
-) {
-    val unavailable = stringResource(R.string.settings_image_processing_unavailable)
-    MonitorViewAssistSettings(
-        listOf(MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA, MonitorAssistTool.WAVE, MonitorAssistTool.PARADE,
-            MonitorAssistTool.HISTO, MonitorAssistTool.VECTOR, MonitorAssistTool.PEAK, MonitorAssistTool.LIGHTS)
-            .mapNotNull { tool ->
-                if (tool == MonitorAssistTool.FALSE && !nikonImageProcessingAvailable) {
-                    MonitorAssistSettingsSection.Unavailable(tool, unavailable)
-                } else {
-                    nikonAssistSection(tool, state, cameraInput, onInteraction)
-                }
-            },
-    )
-}
 
 /**
  * One shared settings card for [tool], or null when this phone cannot render it or the shared
@@ -133,7 +109,7 @@ internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
     input: ExposureAssistCameraInput, read709: Boolean = false): MonitorFalseColorReferenceValues? {
     val reference = resolveFalseColorReference(scale, input, read709) ?: return null
     val curve = reference.curveLabel(read709)
-    val labels = listOf("Min", "−2", "−1", "18%", "+1", "+2", "Clip")
+    val labels = reference.stopMarkerLabels
     return MonitorFalseColorReferenceValues(subtitle = "${scale.label} · $curve",
         segments = reference.segments.mapIndexed { index, segment ->
             MonitorFalseColorReferenceSegment(index, segment.lowerFraction.toDouble(), segment.upperFraction.toDouble(),

@@ -43,6 +43,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.flow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -160,8 +161,6 @@ class NikonMonitorHostLifetimeComposeTest {
             assertTrue(assists.shared.isOn(MonitorAssistTool.WAVE))
             assertTrue(assists.shared.isOn(MonitorAssistTool.HISTO))
             assertTrue(assists.shared.isOn(MonitorAssistTool.PARADE))
-            assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
-                assists.shared.portraitScopes(scopesShown(assists.shared::isOn)))
         }
         composeRule.onNodeWithContentDescription("${MonitorAssistTool.PARADE.title}, on")
             .performSemanticsAction(SemanticsActions.OnLongClick)
@@ -231,10 +230,18 @@ class NikonMonitorHostLifetimeComposeTest {
         composeRule.waitUntil(10_000) {
             runCatching { pixel().let { it.red > it.green + .1f } }.getOrDefault(false)
         }
-        // Settings/Media cover destroys the visible editor demand without opening another source.
+        // A Settings/Media cover dismisses the editor with its demand (the shared interaction lifecycle, as on
+        // iOS) without opening another source; back in front it stays closed until the operator reopens it,
+        // and the reopened editor previews the current source again.
         composeRule.runOnIdle { front.value = false }
         composeRule.waitUntil(5_000) { assists.shared.inspectorScopeDemand == null }
-        composeRule.runOnIdle { front.value = true }
+        composeRule.runOnIdle {
+            assertNull(assists.shared.configureTool)
+            front.value = true
+        }
+        composeRule.onNodeWithContentDescription("${MonitorAssistTool.LUT.title} image preview").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("${MonitorAssistTool.LUT.title}, on")
+            .performSemanticsAction(SemanticsActions.OnLongClick)
         composeRule.waitUntil(10_000) {
             runCatching { pixel().let { it.red > it.green + .1f } }.getOrDefault(false)
         }

@@ -2,7 +2,6 @@ package com.opencapture.openzcine
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Log
 import android.view.TextureView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -18,8 +17,11 @@ import com.opencapture.opencine.media.ScopeSamples
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.opencine.runtime.ScopeSampleBus
+import com.opencapture.opencine.runtime.MonitorAssistEngine
+import com.opencapture.opencine.runtime.MonitorAssistScopeConfiguration
+import com.opencapture.opencine.runtime.MonitorAssistScopeSource
+import com.opencapture.opencine.media.ScopeTapPolicy
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.monitorui.MonitorRect
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutSelection
@@ -30,15 +32,10 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-private const val TAG = "ZCScope"
-
-private const val NANOS_PER_SECOND = 1_000_000_000.0
 
 /** Widest reduction frame handed to the core sampler (1280→160, 1024→128). */
 private const val REDUCTION_MAX_WIDTH = 160
@@ -127,25 +124,16 @@ fun scopeSamplingDemand(
     )
 }
 
-/** Exact Android mirror of iOS `ScopeAssistSampling.thermalScopeInterval`. */
-internal fun scopePeriodNanos(activeScopeCount: Int, thermalTier: AndroidThermalTier): Long {
-    // iOS refreshes its scopes at ~10 Hz; ticking faster than the reference
-    // buys nothing visually and triples decode + raster + redraw work.
-    val baseFramesPerSecond = if (activeScopeCount > 3) 10.0 else 12.0
-    val multiplier =
-        when (thermalTier) {
-            AndroidThermalTier.NOMINAL, AndroidThermalTier.FAIR -> 1.0
-            // Core serious ×1.5 shedding, then iOS scope-specific ×2.
-            AndroidThermalTier.SERIOUS -> 3.0
-            // Core critical ×2 shedding, then iOS scope-specific ×2.5.
-            AndroidThermalTier.CRITICAL -> 5.0
-        }
-    return (NANOS_PER_SECOND / baseFramesPerSecond * multiplier).roundToInt().toLong()
-}
+/** Host thermal reports enter the shared scope cadence without a separate app scheduler. */
+internal fun scopePeriodNanos(activeScopeCount: Int, thermalTier: AndroidThermalTier): Long =
+    ScopeSampler.minIntervalNs(activeScopeCount, thermalTier.scopeMultiplier)
 
-/** First two eligible selections, without changing the active set or floating-scope order. */
-fun portraitDisplayedScopes(selected: Set<ScopeKind>): List<ScopeKind> =
-    ScopeKind.canonical.filter(selected::contains).take(2)
+private val AndroidThermalTier.scopeMultiplier: Double
+    get() = ScopeSampler.thermalMultiplier(when (this) {
+        AndroidThermalTier.NOMINAL, AndroidThermalTier.FAIR -> 0
+        AndroidThermalTier.SERIOUS -> 3
+        AndroidThermalTier.CRITICAL -> 4
+    })
 
 /** One immutable native registration request for the vectorscope monitor cube. */
 internal data class ScopeVectorLutRequest(
@@ -205,12 +193,19 @@ internal data class ScopeTickInputs(
             includePoints = includePoints, stride = SAMPLE_STRIDE, includeSampleCoordinates = true,
             requireCompleteRows = true)
 
-    /** The shared bundle (lamps with hysteresis and the clip shelf, histogram on the shared axis). */
+    val policy: ScopeTapPolicy get() = ScopeTapPolicy(
+        waveform = ScopeKind.WAVEFORM in selected, parade = ScopeKind.PARADE in selected,
+        histogram = ScopeKind.HISTOGRAM in selected, vectorscope = ScopeKind.VECTORSCOPE in selected,
+        trafficLights = ScopeKind.TRAFFIC_LIGHTS in selected, trafficThreshold = trafficThreshold,
+        transfer = transfer)
+
+    fun configuration(look: MonitorLUTCube?): MonitorAssistScopeConfiguration =
+        MonitorAssistScopeConfiguration(transfer, ceiling, look)
+
+    /** Playback keeps its existing item owner and uses the same shared assist derivation as live. */
     fun bundle(samples: ScopeSamples, look: MonitorLUTCube?, previous: ScopeAssistBundle): ScopeAssistBundle =
-        ScopeSampler.bundle(samples, transfer,
-            includePoints = scopeSamplingDemand(selected, histogramTrafficLightsEnabled).pointTrace,
-            includeVectorPoints = look != null, look = look, trafficThreshold = trafficThreshold,
-            previous = previous, ceiling = ceiling)
+        MonitorAssistEngine.bundle(samples, configuration(look), policy, previous)
+
 }
 
 @Composable
@@ -241,21 +236,13 @@ private fun rememberScopeVectorLut(
  */
 @Composable
 internal fun rememberNikonLiveScopeBundles(
-    selectedScopes: Set<ScopeKind>, portraitScopes: List<ScopeKind>, assist: MonitorAssistState,
+    selectedScopes: Set<ScopeKind>, assist: MonitorAssistState,
     cameraInput: ExposureAssistCameraInput, lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?,
-    thermalTier: AndroidThermalTier, source: LiveFrameSource, isPortrait: Boolean,
-    portraitFloating: Boolean, scopeZone: MonitorRect?,
+    thermalTier: AndroidThermalTier, source: LiveFrameSource,
 ): Flow<ScopeAssistBundle>? {
-    val displayed =
-        displayedScopeKinds(
-            selectedScopes = selectedScopes,
-            portraitScopes = portraitScopes,
-            isPortrait = isPortrait,
-            portraitFloating = portraitFloating,
-        )
+    val displayed = ScopeKind.canonical.filter(selectedScopes::contains)
     // This guard also stops all collection when no displayed panel exists.
     if (displayed.isEmpty()) return null
-    if (isPortrait && !portraitFloating && scopeZone == null) return null
     // A scope cannot honor camera-dependent display mapping without the Swift
     // facade, so fail closed rather than locally selecting a fallback curve.
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
@@ -264,7 +251,7 @@ internal fun rememberNikonLiveScopeBundles(
     val inputs = ScopeTickInputs(ScopeKind.canonical.filter(displayed::contains).toSet(), assist, mapping,
         vectorLut, scopePeriodNanos(displayed.size, thermalTier))
     LaunchedEffect(source, inputs) {
-        withContext(Dispatchers.Default) { pumpLiveScopes(source.frames, inputs, bus) }
+        withContext(Dispatchers.Default) { pumpLiveScopes(source.frames, inputs, bus, thermalTier.scopeMultiplier) }
     }
     return remember(bus) { bus.publications.map { it.bundle } }
 }
@@ -299,88 +286,34 @@ internal fun rememberNikonPlaybackScopeConfiguration(
         scopePeriodNanos(selected.size, thermalTier)), look)
 }
 
-/** Resolves stacked portrait-fit scopes versus uncapped floating fill/landscape scopes. */
-internal fun displayedScopeKinds(
-    selectedScopes: Set<ScopeKind>,
-    portraitScopes: List<ScopeKind>,
-    isPortrait: Boolean,
-    portraitFloating: Boolean,
-): List<ScopeKind> =
-    if (isPortrait && !portraitFloating) {
-        portraitScopes.filter(selectedScopes::contains)
-    } else {
-        ScopeKind.canonical.filter(selectedScopes::contains)
-    }
-
 /**
  * Absolute-schedule live sampler: never gates by source-frame cadence, so it
  * retains the iOS wall-clock anti-aliasing policy while sharing one decoder.
  */
 private suspend fun pumpLiveScopes(
-    frames: Flow<LiveFrame>,
-    inputs: ScopeTickInputs,
-    bus: ScopeSampleBus,
+    frames: Flow<LiveFrame>, inputs: ScopeTickInputs, bus: ScopeSampleBus, thermalMultiplier: Double,
 ): Unit = coroutineScope {
     val latest = AtomicReference<LiveScopeInput?>(null)
     var generation = 0L
-    val collector =
-        launch {
-            frames.collect { frame ->
-                generation += 1
-                latest.set(LiveScopeInput(generation, frame.jpegData))
-            }
+    val collector = launch {
+        frames.collect { frame ->
+            generation += 1
+            latest.set(LiveScopeInput(generation, frame.jpegData))
         }
+    }
     val tap = ScopeFrameTap()
     var lastGeneration = Long.MIN_VALUE
+    val look = if (inputs.policy.includeVectorPoints) inputs.vectorLut?.cube() else null
     try {
-        pumpReducedScopes(inputs, bus, ScopeSampleBus.Role.LIVE) {
-            val next = latest.get() ?: return@pumpReducedScopes null
-            if (next.generation == lastGeneration) return@pumpReducedScopes null
+        MonitorAssistEngine().run(MonitorAssistScopeSource { includePoints ->
+            val next = latest.get() ?: return@MonitorAssistScopeSource null
+            if (next.generation == lastGeneration) return@MonitorAssistScopeSource null
             lastGeneration = next.generation
-            tap.reduce(next.jpeg)
-        }
+            tap.reduce(next.jpeg)?.let { inputs.samples(it, includePoints) } ?: ScopeSamples.EMPTY
+        }, inputs.configuration(look), inputs.policy, bus, thermalMultiplier)
     } finally {
         collector.cancel()
-    }
-}
-
-/**
- * Absolute-schedule clean-frame sampler shared by live JPEG and playback
- * TextureView inputs. Sampling, lamps, axis and plots are the shared OpenCine
- * scopes over the camera's transfer and stated clip. This loop owns demand,
- * cadence and the bus lease.
- */
-private suspend fun pumpReducedScopes(
-    inputs: ScopeTickInputs,
-    bus: ScopeSampleBus,
-    role: ScopeSampleBus.Role,
-    nextFrame: suspend () -> ReducedScopeFrame?,
-) {
-    val demand = scopeSamplingDemand(inputs.selected, inputs.histogramTrafficLightsEnabled)
-    if (!demand.traces && !demand.vector) return
-    val look = if (demand.vector) inputs.vectorLut?.cube() else null
-    if (demand.vector && look == null) {
-        Log.w(TAG, "active vectorscope LUT is unavailable; vectorscope rendering disabled")
-    }
-    val lease = bus.openSource(role)
-    try {
-        val stats = ScopeTickStats { if (BuildConfig.DEBUG) Log.d(TAG, it) }
-        var bundle = ScopeAssistBundle.EMPTY
-        val startNanos = System.nanoTime()
-        var tick = 0L
-        while (true) {
-            tick = max(tick + 1, (System.nanoTime() - startNanos) / inputs.periodNanos)
-            val waitMillis = (startNanos + tick * inputs.periodNanos - System.nanoTime()) / 1_000_000
-            if (waitMillis > 0) delay(waitMillis)
-
-            val tickStart = System.nanoTime()
-            val reduced = nextFrame() ?: continue
-            bundle = inputs.bundle(inputs.samples(reduced, demand.pointTrace || look != null), look, bundle)
-            if (!bus.publish(lease, bundle)) return
-            stats.tickCompleted(System.nanoTime() - tickStart, System.nanoTime())
-        }
-    } finally {
-        bus.closeSource(lease)
+        tap.close()
     }
 }
 
@@ -407,6 +340,12 @@ private class ScopeFrameTap {
     private val options = BitmapFactory.Options().apply { inMutable = true }
     private var bitmap: Bitmap? = null
     private var rgba = ByteArray(0)
+
+    fun close() {
+        bitmap?.recycle()
+        bitmap = null
+        rgba = ByteArray(0)
+    }
 
     fun reduce(jpeg: ByteArray): ReducedScopeFrame? {
         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, boundsOptions)
@@ -487,29 +426,4 @@ internal interface PlaybackScopeFrameSource {
 
     /** Returns the newest unconsumed reduced frame, or null when no decoded frame changed. */
     suspend fun capture(): ReducedScopeFrame?
-}
-
-/** Cadence accounting: achieved rate plus per-tick cost every 5 seconds. */
-private class ScopeTickStats(private val log: (String) -> Unit) {
-    private var ticks = 0L
-    private var totalNanos = 0L
-    private var maxNanos = 0L
-    private var windowStart = 0L
-
-    fun tickCompleted(costNanos: Long, nowNanos: Long) {
-        if (windowStart == 0L) windowStart = nowNanos
-        ticks++
-        totalNanos += costNanos
-        maxNanos = max(maxNanos, costNanos)
-        val elapsed = nowNanos - windowStart
-        if (elapsed < 5_000_000_000L) return
-        log(
-            "scope pacing: %.1f Hz | tick avg %.1f ms max %.1f ms"
-                .format(ticks * 1e9 / elapsed, totalNanos / ticks / 1e6, maxNanos / 1e6),
-        )
-        ticks = 0
-        totalNanos = 0
-        maxNanos = 0
-        windowStart = nowNanos
-    }
 }

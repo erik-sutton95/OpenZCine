@@ -22,8 +22,10 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
     private var stamps: [TimeInterval?] = [nil, nil, nil, nil]
     private var previous: (at: TimeInterval, counts: [Int])?
 
-    init(source: FeedIncidentSessionSource,
-        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    init(
+        source: FeedIncidentSessionSource,
+        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
         self.source = source
         self.clock = clock
     }
@@ -49,7 +51,8 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
     }
 
     func snapshot(lifecycle: FeedIncidentLifecycle, now: TimeInterval, wall: Date = Date())
-        -> FeedIncidentSnapshot {
+        -> FeedIncidentSnapshot
+    {
         lock.withLock {
             var life = lifecycle
             // A successful image return is observed output. Raster publication is not scanout.
@@ -62,8 +65,10 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
                 return Double(max(0, counts[index] - previous.counts[index])) / elapsed
             }
             func age(_ index: Int) -> TimeInterval? { stamps[index].map { max(0, now - $0) } }
-            let sample = FeedIncidentSnapshot(monotonicNow: now, wallClock: wall,
-                rates: .init(accessUnitHz: rate(0), decodeSubmitHz: rate(1), decodedOutputHz: rate(2)),
+            let sample = FeedIncidentSnapshot(
+                monotonicNow: now, wallClock: wall,
+                rates: .init(
+                    accessUnitHz: rate(0), decodeSubmitHz: rate(1), decodedOutputHz: rate(2)),
                 ages: .init(accessUnitAge: age(0), decodedOutputAge: age(2)),
                 decoder: .init(codec: "jpeg"), lifecycle: life)
             previous = (now, counts)
@@ -79,7 +84,9 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
 
     func breadcrumb(_ kind: FeedIncidentBreadcrumbKind, detail: String = "") {
         lock.withLock {
-            if !closed { source.recordBreadcrumb(.init(monotonicAt: clock(), kind: kind, detail: detail)) }
+            if !closed {
+                source.recordBreadcrumb(.init(monotonicAt: clock(), kind: kind, detail: detail))
+            }
         }
     }
 

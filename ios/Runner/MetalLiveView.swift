@@ -8,7 +8,9 @@ import UIKit
 import VideoToolbox
 import os
 
-// MetalFX is a device-only framework — there is no `MetalFX.framework` in the iOS Simulator SDK,
+import class OpenCineCameraVocabulary.CustomLUTStore
+
+// MetalFX is a device-only framework - there is no `MetalFX.framework` in the iOS Simulator SDK,
 // so an unconditional import breaks `just ios-build` and `just ios-test`. Every use below is behind
 // the same check, with a `false`-returning stub for the simulator that routes to Lanczos.
 #if canImport(MetalFX)
@@ -21,7 +23,7 @@ import os
 /// This used to be off unless `ZC_METAL_FEED=1` was set, on the reasoning that an unvalidated GPU
 /// path must never regress the shipping feed. What that reasoning missed is the cost of the path it
 /// was protecting: the `UIImageView` route reads every rendered frame back off the GPU as `RGBAh`,
-/// eight bytes a pixel — roughly 4.7 MB per frame and 140 MB/s at 30 fps — only for SwiftUI to
+/// eight bytes a pixel - roughly 4.7 MB per frame and 140 MB/s at 30 fps - only for SwiftUI to
 /// upload it again to display. Measured on an iPhone 16 Pro Max that pipeline ran 35.4 ms of CPU
 /// against 2.5 ms of GPU per frame and held 28 fps with the energy gauge in the red. Being careful
 /// about the new path was costing more than the risk it avoided.
@@ -34,7 +36,7 @@ enum FeedRenderMode {
 
     private static let metalFeedEnabledState = OSAllocatedUnfairLock(initialState: true)
 
-    /// Runtime gate for the Metal feed — stays off after a persistent render failure so the app
+    /// Runtime gate for the Metal feed - stays off after a persistent render failure so the app
     /// falls back to `LiveFrameView` without per-frame `CIRenderDestination` error spam.
     static var metalFeedEnabled: Bool {
         useMetal && metalFeedEnabledState.withLock { $0 }
@@ -49,7 +51,7 @@ enum FeedRenderMode {
         }
         if wasEnabled {
             Logger(subsystem: "OpenZCine", category: "LiveView").error(
-                "Metal live feed disabled — falling back to UIImageView: \(reason, privacy: .public)"
+                "Metal live feed disabled - falling back to UIImageView: \(reason, privacy: .public)"
             )
             NotificationCenter.default.post(name: .metalFeedDisabled, object: nil)
         }
@@ -67,7 +69,7 @@ extension Notification.Name {
 }
 
 /// GPU-native live-view feed: renders the frame (with monitor effects) on the GPU via Core Image,
-/// then scales into the `MTKView` drawable — no `createCGImage` GPU→CPU readback. Core Image cannot
+/// then scales into the `MTKView` drawable - no `createCGImage` GPU→CPU readback. Core Image cannot
 /// write CAMetalLayer drawables directly (they lack `MTLTextureUsageShaderWrite`), so CI renders to
 /// a private intermediate texture and the present copies it to the swapchain texture.
 ///
@@ -75,13 +77,13 @@ extension Notification.Name {
 /// `MonitorFrameBaker.bakeSize`), so the present is a scale rather than a copy: one bilinear
 /// sample per drawable pixel instead of a whole Core Image graph per drawable pixel.
 ///
-/// Opt-in alternative to `LiveFrameView` (see `FeedRenderMode`). **Needs on-device validation** — the
+/// Opt-in alternative to `LiveFrameView` (see `FeedRenderMode`). **Needs on-device validation** - the
 /// vertical flip, crop, and colour-space handling below are correct by the documented pattern
 /// but only a GPU capture against the live ZR confirms orientation/aspect/colour pixel-for-pixel.
 struct MetalLiveView: UIViewRepresentable {
     let image: UIImage
     let effects: LiveImageEffects
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
     var source: LiveFrameSampleBus.Source? = nil
     var qualification: (@MainActor () -> MonitorNativeQualificationSnapshot?)? = nil
 
@@ -90,10 +92,10 @@ struct MetalLiveView: UIViewRepresentable {
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: context.coordinator.device)
         view.accessibilityIdentifier = "monitor.native.picture"
-        // CI never writes the layer drawable directly — we blit from an intermediate texture — but
+        // CI never writes the layer drawable directly - we blit from an intermediate texture - but
         // both upscalers in `draw(in:)` do, from a compute kernel, so the drawable texture needs
         // `.shaderWrite`. `framebufferOnly = false` is what grants it (there is no `usage` knob on
-        // `CAMetalLayer`), and the MPS path already depended on it — do not set this back to true.
+        // `CAMetalLayer`), and the MPS path already depended on it - do not set this back to true.
         view.framebufferOnly = false
         if let metalLayer = view.layer as? CAMetalLayer {
             metalLayer.framebufferOnly = false
@@ -101,7 +103,7 @@ struct MetalLiveView: UIViewRepresentable {
         view.isPaused = true  // Push model: redraw only when a new frame arrives (setNeedsDisplay).
         view.enableSetNeedsDisplay = true
         view.colorPixelFormat = .bgra8Unorm
-        // Fit, never fill: a frame/picture aspect mismatch must letterbox, not crop —
+        // Fit, never fill: a frame/picture aspect mismatch must letterbox, not crop -
         // the operator loses exactly the frame edges they are checking (#115).
         view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
@@ -161,7 +163,7 @@ struct MetalLiveView: UIViewRepresentable {
             return value
         }
 
-        init(fileStore: LUTFileStore) {
+        init(fileStore: CustomLUTStore) {
             device = MTLCreateSystemDefaultDevice()!
             baker = MetalFeedFrameBaker(device: device, fileStore: fileStore)
             presenter = MonitorMetalPicturePresenter(
@@ -227,7 +229,7 @@ struct MetalLiveView: UIViewRepresentable {
 /// Unlike every other option in the picker, this one is not a fixed property of the hardware: the
 /// processor ships without its model and reports `downloadRequired` until someone fetches it over
 /// the network. Apple asks that the download be driven "with user awareness and interaction", and
-/// this app spends much of its life on a camera's access point with no route to the internet — so
+/// this app spends much of its life on a camera's access point with no route to the internet - so
 /// nothing here starts on its own. The operator taps, or the option stays absent.
 @MainActor
 @Observable
@@ -235,7 +237,7 @@ final class SuperResolutionModel {
     static let shared = SuperResolutionModel()
 
     enum State: Equatable {
-        /// The processor does not exist on this device or OS — there is nothing to download.
+        /// The processor does not exist on this device or OS - there is nothing to download.
         case unavailable
         /// Supported, model absent. This is the only state that offers a download.
         case needsDownload
@@ -249,7 +251,7 @@ final class SuperResolutionModel {
     /// Whether the quality-prioritized upscaler can run right now.
     ///
     /// `nonisolated` and asked of VideoToolbox rather than of this object, because the renderer's
-    /// own default resolves off the main actor before any view exists — and because the answer
+    /// own default resolves off the main actor before any view exists - and because the answer
     /// changes when a download finishes, so it cannot be cached in a `let` like the others.
     nonisolated static var isReady: Bool {
         #if targetEnvironment(simulator)
@@ -261,7 +263,7 @@ final class SuperResolutionModel {
     }
 
     #if !targetEnvironment(simulator)
-        /// A configuration built only to be asked questions — model status, download progress — at
+        /// A configuration built only to be asked questions - model status, download progress - at
         /// a representative feed size inside the processor's iOS input cap (1440×1080 for video).
         /// The model asset is per-processor, not per-size, so any valid configuration answers for
         /// all of them.
@@ -328,7 +330,7 @@ final class SuperResolutionModel {
     ///
     /// Two seconds, not the half-second this started at. Reading `configurationModelStatus` makes
     /// MobileAsset try to lock the asset, and while the download is still in flight that lock fails
-    /// and logs `LockNoWaitNoDownloadedAsset` every time — a device log filled with those was this
+    /// and logs `LockNoWaitNoDownloadedAsset` every time - a device log filled with those was this
     /// poll asking four times as often as a progress bar needs, not the download going wrong.
     private func pollProgress() {
         Task { @MainActor [weak self] in
@@ -344,7 +346,7 @@ final class SuperResolutionModel {
 /// Runtime control for VideoToolbox's temporal noise filter over the live feed.
 ///
 /// Mounted by `FeedDenoiseDebugKey` on the live feed; `ZC_DEMO_DENOISE` seeds it at launch. The
-/// key came out once while the filter appeared dead — that was the end-before-start bug
+/// key came out once while the filter appeared dead - that was the end-before-start bug
 /// (`LiveFeedSuperResolution.prepare`), and it returned with the fix.
 @MainActor
 @Observable
@@ -353,7 +355,7 @@ final class LiveDenoiseSwitch {
 
     private nonisolated static let storageKey = "OpenZCine.feedNoiseReduction"
 
-    /// Whether this device can run the filter at all — the same rule the upscaler options follow.
+    /// Whether this device can run the filter at all - the same rule the upscaler options follow.
     /// An operator switch that quietly does nothing is worse than no switch.
     static var isSupportedOnThisDevice: Bool {
         #if targetEnvironment(simulator)
@@ -381,13 +383,13 @@ final class LiveDenoiseSwitch {
     }
 
     /// What the decode actor reads. It runs off any actor, so a plain mirrored value is what
-    /// crosses — the worst a torn read can do is carry the old setting for one frame.
+    /// crosses - the worst a torn read can do is carry the old setting for one frame.
     nonisolated(unsafe) static var decoderReadsEnabled = UserDefaults.standard.bool(
         forKey: storageKey)
     nonisolated(unsafe) static var decoderReadsStrength: Float = 1
 
     /// Why the filter turned itself off, when it has. Written by the decode side, read by the
-    /// settings row — the switch must never sit there looking armed over a filter that has given
+    /// settings row - the switch must never sit there looking armed over a filter that has given
     /// up, which is exactly how "it stopped working" arrives with nothing to act on.
     nonisolated(unsafe) static var decoderReportsUnavailable: String?
     private init() {}
@@ -396,7 +398,7 @@ final class LiveDenoiseSwitch {
 /// Which upscaler the feed is using, set from the Link settings row.
 ///
 /// Neither MetalFX nor VideoToolbox super resolution exists in the simulator, so what they buy can
-/// only be judged on a device against a live feed — which makes a relaunch-free picker the only
+/// only be judged on a device against a live feed - which makes a relaunch-free picker the only
 /// honest way to compare them with the Lanczos floor on the same shot. Read once per encode rather
 /// than latched at construction, so the next frame carries the change.
 @MainActor
@@ -414,13 +416,13 @@ final class FeedUpscaleSwitch {
         }
     }
 
-    /// What the renderer actually reads. The encode paths are nonisolated — they run from the draw
-    /// callback, not an actor — so they cannot touch the main-actor property above. A single value
+    /// What the renderer actually reads. The encode paths are nonisolated - they run from the draw
+    /// callback, not an actor - so they cannot touch the main-actor property above. A single value
     /// mirrored on every change is enough: the worst a torn read could do is carry the old upscaler
     /// for one more frame, which is the very thing being compared.
     ///
     /// It seeds itself rather than being seeded by ``shared``, because the renderer runs whether or
-    /// not the settings panel was ever opened — reading the stored choice here is what keeps a
+    /// not the settings panel was ever opened - reading the stored choice here is what keeps a
     /// default of "the best this device has" from collapsing to the floor on an untouched launch.
     nonisolated(unsafe) static var rendererReadsUpscaler: MonitorUpscaler = .supported(
         or: storedChoice)
@@ -431,7 +433,7 @@ final class FeedUpscaleSwitch {
     /// the static above it is: the renderer's seed cannot wait for the main actor.
     ///
     /// The raw values ARE the stored keys and they were renamed to operator-facing words, so the
-    /// old ones are mapped rather than dropped — an operator who chose MetalFX keeps Quality
+    /// old ones are mapped rather than dropped - an operator who chose MetalFX keeps Quality
     /// instead of being silently reset to the default.
     private nonisolated static var storedChoice: MonitorUpscaler? {
         guard let stored = UserDefaults.standard.string(forKey: storageKey) else { return nil }

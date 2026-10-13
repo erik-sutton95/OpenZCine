@@ -1,6 +1,6 @@
 // JNI facade over OpenZCineCore for the Android app.
 //
-// Hand-written `@_cdecl` shims (not swift-java/jextract — see
+// Hand-written `@_cdecl` shims (not swift-java/jextract - see
 // docs/investigations/android-core-feasibility.md, Phase 1 note) matching the
 // `external fun` declarations in
 // Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/bridge/SwiftCore.kt.
@@ -16,7 +16,7 @@
 
     // MARK: - Info
 
-    /// `SwiftCore.coreVersion(): String` — proves the Swift core is alive in-process.
+    /// `SwiftCore.coreVersion(): String` - proves the Swift core is alive in-process.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_coreVersion")
     public func swiftCoreVersion(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?
@@ -31,7 +31,7 @@
         return javaString(env, "OpenZCineCore swift-android/\(arch)")
     }
 
-    /// `SwiftCore.playbackAudioMeterStep(...)` — advances decoded-playback stereo
+    /// `SwiftCore.playbackAudioMeterStep(...)` - advances decoded-playback stereo
     /// peaks through the shared dBFS conversion and attack/decay/peak-hold policy.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_playbackAudioMeterStep")
     public func swiftCorePlaybackAudioMeterStep(
@@ -54,7 +54,7 @@
     // MARK: - Frame.io OAuth + request policy
 
     /// `SwiftCore.frameioBeginAuthorization(clientID, redirectURI): String?`
-    /// — starts a shared-core PKCE transaction. The JSON wire can contain a
+    /// - starts a shared-core PKCE transaction. The JSON wire can contain a
     /// verifier and must remain process-local; Kotlin must never log it.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioBeginAuthorization")
     public func swiftCoreFrameioBeginAuthorization(
@@ -71,7 +71,7 @@
     }
 
     /// `SwiftCore.frameioParseRedirect(redirectURI, callbackURI, expectedState): String?`
-    /// — validates exact redirect identity plus OAuth state, returning only a
+    /// - validates exact redirect identity plus OAuth state, returning only a
     /// code. Error details and code values are deliberately not logged here.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioParseRedirect")
     public func swiftCoreFrameioParseRedirect(
@@ -88,7 +88,7 @@
         return javaString(env, code)
     }
 
-    /// `SwiftCore.frameioTokenRequest(...)` — builds the shared Adobe IMS form
+    /// `SwiftCore.frameioTokenRequest(...)` - builds the shared Adobe IMS form
     /// request for the Android HTTPS adapter. The returned form can contain an
     /// auth code or refresh token and must never be logged.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioTokenRequest")
@@ -108,7 +108,7 @@
         return javaString(env, payload)
     }
 
-    /// `SwiftCore.frameioAPIRequest(...)` — plans one portable V4 endpoint and
+    /// `SwiftCore.frameioAPIRequest(...)` - plans one portable V4 endpoint and
     /// JSON body. Kotlin attaches an encrypted stored bearer token and performs
     /// HTTPS; endpoint / request-model policy stays in Swift.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioAPIRequest")
@@ -128,7 +128,7 @@
         return javaString(env, payload)
     }
 
-    /// `SwiftCore.frameioDecodeResponse(operation, response): String?` —
+    /// `SwiftCore.frameioDecodeResponse(operation, response): String?` -
     /// decodes API JSON through the shared Codable models before Kotlin uses it
     /// for presentation. The raw response is never logged at the bridge.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioDecodeResponse")
@@ -145,7 +145,7 @@
         return javaString(env, decoded)
     }
 
-    /// `SwiftCore.frameioMediaTypeForFilename(filename): String` — asks the
+    /// `SwiftCore.frameioMediaTypeForFilename(filename): String` - asks the
     /// shared core for the upload MIME family instead of inferring it in Kotlin.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioMediaTypeForFilename")
     public func swiftCoreFrameioMediaTypeForFilename(
@@ -157,7 +157,7 @@
 
     // MARK: - Feed effects (baked in the core, uploaded by Kotlin)
 
-    /// `SwiftCore.bakeLut(lookOrdinal, size): ByteArray?` — a built-in monitor
+    /// `SwiftCore.bakeLut(lookOrdinal, size): ByteArray?` - a built-in monitor
     /// look baked by the core into the packed-2D RGBA8 grid described in
     /// `FeedEffectsWire`. Null for unknown ordinals/sizes.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeLut")
@@ -172,7 +172,7 @@
     }
 
     /// `SwiftCore.exposureAssistMapping(codec, iso, baseIso, stillsToneMode): FloatArray`
-    /// — camera-aware curve and code-value anchors. Kotlin forwards camera
+    /// - camera-aware curve and code-value anchors. Kotlin forwards camera
     /// metadata but never selects a curve or clip endpoint itself; a non-null
     /// stills tone mode marks the photo selector active and swaps the movie
     /// codec's log mapping for the display-referred stills one.
@@ -190,7 +190,7 @@
         )
     }
 
-    /// `SwiftCore.zebraEditorValue(...)` — converts a canonical monitor-percent
+    /// `SwiftCore.zebraEditorValue(...)` - converts a canonical monitor-percent
     /// threshold into the requested editor unit. `NaN` is a fail-closed result
     /// for an unsupported unit ordinal.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraEditorValue")
@@ -204,7 +204,7 @@
             unitOrdinal: Int(unitOrdinal), monitorPercent: Double(monitorPercent)) ?? .nan
     }
 
-    /// `SwiftCore.zebraMonitorPercent(...)` — converts an editor threshold to
+    /// `SwiftCore.zebraMonitorPercent(...)` - converts an editor threshold to
     /// the canonical monitor axis. `NaN` makes malformed unit input fail closed.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_zebraMonitorPercent")
     public func swiftCoreZebraMonitorPercent(
@@ -217,7 +217,7 @@
             unitOrdinal: Int(unitOrdinal), value: Double(editorValue)) ?? .nan
     }
 
-    /// `SwiftCore.feedEffectsConfiguration(...)` — full source-measurement
+    /// `SwiftCore.feedEffectsConfiguration(...)` - full source-measurement
     /// thresholds and overlay RGB for the Android shader. Every colour,
     /// threshold, and camera mapping stays owned by the Swift core.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_feedEffectsConfiguration")
@@ -240,7 +240,7 @@
         return javaFloatArray(env, values)
     }
 
-    /// `SwiftCore.bakeFalseColorCube(scaleOrdinal, curveOrdinal, clipNative): ByteArray?` —
+    /// `SwiftCore.bakeFalseColorCube(scaleOrdinal, curveOrdinal, clipNative): ByteArray?` -
     /// the core's false-colour cube (64³) in the same packed-2D RGBA8 grid.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorCube")
     public func swiftCoreBakeFalseColorCube(
@@ -248,40 +248,40 @@
         curveOrdinal: jint, clipNative: jfloat
     ) -> jbyteArray? {
         guard
-            let bytes = FeedEffectsWire.bakedFalseColor(
+            let bytes = FeedEffectsWire.bakedMonitorFalseColor(
                 scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
                 clipNative: Double(clipNative))
         else { return nil }
         return javaByteArray(env, bytes)
     }
 
-    /// `SwiftCore.bakeFalseColorLimitsPaint(curveOrdinal, clipNative): ByteArray?` —
+    /// `SwiftCore.bakeFalseColorLimitsPaint(curveOrdinal, clipNative): ByteArray?` -
     /// the Swift-owned colour paint for additive Limits false colour.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorLimitsPaint")
     public func swiftCoreBakeFalseColorLimitsPaint(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
     ) -> jbyteArray? {
         guard
-            let bytes = FeedEffectsWire.bakedFalseColorLimitsPaint(
+            let bytes = FeedEffectsWire.bakedMonitorFalseColorLimitsPaint(
                 curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
         else { return nil }
         return javaByteArray(env, bytes)
     }
 
-    /// `SwiftCore.bakeFalseColorLimitsWeight(curveOrdinal, clipNative): ByteArray?` —
+    /// `SwiftCore.bakeFalseColorLimitsWeight(curveOrdinal, clipNative): ByteArray?` -
     /// the Swift-owned weight mask for additive Limits false colour.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeFalseColorLimitsWeight")
     public func swiftCoreBakeFalseColorLimitsWeight(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
     ) -> jbyteArray? {
         guard
-            let bytes = FeedEffectsWire.bakedFalseColorLimitsWeight(
+            let bytes = FeedEffectsWire.bakedMonitorFalseColorLimitsWeight(
                 curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
         else { return nil }
         return javaByteArray(env, bytes)
     }
 
-    /// `SwiftCore.falseColorReference(scaleOrdinal, curveOrdinal, clipNative): FloatArray?` —
+    /// `SwiftCore.falseColorReference(scaleOrdinal, curveOrdinal, clipNative): FloatArray?` -
     /// same palette bands as the baked false-colour payload.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_falseColorReference")
     public func swiftCoreFalseColorReference(
@@ -289,7 +289,7 @@
         curveOrdinal: jint, clipNative: jfloat
     ) -> jfloatArray? {
         guard
-            let values = FeedEffectsWire.falseColorReference(
+            let values = FeedEffectsWire.bakedMonitorFalseColorReference(
                 scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
                 clipNative: Double(clipNative))
         else { return nil }
@@ -297,7 +297,7 @@
     }
 
     /// `SwiftCore.feedEffectsScalars(curveOrdinal, zebraHighlightIre, zebraMidtoneIre):
-    /// FloatArray?` — `[deLogBlack, deLogClip, zebraHighlight, zebraMidtoneCentre]`
+    /// FloatArray?` - `[deLogBlack, deLogClip, zebraHighlight, zebraMidtoneCentre]`
     /// on the normalized 0–1 code axis (see `FeedEffectsWire.scalars`).
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_feedEffectsScalars")
     public func swiftCoreFeedEffectsScalars(
@@ -315,7 +315,7 @@
 
     // MARK: - Stored LUT library
 
-    /// `SwiftCore.validateImportedLut(bytes, category, fileName): String?` — validates strict
+    /// `SwiftCore.validateImportedLut(bytes, category, fileName): String?` - validates strict
     /// UTF-8 through the shared `CubeLUT` parser before Android copies a SAF document into
     /// app-private storage. The compact result is versioned by `LUTLibraryWire`; nil is a
     /// fail-closed import rejection.
@@ -332,7 +332,7 @@
         return javaString(env, record)
     }
 
-    /// `SwiftCore.packImportedLut(bytes): ByteArray?` — reparses an app-private cube and packs it
+    /// `SwiftCore.packImportedLut(bytes): ByteArray?` - reparses an app-private cube and packs it
     /// into the existing feed-effects texture layout. Kotlin must render nil as unavailable rather
     /// than reimplementing cube parsing, interpolation, or colour math.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_packImportedLut")
@@ -345,7 +345,7 @@
         return javaByteArray(env, bytes)
     }
 
-    /// `SwiftCore.redLutDownloadAvailability(hasInternetPath, isOnCameraAccessPoint): String?` —
+    /// `SwiftCore.redLutDownloadAvailability(hasInternetPath, isOnCameraAccessPoint): String?` -
     /// the versioned shared RED network guard. The Android shell supplies reachability and current
     /// camera-AP state; `RedLUTDownloadPolicy` remains the single decision owner.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_redLutDownloadAvailability")
@@ -362,7 +362,7 @@
 
     // MARK: - Link health and preview policy
 
-    /// `SwiftCore.resolveLiveViewRequest(...)` — resolves persisted Android
+    /// `SwiftCore.resolveLiveViewRequest(...)` - resolves persisted Android
     /// stream choices through `OperatorPreferences` plus
     /// `LiveViewLoadPolicy`. Kotlin receives a validated preview request but
     /// never maps choices to Nikon properties itself.
@@ -391,7 +391,7 @@
     /// Listener state that crosses to the pushing thread.
     ///
     /// The raw pointers are a JNI global reference, a process-wide `jmethodID`,
-    /// and the process-wide `JavaVM*` — all explicitly valid across threads per
+    /// and the process-wide `JavaVM*` - all explicitly valid across threads per
     /// the JNI spec, hence `@unchecked Sendable`.
     private struct ListenerHandle: @unchecked Sendable {
         let vm: UnsafeMutablePointer<JavaVM?>
@@ -399,7 +399,7 @@
         let method: jmethodID
     }
 
-    /// `SwiftCore.startConnectionDemo(listener)` — registers a Kotlin listener and
+    /// `SwiftCore.startConnectionDemo(listener)` - registers a Kotlin listener and
     /// pushes a canned connection-phase sequence from a Swift background thread.
     /// Proves the callback/streaming pattern (attach thread → upcall → detach)
     /// that session events and live-view frames will use.

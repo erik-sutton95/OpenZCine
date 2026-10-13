@@ -126,9 +126,9 @@ struct ShellAdoptionTests {
     }
 
     @Test(
-        "SIMULATED third scope stays active and inspectable while fit renders the first two eligible scopes"
+        "SIMULATED portrait fit renders every active scope, a third included, like Pocket and Insta (A1-20)"
     )
-    func scopeSelectionDoesNotConfuseActivationWithFitPlacement() {
+    func portraitFitRendersEveryActiveScope() {
         let model = NativeAppModel()
         let saved = model.preferences
         let live = model.assist.liveTools
@@ -154,19 +154,13 @@ struct ShellAdoptionTests {
         model.setAssist(.parade, visible: true)
 
         #expect(model.assist.liveTools.isSuperset(of: [.waveform, .histogram, .parade]))
-        #expect(
-            model.renderedFitScopes == [
-                .waveform, .parade,
-            ])
+        #expect(model.renderedLiveAssistTools.isSuperset(of: [.waveform, .histogram, .parade]))
         #expect(model.monitorNote == nil)
         model.showAssist(.vectorscope)
         #expect(model.assist.configureTool == MonitorAssistTool.vectorscope.selection)
         model.toggleAssist(.vectorscope)
         #expect(model.assist.liveTools.contains(.vectorscope))
-        #expect(
-            model.renderedFitScopes == [
-                .waveform, .parade,
-            ])
+        #expect(model.renderedLiveAssistTools.contains(.vectorscope))
         model.interfaceLocked = true
         model.toggleAssist(.vectorscope)
         #expect(model.assist.liveTools.contains(.vectorscope))

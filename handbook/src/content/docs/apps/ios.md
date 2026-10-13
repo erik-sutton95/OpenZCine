@@ -74,10 +74,8 @@ keeps your most used tools out and folds the rest behind its chevron.
 - **False color** is codec-aware, **zebras** mark levels, and
   **Traffic Lights** is a RED-inspired per-channel meter that leans over or
   under from middle gray.
-- In landscape and portrait fill, scope panels float and can be dragged and
-  resized; positions persist. Portrait fit stacks the two most recently
-  activated scopes. A third stays active but hidden until you close one or
-  pinch to fill.
+- Scope panels float over the picture and can be dragged and resized, in
+  landscape and in portrait fit or fill; positions persist.
 - In photo mode, scopes and false color read the stills preview (sRGB or HLG),
   and an EV meter follows the body's exposure indicator.
 

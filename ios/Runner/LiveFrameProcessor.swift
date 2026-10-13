@@ -5,15 +5,17 @@ import OpenZCineCore
 import UIKit
 import os
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Process-wide memo of generated/parsed LUT cubes, keyed by `LUTSelection.cacheKey` (or a
 /// false-colour scale key). The log-look cubes run ~10⁵ `pow`/`exp` calls to build, so generating
-/// each only once — and ideally off the main thread via `prewarmBuiltIns()` — keeps switching and
+/// each only once - and ideally off the main thread via `prewarmBuiltIns()` - keeps switching and
 /// scrolling the LUT drum smooth.
 enum LUTCubeCache {
     private struct State {
         var cache: [String: CubeLUT] = [:]
         var revisions: [String: UInt] = [:]
-        /// Access order, least-recent first — drives the LRU eviction.
+        /// Access order, least-recent first - drives the LRU eviction.
         var order: [String] = []
 
         mutating func markUsed(_ key: String) {
@@ -82,7 +84,7 @@ struct LiveImageEffects: Equatable, Sendable {
     var falseColor: FalseColorSettings?
     var peaking: PeakingSettings?
     var zebra: ZebraSettings?
-    /// Softens JPEG block steps before the look. Display path only — see `outputCIImage`.
+    /// Softens JPEG block steps before the look. Display path only - see `outputCIImage`.
     var blockSmoothing: BlockSmoothingSettings?
     /// Masks whatever block structure survives, after the look.
     var blockDither: BlockDitherSettings?
@@ -99,10 +101,10 @@ struct LiveImageEffects: Equatable, Sendable {
 /// Variance-gated smoothing of flat areas, to soften JPEG block steps.
 ///
 /// Trial values are driven from the demo harness so they can be swept on hardware without a
-/// rebuild — these are the only numbers in the feature and none of them have been calibrated
+/// rebuild - these are the only numbers in the feature and none of them have been calibrated
 /// against a real camera frame yet.
 struct BlockSmoothingSettings: Equatable, Sendable {
-    /// Tap offset in pixels. 2 gives a 5 px span from 9 taps — enough to ramp an 8 px block step.
+    /// Tap offset in pixels. 2 gives a 5 px span from 9 taps - enough to ramp an 8 px block step.
     var radius: Double = 2
     /// Neighbourhood mean-absolute-deviation, in levels out of 255, at which the filter fully
     /// disengages. Below this a region counts as flat; above it, detail is left alone.
@@ -114,7 +116,7 @@ struct BlockSmoothingSettings: Equatable, Sendable {
 /// Masking noise added after the look to break up residual block periodicity.
 struct BlockDitherSettings: Equatable, Sendable {
     /// Peak-to-peak amplitude in levels out of 255. Wants to be comparable to the block step it is
-    /// masking — a few levels, not a visible grain overlay.
+    /// masking - a few levels, not a visible grain overlay.
     var levels: Double = 3
 }
 
@@ -152,7 +154,7 @@ struct PeakingSettings: Equatable, Sendable {
     /// Multiplies the sensitivity's noise gate, in the gate's own (squared) domain.
     ///
     /// The RATIO the detector thresholds is near-invariant to the camera's encoding, but the gate is
-    /// an absolute magnitude, so it is not — see `Peaking.displayReferredGradientScale`. This is how
+    /// an absolute magnitude, so it is not - see `Peaking.displayReferredGradientScale`. This is how
     /// a step keeps meaning the same thing on the photography feed, which is display-referred, as it
     /// does on the log video feed the gates were calibrated against.
     var gateScale: Double = 1
@@ -161,7 +163,7 @@ struct PeakingSettings: Equatable, Sendable {
 struct ZebraSettings: Equatable, Sendable {
     var unit: AssistConfiguration.Zebra.Unit = .ire
     var highlightEnabled: Bool = true
-    /// Clip point as *reference* IRE — converted to native luma through the signal `curve`.
+    /// Clip point as *reference* IRE - converted to native luma through the signal `curve`.
     var highlightIRE: Double = 100
     var highlightColor: MonitorZebraPaint = .white
     var midtoneEnabled: Bool = true
@@ -183,7 +185,7 @@ extension NativeAppModel {
 
     /// Shared 0–100 black-to-clip mapping used by every live exposure assist. In photography
     /// mode the live view is a display-referred preview, so the mapping follows the stills
-    /// tone mode (sRGB, or HLG when the body reports it) — the movie codec's log curve would
+    /// tone mode (sRGB, or HLG when the body reports it) - the movie codec's log curve would
     /// anchor mid grey and the clip line in the wrong places. Video keeps the codec-derived
     /// log mapping; R3D NE follows Nikon's base-circuit/metadata-ISO warning table instead of
     /// assuming a fixed 70% native endpoint.
@@ -194,7 +196,7 @@ extension NativeAppModel {
         return videoExposureSignalMapping
     }
 
-    /// The movie-signal mapping, independent of the active selector — playback of video clips
+    /// The movie-signal mapping, independent of the active selector - playback of video clips
     /// keeps anchoring by the recording codec even while the body sits in photo mode.
     private var videoExposureSignalMapping: ExposureSignalMapping {
         ExposureSignalMapping.camera(
@@ -204,7 +206,7 @@ extension NativeAppModel {
     }
 
     /// The mapping playback assists use. Clips do not yet persist a verified tone profile, so
-    /// this follows the connected camera like every other assist — but with no camera at all it
+    /// this follows the connected camera like every other assist - but with no camera at all it
     /// falls back to Log3G10 (the ZR's primary R3D NE profile) instead of `forCameraCodec("")`'s
     /// N-Log default, so reviewing R3D-derived clips offline anchors correctly.
     var playbackExposureSignalMapping: ExposureSignalMapping {
@@ -219,13 +221,11 @@ extension NativeAppModel {
     /// toggles); the LUT follows the operator's picked look.
     var playbackImageEffects: LiveImageEffects {
         imageEffects(
-            for: assist.playbackTools, mapping: playbackExposureSignalMapping,
-            photographyPreview: false)
+            for: assist.playbackTools, mapping: playbackExposureSignalMapping)
     }
 
     private func imageEffects(
-        for visible: Set<MonitorAssistTool>, mapping: ExposureSignalMapping,
-        photographyPreview: Bool
+        for visible: Set<MonitorAssistTool>, mapping: ExposureSignalMapping
     ) -> LiveImageEffects {
         LiveImageEffects(
             lut: LUTResolution.active(
@@ -241,12 +241,8 @@ extension NativeAppModel {
                     color: Peaking.Color(rawValue: assist.peakingColor.rawValue) ?? .red,
                     sensitivity: Peaking.Sensitivity(rawValue: assist.peakingSensitivity.rawValue)
                         ?? .medium,
-                    // The photography feed is a display-referred preview, so its gradients run
-                    // larger than the log video feed the gates were calibrated on. Shared core
-                    // owns the squaring, so both shells resolve the same number.
-                    gateScale: photographyPreview
-                        ? Peaking.gateScale(
-                            gradientScale: Peaking.displayReferredGradientScale) : 1) : nil,
+                    // Calibration follows the actual encoded source, including playback.
+                    gateScale: mapping.curve.monitorTransfer.peakingGateScale) : nil,
             zebra: visible.contains(.zebra)
                 ? ZebraSettings(
                     unit: assistConfiguration.zebra.unit,
@@ -271,11 +267,10 @@ extension NativeAppModel {
 
     var liveImageEffects: LiveImageEffects {
         // The photo-filtered set: a creative LUT (or any cinema-only effect) left on in video
-        // must not ride into the photo feed — it cannot even be turned off from the photo
+        // must not ride into the photo feed - it cannot even be turned off from the photo
         // toolbar. It comes back untouched on the flip to video.
         imageEffects(
-            for: renderedLiveAssistTools, mapping: exposureSignalMapping,
-            photographyPreview: isPhotographyMode)
+            for: renderedLiveAssistTools, mapping: exposureSignalMapping)
     }
 
     /// Audition the selected tool without changing the live assist switches or its calibration.
@@ -284,7 +279,7 @@ extension NativeAppModel {
         if renderedLiveAssistTools.contains(.lut) || tool == .lut { visible.insert(.lut) }
         if [.falseColor, .peaking, .zebra].contains(tool) { visible.insert(tool) }
         return imageEffects(
-            for: visible, mapping: exposureSignalMapping, photographyPreview: isPhotographyMode)
+            for: visible, mapping: exposureSignalMapping)
     }
 
     /// Inspector demand uses the existing tap without enabling an assist on the monitor.
@@ -308,7 +303,7 @@ extension NativeAppModel {
             || visible.contains(.trafficLights)
     }
 
-    /// Whether the horizon level overlay is visible — gates per-frame virtual-horizon updates.
+    /// Whether the horizon level overlay is visible - gates per-frame virtual-horizon updates.
     var levelAssistActive: Bool {
         renderedLiveAssistTools.contains(.level)
     }
@@ -389,6 +384,8 @@ extension MonitorAssistConfiguration {
 }
 
 enum NikonScopeLook {
+    static let curves = NikonMonitorSignal.lookCurves
+
     /// The built-in log to Rec.709 look for a camera log curve; display-referred stills need
     /// none.
     static func display(for transfer: MonitorTransfer) -> CubeLUT? {
@@ -408,12 +405,12 @@ private let armedScopeLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialSt
 
 /// Source cube and calibration facts; shared native runtime owns the complete image graph and memo.
 final class LiveFrameProcessor {
-    private let fileStore: LUTFileStore
+    private let fileStore: CustomLUTStore
     private let native = MonitorUIImageGraphProcessor<LiveImageEffects>(
         beginReadback: { LiveViewSignposts.beginCreateCGImageReadback() },
         endReadback: { LiveViewSignposts.endCreateCGImageReadback() })
 
-    init(fileStore: LUTFileStore) { self.fileStore = fileStore }
+    init(fileStore: CustomLUTStore) { self.fileStore = fileStore }
 
     func render(_ image: UIImage, effects: LiveImageEffects) -> UIImage {
         native.render(image, settings: effects, identity: effects.isIdentity) {
@@ -450,12 +447,16 @@ final class LiveFrameProcessor {
             graph.look = .limits(
                 grade: grade, splitVertical: split,
                 paint: request(key: "limitsPaint:\(mappingKey)") {
-                    FalseColorMap.limitsPaintCube(
-                        mapping: falseColor.mapping, read709: falseColor.read709)
+                    NikonMonitorSignal.lattice(
+                        scale: .limits, mapping: falseColor.mapping,
+                        read709: falseColor.read709
+                    ).cube(.paint)
                 },
                 weight: request(key: "limitsWeight:\(mappingKey)") {
-                    FalseColorMap.limitsWeightCube(
-                        mapping: falseColor.mapping, read709: falseColor.read709)
+                    NikonMonitorSignal.lattice(
+                        scale: .limits, mapping: falseColor.mapping,
+                        read709: falseColor.read709
+                    ).cube(.weight)
                 })
         } else if let falseColor = effects.falseColor {
             graph.look = .replacement(
@@ -463,9 +464,10 @@ final class LiveFrameProcessor {
                     key:
                         "false:\(falseColor.scale.rawValue):\(falseColor.curve.rawValue):\(falseColor.mapping.clipNative):\(falseColor.read709)"
                 ) {
-                    FalseColorMap.cube(
+                    NikonMonitorSignal.lattice(
                         scale: falseColor.scale, mapping: falseColor.mapping,
-                        read709: falseColor.read709)
+                        read709: falseColor.read709
+                    ).cube(.composite)
                 })
         } else if let grade {
             graph.look = .grade(grade, splitVertical: split)

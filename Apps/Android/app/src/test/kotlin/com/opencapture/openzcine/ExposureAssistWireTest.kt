@@ -7,6 +7,25 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ExposureAssistWireTest {
+    @Test fun `source ruler preserves typed labels and refuses malformed marker records`() {
+        val legacy = falseColorReferencePayload(FeedFalseColorScale.STOPS)
+        val headerAndBands = legacy.take(4 + 9 * 5).toMutableList().also { it[0] = 2f; it[3] = 6f }
+        val payload = (headerAndBands + listOf(
+            0f, -6f, .10f, 0f, -4f, .20f, 0f, -2f, .30f,
+            0f, 0f, .40f, 0f, 2f, .60f, 1f, 4.5f, .90f,
+        )).toFloatArray()
+        val parsed = FeedFalseColorReference.parse(payload, FeedFalseColorScale.STOPS, 0)
+        assertEquals(listOf("−6", "−4", "−2", "18%", "+2", "clip"), parsed.stopMarkerLabels)
+        assertEquals(6, parsed.stopMarkerFractions.size)
+        assertEquals(.9f, parsed.stopMarkerFractions.last())
+        for ((index, value) in listOf(49 to 1f, 50 to -5f, 51 to Float.NaN, 66 to .2f)) {
+            assertFailsWith<IllegalArgumentException> {
+                FeedFalseColorReference.parse(payload.copyOf().also { it[index] = value }, FeedFalseColorScale.STOPS, 0)
+            }
+        }
+        assertEquals(7, FeedFalseColorReference.parse(legacy, FeedFalseColorScale.STOPS, 0).stopMarkerFractions.size)
+    }
+
     private fun falseColorReferencePayload(
         scale: FeedFalseColorScale,
         curveOrdinal: Int = 0,

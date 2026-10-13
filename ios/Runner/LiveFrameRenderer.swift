@@ -2,6 +2,8 @@ import CoreImage
 import OpenCineMedia
 import UIKit
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Bakes monitor analysis effects (LUT, peaking, zebra, false colour) **off the main actor**.
 ///
 /// Core Image's `createCGImage` readback is expensive; confining `LiveFrameProcessor` to this actor
@@ -14,7 +16,7 @@ actor LiveFrameRenderer {
         .cacheIntermediates: false,
     ])
 
-    init(fileStore: LUTFileStore) {
+    init(fileStore: CustomLUTStore) {
         processor = LiveFrameProcessor(fileStore: fileStore)
     }
 
@@ -59,7 +61,7 @@ actor LiveFrameRenderer {
         processor.evictRenderCache()
     }
 
-    /// Evicts the prior frame's memo and bakes `effects` into `image` in **one** actor hop — the
+    /// Evicts the prior frame's memo and bakes `effects` into `image` in **one** actor hop - the
     /// streaming loop calls this per displayed frame, and two round-trips per frame at ~30 fps is
     /// measurable scheduler overhead.
     func renderReplacingCache(_ image: UIImage, effects: LiveImageEffects) -> sending UIImage {

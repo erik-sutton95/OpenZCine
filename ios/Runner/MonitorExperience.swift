@@ -1,13 +1,15 @@
 import CoreImage
 import MonitorPresentation
 import MonitorUI
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
 import UIKit
+
+import class OpenCineCameraVocabulary.CustomLUTStore
 
 /// Shared field-monitor chrome. Surfaces, type, and hairlines come from `MonitorTheme`, the same
 /// tokens Pocket and Insta use. The accent is the OpenZCine gold assigned at launch
@@ -52,12 +54,12 @@ struct MonitorExperience: View {
             .overlay {
                 TimerTallyBorderOverlay()
             }
-            // Instant playback covers the whole monitor — a focused look at the captured
+            // Instant playback covers the whole monitor - a focused look at the captured
             // frame, above every piece of chrome.
             .overlay {
                 InstantReviewOverlay()
             }
-            // A watcher asking to drive the camera prompts HERE, on the live view — the Share
+            // A watcher asking to drive the camera prompts HERE, on the live view - the Share
             // This Feed panel answers requests too, but a panel is closed almost always, and a
             // request only visible there is one nobody sees until the viewer gives up.
             .overlay(alignment: .top) {
@@ -77,8 +79,8 @@ struct MonitorExperience: View {
 private struct LiveViewShell: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.monitorWindowGeometry) private var windowGeometry
-    /// OBSERVED state, not a body-time read. The two landscapes are invisible to layout —
-    /// same size, symmetric safe areas — so flipping between them changes nothing SwiftUI
+    /// OBSERVED state, not a body-time read. The two landscapes are invisible to layout -
+    /// same size, symmetric safe areas - so flipping between them changes nothing SwiftUI
     /// already watches, and a body-time read of the orientation stayed stale until some other
     /// invalidation (a DISP tap was the field repro) happened to rebuild the shell. Portrait
     /// transitions only ever worked because the SIZE change re-ran the body.
@@ -95,13 +97,13 @@ private struct LiveViewShell: View {
             )
 
             // One view tree for both orientations, driven by the zone map: rotation is a geometry
-            // change under stable view identity — the `.easeInOut(value: isPortrait)` glides every
+            // change under stable view identity - the `.easeInOut(value: isPortrait)` glides every
             // module to its new frame. The shared root retains this native picture beneath covers.
             NikonMonitorShell(context: context)
                 .environment(model)
                 .animation(.easeInOut(duration: 0.3), value: context.isPortrait)
                 // The landscape-to-landscape flip animates for the same reason the portrait one
-                // does — the modules glide to their mirrored frames under stable identity.
+                // does - the modules glide to their mirrored frames under stable identity.
                 .animation(.easeInOut(duration: 0.3), value: context.horizontalDirection)
         }
         .ignoresSafeArea(.container, edges: .all)
@@ -119,11 +121,11 @@ struct LiveViewLayoutContext {
     let horizontalDirection: MonitorHorizontalLayoutDirection
     let viewportWidth: Double
     let topControlInset: Double
-    /// True when the viewport is taller than it is wide — drives the portrait monitor shell.
+    /// True when the viewport is taller than it is wide - drives the portrait monitor shell.
     let isPortrait: Bool
     /// Full PHYSICAL viewport height for the portrait zone layout. The GeometryReader reports the
     /// safe-area frame, but the shell renders edge-to-edge and the shared `FieldMonitorLayout`
-    /// subtracts the insets itself — restore them here (as `MonitorLiveViewViewport.fullWidth` does
+    /// subtracts the insets itself - restore them here (as `MonitorLiveViewViewport.fullWidth` does
     /// horizontally). Passing the safe-area height double-counts the insets: ~96pt dead band.
     let viewportHeight: Double
 
@@ -186,7 +188,7 @@ struct LiveFeedModule: View {
     /// Portrait mounts hand the module an exact zone-frame height. The measured height is only
     /// trustworthy in the landscape full-bleed canvas: inside a safe-area-inset context the
     /// module's own `.ignoresSafeArea()` re-expands the proposal, the reader reports the grown
-    /// height, and the derived 16:9 box renders oversized and shifted up — the fill-mode "cropped
+    /// height, and the derived 16:9 box renders oversized and shifted up - the fill-mode "cropped
     /// on top and right" bug. Nil (landscape) keeps the measured path unchanged.
     var fixedContentHeight: Double? = nil
 
@@ -221,8 +223,8 @@ struct LiveFeedModule: View {
             GeometryReader { proxy in
                 // Vertical mode: the body is on its side (header byte 839), so the DISPLAYED
                 // frame is the source frame's inverse aspect and the picture rotates upright
-                // inside it. The rotation wraps the whole feed stack — raster, AF boxes, zoom,
-                // gestures — so every existing coordinate mapping keeps operating in the
+                // inside it. The rotation wraps the whole feed stack - raster, AF boxes, zoom,
+                // gestures - so every existing coordinate mapping keeps operating in the
                 // camera's own (pre-rotation) space.
                 // The shared canvas already fitted the picture (source aspect, rotation, HDMI
                 // shape); the native raster only fills it.
@@ -243,7 +245,7 @@ struct LiveFeedModule: View {
                 )
                 // Portrait's fixed band clips the small-overflow vertical fill (core layout's
                 // width-bound frame) instead of letting it paint over the chrome above/below.
-                // Landscape full-bleed must stay unclipped — its safe-area escape depends on it.
+                // Landscape full-bleed must stay unclipped - its safe-area escape depends on it.
                 .modifier(ClipToBandWhenFixed(active: fixedContentHeight != nil))
             }
         }
@@ -319,7 +321,7 @@ struct LiveFeedModule: View {
 
 }
 
-/// Feed raster only — observes the frame plus display effects; sibling overlays remain isolated.
+/// Feed raster only - observes the frame plus display effects; sibling overlays remain isolated.
 private struct LiveFrameRaster: View {
     @Environment(NativeAppModel.self) private var model
     let width: CGFloat
@@ -343,13 +345,13 @@ private struct LiveFrameRaster: View {
         .clipped()
     }
 
-    /// De-squeeze and mirror are the same kind of thing — a transform of the raster alone — so they
+    /// De-squeeze and mirror are the same kind of thing - a transform of the raster alone - so they
     /// ride one `scaleEffect`. The selected axes are negative X and Y scales, which is
     /// why it lands here and not in the effects graph: this node is above BOTH feed renderers, so
     /// the Metal path and the `UIImageView` fallback flip identically and neither had to learn it.
     ///
     /// Sibling overlays are deliberately outside this: guides, grid and crosshair are symmetric so
-    /// a flip would not show, and the horizon reads the phone's own gyro rather than the picture —
+    /// a flip would not show, and the horizon reads the phone's own gyro rather than the picture -
     /// mirroring it would be wrong. The AF boxes DO describe positions in the picture and are
     /// handled where they are drawn.
     private var feedScale: CGSize {
@@ -381,7 +383,7 @@ private struct LiveFrameFeedLayer: View {
     let effects: LiveImageEffects
     let source: LiveFrameSampleBus.Source?
     let isDemoSession: Bool
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
     let width: CGFloat
     let height: CGFloat
     let qualification: (@MainActor () -> MonitorNativeQualificationSnapshot?)?
@@ -418,7 +420,7 @@ private struct LiveFrameFeedLayer: View {
 private struct DemoProcessedLiveFrameView: UIViewRepresentable {
     let image: UIImage
     let effects: LiveImageEffects
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
 
     func makeCoordinator() -> Coordinator { Coordinator(fileStore: fileStore) }
 
@@ -449,7 +451,7 @@ private struct DemoProcessedLiveFrameView: UIViewRepresentable {
         private var currentImage: UIImage?
         private var currentEffects: LiveImageEffects?
 
-        init(fileStore: LUTFileStore) {
+        init(fileStore: CustomLUTStore) {
             renderer = LiveFrameRenderer(fileStore: fileStore)
         }
 
@@ -525,7 +527,7 @@ private struct DemoFocusPointerSurface: UIViewRepresentable {
     }
 }
 
-/// AF / subject-detection boxes — isolated from per-frame feed publishes.
+/// AF / subject-detection boxes - isolated from per-frame feed publishes.
 private struct LiveFeedFocusOverlay: View {
     @Environment(NativeAppModel.self) private var model
     let lockProgress: CGFloat
@@ -537,7 +539,7 @@ private struct LiveFeedFocusOverlay: View {
         if model.chromeSectionMounts(.focusBox), let focus = model.liveViewFocus,
             !focus.boxes.isEmpty
         {
-            // Focus metadata repeats identically on most frames — the Equatable guard skips the
+            // Focus metadata repeats identically on most frames - the Equatable guard skips the
             // Canvas redraw unless a box, lock, or progress changed.
             LiveFocusBoxOverlay(
                 focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
@@ -551,13 +553,13 @@ private struct LiveFeedFocusOverlay: View {
             // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
             // below), and this Canvas draws the boxes itself.
             .opacity(focusBoxEditDimmed ? 0.3 : 1)
-            // The badge goes on the primary AF box, not the whole feed — a dashed outline round
+            // The badge goes on the primary AF box, not the whole feed - a dashed outline round
             // the entire image would name nothing.
             .overlay { focusBoxEditTarget(focus) }
         }
     }
 
-    /// The AF box is force-mounted while editing a mode that has it switched off — dim it so the
+    /// The AF box is force-mounted while editing a mode that has it switched off - dim it so the
     /// operator sees it is off and can switch it back on from its badge.
     private var focusBoxEditDimmed: Bool {
         guard let mode = model.chromeEditorMode,
@@ -590,17 +592,17 @@ private struct LiveFeedFocusOverlay: View {
 }
 
 /// Post-capture instant playback: the just-captured still, full-screen over the entire monitor
-/// chrome for the configured review duration (until tapped when ∞) — a focused look at the
+/// chrome for the configured review duration (until tapped when ∞) - a focused look at the
 /// frame, not another chrome state. Optional overlays: the AF box the shot focused with, and a
-/// capture-settings line. A tap anywhere — or the close control — dismisses.
+/// capture-settings line. A tap anywhere - or the close control - dismisses.
 /// Pulses a white screen border once per app-timer countdown second (and once on arm), so
-/// the phone reads as a tally light from in front of the lens. Purely decorative — never
+/// the phone reads as a tally light from in front of the lens. Purely decorative - never
 /// intercepts touches.
 struct TimerTallyBorderOverlay: View {
     @Environment(NativeAppModel.self) private var model
     @State private var flashOpacity: Double = 0
 
-    /// Approximate physical display corner radius by device class (safe-area heuristic — no
+    /// Approximate physical display corner radius by device class (safe-area heuristic - no
     /// private display APIs): Dynamic-Island bodies ≈55pt, notch bodies ≈41.5pt, flat screens
     /// square. Close enough that the pulse reads as the screen's own edge lighting up.
     private var displayCornerRadius: CGFloat {
@@ -694,7 +696,7 @@ struct InstantReviewOverlay: View {
                 VStack(spacing: 10) {
                     Spacer()
                     if review.handle != nil {
-                        // Single-tap favourite (a one-star flag on the card) — the between-
+                        // Single-tap favourite (a one-star flag on the card) - the between-
                         // shots keep/toss call. The full 1-5 rating lives in playback.
                         Button {
                             let previous = reviewFavorited
@@ -761,7 +763,7 @@ struct InstantReviewOverlay: View {
 /// The broadcaster's control-request prompt, floated over the live view.
 ///
 /// Kept to one line plus two answers: the operator is mid-shot, so the prompt must be
-/// answerable without reading a paragraph — and it must never cover the middle of the frame.
+/// answerable without reading a paragraph - and it must never cover the middle of the frame.
 private struct RelayControlRequestOverlay: View {
     @Environment(NativeAppModel.self) private var model
 
@@ -848,10 +850,10 @@ struct RelayJoinRecovery: View {
     }
 }
 
-/// The watcher's ask/give-back, on the glass where the watching happens — control is exercised
+/// The watcher's ask/give-back, on the glass where the watching happens - control is exercised
 /// mid-take, not inside a settings sheet. One pill reflecting the token, so the control and its
 /// state cannot disagree. Mounted from the zone-aware chrome overlay (MonitorUnified), which
-/// knows the assist toolbar's band — a feed-anchored bottom-center mount sat INSIDE that band
+/// knows the assist toolbar's band - a feed-anchored bottom-center mount sat INSIDE that band
 /// in landscape, half-under the toolbar.
 struct WatcherControlKey: View {
     @Environment(NativeAppModel.self) private var model
@@ -883,7 +885,7 @@ struct WatcherControlKey: View {
 
 /// The broadcaster's side of the token, where the watcher's pill sits on their glass: while a
 /// watcher holds control this device's camera keys stand down, and this is the way back. The
-/// reclaim needs no cooperation from the holder — this device owns the session.
+/// reclaim needs no cooperation from the holder - this device owns the session.
 struct BroadcasterControlKey: View {
     @Environment(NativeAppModel.self) private var model
 
@@ -973,8 +975,8 @@ private struct LiveFrameView: UIViewRepresentable {
 /// picture inside `size`.
 ///
 /// Presented, not the whole frame: the raster carries the de-squeeze as a centred `scaleEffect`
-/// (`LiveFrameRaster.feedScale`), so an anamorphic setup paints the image into a narrower — or
-/// shorter — sub-rect of the same frame. Mapping into the frame left the box drifting sideways off
+/// (`LiveFrameRaster.feedScale`), so an anamorphic setup paints the image into a narrower - or
+/// shorter - sub-rect of the same frame. Mapping into the frame left the box drifting sideways off
 /// the subject it is tracking, while the framing aids, which already map through `desqueezedRect`,
 /// stayed put. Android applies its presentation scales before the identical mapping
 /// (`liveOverlayFeedRect`).
@@ -1008,11 +1010,11 @@ func liveFocusBoxRect(
 }
 
 /// Draws the camera's AF / subject-detection boxes (from the live-view header) over the feed:
-/// rounded rectangles with a uniform stroke — the AF / focus box (box 0) styled by AF state
+/// rounded rectangles with a uniform stroke - the AF / focus box (box 0) styled by AF state
 /// (see `primaryBoxColor`), detected face/eye boxes (box 1+) in green.
 struct LiveFocusBoxOverlay: View, Equatable {
     let focus: PTPLiveViewFocusInfo
-    /// App-only focus-point lock — tints the AF box accent and badges it with a small lock.
+    /// App-only focus-point lock - tints the AF box accent and badges it with a small lock.
     var locked: Bool = false
     /// 0→1 while long-pressing the AF box to lock it: how much of box 0's outline has drawn in.
     var lockProgress: CGFloat = 0
@@ -1021,7 +1023,7 @@ struct LiveFocusBoxOverlay: View, Equatable {
     var mirrored: Bool = false
     /// Top-to-bottom presentation flip; AF metadata stays in source coordinates.
     var mirroredVertically: Bool = false
-    /// The de-squeeze the raster below is presenting with — see ``liveFocusBoxRect``.
+    /// The de-squeeze the raster below is presenting with - see ``liveFocusBoxRect``.
     var desqueeze = NikonDesqueeze.off
 
     nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
@@ -1033,15 +1035,15 @@ struct LiveFocusBoxOverlay: View, Equatable {
             && lhs.desqueeze == rhs.desqueeze
     }
 
-    /// Idle AF-box white opacity — slightly transparent so acquired/tracking green reads as a
+    /// Idle AF-box white opacity - slightly transparent so acquired/tracking green reads as a
     /// state change. Value is tuned in the central visual pass.
     private static let idleWhiteOpacity = 0.72
 
     /// Box 0 (AF area) state → style, Nikon-body-like, in precedence order:
-    /// 1. `locked` (app-side focus-point lock) — accent at full opacity, plus the lock badge.
+    /// 1. `locked` (app-side focus-point lock) - accent at full opacity, plus the lock badge.
     /// 2. AF acquired (`focusResult == .focused`) or subject tracking engaged
-    ///    (`trackingAFActive`, the header's tracking-AF status byte) — green at full opacity.
-    /// 3. Idle / hunting (`.unknown` / `.notFocused`) — dim white; no distinct red state.
+    ///    (`trackingAFActive`, the header's tracking-AF status byte) - green at full opacity.
+    /// 3. Idle / hunting (`.unknown` / `.notFocused`) - dim white; no distinct red state.
     /// Face/eye boxes (index > 0) are always green.
     private var primaryBoxColor: Color {
         if locked { return LiveDesign.accent }
@@ -1079,7 +1081,7 @@ struct LiveFocusBoxOverlay: View, Equatable {
                 }
 
                 // The lock draw-in: box 0's outline traced in accent as you hold to lock it,
-                // completing as the lock engages — then it gives way to the solid accent box above.
+                // completing as the lock engages - then it gives way to the solid accent box above.
                 if lockProgress > 0.001, !locked, let rect = primaryBoxRect(in: proxy.size) {
                     let radius = min(min(rect.width, rect.height) * 0.12, 7)
                     RoundedRectangle(cornerRadius: radius)

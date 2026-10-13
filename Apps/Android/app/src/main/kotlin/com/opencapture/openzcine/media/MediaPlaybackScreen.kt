@@ -156,7 +156,7 @@ internal fun MediaPlaybackScreen(
         picture?.scopes ?: emptyScopes, scopeStackMoved = {}, lookPicker = null,
         panelPlacement = placements,
         lookMenu = { NikonLutOptions(assists, lutLibrary, onOpenRedDownload = {},
-            onRequestLutImport = null, includesComparison = false) }, paradeIntensityScale = 1.0)
+            onRequestLutImport = null) }, paradeIntensityScale = 1.0)
     val signal = MonitorOperatorSignalOptions(
         falseColor = { nikonAssistSection(MonitorAssistTool.FALSE, assists.shared,
             exposureAssistCameraInput, {})?.Menu() },

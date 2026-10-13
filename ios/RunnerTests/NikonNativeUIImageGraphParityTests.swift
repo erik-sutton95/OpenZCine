@@ -1,15 +1,50 @@
 import CoreImage
 import OpenCineApple
+import OpenCineMedia
 import OpenZCineCore
 import UIKit
 import XCTest
 
+import class OpenCineCameraVocabulary.CustomLUTStore
 import enum OpenCineMedia.MonitorZebraPaint
 
 @testable import Runner
 
 /// SIMULATED actual PNG decode and CI evaluation; no camera or physical qualification.
 @MainActor final class NikonNativeUIImageGraphParityTests: XCTestCase {
+    /// A1-41: actual Nikon CI rendering uses the same encoded-source science as the shared monitor.
+    func testDecodedNikonFalseColorMatchesTheSharedSignalLattice() throws {
+        let image = try decodedFixture()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let actual = LiveFrameProcessor(fileStore: CustomLUTStore.nikon(root: root))
+        let reference = MonitorUIImageGraphProcessor<LiveImageEffects>()
+        let context = CIContext(options: [
+            .workingColorSpace: NSNull(), .outputColorSpace: NSNull(),
+        ])
+        for curve in [ExposureToneCurve.redLog3G10, .nikonNLog] {
+            let mapping = ExposureSignalMapping(curve: curve, clipNative: 180)
+            var effects = LiveImageEffects()
+            effects.falseColor = FalseColorSettings(scale: .stops, curve: curve, clipNative: 180)
+            let shared = MonitorFalseColorLattice.signal(
+                scale: .sceneStops,
+                transfer: curve.monitorTransfer, clipByte: mapping.clipByte, readThroughLook: false
+            )
+            .cube(.composite).preparedForRenderer()
+            var graph = MonitorUIImageGraph()
+            graph.look = .replacement(
+                MonitorNativeCubeRequest(key: curve.rawValue) {
+                    (shared.size, shared.rgbaComponents.withUnsafeBytes { Data($0) })
+                })
+            let expected = reference.render(image, settings: effects, identity: false) { graph }
+            let rendered = actual.render(image, effects: effects)
+            XCTAssertEqual(
+                try pixels(XCTUnwrap(CIImage(image: rendered)), context: context),
+                try pixels(XCTUnwrap(CIImage(image: expected)), context: context),
+                "The actual decoded Nikon \(curve) image must paint the shared source signal")
+        }
+    }
+
     /// A1-40: Nikon zebra is the shared zebra (hottest-channel highlight to the clip shelf,
     /// luma midtone band) on the camera's transfer and clip, as Pocket and Insta paint it.
     func testDecodedColoredZebraPaintsTheSharedZones() throws {
@@ -62,7 +97,7 @@ import enum OpenCineMedia.MonitorZebraPaint
         let image = try decodedFixture()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore.nikon(root: root)
         let donor = FrozenNikonUIImageGraphProcessor(fileStore: store)
         let composed = LiveFrameProcessor(fileStore: store)
         XCTAssertTrue(donor.render(image, effects: LiveImageEffects()) === image)
@@ -96,7 +131,7 @@ import enum OpenCineMedia.MonitorZebraPaint
         let image = try decodedFixture()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore.nikon(root: root)
         let donor = FrozenNikonUIImageGraphProcessor(fileStore: store)
         let composed = LiveFrameProcessor(fileStore: store)
         let context = CIContext(options: [

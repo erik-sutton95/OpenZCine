@@ -12,6 +12,7 @@ import com.opencapture.opencine.media.MonitorTransfer
 import com.opencapture.opencine.media.ScopeAssistBundle
 import com.opencapture.opencine.media.ScopeLevelAxis
 import com.opencapture.opencine.media.ScopeTrafficLights
+import com.opencapture.opencine.media.ScopeTrafficLightsReading
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -35,6 +36,34 @@ import org.junit.runner.RunWith
 class NikonScopeEngineAdoptionTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun anUnreadableJpegSuccessorClearsTheActualScopeSource() {
+        assertTrue("The camera mapping needs the staged Swift core", SwiftCore.isAvailable)
+        val input = ExposureAssistCameraInput()
+        val mapping = requireNotNull(resolveExposureAssistMapping(input))
+        val source = PatchSource(96, mapping.clipNative.roundToInt() - 5)
+        val assist = MonitorAssistState().apply {
+            toggle(MonitorAssistTool.WAVE); toggle(MonitorAssistTool.HISTO); toggle(MonitorAssistTool.LIGHTS)
+        }
+        val published = CopyOnWriteArrayList<ScopeAssistBundle>()
+        composeRule.setContent {
+            val bundles = rememberNikonLiveScopeBundles(
+                selectedScopes = setOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS),
+                assist = assist, cameraInput = input, lutSelection = null, lutLibrary = null,
+                thermalTier = AndroidThermalTier.NOMINAL, source = source)
+            LaunchedEffect(bundles) { bundles?.collect { if (it.revision > 0) published += it } }
+        }
+        composeRule.waitUntil(10_000) { published.lastOrNull()?.traffic?.blue?.clip == true }
+        val prior = published.last().revision
+        source.readable = false
+        composeRule.waitUntil(10_000) {
+            published.lastOrNull()?.let { it.revision > prior && it.traffic == ScopeTrafficLightsReading.NONE } == true
+        }
+        val unreadable = published.last()
+        assertTrue(unreadable.samples.histogramLuma.all { it == 0 })
+        assertTrue(unreadable.trailSamples.points.isEmpty())
+        assertTrue(unreadable.histogramDisplay.luma.all { it == 0f })
+    }
+
     @Test fun theLiveScopeSourcePublishesTheSharedEnginesBundle() {
         assertTrue("The camera mapping needs the staged Swift core", SwiftCore.isAvailable)
         val input = ExposureAssistCameraInput()
@@ -54,9 +83,8 @@ class NikonScopeEngineAdoptionTest {
         val published = CopyOnWriteArrayList<ScopeAssistBundle>()
         composeRule.setContent {
             val bundles = rememberNikonLiveScopeBundles(
-                setOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS), emptyList(), assist,
-                input, null, null, AndroidThermalTier.NOMINAL, source, isPortrait = false,
-                portraitFloating = false, scopeZone = null)
+                setOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS), assist,
+                input, null, null, AndroidThermalTier.NOMINAL, source)
             LaunchedEffect(bundles) { bundles?.collect { if (it.revision > 0) published += it } }
         }
         composeRule.waitUntil(10_000) { consecutive(published) != null }
@@ -86,6 +114,7 @@ class NikonScopeEngineAdoptionTest {
 
     /** SIMULATED camera JPEGs: grey with a blue patch over a quarter of the frame. */
     private class PatchSource(grey: Int, blue: Int) : LiveFrameSource {
+        @Volatile var readable = true
         private val jpeg = ByteArrayOutputStream().use { output ->
             val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.rgb(grey, grey, grey))
@@ -97,7 +126,7 @@ class NikonScopeEngineAdoptionTest {
         }
         override val frames = flow {
             while (true) {
-                emit(LiveFrame(System.nanoTime(), jpeg))
+                emit(LiveFrame(System.nanoTime(), if (readable) jpeg else byteArrayOf(0, 1, 2)))
                 delay(60)
             }
         }

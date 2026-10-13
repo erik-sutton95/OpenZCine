@@ -121,27 +121,16 @@ feed, focus, framing, scope, and chrome geometry registered to the same fit/fill
 
 **Portrait monitor v2 (live mode)** is the portrait shape of the shared Field Monitor layout:
 a top bar overlaid on the feed, the feed itself (pinch-toggled between `.fit16x9` and a
-center-crop `.fill`), a dynamic scopes region, and a persistent 100pt bottom system bar (a
+center-crop `.fill`) and a persistent 100pt bottom system bar (a
 `LiveDesign.glass` band that runs to the physical bottom edge, clearing the record button and the
 home-indicator area) — the tile grid (fit) or capture bar (fill) fills whatever height those leave.
 Clean and command modes keep the pre-v2 structure.
 
-Fit and fill diverge on how scopes render, matched by `OperatorPreferences.scopeActivationOrder`
-(persisted, oldest→newest activation, maintained by `OperatorPreferences.recordScopeActivation`
-from `NativeAppModel.setAssist` for live `MonitorAssistTool.scopeTools` only; which tools are on
-lives in the shared `MonitorAssistState`):
-
-- **Fit** stacks `OperatorPreferences.displayedFitScopes` — the 2 *most recently activated* scope
-  tools (re-sorted into canonical order for display), capped regardless of how many are actually
-  active. The assist palette is the shared `MonitorAssistPalette` in the Field Monitor assists
-  slot (`NikonAssistPalette`), chrome-gated by `displayChrome.assistToolbarVisible`. With ≥2
-  scopes displayed, `NativeAppModel.scopeCapActive` refuses further scope activations in fit: a
-  tap on a third scope fires a self-dissolving `MonitorToast` (`scopeCapNoticeText`). Scopes
-  beyond the 2 displayed stay active-but-hidden rather than being dropped.
-- **Fill** mounts the landscape-identical floating `MonitorScopes(.scopesFloating)` panels —
-  draggable, resizable, uncapped — over the visible (post-crop) feed region; every active scope
-  tool floats, including ones fit was hiding. Pinching between fit and fill destroys no state:
-  `scopeActivationOrder` is the single source of truth both modes read from.
+Scopes render the same way in portrait fit, portrait fill and landscape, as in Pocket and Insta:
+every active scope tool floats as a draggable, resizable shared panel over the picture (A1-20; the
+Z-only portrait fit stack and its two-scope cap are gone). Which tools are on lives in the shared
+`MonitorAssistState`. The assist palette is the shared `MonitorAssistPalette` in the Field Monitor
+assists slot (`NikonAssistPalette`), chrome-gated by `displayChrome.assistToolbarVisible`.
 
 ### Camera load management
 

@@ -7,7 +7,7 @@ import os
 /// `media-store`.
 let mediaLibraryLogger = Logger(subsystem: "OpenZCine", category: "media-store")
 
-/// Reserved Frame.io upload state for a clip (the Frame.io button is a placeholder for now — see
+/// Reserved Frame.io upload state for a clip (the Frame.io button is a placeholder for now - see
 /// `MediaPlayerView`). Persisted so a future upload flow can resume/show status.
 enum FrameioStatus: String, Codable, Sendable {
     case notUploaded, uploading, uploaded, failed
@@ -25,13 +25,13 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
     var cameraID: String
     /// On-card filename, e.g. `C0001.MOV`.
     var filename: String
-    /// Primary object handle on the camera — present when discovered on the card, nil for
+    /// Primary object handle on the camera - present when discovered on the card, nil for
     /// local-only clips. When the shot lives on both cards this is the lowest-slot copy.
     var handle: UInt32?
     /// Storage volume of the primary handle (nil for local-only clips).
     var storageID: UInt32?
     /// Every card location this shot occupies: backup mode writes the same filename to both
-    /// cards as two distinct objects, and the index keeps ONE row per filename — so the row
+    /// cards as two distinct objects, and the index keeps ONE row per filename - so the row
     /// carries all its locations. Additive/Codable; nil on rows indexed before this field
     /// existed (`allLocations` falls back to the primary pair).
     var storageLocations: [MediaObjectHandle]? = nil
@@ -50,12 +50,12 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
     /// On-card R3D filename paired with this proxy by stem (nil when unlinked).
     var linkedR3DFilename: String? = nil
     var isFavorite: Bool = false
-    /// EXIF orientation (1–8) of the full still, learned from the full file's header — the
+    /// EXIF orientation (1–8) of the full still, learned from the full file's header - the
     /// camera's PTP thumbnails can be EXIF-stripped, so grid/filmstrip decodes use this as the
-    /// fallback to show portrait shots upright. Additive/Codable — nil until resolved.
+    /// fallback to show portrait shots upright. Additive/Codable - nil until resolved.
     var exifOrientation: Int? = nil
     /// Cached camera star rating (0–5), mirrored from the body on every rating write so the
-    /// Favorites filter agrees with the shots starred during a shoot. Additive/Codable —
+    /// Favorites filter agrees with the shots starred during a shoot. Additive/Codable -
     /// decodes nil on index rows written before this field existed. Camera is source of truth.
     var starRating: Int? = nil
     var frameioStatus: FrameioStatus = .notUploaded
@@ -88,13 +88,13 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
 
 // MARK: - Browser filters & formatting
 
-/// Progress of an in-flight batch deletion — drives the delete progress bar and defers the grid
+/// Progress of an in-flight batch deletion - drives the delete progress bar and defers the grid
 /// refresh until it finishes.
 struct MediaDeletionProgress: Equatable, Sendable {
     var completed: Int
     /// Total files removed (a RAW+JPEG pair or a proxy+master counts as 2+).
     var total: Int
-    /// Shots the operator selected — smaller than `total` when pairs/masters/backups ride along.
+    /// Shots the operator selected - smaller than `total` when pairs/masters/backups ride along.
     var selectedCount: Int
     var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
     /// True when companions (RAW, master, backup copies) inflate the file count above the picks.
@@ -128,7 +128,7 @@ enum MediaSortOrder: String, CaseIterable, Codable, Sendable {
     case newest
     case oldest
     case name
-    /// Highest camera star first — clusters favorited/rated shots at the top for culling.
+    /// Highest camera star first - clusters favorited/rated shots at the top for culling.
     case rating
 
     var next: MediaSortOrder {
@@ -151,7 +151,7 @@ extension MediaFormatChip {
 
 extension MediaClip {
 
-    /// Inferred from filename — videos are playable proxies; stills use `MediaClipFilename.isPhoto`.
+    /// Inferred from filename - videos are playable proxies; stills use `MediaClipFilename.isPhoto`.
     var mediaKind: MediaKind {
         MediaClipFilename.isPhoto(filename) ? .photo : .video
     }
@@ -164,11 +164,11 @@ extension MediaClip {
             sourcePixelWidth: sourcePixelWidth)
     }
 
-    /// True for Nikon RAW stills (`.NEF` / `.NRW` / `.DNG`) — the tag-along side of a RAW+JPEG pair.
+    /// True for Nikon RAW stills (`.NEF` / `.NRW` / `.DNG`) - the tag-along side of a RAW+JPEG pair.
     ///
     /// Asks the core rather than carrying its own extension list: the shell held a duplicate of
     /// the same set, and a duplicate only stays correct until one copy learns a new extension.
-    /// That is not hypothetical here — `.HIF` was missing from the core's HEIF set while two other
+    /// That is not hypothetical here - `.HIF` was missing from the core's HEIF set while two other
     /// places already special-cased it, and every Nikon HEIF went unlisted as a result.
     var isRawPhoto: Bool {
         MediaClipFilename.formatChip(for: filename) == .nef
@@ -269,10 +269,10 @@ enum MediaClipStorePathError: LocalizedError, Equatable {
     }
 }
 
-/// On-disk cache for camera clips, mirroring `LUTFileStore`. Files live under
+/// On-disk cache for camera clips, beside the LUT library (`CustomLUTStore.nikon`). Files live under
 /// `Documents/media/{cameraID}/`; a sibling `index.json` holds metadata not derivable from the
 /// files (favorites, camera handles, upload/export status). Clip bytes are streamed to a
-/// `FileHandle` during download — never buffered whole.
+/// `FileHandle` during download - never buffered whole.
 struct MediaClipStore {
     /// Root of the per-camera bucket directories, `<documents>/media`.
     let root: URL
@@ -412,14 +412,14 @@ struct MediaClipStore {
         }.sorted()
     }
 
-    /// Every indexed clip across all on-device buckets — used for offline cached browsing.
+    /// Every indexed clip across all on-device buckets - used for offline cached browsing.
     func listAllCachedClips() -> [MediaClip] {
         listAllBucketIDs().flatMap { list(cameraID: $0) }
     }
 
     /// All known clips for a bucket: the persisted index reconciled with the files actually on disk.
     /// Files present but not in the index are adopted as local clips (so a clip dropped into the
-    /// container — e.g. a simulator sample — shows up); index entries are kept even when not yet
+    /// container - e.g. a simulator sample - shows up); index entries are kept even when not yet
     /// downloaded (camera clips awaiting fetch). Sorted by filename.
     func list(cameraID: String) -> [MediaClip] {
         var byName: [String: MediaClip] = [:]
@@ -471,7 +471,7 @@ struct MediaClipStore {
         try FileManager.default.removeItem(at: localURL(cameraID: cameraID, filename: filename))
     }
 
-    /// Drops one clip row from the index entirely (deliberate deletion — unlike
+    /// Drops one clip row from the index entirely (deliberate deletion - unlike
     /// `applyCameraRemoval`, downloaded copies don't keep a row alive).
     func removeEntry(cameraID: String, filename: String) {
         var clips = loadIndex(cameraID: cameraID)
@@ -492,9 +492,9 @@ struct MediaClipStore {
     /// Removes cached clip bytes (video files and thumbnails) for one bucket.
     ///
     /// `preservingIndex` keeps `index.json` (favorites, handles, delivery flags) for buckets
-    /// whose index IS the source of truth — the local library has no camera to re-enumerate.
+    /// whose index IS the source of truth - the local library has no camera to re-enumerate.
     /// CAMERA buckets must clear the index too (#296): preserved handles of a formatted card
-    /// are exactly the thumbnail-less, unopenable ghost rows that survived every cache clear —
+    /// are exactly the thumbnail-less, unopenable ghost rows that survived every cache clear -
     /// the camera re-enumerates the truth on the next connected pass.
     ///
     /// - Returns: Bytes removed from disk (partial caches count at their written size).
@@ -539,7 +539,7 @@ struct MediaClipStore {
     }
 
     /// Merges camera-discovered fields into an existing index entry, preserving operator flags.
-    /// Backup mode surfaces one shot as an object per card sharing the filename — the
+    /// Backup mode surfaces one shot as an object per card sharing the filename - the
     /// locations union instead of the newest discovery clobbering the row's identity.
     static func mergeCameraDiscovery(existing: MediaClip, incoming: MediaClip) -> MediaClip {
         var merged = existing
@@ -577,7 +577,7 @@ struct MediaClipStore {
         upsertBatch(clips, cameraID: cameraID)
     }
 
-    /// Batch variant of `upsert` — reads and writes `index.json` once for the whole batch.
+    /// Batch variant of `upsert` - reads and writes `index.json` once for the whole batch.
     func upsertBatch(_ clips: [MediaClip], cameraID: String) {
         let clips = clips.filter { MediaClipFilename.safeCameraBasename($0.filename) != nil }
         guard !clips.isEmpty else { return }
@@ -676,7 +676,7 @@ struct MediaClipStore {
             let locations = clip.allLocations
             let survivors: [MediaObjectHandle]
             if locations.isEmpty {
-                // Legacy row (handle without a storage) — match by bare handle.
+                // Legacy row (handle without a storage) - match by bare handle.
                 guard let bare = clip.handle,
                     removedHandles.contains(where: { $0.handle == bare })
                 else { return clip }
@@ -686,7 +686,7 @@ struct MediaClipStore {
                 if survivors.count == locations.count { return clip }
             }
             if let primary = survivors.min(by: { Self.locationRank($0) < Self.locationRank($1) }) {
-                // One card's copy vanished (e.g. deleted in-camera) — the row lives on the rest.
+                // One card's copy vanished (e.g. deleted in-camera) - the row lives on the rest.
                 var updated = clip
                 updated.handle = primary.handle
                 updated.storageID = primary.storageID

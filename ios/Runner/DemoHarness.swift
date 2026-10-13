@@ -1,7 +1,7 @@
 import MonitorPresentation
 import Network
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -10,14 +10,14 @@ import os
 
 /// The demo / screenshot harness: every `ZC_*` launch-environment hook lives in this file and
 /// nowhere else (`just check-demo-isolation` enforces it). Stages app state for headless captures
-/// without a camera, and is **compiled out of Release builds** — everything below is `#if DEBUG`
+/// without a camera, and is **compiled out of Release builds** - everything below is `#if DEBUG`
 /// or an inert stub, so store archives physically cannot trigger demo behaviour.
 ///
 /// Adding a hook: add a named accessor to the registry below (or extend
-/// `applyLaunchEnvironment(to:)` for launch-time staging) and call it from the feature — no
+/// `applyLaunchEnvironment(to:)` for launch-time staging) and call it from the feature - no
 /// `ProcessInfo` reads and no raw `ZC_` strings at call sites.
 enum DemoHarness {
-    // MARK: Hook registry — every env toggle, one place.
+    // MARK: Hook registry - every env toggle, one place.
 
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
     /// first downloaded clip (read in `MediaBrowserView`).
@@ -51,8 +51,8 @@ enum DemoHarness {
     /// `ZC_DEMO_SR_STAGE=input` presents the super-resolution model's INPUT buffer instead of its
     /// output, converted back the same way.
     ///
-    /// The two colour legs fail identically from the outside — a buffer nobody wrote reads as flat
-    /// green either way — so this splits them: a picture here means the write leg works and the
+    /// The two colour legs fail identically from the outside - a buffer nobody wrote reads as flat
+    /// green either way - so this splits them: a picture here means the write leg works and the
     /// fault is downstream of the model; green here means the write leg is what is silent.
     static let superResolutionStage = value("ZC_DEMO_SR_STAGE")
     /// `ZC_DEMO_DENOISE=<0…1>` runs VideoToolbox's temporal noise filter over the live feed at
@@ -69,7 +69,7 @@ enum DemoHarness {
     /// levels out of 255). `ZC_DEMO_BLOCK_DITHER=<levels>` adds masking noise (try 2–4).
     ///
     /// Env rather than a setting because none of these have been calibrated against a real camera
-    /// frame — they exist to be swept on hardware and relaunched, and the winning numbers become a
+    /// frame - they exist to be swept on hardware and relaunched, and the winning numbers become a
     /// real operator control (and a shared-core constant for the Android shells) afterwards.
     static let blockSmoothStrength = value("ZC_DEMO_BLOCK_SMOOTH").flatMap(Double.init)
     static let blockSmoothGateLevels = value("ZC_DEMO_BLOCK_GATE").flatMap(Double.init)
@@ -77,7 +77,7 @@ enum DemoHarness {
     /// `ZC_DEMO_WIFI_SCANNER=scan|manual` opens the Wi-Fi credential scanner for screenshots.
     static let cameraWiFiScannerMode = value("ZC_DEMO_WIFI_SCANNER")
     /// `ZC_DEMO_WIFI_OFF=1` makes the camera-AP flows treat the Wi-Fi radio as switched off, so
-    /// the "Wi-Fi is off" prompt can be captured — the Simulator borrows the Mac's radio and can
+    /// the "Wi-Fi is off" prompt can be captured - the Simulator borrows the Mac's radio and can
     /// never reach that state for real.
     static let wiFiRadioOff = flag("ZC_DEMO_WIFI_OFF")
     /// `ZC_DEMO_PLAYBACK_CLEAN_VIEW=1` opens the clip player with its chrome already hidden, so
@@ -90,14 +90,14 @@ enum DemoHarness {
     static let magnificationActive = flag("ZC_DEMO_MAGNIFY")
     /// `ZC_DEMO_RATING_SHADE=handle|open` mounts the star-rating shade in the clip player without a
     /// camera session, closed or already open. Both states need capturing: the rating is read from
-    /// the card, so neither is reachable headlessly, and synthetic taps do not reach this app —
+    /// the card, so neither is reachable headlessly, and synthetic taps do not reach this app -
     /// which is how an empty shade shipped unnoticed.
     static let ratingShade = value("ZC_DEMO_RATING_SHADE")
-    /// `ZC_DEMO_CAPTURE_FRAMES=N` dumps the next N live-view frames to disk — see
+    /// `ZC_DEMO_CAPTURE_FRAMES=N` dumps the next N live-view frames to disk - see
     /// ``captureLiveViewObject(_:)``.
     static let captureLiveViewFrameCount = value("ZC_DEMO_CAPTURE_FRAMES").flatMap(Int.init)
 
-    // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
+    // MARK: Environment access - Debug reads the process env; Release is hardwired inert.
 
     #if DEBUG
         private static let environment = ProcessInfo.processInfo.environment
@@ -109,7 +109,7 @@ enum DemoHarness {
     #endif
 
     #if !DEBUG
-        /// Release stub — the launch harness does not exist outside Debug builds.
+        /// Release stub - the launch harness does not exist outside Debug builds.
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {}
     #endif
 
@@ -119,7 +119,7 @@ enum DemoHarness {
         /// Spacing between captured frames. One a second so that slowly racking focus across the
         /// capture produces a focus SWEEP rather than N copies of one moment.
         private static let captureInterval: TimeInterval = 1.0
-        /// Grace period between arming and the first frame — long enough to dismiss the setup
+        /// Grace period between arming and the first frame - long enough to dismiss the setup
         /// panel and get a hand on the focus ring.
         private static let captureLeadIn: TimeInterval = 5.0
 
@@ -138,7 +138,7 @@ enum DemoHarness {
         }
 
         /// Next unused run index, read from disk rather than held in memory so a relaunch between
-        /// sweeps cannot silently overwrite an earlier one — which is exactly what happened the
+        /// sweeps cannot silently overwrite an earlier one - which is exactly what happened the
         /// first time two sweeps were shot back to back.
         private static func nextRunIndex() -> Int {
             guard let directory = captureDirectory,
@@ -178,17 +178,17 @@ enum DemoHarness {
         }
     #endif
 
-    /// Dumps raw LiveViewObjects — header **and** JPEG, byte for byte as the camera sent them —
+    /// Dumps raw LiveViewObjects - header **and** JPEG, byte for byte as the camera sent them -
     /// so peaking can be developed against real frames instead of synthetic blur.
     ///
     /// Why the whole object and not just the JPEG: the header carries the AF boxes, the focus
     /// result and the delivered size/compression grade, so one blob re-parses offline into
     /// everything `PTPLiveViewObject.frame(from:)` produces. It also settles, from real bytes,
-    /// whether the focus result at header offset 42 is populated in manual focus — no fixture in
+    /// whether the focus result at header offset 42 is populated in manual focus - no fixture in
     /// the repo covers that today, and it is the mode peaking is actually used in.
     ///
     /// Why one frame a second: capture while racking focus slowly end to end and the result is a
-    /// sweep of a single static scene — same lens, same exposure, same compression, only focus
+    /// sweep of a single static scene - same lens, same exposure, same compression, only focus
     /// varying. That makes the sharpest frame an objective in-focus reference and the extremes
     /// objective defocused ones, which is exactly what synthetic blur cannot provide and what the
     /// day's regressions slipped through for want of.
@@ -260,7 +260,7 @@ enum DemoHarness {
                     model.preferences.bluetoothShutterEnabled = true
                 }
                 // Seed a face + eye AF box pair (mirroring a real ZR subject-detection frame, in the
-                // header's 6048×3400 space) so the focus overlay — and the selected eye box — is
+                // header's 6048×3400 space) so the focus overlay - and the selected eye box - is
                 // visible in the demo. Tapping the feed moves it. ZC_DEMO_FOCUSBOX overrides.
                 model.demoSeedFocusPair()
                 if model.liveFrameImage == nil {
@@ -272,14 +272,14 @@ enum DemoHarness {
                     // Vertical-mode capture: stage the body-rotation byte (1 grip up, 2 grip
                     // down, 3 upside down) so the rotated feed layout can be screenshot
                     // without a camera. The demo still is landscape, so its content reads
-                    // sideways — exactly what a vertically held body sends before rotation.
+                    // sideways - exactly what a vertically held body sends before rotation.
                     model.liveFeedRotation = rotation
                 }
                 if env["ZC_DEMO_CODEC_DESCRIPTOR"] == "1" {
                     // Demo/screenshot affordance: stage a Z6III-shaped `MovFileType` descriptor
                     // (H.264 8-bit, plus H.265 at BOTH depths) and put the body on H.265 10-bit,
-                    // so the CODEC picker's advertised rows — and the bit-depth pair the
-                    // two-variant family earns — can be captured without a camera.
+                    // so the CODEC picker's advertised rows - and the bit-depth pair the
+                    // two-variant family earns - can be captured without a camera.
                     model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(
                         fromEnum: [0x0000_0801, 0x0001_0800, 0x0001_0A00, 0x0031_0A03])
                     model.applyDemoProperty(
@@ -367,7 +367,7 @@ enum DemoHarness {
                 }
                 if env["ZC_DEMO_WATCHER"] == "1" {
                     // Watcher-chrome screenshot hook: the demo feed keeps pumping frames, but the
-                    // chrome derives from availability — `.relay` source WITHOUT camera control
+                    // chrome derives from availability - `.relay` source WITHOUT camera control
                     // (the demo session normally counts as control, so suppress it) unmounts
                     // record/capture and arms the freed-band zone refinement, exactly as on a
                     // real joined watcher.
@@ -566,7 +566,7 @@ enum DemoHarness {
                     // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated
                     // `MonitorDisplayChrome.Section` raw values or the retired Nikon names, e.g.
                     // "lockButton,railMedia,focusBox") so each hidden state can be captured
-                    // headlessly — simctl cannot drive the Settings switches. Applies to the DISP
+                    // headlessly - simctl cannot drive the Settings switches. Applies to the DISP
                     // mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else the current one,
                     // in the shared per-DISP chrome.
                     let target = Self.demoDispMode(env) ?? model.displayMode
@@ -587,9 +587,12 @@ enum DemoHarness {
                             case "fpsReadout": [.fps]
                             // "rail" is the retired whole-rail blob: the rail controls.
                             case "rail": [.railRecord, .railMedia, .railSettings]
-                            default: MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] } ?? []
+                            default:
+                                MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] }
+                                    ?? []
                             }
-                        for section in sections where model.operatorSession.chrome(for: target).isVisible(section) {
+                        for section in sections
+                        where model.operatorSession.chrome(for: target).isVisible(section) {
                             model.operatorSession.toggle(section, in: target)
                         }
                     }
@@ -667,14 +670,6 @@ enum DemoHarness {
                 // Demo/screenshot affordances: engage the interface lock, lock the focus point, or
                 // show the recording tally.
                 if env["ZC_DEMO_LOCK"] == "1" { model.interfaceLocked = true }
-                if env["ZC_DEMO_SCOPE_TOAST"] == "1" {
-                    // Demo/screenshot affordance: fire the scope-cap toast shortly after launch (once
-                    // the shell is mounted) so the self-dissolving capsule can be captured headlessly.
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(0.5))
-                        model.showMonitorNotice(model.scopeCapNoticeText)
-                    }
-                }
                 if env["ZC_DEMO_FOCUSLOCK"] == "1" { model.focusPointLocked = true }
                 if env["ZC_DEMO_LEVELGAUGE"] == "1" {
                     model.assistConfiguration.level.style = .gauge
@@ -740,7 +735,7 @@ enum DemoHarness {
             if let upscaler = forcedFeedUpscaler {
                 // Outside the AUTOSTART block: the settings row that shows this is reachable
                 // without a demo session, and a real camera session is the point of the A/B.
-                // Through `supported(or:)` like every other entry — naming an upscaler this device
+                // Through `supported(or:)` like every other entry - naming an upscaler this device
                 // does not have must land somewhere real, not on a setting that reads as active.
                 FeedUpscaleSwitch.shared.upscaler = .supported(or: upscaler)
             }
@@ -768,7 +763,7 @@ enum DemoHarness {
             }
             if let raw = env["ZC_DEMO_ORIENTATION"] {
                 // Demo/screenshot affordance: force the interface orientation so headless
-                // verification can reach BOTH layouts — simctl has no rotation API and scripted
+                // verification can reach BOTH layouts - simctl has no rotation API and scripted
                 // Simulator keystrokes need an Accessibility grant. "landscape" or "portrait".
                 let scenes = UIApplication.shared.connectedScenes
                     .compactMap { $0 as? UIWindowScene }
@@ -787,7 +782,7 @@ enum DemoHarness {
                 let aspect = PortraitFeedAspect(rawValue: raw)
             {
                 // Demo/screenshot affordance: stage the portrait feed aspect (fit16x9/fill). Under
-                // AUTOSTART this is applied earlier (before scope seeding) — see above; this branch
+                // AUTOSTART this is applied earlier (before scope seeding) - see above; this branch
                 // covers the non-autostart launch path.
                 model.preferences.portraitFeedAspect = aspect
             }
@@ -795,7 +790,7 @@ enum DemoHarness {
                 let colon = endpoint.lastIndex(of: ":"),
                 let port = UInt16(endpoint[endpoint.index(after: colon)...])
             {
-                // Direct-endpoint join (host:port), bypassing Bonjour — cross-platform wire
+                // Direct-endpoint join (host:port), bypassing Bonjour - cross-platform wire
                 // verification through adb forward, where mDNS cannot cross network segments.
                 let host = String(endpoint[..<colon])
                 model.joinRelay(
@@ -850,14 +845,14 @@ enum DemoHarness {
             }
             if env["ZC_DEMO_CAMERA_LIST"] == "1" {
                 // Demo/screenshot affordance: land on the camera-list home even with zero saved
-                // cameras — the watcher's destination behind the wizard's "Open the camera list"
+                // cameras - the watcher's destination behind the wizard's "Open the camera list"
                 // row, otherwise unreachable headless (it needs that tap).
                 model.showSavedCameras()
             }
             if env["ZC_DEMO_SAVED_PATHS"] == "1" {
                 // Stages the multi-path camera list: the SAME body saved via hotspot, router
                 // and cable (one serial, three records) beside a second single-path body.
-                // Seeds the real store — simulator-only residue, cleared by uninstall.
+                // Seeds the real store - simulator-only residue, cleared by uninstall.
                 let store = NativeCameraConnectionStore.shared
                 store.upsertSavedCamera(
                     host: "172.20.10.2", displayName: "ZR_6002199", transport: "Wi-Fi",
@@ -865,7 +860,7 @@ enum DemoHarness {
                 store.upsertSavedCamera(
                     host: "10.99.0.20", displayName: "ZR_6002199", transport: "Wi-Fi",
                     onCameraAccessPoint: false, serialNumber: "6002199")
-                // A SECOND router on another subnet — the two-router state is only reachable
+                // A SECOND router on another subnet - the two-router state is only reachable
                 // headless from here, and it is the one the chip qualifier exists for.
                 store.upsertSavedCamera(
                     host: "192.168.129.66", displayName: "ZR_6002199", transport: "Wi-Fi",
@@ -874,7 +869,7 @@ enum DemoHarness {
                     host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C",
                     serialNumber: "6002199")
                 // A ZR-shaped name so the access-point SSID derives, which is what makes this an
-                // access-point setup you can actually JOIN — and the only way the tab's
+                // access-point setup you can actually JOIN - and the only way the tab's
                 // ready-to-join ring is reachable headless. A name that derives no SSID is a real
                 // state too, but it renders as the plain dark dot.
                 store.upsertSavedCamera(
@@ -899,7 +894,7 @@ enum DemoHarness {
                 if let camera = model.cameras.saved.first { model.cameras.connect(camera) }
             }
             if let raw = env["ZC_DEMO_HOTSPOT_CARD"] {
-                // Stages the hotspot-recovery strip on the camera list ("active" / "needed") —
+                // Stages the hotspot-recovery strip on the camera list ("active" / "needed") -
                 // the real prompt derives from saved records plus live hotspot state, so
                 // neither state is reachable headless.
                 let camera = PTPIPSavedCameraRecord(
@@ -912,9 +907,9 @@ enum DemoHarness {
             }
             if let raw = env["ZC_DEMO_JOIN_POPUP"] {
                 // Demo/screenshot affordance: stage the scanned-credentials join popup over the
-                // startup screen — the scanner itself needs a physical camera screen to point at.
+                // startup screen - the scanner itself needs a physical camera screen to point at.
                 // The value picks the staged phase: "joining"/"failed", anything else ⇒ ready.
-                // "scan" stages it keyless — the "+ Add setup → Camera AP" shape, where the
+                // "scan" stages it keyless - the "+ Add setup → Camera AP" shape, where the
                 // card's own button has to open the scanner over this sheet.
                 if raw == "scan" {
                     model.applyManualCameraWiFi(ssid: "NIKON_ZR_01234", key: "")

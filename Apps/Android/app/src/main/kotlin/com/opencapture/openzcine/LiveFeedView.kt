@@ -516,6 +516,7 @@ internal fun LiveFeedView(
                 stats = stats,
                 timestampNanos = { it.timestampNanos },
                 isCurrent = isCurrent,
+                presentationDispatcher = Dispatchers.Main.immediate,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.
                 decode = { frame ->
@@ -783,7 +784,7 @@ internal fun FalseColorReferencePresentation.referenceValues(
                 // The shared ruler starts each label 10 dp before its stop and clips at the panel, so the
                 // Min and Max ends (0 and 1) are held 16 dp inside it, where the old ruler aligned them.
                 val edge = 16.0 / MonitorScopePanelSize.falseColorReference.width
-                copy.stopLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
+                reference.stopMarkerLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
                     MonitorFalseColorReferenceMarker(index, label, at.toDouble().coerceIn(edge, 1.0 - edge))
                 }
             } else {

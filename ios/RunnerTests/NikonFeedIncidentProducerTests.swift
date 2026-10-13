@@ -33,7 +33,8 @@ final class NikonFeedIncidentProducerTests: XCTestCase {
         }
     }
 
-    func testActualJPEGDecodeReportsOutputWithoutInventingAcceptancePacketsOrScanout() async throws {
+    func testActualJPEGDecodeReportsOutputWithoutInventingAcceptancePacketsOrScanout() async throws
+    {
         let clock = Clock()
         let producer = makeProducer(clock: clock)
         defer { producer.end() }
@@ -99,7 +100,8 @@ final class NikonFeedIncidentProducerTests: XCTestCase {
         let input = try XCTUnwrap(decoder.source(owner))
         old.received()
         let image = await decoder.decode(jpeg(), source: input, incident: old)
-        XCTAssertNotNil(image) // Decoding itself is unchanged; diagnostics reject retired observation.
+        // Decoding itself is unchanged; diagnostics reject retired observation.
+        XCTAssertNotNil(image)
         old.published()
         let before = producer.snapshot(lifecycle: .init(connected: true), now: clock.read())
         XCTAssertNil(before.ages.accessUnitAge)
@@ -109,7 +111,9 @@ final class NikonFeedIncidentProducerTests: XCTestCase {
         let currentImage = await decoder.decode(jpeg(), source: input, incident: current)
         XCTAssertNotNil(currentImage)
         current.published()
-        XCTAssertEqual(producer.snapshot(lifecycle: .init(connected: true), now: clock.read()).ages.decodedOutputAge, 0)
+        XCTAssertEqual(
+            producer.snapshot(lifecycle: .init(connected: true), now: clock.read()).ages
+                .decodedOutputAge, 0)
     }
 
     private func jpeg() -> Data {
@@ -120,19 +124,26 @@ final class NikonFeedIncidentProducerTests: XCTestCase {
     }
 
     private func makeProducer(clock: Clock) -> NikonFeedIncidentProducer {
-        let host = DiagnosticsHost(product: "SIMULATED", listingName: "SIMULATED",
+        let host = DiagnosticsHost(
+            product: "SIMULATED", listingName: "SIMULATED",
             releasePackage: "org.example.simulated", version: "1", build: "1", environment: "test",
             sourceRevision: "test", supportEmail: "support@example.invalid", redact: { $0 })
-        let reporting = ReliabilityReporting(host: host,
-            consent: ReliabilityReportingConsent(defaults: UserDefaults(suiteName: UUID().uuidString)!),
-            dsn: ReliabilityReportingDSN { [] }, gate: ReliabilityReportingGate(cameraIPv4Prefix: nil),
-            origin: FeedIncidentOrigin(derivesTestSource: false, verification: false,
+        let reporting = ReliabilityReporting(
+            host: host,
+            consent: ReliabilityReportingConsent(
+                defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            dsn: ReliabilityReportingDSN { [] },
+            gate: ReliabilityReportingGate(cameraIPv4Prefix: nil),
+            origin: FeedIncidentOrigin(
+                derivesTestSource: false, verification: false,
                 buildIdentity: nil, injectionActivated: { false }), sink: NoReportSink())
         let runtime = cachedRuntime ?? FeedIncidentRuntime(reporting: reporting, directory: nil)
         cachedRuntime = runtime
-        let source = runtime.beginBoundSession(.init(sessionID: UUID().uuidString, appVersion: "1",
-            appBuild: "1", sourceRevision: "test", osName: "test", osVersion: "1",
-            hardwareClass: "test", cameraFamily: "test"))
+        let source = runtime.beginBoundSession(
+            .init(
+                sessionID: UUID().uuidString, appVersion: "1",
+                appBuild: "1", sourceRevision: "test", osName: "test", osVersion: "1",
+                hardwareClass: "test", cameraFamily: "test"))
         return NikonFeedIncidentProducer(source: source, clock: clock.read)
     }
     private var cachedRuntime: FeedIncidentRuntime?

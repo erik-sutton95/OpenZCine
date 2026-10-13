@@ -14,6 +14,7 @@ import com.opencapture.monitorui.settings.MonitorSupportSettings
 import com.opencapture.opencine.appkit.diagnostics.settingsStatus
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.monitorui.MonitorAssistTool
+import com.opencapture.opencine.media.MonitorTransfer
 import com.opencapture.opencine.cameracontrols.*
 import com.opencapture.opencine.appkit.MonitorOperatorSessionModel
 import com.opencapture.opencine.appkit.MonitorSettingsCacheIdentity
@@ -238,13 +239,21 @@ internal fun OperatorSettingsScreen(
     val display = MonitorOperatorDisplaySource(operatorSession, NIKON_DISPLAY_SECTIONS,
         if (editsLiveView) ({ mode -> retainedAccount.retire(); operatorSession.beginEditing(mode) }) else null)
     val unavailable = stringResource(R.string.settings_image_processing_unavailable)
-    val assistSections = listOf(MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA, MonitorAssistTool.WAVE,
-        MonitorAssistTool.PARADE, MonitorAssistTool.HISTO, MonitorAssistTool.VECTOR, MonitorAssistTool.PEAK,
-        MonitorAssistTool.LIGHTS).mapNotNull { tool ->
-        if (tool == MonitorAssistTool.FALSE && !nikonImageProcessingAvailable)
-            MonitorAssistSettingsSection.Unavailable(tool, unavailable)
-        else nikonAssistSection(tool, assists.shared, cameraInput, emitHaptic)
-    }
+    // View Assist is the shared recipe (A4-06). This camera owns False Color and Zebra (its curve and native
+    // codes); without the image renderer False Color explains why and Zebra and Peaking are not offered.
+    val assistHelp = remember { OperatorHelpCopy("OpenZCine") }
+    val assistHost = remember { AssistHost(SettingsPalette.peaking, SettingsPalette.highlight, SettingsPalette.midtone) }
+    val assistSettings = MonitorOperatorAssistSettingsSource(assists.shared, assistHelp, assistHost,
+        // Only the common False Color and Zebra cards read the transfer, and this camera supplies both.
+        MonitorTransfer.SRGB,
+        exposureHelp = "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
+        available = if (nikonImageProcessingAvailable) MonitorOperatorAssistSettingsTools.toSet()
+            else MonitorOperatorAssistSettingsTools.toSet() - setOf(MonitorAssistTool.ZEBRA, MonitorAssistTool.PEAK),
+        falseColor = if (nikonImageProcessingAvailable) {
+            nikonAssistSection(MonitorAssistTool.FALSE, assists.shared, cameraInput, emitHaptic)
+        } else MonitorAssistSettingsSection.Unavailable(MonitorAssistTool.FALSE, unavailable),
+        zebra = nikonAssistSection(MonitorAssistTool.ZEBRA, assists.shared, cameraInput, emitHaptic),
+        resetPolicy = MonitorOperatorAssistResetPolicy.PLOT_CONTROLS, changed = emitHaptic)
     val healthCaption = if (!linked) {
         health?.detail?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_link_no_camera_caption)
     } else {
@@ -308,7 +317,7 @@ internal fun OperatorSettingsScreen(
     val configuration = MonitorOperatorSettingsConfiguration("OpenZCine", linked, phase,
         closeOwned, onDisconnect?.let { disconnect -> { retainedAccount.retire(); disconnect() } }, emitHaptic, link,
         sharingSource(session, relaySharing, settings, relaySharingEnabled, onRelayShareToggle, emitHaptic),
-        stringResource(R.string.settings_subtitle_sharing), "Broadcast & watchers", assistSections, controls,
+        stringResource(R.string.settings_subtitle_sharing), "Broadcast & watchers", assistSettings, controls,
         cache = MonitorSettingsCachePresentation(cacheSource, { cacheSizeLabel(context, it) },
             stringResource(R.string.status_calculating), stringResource(R.string.cache_read_failed),
             stringResource(R.string.cache_clear_failed), stringResource(R.string.help_storage_cache),

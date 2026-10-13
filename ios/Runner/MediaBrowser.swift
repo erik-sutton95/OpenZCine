@@ -12,8 +12,8 @@ import SwiftUI
 import UIKit
 
 /// Decodes cell images downsampled to a bounded pixel size, off the main actor (same pattern as
-/// `FrameDecoder`). Cells must never decode a full-resolution still — a 45 MP HEIF is ~180 MB
-/// decoded, a screenful is a jetsam kill — and one actor also serializes decodes during fast scroll.
+/// `FrameDecoder`). Cells must never decode a full-resolution still - a 45 MP HEIF is ~180 MB
+/// decoded, a screenful is a jetsam kill - and one actor also serializes decodes during fast scroll.
 actor MediaCellImageLoader {
     static let shared = MediaCellImageLoader()
 
@@ -83,7 +83,7 @@ actor MediaCellImageLoader {
             ] as [CFString: Any] as CFDictionary
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions)
         else { return nil }
-        // The transform option only rotates when the bytes carry the tag — apply the caller's
+        // The transform option only rotates when the bytes carry the tag - apply the caller's
         // learned orientation exactly when the source has none of its own.
         if let fallbackOrientation, fallbackOrientation != 1,
             exifOrientation(source: source) == nil,
@@ -113,7 +113,7 @@ enum MediaCellThumbnailCache {
 /// Geometry for a media popup panel anchored to its trigger button.
 ///
 /// The preferred width is a *preference, not a promise*: a 400pt panel cannot fit a 393pt phone,
-/// and no clamp rescues a width that does not fit — a trailing-aligned `min(max(…))` silently
+/// and no clamp rescues a width that does not fit - a trailing-aligned `min(max(…))` silently
 /// inverts and shoves the panel off the leading edge. So the width is bounded by the safe
 /// viewport first, which is precisely what makes the two-edge clamp well-formed afterwards.
 ///
@@ -130,7 +130,7 @@ struct MediaPopupPlacement: Equatable {
     /// Gap kept between the panel and every safe-area edge.
     static let margin: CGFloat = 12
 
-    /// Width and leading edge — the rule every anchored media popup shares. Only the vertical
+    /// Width and leading edge - the rule every anchored media popup shares. Only the vertical
     /// rule differs between the below-anchor and above-anchor panels.
     static func fitted(
         anchor: CGRect,
@@ -530,7 +530,7 @@ private struct MediaClipThumbnail: View {
         }
         let thumbPixels = list ? 480 : 640
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
-            // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
+            // The camera's PTP thumbs can be EXIF-stripped - the row's learned orientation
             // stands in so portrait shots render upright.
             if let image = await MediaCellImageLoader.shared.downsampled(
                 data: data, maxPixelSize: thumbPixels, fallbackOrientation: clip.exifOrientation)
@@ -582,7 +582,7 @@ private struct MediaClipThumbnail: View {
     }
 }
 
-/// A centred, non-interactive progress card shown while a batch delete runs — the grid holds
+/// A centred, non-interactive progress card shown while a batch delete runs - the grid holds
 /// steady behind it and refreshes once when the deletion finishes.
 private struct MediaDeletionProgressOverlay: View {
     let progress: MediaDeletionProgress
@@ -645,7 +645,7 @@ private struct MediaBurstSeriesView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let selected, let record = records.first(where: { $0.payload.id == selected.id }) {
-                // The selected frame reuses the full photo viewer — streaming decode, zoom,
+                // The selected frame reuses the full photo viewer - streaming decode, zoom,
                 // rating, RAW toggle, share, and single-frame delete all keep working.
                 // Recreated per frame (`.id`) so its per-clip state and stream reset cleanly.
                 MediaPhotoViewer(
@@ -706,7 +706,7 @@ private struct MediaBurstSeriesView: View {
     }
 }
 
-/// One scrubber thumb — the camera thumbnail at strip size, widened when selected (Photos
+/// One scrubber thumb - the camera thumbnail at strip size, widened when selected (Photos
 /// style). Fetches the thumb from the body when it isn't cached yet.
 private struct NikonStripThumbnail: View {
     let request: MonitorMediaPictureRequest<MediaClip>
@@ -749,7 +749,7 @@ private struct NikonStripThumbnail: View {
 
 // MARK: - Photo viewer
 
-/// Full-screen still viewer for camera JPEG/RAW/HEIF — streams the object from the card when
+/// Full-screen still viewer for camera JPEG/RAW/HEIF - streams the object from the card when
 /// needed. Same-stem RAW+JPEG pairs open on the JPEG with a JPG ⇄ RAW toggle beside Share.
 @MainActor private struct NikonPhotoContext {
     let library: MonitorMediaLibraryModel<MediaClip>
@@ -1129,7 +1129,7 @@ struct MediaPlayerView: View {
                 } else {
                     Color.black
                 }
-            }, preview: { _ in EmptyView() }, lookMenu: { LUTPickerContent().environment(model) })
+            }, preview: { _ in EmptyView() }, lookMenu: { NikonLUTPicker().environment(model) })
     }
 
     private func closeAfterEnteredCleanup(_ captured: NikonOperatorPlaybackContext) {
@@ -1159,7 +1159,8 @@ struct MediaPlayerView: View {
             share: MediaDeliveryEligibility.canDeliver(
                 clipIsLocal: model.isClipDownloaded(record.payload),
                 cameraConnected: model.isConnected),
-            delete: model.isConnected && model.mediaBrowserSource == .camera && record.payload.handle != nil
+            delete: model.isConnected && model.mediaBrowserSource == .camera
+                && record.payload.handle != nil
                 && !covered && model.mediaDeletionProgress == nil)
     }
     private var operations: MonitorOperatorPlaybackOperations<MediaClip, String> {
@@ -1169,18 +1170,23 @@ struct MediaPlayerView: View {
                     let native = captured.native, captured.media.isCurrent(owner.token),
                     owner.active?.asset.id == record.asset.id, access(record).delete == true
                 else { return nil }
-                let token = owner.token, run = deliveryCoordinator.capturedRun
-                return model.capturePlaybackMediaDeletion(record.payload, cleanup: {
-                    guard context === captured, captured.media.playback === owner,
-                        captured.native === native, captured.media.isCurrent(token) else { return false }
-                    owner.close()
-                    let transfer = native.captureEnteredTransferCleanup()
-                    await run?.cancelAndJoin()
-                    await transfer()
-                    return context === captured && captured.media.playback === owner &&
-                        captured.native === native && owner.closed &&
-                        owner.token == .init(owner: token.owner, revision: token.revision &+ 1)
-                })
+                let token = owner.token
+                let run = deliveryCoordinator.capturedRun
+                return model.capturePlaybackMediaDeletion(
+                    record.payload,
+                    cleanup: {
+                        guard context === captured, captured.media.playback === owner,
+                            captured.native === native, captured.media.isCurrent(token)
+                        else { return false }
+                        owner.close()
+                        let transfer = native.captureEnteredTransferCleanup()
+                        await run?.cancelAndJoin()
+                        await transfer()
+                        return context === captured && captured.media.playback === owner
+                            && captured.native === native && owner.closed
+                            && owner.token
+                                == .init(owner: token.owner, revision: token.revision &+ 1)
+                    })
             },
             favorite: { record in model.toggleClipFavorite(record.payload) }, access: access,
             rating: .init(

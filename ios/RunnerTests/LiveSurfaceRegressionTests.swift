@@ -1,5 +1,5 @@
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -61,7 +61,9 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         }
 
         /// What VoiceOver reaches, for a failure message.
-        var identifiers: [String] { elements().map(Self.identifier).filter { !$0.isEmpty }.sorted() }
+        var identifiers: [String] {
+            elements().map(Self.identifier).filter { !$0.isEmpty }.sorted()
+        }
 
         private static func identifier(_ object: NSObject) -> String {
             let getter = NSSelectorFromString("accessibilityIdentifier")
@@ -133,7 +135,8 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             let coverShown = try await hosted.settle {
                 hosted.element(prefix: "monitor.settings.tab.") != nil
             }
-            XCTAssertTrue(coverShown, "\(source): Settings must render its cover: \(hosted.identifiers)")
+            XCTAssertTrue(
+                coverShown, "\(source): Settings must render its cover: \(hosted.identifiers)")
 
             model.activePanel = nil
             let backToLive = try await hosted.settle {
@@ -141,7 +144,8 @@ final class LiveSurfaceRegressionTests: XCTestCase {
                     && hosted.element("monitor.system.settings") != nil
             }
             XCTAssertTrue(
-                backToLive, "\(source): closing Settings must return to the monitor: \(hosted.identifiers)")
+                backToLive,
+                "\(source): closing Settings must return to the monitor: \(hosted.identifiers)")
         }
     }
 
@@ -294,7 +298,8 @@ final class LiveSurfaceScreens: XCTestCase {
                 $0.activationState == .foregroundActive
             })
         for (name, size) in [
-            ("portrait", CGSize(width: 402, height: 874)), ("landscape", CGSize(width: 874, height: 402)),
+            ("portrait", CGSize(width: 402, height: 874)),
+            ("landscape", CGSize(width: 874, height: 402)),
         ] {
             let model = NativeAppModel()
             model.preferences = OperatorPreferences.defaults

@@ -7,9 +7,9 @@ import OpenZCineCore
 import SwiftUI
 
 /// Default centre for the floating audio meter, anchored just outside the video feed edge. When the
-/// outside position doesn't fit `bounds` — landscape's full-bleed feed spans the whole screen, so
+/// outside position doesn't fit `bounds` - landscape's full-bleed feed spans the whole screen, so
 /// "outside" is off-screen and `MovablePanel`'s clamp would park the panel behind the floating
-/// chrome — the anchor mirrors to just inside the feed edge instead, pushed past `chromeClearance`
+/// chrome - the anchor mirrors to just inside the feed edge instead, pushed past `chromeClearance`
 /// (top status pill band, bottom assist/capture strip band).
 private func feedOutsideCenter(
     _ feedRect: CGRect, _ size: CGSize, _ anchor: Alignment,
@@ -95,8 +95,8 @@ func desqueezeScale(_ desqueeze: NikonDesqueeze) -> CGSize {
 /// Stills cannot use ``desqueezeScale`` the way the live feed does. The feed layer is scaled inside
 /// a fixed rect, but a still is FITTED to its container first, so scaling afterwards would push the
 /// image outside the frame it was just fitted into. De-squeezing the size before the fit keeps the
-/// whole picture on screen and lets everything anchored to the fitted rect — the AF box on instant
-/// review, the zoom transform in the viewer — follow without knowing about anamorphic at all.
+/// whole picture on screen and lets everything anchored to the fitted rect - the AF box on instant
+/// review, the zoom transform in the viewer - follow without knowing about anamorphic at all.
 func desqueezedSize(_ size: CGSize, _ desqueeze: NikonDesqueeze) -> CGSize {
     guard desqueeze.factor > 1, size.width > 0, size.height > 0 else { return size }
     let factor = CGFloat(desqueeze.factor)
@@ -113,7 +113,7 @@ func desqueezedAspectRatio(_ size: CGSize, _ desqueeze: NikonDesqueeze) -> CGFlo
     return presented.width / presented.height
 }
 
-/// The visible (de-squeezed) image rectangle inside the full feed rect — the same centred sub-rect
+/// The visible (de-squeezed) image rectangle inside the full feed rect - the same centred sub-rect
 /// the scale above produces, so framing overlays land on the de-squeezed image.
 func desqueezedRect(_ full: CGRect, _ desqueeze: NikonDesqueeze) -> CGRect {
     guard desqueeze.factor > 1 else { return full }
@@ -126,14 +126,14 @@ func desqueezedRect(_ full: CGRect, _ desqueeze: NikonDesqueeze) -> CGRect {
     return CGRect(x: full.midX - width / 2, y: full.minY, width: width, height: full.height)
 }
 
-/// Framing aids that must register pixel-exact with the live image — guides, grid, crosshair, and
+/// Framing aids that must register pixel-exact with the live image - guides, grid, crosshair, and
 /// level. Drawn as an overlay *on the feed image itself* (like the AF boxes), so they share the feed
 /// rectangle by construction instead of recomputing it. Positioned against the visible feed rect the
 /// same way the index.html prototype does.
 struct FeedAlignedAssists: View {
     @Environment(NativeAppModel.self) private var model
     /// Clean output mode (DISP 2). Which tools survive it is decided by `MonitorChromePolicy` via
-    /// `renderedLiveAssistTools` — nothing unless the operator pinned it. This flag only carries
+    /// `renderedLiveAssistTools` - nothing unless the operator pinned it. This flag only carries
     /// the layout consequence (no bottom bars, so the EV needle drops to the feed edge).
     var clean: Bool = false
     /// When set (e.g. letterboxed media playback), framing overlays align to this rect instead of
@@ -199,7 +199,7 @@ struct FeedAlignedAssists: View {
         .allowsHitTesting(false)
     }
 
-    /// The foreground scene's bounds — the on-screen area the over-widened feed content gets
+    /// The foreground scene's bounds - the on-screen area the over-widened feed content gets
     /// clipped to (the portrait fill crop frame spans the full viewport width, so the screen
     /// intersection and the clip intersection coincide).
     private var screenBounds: CGRect? {
@@ -210,7 +210,7 @@ struct FeedAlignedAssists: View {
 
     /// The portion of this overlay that is actually on screen, in its own coordinate space.
     ///
-    /// Framing aids register pixel-exact with the feed content — including content that portrait
+    /// Framing aids register pixel-exact with the feed content - including content that portrait
     /// fill (and fill + de-squeeze) over-widens past the screen and clips. HUD instruments like the
     /// level gauge instead seat against what the operator can see; this recovers that rect by
     /// intersecting the content with the screen (`screen` and `contentGlobal` share the global
@@ -230,13 +230,13 @@ struct FeedAlignedAssists: View {
 ///
 /// Reads the **camera's** virtual horizon (PTP `AngleLevelYawing` 0xD07E roll /
 /// `AngleLevelPitching` 0xD07D pitch) so the horizon reflects the shot's tilt, not the monitor's.
-/// The value encoding is undocumented — decoded best-effort and logged for HW calibration
+/// The value encoding is undocumented - decoded best-effort and logged for HW calibration
 /// (category `camera-level`). Falls back to the monitor's CoreMotion until the body reports one.
 struct FeedLevelView: View {
     @Environment(NativeAppModel.self) private var model
     let style: AssistConfiguration.Level.Style
     let feed: CGRect
-    /// On-screen portion of the overlay in its coordinate space — what the gauge seats against.
+    /// On-screen portion of the overlay in its coordinate space - what the gauge seats against.
     let visibleBounds: CGRect
     @State private var device = DeviceLevel()
 
@@ -260,7 +260,7 @@ struct FeedLevelView: View {
                     .position(x: feed.midX, y: feed.midY)
             }
         }
-        // Only run device motion while it's actually the source — stop it once the camera supplies a
+        // Only run device motion while it's actually the source - stop it once the camera supplies a
         // level so the monitor's own tilt can't leak into the readout.
         .onAppear { if usesDeviceFallback { device.start() } }
         .onChange(of: usesDeviceFallback) { _, fallback in
@@ -287,7 +287,7 @@ struct FeedLevelView: View {
 /// Streams the device's gravity-derived roll/pitch (degrees) while the level overlay is on. Gravity
 /// arrives in CoreMotion's fixed, portrait-referenced device frame (+x out the right edge, +y out
 /// the top, +z out of the screen), so the screen-plane roll depends on which way the interface is
-/// rotated — `isPortrait` selects the mapping for the two orientations the app supports (Portrait,
+/// rotated - `isPortrait` selects the mapping for the two orientations the app supports (Portrait,
 /// LandscapeRight). The simulator reports no motion, so the mapping is derived from CoreMotion's
 /// documented axis conventions; on-hardware sign calibration may still want a one-line flip.
 @Observable
@@ -350,7 +350,7 @@ struct LevelHorizonView: View {
 
 /// The body's exposure indicator as a compact glass strip: a ±3 EV tick bar (taller ticks
 /// on whole stops), the camera's 1/6-EV needle, and a signed numeric readout that keeps the
-/// truth when the needle clamps at the rail. Read-only — the value comes straight from the
+/// truth when the needle clamps at the rail. Read-only - the value comes straight from the
 /// camera's own metering.
 struct EVMeterView: View {
     let sixths: Int
@@ -442,20 +442,24 @@ enum FalseColorReference {
             case .srgb: "sRGB"
             case .hlg: "HLG"
             }
+        let lookCurve = NikonMonitorSignal.lookCurves[mapping.curve.monitorTransfer]
+        let plan = MonitorFalseColorReferencePlan(
+            scale: scale.sharedScale,
+            transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
+            lookCurve: lookCurve, readThroughLook: read709)
         return MonitorFalseColorReferenceValues(
             subtitle:
-                "\(selection.referenceScaleLabel) · \(FalseColorMap.readsThroughLook(mapping: mapping, read709: read709) ? "709" : curveLabel)",
-            segments: segments(scale: scale, mapping: mapping, read709: read709).map {
+                "\(selection.referenceScaleLabel) · \(LiveColorScience.readsThroughLook(lookCurve: lookCurve, rec709: read709) ? "709" : curveLabel)",
+            segments: plan.segments.enumerated().map {
                 MonitorFalseColorReferenceSegment(
-                    id: $0.id, lowerFraction: $0.lowerFraction, upperFraction: $0.upperFraction,
-                    red: $0.band.red, green: $0.band.green, blue: $0.band.blue)
+                    id: $0.offset, lowerFraction: $0.element.lowerFraction,
+                    upperFraction: $0.element.upperFraction, red: $0.element.band.red,
+                    green: $0.element.band.green, blue: $0.element.band.blue)
             },
-            markers: scale == .stops
-                ? stopAxisMarkers(mapping: mapping, read709: read709).map {
-                    MonitorFalseColorReferenceMarker(
-                        id: $0.id, label: $0.label, fraction: $0.fraction)
-                } : [],
-            axisLabels: FalseColorAssist.legendLabels(scale: selection))
+            markers: plan.markers.enumerated().map {
+                MonitorFalseColorReferenceMarker(
+                    id: $0.offset, label: $0.element.label, fraction: $0.element.fraction)
+            }, axisLabels: FalseColorAssist.legendLabels(scale: selection))
     }
 
     static func segments(
@@ -507,4 +511,3 @@ enum FalseColorReference {
         return min(1, max(0, (value - domain.lowerBound) / (domain.upperBound - domain.lowerBound)))
     }
 }
-

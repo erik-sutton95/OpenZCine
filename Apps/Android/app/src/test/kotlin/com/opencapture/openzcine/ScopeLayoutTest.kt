@@ -15,50 +15,6 @@ import kotlin.test.assertTrue
 /** Pure multi-scope selection, demand, and placement policy checks. */
 class ScopeLayoutTest {
     @Test
-    fun `portrait keeps the first two eligible canonical selections`() {
-        val selected =
-            setOf(
-                ScopeKind.WAVEFORM,
-                ScopeKind.PARADE,
-                ScopeKind.HISTOGRAM,
-                ScopeKind.TRAFFIC_LIGHTS,
-            )
-
-        val displayed = portraitDisplayedScopes(selected)
-        assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE), displayed)
-        assertEquals(4, selected.size, "Fit placement must not alter the active selection")
-    }
-
-    @Test
-    fun `portrait fill keeps every selected scope floating in canonical order`() {
-        val selected =
-            setOf(
-                ScopeKind.HISTOGRAM,
-                ScopeKind.WAVEFORM,
-                ScopeKind.VECTORSCOPE,
-            )
-
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM, ScopeKind.VECTORSCOPE),
-            displayedScopeKinds(
-                selectedScopes = selected,
-                portraitScopes = listOf(ScopeKind.HISTOGRAM),
-                isPortrait = true,
-                portraitFloating = true,
-            ),
-        )
-        assertEquals(
-            listOf(ScopeKind.HISTOGRAM),
-            displayedScopeKinds(
-                selectedScopes = selected,
-                portraitScopes = listOf(ScopeKind.HISTOGRAM),
-                isPortrait = true,
-                portraitFloating = false,
-            ),
-        )
-    }
-
-    @Test
     fun `sampler demand avoids trace or vector work unless a visible scope needs it`() {
         val lights = scopeSamplingDemand(setOf(ScopeKind.TRAFFIC_LIGHTS))
         assertTrue(lights.traces)

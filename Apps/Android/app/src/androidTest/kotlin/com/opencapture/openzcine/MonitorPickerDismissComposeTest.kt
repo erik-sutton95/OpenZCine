@@ -17,11 +17,12 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
@@ -71,7 +72,9 @@ class MonitorPickerDismissComposeTest {
     @Test
     fun backdropTapDismissesThePanelWhileItsWriteIsPending() = dismissWhilePending {
         // Above the bottom panel, over the picture: the shared dismiss backdrop.
-        composeRule.onRoot().performTouchInput { click(Offset(width / 2f, height * 0.3f)) }
+        // A drum's small popup is a second native root. Tap the actual monitor's backdrop.
+        composeRule.onNode(isRoot() and hasAnyDescendant(hasTestTag("monitor_live_feed")),
+            useUnmergedTree = true).performTouchInput { click(Offset(width / 2f, height * 0.3f)) }
     }
 
     /** The focus-dial row is a switch to TalkBack, so it must also say whether it is on. */
@@ -112,9 +115,11 @@ class MonitorPickerDismissComposeTest {
         mount(session)
         composeRule.onNode(hasContentDescription("ISO", substring = true) and hasClickAction()).performClick()
         composeRule.waitUntilAtLeastOneExists(close, 5_000)
-        // Settle the ISO drum on 1600: the write queues and holds at the gate.
-        composeRule.onNode(hasContentDescription("800") and sharedDrum)
-            .performSemanticsAction(SemanticsActions.SetProgress) { it(2f) }
+        // Settle the ISO drum on another value: the write queues and holds at the gate.
+        val drum = composeRule.onNode(hasContentDescription("800") and sharedDrum)
+        val range = drum.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
+        val target = if (range.current < range.range.endInclusive) range.range.endInclusive else range.range.start
+        drum.performSemanticsAction(SemanticsActions.SetProgress) { it(target) }
         composeRule.waitUntil(5_000) { session.queued }
 
         dismiss()
@@ -155,14 +160,17 @@ class MonitorPickerDismissComposeTest {
         val gate = CompletableDeferred<Unit>()
         @Volatile var queued = false
         override suspend fun refreshProperties() = Unit
-        override suspend fun applyControl(control: CameraControl, label: String) {
-            writes += control to label
-        }
-        override suspend fun applyControl(control: CameraControl, label: String, admission: CameraCommandAdmission) {
+        // The ISO drum may write through the shared control model with or without an admission,
+        // so both routes hold at the gate.
+        override suspend fun applyControl(control: CameraControl, label: String) =
+            hold { writes += control to label }
+        override suspend fun applyControl(control: CameraControl, label: String, admission: CameraCommandAdmission) =
+            hold { if (admission.admits(this)) writes += control to label }
+        private suspend fun hold(write: () -> Unit) {
             queued = true
             try {
                 gate.await()
-                if (admission.admits(this)) applyControl(control, label)
+                write()
             } finally { queued = false }
         }
     }
