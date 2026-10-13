@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.cameracontrols.MonitorOperatorExposureReading
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.opencine.nikon.LiveFrameTimecode
@@ -10,6 +11,18 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MonitorReadoutsTest {
+    @Test
+    fun `the body exposure indicator reaches the shared gauge in shared EV words`() {
+        // A1-32: the 1/6 EV indicator feeds the shared gauge; A5-16: it spells 0.0 and U+2212 like every EV.
+        fun stops(sixths: Int?, lit: Boolean?) =
+            nikonExposureStops(CameraPropertySnapshot(evIndicatorSixths = sixths, evIndicatorLit = lit))
+        assertEquals("0.0", MonitorOperatorExposureReading(stops(0, true)).label)
+        assertEquals("\u22120.3", MonitorOperatorExposureReading(stops(-2, true)).label)
+        assertEquals("+1.0", MonitorOperatorExposureReading(stops(6, null)).label)
+        assertNull(stops(6, false), "an unlit indicator is unknown")
+        assertNull(stops(null, true))
+    }
+
     @Test
     fun `monitor and multicam preserve the camera frame counter`() {
         val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 17)

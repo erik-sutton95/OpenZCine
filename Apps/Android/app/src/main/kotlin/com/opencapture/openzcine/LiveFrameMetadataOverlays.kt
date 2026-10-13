@@ -5,11 +5,9 @@ import android.graphics.Path
 import android.graphics.PathMeasure
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -17,14 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
@@ -42,7 +38,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -58,14 +53,10 @@ import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
-import java.util.Locale
-import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 import com.opencapture.opencine.runtime.NativeFeedContentRect
 import com.opencapture.opencine.runtime.nativeFeedContentRect
-import com.opencapture.monitorui.MonitorMaterial
-import com.opencapture.monitorui.monitorMaterial
 
 /** A floating-point feed-local rectangle used by focus and level overlay math. */
 internal data class LiveOverlayRect(
@@ -246,11 +237,8 @@ internal fun liveLevelAccessibilityDescription(
 internal fun LiveFrameMetadataOverlay(
     presentationState: LiveFeedPresentationState,
     configuration: LocalFramingAssistConfiguration,
-    cleanMode: Boolean,
     isPortrait: Boolean,
     aspectFill: Boolean = false,
-    /** The EV meter is a photography-only tool; a persisted set may still carry it. */
-    isPhotography: Boolean = false,
     /** Local-pixel height of monitor chrome covering the feed's bottom edge. */
     gaugeBottomChromeInset: Float = 0f,
     focusPointLocked: Boolean = false,
@@ -261,16 +249,11 @@ internal fun LiveFrameMetadataOverlay(
     focusBoxAlpha: Float = 1f,
     /** Edit-view proxy: applied to an invisible box over the primary AF box, or null when live. */
     focusBoxEditModifier: Modifier? = null,
-    /** Body exposure-indicator needle in 1/6 EV steps; null hides the meter. */
-    evIndicatorSixths: Int? = null,
-    /** Body indicator lit state; the meter hides only on an explicit false. */
-    evIndicatorLit: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     val cameraLevel = presentationState.level
     // Tool visibility comes from [configuration], already filtered for the DISP mode by
-    // `renderedFramingAssists` (#256). `cleanMode` is now only a LAYOUT input: clean leaves the
-    // feed's bottom edge free, so the EV needle drops to it instead of clearing a capture bar.
+    // `renderedFramingAssists` (#256). The EV meter is the shared surface's gauge (A1-32).
     val levelEnabled = configuration.levelEnabled
     val cameraLevelAvailable = cameraLevel?.let(::cameraLevelIsValid) == true
     val deviceGravity = rememberMonitorDeviceTilt(enabled = levelEnabled && !cameraLevelAvailable, portrait = isPortrait)
@@ -330,27 +313,6 @@ internal fun LiveFrameMetadataOverlay(
                     isPortrait = isPortrait,
                     bottomChromeInset = gaugeBottomChromeInset,
                     debugFixtureShown = debugFixtureShown,
-                )
-            }
-            // Photography-only — the render guards the mode as well as the
-            // toolset, since a persisted visibility set from an older build may
-            // still carry the tool. Hidden while the body reports its indicator
-            // unlit (the value is undefined there) or before the first read lands.
-            if (
-                configuration.evMeterEnabled &&
-                isPhotography &&
-                evIndicatorSixths != null &&
-                evIndicatorLit != false
-            ) {
-                EVMeterOverlay(
-                    sixths = evIndicatorSixths,
-                    feed = feed,
-                    visibleBounds = viewport,
-                    cleanMode = cleanMode,
-                    // Photography always lays out fit, so the portrait feed bottom
-                    // is free — the needle drops to the edge instead of lifting into
-                    // a capture bar's lane (only landscape overlays a bar there).
-                    feedBottomFree = isPortrait,
                 )
             }
             DebugMetadataBadge(show = debugFixtureShown, feed = feed)
@@ -484,109 +446,6 @@ private fun CameraFocusOverlay(
                         }
                         .background(LiveDesign.background.copy(alpha = 0.82f), ChromeShape)
                         .padding(horizontal = 5.dp, vertical = 2.dp),
-            )
-        }
-    }
-}
-
-/**
- * Camera-fed exposure needle, seated bottom-centre of the visible feed (iOS
- * `EVMeterView` placement). With the capture band present it lifts above the
- * band's lane; clean mode has the bottom free, so it drops to the feed edge.
- */
-@Composable
-private fun EVMeterOverlay(
-    sixths: Int,
-    feed: LiveOverlayRect,
-    visibleBounds: LiveOverlayRect,
-    cleanMode: Boolean,
-    feedBottomFree: Boolean = false,
-) {
-    val density = LocalDensity.current
-    // Lift above a capture bar only where one actually overlays the feed bottom;
-    // clean mode and portrait-fit leave the bottom free, so the needle sits at the edge.
-    val lift = with(density) { (if (cleanMode || feedBottomFree) 28 else 92).dp.toPx() }
-    var meterSize by remember { mutableStateOf(IntSize.Zero) }
-    val visible = intersectLiveOverlayRects(feed, visibleBounds) ?: feed
-    val ev = sixths / 6.0
-    val description =
-        "EV meter: ${String.format(Locale.US, "%+.1f", ev)} EV camera exposure indicator"
-    Box(Modifier.fillMaxSize().clearAndSetSemantics { contentDescription = description }) {
-        EVMeterView(
-            sixths = sixths,
-            modifier =
-                Modifier.onSizeChanged { meterSize = it }
-                    .offset {
-                        IntOffset(
-                            (visible.centerX - meterSize.width / 2f).roundToInt(),
-                            (visible.bottom - lift - meterSize.height / 2f).roundToInt(),
-                        )
-                    }
-                    // Invisible until measured so the first frame can't flash at origin.
-                    .alpha(if (meterSize == IntSize.Zero) 0f else 1f),
-        )
-    }
-}
-
-/**
- * The body's exposure indicator as a compact glass strip (iOS `EVMeterView`):
- * a ±3 EV tick bar (taller ticks on whole stops), the camera's 1/6-EV needle,
- * and a signed numeric readout that keeps the truth when the needle clamps at
- * the rail. Read-only — the value comes straight from the camera's metering.
- */
-@Composable
-internal fun EVMeterView(sixths: Int, modifier: Modifier = Modifier) {
-    val ev = sixths / 6.0
-    Row(
-        modifier
-            // CircleShape renders as a capsule on a wide row, like iOS's Capsule.
-            .monitorMaterial(MonitorMaterial.Compact, CircleShape)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            String.format(Locale.US, "%+.1f", ev),
-            style = chromeStyle(11.5f, FontWeight.SemiBold, mono = true),
-            color = if (abs(ev) < 0.01) LiveDesign.text else LiveDesign.accent,
-            maxLines = 1,
-            softWrap = false,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(34.dp),
-        )
-        Canvas(Modifier.width(132.dp).height(16.dp)) {
-            val midY = size.height / 2f
-            val evSpan = 3.0
-            fun x(value: Double): Float {
-                val clamped = value.coerceIn(-evSpan, evSpan)
-                return (((clamped + evSpan) / (2 * evSpan)) * size.width).toFloat()
-            }
-            // Baseline.
-            drawLine(
-                Color.White.copy(alpha = 0.25f),
-                start = Offset(0f, midY),
-                end = Offset(size.width, midY),
-                strokeWidth = 1.dp.toPx(),
-            )
-            // Ticks every 1/3 EV; whole stops taller.
-            for (third in -9..9) {
-                val tall = third % 3 == 0
-                val half = (if (tall) 8 else 4).dp.toPx() / 2f
-                val tickX = x(third / 3.0)
-                drawLine(
-                    Color.White.copy(alpha = if (tall) 0.55f else 0.3f),
-                    start = Offset(tickX, midY - half),
-                    end = Offset(tickX, midY + half),
-                    strokeWidth = 1.dp.toPx(),
-                )
-            }
-            // The needle: clamps at the rail while the readout keeps the truth.
-            val needleX = x(ev)
-            drawLine(
-                LiveDesign.accent,
-                start = Offset(needleX, 1.dp.toPx()),
-                end = Offset(needleX, size.height - 1.dp.toPx()),
-                strokeWidth = 2.dp.toPx(),
             )
         }
     }

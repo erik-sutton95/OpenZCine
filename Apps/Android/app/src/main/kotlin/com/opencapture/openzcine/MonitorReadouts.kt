@@ -83,6 +83,13 @@ internal fun nikonCameraBatteryReading(rawLevel: Int?, externalPower: Boolean?):
 }
 
 /**
+ * The body's exposure indicator in stops for the shared EV gauge (A1-32, iOS
+ * `NikonMonitorShell.exposureReading`): 1/6 EV steps, unknown while the body reports it unlit.
+ */
+internal fun nikonExposureStops(properties: CameraPropertySnapshot): Double? =
+    if (properties.evIndicatorLit == false) null else properties.evIndicatorSixths?.let { it / 6.0 }
+
+/**
  * iOS never blanks a top-bar readout: values seed from `CameraDisplayState.preview`
  * and each later camera readback replaces its field while missing fields hold
  * the previous value. Scoped per connected-camera identity like the timecode.

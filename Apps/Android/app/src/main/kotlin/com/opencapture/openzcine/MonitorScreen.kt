@@ -2012,8 +2012,10 @@ internal fun MonitorScreen(
             capture = captureInputs,
             record = MonitorOperatorRecordSource(isPhotographyMode, operatorSettings.recordConfirmationEnabled.value,
                 busy = !recordControlEnabled, openMode = null, confirmingChanged = { recordConfirmationOpen = it }),
-            // The Nikon EV needle and level stay native instruments (F04, A3-25).
-            exposure = null, level = null, levelViewFlip = false, audio = null,
+            // The body's 1/6 EV exposure indicator, photography only, on the shared gauge (A1-32);
+            // the level stays native (A3-25).
+            exposure = if (isPhotographyMode) { { nikonExposureStops(cameraProperties) } } else null,
+            level = null, levelViewFlip = false, audio = null,
             // Control held by a watcher, a camera this device cannot drive, or a card transfer that owns
             // the command channel: presentation stays, commands are refused.
             readOnly = controlsSurrendered || !availability.canDriveCamera || mediaOwnsCommandChannel ||
@@ -2232,10 +2234,8 @@ internal fun MonitorScreen(
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,
                     configuration = renderedFraming,
-                    cleanMode = isClean,
                     isPortrait = isPortrait,
                     aspectFill = portraitRasterFill,
-                    isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
@@ -2244,8 +2244,6 @@ internal fun MonitorScreen(
                     // The editor's outline, dimming and badge, through the surface's one editor.
                     focusBoxEditModifier = if (editingDisplay == null) null
                         else Modifier.monitorOperatorChromeEditable(MonitorDisplaySection.FOCUS_BOX),
-                    evIndicatorSixths = cameraProperties.evIndicatorSixths,
-                    evIndicatorLit = cameraProperties.evIndicatorLit,
                 )
             }
                 // Outside the rotated stack: reads as screen chrome, never sideways text.
