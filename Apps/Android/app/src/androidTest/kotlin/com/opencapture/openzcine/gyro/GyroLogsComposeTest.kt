@@ -44,7 +44,7 @@ class GyroLogsComposeTest {
         compose.onNodeWithTag("gyro-delete-test-log").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(null, deleted) }
         compose.onNode(hasText("Delete") and hasAnyAncestor(hasTestTag("gyro-delete-confirmation"))).performClick()
-        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithText("CLOSE").performClick()
         compose.runOnIdle {
             assertEquals(entry, shared)
             assertEquals(entry, deleted)
