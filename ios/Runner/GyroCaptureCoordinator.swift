@@ -66,7 +66,7 @@ import UIKit
     var statusText: String {
         if failure != nil { return "GYRO ERROR" }
         if !enabled { return "Gyro logging off" }
-        if !eligible { return "Open a connected Nikon monitor to log gyro" }
+        if !eligible { return "Waiting for camera" }
         if logs.contains(where: \.active) {
             if hasGapWarning { return "GYRO GAP" }
             return reportedRecording == true ? "GYRO REC" : "GYRO SAVING"
