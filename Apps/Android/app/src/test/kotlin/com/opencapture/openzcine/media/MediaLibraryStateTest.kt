@@ -1013,7 +1013,7 @@ class MediaLibraryStateTest {
                 listOf(clip(1, "A001.MOV", captureDate = "20260715T101010")),
             )
 
-        assertEquals("A001.MOV · 20260715T101010 · 0MB", summary)
+        assertEquals("A001.MOV · 20260715T101010 · 100 B", summary)
         assertFalse(summary.contains("camera"))
 
         val bounded =

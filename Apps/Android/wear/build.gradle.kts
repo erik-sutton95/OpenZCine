@@ -112,6 +112,7 @@ val verifyWearReleaseArtifact = tasks.register<Exec>("verifyWearReleaseArtifact"
 }
 
 dependencies {
+    implementation("com.opencapture.opencine:media:0.1.0-SNAPSHOT")
     implementation(project(":wear-relay"))
     implementation("com.opencapture.opencine:watch-runtime:0.1.0-SNAPSHOT")
     implementation("com.opencapture.opencine:monitor-ui:0.1.0-SNAPSHOT")

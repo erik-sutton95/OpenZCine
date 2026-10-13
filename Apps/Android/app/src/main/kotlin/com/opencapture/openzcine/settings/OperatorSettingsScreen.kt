@@ -30,6 +30,7 @@ import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
 import com.opencapture.monitorui.settings.MonitorOperatorSafetySettings
 import com.opencapture.monitorui.settings.MonitorInputOrientationSettings
 import com.opencapture.monitorui.settings.MonitorAppInformationSettings
+import com.opencapture.opencine.vocabulary.MediaClipFormatting
 import com.opencapture.monitorui.settings.MonitorCacheSettings
 import com.opencapture.monitorui.settings.MonitorProjectLegalSettings
 import com.opencapture.monitorui.settings.MonitorSettingsPage
@@ -39,7 +40,6 @@ import com.opencapture.monitorui.settings.MonitorSettingsTab
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -455,7 +455,7 @@ private fun cacheSizeLabel(context: Context, bytes: Long?): String =
     when {
         bytes == null -> context.getString(R.string.status_calculating)
         bytes == 0L -> context.getString(R.string.status_empty)
-        else -> Formatter.formatFileSize(context, bytes)
+        else -> MediaClipFormatting.byteLabel(bytes)
     }
 
 private fun clearResultLabel(context: Context, result: MediaCacheClearResult): String =

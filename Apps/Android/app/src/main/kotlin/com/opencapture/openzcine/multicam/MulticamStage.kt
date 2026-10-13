@@ -44,6 +44,7 @@ import com.opencapture.opencine.appkit.MultiviewRecordContext
 import com.opencapture.opencine.appkit.MultiviewStage
 import com.opencapture.opencine.appkit.MultiviewStageActions
 import com.opencapture.opencine.appkit.MultiviewTally
+import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.appkit.MultiviewTile
 import com.opencapture.opencine.appkit.MultiviewTileStatus
 import com.opencapture.opencine.appkit.MultiviewTool
@@ -209,6 +210,7 @@ internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mul
         ) to state.reason
     }
     return MultiviewTile(
+        storage = member.control?.refresh()?.storage?.storageReadout?.free ?: MultiviewTally.UNAVAILABLE,
         name = member.displayName, model = member.record.transport.displayName,
         // The body's five-step gauge (A5-01): bars, never a percent it did not report.
         batteryBars = nikonCameraBatteryReading(member.batteryPercent, null)?.bars,

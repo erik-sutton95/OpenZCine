@@ -30,13 +30,13 @@ class MediaClipCellPresentationTest {
     @Test fun actualPairBurstAndFavoriteFactsKeepCurrentNativeLabels() {
         val clip = sample("01.JPG", NikonMediaContentKind.STILL_PHOTO)
         val value = mediaClipCellPresentation(clip, "SIMULATED-cell", true, true, 4, false, false, false)
-        assertEquals("1MB · RAW+J", value.mediaBadge)
+        assertEquals("1 MB · RAW+J", value.mediaBadge)
         assertEquals(4, value.burstCount)
         assertEquals("Remove 01.JPG from favorites", value.favoriteLabel)
         assertEquals(true, value.favorite)
         val ordinary = mediaClipCellPresentation(clip, "SIMULATED-cell", false, false, null, false, false, false)
         assertNull(ordinary.burstCount)
-        assertEquals("1MB · JPG", ordinary.mediaBadge)
+        assertEquals("1 MB · JPG", ordinary.mediaBadge)
         assertFalse(ordinary.favorite)
         assertEquals("Add 01.JPG to favorites", ordinary.favoriteLabel)
     }
@@ -48,9 +48,9 @@ class MediaClipCellPresentationTest {
         assertNull(selected.selectionEntryLabel)
         assertNull(selected.burstCount)
         // Android's real RAW+J badge remains visible during selection, unlike the Swift donor.
-        assertEquals("1MB · RAW+J", selected.mediaBadge)
+        assertEquals("1 MB · RAW+J", selected.mediaBadge)
         val list = mediaClipCellPresentation(clip, "SIMULATED-cell", false, true, 4, true, true, false)
-        assertEquals("1MB · RAW+J · VIEW", list.detail)
+        assertEquals("1 MB · RAW+J · VIEW", list.detail)
         assertEquals("01.JPG, view, not selected", list.accessibilityDescription)
         assertNull(list.source)
         assertNull(list.mediaBadge)

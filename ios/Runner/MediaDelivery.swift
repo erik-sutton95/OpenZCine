@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import OpenCineAppKit
+import OpenCineCameraVocabulary
 import OpenCineFrameIO
 import OpenZCineCore
 import os
@@ -289,7 +290,7 @@ extension NativeAppModel {
         clips.map { clip in
             let size =
                 clip.sizeBytes > 0
-                ? ByteCountFormatter.string(fromByteCount: Int64(clip.sizeBytes), countStyle: .file)
+                ? MediaClipFormatting.byteLabel(clip.sizeBytes)
                 : "unknown size"
             let date = clip.captureDate.isEmpty ? "unknown date" : clip.captureDate
             return "\(clip.filename) · \(date) · \(size)"
