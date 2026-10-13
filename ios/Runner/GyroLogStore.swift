@@ -9,10 +9,16 @@ struct GyroLogEntry: Identifiable, Sendable {
     var id: UUID { descriptor.id }
 }
 
+/// Recovery preserves every available row even when an individual interrupted file cannot finish.
+struct GyroLogRecoveryResult: Sendable {
+    let entries: [GyroLogEntry]
+    let warning: String?
+}
+
 protocol GyroLogStoring: Sendable {
-    func load() async throws -> [GyroLogEntry]
+    func load() async throws -> GyroLogRecoveryResult
     func apply(_ updates: [GyroLogUpdate], at time: Double) async throws -> [GyroLogEntry]
-    func abort() async -> [GyroLogEntry]
+    func abort() async -> GyroLogRecoveryResult
     func share(_ id: UUID) async throws -> URL
     func delete(_ id: UUID) async throws -> [GyroLogEntry]
 }
@@ -41,7 +47,7 @@ actor GyroLogStore: GyroLogStoring {
             .appendingPathComponent("GyroLogs", isDirectory: true)
     }
 
-    func load() throws -> [GyroLogEntry] {
+    func load() throws -> GyroLogRecoveryResult {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         entries = try FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil
@@ -58,8 +64,8 @@ actor GyroLogStore: GyroLogStoring {
             return GyroLogEntry(
                 descriptor: descriptor, summary: summary, active: handles[id] != nil)
         }
-        try recoverInterruptedLogs()
-        return sortedEntries
+        let warning = recoverInterruptedLogs()
+        return GyroLogRecoveryResult(entries: sortedEntries, warning: warning)
     }
 
     func apply(_ updates: [GyroLogUpdate], at time: Double) throws -> [GyroLogEntry] {
@@ -89,7 +95,7 @@ actor GyroLogStore: GyroLogStoring {
         return sortedEntries
     }
 
-    func abort() -> [GyroLogEntry] {
+    func abort() -> GyroLogRecoveryResult {
         for handle in handles.values {
             try? handle.synchronize()
             try? handle.close()
@@ -98,8 +104,8 @@ actor GyroLogStore: GyroLogStoring {
         entries = entries.map {
             GyroLogEntry(descriptor: $0.descriptor, summary: $0.summary, active: false)
         }
-        try? recoverInterruptedLogs()
-        return sortedEntries
+        let warning = recoverInterruptedLogs()
+        return GyroLogRecoveryResult(entries: sortedEntries, warning: warning)
     }
 
     func share(_ id: UUID) throws -> URL {
@@ -163,17 +169,22 @@ actor GyroLogStore: GyroLogStoring {
             GyroLogEntry(descriptor: summary.descriptor, summary: summary, active: false))
     }
 
-    private func recoverInterruptedLogs() throws {
+    private func recoverInterruptedLogs() -> String? {
+        var hadFailure = false
         for entry in entries where entry.summary == nil && !entry.active {
             let source =
                 FileManager.default.fileExists(atPath: partial(entry.id).path)
                 ? partial(entry.id) : finishedURL(entry.descriptor)
             guard FileManager.default.fileExists(atPath: source.path) else { continue }
-            do { try recover(entry, source: source) } catch GyroGCSVError.invalidHeader {
-                // Preserve the broken entry for visible deletion; it must not block other takes.
-                continue
+            do { try recover(entry, source: source) } catch {
+                // A bad header or a failed write affects this take only. Keep saved logs usable,
+                // including deletion to free space when recovery could not publish its metadata.
+                hadFailure = true
             }
         }
+        return hadFailure
+            ? "Some interrupted gyro logs could not be recovered. Saved logs remain available."
+            : nil
     }
 
     private func recover(_ entry: GyroLogEntry, source: URL) throws {

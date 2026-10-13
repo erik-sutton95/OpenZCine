@@ -17,6 +17,7 @@ import UIKit
     }
     private(set) var logs: [GyroLogEntry] = []
     private(set) var failure: String?
+    private(set) var storageWarning: String?
     var logsPresented = false
     private(set) var motionRunning = false
     private(set) var hasGapWarning = false
@@ -55,7 +56,11 @@ import UIKit
         enabled = defaults.bool(forKey: Self.preferenceKey)
         loading = Task { [weak self] in
             guard let self else { return }
-            do { logs = try await store.load() } catch {
+            do {
+                let recovered = try await store.load()
+                logs = recovered.entries
+                storageWarning = recovered.warning
+            } catch {
                 failure = "Gyro logs could not be opened: \(error.localizedDescription)"
             }
             loaded = true
@@ -200,7 +205,9 @@ import UIKit
             failure = "Gyro log could not be saved: \(error.localizedDescription)"
             // The file may contain only part of this batch. Recover bytes actually written,
             // never publish the session's in-memory sample count as a successful disk write.
-            logs = await store.abort()
+            let recovered = await store.abort()
+            logs = recovered.entries
+            storageWarning = recovered.warning
         }
     }
 

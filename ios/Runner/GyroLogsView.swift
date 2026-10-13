@@ -16,6 +16,10 @@ struct GyroLogsView: View {
                         "Mount the phone firmly to the camera. Export a log, then synchronize it and select your lens in Gyroflow."
                     )
                     .font(.subheadline)
+                    if let warning = coordinator.storageWarning {
+                        Label(warning, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
                     if let failure = coordinator.failure {
                         Label(failure, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)

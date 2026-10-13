@@ -270,13 +270,13 @@ struct GyroCaptureTests {
 
 private actor FailingGyroStore: GyroLogStoring {
     var aborted = false
-    func load() -> [GyroLogEntry] { [] }
+    func load() -> GyroLogRecoveryResult { .init(entries: [], warning: nil) }
     func apply(_ updates: [GyroLogUpdate], at time: Double) throws -> [GyroLogEntry] {
         throw CocoaError(.fileWriteOutOfSpace)
     }
-    func abort() -> [GyroLogEntry] {
+    func abort() -> GyroLogRecoveryResult {
         aborted = true
-        return []
+        return .init(entries: [], warning: nil)
     }
     func share(_ id: UUID) throws -> URL { throw GyroStoreError.missing }
     func delete(_ id: UUID) -> [GyroLogEntry] { [] }
