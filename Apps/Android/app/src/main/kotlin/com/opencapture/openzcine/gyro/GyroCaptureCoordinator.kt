@@ -230,11 +230,12 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
         val reply = JSONObject(payload ?: throw IllegalStateException("Gyro core did not accept the operation."))
         store.apply(reply)
         val updates = reply.getJSONArray("updates")
-        var finished = false
+        var changed = false
         for (index in 0 until updates.length()) {
             val update = updates.getJSONObject(index)
+            if (update.getString("kind") == "opened") changed = true
             if (update.getString("kind") == "finished") {
-                finished = true
+                changed = true
                 if (update.getJSONObject("summary").getString("termination") == "sensorStalled") stalled = true
             }
         }
@@ -247,14 +248,18 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
             }
                 else if (reply.getBoolean("hasSamples")) "Ready" else "Starting gyroscope",
             failed = warning)
-        if (finished) refreshLogs()
+        if (changed) refreshLogs()
     }
 
-    private fun stop(reason: String) {
+    private fun stopSensors() {
         tick?.cancel(); tick = null
         synchronized(pending) { armedTimestamp = null; ++sensorGeneration }
         listener?.let { sensorManager?.unregisterListener(it) }; listener = null
         sensorThread?.quitSafely(); sensorThread = null
+    }
+
+    private fun stop(reason: String) {
+        stopSensors()
         if (owner == null) return
         try {
             val overflow = synchronized(pending) { overflowed }
@@ -268,7 +273,14 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
     }
 
     private fun failCapture(error: Exception) {
-        runCatching { stop("writeFailure") }
+        stopSensors()
+        owner?.let(native::close); owner = null
+        // The core may have accepted more rows than the failed write persisted. Recover the
+        // valid file prefix instead of publishing the core's in-memory completion counters.
+        runCatching { store.abort() }.onFailure {
+            mutableState.value = mutableState.value.copy(storageWarning = it.message ?: "Some gyro logs could not be recovered.")
+        }
+        runCatching { refreshLogs() }
         fail(error.message ?: "Gyro capture failed; available samples were retained.")
     }
 

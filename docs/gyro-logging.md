@@ -23,6 +23,8 @@ Starting logging during a take creates a partial log. Backgrounding, disconnecti
 logging, a stalled sensor, or a storage error preserves available samples as interrupted.
 Recoverable partial files are retained after an unexpected app exit. Logging never stops the
 camera. Devices without a gyroscope report the feature as unavailable.
+Files that cannot be recovered remain visible as incomplete and can be deleted. Only finalized
+logs can be shared.
 
 V1 supports one directly connected camera. Relay viewers and multicam sessions are excluded.
 Logs live outside the downloaded-media cache and are retained until explicitly deleted.

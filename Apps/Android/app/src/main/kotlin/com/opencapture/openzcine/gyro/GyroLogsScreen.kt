@@ -61,7 +61,7 @@ internal fun GyroStatusPill(state: GyroCaptureState, modifier: Modifier = Modifi
         fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
 }
 
-/** App-owned list of durable finalized motion logs, independent of camera media downloads. */
+/** App-owned motion logs, including incomplete files retained after failed recovery. */
 @Composable
 internal fun GyroLogsScreen(state: GyroCaptureState, onShare: (GyroLogEntry) -> Unit,
     onDelete: (GyroLogEntry) -> Unit, onClose: () -> Unit) {
@@ -86,17 +86,18 @@ internal fun GyroLogsScreen(state: GyroCaptureState, onShare: (GyroLogEntry) -> 
                 MonitorSettingsRowCard {
                     Text(entry.cameraLabel, color = MonitorPalette.text)
                     Text(DateFormat.getDateTimeInstance().format(Date(entry.startDateMillis)), color = MonitorPalette.muted)
-                    Text(String.format(Locale.US, "%.1f s · %.1f Hz · %s", entry.duration,
-                        entry.summary.getDouble("measuredRate"), if (entry.partial) "Partial" else "Complete"),
-                        color = MonitorPalette.text)
-                    Text(String.format(Locale.US, "Largest gap %.1f ms · Approximate REC offset %.2f s",
-                        entry.summary.getDouble("largestGap") * 1_000,
-                        entry.descriptor.getDouble("approximateStartOffset")), color = MonitorPalette.muted)
+                    entry.summary?.let { summary ->
+                        Text(String.format(Locale.US, "%.1f s · %.1f Hz · %s", summary.getDouble("duration"),
+                            summary.getDouble("measuredRate"), entry.health), color = MonitorPalette.text)
+                        Text(String.format(Locale.US, "Largest gap %.1f ms · Approximate REC offset %+.2f s",
+                            summary.getDouble("largestGap") * 1_000,
+                            summary.getDouble("approximateStartOffset")), color = MonitorPalette.muted)
+                    } ?: Text(entry.health, color = MonitorPalette.muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         MonitorSettingsActionPill("Share", modifier = Modifier.testTag("gyro-share-${entry.id}"),
-                            onClick = { onShare(entry) })
+                            enabled = entry.canShare, onClick = { onShare(entry) })
                         MonitorSettingsActionPill("Delete", modifier = Modifier.testTag("gyro-delete-${entry.id}"),
-                            onClick = { deleting = entry })
+                            enabled = !entry.active, onClick = { deleting = entry })
                     }
                 }
             }
@@ -114,6 +115,7 @@ internal fun GyroLogsScreen(state: GyroCaptureState, onShare: (GyroLogEntry) -> 
 
 /** Stages a finalized log in the existing read-only media FileProvider scope. */
 internal fun shareGyroLog(context: Context, entry: GyroLogEntry) {
+    check(entry.canShare) { "This gyro log is not finalized." }
     val directory = File(context.cacheDir, "share/ready/gyro").apply { mkdirs() }
     val staged = File(directory, entry.file.name)
     entry.file.copyTo(staged, overwrite = true)

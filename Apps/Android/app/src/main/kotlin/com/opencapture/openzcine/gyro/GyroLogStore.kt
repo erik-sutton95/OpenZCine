@@ -7,18 +7,26 @@ import java.io.RandomAccessFile
 import java.util.Base64
 import java.util.UUID
 
-/** A finalized, app-private motion artifact and its shared-core summary. */
-internal data class GyroLogEntry(val summary: JSONObject, val file: File) {
-    val descriptor: JSONObject get() = summary.getJSONObject("descriptor")
+/** An app-private motion artifact; incomplete and active files cannot be shared. */
+internal data class GyroLogEntry(val descriptor: JSONObject, val summary: JSONObject?, val file: File,
+    val active: Boolean = false) {
     val id: String get() = descriptor.getString("id")
     val cameraLabel: String get() = descriptor.getString("cameraLabel")
     val startDateMillis: Long get() = descriptor.getDouble("startDate").toLong()
-    val duration: Double get() = summary.getDouble("duration")
-    val partial: Boolean get() = summary.getBoolean("isPartial")
+    val canShare: Boolean get() = summary != null && !active
+    val health: String get() = when {
+        active -> "Recording / post-roll"
+        summary == null -> "Incomplete file"
+        summary.getString("termination") == "recovered" -> "Recovered · partial"
+        summary.getString("termination") != "normal" -> "Interrupted · partial"
+        summary.getBoolean("isPartial") -> "Partial"
+        else -> "Complete"
+    }
 }
 
 /** Native files only: take boundaries, GCSV encoding and recovery validation stay in Swift. */
-internal class GyroLogStore(private val root: File, private val native: GyroNative) {
+internal class GyroLogStore(private val root: File, private val native: GyroNative,
+    private val writeBytes: (RandomAccessFile, ByteArray) -> Unit = { file, bytes -> file.write(bytes) }) {
     private val writers = mutableMapOf<String, RandomAccessFile>()
     private var lastFlush = 0L
 
@@ -37,7 +45,7 @@ internal class GyroLogStore(private val root: File, private val native: GyroNati
                 }
                 "appended" -> {
                     val writer = writers[id] ?: throw IOException("Gyro log is not open.")
-                    writer.write(Base64.getDecoder().decode(update.getString("data")))
+                    writeBytes(writer, Base64.getDecoder().decode(update.getString("data")))
                 }
                 "finished" -> finish(id, update.getJSONObject("summary"))
             }
@@ -56,13 +64,31 @@ internal class GyroLogStore(private val root: File, private val native: GyroNati
     }
 
     fun entries(): List<GyroLogEntry> = root.listFiles().orEmpty()
-        .filter { it.name.endsWith(".summary.json") }
-        .map { file ->
-            val summary = JSONObject(file.readText())
-            val filename = summary.getJSONObject("descriptor").getString("filename")
-            require(File(filename).name == filename) { "Invalid gyro filename." }
-            GyroLogEntry(summary, File(root, filename))
-        }.filter { it.file.isFile }.sortedByDescending { it.startDateMillis }
+        .filter { it.name.endsWith(".json") && !it.name.endsWith(".summary.json") }
+        .mapNotNull { file -> runCatching { readEntry(file) }.getOrNull() }
+        .sortedByDescending { it.startDateMillis }
+
+    private fun readEntry(file: File): GyroLogEntry? {
+        val descriptor = JSONObject(file.readText())
+        val id = UUID.fromString(descriptor.getString("id")).toString().uppercase()
+        require(file.name == "$id.json") { "Invalid gyro descriptor." }
+        descriptor.getString("cameraLabel")
+        descriptor.getDouble("startDate")
+        val filename = descriptor.getString("filename")
+        require(File(filename).name == filename) { "Invalid gyro filename." }
+        val partial = File(root, "$id.partial")
+        val artifact = if (partial.isFile) partial else File(root, filename)
+        if (!artifact.isFile) return null
+        val summary = if (partial.isFile) null else runCatching {
+            JSONObject(File(root, "$id.summary.json").readText()).also {
+                require(it.getJSONObject("descriptor").getString("id") == id)
+                it.getDouble("duration"); it.getDouble("measuredRate"); it.getDouble("largestGap")
+                it.getBoolean("isPartial"); it.getString("termination")
+                it.getDouble("approximateStartOffset")
+            }
+        }.getOrNull()
+        return GyroLogEntry(descriptor, summary, artifact, active = writers.containsKey(id))
+    }
 
     fun delete(entry: GyroLogEntry) {
         check(!writers.containsKey(entry.id)) { "A recording gyro log cannot be deleted." }
@@ -78,6 +104,9 @@ internal class GyroLogStore(private val root: File, private val native: GyroNati
         }
         if (failures > 0) throw IOException("Some interrupted gyro logs could not be recovered. Saved logs remain available.")
     }
+
+    /** Rebuilds completion metadata from bytes actually written after an append failure. */
+    fun abort() { close(); recover() }
 
     private fun recoverFile(file: File) {
             val id = UUID.fromString(file.name.removeSuffix(".partial")).toString().uppercase()
