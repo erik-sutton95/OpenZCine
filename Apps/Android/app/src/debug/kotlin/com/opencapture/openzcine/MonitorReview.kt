@@ -14,7 +14,6 @@ import com.opencapture.openzcine.media.MediaCacheObjectIdentity
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.media.MediaLibraryCameraBucket
 import com.opencapture.openzcine.media.MediaLibraryIndex
-import com.opencapture.openzcine.media.MediaLibrarySource
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -50,7 +49,10 @@ internal object MonitorReview {
                 record
             }
             index.rememberCameraListing(NAMESPACE, records)
-            index.saveViewOptions(index.viewOptions(MediaLibrarySource.LOCAL).copy(layout = review.layout))
+            // Current layout persistence: the shared media preferences store (the gallery model
+            // reads it when the review bucket's library is constructed).
+            index.mediaPreferences(NAMESPACE).saveViewOptions(
+                index.mediaPreferences(NAMESPACE).viewOptions().copy(layout = review.layout))
         }
     }
 
