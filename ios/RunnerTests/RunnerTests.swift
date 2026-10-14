@@ -3867,3 +3867,344 @@ extension RunnerTests {
         }
     }
 }
+
+/// SIMULATED native compatibility and rendering through the public picker/preview interfaces.
+@MainActor
+final class SharedLUTPickerCompatibilityTests: XCTestCase {
+    func testTheOriginalGenericPickerStillRendersItsSuppliedFooter() async throws {
+        let name = "lut-picker-compatibility." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer {
+            storage.removePersistentDomain(forName: name)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let preferences = LUTPreferences(storage: storage, namespace: name)
+        let looks = MonitorLUTLooks(
+            official: OfficialLUTs(catalog: { _ in [.officialAuto] }, cube: { _ in nil }),
+            preferences: preferences,
+            customLUTs: CustomLUTStore(root: root, preferences: preferences))
+        let assist = MonitorAssistState(
+            looks: looks, storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        let picker: LUTPickerView<MonitorDefaultLivePalette, Text> = LUTPickerView(
+            assist: assist,
+            context: .init(
+                colorMode: nil, isPhoto: false, inPlayback: false,
+                family: .fallback, cameraName: nil, isWatching: false),
+            copy: .init(
+                officialTab: "Camera", officialLockedCaption: "", officialCaption: "",
+                customEmptyHint: "Import a look"), palette: MonitorDefaultLivePalette.self
+        ) {
+            Text("Legacy supplied footer")
+        }
+        let hosted = try Hosted(picker)
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if hosted.labels.contains("Legacy supplied footer") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(
+            hosted.labels.contains("Legacy supplied footer"), hosted.labels.joined(separator: ", "))
+    }
+
+    func testAnIndependentLookProviderRendersTheSharedAudioPreview() async throws {
+        let name = "look-preview-compatibility." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { storage.removePersistentDomain(forName: name) }
+        let looks = IndependentLooks()
+        let assist = MonitorAssistState(
+            looks: looks, storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        let samples = LiveFrameSampleBus()
+        let renderer = MonitorInspectorImageRenderer(lookCurves: [:])
+        var audioReads = 0
+        let preview = MonitorLookInspectorPreview(
+            tool: .audioMeters, assist: assist,
+            stores: AssistPanelStores(storage: storage, namespace: name),
+            haptics: OperatorHaptics(isEnabled: { false }),
+            source: MonitorInspectorImageSource(renderer: renderer, samples: samples),
+            readCustomName: { nil }, readLookContext: { nil },
+            prepareEffects: { frame in
+                assist.inspectorImageEffects(
+                    tool: .audioMeters, transfer: frame.transfer,
+                    clipByte: frame.exposureCeiling.clipByte(transfer: frame.transfer))
+            }, readBundle: { .empty },
+            readAudio: {
+                audioReads += 1
+                return MonitorAudioMeterLevels(
+                    left: .init(levelDB: -18, peakDB: -12), right: .init(levelDB: -12, peakDB: -6))
+            })
+        let hosted = try Hosted(preview.frame(width: 300))
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if audioReads > 0 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertGreaterThan(audioReads, 0, "The generic preview must use the actual audio source")
+        let image = UIGraphicsImageRenderer(bounds: hosted.window.bounds).image { _ in
+            hosted.window.drawHierarchy(in: hosted.window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "SIMULATED-independent-look-audio-preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(
+            try greenPixels(image), 20, "The native shared meter must actually draw its signal")
+    }
+
+    private final class IndependentLooks: MonitorLookProvider {
+        var selection = 7
+        var cube: CubeLUT? { nil }
+        var transfer: MonitorTransfer { .rec709 }
+        var referenceClipByte: Int { 255 }
+        func lutExposureTransfer(for transfer: MonitorTransfer) -> MonitorTransfer { transfer }
+        var appliesLUTExposure: Bool { false }
+    }
+
+    @MainActor
+    private final class Hosted {
+        let host: UIHostingController<AnyView>
+        let window: UIWindow
+        let previous: UIWindow?
+        init(_ view: some View) throws {
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }.first {
+                        $0.activationState == .foregroundActive
+                    })
+            previous = scene.keyWindow
+            host = UIHostingController(rootView: AnyView(view))
+            host.safeAreaRegions = []
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 420, height: 900)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.frame = window.bounds
+        }
+        func close() {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        var labels: [String] {
+            var seen = Set<ObjectIdentifier>()
+            var result: [String] = []
+            @MainActor func visit(_ object: NSObject) {
+                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+                if object.isAccessibilityElement, let label = object.accessibilityLabel {
+                    result.append(label)
+                }
+                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
+                let count = object.accessibilityElementCount()
+                if count > 0 && count < 512 {
+                    for index in 0..<count {
+                        if let child = object.accessibilityElement(at: index) as? NSObject {
+                            visit(child)
+                        }
+                    }
+                }
+                if let view = object as? UIView { for child in view.subviews { visit(child) } }
+            }
+            visit(window)
+            return result
+        }
+    }
+
+    private func greenPixels(_ image: UIImage) throws -> Int {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
+        try bytes.withUnsafeMutableBytes { raw in
+            let context = try XCTUnwrap(
+                CGContext(
+                    data: raw.baseAddress, width: cgImage.width,
+                    height: cgImage.height, bitsPerComponent: 8, bytesPerRow: cgImage.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(
+                cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+        }
+        return stride(from: 0, to: bytes.count, by: 4).filter {
+            Int(bytes[$0 + 1]) > 90 && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0]) * 13
+                && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0 + 2]) * 13
+        }.count
+    }
+}
+
+extension SharedLUTPickerCompatibilityTests {
+    private func legacyComparisonFixture() throws -> (
+        MonitorAssistState<IndependentLooks>, UserDefaults, String
+    ) {
+        let name = "legacy-comparison-native." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        let assist = MonitorAssistState(
+            looks: IndependentLooks(), storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        assist.lutEnabled = false
+        assist.splitComparison = false
+        return (assist, storage, name)
+    }
+
+    private static func legacyComparisonElements(_ root: NSObject) -> [NSObject] {
+        var seen = Set<ObjectIdentifier>()
+        var result: [NSObject] = []
+        func walk(_ object: NSObject) {
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            if object.isAccessibilityElement { result.append(object) }
+            for child in object.accessibilityElements as? [NSObject] ?? [] { walk(child) }
+            let count = object.accessibilityElementCount()
+            if count > 0 && count < 512 {
+                for index in 0..<count {
+                    if let child = object.accessibilityElement(at: index) as? NSObject {
+                        walk(child)
+                    }
+                }
+            }
+            if let view = object as? UIView { for child in view.subviews { walk(child) } }
+        }
+        walk(root)
+        return result
+    }
+
+    private func legacyComparisonSettle(_ host: Hosted, _ predicate: () -> Bool) async throws
+        -> Bool
+    {
+        for _ in 0..<150 {
+            host.host.view.layoutIfNeeded()
+            if predicate() { return true }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        return predicate()
+    }
+
+    func testPublishedAvailabilityTrueFalseAndNilStillDriveTheActualExposureControl() async throws {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        let originalDefault = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist, haptics: OperatorHaptics(isEnabled: { false })))
+        let defaultReady = try await legacyComparisonSettle(originalDefault) {
+            Self.legacyComparisonElements(originalDefault.window).contains {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }
+        }
+        XCTAssertTrue(
+            defaultReady, "The published two-argument call defaults to exposure available")
+        XCTAssertEqual(
+            Self.legacyComparisonElements(originalDefault.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.count, 1)
+        originalDefault.close()
+        for availability: Bool? in [true, false, nil] {
+            let host = try Hosted(
+                MonitorOperatorLookComparison(
+                    assist: assist,
+                    haptics: OperatorHaptics(isEnabled: { false }), exposureAvailable: availability)
+            )
+            defer { host.close() }
+            let ready = try await legacyComparisonSettle(host) {
+                Self.legacyComparisonElements(host.window).contains {
+                    $0.accessibilityLabel == "50 / 50 split"
+                        && $0.accessibilityTraits.contains(.button)
+                }
+            }
+            XCTAssertTrue(ready)
+            let controls = Self.legacyComparisonElements(host.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }
+            XCTAssertEqual(controls.count, availability == true ? 1 : 0)
+            for control in controls {
+                XCTAssertFalse(control.accessibilityFrame.isEmpty)
+                XCTAssertTrue(host.window.bounds.contains(control.accessibilityFrame))
+            }
+        }
+    }
+
+    func testPublishedCustomArmRunsOnEveryEnableAndRetainsTheCallbackOnlyExposureDefault()
+        async throws
+    {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        var calls = 0
+        let host = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), onArm: { calls += 1 }))
+        defer { host.close() }
+        let ready = try await legacyComparisonSettle(host) {
+            Self.legacyComparisonElements(host.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(ready)
+        let controls = Self.legacyComparisonElements(host.window)
+        XCTAssertEqual(
+            controls.filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.count, 1)
+        let toggle = try XCTUnwrap(
+            controls.first {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            })
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.splitComparison)
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(assist.lutArmed, "The supplied callback retains arming ownership")
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertFalse(assist.splitComparison)
+        XCTAssertEqual(calls, 1, "Disabling split never arms")
+        assist.armLastLUT()
+        XCTAssertTrue(assist.lutArmed)
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.splitComparison)
+        XCTAssertEqual(calls, 2, "The published callback also runs when the look is already armed")
+    }
+
+    func testPublishedNilArmKeepsFallbackAndCanonicalProviderAvailabilityStaysTyped() async throws {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        let host = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), exposureAvailable: nil, onArm: nil))
+        defer { host.close() }
+        let ready = try await legacyComparisonSettle(host) {
+            Self.legacyComparisonElements(host.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(ready)
+        let controls = Self.legacyComparisonElements(host.window)
+        XCTAssertTrue(
+            controls.filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.isEmpty)
+        let toggle = try XCTUnwrap(
+            controls.first {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            })
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.lutArmed, "Nil callback retains the shared fallback arming")
+        host.close()
+        let canonical = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), exposure: .provider))
+        defer { canonical.close() }
+        let canonicalReady = try await legacyComparisonSettle(canonical) {
+            Self.legacyComparisonElements(canonical.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(canonicalReady)
+        XCTAssertTrue(
+            Self.legacyComparisonElements(canonical.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.isEmpty, "Canonical source that does not apply exposure stays unavailable")
+    }
+}
