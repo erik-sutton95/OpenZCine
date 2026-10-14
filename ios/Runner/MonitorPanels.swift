@@ -2383,11 +2383,7 @@ struct OperatorSettingsPanel: View {
                 resetZebra: {
                     model.assist.resetOptions(.zebra)
                     model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
-                }),
-            cacheScopeHelp:
-                "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
-            cacheConfirmationMessage:
-                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact."
+                })
         )
     }
 
