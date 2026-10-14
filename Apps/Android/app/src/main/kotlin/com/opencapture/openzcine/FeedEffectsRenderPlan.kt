@@ -3,7 +3,7 @@ package com.opencapture.openzcine
 import android.util.Log
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import java.util.LinkedHashMap
+import com.opencapture.opencine.media.MonitorLUTCubeCache
 import com.opencapture.opencine.media.MonitorLUTCube
 
 private const val TAG = "ZCFeedEffects"
@@ -12,7 +12,7 @@ private const val BUILT_IN_LUT_SIZE = 33
 /**
  * Immutable renderer input produced entirely from shared Swift policy.
  *
- * Android's AGSL and GLES adapters consume this same record. The byte arrays are process-owned,
+ * Android's AGSL and GLES adapters consume this same record. The byte arrays are owner-held,
  * cached payloads and are never exposed to UI state or mutated after construction.
  */
 internal class FeedEffectsRenderPlan(
@@ -71,7 +71,11 @@ internal class FeedEffectsRenderPlan(
 }
 
 /** Builds the single shared plan used by every Android GPU backend. */
-internal object FeedEffectsRenderPlanFactory {
+internal class FeedEffectsRenderPlans(
+    private val cubes: MonitorLUTCubeCache = MonitorLUTCubeCache(),
+) : AutoCloseable {
+    override fun close() = cubes.close()
+
     fun create(
         effects: FeedEffects,
         configuration: FeedEffectsConfiguration,
@@ -119,7 +123,7 @@ internal object FeedEffectsRenderPlanFactory {
                             renderConfiguration.clipNative.toBits(),
                     size = 64,
                 ) {
-                    SwiftCore.bakeFalseColorLimitsPaint(
+                    SwiftCore.bakeMonitorFalseColorLimitsPaint(
                         readingCurveOrdinal,
                         renderConfiguration.clipNative,
                     )
@@ -135,7 +139,7 @@ internal object FeedEffectsRenderPlanFactory {
                             renderConfiguration.clipNative.toBits(),
                     size = 64,
                 ) {
-                    SwiftCore.bakeFalseColorLimitsWeight(
+                    SwiftCore.bakeMonitorFalseColorLimitsWeight(
                         readingCurveOrdinal,
                         renderConfiguration.clipNative,
                     )
@@ -199,7 +203,7 @@ internal object FeedEffectsRenderPlanFactory {
                                 configuration.clipNative.toBits(),
                         size = 64,
                     ) {
-                        SwiftCore.bakeFalseColorCube(
+                        SwiftCore.bakeMonitorFalseColorCube(
                             effects.falseColor.wireOrdinal + if (effects.falseColorRec709) 4 else 0,
                             configuration.curveOrdinal,
                             configuration.clipNative,
@@ -225,20 +229,22 @@ internal object FeedEffectsRenderPlanFactory {
     }
 
     private fun cachedCube(key: String, size: Int, bake: () -> ByteArray?): MonitorLUTCube? =
-        FeedEffectsCubeCache.value(key, bake)?.let { MonitorLUTCube(size, it) }
+        cubes.value(key) { bake()?.let { MonitorLUTCube(size, it) } }
 }
 
-/** Bounded cache for immutable Swift-baked cube bytes. */
-private object FeedEffectsCubeCache {
-    private const val MAX_ENTRIES = 8
-    private val cubes =
-        object : LinkedHashMap<String, ByteArray>(MAX_ENTRIES, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?): Boolean =
-                size > MAX_ENTRIES
-        }
+/** Original stateless factory call; retained callers gain no process-wide cache. */
+internal object FeedEffectsRenderPlanFactory {
+    fun create(effects: FeedEffects, configuration: FeedEffectsConfiguration,
+        cameraInput: ExposureAssistCameraInput, lutLibrary: AndroidLutLibrary? = null): FeedEffectsRenderPlan? {
+        val plans = FeedEffectsRenderPlans()
+        return try { plans.create(effects, configuration, cameraInput, lutLibrary) }
+        finally { plans.close() }
+    }
+}
 
-    fun value(key: String, bake: () -> ByteArray?): ByteArray? =
-        synchronized(cubes) {
-            cubes[key] ?: bake()?.also { cubes[key] = it }
-        }
+@androidx.compose.runtime.Composable
+internal fun rememberFeedEffectsRenderPlans(owner: Any): FeedEffectsRenderPlans {
+    val plans = androidx.compose.runtime.remember(owner) { FeedEffectsRenderPlans() }
+    androidx.compose.runtime.DisposableEffect(plans) { onDispose { plans.close() } }
+    return plans
 }
