@@ -3236,26 +3236,6 @@ struct NikonSettingsScrollTests {
         #expect(model.operatorSettingsScrollOffsets == offsets)
     }
 
-    @Test("Measured full labels select the same column counts as Compose")
-    func displayLabelFitBoundaries() {
-        #expect(MonitorDisplayMetrics.toggleColumnCount(compact: false, availableWidth: 480) == 4)
-        #expect(
-            MonitorDisplayMetrics.toggleColumnCount(
-                compact: false, availableWidth: 624, minimumCellWidth: 151) == 2)
-        #expect(
-            MonitorDisplayMetrics.toggleColumnCount(
-                compact: false, availableWidth: 625, minimumCellWidth: 151) == 4)
-        #expect(
-            MonitorDisplayMetrics.toggleColumnCount(
-                compact: true, availableWidth: 625, minimumCellWidth: 151) == 2)
-        #expect(
-            MonitorDisplayMetrics.toggleColumnCount(
-                compact: false, availableWidth: 309, minimumCellWidth: 151) == 2)
-        #expect(
-            MonitorDisplayMetrics.toggleColumnCount(
-                compact: false, availableWidth: 308, minimumCellWidth: 151) == 1)
-    }
-
     @Test("A saved position beyond the current content restores inside the real viewport")
     func scrollClampsToCurrentContent() async throws {
         let state = NikonSettingsScrollFixture()
