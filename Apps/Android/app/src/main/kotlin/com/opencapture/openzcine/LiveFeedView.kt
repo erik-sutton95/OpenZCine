@@ -331,6 +331,7 @@ internal fun LiveFeedView(
     val fallbackColorMode = remember(source) { mutableStateOf(LiveFeedColorMode.UNKNOWN) }
     // GPU present (Vulkan preferred, GLES fallback); a rotated feed stays on Compose Canvas.
     val gpuBackend = remember(source) { LiveFeedGpuBackendFactory.create(applicationContext) }
+    val effectPlans = rememberFeedEffectsRenderPlans(source)
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
     DisposableEffect(gpuBackend) {
@@ -371,6 +372,7 @@ internal fun LiveFeedView(
     // AGSL grade for the Compose present path (a rotated vertical feed), API 33+.
     var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
+        effectPlans,
         effects,
         configuration,
         cameraInput,
@@ -396,7 +398,7 @@ internal fun LiveFeedView(
         val previousComposable = composableEffectsRenderer
         val nextPlan =
             withContext(Dispatchers.Default) {
-                FeedEffectsRenderPlanFactory.create(
+                effectPlans.create(
                     effects,
                     configuration,
                     cameraInput,

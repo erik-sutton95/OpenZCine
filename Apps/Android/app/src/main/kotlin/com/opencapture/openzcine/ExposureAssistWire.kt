@@ -277,7 +277,7 @@ fun resolveFalseColorReference(
     return runCatching {
         val payload =
             requireNotNull(
-                SwiftCore.falseColorReference(
+                SwiftCore.monitorFalseColorReference(
                     scale.wireOrdinal + if (read709) 4 else 0, mapping.curveOrdinal, mapping.clipNative,
                 ),
             ) { "missing false-color reference" }

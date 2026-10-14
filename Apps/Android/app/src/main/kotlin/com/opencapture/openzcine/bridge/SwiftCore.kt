@@ -130,6 +130,30 @@ object SwiftCore {
      */
     external fun startConnectionDemo(listener: ConnectionPhaseListener)
 
+    // ── Scopes (camera axis and Traffic Lights in the Swift core; sampling and plots shared) ──
+
+    /**
+     * The shared scopes' level axis for this camera: `[256 code-to-IRE levels,
+     * middle-grey IRE]` (Swift `ScopeFrameWire.levelAxis`). Black lands on the
+     * crush line, mid grey at its fixed per-curve level and [clipNative] (the
+     * camera-resolved warning endpoint) on the clip line. Call once per mapping.
+     */
+    external fun scopeLevelAxis(curve: Int, clipNative: Float): FloatArray
+
+    /**
+     * The core Traffic Lights meter on the shared sampler's four 256-bin
+     * histograms (luma, red, green, blue, concatenated): `(level, clip, crush)
+     * × RGB` (Swift `ScopeFrameWire.trafficLights`). [crushClipCompensationRaw]
+     * is the persisted raw `AssistConfiguration.CrushClipCompensation`; Swift
+     * alone applies it.
+     */
+    external fun scopeTrafficLights(
+        histograms: FloatArray,
+        curve: Int,
+        clipNative: Float,
+        crushClipCompensationRaw: Int,
+    ): FloatArray
+
     // ── Feed effects (colour math baked in the core, uploaded by Kotlin) ──
 
     /**
@@ -225,10 +249,30 @@ object SwiftCore {
     external fun bakeFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Float): ByteArray?
 
     /**
-     * Versioned reference-panel segments and stop-marker geometry, taken from
-     * the exact false-colour scale/mapping that produced the GPU cube.
+     * Legacy version 1: four header floats, five floats per segment and one
+     * fraction per marker. Current monitor callers use [monitorFalseColorReference].
      */
     external fun falseColorReference(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): FloatArray?
+
+    /** Shared encoded-signal monitor cube; the legacy baker remains available above. */
+    external fun bakeMonitorFalseColorCube(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): ByteArray?
+
+    /** Shared monitor Limits paint, paired with [bakeMonitorFalseColorLimitsWeight]. */
+    external fun bakeMonitorFalseColorLimitsPaint(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    /** Shared monitor Limits weight, separate from the legacy weight payload. */
+    external fun bakeMonitorFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    /** Version 2 source ruler: five floats per segment, three per typed stop/clip marker. */
+    external fun monitorFalseColorReference(
         scaleOrdinal: Int,
         curveOrdinal: Int,
         clipNative: Float,

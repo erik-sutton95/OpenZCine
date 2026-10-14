@@ -4107,3 +4107,177 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
         }.count
     }
 }
+
+extension SharedLUTPickerCompatibilityTests {
+    private func legacyComparisonFixture() throws -> (
+        MonitorAssistState<IndependentLooks>, UserDefaults, String
+    ) {
+        let name = "legacy-comparison-native." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        let assist = MonitorAssistState(
+            looks: IndependentLooks(), storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        assist.lutEnabled = false
+        assist.splitComparison = false
+        return (assist, storage, name)
+    }
+
+    private static func legacyComparisonElements(_ root: NSObject) -> [NSObject] {
+        var seen = Set<ObjectIdentifier>()
+        var result: [NSObject] = []
+        func walk(_ object: NSObject) {
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            if object.isAccessibilityElement { result.append(object) }
+            for child in object.accessibilityElements as? [NSObject] ?? [] { walk(child) }
+            let count = object.accessibilityElementCount()
+            if count > 0 && count < 512 {
+                for index in 0..<count {
+                    if let child = object.accessibilityElement(at: index) as? NSObject {
+                        walk(child)
+                    }
+                }
+            }
+            if let view = object as? UIView { for child in view.subviews { walk(child) } }
+        }
+        walk(root)
+        return result
+    }
+
+    private func legacyComparisonSettle(_ host: Hosted, _ predicate: () -> Bool) async throws
+        -> Bool
+    {
+        for _ in 0..<150 {
+            host.host.view.layoutIfNeeded()
+            if predicate() { return true }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        return predicate()
+    }
+
+    func testPublishedAvailabilityTrueFalseAndNilStillDriveTheActualExposureControl() async throws {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        let originalDefault = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist, haptics: OperatorHaptics(isEnabled: { false })))
+        let defaultReady = try await legacyComparisonSettle(originalDefault) {
+            Self.legacyComparisonElements(originalDefault.window).contains {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }
+        }
+        XCTAssertTrue(
+            defaultReady, "The published two-argument call defaults to exposure available")
+        XCTAssertEqual(
+            Self.legacyComparisonElements(originalDefault.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.count, 1)
+        originalDefault.close()
+        for availability: Bool? in [true, false, nil] {
+            let host = try Hosted(
+                MonitorOperatorLookComparison(
+                    assist: assist,
+                    haptics: OperatorHaptics(isEnabled: { false }), exposureAvailable: availability)
+            )
+            defer { host.close() }
+            let ready = try await legacyComparisonSettle(host) {
+                Self.legacyComparisonElements(host.window).contains {
+                    $0.accessibilityLabel == "50 / 50 split"
+                        && $0.accessibilityTraits.contains(.button)
+                }
+            }
+            XCTAssertTrue(ready)
+            let controls = Self.legacyComparisonElements(host.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }
+            XCTAssertEqual(controls.count, availability == true ? 1 : 0)
+            for control in controls {
+                XCTAssertFalse(control.accessibilityFrame.isEmpty)
+                XCTAssertTrue(host.window.bounds.contains(control.accessibilityFrame))
+            }
+        }
+    }
+
+    func testPublishedCustomArmRunsOnEveryEnableAndRetainsTheCallbackOnlyExposureDefault()
+        async throws
+    {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        var calls = 0
+        let host = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), onArm: { calls += 1 }))
+        defer { host.close() }
+        let ready = try await legacyComparisonSettle(host) {
+            Self.legacyComparisonElements(host.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(ready)
+        let controls = Self.legacyComparisonElements(host.window)
+        XCTAssertEqual(
+            controls.filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.count, 1)
+        let toggle = try XCTUnwrap(
+            controls.first {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            })
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.splitComparison)
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(assist.lutArmed, "The supplied callback retains arming ownership")
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertFalse(assist.splitComparison)
+        XCTAssertEqual(calls, 1, "Disabling split never arms")
+        assist.armLastLUT()
+        XCTAssertTrue(assist.lutArmed)
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.splitComparison)
+        XCTAssertEqual(calls, 2, "The published callback also runs when the look is already armed")
+    }
+
+    func testPublishedNilArmKeepsFallbackAndCanonicalProviderAvailabilityStaysTyped() async throws {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        let host = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), exposureAvailable: nil, onArm: nil))
+        defer { host.close() }
+        let ready = try await legacyComparisonSettle(host) {
+            Self.legacyComparisonElements(host.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(ready)
+        let controls = Self.legacyComparisonElements(host.window)
+        XCTAssertTrue(
+            controls.filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.isEmpty)
+        let toggle = try XCTUnwrap(
+            controls.first {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            })
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.lutArmed, "Nil callback retains the shared fallback arming")
+        host.close()
+        let canonical = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), exposure: .provider))
+        defer { canonical.close() }
+        let canonicalReady = try await legacyComparisonSettle(canonical) {
+            Self.legacyComparisonElements(canonical.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(canonicalReady)
+        XCTAssertTrue(
+            Self.legacyComparisonElements(canonical.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.isEmpty, "Canonical source that does not apply exposure stays unavailable")
+    }
+}

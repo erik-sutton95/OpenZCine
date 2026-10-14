@@ -150,6 +150,8 @@ android {
     }
 
     sourceSets {
+        getByName("androidTest").kotlin.srcDir(
+            gradle.includedBuild("opencine").projectDir.resolve("appkit-native/src/cacheOwnerProof/kotlin"))
         getByName("main").jniLibs.directories.apply {
             clear()
             add(swiftCoreJniLibsRoot.get().asFile.absolutePath)

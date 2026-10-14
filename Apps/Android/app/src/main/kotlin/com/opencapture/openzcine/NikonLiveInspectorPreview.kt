@@ -180,12 +180,13 @@ internal fun NikonInspectorImagePreview(
             assists.shared.isOn(candidate))
     }.copy(splitComparison = null)
     val configuration = assists.shared.feedEffectsConfiguration
+    val effectPlans = rememberFeedEffectsRenderPlans(sourceIdentity)
     val lutGeneration = lutLibrary?.renderGeneration?.collectAsState()?.value
     androidx.compose.runtime.LaunchedEffect(lutLibrary, effects.lut) {
         (effects.lut as? FeedLutSelection.Stored)?.value?.let { lutLibrary?.prepare(it) }
     }
-    val plan = androidx.compose.runtime.remember(tool, effects, configuration, cameraInput, lutLibrary, lutGeneration) {
-        FeedEffectsRenderPlanFactory.create(effects, configuration, cameraInput, lutLibrary)
+    val plan = androidx.compose.runtime.remember(effectPlans, tool, effects, configuration, cameraInput, lutLibrary, lutGeneration) {
+        effectPlans.create(effects, configuration, cameraInput, lutLibrary)
             ?.takeIf { (effects.lut == null || it.baseCube != null) &&
                 (effects.falseColor == null || it.falseColorReady) }
     }

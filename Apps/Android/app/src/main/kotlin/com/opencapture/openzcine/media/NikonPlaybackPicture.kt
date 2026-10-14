@@ -43,7 +43,7 @@ import com.opencapture.opencine.media.ScopeAssistBundle
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FeedEffectsRenderer
 import com.opencapture.openzcine.FeedEffectsRenderPlan
-import com.opencapture.openzcine.FeedEffectsRenderPlanFactory
+import com.opencapture.openzcine.rememberFeedEffectsRenderPlans
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.NikonPlaybackScopeConfiguration
@@ -244,6 +244,7 @@ internal fun rememberNikonPlaybackPicture(
     val effectsConfiguration = assists.shared.feedEffectsConfiguration
     val playbackScopes = scopesShown(assists.shared::isPlaybackVisible)
     val cameraInput = exposureAssistCameraInput
+    val effectPlans = rememberFeedEffectsRenderPlans(itemToken)
     var reference by remember(entry, itemToken) { mutableStateOf<MonitorFalseColorReferenceValues?>(null) }
     val playbackEffectDisplaySize = remember(entry) { PlaybackEffectDisplaySize() }
     val playbackScopeFrameSource =
@@ -258,6 +259,7 @@ internal fun rememberNikonPlaybackPicture(
     var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     var renderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
+        effectPlans,
         effects,
         effectsConfiguration,
         cameraInput,
@@ -269,7 +271,7 @@ internal fun rememberNikonPlaybackPicture(
         if (effects.isIdentity || Build.VERSION.SDK_INT < 29) return@LaunchedEffect
         val nextPlan =
             withContext(Dispatchers.Default) {
-                FeedEffectsRenderPlanFactory.create(
+                effectPlans.create(
                     effects,
                     effectsConfiguration,
                     cameraInput,

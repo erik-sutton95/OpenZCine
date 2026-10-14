@@ -35,7 +35,7 @@ class NikonBitmapColorContractTest {
                 transfer, clipByte = 180)
             assertArrayEquals("Actual JNI source lattice $transfer",
                 lattice.packedCube(MonitorFalseColorCubeComponent.COMPOSITE).rgba,
-                requireNotNull(SwiftCore.bakeFalseColorCube(0, ordinal, 180f)))
+                requireNotNull(SwiftCore.bakeMonitorFalseColorCube(0, ordinal, 180f)))
         }
     }
 
@@ -53,7 +53,7 @@ class NikonBitmapColorContractTest {
                 marker.sceneStop.toFloat(), marker.fraction.toFloat())
         }
         assertArrayEquals("Actual JNI legend follows the shared source ruler", expected.toFloatArray(),
-            requireNotNull(SwiftCore.falseColorReference(0, 0, 180f)), .000002f)
+            requireNotNull(SwiftCore.monitorFalseColorReference(0, 0, 180f)), .000002f)
     }
 
     @Test fun bitmapPrimariesAndNeutralGrayKeepTheirActualChannels() {
