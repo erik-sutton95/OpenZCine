@@ -37,6 +37,7 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:appkit-sentry")).using(project(":appkit-sentry"))
         // The shared capture sheets over the camera vocabulary (LadderSheet).
         substitute(module("com.opencapture.opencine:camera-controls")).using(project(":camera-controls"))
+        substitute(module("com.opencapture.opencine:app-ui-testing")).using(project(":app-ui-testing"))
         substitute(module("com.opencapture.opencine:native-runtime")).using(project(":native-runtime"))
         // Shared relay/watch owners and transport-free deployed Nikon schemas.
         substitute(module("com.opencapture.opencine:relay")).using(project(":relay"))

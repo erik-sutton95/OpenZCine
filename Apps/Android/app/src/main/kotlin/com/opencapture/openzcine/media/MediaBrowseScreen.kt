@@ -988,7 +988,7 @@ internal fun MediaBrowseScreen(
                     onClose = {
                         if (photoOpening?.id == opening.id && openedPhotoLibrary === actual) {
                             playingClip = null; photoOpening = null; openedPhotoLibrary = null
-                            reloadKey += 1
+                            actual.refreshLocalCache()
                         }
                     },
                     opening = opening,

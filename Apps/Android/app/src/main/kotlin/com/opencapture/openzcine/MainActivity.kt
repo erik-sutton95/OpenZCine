@@ -199,6 +199,7 @@ class MainActivity : ComponentActivity() {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition { !composeFirstFrameDrawn.get() }
         super.onCreate(savedInstanceState)
+        val localReview = MonitorReview.decode(intent)
         // Load the Swift core (and with it OpenCine's NikonNative) before any camera session.
         SwiftCore.isAvailable
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
@@ -241,7 +242,7 @@ class MainActivity : ComponentActivity() {
                 val operatorHaptics =
                     rememberOperatorHaptics { operatorSettings.hapticsEnabled.value }
                 CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics) {
-                Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().reviewMetadata(localReview)) {
                 var monitorSession by remember { mutableStateOf(debugSession) }
                 // The HDMI capture feed beside a capture-only session. Non-null
                 // exactly while the monitor is on the HDMI path; closed (CameraX
@@ -479,7 +480,7 @@ class MainActivity : ComponentActivity() {
                         mutableStateOf(
                             debugSession == null &&
                                 pairingScript == null &&
-                                debugInitialSettingsTab == null,
+                                debugInitialSettingsTab == null && localReview == null,
                         )
                     }
                 LaunchedEffect(Unit) {
@@ -664,6 +665,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val shellState by shell.state.collectAsState()
+                var reviewBucket by remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
+                LaunchedEffect(localReview) {
+                    if (localReview != null) {
+                        MonitorReview.start(applicationContext, mediaCacheStore, mediaLibraryIndex, localReview)
+                        reviewBucket = MonitorReview.bucket(localReview)
+                        mediaCacheRevision += 1
+                        shell.open(ShellModel.Cover.MEDIA)
+                    }
+                }
                 LaunchedEffect(savedCameras, monitorSession, shellState.cover, mediaCacheRevision) {
                     if (monitorSession != null) return@LaunchedEffect
                     completedMediaBuckets =
@@ -1347,7 +1357,7 @@ class MainActivity : ComponentActivity() {
                     }
                     @Composable
                     fun StandaloneMedia() {
-                        val offlineBuckets = remember { completedMediaBuckets.values.toList() }
+                        val offlineBuckets = remember(reviewBucket) { reviewBucket?.let(::listOf) ?: completedMediaBuckets.values.toList() }
                         val primary = offlineBuckets.firstOrNull()
                         val offlineAssist =
                             remember(primary?.cameraID, offlineBuckets.size) {
@@ -1616,7 +1626,7 @@ class MainActivity : ComponentActivity() {
                         }
                         LaunchSplashOverlay(visible = launchSplashVisible)
                         var showAutomaticPrompt by remember {
-                            mutableStateOf(AppDiagnostics.consent.shouldOfferAutomaticPrompt())
+                            mutableStateOf(localReview == null && AppDiagnostics.consent.shouldOfferAutomaticPrompt())
                         }
                         if (!launchSplashVisible && !multicam.presented && showAutomaticPrompt) {
                             AutomaticReportsPrompt(
