@@ -11170,6 +11170,8 @@ final class NativeAppModel {
 
     // MARK: Apple Watch relay
 
+    @ObservationIgnored private var watchCommandSource: NikonCommandAdmission?
+
     /// Activates the watch relay once and wires its callbacks. Called from the app root on launch.
     func activateWatchRelay() {
         guard !watchRelayActivated else { return }
@@ -11275,29 +11277,39 @@ final class NativeAppModel {
     private func watchCommandAdmission(_ receipt: RelayWatchCommandAdmission)
         -> NikonCommandAdmission?
     {
-        guard receipt.isCurrent, let owner = cameraSession?.commandOwner else { return nil }
-        return NikonCommandAdmission(owner: owner, isCurrent: { receipt.isCurrent })
+        guard receipt.isCurrent, let shown = watchCommandSource,
+            shown.admits(cameraSession?.commandOwner)
+        else { return nil }
+        return NikonCommandAdmission(
+            owner: shown.owner, isCurrent: { shown.isCurrent && receipt.isCurrent })
     }
 
     func watchCapture() -> OpenZCineCore.WatchCommandResult { watchCapture(admission: nil) }
 
+    private var watchCommandFacts: WatchCommandFacts {
+        WatchCommandFacts(
+            isRecording: isRecording,
+            isBusy: shell.control.recordPending || interfaceLocked || relayControlSurrendered,
+            isLive: isMonitorPresented && (isDemoSession || cameraSession != nil),
+            isPhotography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector))
+    }
+
     private func watchCapture(admission: NikonCommandAdmission?) -> OpenZCineCore.WatchCommandResult
     {
-        guard admitsCameraCommand(admission) else {
-            return OpenZCineCore.WatchCommandResult(
-                accepted: false, isRecording: isRecording, error: "unavailable")
-        }
-        let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
-            selector: cameraPropertySnapshot.captureSelector)
-        guard isPhotography else {
-            return OpenZCineCore.WatchCommandResult(
-                accepted: false, isRecording: isRecording,
-                error: "Switch the camera to photo mode first.")
-        }
-        captureStill(admission: admission)
+        let result = WatchCommandPolicy.answer(
+            .capture, facts: { watchCommandFacts },
+            shutter: {
+                guard admitsCameraCommand(admission) else { return .targetChanged }
+                // Keep the existing still queue, bulb termination and native first-send admission.
+                guard !isStillCapturing || stillReleaseIsOpenShutter else { return .notSent }
+                captureStill(admission: admission)
+                return pendingStillCaptureWork != nil || pendingStillTerminateWork != nil
+                    || (isDemoSession && isStillCapturing) ? .sent : .notSent
+            })
         publishWatchState()
         return OpenZCineCore.WatchCommandResult(
-            accepted: true, isRecording: isRecording, error: nil)
+            accepted: result.accepted, isRecording: result.isRecording, error: result.error)
     }
 
     func watchToggleRecord() -> OpenZCineCore.WatchCommandResult {
@@ -11307,19 +11319,31 @@ final class NativeAppModel {
     private func watchToggleRecord(admission: NikonCommandAdmission?)
         -> OpenZCineCore.WatchCommandResult
     {
-        guard admitsCameraCommand(admission) else {
-            return OpenZCineCore.WatchCommandResult(
-                accepted: false, isRecording: isRecording, error: "unavailable")
-        }
-        let wasRecording = isRecording
-        executeRecord(start: !wasRecording, admission: admission)
-        let accepted = isRecording != wasRecording
-        let result = OpenZCineCore.WatchCommandResult(
-            accepted: accepted,
-            isRecording: isRecording,
-            error: accepted ? nil : "Start live view before recording.")
+        let result = WatchCommandPolicy.answer(
+            .toggleRecord, facts: { watchCommandFacts },
+            shutter: {
+                guard admitsCameraCommand(admission) else { return .targetChanged }
+                if isDemoSession {
+                    executeRecord(start: !isRecording, admission: admission)
+                    return .sent
+                }
+                guard shell.control.session != nil, !pictureOnlyMonitor else { return .notSent }
+                refreshCommonControlFacts()
+                guard let editor = shell.control.recordEditor() else { return .notSent }
+                let accepted: Bool
+                if let admission {
+                    guard let dispatch = sharedCommandAdmission(admission) else {
+                        return .targetChanged
+                    }
+                    accepted = shell.control.commitRecord(from: editor, admission: dispatch)
+                } else {
+                    accepted = shell.control.commitRecord(from: editor)
+                }
+                return accepted ? .sent : .notSent
+            })
         publishWatchState()
-        return result
+        return OpenZCineCore.WatchCommandResult(
+            accepted: result.accepted, isRecording: result.isRecording, error: result.error)
     }
 
     /// Builds the current wire snapshot from the live monitor fields.
@@ -11354,6 +11378,9 @@ final class NativeAppModel {
 
     /// Publishes the current state to the watch relay (coalesced; no-ops when nothing changed).
     func publishWatchState() {
+        let owner = cameraSession?.commandOwner
+        if watchCommandSource?.owner !== owner { watchRelay.retireSource() }
+        watchCommandSource = owner.map { NikonCommandAdmission(owner: $0, isCurrent: { true }) }
         watchRelay.ingestState(currentWatchRelayState())
     }
 
