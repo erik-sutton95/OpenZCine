@@ -183,6 +183,124 @@ import XCTest
         context.media.closePlayback()
         await fixture.library.dispose()
     }
+
+    /// SIMULATED retirement must keep Back available after the shared owner is gone.
+    func testAlreadyRetiredPlayerStillCapturesOneCloseCleanup() async throws {
+        let fixture = try NikonBarrierFixture()
+        defer { fixture.remove() }
+        let context = try XCTUnwrap(
+            NikonOperatorPlaybackContext(model: fixture.model, initial: fixture.opening))
+        XCTAssertTrue(
+            context.media.open(
+                fixture.first, playlist: fixture.opening.playlist,
+                admitted: fixture.opening.admission))
+        await settle { context.media.playback?.ready == true }
+        let native = try XCTUnwrap(context.native)
+        fixture.library.close()
+        context.media.closePlayback()
+        XCTAssertNil(context.media.playback)
+        XCTAssertNil(native.player.currentItem)
+        let finish = try XCTUnwrap(
+            context.captureCloseCleanup(),
+            "A retired shared owner must still offer a working Close")
+        XCTAssertNil(context.captureCloseCleanup(), "Close cleanup is captured once")
+        let completed = await finish()
+        XCTAssertTrue(completed)
+        XCTAssertTrue(context.native === native)
+        await fixture.library.dispose()
+    }
+
+    func testRefusedFirstOpenStillCapturesOneCloseWithoutCreatingNativeWork() async throws {
+        let fixture = try NikonBarrierFixture()
+        defer { fixture.remove() }
+        let context = try XCTUnwrap(
+            NikonOperatorPlaybackContext(model: fixture.model, initial: fixture.opening))
+        fixture.library.close()
+        XCTAssertFalse(
+            context.media.open(
+                fixture.first, playlist: fixture.opening.playlist,
+                admitted: fixture.opening.admission))
+        XCTAssertNil(context.native)
+        XCTAssertNil(context.media.playback)
+        let finish = try XCTUnwrap(
+            context.captureCloseCleanup(),
+            "Refused first open must return without manufacturing a new player")
+        XCTAssertNil(context.captureCloseCleanup())
+        let completed = await finish()
+        XCTAssertTrue(completed)
+        XCTAssertNil(context.native)
+        XCTAssertEqual(context.initial.admission, fixture.opening.admission)
+        await fixture.library.dispose()
+    }
+
+    /// The actual retained native adapter owns this manually held, SIMULATED transfer.
+    func testRetiredCloseStillJoinsTheEnteredNativeTransfer() async throws {
+        let fixture = try NikonBarrierFixture()
+        defer { fixture.remove() }
+        let context = try XCTUnwrap(
+            NikonOperatorPlaybackContext(model: fixture.model, initial: fixture.opening))
+        XCTAssertTrue(
+            context.media.open(
+                fixture.first, playlist: fixture.opening.playlist,
+                admitted: fixture.opening.admission))
+        await settle { context.media.playback?.ready == true }
+        let native = try XCTUnwrap(context.native)
+        let token = try XCTUnwrap(context.media.playback?.token)
+        let gate = NikonBarrierGate()
+        let transfer = Task { await gate.wait() }
+        let ticket = NativeAppModel.MediaClipStreamTicket(task: transfer)
+        let incomplete = MediaClip(
+            cameraID: fixture.second.payload.cameraID,
+            filename: fixture.second.payload.filename, handle: nil, storageID: nil,
+            sizeBytes: 32, captureDate: "20261004T120000")
+        XCTAssertFalse(fixture.model.isClipDownloaded(incomplete))
+        var enteredNative = false
+        guard
+            case .cached(let item) = try XCTUnwrap(
+                native.candidates(
+                    for: incomplete, model: fixture.model,
+                    startStream: {
+                        enteredNative = true
+                        return ticket
+                    }
+                ).first)
+        else { return XCTFail("The actual native source must expose the owned cache prefix") }
+        let prepare = Task { () -> Bool in
+            do {
+                _ = try await native.prepare(item, token: token, readyTimeout: nil)
+                return true
+            } catch { return false }
+        }
+        addTeardownBlock { @MainActor in
+            gate.release()
+            prepare.cancel()
+            transfer.cancel()
+            _ = await prepare.value
+            await fixture.library.dispose()
+        }
+        await settle { enteredNative && gate.pending == 1 }
+        fixture.library.close()
+        context.media.closePlayback()
+        let finish = try XCTUnwrap(
+            context.captureCloseCleanup(),
+            "Shared retirement must not discard the native cleanup join")
+        var returned = false
+        var closeStarted = false
+        let close = Task {
+            closeStarted = true
+            let result = await finish()
+            returned = true
+            return result
+        }
+        await settle { closeStarted }
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertFalse(returned, "Close waits for the original entered transfer")
+        gate.release()
+        let completed = await close.value
+        XCTAssertTrue(completed)
+        XCTAssertTrue(returned)
+        XCTAssertNil(context.captureCloseCleanup())
+    }
 }
 
 @MainActor private final class NikonBarrierGate {
