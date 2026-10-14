@@ -75,14 +75,18 @@ internal fun MediaPlaybackScreen(
     captureRecord: ((MonitorMediaRecord<NikonLibraryClip>) -> MonitorPlaybackAdmission)? = null,
     captureDeletion: ((MonitorMediaRecord<NikonLibraryClip>, suspend () -> Boolean) -> MonitorOperatorPlaybackDeletionRequest?)? = null,
 ): Unit {
-    val actualLibrary = library ?: run { PlaybackLoading("Preparing media library…"); return }
+    val actualLibrary = library ?: run {
+        com.opencapture.opencine.cameracontrols.MonitorOperatorMediaUnavailable(close = onClose); return
+    }
     val initial = remember(actualLibrary, opening?.id, initialClip.libraryKey(cameraID)) {
         opening ?: playbackRecords.firstOrNull {
             it.payload.bucket == cameraID && it.payload.clip == initialClip
         }?.let { record -> MonitorMediaGalleryOpen(record,
             playbackRecords.filter { it.payload.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY },
             actualLibrary.actionToken) }
-    } ?: run { PlaybackFailure("This clip is not in the current media library."); return }
+    } ?: run {
+        com.opencapture.opencine.cameracontrols.MonitorOperatorMediaUnavailable(close = onClose); return
+    }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val currentOwner = rememberUpdatedState(connectionOwner)

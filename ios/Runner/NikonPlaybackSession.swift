@@ -30,6 +30,7 @@ struct NikonPlaybackTailPresentation {
     }
     @ObservationIgnored private var installation: Installation?
     @ObservationIgnored private var factoryRevision = UUID()
+    @ObservationIgnored private var closeCleanupRevision: UUID?
     @ObservationIgnored private var notifying = false
     @ObservationIgnored private var pendingNotifications: [Field] = []
     private enum Field: Equatable { case native, assists }
@@ -161,14 +162,20 @@ struct NikonPlaybackTailPresentation {
     /// The shared media owner retires the item; this leaf only joins its entered native work.
     /// An app-scoped delivery goes on: Back never cancels it (A2-54).
     func captureCloseCleanup() -> (@MainActor () async -> Bool)? {
-        guard let owner = media.playback, let native,
-            media.playback === owner, self.native === native
-        else { return nil }
-        media.closePlayback()
-        let transfer = native.captureEnteredTransferCleanup()
+        let revision = factoryRevision
+        guard closeCleanupRevision != revision else { return nil }
+        let capturedNative = native
+        guard media.playback == nil || capturedNative != nil else { return nil }
+        closeCleanupRevision = revision
+        // Shared retirement can clear the player before the unavailable surface offers Close.
+        // Keep its native cleanup join, including the empty join of a refused first open.
+        if media.playback != nil { media.closePlayback() }
+        let transfer = capturedNative?.captureEnteredTransferCleanup()
         return { [weak self] in
-            await transfer()
-            guard let self, self.media.playback == nil, self.native === native else { return false }
+            await transfer?()
+            guard let self, self.factoryRevision == revision,
+                self.media.playback == nil, self.native === capturedNative
+            else { return false }
             return true
         }
     }
