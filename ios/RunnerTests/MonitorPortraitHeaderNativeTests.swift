@@ -59,13 +59,13 @@
             XCTAssertEqual(codec.accessibilityValue, "R3D NE")
         }
 
-        func testPhoneStorageAndPerformanceClearSafeTopAndRemainBeforePower() async throws {
+        func testCompactPortraitStorageAndPerformanceRemainAdjacentBeforePower() async throws {
             for width in [CGFloat(320), 360, 440] {
                 let layout = FieldMonitorLayout(
                     width: Double(width), height: 956,
                     safeArea: .init(top: 59, leading: 20, trailing: 20))
                 let fixture = try HeaderFixture(
-                    width: width, layout: layout, storage: "123456789 GB · 100%")
+                    width: width, layout: layout, storage: "123456789 GB")
                 defer { fixture.close() }
                 let nodes = try await fixture.nodes()
                 let storage = try XCTUnwrap(
@@ -73,18 +73,20 @@
                 let link = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Performance" })
                 let power = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Power" })
                 XCTAssertGreaterThanOrEqual(
-                    storage.accessibilityFrame.minY, 67,
-                    "Storage must clear the safe top plus breathing room")
+                    storage.accessibilityFrame.minY, layout.telemetry.y - 13,
+                    "Storage stays inside the restored corner band")
                 XCTAssertGreaterThanOrEqual(
-                    link.accessibilityFrame.minY, 67, "Performance must never enter the cutout")
+                    link.accessibilityFrame.minY, layout.telemetry.y - 13,
+                    "Performance stays inside the restored corner band")
                 XCTAssertGreaterThanOrEqual(
-                    power.accessibilityFrame.minY, 67, "Power shares the safe telemetry row")
+                    power.accessibilityFrame.minY, layout.telemetry.y - 13,
+                    "Power shares the safe telemetry row")
                 XCTAssertLessThanOrEqual(
                     storage.accessibilityFrame.maxX + 8, link.accessibilityFrame.minX + 0.5)
                 XCTAssertLessThanOrEqual(
                     link.accessibilityFrame.maxX + 8, power.accessibilityFrame.minX + 0.5)
                 XCTAssertEqual(
-                    storage.accessibilityValue, "123456789 GB · 100%",
+                    storage.accessibilityValue, "123456789 GB",
                     "Truncation must retain the full accessible value")
             }
         }

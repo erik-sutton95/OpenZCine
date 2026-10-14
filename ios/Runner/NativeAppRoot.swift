@@ -18,6 +18,7 @@ import os
 import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
+import enum MonitorPresentation.MonitorStorageReadoutFormat
 import enum MonitorPresentation.MonitorThumbnailSize
 
 private let connectionLogger = Logger(
@@ -4326,6 +4327,13 @@ final class NativeAppModel {
         }
 
         @ObservationIgnored private var quickDemoDriver: NikonQuickDemoDriver?
+
+        /// Explicit SIMULATED graphical fixture, using the normal declared header projection.
+        func seedGraphicalReviewTimecode() {
+            guard isDemoSession else { return }
+            applyLiveViewHeaderTimecode(Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
+            prefersMediaDuration = false
+        }
 
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
         func seedQuickDemoCamera() {
@@ -12507,6 +12515,15 @@ final class NativeAppModel {
             return prefersMediaDuration ? status.durationLabel : status.capacityLabel
         }
         return cameraState.media
+    }
+
+    /// Operator monitor storage uses the same units as every shared live surface.
+    var liveMediaReadout: String {
+        let status = cameraState.mediaStatus
+        return prefersMediaDuration
+            ? MonitorStorageReadoutFormat.remainingMinutes(status?.minutesRemaining)
+            : MonitorStorageReadoutFormat.capacity(
+                gigabytes: status.map { Int64($0.gigabytesFree) })
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {

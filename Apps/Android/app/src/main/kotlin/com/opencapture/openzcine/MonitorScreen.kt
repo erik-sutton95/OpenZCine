@@ -109,6 +109,7 @@ import com.opencapture.monitorui.MonitorSystemControls
 import com.opencapture.monitorui.MonitorSystemControlsVisibility
 import com.opencapture.monitorui.MonitorStatusChrome
 import com.opencapture.monitorui.MonitorStatusPresentation
+import com.opencapture.monitorui.MonitorStorageReadoutFormat
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.opencine.nikon.NikonOpenCineSession
@@ -1265,7 +1266,7 @@ internal fun MonitorScreen(
         // clearance are common policy; this adapter supplies only the window's facts.
         val geometry = monitorOperatorFieldLayout(
             MonitorOperatorViewport(viewportWidth, viewportHeight, safeLeading, safeTrailing,
-                portraitPhoneSafeTop(safeTop, viewportWidth, viewportHeight), safeBottom, 1f,
+                safeTop, safeBottom, 1f,
                 safeLeading > 0f || safeTrailing > 0f),
             assists.shared, mounted, portraitAspect, portraitFeedAspectRatio, isVerticalFeed)
         val fieldLayout = checkNotNull(geometry.layout.field)
@@ -1388,9 +1389,9 @@ internal fun MonitorScreen(
         var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
         val topBarMedia =
             if (prefersMediaDuration) {
-                readoutRetention.media.durationLabel
+                MonitorStorageReadoutFormat.remainingMinutes(readoutRetention.media.minutesRemaining)
             } else {
-                readoutRetention.media.capacityLabel
+                MonitorStorageReadoutFormat.capacity(readoutRetention.media.gigabytesFree)
             }
         val watchRelayState =
             remember(
@@ -2440,7 +2441,7 @@ internal fun MonitorDataAvailability.monitorSections(
  * the clock. From 44 dp up the band keeps the gap it has on a punch-hole phone.
  */
 internal fun portraitPhoneSafeTop(safeTop: Float, width: Float, height: Float): Float =
-    if (height > width && width < 600f) maxOf(safeTop, 44f) else safeTop
+    com.opencapture.monitorui.MonitorLayoutPolicy.portraitHeaderSafeTop(width, height, safeTop)
 
 /** Localized DISP mode label for the monitor's accessibility description. */
 @StringRes

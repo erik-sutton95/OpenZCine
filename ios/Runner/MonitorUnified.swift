@@ -299,12 +299,12 @@ struct NikonMonitorShell: View {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: model.photoPillShowsStorage
-                    ? model.mediaReadout
+                    ? model.liveMediaReadout
                     : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() })
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
-                id: .storage, title: "Storage", value: model.mediaReadout,
+                id: .storage, title: "Storage", value: model.liveMediaReadout,
                 section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil
