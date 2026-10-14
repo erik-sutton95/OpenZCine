@@ -10,6 +10,21 @@ import XCTest
 /// SIMULATED acquisition owners over the actual app/native JPEG decoder; no camera or upload.
 @MainActor
 final class NikonFeedIncidentProducerTests: XCTestCase {
+    func testFutureObservationAgeIsUnknownAndManualRatesMeasureActualDelta() {
+        let clock = Clock()
+        let producer = makeProducer(clock: clock)
+        defer { producer.end() }
+        let observer = producer.beginPreview()
+        observer.received()
+        XCTAssertNil(producer.snapshot(lifecycle: .init(), now: 9).ages.accessUnitAge)
+        let baseline = producer.snapshot(lifecycle: .init(), now: 10)
+        XCTAssertEqual(baseline.ages.accessUnitAge, 0)
+        observer.received()
+        let next = producer.snapshot(lifecycle: .init(), now: 12)
+        XCTAssertEqual(next.rates.observed?.accessUnitHz, 0.5)
+        XCTAssertNil(next.rates.observed?.packetHz)
+        XCTAssertNil(next.rates.observed?.presentHz)
+    }
     private final class Owner: NSObject {}
     private final class Clock: @unchecked Sendable {
         let lock = NSLock()

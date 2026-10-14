@@ -2,7 +2,9 @@ package com.opencapture.openzcine
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.opencapture.opencine.appkit.diagnostics.FeedIncidentBindings
 import com.opencapture.opencine.media.FeedIncidentBreadcrumb
 import com.opencapture.opencine.media.FeedIncidentLifecycle
 import com.opencapture.opencine.media.FeedIncidentSnapshot
@@ -28,10 +30,56 @@ import kotlin.test.assertTrue
 /** SIMULATED source owners over the actual shared pump/JPEG decoder; no JNI camera or scanout. */
 @RunWith(AndroidJUnit4::class)
 class NikonFeedIncidentProducerTest {
+    @Test fun defaultDiagnosticSamplesAndDisposalUseTheSharedRuntimeClockDomain() {
+        // SIMULATED ownership with the actual default producer. The runtime captures this
+        // elapsed-realtime clock at replacement, including accumulated deep sleep.
+        val source = RecordingSource()
+        val producer = NikonFeedIncidentProducer(source)
+        try {
+            assertInSharedClockTick { producer.snapshot(FeedIncidentLifecycle()).monotonicNow }
+        } finally { producer.end() }
+        assertEquals(1, source.ends)
+        assertTrue(source.endTimes.single() >= 0.0)
+        assertInSharedClockTick {
+            val ending = RecordingSource()
+            NikonFeedIncidentProducer(ending).end()
+            ending.endTimes.single()
+        }
+    }
+
+    private fun assertInSharedClockTick(observe: () -> Double) {
+        // A closed common-clock tick gives a precise bracket without sleeping or changing
+        // device state. It detects a different default clock even on an awake test device.
+        repeat(64) {
+            val before = SystemClock.elapsedRealtime()
+            val observed = observe()
+            val after = SystemClock.elapsedRealtime()
+            if (before == after) {
+                assertEquals(before / 1_000.0, observed,
+                    "Default diagnostic timestamp must match the runtime replacement clock")
+                return
+            }
+        }
+        error("No closed elapsed-realtime tick available to qualify the default clock")
+    }
+
+    @Test fun futureObservationAgeIsUnknownAndManualRatesMeasureActualDelta() {
+        val producer = NikonFeedIncidentProducer(RecordingSource(), { 10.0 })
+        try {
+            producer.received()
+            assertNull(producer.snapshot(FeedIncidentLifecycle(), 9.0).ages.accessUnitAge)
+            assertEquals(0.0, producer.snapshot(FeedIncidentLifecycle(), 10.0).ages.accessUnitAge)
+            producer.received()
+            val next = producer.snapshot(FeedIncidentLifecycle(), 12.0)
+            assertEquals(0.5, next.rates.observed?.accessUnitHz)
+            assertNull(next.rates.observed?.packetHz)
+            assertNull(next.rates.observed?.presentHz)
+        } finally { producer.end() }
+    }
     @Test fun consumingJPEGCallbackReportsDecodeWithoutInventingPacketsAcceptanceOrPresentation() = runBlocking {
         val source = RecordingSource()
         val owner = AtomicLong(1)
-        val producer = NikonFeedIncidentProducer(source, { owner.get() == 1L }, { 10.0 })
+        val producer = NikonFeedIncidentProducer(FeedIncidentBindings.bind(source) { owner.get() == 1L }, { 10.0 })
         try {
             val frame = LiveFrame(1, jpeg())
             producer.received() // The existing generation-filtered health collector observes delivery.
@@ -55,8 +103,8 @@ class NikonFeedIncidentProducerTest {
         val owner = AtomicLong(1)
         val oldSource = RecordingSource()
         val currentSource = RecordingSource()
-        val old = NikonFeedIncidentProducer(oldSource, { owner.get() == 1L }, { 10.0 })
-        val current = NikonFeedIncidentProducer(currentSource, { owner.get() == 2L }, { 11.0 })
+        val old = NikonFeedIncidentProducer(FeedIncidentBindings.bind(oldSource) { owner.get() == 1L }, { 10.0 })
+        val current = NikonFeedIncidentProducer(FeedIncidentBindings.bind(currentSource) { owner.get() == 2L }, { 11.0 })
         try {
             old.received()
             val frame = LiveFrame(1, jpeg())
@@ -93,7 +141,7 @@ class NikonFeedIncidentProducerTest {
     @Test fun knownOwnerReplacementRejectsOldDeliveryAndDecoderFactsBeforeLifecycleDisposal() = runBlocking {
         val owner = AtomicLong(1)
         val source = RecordingSource()
-        val old = NikonFeedIncidentProducer(source, { owner.get() == 1L }, { 10.0 })
+        val old = NikonFeedIncidentProducer(FeedIncidentBindings.bind(source) { owner.get() == 1L }, { 10.0 })
         try {
             owner.set(2)
             old.received()
@@ -126,8 +174,9 @@ class NikonFeedIncidentProducerTest {
     private class RecordingSource : FeedIncidentSource {
         val snapshots = mutableListOf<FeedIncidentSnapshot>()
         var ends = 0
+        val endTimes = mutableListOf<Double>()
         override fun ingestSnapshot(snapshot: FeedIncidentSnapshot) { snapshots += snapshot }
-        override fun endSession(nowSeconds: Double) { ends++ }
+        override fun endSession(nowSeconds: Double) { ends++; endTimes += nowSeconds }
         override fun recordBreadcrumb(breadcrumb: FeedIncidentBreadcrumb) = Unit
         override fun recordRepair(repair: FeedRepairRecord) = Unit
         override fun noteDecoderGeneration(generation: Int) = Unit

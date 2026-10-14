@@ -20,7 +20,7 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
     private var preview: Preview?
     private var counts = [0, 0, 0, 0]
     private var stamps: [TimeInterval?] = [nil, nil, nil, nil]
-    private var previous: (at: TimeInterval, counts: [Int])?
+    private var rateSampler = FeedIncidentRateSampler()
 
     init(source: FeedIncidentSessionSource,
         clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
@@ -35,6 +35,7 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
             if !closed {
                 preview = next
                 stamps = [nil, nil, nil, nil]
+                rateSampler.reset()
             }
             return next
         }
@@ -42,7 +43,7 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
 
     private func note(_ captured: Preview, stage: Int) {
         lock.withLock {
-            guard !closed, preview === captured else { return }
+            guard !closed, source.isCurrent, preview === captured else { return }
             counts[stage] += 1
             stamps[stage] = clock()
         }
@@ -56,17 +57,17 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
             life.outputObservable = counts[2] > 0
             life.presentationExpected = false
             life.liveEstablished = stamps[3] != nil
-            let elapsed = previous.map { now - $0.at } ?? 0
-            func rate(_ index: Int) -> Double {
-                guard let previous, elapsed > 0 else { return 0 }
-                return Double(max(0, counts[index] - previous.counts[index])) / elapsed
-            }
-            func age(_ index: Int) -> TimeInterval? { stamps[index].map { max(0, now - $0) } }
+            let rates = rateSampler.sample(
+                now: now,
+                counts: .init(
+                    accessUnit: counts[0],
+                    decodeSubmit: counts[1], decodedOutput: counts[2]))
             let sample = FeedIncidentSnapshot(monotonicNow: now, wallClock: wall,
-                rates: .init(accessUnitHz: rate(0), decodeSubmitHz: rate(1), decodedOutputHz: rate(2)),
-                ages: .init(accessUnitAge: age(0), decodedOutputAge: age(2)),
+                rates: rates,
+                ages: .init(
+                    accessUnitAge: FeedIncidentRateSampler.age(since: stamps[0], now: now),
+                    decodedOutputAge: FeedIncidentRateSampler.age(since: stamps[2], now: now)),
                 decoder: .init(codec: "jpeg"), lifecycle: life)
-            previous = (now, counts)
             return sample
         }
     }
