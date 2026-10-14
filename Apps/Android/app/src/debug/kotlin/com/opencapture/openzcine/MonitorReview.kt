@@ -26,7 +26,13 @@ internal object MonitorReview {
     private const val NAMESPACE = "SIMULATED-S1"
 
     fun decode(intent: Intent?): ReviewLaunch? = ReviewLaunch.decode { intent?.getStringExtra(it) }
-        ?.takeIf { it.screen == ReviewLaunch.Screen.MEDIA && it.source == ReviewLaunch.Source.LOCAL && !it.connected }
+        ?.takeIf { it.source == ReviewLaunch.Source.LOCAL && !it.connected && it.screen in screens }
+
+    /** The screens this host stages; anything else decodes null and runs the real startup. */
+    private val screens = setOf(
+        ReviewLaunch.Screen.CAMERAS, ReviewLaunch.Screen.PAIR, ReviewLaunch.Screen.LIVE,
+        ReviewLaunch.Screen.MEDIA, ReviewLaunch.Screen.PLAYBACK, ReviewLaunch.Screen.SETTINGS,
+    )
 
     fun bucket(review: ReviewLaunch?): MediaLibraryCameraBucket? = review?.let {
         MediaLibraryCameraBucket(NAMESPACE, NAMESPACE, "SIMULATED local media")

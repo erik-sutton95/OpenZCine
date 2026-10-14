@@ -187,6 +187,12 @@ class MainActivity : ComponentActivity() {
         val localReview = MonitorReview.decode(intent)
         // Load the Swift core (and with it OpenCine's NikonNative) before any camera session.
         SwiftCore.isAvailable
+        // A staged LIVE review reuses the debug demo feed (the typed fake session and its frame
+        // source), so the staged monitor shows the live chrome with no radio, camera or USB.
+        val stagedIntent =
+            if (localReview?.screen == com.opencapture.monitorui.ReviewLaunch.Screen.LIVE)
+                Intent(intent).putExtra(DemoHarness.EXTRA_DEMO_FEED, true)
+            else intent
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
         diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
         AppDiagnostics.install(applicationContext)
@@ -196,8 +202,8 @@ class MainActivity : ComponentActivity() {
         root =
             retainedMonitorRoot {
                 AppRoot(
-                    applicationContext, DemoHarness.demoLiveFeed(intent, applicationContext),
-                    DemoHarness.pairingScript(intent), diagnostics, DemoHarness.galleryFailureInjection(intent),
+                    applicationContext, DemoHarness.demoLiveFeed(stagedIntent, applicationContext),
+                    DemoHarness.pairingScript(stagedIntent), diagnostics, DemoHarness.galleryFailureInjection(stagedIntent),
                 )
             }
         val demo = root.demo
@@ -517,11 +523,35 @@ class MainActivity : ComponentActivity() {
                 val shellState by shell.state.collectAsState()
                 var reviewBucket by remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
                 LaunchedEffect(localReview) {
-                    if (localReview != null) {
-                        MonitorReview.start(applicationContext, mediaCacheStore, mediaLibraryIndex, localReview)
-                        reviewBucket = MonitorReview.bucket(localReview)
-                        mediaCacheRevision += 1
-                        shell.open(ShellModel.Cover.MEDIA)
+                    if (localReview == null) return@LaunchedEffect
+                    // Typed, review-gated staging per screen (A7 increment 4): each staged screen
+                    // shows its own production composition over the seeded, idle state; no radio,
+                    // connection or command ever reaches a camera.
+                    when (localReview.screen) {
+                        com.opencapture.monitorui.ReviewLaunch.Screen.PAIR -> shell.beginPairing()
+                        com.opencapture.monitorui.ReviewLaunch.Screen.CAMERAS -> {
+                            savedCameraStore.replace(listOf(
+                                SavedCameraRecord(host = "simulated-studio.local", cameraName = "Studio camera",
+                                    transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                                    lastSeenAtEpochMillis = 1_000L, wifiSsid = "Studio-5G"),
+                                SavedCameraRecord(host = "simulated-travel.local", cameraName = "Travel camera",
+                                    transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                                    lastSeenAtEpochMillis = 500L, wifiSsid = "Travel-5G"),
+                            ))
+                            camerasModel.reloadSaved()
+                        }
+                        com.opencapture.monitorui.ReviewLaunch.Screen.LIVE ->
+                            // The demo feed's fake session; the shell presents it as the monitor.
+                            demo?.first?.let { monitorSession = it }
+                        com.opencapture.monitorui.ReviewLaunch.Screen.MEDIA,
+                        com.opencapture.monitorui.ReviewLaunch.Screen.PLAYBACK -> {
+                            MonitorReview.start(applicationContext, mediaCacheStore, mediaLibraryIndex, localReview)
+                            reviewBucket = MonitorReview.bucket(localReview)
+                            mediaCacheRevision += 1
+                            shell.open(ShellModel.Cover.MEDIA)
+                        }
+                        com.opencapture.monitorui.ReviewLaunch.Screen.SETTINGS -> shell.open(ShellModel.Cover.SETTINGS)
+                        else -> Unit
                     }
                 }
                 LaunchedEffect(savedCameras, monitorSession, shellState.cover, mediaCacheRevision) {
@@ -1259,6 +1289,10 @@ class MainActivity : ComponentActivity() {
                             operatorSettings = operatorSettings,
                             lutLibrary = lutLibrary,
                             mediaDelivery = mediaDelivery,
+                            // `ReviewLaunch(screen: .playback)`: the staged gallery opens its first
+                            // clip once, as a tap would (the demo play path's same affordance).
+                            autoPlayFirstProxy = localReview?.screen ==
+                                com.opencapture.monitorui.ReviewLaunch.Screen.PLAYBACK,
                             onRatingDiagnostic = diagnostics::record,
                             onClose = { shell.dismissCover() },
                         )
@@ -1282,9 +1316,10 @@ class MainActivity : ComponentActivity() {
                             frameioController = frameioController,
                             accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                             savedCameras = camerasState.saved,
-                            // iOS's startup Settings lands on Link; a debug
-                            // intent can still force a specific tab.
-                            initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,
+                            // iOS's startup Settings lands on Link; a typed review stages the tab
+                            // it names, and a debug intent can still force a specific tab.
+                            initialTab = localReview?.settingsTab ?: debugInitialSettingsTab
+                                ?: MonitorSettingsTab.LINK,
                             systemSettingsActions = systemSettingsActions,
                             onReportProblem = { showProblemReport = true },
                             onCompletedMediaCacheCleared = {
