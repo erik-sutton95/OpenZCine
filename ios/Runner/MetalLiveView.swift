@@ -411,6 +411,7 @@ final class FeedUpscaleSwitch {
         didSet {
             Self.rendererReadsUpscaler = upscaler
             UserDefaults.standard.set(upscaler.rawValue, forKey: Self.storageKey)
+            ReliabilityDiagnostics.reporting.noteFeedUpscaler(upscaler.rawValue)
         }
     }
 
