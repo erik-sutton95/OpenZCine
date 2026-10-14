@@ -12835,13 +12835,8 @@ extension NativeAppModel {
         feedIncidentProducer = nil
         // Lent multicam, demo and editor shells never retire a canonical incident source.
         if multicam.lentMember == nil, !isDemoSession {
-            let host = ReliabilityDiagnostics.host
-            let source = ReliabilityDiagnostics.incidents.beginBoundSession(.init(
-                sessionID: UUID().uuidString, appVersion: host.version, appBuild: host.build,
-                sourceRevision: host.sourceRevision, osName: "iOS", osVersion: UIDevice.current.systemVersion,
-                hardwareClass: UIDevice.current.model, cameraFamily: "nikon",
-                testSource: ReliabilityDiagnostics.origin.currentTestSource(),
-                buildIdentity: ReliabilityDiagnostics.origin.currentBuildIdentity()))
+            let source = ReliabilityDiagnostics.incidents.beginBoundSession(
+                ReliabilityDiagnostics.incidents.sessionContext(cameraFamily: "nikon"))
             feedIncidentProducer = NikonFeedIncidentProducer(source: source)
         }
         if let monitorRuntime {

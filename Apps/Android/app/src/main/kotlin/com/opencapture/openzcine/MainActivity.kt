@@ -885,16 +885,11 @@ class MainActivity : ComponentActivity() {
                             currentSessionState is CameraSessionState.Connected && !multicam.owns(active)
                         val incidentProducer = remember(active, incidentOwner, canonicalIncidentConnection) {
                             if (!canonicalIncidentConnection) null else {
-                                val host = AppDiagnostics.host
                                 val source = AppDiagnostics.incidents.beginBoundSession(
-                                    com.opencapture.opencine.media.FeedIncidentSessionContext(
-                                        java.util.UUID.randomUUID().toString(), host.versionName,
-                                        host.versionCode.toString(), host.sourceRevision, "Android",
-                                        android.os.Build.VERSION.RELEASE, android.os.Build.DEVICE, "nikon",
-                                        testSource = AppDiagnostics.origin.currentTestSource(),
-                                        buildIdentity = AppDiagnostics.origin.currentBuildIdentity()))
-                                com.opencapture.openzcine.diagnostics.NikonFeedIncidentProducer(source,
-                                    isCurrentConnection = { native?.connectionOwner == incidentOwner })
+                                    AppDiagnostics.incidents.sessionContext(cameraFamily = "nikon"))
+                                val bound = com.opencapture.opencine.appkit.diagnostics.FeedIncidentBindings.bind(source,
+                                    ownerIsCurrent = { native?.connectionOwner == incidentOwner })
+                                com.opencapture.openzcine.diagnostics.NikonFeedIncidentProducer(bound)
                             }
                         }
                         DisposableEffect(incidentProducer) { onDispose { incidentProducer?.end() } }
