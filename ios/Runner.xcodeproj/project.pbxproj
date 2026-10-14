@@ -965,6 +965,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -981,6 +982,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -995,6 +997,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
