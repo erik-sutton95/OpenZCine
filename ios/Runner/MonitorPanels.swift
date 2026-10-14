@@ -2710,7 +2710,7 @@ struct OperatorSettingsPanel: View {
             reportAction: model.isStandaloneSettingsPresented
                 ? nil : { model.isBugReportPresented = true },
             report: { AnyView(ProblemReportView().environment(model)) },
-            shareReport: { AnyView(DiagnosticsShareSheet(url: $0)) })
+            shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) })
     }
     private var lookLabel: String {
         switch model.assistConfiguration.selectedLUT {
