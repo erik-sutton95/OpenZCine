@@ -3910,11 +3910,17 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
             hosted.labels.contains("Legacy supplied footer"), hosted.labels.joined(separator: ", "))
     }
 
-    func testAnIndependentLookProviderRendersTheSharedAudioPreview() async throws {
+    /// The shared inspector preview consumes the actual audio source and draws its signal.
+    func testTheSharedInspectorAudioPreviewConsumesItsSourceAndDrawsItsSignal() async throws {
         let name = "look-preview-compatibility." + UUID().uuidString
         let storage = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { storage.removePersistentDomain(forName: name) }
-        let looks = IndependentLooks()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let preferences = LUTPreferences(storage: storage, namespace: name)
+        let looks = MonitorLUTLooks(
+            official: OfficialLUTs(catalog: { _ in [.officialAuto] }, cube: { _ in nil }),
+            preferences: preferences,
+            customLUTs: CustomLUTStore(root: root, preferences: preferences))
         let assist = MonitorAssistState(
             looks: looks, storage: storage,
             keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
@@ -3922,12 +3928,12 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
         let samples = LiveFrameSampleBus()
         let renderer = MonitorInspectorImageRenderer(lookCurves: [:])
         var audioReads = 0
-        let preview = MonitorLookInspectorPreview(
+        let preview = MonitorOperatorInspectorPreview(
             tool: .audioMeters, assist: assist,
             stores: AssistPanelStores(storage: storage, namespace: name),
             haptics: OperatorHaptics(isEnabled: { false }),
             source: MonitorInspectorImageSource(renderer: renderer, samples: samples),
-            readCustomName: { nil }, readLookContext: { nil },
+            readCustomName: { nil },
             prepareEffects: { frame in
                 assist.inspectorImageEffects(
                     tool: .audioMeters, transfer: frame.transfer,
