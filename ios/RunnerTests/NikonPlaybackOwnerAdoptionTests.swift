@@ -1,3 +1,4 @@
+import OpenZCineCore
 import AVFoundation
 import Foundation
 import MonitorPresentation
@@ -1358,6 +1359,15 @@ extension NikonPlaybackOwnerAdoptionTests {
         let clip = MediaClip(cameraID: bucket, filename: url.lastPathComponent, handle: 42,
             storageID: 65_537, sizeBytes: UInt64(bytes.count), captureDate: "20261011T120000")
         fixture.store.upsertBatch([clip], cameraID: bucket)
+        let transport = LargeTransferTransport(operations: [.deleteObject])
+        let session = try await NativeCameraSession.establish(
+            transport: transport, host: "usb:SIMULATED-playback-delete",
+            cameraName: "SIMULATED", requestPairing: false)
+        fixture.model.debugAdoptEstablishedMediaSession(session)
+        defer {
+            fixture.model.debugAdoptEstablishedMediaSession(nil)
+            session.close()
+        }
         fixture.model.mediaBrowserSource = .camera
         fixture.model.openCachedMediaLibrary()
         let library = try XCTUnwrap(fixture.model.mediaLibrary)
@@ -1392,8 +1402,9 @@ extension NikonPlaybackOwnerAdoptionTests {
         let destructive = try XCTUnwrap(dialog.actions.first { $0.style == .destructive }?.title)
         let rendered = await cachedCatalogSettled {
             dialog.view.layoutIfNeeded()
-            return HostedAccessibility.elements(in: dialog.view)
-                .contains { $0.accessibilityLabel == destructive }
+            return dialog.view.window != nil && HostedAccessibility.elements(in: dialog.view)
+                .contains { $0.isAccessibilityElement && $0.accessibilityTraits.contains(.button)
+                    && $0.accessibilityLabel == destructive && !$0.accessibilityFrame.isEmpty }
         }
         XCTAssertTrue(rendered)
         if let cancelButton = HostedAccessibility.elements(in: dialog.view)
@@ -1409,6 +1420,10 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(dismissed)
         XCTAssertEqual(try Data(contentsOf: url), bytes)
         XCTAssertEqual(try fixture.store.catalogBytes(cameraID: bucket), catalog)
+        let calls = await transport.calls
+        XCTAssertFalse(
+            calls.contains { $0.operation == .deleteObject }, "Cancel sends no camera delete")
+        fixture.model.debugAdoptEstablishedMediaSession(nil)
         fixture.model.connection = .disconnected
         let hidden = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
@@ -1416,6 +1431,62 @@ extension NikonPlaybackOwnerAdoptionTests {
                 .contains { $0.accessibilityLabel == "Delete clip from camera" }
         }
         XCTAssertTrue(hidden, "Offline cached playback must not advertise camera-card deletion")
+        await library.dispose()
+    }
+}
+
+// SIMULATED actual player without a camera deletion authority.
+extension NikonPlaybackOwnerAdoptionTests {
+    func testConnectedPlaybackWithoutADeletionAuthorityOffersNoDelete() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let bucket = "SIMULATED-NO-AUTHORITY"
+        let url = try fixture.store.localURL(cameraID: bucket, filename: "SIMULATED-KEEP.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await NikonGrowingMovieFixture.write(at: url)
+        let clip = MediaClip(
+            cameraID: bucket, filename: url.lastPathComponent, handle: 42, storageID: 65_537,
+            sizeBytes: UInt64(try Data(contentsOf: url).count), captureDate: "20261012T120000")
+        fixture.store.upsertBatch([clip], cameraID: bucket)
+        fixture.model.mediaBrowserSource = .camera
+        fixture.model.openCachedMediaLibrary()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
+        fixture.model.connection = .connected
+        defer { fixture.model.connection = .disconnected }
+        XCTAssertFalse(
+            fixture.model.canDeleteMedia([clip]), "No session: the gallery withholds Delete")
+        let coordinator = MediaDeliveryCoordinator()
+        defer { coordinator.close() }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(
+            rootView: MediaPlayerView(clips: [clip], startingAt: clip)
+                .environment(fixture.model).environment(coordinator))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let mounted = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return HostedAccessibility.elements(in: host.view)
+                .contains { HostedAccessibility.identifier($0) == "monitor.playback.back" }
+        }
+        XCTAssertTrue(mounted, "The shared player must mount")
+        XCTAssertFalse(
+            HostedAccessibility.elements(in: host.view)
+                .contains { $0.accessibilityLabel == "Delete clip from camera" },
+            "Without a deletion authority the player must not offer a Delete that removes nothing")
         await library.dispose()
     }
 }

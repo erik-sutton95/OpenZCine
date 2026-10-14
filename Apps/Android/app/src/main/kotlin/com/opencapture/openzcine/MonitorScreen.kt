@@ -95,7 +95,9 @@ import com.opencapture.opencine.appkit.MonitorBackdropActivation
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.statusPresentation
 import com.opencapture.opencine.appkit.MonitorCaptureField
+import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.appkit.captureField
+import com.opencapture.opencine.appkit.captureValue
 import com.opencapture.opencine.appkit.commit
 import com.opencapture.opencine.appkit.quickControl
 import com.opencapture.opencine.appkit.MonitorCaptureDrum
@@ -1817,8 +1819,18 @@ internal fun MonitorScreen(
         }
         val readouts: List<MonitorOperatorLiveReadout<String, MonitorDisplaySection>> = nativeSettings.map { setting ->
             val field = fieldFor(setting.kind)
+            val key = when (setting.kind) {
+                MonitorPickerKind.ISO -> SettingKey.ISO
+                MonitorPickerKind.SHUTTER -> SettingKey.SHUTTER
+                MonitorPickerKind.IRIS -> SettingKey.APERTURE
+                MonitorPickerKind.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
+                else -> null
+            }
+            val value = if (!isPhotographyMode && !isDemoSession && relayedState == null && key != null)
+                commonControl.captureValue(key, com.opencapture.opencine.appkit.MonitorCaptureSelection.PENDING)
+                    ?.let(MonitorCapturePresentation::label) ?: "--" else setting.value
             MonitorOperatorLiveReadout(setting.kind.name, field?.title ?: setting.label,
-                if (field != null) field.label else setting.value, field = field,
+                value, field = field,
                 quickEnabled = setting.kind != MonitorPickerKind.SHUTTER || isPhotographyMode ||
                     (effectiveShutterLocked == false && cameraProperties.shutterMode != null),
             )
@@ -1924,12 +1936,14 @@ internal fun MonitorScreen(
             ?: activeCommandControl?.let { request -> MonitorOperatorCameraPanel("command:${request.control.name}",
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
+        val recordingFormat = sharedControlState.snapshot?.let(MonitorCapturePresentation::recordingFormat)
+        val recordingLabel = recordingFormat?.let(MonitorCapturePresentation::recordingLabel)
         val headerReadouts = listOfNotNull(
             if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
-                if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else readoutRetention.resolution,
+                if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else if (isDemoSession || relayedState != null) readoutRetention.resolution else recordingLabel,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",
-                if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else readoutRetention.codec,
+                if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else if (isDemoSession || relayedState != null) readoutRetention.codec else recordingFormat?.codec?.let(::monitorCodecShortLabel),
                 MonitorDisplaySection.CODEC, action = { openSharedPicker(codecKind) }))
         val quickPickers = nativeSettings.mapNotNull { setting -> setting.picker?.let { setting.kind to it } }.toMap() +
             if (isPhotographyMode) photographyTopPickers else topPillPickers
@@ -2246,6 +2260,7 @@ internal fun MonitorScreen(
                     CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
                     MonitorControlPickerPanel(
                         picker = picker,
+                        recordingFormats = cameraProperties.controlCapabilities.recordingFormats,
                         frame = pickerFrame,
                         commonControl = if (isPhotographyMode) null else commonControl,
                         commonField = fieldFor(picker.kind),

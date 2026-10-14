@@ -111,11 +111,9 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             model.preferences = OperatorPreferences.defaults
             switch source {
             case "hdmi":
-                model.isMonitorPresented = true
-                model.videoSource = .hdmiCapture
+                model.debugPresentHostedPictureMonitor(source: .hdmiCapture)
             case "relay":
-                model.videoSource = .relay
-                model.isMonitorPresented = true
+                model.debugPresentHostedPictureMonitor(source: .relay)
             default:
                 model.startDemoSession()
             }

@@ -1030,6 +1030,7 @@ internal fun MonitorControlPickerPanel(
     onToggleMfScrub: (() -> Unit)? = null,
     /** Shared monitor popup supplies all panel chrome; this slot supplies controls only. */
     chromeless: Boolean = false,
+    recordingFormats: List<com.opencapture.opencine.nikon.NikonRecordingFormatPresentation> = emptyList(),
 ) {
     val writeEnabled = controlsEnabled && com.opencapture.opencine.appkit.LocalMonitorCaptureCommandEnabled.current
     @Composable fun PickerContent(currentPicker: MonitorPickerPresentation) {
@@ -1049,6 +1050,7 @@ internal fun MonitorControlPickerPanel(
         } else if (currentPicker.kind in ladderKinds) {
             VideoLadderBody(
                 picker = currentPicker,
+                recordingFormats = recordingFormats,
                 field = commonField,
                 control = commonControl,
                 controlsEnabled = writeEnabled,

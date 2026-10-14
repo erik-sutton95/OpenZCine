@@ -248,8 +248,11 @@ struct NikonMonitorShell: View {
                 quickEnabled
                 ? picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
                 : nil
+            let common = !model.isPhotographyMode && !model.isDemoSession && model.videoSource != .relay
+                ? picker.nikonControlSetting.map { model.shell.control.captureValue($0.key, selection: .pending) } : nil
+            let label = common.map { $0.map(MonitorCapturePresentation.label) ?? "--" } ?? value.value
             return Readout(
-                id: .picker(picker), title: value.label, value: value.value, field: field,
+                id: .picker(picker), title: value.label, value: label, field: field,
                 quickEnabled: quickEnabled,
                 accessibilityIdentifier: picker.nikonControlSetting.map {
                     "monitor.capture." + $0.key.rawValue
@@ -262,6 +265,10 @@ struct NikonMonitorShell: View {
     }
     private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, Section> {
         let photo = model.isPhotographyMode
+        let recordingFormat = model.shell.control.snapshot.map(MonitorCapturePresentation.recordingFormat)
+        let recordingLabel = recordingFormat.flatMap(MonitorCapturePresentation.recordingLabel)
+        let imageArea = model.recordingFormatPresentations.first { $0.token == model.cameraState.resolutionFrameRate }?.imageArea
+        let formatLabel = recordingLabel.map { text in imageArea.map { "[\($0)] " + text } ?? text }
         // The common session publishes the header timecode at frame precision (A5-04).
         let recording =
             model.pictureOnlyMonitor
@@ -277,7 +284,7 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillSize : .resolution), title: "Format",
                     value: photo
                         ? model.stillSizeAreaDisplay ?? "--"
-                        : model.cameraState.resolutionFrameRate,
+                        : model.isDemoSession || model.videoSource == .relay ? model.cameraState.resolutionFrameRate : formatLabel ?? "--",
                     section: .format))
         }
         if model.chromeSectionMounts(.codec) {
@@ -286,7 +293,8 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillQuality : .codec), title: "Codec",
                     value: photo
                         ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--"
-                        : MonitorTextFormat.codecCompactLabel(model.cameraState.codec),
+                        : model.isDemoSession || model.videoSource == .relay ? MonitorTextFormat.codecCompactLabel(model.cameraState.codec)
+                            : recordingFormat?.codec.map(MonitorTextFormat.codecCompactLabel) ?? "--",
                     section: .codec))
         }
         let storage: Readout?

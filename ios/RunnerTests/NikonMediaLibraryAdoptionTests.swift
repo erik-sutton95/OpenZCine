@@ -884,7 +884,7 @@ import XCTest
     func queueRecord(start: Bool, operation: OperationID) {}
 }
 
-private actor LargeTransferTransport: CameraTransport {
+actor LargeTransferTransport: CameraTransport {
     struct Call: Sendable {
         let operation: PTPOperationCode
         let parameters: [UInt32]
