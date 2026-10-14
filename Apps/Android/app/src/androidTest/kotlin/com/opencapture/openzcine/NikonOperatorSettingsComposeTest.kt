@@ -344,8 +344,12 @@ class NikonOperatorSettingsComposeTest {
         }
         composeRule.onNode(hasContentDescription("1.0") and hasAnyAncestor(hasTestTag("settings.assist.trafficLights")))
             .performScrollTo().performClick()
-        composeRule.onNodeWithText("Read").assertDoesNotExist()
-        composeRule.onNodeWithText("LOG").assertDoesNotExist()
+        // The Nikon source supports the Read choice (LOG reads the source signal, 709 the
+        // monitor look); the card offers it next to the scale choices.
+        val falseColor = hasAnyAncestor(hasTestTag("settings.assist.falseColor"))
+        composeRule.onNode(hasText("Read") and falseColor).performScrollTo().assertIsDisplayed()
+        composeRule.onNode(hasText("LOG") and falseColor).assertIsDisplayed()
+        composeRule.onNode(hasText("709") and falseColor).assertIsDisplayed()
         composeRule.onNodeWithText("REFERENCE KEY").performScrollTo().assertIsDisplayed()
         val key = composeRule.onNodeWithTag("monitor.false-color.reference")
             .performScrollTo().fetchSemanticsNode().boundsInRoot

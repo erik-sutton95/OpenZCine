@@ -12,6 +12,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -248,12 +249,18 @@ class OfflineMediaMainActivityTest {
 
     private fun UiDevice.revealSettingsTab(description: String): UiObject2 {
         repeat(8) {
-            findObject(By.desc(description))?.let { tab ->
-                val observedBounds = tab.visibleBounds
-                waitForIdle()
-                findObject(By.desc(description))?.let { current ->
-                    if (current.visibleBounds == observedBounds) return current
-                }
+            // The live catalog's native frame clock retires nodes while automation reads
+            // them; requery by description instead of holding a UiObject2 across reads
+            // (the same discipline the media selection helpers use).
+            val observed = findObject(By.desc(description))?.let { tab ->
+                try { tab.visibleBounds } catch (_: StaleObjectException) { null }
+            }
+            waitForIdle()
+            val settled = findObject(By.desc(description))?.let { tab ->
+                try { tab.visibleBounds } catch (_: StaleObjectException) { null }
+            }
+            if (observed != null && settled == observed) {
+                findObject(By.desc(description))?.let { return it }
             }
             val rail = wait(
                 Until.findObject(By.clazz("android.widget.HorizontalScrollView").scrollable(true)),
