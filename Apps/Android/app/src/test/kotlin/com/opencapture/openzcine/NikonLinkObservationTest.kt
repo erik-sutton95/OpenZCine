@@ -28,7 +28,7 @@ class NikonLinkObservationTest {
 
     @Test
     fun theChipNamesTheRouteBeforeAnyPicture() {
-        assertEquals("—", label(CameraSessionState.Disconnected))
+        assertEquals("\u2014", label(CameraSessionState.Disconnected))
         assertEquals("LINK", label(CameraSessionState.Connecting))
         assertEquals("LINK", label(connected), "connected, no picture yet")
     }

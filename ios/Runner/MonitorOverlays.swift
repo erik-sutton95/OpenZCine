@@ -507,4 +507,3 @@ enum FalseColorReference {
         return min(1, max(0, (value - domain.lowerBound) / (domain.upperBound - domain.lowerBound)))
     }
 }
-
