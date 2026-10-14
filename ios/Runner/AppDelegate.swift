@@ -12,6 +12,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         #if DEBUG
             ReliabilityDiagnostics.verification.prepareIfRequested()
         #endif
+        ReliabilityDiagnostics.reporting.noteFeedUpscaler(
+            FeedUpscaleSwitch.rendererReadsUpscaler.rawValue)
         ReliabilityDiagnostics.reporting.install()
         #if DEBUG
             ReliabilityDiagnostics.verification.runIfRequested()

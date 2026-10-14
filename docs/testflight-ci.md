@@ -111,8 +111,9 @@ sends once the phone has left camera Wi-Fi and has internet. Optional automatic 
 reports (off by default, asked once at launch) take the same route. A build without a Sentry DSN
 (`SENTRY_DSN`, empty in the repository) shows both as unavailable. Releases follow
 OpenPocketCine's scheme: release `com.opencapture.openzcine@<version>+<build>`, `dist` the build,
-environments `development`, `verification` (debug `OPV_RELIABILITY_VERIFY` probes), `testflight`
-and `production`, and every build stamps `OPCSourceRevision` and `OPCBuildIdentity` (OpenCine's
+environments `development`, `verification` (debug `OPV_RELIABILITY_VERIFY` probes), `local`
+(Xcode, ad hoc and simulator release installs; Android release builds outside the Play workflow),
+`testflight`, `internal` (the Play internal workflow) and `production` (store builds only), and every build stamps `OPCSourceRevision` and `OPCBuildIdentity` (OpenCine's
 `scripts/sentry/stamp-source-revision.sh`, a Runner build phase).
 
 The TestFlight workflow and `ci_scripts/ci_post_clone.sh` write `ios/Runner/Reliability.local.xcconfig`

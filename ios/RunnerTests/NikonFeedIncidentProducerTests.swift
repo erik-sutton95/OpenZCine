@@ -144,5 +144,6 @@ final class NikonFeedIncidentProducerTests: XCTestCase {
         func addBreadcrumb(category: String, message: String, data: [String: String]?) {}
         func setTags(_ tags: [String: String]) {}
         func capture(_ event: ReliabilityEvent, attachment: Data, attachmentName: String) {}
+        func record(_ metric: ReliabilityMetric) {}
     }
 }
