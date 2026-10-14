@@ -313,6 +313,7 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
 }
 
 dependencies {
+    androidTestImplementation("com.opencapture.opencine:app-ui-testing:0.1.0-SNAPSHOT")
     implementation(project(":core-api"))
     // OpenCine common camera contracts (CORE-02 candidate, composite build; see settings).
     implementation(libs.opencine.core)

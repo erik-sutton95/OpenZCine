@@ -184,6 +184,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen().setKeepOnScreenCondition { !launch.firstFrameDrawn }
         super.onCreate(savedInstanceState)
+        val localReview = MonitorReview.decode(intent)
         // Load the Swift core (and with it OpenCine's NikonNative) before any camera session.
         SwiftCore.isAvailable
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
@@ -226,7 +227,7 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(liveBackdrop) { onDispose { liveBackdrop.close() } }
                 CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics,
                     LocalMonitorBackdrops provides listOf(liveBackdrop.source)) {
-                Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().reviewMetadata(localReview)) {
                 // The session, its HDMI feed and its saved profile live in the retained root.
                 var monitorSession by root::monitorSession
                 var uvcSource by root::uvcSource
@@ -377,11 +378,11 @@ class MainActivity : ComponentActivity() {
                 var mediaCacheRevision by remember { mutableStateOf(0) }
                 val pairingEnvironment = root.pairingEnvironment
                 val multicam = root.multicam
-                // Debug demo, scripted and settings deep-link launches skip the splash so
+                // Debug demo, scripted, settings deep-link and review launches skip the splash so
                 // screenshots stay deterministic.
                 val launchSplash =
                     rememberMonitorLaunchSplash(
-                        enabled = debugSession == null && pairingScript == null && debugInitialSettingsTab == null,
+                        enabled = debugSession == null && pairingScript == null && debugInitialSettingsTab == null && localReview == null,
                     )
                 /**
                  * Saves a Nikon-confirmed profile before the temporary pairing
@@ -514,6 +515,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val shellState by shell.state.collectAsState()
+                var reviewBucket by remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
+                LaunchedEffect(localReview) {
+                    if (localReview != null) {
+                        MonitorReview.start(applicationContext, mediaCacheStore, mediaLibraryIndex, localReview)
+                        reviewBucket = MonitorReview.bucket(localReview)
+                        mediaCacheRevision += 1
+                        shell.open(ShellModel.Cover.MEDIA)
+                    }
+                }
                 LaunchedEffect(savedCameras, monitorSession, shellState.cover, mediaCacheRevision) {
                     if (monitorSession != null) return@LaunchedEffect
                     completedMediaBuckets =
@@ -1221,7 +1231,8 @@ class MainActivity : ComponentActivity() {
                     @Composable
                     fun StandaloneMedia() {
                         // Read as state: a bucket scan still running when the cover opens adds its cameras here.
-                        val offlineBuckets = completedMediaBuckets.values.toList()
+                        // A review launch stages its own seeded bucket ahead of the on-device caches.
+                        val offlineBuckets = reviewBucket?.let(::listOf) ?: completedMediaBuckets.values.toList()
                         val primary = offlineBuckets.firstOrNull()
                         val offlineAssist =
                             remember(primary?.cameraID, offlineBuckets.size) {
@@ -1484,7 +1495,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         MonitorLaunchSplash(LAUNCH_BRAND, launchSplash)
-                        if (!launchSplash.visible && !multicam.presented) {
+                        if (!launchSplash.visible && !multicam.presented && localReview == null) {
                             MonitorAutomaticReportsOffer(
                                 MonitorReportsOffer(
                                     AppDiagnostics.consent, AppDiagnostics.reporting, AppDiagnostics.host.product,
