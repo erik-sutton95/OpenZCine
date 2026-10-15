@@ -1,5 +1,7 @@
 package com.opencapture.openzcine.lut
 
+import com.opencapture.opencine.cameracontrols.MonitorLutArchiveBudget
+import com.opencapture.opencine.cameracontrols.MonitorLutArchiveLimitExceeded
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -32,6 +34,7 @@ internal object RedZipCubeExtractor {
 
     /**
      * Extracts up to [maxFiles] `.cube` entries from [file], each at most [maxBytes] after inflate.
+     * Actual emitted output across entries and parser fallback is bounded by [maxTotalBytes].
      *
      * @throws IOException when the archive is truncated, uses unsupported methods for cube
      *   entries we need, or is not a ZIP at all.
@@ -40,15 +43,21 @@ internal object RedZipCubeExtractor {
         file: File,
         maxFiles: Int = MAX_RED_ZIP_CUBE_FILES,
         maxBytes: Int = MAX_RED_CUBE_BYTES,
+        maxTotalBytes: Long = MonitorLutArchiveBudget.DEFAULT_MAXIMUM_TOTAL_BYTES,
     ): List<RedZipCubeEntry> {
         if (!file.isFile || file.length() < 4L) {
             throw IOException("Archive is empty or missing.")
         }
+        val budget = MonitorLutArchiveBudget(maxTotalBytes)
         RandomAccessFile(file, "r").use { raf ->
-            val fromCentral = runCatching { extractViaCentralDirectory(raf, maxFiles, maxBytes) }.getOrNull()
+            val fromCentral = runCatching { extractViaCentralDirectory(raf, maxFiles, maxBytes, budget) }
+                .getOrElse { error ->
+                    if (error is MonitorLutArchiveLimitExceeded) throw error
+                    null
+                }
             if (fromCentral != null) return fromCentral
             raf.seek(0L)
-            return extractViaLocalHeaders(raf, maxFiles, maxBytes)
+            return extractViaLocalHeaders(raf, maxFiles, maxBytes, budget)
         }
     }
 
@@ -56,6 +65,7 @@ internal object RedZipCubeExtractor {
         raf: RandomAccessFile,
         maxFiles: Int,
         maxBytes: Int,
+        budget: MonitorLutArchiveBudget,
     ): List<RedZipCubeEntry>? {
         val eocd = findEocd(raf) ?: return null
         if (eocd.entryCount == 0) return emptyList()
@@ -115,9 +125,12 @@ internal object RedZipCubeExtractor {
                         compressedSize = compressedSize,
                         uncompressedSize = uncompressedSize,
                         method = method,
-                        maxBytes = maxBytes,
+                        maxBytes = maxBytes, budget = budget,
                     )
-                }.getOrNull() ?: continue
+                }.getOrElse { error ->
+                    if (error is MonitorLutArchiveLimitExceeded) throw error
+                    null
+                } ?: continue
             if (bytes.isEmpty()) continue
             out += RedZipCubeEntry(fileName = baseName, bytes = bytes)
         }
@@ -128,6 +141,7 @@ internal object RedZipCubeExtractor {
         raf: RandomAccessFile,
         maxFiles: Int,
         maxBytes: Int,
+        budget: MonitorLutArchiveBudget,
     ): List<RedZipCubeEntry> {
         val out = ArrayList<RedZipCubeEntry>(minOf(maxFiles, 64))
         var position = 0L
@@ -197,9 +211,12 @@ internal object RedZipCubeExtractor {
                             compressedSize = compressedSize,
                             uncompressedSize = uncompressedSize,
                             method = method,
-                            maxBytes = maxBytes,
+                            maxBytes = maxBytes, budget = budget,
                         )
-                    }.getOrNull()
+                    }.getOrElse { error ->
+                        if (error is MonitorLutArchiveLimitExceeded) throw error
+                        null
+                    }
                 if (bytes != null && bytes.isNotEmpty()) {
                     val baseName = path.substringAfterLast('/')
                     out += RedZipCubeEntry(fileName = baseName, bytes = bytes)
@@ -230,6 +247,7 @@ internal object RedZipCubeExtractor {
         uncompressedSize: Long,
         method: Int,
         maxBytes: Int,
+        budget: MonitorLutArchiveBudget,
     ): ByteArray {
         raf.seek(localOffset)
         val sig = raf.readUInt32()
@@ -254,7 +272,7 @@ internal object RedZipCubeExtractor {
             compressedSize = compressedSize,
             uncompressedSize = uncompressedSize,
             method = method,
-            maxBytes = maxBytes,
+            maxBytes = maxBytes, budget = budget,
         )
     }
 
@@ -265,12 +283,16 @@ internal object RedZipCubeExtractor {
         uncompressedSize: Long,
         method: Int,
         maxBytes: Int,
+        budget: MonitorLutArchiveBudget,
     ): ByteArray {
         if (compressedSize > maxBytes.toLong() * 2L && method == METHOD_DEFLATE) {
             // Deflate usually shrinks; allow some expansion headroom but reject absurd blobs.
             if (compressedSize > maxBytes.toLong() * 4L) {
                 throw IOException("Compressed cube entry too large.")
             }
+        }
+        if (method == METHOD_STORE && compressedSize > maxBytes) {
+            throw IOException("Cube entry too large.")
         }
         if (compressedSize > Int.MAX_VALUE.toLong()) throw IOException("Entry too large.")
         raf.seek(dataStart)
@@ -279,6 +301,7 @@ internal object RedZipCubeExtractor {
         return when (method) {
             METHOD_STORE -> {
                 if (compressed.size > maxBytes) throw IOException("Cube entry too large.")
+                budget.consume(compressed.size)
                 if (uncompressedSize >= 0L && compressed.size.toLong() != uncompressedSize) {
                     // Prefer declared size when STORE mismatches slightly? Fail closed.
                     if (uncompressedSize <= maxBytes.toLong() && uncompressedSize < compressed.size) {
@@ -290,7 +313,7 @@ internal object RedZipCubeExtractor {
                     compressed
                 }
             }
-            METHOD_DEFLATE -> inflateRaw(compressed, uncompressedSize, maxBytes)
+            METHOD_DEFLATE -> inflateRaw(compressed, uncompressedSize, maxBytes, budget)
             else -> throw IOException("Unsupported compression method $method.")
         }
     }
@@ -299,6 +322,7 @@ internal object RedZipCubeExtractor {
         compressed: ByteArray,
         expectedUncompressed: Long,
         maxBytes: Int,
+        budget: MonitorLutArchiveBudget,
     ): ByteArray {
         val inflater = Inflater(true) // raw DEFLATE, no zlib wrapper
         return try {
@@ -320,6 +344,7 @@ internal object RedZipCubeExtractor {
                     break
                 }
                 if (out.size() + n > maxBytes) throw IOException("Cube entry too large.")
+                budget.consume(n)
                 out.write(chunk, 0, n)
             }
             val bytes = out.toByteArray()

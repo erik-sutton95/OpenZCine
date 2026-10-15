@@ -18,7 +18,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -45,6 +48,44 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
 class BoundedLutPickerFooterTest {
+    @Test
+    fun productionNikonLibrariesUseSharedTabsAndRetainHostImportAction() {
+        val assists = idleNikonAssists()
+        var imports = 0
+        composeRule.setContent {
+            Box(Modifier.size(360.dp, 260.dp)) {
+                NikonLutOptions(assists, null, onOpenRedDownload = {},
+                    onRequestLutImport = { imports += 1 }, includesComparison = false)
+            }
+        }
+        composeRule.onNodeWithTag("monitor.lut.tab.Built-in").assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor.lut.tab.RED").assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor.lut.tab.Custom").performClick()
+        composeRule.onNodeWithText("Import .cube").performClick()
+        composeRule.runOnIdle { assertEquals(1, imports) }
+        composeRule.onAllNodesWithText("Exposure").assertCountEquals(0)
+        composeRule.onAllNodesWithText("50/50").assertCountEquals(0)
+    }
+
+    @Test
+    fun productionNikonStandaloneComparisonHasOneControlAndNoExposure() {
+        val assists = idleNikonAssists()
+        composeRule.setContent {
+            OpenZCineTheme {
+                Box(Modifier.size(640.dp, 300.dp)) {
+                    NikonLutOptions(assists, null, onOpenRedDownload = {},
+                        onRequestLutImport = {}, includesComparison = true)
+                }
+            }
+        }
+        composeRule.onAllNodesWithText("50/50").assertCountEquals(1)
+        composeRule.onAllNodesWithContentDescription("Exposure compensation in stops").assertCountEquals(0)
+        composeRule.onNodeWithText("50/50").performClick()
+        composeRule.runOnIdle { assertTrue(assists.shared.splitComparison) }
+        composeRule.onNodeWithText("Top / Bottom").performClick()
+        composeRule.runOnIdle { assertTrue(!assists.shared.splitVertical) }
+    }
+
     @get:Rule val composeRule = createComposeRule()
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
