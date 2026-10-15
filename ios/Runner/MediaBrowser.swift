@@ -134,11 +134,7 @@ struct MediaBrowserView: View {
                     presentation: model.mediaGalleryPresentation(projection), navigation: navigate,
                     sourceFilter: model.applyMediaGalleryFilter,
                     managesVisibility: false,
-                    deletionDetail: { progress in
-                        progress.total > progress.selectedCount
-                            ? "\(progress.completed) of \(progress.total) files · incl. RAW + copies"
-                            : nil
-                    },
+                    deletionDetail: nikonDeletionDetail,
                     facts: { record in
                         .init(
                             resolution: record.payload.resolutionBucket?.rawValue,
@@ -460,44 +456,11 @@ private struct MediaClipThumbnail: View {
     }
 }
 
-/// A centred, non-interactive progress card shown while a batch delete runs — the grid holds
-/// steady behind it and refreshes once when the deletion finishes.
-private struct MediaDeletionProgressOverlay: View {
-    let progress: MediaDeletionProgress
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.35).ignoresSafeArea()
-            VStack(spacing: 6) {
-                Text(
-                    "Deleting \(progress.selectedCount) \(progress.selectedCount == 1 ? "item" : "items")…"
-                )
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-                if progress.hasCompanionFiles {
-                    // Make the inflated file count legible: 8 picks can be 16 files once each
-                    // RAW+JPEG pair (and any backup copies) are counted.
-                    Text("\(progress.completed) of \(progress.total) files · incl. RAW + copies")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(LiveDesign.muted)
-                } else {
-                    Text("\(progress.completed) of \(progress.total)")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(LiveDesign.muted)
-                }
-                ProgressView(value: progress.fraction)
-                    .progressViewStyle(.linear)
-                    .tint(LiveDesign.accent)
-                    .frame(width: 220)
-                    .padding(.top, 6)
-                    .animation(.easeInOut(duration: 0.2), value: progress.fraction)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .liquidGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .allowsHitTesting(true)  // swallow taps so the grid can't be interacted with mid-delete
-    }
+/// Names the companion files (RAW+JPEG pairs, masters, backup copies) that inflate the file count
+/// above the operator's picks, so the shared deletion overlay reads e.g. "3 of 6 files".
+private func nikonDeletionDetail(_ progress: MonitorMediaDeletionProgress) -> String? {
+    progress.total > progress.selectedCount
+        ? "\(progress.completed) of \(progress.total) files · incl. RAW + copies" : nil
 }
 
 /// "Manage series" view: the frames of one burst series in a grid, with per-frame open (rate /
@@ -540,9 +503,12 @@ private struct MediaBurstSeriesView: View {
             // Delete-all runs over this fullScreenCover, so the progress bar mounts here too
             // (the browser-level overlay is behind the cover).
             if let progress = model.mediaDeletionProgress {
-                MediaDeletionProgressOverlay(progress: progress)
-                    .transition(.opacity)
-                    .zIndex(6)
+                MonitorMediaDeletionOverlay(
+                    progress: progress, detail: nikonDeletionDetail(progress)
+                )
+                .animation(.easeInOut(duration: 0.2), value: progress)
+                .transition(.opacity)
+                .zIndex(6)
             }
         }
         .statusBarHidden()

@@ -2394,12 +2394,10 @@ final class NativeAppModel {
     @ObservationIgnored private var mediaDownloadInFlight: Set<String> = []
     /// Deletion progress while a batch delete runs — non-nil hides the per-item grid churn behind
     /// one progress bar, and the grid refreshes once when it clears.
-    private var mediaDeletionProgressOverride: MediaDeletionProgress?
-    var mediaDeletionProgress: MediaDeletionProgress? {
+    private var mediaDeletionProgressOverride: MonitorMediaDeletionProgress?
+    var mediaDeletionProgress: MonitorMediaDeletionProgress? {
         get {
-            mediaLibrary?.deletionProgress.map {
-                .init(completed: $0.completed, total: $0.total, selectedCount: $0.selectedCount)
-            } ?? mediaDeletionProgressOverride
+            mediaLibrary?.deletionProgress ?? mediaDeletionProgressOverride
         }
         set { mediaDeletionProgressOverride = newValue }
     }
@@ -10584,8 +10582,7 @@ final class NativeAppModel {
             plan, selectedCount: clips.count,
             ifCurrent: { action?.isCurrent != false }, port: port,
             progress: { [weak self] in
-                self?.mediaDeletionProgress = .init(
-                    completed: $0.completed, total: $0.total, selectedCount: $0.selectedCount)
+                self?.mediaDeletionProgress = $0
             })
     }
 
