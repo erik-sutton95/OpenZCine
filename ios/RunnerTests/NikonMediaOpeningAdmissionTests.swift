@@ -20,6 +20,53 @@ import XCTest
         try await retired(photo: true)
     }
 
+    func testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto() async throws
+    {
+        let fixture = try await NikonOpeningFixture(photo: true, burst: true)
+        addTeardownBlock { @MainActor in await fixture.close() }
+        let record = try XCTUnwrap(
+            fixture.library.records.first { $0.payload.filename == "DSC_0001.JPG" })
+        let cell = try await fixture.element("monitor.media.clip." + record.asset.id.rawValue)
+        XCTAssertTrue(cell.accessibilityActivate(), "Open the actual burst representative")
+        _ = try await fixture.element("monitor.photo.back")
+        let members = fixture.model.burstMembers(of: record.payload)
+        XCTAssertEqual(members.count, 3, "The actual series cover must retain all frames")
+        for (completed, total, selected, title, detail) in [
+            (0, 1, 1, "Deleting 1 item…", "0 of 1"),
+            (2, 3, 3, "Deleting 3 items…", "2 of 3"),
+            (2, 6, 3, "Deleting 3 items…", "2 of 6 files · incl. RAW + copies"),
+            (0, 0, 3, "Deleting 3 items…", "0 of 0"),
+        ] {
+            fixture.model.mediaDeletionProgress = .init(
+                completed: completed, total: total, selectedCount: selected)
+            let visible = await fixture.wait {
+                let cover = fixture.host.presentedViewController
+                guard let cover else { return false }
+                let labels = HostedAccessibility.elements(in: cover.view).compactMap(
+                    \.accessibilityLabel)
+                return labels.contains(title) && labels.contains(detail)
+            }
+            XCTAssertTrue(visible, "The actual burst cover must show " + title + " / " + detail)
+            fixture.capture(
+                self, name: "SIMULATED-Z-burst-progress-\(completed)-\(total)-\(selected)")
+            XCTAssertTrue(fixture.model.mediaLibrary === fixture.library)
+            XCTAssertEqual(fixture.model.burstMembers(of: record.payload), members)
+            for member in members {
+                XCTAssertTrue(
+                    fixture.model.mediaClipStore.isDownloaded(
+                        cameraID: member.cameraID, filename: member.filename))
+            }
+        }
+        fixture.model.mediaDeletionProgress = nil
+        let cleared = await fixture.wait {
+            !HostedAccessibility.elements(in: fixture.window).contains {
+                $0.accessibilityLabel?.hasPrefix("Deleting ") == true
+            }
+        }
+        XCTAssertTrue(cleared, "Clearing progress must reveal the retained series")
+        _ = try await fixture.element("monitor.photo.back")
+    }
+
     private func retired(photo: Bool) async throws {
         let fixture = try await NikonOpeningFixture(photo: photo)
         addTeardownBlock { @MainActor in await fixture.close() }
@@ -59,7 +106,7 @@ import XCTest
     let host: UIHostingController<AnyView>
     private weak var previous: UIWindow?
 
-    init(photo: Bool) async throws {
+    init(photo: Bool, burst: Bool = false) async throws {
         let active = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 MainActor.assumeIsolated {
@@ -73,19 +120,50 @@ import XCTest
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
                 .first { $0.activationState == .foregroundActive })
+        if burst {
+            scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+            let landscape = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    MainActor.assumeIsolated {
+                        scene.interfaceOrientation.isLandscape
+                            && scene.coordinateSpace.bounds.width
+                                > scene.coordinateSpace.bounds.height
+                    }
+                }, object: nil)
+            let rotated = await XCTWaiter.fulfillment(of: [landscape], timeout: 5)
+            XCTAssertEqual(
+                rotated, .completed, "The actual burst cover is verified in landscape first")
+        }
         let store = MediaClipStore(root: root)
         let model = NativeAppModel(mediaClipStore: store)
         model.mediaBrowserSource = .iPhone
         model.mediaCategoryTab = .all
-        let filename = photo ? "SIMULATED-CAPTURED.JPG" : "SIMULATED-CAPTURED.MOV"
-        let clip = MediaClip(
-            cameraID: MediaClipStore.localBucketID, filename: filename,
-            handle: nil, storageID: nil, sizeBytes: 4, captureDate: "20261013T120000")
-        store.upsertBatch([clip], cameraID: clip.cameraID)
-        let file = try store.localURL(cameraID: clip.cameraID, filename: filename)
-        try FileManager.default.createDirectory(
-            at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data([1, 2, 3, 4]).write(to: file)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 48)).image { context in
+            context.cgContext.setFillColor(UIColor.darkGray.cgColor)
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 64, height: 48))
+        }
+        let bytes =
+            burst ? try XCTUnwrap(image.jpegData(compressionQuality: 0.8)) : Data([1, 2, 3, 4])
+        let clips: [MediaClip] = (0..<(burst ? 3 : 1)).map { index in
+            let filename =
+                burst
+                ? String(format: "DSC_%04d.JPG", index + 1)
+                : (photo ? "SIMULATED-CAPTURED.JPG" : "SIMULATED-CAPTURED.MOV")
+            return MediaClip(
+                cameraID: MediaClipStore.localBucketID, filename: filename,
+                handle: burst ? UInt32(index + 1) : nil, storageID: burst ? 65_537 : nil,
+                sizeBytes: UInt64(bytes.count),
+                captureDate: String(format: "20261013T12000%d", index),
+                pixelWidth: burst ? 6048 : nil, pixelHeight: burst ? 4000 : nil)
+        }
+        store.upsertBatch(clips, cameraID: MediaClipStore.localBucketID)
+        for clip in clips {
+            let file = try store.localURL(cameraID: clip.cameraID, filename: clip.filename)
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try bytes.write(to: file)
+        }
         model.refreshMediaClips()
         let library = try XCTUnwrap(model.mediaLibrary)
         library.begin()
