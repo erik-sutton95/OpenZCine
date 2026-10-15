@@ -1,3 +1,6 @@
+import Foundation
+import MonitorPresentation
+import MonitorUI
 import Testing
 import UIKit
 
@@ -62,5 +65,31 @@ extension SettingsSharedOwnerTests {
         #expect(UIApplication.shared.isIdleTimerDisabled)
         model.syncScreenWakePolicy(sceneActive: false)
         #expect(!UIApplication.shared.isIdleTimerDisabled)
+    }
+}
+
+/// A2-26: Z's Licenses and NOTICE pages are the repository files shipped in the app bundle;
+/// privacy and terms stay the web pages behind the settings internet hop.
+extension SettingsSharedOwnerTests {
+    @Test func legalPagesAreTheBundledRepositoryFilesAndTheWebPages() throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        func text(_ path: String) throws -> String {
+            try String(contentsOf: repository.appending(path: path), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        for (copy, canonical) in [("NOTICE", "NOTICE"), ("LICENSE", "LICENSE"),
+            ("THIRD-PARTY-NOTICES", "THIRD-PARTY-NOTICES.md")] {
+            let bundled = try #require(Bundle.main.url(forResource: copy, withExtension: "txt", subdirectory: "Legal"))
+            #expect(try Data(contentsOf: bundled) == Data(contentsOf: repository.appending(path: canonical)),
+                "Legal/\(copy).txt is the repository file, staged at build time")
+        }
+        let legal = MonitorLegalDocuments.z
+        let platform = try #require(MonitorPlatformLegalNotices.text)
+        #expect(legal.notice == .text(try text("NOTICE")))
+        #expect(legal.licenses == .text([try text("LICENSE"), try text("THIRD-PARTY-NOTICES.md"), platform]
+            .joined(separator: "\n\n")))
+        #expect(legal.privacy == .link(SupportLinkCatalog.privacy))
+        #expect(legal.terms == .link(SupportLinkCatalog.terms))
     }
 }

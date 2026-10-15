@@ -1926,6 +1926,21 @@ extension MonitorSettingsTab {
     }
 }
 
+/// Z's legal set: privacy and terms are the web pages, opened through the settings internet hop;
+/// licenses and NOTICE are the repository's LICENSE, THIRD-PARTY-NOTICES.md and NOTICE, copied into
+/// the bundle's Legal folder at build time (OpenCine `scripts/stage-legal-resources.py`), with the
+/// platform's third-party notices. A build missing one shows the unavailable page.
+extension MonitorLegalDocuments {
+    static let z = MonitorLegalDocuments(
+        wordmark: "OpenZCine", privacy: .link(SupportLinkCatalog.privacy), terms: .link(SupportLinkCatalog.terms),
+        licenses: bundledText([
+            resource("LICENSE", extension: "txt", subdirectory: "Legal", in: .main),
+            resource("THIRD-PARTY-NOTICES", extension: "txt", subdirectory: "Legal", in: .main),
+            MonitorPlatformLegalNotices.text,
+        ]),
+        notice: bundledText([resource("NOTICE", extension: "txt", subdirectory: "Legal", in: .main)]))
+}
+
 /// The internet-backed destination selected from Operator Setup.
 ///
 /// Keeping the selection as a value lets the camera-AP confirmation survive the tap and route to
@@ -1960,7 +1975,7 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
     }
 
     var confirmationMessage: String {
-        "To open \(title), OpenZCine will disconnect from the camera's Wi-Fi and switch to cellular or another internet-connected Wi-Fi network. You can reconnect to the camera after you finish."
+        MonitorSettingsCopy.browserConfirmation(title: title, app: "OpenZCine")
     }
 
     static func demoValue(_ rawValue: String?) -> SettingsInternetDestination? {
@@ -2306,30 +2321,16 @@ struct OperatorSettingsPanel: View {
 
     private var accountActions: MonitorSettingsAccountActions {
         let account = model.frameioAccount.capture()
-        return .init(
+        return .overInternetHop(
             identity: account.identity,
             isCurrent: { [weak model] in model != nil && account.isCurrent },
-            requiresInternetConsent: model.isOnCameraAccessPoint,
             connect: { [weak model] in
                 guard let model else { throw CancellationError() }
                 try await model.connectFrameio(captured: account)
             },
             disconnect: { [weak model] in if account.isCurrent { model?.disconnectFrameio() } },
-            beginInternet: { [weak model] admission in
-                guard let model,
-                    let token = model.internetHop.begin(model.hopRoute(), admission: admission)
-                else { return nil }
-                return .init(
-                    isCurrent: { [weak model] in
-                        model?.internetHop.owns(token) == true && account.isCurrent
-                    },
-                    wait: { [weak model] in await model?.internetHop.waitForInternet(token) == true
-                    },
-                    restore: { [weak model] in await model?.internetHop.end(token)?.value })
-            },
-            internetFailure:
-                "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi."
-        )
+            hop: model.internetHop, route: { [weak model] in model?.hopRoute() },
+            internetFailure: MonitorSettingsCopy.accountInternetFailure)
     }
     private var accountSource: MonitorSettingsAccountSource {
         .init(
@@ -2341,10 +2342,9 @@ struct OperatorSettingsPanel: View {
                 if model.isFrameioConnected { return .signedIn }
                 if !model.isFrameioConfigured { return .notConfigured }
                 return model.settingsAccount.busy ? .connecting : .signedOut
-            }, consentTitle: "Leave camera Wi‑Fi to sign in?",
-            consentMessage:
-                "We'll hop to home Wi‑Fi or cellular so you can sign in to Frame.io, then reconnect to the camera automatically.",
-            consentAction: "Sign in")
+            }, consentTitle: MonitorSettingsCopy.accountConsentTitle,
+            consentMessage: MonitorSettingsCopy.accountConsentMessage(service: "Frame.io"),
+            consentAction: MonitorSettingsCopy.accountConsentAction)
     }
 
     private func browserDestination(_ source: SettingsInternetDestination)
@@ -2384,8 +2384,7 @@ struct OperatorSettingsPanel: View {
                     model?.finishInternetDestinationPreparation(captured)
                 }
             },
-            internetFailure:
-                "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+            internetFailure: MonitorSettingsCopy.browserInternetFailure(app: "OpenZCine")
         )
     }
     private var supportSource: MonitorSettingsSupportSource {
@@ -2425,7 +2424,8 @@ struct OperatorSettingsPanel: View {
             report: { AnyView(ProblemReportView().environment(model)) },
             shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) },
             deleteStoredReports: { ReliabilityDiagnostics.incidents.deleteStoredIncidents {} },
-            deleteReportsHelp: "Removes the feed incident and session reports stored on this phone.")
+            deleteReportsHelp: "Removes the feed incident and session reports stored on this phone.",
+            legal: .z)
     }
     private var lookLabel: String {
         switch model.assistConfiguration.selectedLUT {

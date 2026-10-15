@@ -559,6 +559,7 @@
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				WTCH00000000000000000080 /* Embed Watch Content */,
 				F01000000000000000000001 /* Stamp source revision */,
+				A1E6A1000000000000000001 /* Stage legal files */,
 			);
 			buildRules = (
 			);
@@ -722,6 +723,21 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "bash \"${SRCROOT}/../../OpenCine/scripts/sentry/stamp-source-revision.sh\"\n";
+		};
+		A1E6A1000000000000000001 /* Stage legal files */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Stage legal files";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${SRCROOT}/../../OpenCine/scripts/stage-legal-resources.py\" --app \"${SRCROOT}/..\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

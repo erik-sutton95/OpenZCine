@@ -324,9 +324,7 @@ internal fun OperatorSettingsScreen(
         diagnostics = MonitorSettingsDiagnosticsSource(
             save = { if (!systemSettingsActions.shareDiagnostics()) toastUnavailable(context) },
             incidents = AppDiagnostics.incidents),
-        legal = remember(context) {
-            zLegalDocuments(context.assets.open("NOTICE").bufferedReader().use { it.readText() }.trimEnd())
-        },
+        legal = ZLegalDocuments,
         information = MonitorSettingsInformationSource(stringResource(R.string.system_theme_charcoal), "PTP / PTP-IP",
             appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
             "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
