@@ -354,7 +354,10 @@ class NikonOperatorSettingsComposeTest {
         val key = composeRule.onNodeWithTag("monitor.false-color.reference")
             .performScrollTo().fetchSemanticsNode().boundsInRoot
         val density = context.resources.displayMetrics.density
-        for (label in listOf("Min", "−3", "18%", "Skin", "+2", "Max")) {
+        composeRule.onNodeWithText("CineStop · L3G10").assertIsDisplayed()
+        // The V2 payload calibrates these six markers for this fixture's source curve.
+        // Keep the original caption height and bottom-inset bounds for every marker.
+        for (label in listOf("−6", "−4", "−2", "18%", "+2", "clip")) {
             val caption = composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
             assertTrue("$label must fit in the caption band without inherited body line spacing",
                 caption.height <= key.height - 40f * density + 1f)
