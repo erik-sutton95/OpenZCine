@@ -1865,6 +1865,62 @@ extension RunnerTests {
     }
 }
 
+// MARK: - Legal pages (A2-27)
+
+extension RunnerTests {
+    /// Renders the System tab and every legal page in the phone's landscape frame and keeps the
+    /// images in the result bundle: the screenshot pass for Z's offline legal pages. Each page
+    /// must show its bundled text, never the unavailable or a web page.
+    @MainActor
+    func testLegalPagesRenderOfflineInLandscape() async throws {
+        let model = NativeAppModel()
+        let tab = model.operatorSettingsTab
+        model.operatorSettingsTab = .system
+        defer { model.operatorSettingsTab = tab }
+        try await snapshot(AnyView(OperatorSettingsPanel().environment(model)), named: "z-settings-system")
+        for page in MonitorLegalPage.allCases {
+            guard case .text(let text) = MonitorLegalDocuments.z[page] else {
+                return XCTFail("\(page.title) is bundled text")
+            }
+            let label = try await snapshot(
+                AnyView(MonitorLegalDocumentScreen(documents: .z, page: page, onClose: {})),
+                named: "z-legal-\(page.rawValue)", identifier: "legal.document.\(page.rawValue)")
+            XCTAssertEqual(label, text, page.title)
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil) async throws -> String? {
+        let host = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        var label: String?
+        for _ in 0..<80 {
+            host.view.layoutIfNeeded()
+            if let identifier {
+                label = HostedAccessibility.elements(in: host.view)
+                    .first { HostedAccessibility.identifier($0) == identifier }?.accessibilityLabel
+                if label != nil { break }
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return label
+    }
+}
+
 // MARK: - Media favorite / rating sync
 
 extension RunnerTests {

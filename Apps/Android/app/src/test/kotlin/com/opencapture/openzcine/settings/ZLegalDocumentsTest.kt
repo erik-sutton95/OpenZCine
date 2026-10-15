@@ -6,12 +6,14 @@ import com.opencapture.openzcine.diagnostics.AndroidSupportLinks
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ZLegalDocumentsTest {
     @Test
-    fun `licenses and NOTICE are the staged repository files while privacy and terms open the web`() {
+    fun `licenses and NOTICE are the staged repository files and privacy and terms read offline`() {
         val root = File(System.getProperty("openzcine.repositoryRoot"))
         fun text(path: String) = root.resolve(path).readText().trim()
         val documents = ZLegalDocuments
@@ -22,7 +24,13 @@ class ZLegalDocumentsTest {
         assertTrue(documents.licenses.available)
         assertEquals(listOf(text("LICENSE"), text("THIRD-PARTY-NOTICES.md"), platform).joinToString("\n\n"),
             documents.licenses.body)
-        assertEquals(AndroidSupportLinks.PRIVACY, (documents.privacy as MonitorLegalDocument.Link).url)
-        assertEquals(AndroidSupportLinks.TERMS, (documents.terms as MonitorLegalDocument.Link).url)
+        val privacy = assertIs<MonitorLegalDocument.Text>(documents.privacy).body
+        val terms = assertIs<MonitorLegalDocument.Text>(documents.terms).body
+        assertTrue(privacy.startsWith("OpenZCine "))
+        assertTrue(privacy.contains("Sentry") && privacy.contains("Automatic error reports are optional"))
+        assertTrue(privacy.endsWith(AndroidSupportLinks.PRIVACY))
+        assertTrue(terms.startsWith("OpenZCine is free software under the Apache License 2.0."))
+        assertTrue(terms.endsWith(AndroidSupportLinks.TERMS))
+        assertFalse((privacy + terms).contains('\u2014'), "Operator copy never uses the em dash")
     }
 }

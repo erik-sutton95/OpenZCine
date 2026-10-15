@@ -55,6 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -68,6 +70,8 @@ import com.opencapture.opencine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioArtifactPreparer
 import com.opencapture.openzcine.frameio.frameioDeliveryController
+import com.opencapture.opencine.cameracontrols.MonitorLegalDocumentScreen
+import com.opencapture.opencine.cameracontrols.MonitorLegalPage
 import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliveryChrome
 import com.opencapture.opencine.cameracontrols.rememberMonitorDeliveryCoordinator
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
@@ -141,6 +145,7 @@ import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.SetupStreamSettings
+import com.opencapture.openzcine.settings.ZLegalDocuments
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
@@ -357,6 +362,8 @@ class MainActivity : ComponentActivity() {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
                     }
                 var showProblemReport by remember { mutableStateOf(false) }
+                // A2-27: privacy and terms are bundled pages, readable on the camera's network.
+                var legalPage by remember { mutableStateOf<MonitorLegalPage?>(null) }
                 // The transport wizard is an explicit choice: Pair a new camera on the cameras page, or
                 // the pair page's Nikon entry. An empty saved list stays on the shared pair page, the
                 // same home as the other apps.
@@ -1346,8 +1353,8 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onPrivacy = { systemSettingsActions.openPrivacy() },
-                            onTerms = { systemSettingsActions.openTerms() },
+                            onPrivacy = { legalPage = MonitorLegalPage.PRIVACY },
+                            onTerms = { legalPage = MonitorLegalPage.TERMS },
                         )
                     }
                     AppShell(
@@ -1378,8 +1385,8 @@ class MainActivity : ComponentActivity() {
                                             }
                                     }
                                 },
-                                privacy = { systemSettingsActions.openPrivacy() },
-                                terms = { systemSettingsActions.openTerms() },
+                                privacy = { legalPage = MonitorLegalPage.PRIVACY },
+                                terms = { legalPage = MonitorLegalPage.TERMS },
                                 // Pair a new camera opens the transport wizard; a nearby card
                                 // opens the shared pair page (the integration declares its tap).
                                 pair = {
@@ -1499,7 +1506,7 @@ class MainActivity : ComponentActivity() {
                             MonitorAutomaticReportsOffer(
                                 MonitorReportsOffer(
                                     AppDiagnostics.consent, AppDiagnostics.reporting, AppDiagnostics.host.product,
-                                    onPrivacy = { systemSettingsActions.openPrivacy() },
+                                    onPrivacy = { legalPage = MonitorLegalPage.PRIVACY },
                                 ),
                             )
                         }
@@ -1529,8 +1536,16 @@ class MainActivity : ComponentActivity() {
                         // The platform 48 dp minimum touch target, as on Nikon's settings pills.
                         actionMinimumTouchTarget = true,
                         onClose = { showProblemReport = false },
-                        onPrivacy = { systemSettingsActions.openPrivacy() },
+                        onPrivacy = { legalPage = MonitorLegalPage.PRIVACY },
                     )
+                }
+                legalPage?.let { page ->
+                    Dialog(
+                        onDismissRequest = { legalPage = null },
+                        properties = DialogProperties(usePlatformDefaultWidth = false),
+                    ) {
+                        MonitorLegalDocumentScreen(ZLegalDocuments, page) { legalPage = null }
+                    }
                 }
                 } // app-root Box
                 } // LocalOperatorHaptics
