@@ -400,10 +400,29 @@ final class RunnerTests: XCTestCase {
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
                 .first { $0.activationState == .foregroundActive })
         let previousKey = scene.windows.first { $0.isKeyWindow }
+        let previousOrientation: UIInterfaceOrientationMask =
+            switch scene.interfaceOrientation {
+            case .landscapeLeft: .landscapeLeft
+            case .landscapeRight: .landscapeRight
+            case .portraitUpsideDown: .portraitUpsideDown
+            default: .portrait
+            }
+        defer { scene.requestGeometryUpdate(.iOS(interfaceOrientations: previousOrientation)) }
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.frame = scene.coordinateSpace.bounds
         window.rootViewController = host
         window.makeKeyAndVisible()
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+        let landscape = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                MainActor.assumeIsolated {
+                    scene.interfaceOrientation.isLandscape
+                        && scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
+                }
+            }, object: nil)
+        let landscapeResult = await XCTWaiter.fulfillment(of: [landscape], timeout: 5)
+        XCTAssertEqual(landscapeResult, .completed)
+        window.frame = scene.coordinateSpace.bounds
         host.view.frame = window.bounds
         defer {
             window.isHidden = true
@@ -497,6 +516,16 @@ final class RunnerTests: XCTestCase {
             inspectorElements.contains {
                 $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
             }, "The actual Nikon inspector must hide unsupported LUT exposure")
+        // Capture the settled drawer rather than its intentionally clipped reveal frame.
+        let revealed = expectation(description: "Actual inspector drawer reveal completed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + MonitorMotion.drawerDuration + 0.1) {
+            revealed.fulfill()
+        }
+        let revealResult = await XCTWaiter.fulfillment(of: [revealed], timeout: 2)
+        XCTAssertEqual(revealResult, .completed)
+        host.view.layoutIfNeeded()
+        let close = try await mountedElement("monitor.assist.close")
+        XCTAssertTrue(window.convert(window.bounds, to: nil).contains(close.accessibilityFrame))
         let inspectorScreenshot = UIGraphicsImageRenderer(size: window.bounds.size).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
@@ -3824,6 +3853,74 @@ extension RunnerTests {
 final class SharedLUTPickerCompatibilityTests: XCTestCase {
     private var validArchiveCube: Data {
         Data("LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n".utf8)
+    }
+
+    func testSeparateWatchRendererReadsModelReimportAndDeletion() async throws {
+        // SIMULATED source uses the actual Watch renderer and operator import/delete actions.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent(UUID().uuidString + ".cube")
+        let library = root.appendingPathComponent("luts")
+        let model = NativeAppModel(lutFileStore: CustomLUTStore(root: library))
+        let savedPreferences = model.preferences
+        let savedConfiguration = model.assistConfiguration
+        let savedTools = model.assist.liveTools
+        defer {
+            model.preferences = savedPreferences
+            model.assistConfiguration = savedConfiguration
+            for tool in MonitorAssistTool.activeCases {
+                model.assist.set(tool, visible: savedTools.contains(tool), context: .liveView)
+            }
+        }
+        func writeConstantCube(_ value: String) throws {
+            let text =
+                "LUT_3D_SIZE 2\n" + String(repeating: "\(value) \(value) \(value)\n", count: 8)
+            try Data(text.utf8).write(to: source)
+        }
+        func pixel(_ image: CGImage) -> [UInt8] {
+            var rgba = [UInt8](repeating: 0, count: 4)
+            rgba.withUnsafeMutableBytes {
+                let context = CGContext(
+                    data: $0.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                    bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                context?.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            }
+            return rgba
+        }
+        try writeConstantCube("0")
+        try model.importCustomLUT(from: source)
+        let selection = model.assistConfiguration.selectedLUT
+        let effects = LiveImageEffects(lut: selection)
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore(root: library))
+        func nextFrame() -> UIImage {
+            UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image {
+                UIColor.red.setFill()
+                $0.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+        }
+        func watchPixel() async throws -> [UInt8] {
+            let encoded = await WatchRelay.thumbnailJPEG(
+                from: nextFrame(), applying: effects, renderer: renderer, maxWidth: 8, quality: 1)
+            let bytes = try XCTUnwrap(encoded)
+            return pixel(try XCTUnwrap(UIImage(data: bytes)?.cgImage))
+        }
+        let first = try await watchPixel()
+        XCTAssertLessThan(first[0], 10)
+        try writeConstantCube("1")
+        try model.importCustomLUT(from: source)
+        let second = try await watchPixel()
+        XCTAssertGreaterThan(second[0], 240)
+        XCTAssertGreaterThan(second[1], 240)
+        let stored = try XCTUnwrap(model.lutFileStore.list(.custom).first)
+        try model.deleteStoredLUT(stored, from: .custom)
+        let ungraded = try await watchPixel()
+        XCTAssertGreaterThan(ungraded[0], 240)
+        XCTAssertLessThan(ungraded[1], 10)
+        let deleted = await renderer.renderInspectorFrame(nextFrame(), effects: effects)
+        XCTAssertNil(
+            deleted, "A separate Watch store must not repopulate the invalidated cube cache")
     }
 
     private func assertRejectedZipPreservesExistingCube(
