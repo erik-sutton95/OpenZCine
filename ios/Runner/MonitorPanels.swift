@@ -2347,7 +2347,7 @@ struct OperatorSettingsPanel: View {
             keepAwake: preferenceBinding(\.keepScreenAwake),
             hapticsHelp: "Short confirmation pulses for critical switches and setting changes.",
             keepAwakeHelp:
-                "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load. Disable tools you are not using. iOS may still dim when the device overheats.",
+                MonitorSettingsCopy.keepScreenAwake,
             hdrHelp: "", cacheHelp: "",
             clearHelp:
                 "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card.",

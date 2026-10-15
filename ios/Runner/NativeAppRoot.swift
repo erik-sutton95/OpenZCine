@@ -152,14 +152,6 @@ func logConnection(_ message: String) {
     }
 #endif
 
-enum ScreenWakeController {
-    @MainActor
-    static func apply(keepAwake: Bool) {
-        guard UIApplication.shared.isIdleTimerDisabled != keepAwake else { return }
-        UIApplication.shared.isIdleTimerDisabled = keepAwake
-    }
-}
-
 extension ThermalTier {
     /// Maps the platform thermal state onto the portable core tier. An `@unknown` future state is
     /// treated as `.serious` — bias toward shedding load when the OS reports a heat category we don't
@@ -4855,6 +4847,7 @@ final class NativeAppModel {
     /// Virtual-horizon low-pass update cap when the level assist is on (~10 Hz).
     private static let levelAngleMinInterval: CFAbsoluteTime = 1.0 / 10.0
 
+    @ObservationIgnored private let screenWakeOwner = MonitorScreenWakeOwner()
     @ObservationIgnored private var screenWakeSuppressedForBackground = false
     private var didPrepareStartup = false
     @ObservationIgnored private var cameraWiFiJoinTask: Task<Void, Never>?
@@ -7361,11 +7354,16 @@ final class NativeAppModel {
         }
     }
 
+    /// The root seeds its initial phase independently of the shell's deduplicated session callback.
+    func syncScreenWakePolicy(sceneActive: Bool) {
+        screenWakeSuppressedForBackground = !sceneActive
+        syncScreenWakePolicy()
+    }
+
     func syncScreenWakePolicy() {
-        let wantsAwake =
-            !screenWakeSuppressedForBackground && preferences.keepScreenAwake
-            && (isMonitorPresented || multicam.isPresented || isMediaPlaybackActive)
-        ScreenWakeController.apply(keepAwake: wantsAwake)
+        screenWakeOwner.update(
+            enabled: preferences.keepScreenAwake,
+            sceneActive: !screenWakeSuppressedForBackground)
     }
 
     /// Mirrors the current `ProcessInfo` thermal state onto `thermalTier`, updating only on a real
