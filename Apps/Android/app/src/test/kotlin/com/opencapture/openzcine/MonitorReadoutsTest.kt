@@ -56,7 +56,7 @@ class MonitorReadoutsTest {
         assertEquals("6K 16:9", readouts.resolution)
         assertEquals("R3D NE", readouts.codec)
         assertEquals("470 GB · 47%", readouts.media)
-        assertEquals("25.00", readouts.framesPerSecond)
+        assertEquals("25", readouts.framesPerSecond, "A5-09: the shared label never invents decimals")
         assertEquals(80, readouts.batteryPercent)
         assertEquals(false, readouts.externalPower)
     }

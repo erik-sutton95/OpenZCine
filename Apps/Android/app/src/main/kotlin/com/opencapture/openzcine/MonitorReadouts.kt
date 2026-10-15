@@ -4,8 +4,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.opencapture.monitorui.MonitorTimecodeFormat
+import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
 import com.opencapture.opencine.cameracontrols.MonitorOperatorPowerReading
+import com.opencapture.opencine.core.Rational
 import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
@@ -16,7 +18,6 @@ import com.opencapture.opencine.nikon.MediaStatus
 import com.opencapture.opencine.nikon.MonitorTextFormat
 import com.opencapture.opencine.vocabulary.ConnectionPhase
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
 internal const val UNAVAILABLE_MONITOR_VALUE = "—"
@@ -56,10 +57,10 @@ internal fun String?.monitorValueOrNull(): String? =
 /** Accepts only a positive recording frame rate. */
 internal fun validMonitorFrameRate(frameRate: Int?): Int? = frameRate?.takeIf { it > 0 }
 
-/** Camera recording-rate label, or an explicit unavailable marker. */
+/** The shared recording-rate label (whole rates print whole), or an explicit unavailable marker. */
 internal fun monitorFrameRateLabel(frameRate: Int?): String =
     validMonitorFrameRate(frameRate)
-        ?.let { String.format(Locale.ROOT, "%d.00", it) }
+        ?.let { MonitorCapturePresentation.frameRate(Rational(it)) }
         ?: UNAVAILABLE_MONITOR_VALUE
 
 /** Storage label derived from a complete, internally consistent camera readback. */

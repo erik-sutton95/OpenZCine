@@ -273,7 +273,8 @@ struct NikonMonitorShell: View {
             model.pictureOnlyMonitor
             ? MonitorStatusPresentation(
                 recording: forwardedRecording,
-                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil)
+                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil,
+                timecodePlaceholder: Timecode.placeholder)
             : model.shell.control.statusPresentation()
         var format: [Readout] = []
         if model.chromeSectionMounts(.format) {
