@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineCameraControls
 import OpenCineMedia
@@ -2141,14 +2142,12 @@ struct OperatorSettingsPanel: View {
                     value: preferenceBinding(\.keepScreenAwake),
                     help: MonitorSettingsCopy.keepScreenAwake),
                 input: .init(
-                    remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
-                    remoteTitle: "Bluetooth Remote Shutter",
-                    remoteHelp:
-                        "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
-                    autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
-                    rotationHelp:
-                        "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
-                )),
+                    remoteShutter: .volumeButtons(enabled: preferenceBinding(\.bluetoothShutterEnabled)),
+                    autoRotate: .init(
+                        enabled: preferenceBinding(\.autoRotateFeedEnabled),
+                        help:
+                            "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
+                    ))),
             display: .init(sections: [
                 .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
                 .timecode, .format, .codec, .storage, .fps, .railRecord, .railMedia, .railSettings,

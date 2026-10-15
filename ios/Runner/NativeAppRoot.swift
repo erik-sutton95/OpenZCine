@@ -2324,7 +2324,7 @@ final class NativeAppModel {
     @ObservationIgnored let watchRelay = WatchRelay()
     @ObservationIgnored private var watchRelayActivated = false
     /// Bluetooth HID shutter remote → record toggle (volume-press mechanism, opt-in preference).
-    @ObservationIgnored private let bluetoothShutter = BluetoothShutterMonitor()
+    @ObservationIgnored private let bluetoothShutter = MonitorRemoteShutter(subsystem: "OpenZCine")
     /// The camera's virtual-horizon roll/pitch (signed degrees) from the live-view header, driving the
     /// level overlay. Nil until the body reports a level — the overlay falls back to CoreMotion then.
     var cameraLevelRoll: Double?
@@ -11216,37 +11216,18 @@ final class NativeAppModel {
 
     // MARK: Bluetooth shutter remote
 
-    /// Whether the remote-shutter mechanism should be live right now: opted in, live monitor up
-    /// AND front (no full-screen panel like Operator Setup, Media, or the Tool Library covering
-    /// it), app active, and the clip player not owning the audio session. Inside menus the
-    /// monitor disarms entirely so the volume keys go back to controlling volume.
-    private var bluetoothShutterShouldRun: Bool {
-        BluetoothShutterMonitor.shouldRun(
-            enabled: preferences.bluetoothShutterEnabled,
-            monitorPresented: isMonitorPresented,
-            liveViewFront: !activePanelHidesLiveFeed && !isStandaloneMediaLibraryPresented,
-            applicationIsActive: UIApplication.shared.applicationState == .active,
-            audioSessionAvailable: !mediaPlaybackOwnsAudioSession)
-    }
-
-    /// Starts or stops the remote-shutter monitor to match the current state. Idempotent — safe to
-    /// call from every seam that changes an input (preference toggle, monitor present/dismiss,
-    /// foreground return). Volume observation is the SOLE path: it catches generic Bluetooth HID
-    /// remotes and the phone's own volume buttons without an `AVCaptureSession` (which would cost
-    /// a permission prompt, the camera-in-use indicator, and thermal/RF load throughout live view).
+    /// Starts or stops the shared remote shutter (A2-32) to match the current state: opted in,
+    /// live monitor up AND front (no full-screen panel like Operator Setup, Media, or the Tool
+    /// Library covering it), app active, and the clip player not owning the audio session. Inside
+    /// menus it disarms entirely so the volume keys go back to controlling volume. Idempotent:
+    /// safe to call from every seam that changes an input (preference toggle, monitor
+    /// present/dismiss, foreground return).
     func updateBluetoothShutter() {
-        let shouldRun = bluetoothShutterShouldRun
-        bluetoothShutterLogger.info(
-            "BT-SHUTTER reconcile enabled=\(self.preferences.bluetoothShutterEnabled, privacy: .public) monitor=\(self.isMonitorPresented, privacy: .public) shouldRun=\(shouldRun, privacy: .public) kvoActive=\(self.bluetoothShutter.isActive, privacy: .public)"
-        )
-        guard shouldRun else {
-            bluetoothShutter.stop()
-            return
-        }
         bluetoothShutter.onTrigger = { [weak self] in self?.remoteShutterToggleRecord() }
-        let volumeActive = bluetoothShutter.start()
-        bluetoothShutterLogger.info(
-            "BT-SHUTTER volume monitor armed=\(volumeActive, privacy: .public)")
+        bluetoothShutter.update(
+            enabled: preferences.bluetoothShutterEnabled, monitorPresented: isMonitorPresented,
+            liveViewFront: !activePanelHidesLiveFeed && !isStandaloneMediaLibraryPresented,
+            audioSessionAvailable: !mediaPlaybackOwnsAudioSession)
     }
 
     /// Coordinates the full-screen clip player's claim on the process-wide audio session with the
@@ -11263,13 +11244,13 @@ final class NativeAppModel {
     /// already debounced the press.
     func remoteShutterToggleRecord() {
         guard admitsRecordPress else {
-            bluetoothShutterLogger.info("BT-SHUTTER record refused by the monitor's admission")
+            bluetoothShutter.log.info("BT-SHUTTER record refused by the monitor's admission")
             return
         }
         let wasRecording = isRecording
         let hasSession = cameraSession != nil || isDemoSession
         executeRecord(start: !wasRecording)
-        bluetoothShutterLogger.info(
+        bluetoothShutter.log.info(
             "BT-SHUTTER record callback session=\(hasSession, privacy: .public) monitor=\(self.isMonitorPresented, privacy: .public) before=\(wasRecording, privacy: .public) after=\(self.isRecording, privacy: .public) queued=\(self.pendingRecordToggle, privacy: .public)"
         )
         publishWatchState()
