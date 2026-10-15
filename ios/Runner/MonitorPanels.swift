@@ -2336,7 +2336,7 @@ struct OperatorSettingsPanel: View {
             account: accountSource, cache: model.captureOperatorMediaCacheSource(),
             support: supportSource,
             information: .init(
-                theme: "Charcoal", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
+                theme: "Charcoal", protocolName: "PTP / PTP-IP", version: MonitorSettingsAppInformation.version(),
                 themeHelp:
                     "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
                 protocolHelp:
@@ -2383,11 +2383,7 @@ struct OperatorSettingsPanel: View {
                 resetZebra: {
                     model.assist.resetOptions(.zebra)
                     model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
-                }), resetPolicy: .plotControls,
-            cacheScopeHelp:
-                "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
-            cacheConfirmationMessage:
-                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact."
+                })
         )
     }
 
@@ -2710,7 +2706,9 @@ struct OperatorSettingsPanel: View {
             reportAction: model.isStandaloneSettingsPresented
                 ? nil : { model.isBugReportPresented = true },
             report: { AnyView(ProblemReportView().environment(model)) },
-            shareReport: { AnyView(DiagnosticsShareSheet(url: $0)) })
+            shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) },
+            deleteStoredReports: { ReliabilityDiagnostics.incidents.deleteStoredIncidents {} },
+            deleteReportsHelp: "Removes the feed incident and session reports stored on this phone.")
     }
     private var lookLabel: String {
         switch model.assistConfiguration.selectedLUT {
@@ -2718,15 +2716,6 @@ struct OperatorSettingsPanel: View {
         case .stored(_, let name): return (name as NSString).deletingPathExtension
         }
     }
-    /// Marketing version + build number from the bundle, e.g. "0.2.0 (9)", matching what
-    /// TestFlight shows for the installed build (CI stamps CFBundleVersion per upload).
-    static var appVersionText: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(version) (\(build))"
-    }
-
     static let reliabilityReportsHelp =
         "Optional: send crash and error reports to OpenCapture through Sentry. Off by default. Turn off anytime without losing app features. Uploads wait until you leave camera Wi-Fi. No footage or GPS location. Sentry receives the connection IP; stored event IP and derived geography are removed. See Reporting Privacy below."
     static let reliabilityUnavailableHelp =
@@ -2738,8 +2727,9 @@ struct OperatorSettingsPanel: View {
     }
     private var linkHealthCaption: String {
         guard isConnected || model.isDemoSession else { return model.linkHealthDetail }
-        return
-            "\(model.linkHealthDetail) · \(model.linkHealth >= 80 ? "Stable" : model.linkHealth >= 50 ? "Watch" : "Poor")"
+        let band = MonitorLinkHealthBand(score: model.linkHealth)
+        let bandName = switch band { case .stable: "Stable"; case .watch: "Watch"; case .poor: "Poor" }
+        return "\(model.linkHealthDetail) · \(bandName)"
     }
     private var transportLabel: String {
         if model.isDemoSession { return "Demo session" }

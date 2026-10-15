@@ -876,7 +876,7 @@ final class NativeAppModel {
         operatorQuickPresentationRevision = UUID()
     }
 
-    var diagnosticsShareItem: DiagnosticsShareItem?
+    var diagnosticsShareItem: MonitorDiagnosticsShareItem?
     var diagnosticsErrorMessage: String?
     var isPreparingDiagnostics = false
 
@@ -893,7 +893,7 @@ final class NativeAppModel {
         Task {
             defer { isPreparingDiagnostics = false }
             do {
-                diagnosticsShareItem = DiagnosticsShareItem(
+                diagnosticsShareItem = MonitorDiagnosticsShareItem(
                     url: try await AppDiagnostics.shared.makeReport())
             } catch {
                 diagnosticsErrorMessage = error.localizedDescription

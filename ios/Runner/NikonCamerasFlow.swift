@@ -442,7 +442,6 @@ private struct NikonFieldStyle: ViewModifier {
 /// rejoin, a reconnect it starts itself) on the shared pair page.
 struct NikonConnectScreen: View {
     @Environment(NativeAppModel.self) private var model
-    @Environment(\.openURL) private var openURL
     let safeArea: EdgeInsets
 
     var body: some View {
@@ -452,9 +451,7 @@ struct NikonConnectScreen: View {
             onDiagnostics: { model.shareDiagnostics() },
             onReportProblem: { model.isBugReportPresented = true },
             pairingFlow: NikonConnectFlow(model: model).flow(
-                steps: [CameraPairingStep("Connect", "")], current: 0),
-            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
-            onTerms: { openURL(SupportLinkCatalog.terms) })
+                steps: [CameraPairingStep("Connect", "")], current: 0))
     }
 }
 

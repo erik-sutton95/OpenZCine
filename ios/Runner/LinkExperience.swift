@@ -91,7 +91,7 @@ struct LinkExperience: View {
         // Owned at the root so the credential scanner can present directly from the join/scan
         // action and from the pair page's join step.
         .cameraWiFiScannerCover(model)
-        .sheet(item: Bindable(model).diagnosticsShareItem) { DiagnosticsShareSheet(url: $0.url) }
+        .sheet(item: Bindable(model).diagnosticsShareItem) { MonitorActivityShareSheet(items: [$0.url]) }
         .alert(
             "Couldn't Share Diagnostics",
             isPresented: Binding(
@@ -149,8 +149,6 @@ struct LinkExperience: View {
                 }
                 if action == NativeNikonPort.diagnosticsAction { model.shareDiagnostics() }
             },
-            privacy: { openURL(SupportLinkCatalog.privacy) },
-            terms: { openURL(SupportLinkCatalog.terms) },
             pair: {
                 // A NEARBY camera's Pair picks it on the shared pair page; "Pair a new camera"
                 // walks the wizard.

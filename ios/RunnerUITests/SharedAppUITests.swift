@@ -9,10 +9,7 @@ final class PhysicalMigrationQualificationTests: OpenCineAppUITesting.PhysicalMi
 
 // The UI tests every app shares, run against this app through the demo harness's `ReviewLaunch`
 // staging. Motion records a capability skip: a Nikon body has no gimbal.
-final class CamerasPageFollowupTests: OpenCineAppUITesting.CamerasPageFollowupTests {
-    /// The shell keeps setup renaming (`ShellBrand` default in LinkExperience).
-    override var renamesSetups: Bool { true }
-}
+final class CamerasPageFollowupTests: OpenCineAppUITesting.CamerasPageFollowupTests {}
 final class DesqueezeUIFlowTests: OpenCineAppUITesting.DesqueezeUIFlowTests {}
 /// Parity finding A1-32: Z draws its own photography-only EV needle, not the shared camera EV
 /// meter these cases check. They still run; their failure is expected until Z adopts the shared
