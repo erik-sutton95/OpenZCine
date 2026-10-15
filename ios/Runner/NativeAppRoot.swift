@@ -2368,6 +2368,9 @@ final class NativeAppModel {
         self.assist = assist ?? .restore()
         self.scopePanels = scopePanels ?? NikonScopePanels()
         self.assist.looks.selection = assistConfiguration.selectedLUT
+        let stageStore = MultiviewStagePreferencesStore(
+            storage: .standard, key: "multiview.presentation")
+        multicam.presentation.attachPersistence(load: stageStore.load, save: stageStore.save)
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -13511,16 +13514,23 @@ struct NativeRootContent: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if model.multicam.isPresented, model.shell.monitor == nil {
-            MulticamStage(
-                coordinator: model.multicam,
-                confirmsRecord: model.preferences.recordConfirmationEnabled,
-                pickerRows: model.multicamPickerRows,
-                openLiveView: model.openMulticamLiveView,
-                close: model.endMulticam)
-        } else {
-            LinkExperience()
-                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        ZStack {
+            if model.multicam.isPresented {
+                MulticamStage(
+                    coordinator: model.multicam,
+                    confirmsRecord: model.preferences.recordConfirmationEnabled,
+                    pickerRows: model.multicamPickerRows,
+                    openLiveView: model.openMulticamLiveView,
+                    close: model.endMulticam
+                )
+                .opacity(model.shell.monitor == nil ? 1 : 0)
+                .allowsHitTesting(model.shell.monitor == nil)
+                .accessibilityHidden(model.shell.monitor != nil)
+            }
+            if !model.multicam.isPresented || model.shell.monitor != nil {
+                LinkExperience()
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
         }
     }
 }

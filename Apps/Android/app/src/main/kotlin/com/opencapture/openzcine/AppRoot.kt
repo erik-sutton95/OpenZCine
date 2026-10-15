@@ -113,7 +113,12 @@ internal class AppRoot(
             scope = scope,
             connect = { record -> withContext(Dispatchers.IO) { multicamLink(record, pairingEnvironment) } },
             decoder = ::multicamDecoder,
-        )
+        ).also {
+            val store = com.opencapture.opencine.appkit.MultiviewStagePreferencesStore(
+                app.getSharedPreferences("multiview-presentation", Context.MODE_PRIVATE), "stage",
+            )
+            it.presentation.attachPersistence(store::load, store::save)
+        }
 
     override fun close() {
         mediaDeliveryCoordinator.close()
