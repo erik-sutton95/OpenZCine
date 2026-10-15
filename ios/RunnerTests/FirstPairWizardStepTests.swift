@@ -286,8 +286,9 @@ struct FirstPairWizardStepTests {
     }
 }
 
-/// Device lane DEF-Z-FIRSTRUN-WIZARD: a fresh install with no saved camera opens the same
-/// transport wizard as Pair a new camera.
+/// Device lane DEF-Z-FIRSTRUN-WIZARD and DEF-Z-FIRSTRUN-CAMERA: a fresh install with no saved
+/// camera opens the same transport wizard as Pair a new camera, and discovery leaves USB camera
+/// control (the iOS Camera prompt) alone until the operator chooses the cable path.
 @MainActor
 @Suite("First run")
 struct FirstRunTests {
@@ -307,5 +308,16 @@ struct FirstRunTests {
         #expect(model.shouldShowFirstPairWizard, "first run must reach Cable Link and Camera AP")
         model.showsCameraListWithoutSavedCameras = true
         #expect(!model.shouldShowFirstPairWizard, "choosing the camera list leaves the wizard")
+    }
+
+    @Test("Discovery does not touch USB camera control before the cable path is chosen")
+    func usbWaitsForTheCablePath() {
+        let model = freshModel()
+        #expect(!model.discoveryBrowsesUSB, "no Camera prompt before a path is chosen")
+        model.isPairingNewCamera = true
+        model.firstPairTransportMethod = .cameraAccessPoint
+        #expect(!model.discoveryBrowsesUSB, "a wireless path never asks for USB control")
+        model.discoveryTransportFilter = .usbC
+        #expect(model.discoveryBrowsesUSB, "the cable path browses USB")
     }
 }

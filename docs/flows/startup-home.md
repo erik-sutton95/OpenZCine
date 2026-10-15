@@ -109,6 +109,9 @@ flowchart TD
   saved row via host/name match. Updates `connectionMessage` for recovery copy when hotspot-related.
   Does **not** auto-connect Wi‑Fi saved cameras — operator must tap Connect (USB is the exception,
   HOME-05).
+  USB is browsed only after an operator choice on the cable path (the wizard's Cable Link, a saved
+  USB-C setup, an armed USB-C watch): starting ImageCaptureCore asks for camera control, which iOS
+  shows as the Camera prompt (`discoveryBrowsesUSB`, A2-09).
 - 📝 Notes:
 
 ### HOME-04 — Connect saved camera
