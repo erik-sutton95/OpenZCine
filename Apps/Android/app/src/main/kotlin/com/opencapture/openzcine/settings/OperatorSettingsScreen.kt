@@ -149,7 +149,11 @@ internal fun OperatorSettingsScreen(
     systemSettingsActions: SystemSettingsActions,
     onReportProblem: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
-    initialTab: MonitorSettingsTab = MonitorSettingsTab.LINK,
+    /**
+     * A debug launch's or a test's opening tab. Otherwise Settings opens on the operator's last tab,
+     * with each tab's scroll offset, from [operatorSession] (the shared landing-tab rule, A2-84).
+     */
+    initialTab: MonitorSettingsTab? = null,
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
     relaySharingEnabled: Boolean = false,
     onRelayShareToggle: ((Boolean) -> Unit)? = null,
@@ -331,7 +335,8 @@ internal fun OperatorSettingsScreen(
             "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
             "Current OpenZCine build from the native project metadata."),
     )
-    MonitorOperatorSettingsScreen(configuration, assistSections, display, initialTab, cacheOwner)
+    remember(operatorSession, initialTab) { initialTab?.let { operatorSession.settingsTab = it } }
+    MonitorOperatorSettingsScreen(configuration, assistSections, display, operatorSession, cacheOwner)
 }
 
 /** Actual broadcast service observations and admitted native actions. */

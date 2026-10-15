@@ -38,7 +38,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.monitorui.settings.MonitorSettingsTab
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -1130,7 +1129,6 @@ class MainActivity : ComponentActivity() {
                                         assists = assist,
                                         operatorSession = operatorSession,
                                         editsLiveView = true,
-                                        initialTab = operatorSession.settingsTab,
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
@@ -1282,9 +1280,8 @@ class MainActivity : ComponentActivity() {
                             frameioController = frameioController,
                             accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                             savedCameras = camerasState.saved,
-                            // iOS's startup Settings lands on Link; a debug
-                            // intent can still force a specific tab.
-                            initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,
+                            // The shared landing-tab rule; a debug intent can still force a tab.
+                            initialTab = debugInitialSettingsTab,
                             systemSettingsActions = systemSettingsActions,
                             onReportProblem = { showProblemReport = true },
                             onCompletedMediaCacheCleared = {

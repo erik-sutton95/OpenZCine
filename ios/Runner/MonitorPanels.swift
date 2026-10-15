@@ -2026,9 +2026,6 @@ struct OperatorSettingsPanel: View {
                 library: model.mediaLibrary,
                 selectedTab: Binding(
                     get: { model.operatorSettingsTab }, set: { model.operatorSettingsTab = $0 }),
-                scrollOffsets: Binding(
-                    get: { model.operatorSettingsScrollOffsets },
-                    set: { model.operatorSettingsScrollOffsets = $0 }),
                 operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id)
         }
         .observeMonitorWindowGeometry()

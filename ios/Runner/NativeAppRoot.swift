@@ -2288,13 +2288,12 @@ final class NativeAppModel {
             return false
         }
     }
-    /// Operator Setup rail tab and per-tab scroll offsets — session-only; survive dismissing the
-    /// panel back to live view without resetting to Link / top-of-page.
+    /// Operator Setup rail tab; the shared display owner also keeps each tab's scroll offset
+    /// (A2-84), so both survive dismissing the panel back to live view.
     var operatorSettingsTab: MonitorSettingsTab {
         get { operatorSession.settingsTab }
         set { operatorSession.settingsTab = newValue }
     }
-    var operatorSettingsScrollOffsets: [String: CGFloat] = [:]
     /// One accepted operation survives the intentional settings rehost during an internet hop.
     @ObservationIgnored let settingsAccount = MonitorSettingsAccountModel()
     @ObservationIgnored let settingsSupport = MonitorSettingsSupportModel()
@@ -12301,10 +12300,9 @@ final class NativeAppModel {
         activePanel = nil
     }
 
-    /// Opens Operator Setup from the startup home, landing on the Storage tab (integrations +
-    /// cache are what's actionable without a camera).
+    /// Opens Operator Setup from the startup home on the operator's last tab and scroll offset,
+    /// the shared landing-tab rule (A2-84).
     func openStandaloneSettings() {
-        operatorSettingsTab = .storage
         isStandaloneSettingsPresented = true
     }
 
