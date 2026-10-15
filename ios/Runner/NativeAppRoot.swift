@@ -10,6 +10,7 @@ import OpenCineCore
 import OpenCineFrameIO
 import OpenCineMedia
 import OpenCineRelay
+import OpenCineRelayApple
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -1291,12 +1292,18 @@ final class NativeAppModel {
         // ex-broadcaster's watchers end up listed as phantom "nearby broadcasts".
         if broadcasting, videoSource == .relay { return }
         if broadcasting {
+            moveLegacyRelayPasscodes()
+            guard let passcode = relayHostPasscode else {
+                connectionMessage =
+                    "The broadcast passcode can't be read until this iPhone is unlocked. Unlock it and try again."
+                return
+            }
             // The real advertisement carries the same shield; the beacon must release the
             // service name before the host claims it.
             cameraInUseBeacon?.stop()
             cameraInUseBeacon = nil
             let host = MonitorRelayHost(profile: preferences.relayEncoderProfile)
-            host.watcherPasscode = preferences.relayWatcherPasscode
+            host.watcherPasscode = passcode
             host.allowsControlRequests = preferences.relayAllowsControlRequests
             host.onPeerCountChanged = { [weak self] count in self?.relayPeerCount = count }
             host.onFailure = { [weak self] message in
@@ -1665,7 +1672,8 @@ final class NativeAppModel {
         relayClient = client
         lastGoodFrameAt = Date()
         client.connect(to: discovery.endpoint)
-        var joinPasscode = Self.storedRelayPasscode(forHost: discovery.name)
+        var joinPasscode =
+            relaySubmittedPasscodes[discovery.name] ?? Self.storedRelayPasscode(forHost: discovery.name)
         #if DEBUG
             joinPasscode = joinPasscode ?? demoRelayJoinPasscode
         #endif
@@ -1674,23 +1682,25 @@ final class NativeAppModel {
         startRelayWatchdog(for: discovery)
     }
 
-    /// Watcher passcodes, remembered per broadcaster so a set's code is typed once per device.
-    private static let relayPasscodesKey = "relayWatcherPasscodes"
-
+    /// Watcher passcodes, remembered per broadcaster in the Keychain so a set's code is typed
+    /// once per device.
     static func storedRelayPasscode(forHost host: String) -> String? {
-        let stored =
-            UserDefaults.standard.dictionary(forKey: relayPasscodesKey) as? [String: String]
-        return stored?[host]
+        RelayLegacyWatcherPasscodes.move(into: .app, from: .standard)
+        if case .stored(let code) = WatcherRelayKeychain.app.rememberedPasscodeLookup(forHost: host) {
+            return code
+        }
+        return RelayLegacyWatcherPasscodes.unmoved(forHost: host, in: .standard)
     }
+
+    /// Entered codes the Keychain could not keep: they still join in this run, never on disk.
+    @ObservationIgnored private var relaySubmittedPasscodes: [String: String] = [:]
 
     /// Stores the entered code and rejoins with it.
     func submitRelayPasscode(_ code: String) {
         guard let target = relayJoinTarget else { return }
-        var stored =
-            (UserDefaults.standard.dictionary(forKey: Self.relayPasscodesKey) as? [String: String])
-            ?? [:]
-        stored[target.name] = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        UserDefaults.standard.set(stored, forKey: Self.relayPasscodesKey)
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let saved = WatcherRelayKeychain.app.storeRememberedPasscode(trimmed, forHost: target.name)
+        relaySubmittedPasscodes[target.name] = saved ? nil : trimmed
         relayJoinNeedsPasscode = false
         joinRelay(target)
     }
@@ -2803,6 +2813,7 @@ final class NativeAppModel {
     func prepareStartup() {
         guard !didPrepareStartup else { return }
         didPrepareStartup = true
+        moveLegacyRelayPasscodes()
         refreshSavedCameras()
         applyStartupDestination()
         if shouldShowFirstPairWizard, firstPairWizardStep == .permissions {
@@ -12537,11 +12548,37 @@ final class NativeAppModel {
     }
 
     /// Applies live to NEW joins; devices already watching keep their access until they leave.
+    /// A code the Keychain did not keep changes nothing: the previous code stays in force.
     func setRelayWatcherPasscode(_ code: String) {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard preferences.relayWatcherPasscode != trimmed else { return }
-        preferences.relayWatcherPasscode = trimmed
+        moveLegacyRelayPasscodes()
+        guard relayHostPasscode != trimmed else { return }
+        guard WatcherRelayKeychain.app.storeHostPasscode(trimmed) else {
+            connectionMessage = "The broadcast passcode couldn't be saved. Try again."
+            return
+        }
+        if !preferences.relayWatcherPasscode.isEmpty { preferences.relayWatcherPasscode = "" }
         relayHost?.watcherPasscode = trimmed
+    }
+
+    /// The broadcast passcode in force: empty for an open broadcast, nil while the Keychain cannot
+    /// answer, so a broadcast never starts unprotected. A preferences copy that has not moved to
+    /// the Keychain yet is still the operator's code.
+    var relayHostPasscode: String? {
+        let legacy = preferences.relayWatcherPasscode
+        if !legacy.isEmpty { return legacy }
+        return WatcherRelayKeychain.app.hostPasscodeLookup().usableValue
+    }
+
+    /// Moves the relay passcodes OpenZCine once kept in UserDefaults into the Keychain (A2-34).
+    /// An old copy goes only once the Keychain holds a value that read back.
+    func moveLegacyRelayPasscodes() {
+        RelayLegacyWatcherPasscodes.move(into: .app, from: .standard)
+        let legacy = preferences.relayWatcherPasscode
+        guard !legacy.isEmpty,
+            WatcherRelayKeychain.app.adoptLegacyHostPasscode(legacy).releasesLegacyCopy
+        else { return }
+        preferences.relayWatcherPasscode = ""
     }
 
     /// Applies live: the state broadcast tells watchers, whose ask buttons hide immediately.
