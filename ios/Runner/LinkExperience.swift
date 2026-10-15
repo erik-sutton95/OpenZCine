@@ -5,7 +5,7 @@ import OpenZCineCore
 import SwiftUI
 
 /// The shared root (`AppShell`): the camera monitor, the shared cameras and pair pages with this
-/// app's own pages before them (the first-pair wizard, preparing live view, its own connect),
+/// app's own first-pair preparation and app-owned connection progress before them,
 /// and the standalone Media and Settings covers.
 struct LinkExperience: View {
     @Environment(NativeAppModel.self) private var model
@@ -116,12 +116,15 @@ struct LinkExperience: View {
             .allowsHitTesting(false)
     }
 
-    /// The page this app shows before the shared ones, if any (SHELL-02): the wizard, the ready
-    /// page while a connected camera's live view starts, the app's own connect in progress.
+    /// First-pair preparation and connection progress that no shared attempt currently owns.
     private var prePageKind: NikonPrePage.Kind? {
         if model.shouldShowFirstPairWizard { return .wizard }
-        if model.isConnected { return .preparing }
-        if model.showsAppConnectProgress { return .connecting }
+        if model.cameras.attempts.isEmpty
+            && (model.isConnected || model.connection == .preparingLiveView
+                || model.showsAppConnectProgress)
+        {
+            return .connecting
+        }
         return nil
     }
 
@@ -138,15 +141,6 @@ struct LinkExperience: View {
             reportProblem: { model.isBugReportPresented = true },
             multiview: MulticamCoordinator.tileCount > 1 ? { model.beginMulticam() } : nil,
             integrationAction: { cameraID, action in
-                if action == NativeNikonPort.takeOverAction,
-                    case .saved(let camera, let routeID) = model.cameras.failures[cameraID]?.target,
-                    let host = camera.routes.first(where: { $0.id == routeID })?.extras[
-                        NikonSavedRecordsV0.Extra.host]
-                {
-                    model.nikonPort.allowTakeOver(host: host)
-                    _ = model.cameras.perform(.retry, for: cameraID)
-                    return
-                }
                 if action == NativeNikonPort.diagnosticsAction { model.shareDiagnostics() }
             },
             pair: {
@@ -222,7 +216,6 @@ struct LinkExperience: View {
 struct NikonPrePage: View {
     enum Kind {
         case wizard
-        case preparing
         case connecting
     }
 
@@ -243,12 +236,6 @@ struct NikonPrePage: View {
             case .wizard:
                 StartupFirstPairWizardView(
                     isBusy: model.isStartupActionLocked, contentLayout: layout, safeArea: safeArea)
-            case .preparing:
-                StartupPreparingLiveView(compact: layout.mode == .singleColumn)
-                    .padding(
-                        EdgeInsets(
-                            top: safeArea.top + 24, leading: safeArea.leading + 24,
-                            bottom: safeArea.bottom + 24, trailing: safeArea.trailing + 24))
             case .connecting:
                 NikonConnectScreen(safeArea: safeArea)
             }

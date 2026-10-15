@@ -21,6 +21,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.opencine.appkit.AddSetupChooser
+import com.opencapture.opencine.appkit.AddSetupFlow
+import com.opencapture.opencine.appkit.AddSetupNotice
+import com.opencapture.opencine.appkit.AddSetupOption
 import com.opencapture.monitorui.MonitorCameraAction
 import com.opencapture.monitorui.MonitorConnectFailure
 import com.opencapture.monitorui.MonitorIcon
@@ -33,7 +37,6 @@ import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.opencine.nikon.NikonAccessPointSsid
 import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.opencine.nikon.NikonSavedRecordsV0
-import com.opencapture.opencine.nikon.NikonTakeOverPrompt
 import com.opencapture.opencine.nikon.SavedCameraRecord
 import com.opencapture.opencine.nikon.SavedCameraRecords
 import com.opencapture.opencine.nikon.SavedCameraTransport
@@ -94,11 +97,8 @@ internal fun nikonIntegrationSlots(
 ): IntegrationSlots =
     IntegrationSlots(
         pairing = { ChooseConnectionEntry(onChooseConnection) },
-        addRoute = { camera, done ->
-            AddSetupCard(camera, recordsOf(camera, records()), connector, credentials, done, onScanAccessPoint)
-        },
-        prompt = { prompt ->
-            (prompt as? NikonTakeOverPrompt)?.let { TakeOverConfirmationDialog(it.holder, it.confirm, it.cancel) }
+        addSetup = { camera, done ->
+            addSetupFlow(camera, recordsOf(camera, records()), connector, credentials, done, onScanAccessPoint)
         },
     )
 
@@ -120,19 +120,19 @@ private fun ChooseConnectionEntry(onClick: () -> Unit) {
  * or scans the camera's network screen first.
  */
 @Composable
-private fun AddSetupCard(
+private fun addSetupFlow(
     camera: SavedCamera,
     group: List<SavedCameraRecord>,
     connector: SavedCameraConnector,
     credentials: PairingCredentials,
     done: (RouteDraft?) -> Unit,
     onScanAccessPoint: (SavedCamera) -> Unit,
-) {
+): AddSetupFlow {
     val anchor =
         group.firstOrNull()
             ?: run {
                 androidx.compose.runtime.LaunchedEffect(camera.id) { done(null) }
-                return
+                return AddSetupFlow(AddSetupChooser("", "", emptyList()), onSelect = {}, onCancel = { done(null) })
             }
     // Asked for here only: naming a network is the one thing this permission buys, and a second
     // router setup is the one place the name is needed.
@@ -143,55 +143,38 @@ private fun AddSetupCard(
     val usbReady = usbCameras.any { it.access == UsbPtpCameraAccess.READY }
     val routerFound = discovered.any { SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName) }
     val apKeyStored = remember(anchor.id) { accessPointSsidFor(anchor)?.let(credentials::passphrase) != null }
-    Column(
-        Modifier.background(MonitorPalette.surface, RoundedCornerShape(20.dp)).padding(20.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(stringResource(R.string.saved_add_setup_title, anchor.displayTitle), color = MonitorPalette.text, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-        Text(stringResource(R.string.saved_add_setup_body), color = MonitorPalette.muted, fontSize = 13.sp, lineHeight = 18.sp)
-        if (group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE } && !networkName.granted) {
-            Text(stringResource(R.string.saved_setup_router_name_permission), color = MonitorPalette.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
-            TextButton(onClick = networkName::request) {
-                Text(stringResource(R.string.saved_setup_router_name_permission_action), color = MonitorPalette.accent, fontSize = 13.sp)
-            }
+    val options = missingSetupKinds(group).map { kind ->
+        val (title, body) = when (kind) {
+            SavedCameraTransport.CAMERA_ACCESS_POINT -> R.string.saved_setup_ap_title to R.string.saved_setup_ap_body
+            SavedCameraTransport.INFRASTRUCTURE -> R.string.saved_setup_router_title to R.string.saved_setup_router_body
+            SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_hotspot_title to R.string.saved_setup_hotspot_body
+            SavedCameraTransport.USB_C -> R.string.saved_setup_usb_title to R.string.saved_setup_usb_body
         }
-        for (kind in missingSetupKinds(group)) {
-            val (title, body) =
-                when (kind) {
-                    SavedCameraTransport.CAMERA_ACCESS_POINT -> R.string.saved_setup_ap_title to R.string.saved_setup_ap_body
-                    SavedCameraTransport.INFRASTRUCTURE -> R.string.saved_setup_router_title to R.string.saved_setup_router_body
-                    SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_hotspot_title to R.string.saved_setup_hotspot_body
-                    SavedCameraTransport.USB_C -> R.string.saved_setup_usb_title to R.string.saved_setup_usb_body
-                }
-            val action =
-                when (kind) {
-                    SavedCameraTransport.CAMERA_ACCESS_POINT ->
-                        if (apKeyStored) R.string.saved_setup_ap_action_join else R.string.saved_setup_ap_action_scan
-                    SavedCameraTransport.USB_C ->
-                        if (usbReady) R.string.saved_setup_connect_now else R.string.saved_setup_connect_when_plugged
-                    SavedCameraTransport.INFRASTRUCTURE ->
-                        if (routerFound) R.string.saved_setup_connect_now else R.string.saved_setup_find_on_network
-                    SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_wait_for_camera
-                }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(title), color = MonitorPalette.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(stringResource(body), color = MonitorPalette.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
-                TextButton(
-                    onClick = {
-                        if (kind == SavedCameraTransport.CAMERA_ACCESS_POINT && !apKeyStored) {
-                            done(null)
-                            onScanAccessPoint(camera)
-                        } else {
-                            done(RouteDraft(AppNikonConnectPort.kindOf(kind)))
-                        }
-                    },
-                ) { Text(stringResource(action)) }
-            }
+        val action = when (kind) {
+            SavedCameraTransport.CAMERA_ACCESS_POINT -> if (apKeyStored) R.string.saved_setup_ap_action_join else R.string.saved_setup_ap_action_scan
+            SavedCameraTransport.USB_C -> if (usbReady) R.string.saved_setup_connect_now else R.string.saved_setup_connect_when_plugged
+            SavedCameraTransport.INFRASTRUCTURE -> if (routerFound) R.string.saved_setup_connect_now else R.string.saved_setup_find_on_network
+            SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_wait_for_camera
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { done(null) }) { Text(stringResource(R.string.action_cancel)) }
-        }
+        AddSetupOption(kind.name, AppNikonConnectPort.kindOf(kind), stringResource(title), stringResource(body), stringResource(action))
     }
+    val notice = if (group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE } && !networkName.granted) {
+        AddSetupNotice("networkName", stringResource(R.string.saved_setup_router_name_permission), stringResource(R.string.saved_setup_router_name_permission_action))
+    } else null
+    return AddSetupFlow(
+        chooser = AddSetupChooser(stringResource(R.string.saved_add_setup_title, anchor.displayTitle), stringResource(R.string.saved_add_setup_body), options, notice = notice),
+        onSelect = { option ->
+            if (option.kind == com.opencapture.opencine.core.RouteKind.CAMERA_ACCESS_POINT && !apKeyStored) {
+                done(null)
+                onScanAccessPoint(camera)
+            } else {
+                done(RouteDraft(option.kind))
+            }
+        },
+        onNoticeAction = { if (it == "networkName") networkName.request() },
+        onCancel = { done(null) },
+        cancelTitle = stringResource(R.string.action_cancel),
+    )
 }
 
 /** The filtered-network notice's row id on the shared page. */
