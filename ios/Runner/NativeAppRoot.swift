@@ -5394,7 +5394,7 @@ final class NativeAppModel {
         connection = .disconnected
         // The session is gone, so the return is owed even when the hop ended meanwhile.
         guard current() else { return left }
-        hopNative.leaveNetwork(ssid)
+        hopNative.leaveNetwork(ssid, current)
         connectedWiFiSSID = nil
         return left
     }
