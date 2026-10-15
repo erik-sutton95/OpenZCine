@@ -81,4 +81,35 @@ import Testing
         }
         #expect(document.data == original)
     }
+
+    @Test(arguments: ["statusBar", "sideRails"])
+    func editingLegacyChromePreservesUntouchedInheritedChoices(field: String) throws {
+        let original = Data(#"{"displayChrome":{"statusBarVisible":false,"sideRailsVisible":false,"futureStyle":{"gain":7}},"futureSetting":"retain"}"#.utf8)
+        let document = OperatorPreferencesDocument(data: original)
+        let previous = document.decoded()
+        var next = previous
+        if field == "statusBar" { next.displayChrome.statusBarVisible = true }
+        else { next.displayChrome.sideRailsVisible = true }
+        let updated = try document.updating(next, previous: previous)
+        #expect(OperatorPreferencesDocument(data: updated).decoded() == next,
+            "Changing one legacy layout must preserve the other inherited layouts and rail choices")
+        let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        #expect(raw["futureSetting"] as? String == "retain")
+        let chrome = try #require(raw["displayChrome"] as? [String: Any])
+        #expect((chrome["futureStyle"] as? [String: Int])?["gain"] == 7)
+    }
+
+
+    @Test func nullLegacyLayoutsKeepTheirInheritedChoicesAfterParentEdit() throws {
+        let original = Data(#"{"displayChrome":{"statusBarVisible":false},"commandChrome":null,"photoDisplayChrome":null,"photoCommandChrome":null,"futureSetting":null}"#.utf8)
+        let document = OperatorPreferencesDocument(data: original)
+        let previous = document.decoded()
+        var next = previous
+        next.displayChrome.statusBarVisible = true
+        let updated = try document.updating(next, previous: previous)
+        #expect(OperatorPreferencesDocument(data: updated).decoded() == next)
+        let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        #expect(raw["futureSetting"] is NSNull)
+    }
+
 }

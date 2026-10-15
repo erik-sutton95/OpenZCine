@@ -20,7 +20,11 @@ public struct OperatorPreferencesDocument: Sendable {
         let before = try Self.object(previous)
         let after = try Self.object(next)
         let merged = Self.merge(original: original, previous: before, next: after)
-        return try JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])
+        let mergedData = try JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])
+        let reloaded = try JSONDecoder().decode(OperatorPreferences.self, from: mergedData)
+        let stabilized = Self.preservingInheritedChoices(
+            in: merged, reloaded: try Self.object(reloaded), desired: after)
+        return try JSONSerialization.data(withJSONObject: stabilized, options: [.sortedKeys])
     }
 
     private enum UpdateError: Error {
@@ -41,6 +45,23 @@ public struct OperatorPreferencesDocument: Sendable {
         }
         return NSDictionary(dictionary: ["value": first ?? NSNull()])
             .isEqual(to: ["value": second ?? NSNull()])
+    }
+
+    private static func preservingInheritedChoices(
+        in original: [String: Any], reloaded: [String: Any], desired: [String: Any]
+    ) -> [String: Any] {
+        var result = original
+        for (key, value) in desired where !equal(reloaded[key], value, key: key) {
+            // Older layouts and rail flags inherit other fields when absent or null. Store only
+            // missing choices that would otherwise drift after an explicitly edited field.
+            if original[key] == nil || original[key] is NSNull {
+                result[key] = value
+            } else if let raw = original[key] as? [String: Any],
+                      let current = reloaded[key] as? [String: Any], let target = value as? [String: Any] {
+                result[key] = preservingInheritedChoices(in: raw, reloaded: current, desired: target)
+            }
+        }
+        return result
     }
 
     private static func merge(original: [String: Any], previous: [String: Any], next: [String: Any]) -> [String: Any] {
