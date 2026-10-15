@@ -291,27 +291,23 @@ class MainActivity : ComponentActivity() {
                         com.opencapture.openzcine.relay.RelayWatchController.seedJpegOnly()
                     }
                 }
-                // Watcher passcodes, one entry per broadcaster name — the durable half of the
-                // controller's process-wide memory (it is rebuilt on every join, so alone it
-                // forgets at launch). iOS keeps the same dictionary in UserDefaults
-                // (`storedRelayPasscode(forHost:)`). NOT install-scoped like the jpeg-only
+                // Watcher passcodes, one per broadcaster name, sealed by the shared relay
+                // secrets (iOS keeps them in the Keychain). NOT install-scoped like the jpeg-only
                 // verdict above: a set's passcode does not change because this app was rebuilt.
-                val relayPasscodePrefs =
+                // The plain-text file of earlier builds moves in once; each entry leaves it only
+                // after its sealed copy read back.
+                val relaySecrets =
                     remember {
-                        applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
+                        com.opencapture.opencine.relayruntime.WatcherRelaySecrets(
+                                applicationContext,
+                                com.opencapture.openzcine.relay.RelayWatchController.SECRETS_SERVICE,
+                            )
+                            .also {
+                                it.adoptLegacyRememberedPasscodes(
+                                    applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
+                                )
+                            }
                     }
-                val persistWatcherPasscode: (String, String) -> Unit = remember {
-                    { broadcasterName, code ->
-                        relayPasscodePrefs.edit().putString(broadcasterName, code).apply()
-                    }
-                }
-                LaunchedEffect(Unit) {
-                    com.opencapture.openzcine.relay.RelayWatchController.seedPasscodes(
-                        relayPasscodePrefs.all
-                            .mapNotNull { (name, code) -> (code as? String)?.let { name to it } }
-                            .toMap()
-                    )
-                }
                 LaunchedEffect(Unit) {
                     // Debug-only direct watch (adb reverse cross-platform verification).
                     DemoHarness.relayWatchEndpoint(intent)?.let { (host, port) ->
@@ -333,9 +329,7 @@ class MainActivity : ComponentActivity() {
                                     watcherId =
                                         com.opencapture.openzcine.relay.RelayWatcherIdentity
                                             .current(applicationContext),
-                                    onPasscodeRemembered = { code ->
-                                        persistWatcherPasscode(direct.name, code)
-                                    },
+                                    secrets = relaySecrets,
                                 )
                                 .also { it.start() }
                     }
@@ -1407,9 +1401,7 @@ class MainActivity : ComponentActivity() {
                                                     com.opencapture.openzcine.relay.RelayWatcherIdentity
                                                         .current(applicationContext),
                                                 onJpegOnlyLatched = persistJpegOnly,
-                                                onPasscodeRemembered = { code ->
-                                                    persistWatcherPasscode(broadcast.name, code)
-                                                },
+                                                secrets = relaySecrets,
                                             )
                                             .also { it.start() }
                                 },

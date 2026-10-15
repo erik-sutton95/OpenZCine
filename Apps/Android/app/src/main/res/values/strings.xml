@@ -201,9 +201,9 @@
     <string name="relay_try_again">Try again</string>
     <string name="relay_leave">Leave</string>
     <string name="relay_passcode_title">Watcher passcode</string>
-    <string name="relay_passcode_body">This broadcast asks for a 4-digit passcode.</string>
+    <string name="relay_passcode_body">This broadcast asks for a passcode.</string>
     <string name="relay_passcode_wrong">That passcode didn\'t match. Try again.</string>
-    <string name="relay_passcode_hint">0000</string>
+    <string name="relay_passcode_hint">Passcode</string>
     <string name="settings_tab_sharing">Sharing</string>
     <string name="settings_rail_sharing">Broadcast\n&amp; watchers</string>
     <string name="settings_subtitle_sharing">Broadcast this feed and manage its watchers.</string>
