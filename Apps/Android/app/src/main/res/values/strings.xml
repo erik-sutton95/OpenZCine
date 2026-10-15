@@ -691,8 +691,6 @@
     <string name="settings_record_confirmation">Record Confirmation</string>
     <string name="settings_haptics">Haptics</string>
     <string name="settings_keep_awake">Keep Screen Awake</string>
-    <string name="settings_media_remote">Bluetooth Remote Shutter</string>
-    <string name="settings_media_remote_caption">A paired Bluetooth shutter remote\'s button press starts or stops recording while the live view is up front. Android cannot reliably distinguish Bluetooth from phone hardware keys, so Volume Up/Down and Play/Pause also toggle recording. Record Confirmation is skipped for remote presses.</string>
     <string name="settings_enable_media_remote">Enable Media Remote</string>
     <string name="settings_media_remote_detail">Volume Up/Down and Play/Pause toggle recording; Record/Play start and Pause/Stop stop. Confirmation is skipped.</string>
     <string name="settings_move_earlier">Move %1$s earlier</string>

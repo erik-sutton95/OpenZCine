@@ -141,10 +141,10 @@ import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
-import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
+import com.opencapture.opencine.appkit.MonitorRemoteShutter
+import com.opencapture.opencine.appkit.MonitorRemoteShutterCommand
+import com.opencapture.opencine.appkit.monitorRemoteShutterShouldArm
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
-import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.opencine.appkit.MonitorDisplayMode
@@ -265,7 +265,7 @@ internal fun MonitorScreen(
     frameioController: com.opencapture.opencine.frameio.FrameioDeliveryController? = null,
     liveViewEnabled: Boolean = true,
     liveBackdrop: NikonLiveBackdrop? = null,
-    mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
+    mediaRemoteShutter: MonitorRemoteShutter? = null,
     isMonitorFront: Boolean = true,
     sessionRecoveryEnabled: Boolean = true,
     linkHealth: AndroidLinkHealthMonitor? = null,
@@ -1048,7 +1048,7 @@ internal fun MonitorScreen(
         }
     }
     val mediaRemoteShutterShouldArm =
-        shouldArmMediaRemoteShutter(
+        monitorRemoteShutterShouldArm(
             enabled = operatorSettings.mediaRemoteShutterEnabled.value,
             monitorIsFront = isMonitorFront,
             cameraConnected = sessionState is CameraSessionState.Connected,
@@ -1058,7 +1058,7 @@ internal fun MonitorScreen(
             cameraControlPending = pendingCommandControl != null,
         )
     val latestRemoteShutterAction =
-        rememberUpdatedState<(MediaRemoteShutterCommand) -> Unit>(
+        rememberUpdatedState<(MonitorRemoteShutterCommand) -> Unit>(
             newValue = remoteShutterAction@{ command ->
                 if (!mediaRemoteShutterShouldArm) return@remoteShutterAction
                 recordScope.launch {

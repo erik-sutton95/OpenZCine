@@ -300,9 +300,9 @@ internal fun OperatorSettingsScreen(
         { settings.hapticsEnabled.value = it }, settings.keepScreenAwake.value,
         { settings.keepScreenAwake.value = it },
         MonitorSettingsCopy.keepScreenAwake,
-        shutter = MonitorSettingsRemoteShutter(settings.mediaRemoteShutterEnabled.value,
-            { settings.mediaRemoteShutterEnabled.value = it }, stringResource(R.string.settings_media_remote),
-            stringResource(R.string.settings_media_remote_caption)),
+        shutter = MonitorSettingsRemoteShutter.mediaButtons(settings.mediaRemoteShutterEnabled.value) {
+            settings.mediaRemoteShutterEnabled.value = it
+        },
         autoRotate = MonitorSettingsAutoRotate(settings.autoRotateFeedEnabled.value,
             { settings.autoRotateFeedEnabled.value = it }, stringResource(R.string.settings_auto_rotate_feed),
             stringResource(R.string.help_controls_auto_rotate_feed)))

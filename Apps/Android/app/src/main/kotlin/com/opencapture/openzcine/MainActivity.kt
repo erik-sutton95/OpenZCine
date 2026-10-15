@@ -139,7 +139,7 @@ import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
 import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.relay.monitorRelayNearbyOwner
-import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
+import com.opencapture.opencine.appkit.MonitorRemoteShutter
 import com.opencapture.openzcine.settings.LiveViewQualityBias
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import com.opencapture.openzcine.settings.OperatorSettings
@@ -169,7 +169,7 @@ private fun FrameioInternetHopState.allowsMonitorSessionRecovery(): Boolean =
  * feed, NSD transport probe) bypass startup straight to the monitor.
  */
 class MainActivity : ComponentActivity() {
-    private lateinit var mediaRemoteShutter: AndroidMediaRemoteShutter
+    private lateinit var mediaRemoteShutter: MonitorRemoteShutter
     private val diagnostics: AndroidAppDiagnostics by lazy {
         AndroidAppDiagnostics.create(applicationContext)
     }
@@ -192,7 +192,7 @@ class MainActivity : ComponentActivity() {
         val localReview = MonitorReview.decode(intent)
         // Load the Swift core (and with it OpenCine's NikonNative) before any camera session.
         SwiftCore.isAvailable
-        mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
+        mediaRemoteShutter = MonitorRemoteShutter(applicationContext, "OpenZCineMediaRemoteShutter")
         diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
         AppDiagnostics.install(applicationContext)
         // A recreated activity's intent was already handed to the retained controller.
