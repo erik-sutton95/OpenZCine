@@ -1,7 +1,6 @@
 package com.opencapture.openzcine.wear
 
 import com.opencapture.opencine.core.PowerStatus
-import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -107,7 +106,8 @@ internal fun retainWatchFrameMetadata(
  *
  * Timecode/FPS begin unavailable and are replaced only by metadata from an
  * actually presented native camera frame inside [AndroidWearPhoneRelay].
- * Storage and battery enter only from the real Swift-core property snapshot.
+ * Storage enters only from the real Swift-core property snapshot, and the battery only from the
+ * common session's typed [power].
  */
 internal fun androidWatchRelayState(
     sessionState: CameraSessionState,
@@ -116,7 +116,7 @@ internal fun androidWatchRelayState(
     monitorFront: Boolean,
     applicationResumed: Boolean,
     liveFeedActive: Boolean,
-    power: PowerStatus? = null,
+    power: PowerStatus,
 ): WatchRelayState {
     val connectedIdentity = (sessionState as? CameraSessionState.Connected)?.identity
     val foreground = monitorFront && applicationResumed
@@ -127,8 +127,7 @@ internal fun androidWatchRelayState(
             else -> WatchConnectionState.NO_CAMERA
         }
     val hasCamera = connection == WatchConnectionState.CONNECTED
-    val reportedPower = if (hasCamera) power ?: NikonCameraBatteryGauge.gauge(
-        cameraProperties.batteryPercent ?: 0).powerStatus else PowerStatus.unknown
+    val reportedPower = if (hasCamera) power else PowerStatus.unknown
     return WatchRelayState(
         recordState = if (isRecording) WatchRecordState.RECORDING else WatchRecordState.STANDBY,
         timecode = WatchTimecode.unavailable(),

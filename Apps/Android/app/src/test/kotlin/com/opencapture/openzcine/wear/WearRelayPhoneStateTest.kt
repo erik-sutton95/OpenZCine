@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.wear
 
 import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.core.PowerStatus
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -97,6 +98,7 @@ class WearRelayPhoneStateTest {
                 monitorFront = true,
                 applicationResumed = true,
                 liveFeedActive = true,
+                power = PowerStatus.unknown,
             )
         assertEquals(WatchConnectionState.CONNECTED, state.connection)
         assertEquals("Nikon ZR", state.cameraName)
@@ -114,6 +116,7 @@ class WearRelayPhoneStateTest {
                 monitorFront = true,
                 applicationResumed = false,
                 liveFeedActive = true,
+                power = PowerStatus.unknown,
             )
         assertEquals(WatchConnectionState.DISCONNECTED, background.connection)
         assertFalse(background.feedLive)
