@@ -501,8 +501,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var photoCommandChrome: DisplayChromeVisibility
     /// The broadcaster's latency-vs-quality stance for the relay encoder.
     public var relayEncoderProfile: RelayEncoderProfile
-    /// Watchers must enter this to receive the broadcast; empty means open. Four digits by UI
-    /// convention, but the wire and the check treat it as an opaque string.
+    /// Watchers must enter this to receive the broadcast; empty means open. The shared watcher
+    /// passcode rule (at least four characters, trimmed) judges a new code; the wire and the check
+    /// treat it as an opaque string.
     public var relayWatcherPasscode: String
     /// Whether watchers may ask for camera control at all.
     public var relayAllowsControlRequests: Bool

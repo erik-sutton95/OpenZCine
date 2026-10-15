@@ -18,6 +18,9 @@ import com.opencapture.opencine.relayruntime.RelayBroadcastAnnouncer
 import com.opencapture.opencine.relayruntime.RelayBroadcastDispatch
 import com.opencapture.opencine.relayruntime.RelayBroadcastFrame
 import com.opencapture.opencine.relayruntime.RelayBroadcastOwner
+import com.opencapture.opencine.relayruntime.WatcherRelaySecrets
+import com.opencapture.monitorui.MonitorWatcherPasscodeRule
+import androidx.compose.runtime.mutableStateOf
 import com.opencapture.openzcine.UNAVAILABLE_MONITOR_VALUE
 import com.opencapture.openzcine.core.RelayEncoderProfile
 import com.opencapture.openzcine.monitorStorageLabel
@@ -36,6 +39,8 @@ class RelayBroadcastController(
     deviceName: String,
     loadPreferredPort: () -> Int = { 0 },
     savePreferredPort: (Int) -> Unit = {},
+    /** Where the broadcast passcode is kept; null keeps it for this run only (tests, previews). */
+    private val secrets: WatcherRelaySecrets? = null,
 ) {
     private class Source(val session: CameraSession, val frames: LiveFrameSource, val cameraName: String?)
     private val owner = RelayBroadcastOwner<Source, LiveFrame, MonitorRelayWire.State,
@@ -62,6 +67,37 @@ class RelayBroadcastController(
     var watcherPasscode: String
         get() = owner.watcherPasscode
         set(value) { owner.watcherPasscode = value }
+    private val passcodeLookup = mutableStateOf(secrets?.hostPasscodeLookup() ?: WatcherRelaySecrets.Lookup.Absent)
+
+    /**
+     * The broadcast passcode in force, observable by the settings field: empty for an open
+     * broadcast, null while the store cannot answer.
+     */
+    val savedPasscode: String? get() = passcodeLookup.value.usableValue
+
+    /**
+     * Stores [code] under the shared watcher passcode rule and applies it to new joins; devices
+     * already watching keep their access until they leave. A code too short for the rule, or one
+     * the store did not keep, changes nothing: the previous code stays in force.
+     */
+    fun savePasscode(code: String): Boolean {
+        val next = MonitorWatcherPasscodeRule.entry(code).passcode ?: return false
+        if (secrets != null && !secrets.storeHostPasscode(next)) return false
+        passcodeLookup.value = if (next.isEmpty()) WatcherRelaySecrets.Lookup.Absent else WatcherRelaySecrets.Lookup.Stored(next)
+        owner.watcherPasscode = next
+        return true
+    }
+
+    /**
+     * Reads the stored passcode again (the store may not have answered at launch) and applies it.
+     * False while the store still cannot answer, so a broadcast never starts unprotected.
+     */
+    fun loadPasscode(): Boolean {
+        val lookup = secrets?.hostPasscodeLookup() ?: passcodeLookup.value
+        passcodeLookup.value = lookup
+        owner.watcherPasscode = lookup.usableValue ?: return false
+        return true
+    }
     var encoderProfile: RelayEncoderProfile
         get() = owner.encoderProfile
         set(value) { owner.encoderProfile = value }
@@ -77,6 +113,12 @@ class RelayBroadcastController(
     fun declinePendingControl(request: RelayHostControl.PendingRequest) = owner.declinePendingControl(request)
     fun reclaimControl() = owner.reclaimControl()
     fun stop(notifyReason: String? = null) = owner.stop(notifyReason)
+
+    companion object {
+        /** Where earlier builds kept the broadcast passcode in plain text (OperatorSettings). */
+        const val LEGACY_PASSCODE_STORE: String = "openzcine.operator-settings"
+        const val LEGACY_PASSCODE_KEY: String = "sharing.watcherPasscode"
+    }
 
     private suspend fun execute(source: Source, command: MonitorRelayWire.Command, dispatch: RelayBroadcastDispatch) {
         val session = source.session
