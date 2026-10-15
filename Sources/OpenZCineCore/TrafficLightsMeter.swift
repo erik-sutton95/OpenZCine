@@ -7,9 +7,9 @@ public typealias TrafficLightsChannelReading = OpenCineMedia.LegacyTrafficLights
 public typealias TrafficLightsReading = OpenCineMedia.LegacyTrafficLightsReading
 public typealias TrafficLightsChannel = OpenCineMedia.LegacyTrafficLightsChannel
 
-public enum TrafficLightsMeter {
-    public static let balanceCenter = OpenCineMedia.LegacyTrafficLightsMeter.balanceCenter
-    public static let balanceDeadZone = OpenCineMedia.LegacyTrafficLightsMeter.balanceDeadZone
+public typealias TrafficLightsMeter = OpenCineMedia.LegacyTrafficLightsMeter
+
+extension OpenCineMedia.LegacyTrafficLightsMeter {
     public static func measure(
         samples: ScopeSamples,
         noiseFloorCompensation: MonitorCrushClipCompensation,
@@ -51,13 +51,5 @@ public enum TrafficLightsMeter {
     ) -> Double {
         OpenCineMedia.LegacyTrafficLightsMeter.channelLevel(
             histogram: histogram, calibration: mapping.legacyScopeCalibration)
-    }
-    public static func channelDisplay(
-        for reading: TrafficLightsChannelReading,
-        balanceCenter center: Double = balanceCenter,
-        deadZone: Double = balanceDeadZone
-    ) -> TrafficLightsChannelDisplay {
-        OpenCineMedia.LegacyTrafficLightsMeter.channelDisplay(
-            for: reading, balanceCenter: center, deadZone: deadZone)
     }
 }
