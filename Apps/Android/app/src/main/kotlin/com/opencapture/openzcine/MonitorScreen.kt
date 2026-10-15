@@ -1939,10 +1939,14 @@ internal fun MonitorScreen(
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
         val recordingFormat = sharedControlState.snapshot?.let(MonitorCapturePresentation::recordingFormat)
-        val recordingLabel = recordingFormat?.let(MonitorCapturePresentation::recordingLabel)
+        val formatLabel = nikonRecordingFormatLabel(
+            recordingFormat?.let(MonitorCapturePresentation::recordingLabel),
+            cameraProperties.controlCapabilities.recordingFormats
+                .firstOrNull { it.token == readoutRetention.resolution }?.imageArea,
+        )
         val headerReadouts = listOfNotNull(
             if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
-                if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else if (isDemoSession || relayedState != null) readoutRetention.resolution else recordingLabel,
+                if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else if (isDemoSession || relayedState != null) readoutRetention.resolution else formatLabel,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",
                 if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else if (isDemoSession || relayedState != null) readoutRetention.codec else recordingFormat?.codec?.let(com.opencapture.opencine.nikon.MonitorTextFormat::codecCompactLabel),

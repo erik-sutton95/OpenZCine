@@ -69,6 +69,13 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String =
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
 
 /**
+ * The FORMAT readout: the common recording label behind the displayed movie token's image-area
+ * tag (`[FX] 6K · 25p`), as the body shows it. Swift twin: `nikonRecordingFormatLabel`.
+ */
+internal fun nikonRecordingFormatLabel(label: String?, imageArea: String?): String? =
+    label?.let { text -> imageArea?.let { "[$it] $text" } ?: text }
+
+/**
  * The body's exposure indicator in stops for the shared EV gauge (A1-32, iOS
  * `NikonMonitorShell.exposureReading`): 1/6 EV steps, unknown while the body reports it unlit.
  */

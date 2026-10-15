@@ -28,6 +28,15 @@ class MonitorReadoutsTest {
     }
 
     @Test
+    fun `the image area tag leads the common recording label, as the body shows it`() {
+        // Twin of the Swift NikonRecordingFormatLabelTests vectors.
+        assertEquals("[FX] 6K · 25p", nikonRecordingFormatLabel("6K · 25p", imageArea = "FX"))
+        assertEquals("[DX] 4K · 50p", nikonRecordingFormatLabel("4K · 50p", imageArea = "DX"))
+        assertEquals("4K · 50p", nikonRecordingFormatLabel("4K · 50p", imageArea = null))
+        assertNull(nikonRecordingFormatLabel(null, imageArea = "FX"))
+    }
+
+    @Test
     fun `monitor and multicam preserve the camera frame counter`() {
         val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 17)
         assertEquals("01:02:03:17", monitorTimecodeLabel(camera))

@@ -8,6 +8,12 @@ import OpenCineNikon
 import OpenZCineCore
 import SwiftUI
 
+/// The FORMAT readout: the common recording label behind the displayed movie token's image-area
+/// tag (`[FX] 6K · 25p`), as the body shows it. Kotlin twin: `nikonRecordingFormatLabel`.
+func nikonRecordingFormatLabel(_ label: String?, imageArea: String?) -> String? {
+    label.map { text in imageArea.map { "[\($0)] " + text } ?? text }
+}
+
 /// Source facts and bounded body operations for the complete common monitor owner.
 private enum NikonLiveReadoutKey: Hashable {
     case picker(CameraPicker)
@@ -274,7 +280,7 @@ struct NikonMonitorShell: View {
         let recordingFormat = model.shell.control.snapshot.map(MonitorCapturePresentation.recordingFormat)
         let recordingLabel = recordingFormat.flatMap(MonitorCapturePresentation.recordingLabel)
         let imageArea = model.recordingFormatPresentations.first { $0.token == model.cameraState.resolutionFrameRate }?.imageArea
-        let formatLabel = recordingLabel.map { text in imageArea.map { "[\($0)] " + text } ?? text }
+        let formatLabel = nikonRecordingFormatLabel(recordingLabel, imageArea: imageArea)
         // The common session publishes the header timecode at frame precision (A5-04).
         let recording =
             model.pictureOnlyMonitor
