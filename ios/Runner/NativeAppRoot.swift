@@ -1982,30 +1982,28 @@ final class NativeAppModel {
     private var relayedBatteryReading: BatteryReading?
     private var relayedBatteryExhausted: Bool?
 
-    var cameraBatteryReading: BatteryReading? {
-        if videoSource == .relay { return relayedBatteryReading }
+    /// The camera's typed power on this device: the session's, or the SIMULATED legacy report
+    /// converted at this composition boundary. A relay carries only its reading, so it has none.
+    private var cameraPower: PowerStatus? {
+        if videoSource == .relay { return nil }
         if isDemoSession {
-            // SIMULATED legacy report conversion belongs at the composition boundary.
             return CameraBatteryGauge.gauge(rawBatteryLevel: cameraState.cameraBatteryPercent)
-                .powerStatus.batteryReading
+                .powerStatus
         }
-        return shell.control.snapshot?.power.batteryReading
+        return shell.control.snapshot?.power
+    }
+
+    var cameraBatteryReading: BatteryReading? {
+        videoSource == .relay ? relayedBatteryReading : cameraPower?.batteryReading
     }
 
     var cameraPowerCharging: Bool? {
-        if videoSource == .relay { return nil }
-        if isDemoSession { return cameraBatteryCharging }
-        let power = shell.control.snapshot?.power
-        return power?.charging.value ?? power?.externalPower.value
+        if videoSource != .relay, isDemoSession { return cameraBatteryCharging }
+        return cameraPower.flatMap { $0.charging.value ?? $0.externalPower.value }
     }
 
     var cameraBatteryExhausted: Bool? {
-        if videoSource == .relay { return relayedBatteryExhausted }
-        if isDemoSession {
-            return CameraBatteryGauge.gauge(rawBatteryLevel: cameraState.cameraBatteryPercent)
-                .powerStatus.exhausted.value
-        }
-        return shell.control.snapshot?.power.exhausted.value
+        videoSource == .relay ? relayedBatteryExhausted : cameraPower?.exhausted.value
     }
 
     var cameraBatteryCharging: Bool?
