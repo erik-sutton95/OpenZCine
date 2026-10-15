@@ -20,6 +20,9 @@ import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
 import enum MonitorPresentation.MonitorThumbnailSize
+import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
+import class OpenCineCameraVocabulary.CustomLUTStore
+import class OpenCineCameraVocabulary.LUTPreferences
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -367,140 +370,66 @@ struct MovablePanelStoredCenter: Codable, Equatable, Sendable {
     }
 }
 
-/// Why a LUT import failed.
-enum LUTImportError: LocalizedError {
-    case unreadableArchive
-    case unreadableFile
-
-    var errorDescription: String? {
-        switch self {
-        case .unreadableArchive: "The downloaded archive couldn't be read."
-        case .unreadableFile: "That file couldn't be read as a .cube LUT."
-        }
-    }
+/// The generated catalogue has no editable stored files. Category policy stays with app composition.
+private enum NikonLUTCategoryError: LocalizedError {
+    case generatedLooksReadOnly
+    var errorDescription: String? { "Built-in LUTs cannot be changed or deleted." }
 }
 
-/// Why a stored LUT could not be removed from the app-owned library.
-enum LUTDeletionError: LocalizedError, Equatable {
-    case builtInProtected
-    case invalidFileName
-    case deletionFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .builtInProtected: "Built-in LUTs cannot be deleted."
-        case .invalidFileName: "That LUT has an invalid stored file name."
-        case .deletionFailed(let displayName): "The LUT \(displayName) could not be deleted."
-        }
-    }
-}
-
-/// File-backed store for stored `.cube` LUTs under `<app documents>/luts/<category>` (custom
-/// imports, downloaded RED presets). Storage is platform-owned (shell); the portable
-/// indexing/parsing lives in OpenZCineCore.
-struct LUTFileStore {
-    /// Root of the per-category subdirectories, `<app documents>/luts`.
-    let root: URL
-
-    init(root: URL? = nil) {
-        if let root {
-            self.root = root
-            return
-        }
+extension CustomLUTStore {
+    /// Preserve the existing Nikon document path and saved category names.
+    convenience init(root: URL? = nil) {
         let documents =
             FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        self.root = documents.appendingPathComponent("luts", isDirectory: true)
+        self.init(
+            root: root ?? documents.appendingPathComponent("luts", isDirectory: true),
+            preferences: LUTPreferences(storage: .standard, namespace: "OpenZCine"))
     }
 
-    private func directory(for category: LUTCategory) -> URL {
-        root.appendingPathComponent(category.rawValue.lowercased(), isDirectory: true)
+    private func storedCategory(_ category: LUTCategory) throws -> CustomLUTStore {
+        guard category != .builtIn else { throw NikonLUTCategoryError.generatedLooksReadOnly }
+        return try self.category(named: category.rawValue.lowercased())
     }
 
-    /// The stored LUTs in `category`, sorted (empty until the directory exists).
     func list(_ category: LUTCategory) -> [StoredCustomLUT] {
-        let path = directory(for: category).path
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-        return CustomLUTIndex.stored(fromFileNames: names)
+        (try? storedCategory(category).list()) ?? []
     }
 
-    /// Copies an external `.cube` into `category`, replacing a same-named file.
-    ///
-    /// The file is parsed first so a cube the renderer cannot apply (wrong size, truncated table,
-    /// non-default domain) never appears in the library as a silent no-op.
     @discardableResult
     func importFile(from source: URL, into category: LUTCategory) throws -> StoredCustomLUT {
-        let data = try Data(contentsOf: source)
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw LUTImportError.unreadableFile
-        }
-        _ = try CubeLUT.parse(text)
-        let directory = directory(for: category)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let destination = directory.appendingPathComponent(source.lastPathComponent)
-        try? FileManager.default.removeItem(at: destination)
-        try data.write(to: destination, options: .atomic)
-        return StoredCustomLUT(fileName: source.lastPathComponent)
+        try storedCategory(category).importFile(from: source)
     }
 
-    /// Extracts every `.cube` from a zip's bytes into `category`, flattening nested folders to the
-    /// file name and skipping non-`.cube` entries. Returns the stored list (sorted).
+    /// ZIPFoundation owns decoding only. The shared store owns bounds, parse and replacement.
     @discardableResult
     func importZip(at zipURL: URL, into category: LUTCategory) throws -> [StoredCustomLUT] {
-        // Stream each entry straight to its destination file — never load the whole zip, or any
-        // extracted file, into memory (a large RED pack would otherwise sit fully resident).
-        let archive: Archive
-        do {
-            archive = try Archive(url: zipURL, accessMode: .read)
-        } catch {
-            throw LUTImportError.unreadableArchive
+        let store = try storedCategory(category)
+        let archive = try Archive(url: zipURL, accessMode: .read)
+        return try store.importArchive { accept in
+            for entry in archive where entry.type != .directory {
+                try accept(
+                    CustomLUTArchiveEntry(
+                        path: entry.path,
+                        uncompressedSize: UInt64(entry.uncompressedSize),
+                        isSymbolicLink: entry.type == .symlink,
+                        extract: { consume in
+                            let checksum = try archive.extract(
+                                entry, bufferSize: 64 * 1024, consumer: consume)
+                            guard checksum == entry.checksum else {
+                                throw Archive.ArchiveError.invalidCRC32
+                            }
+                        }))
+            }
         }
-        let directory = directory(for: category)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        // A .cube LUT is tens of KB to a few MB; cap per-entry, total bytes, and file count so a
-        // malformed or hostile archive (many entries / a zip bomb) can't fill the app container.
-        let maxEntryBytes: UInt64 = 64 * 1024 * 1024
-        let maxTotalBytes: UInt64 = 512 * 1024 * 1024
-        let maxFiles = 512
-        var extractedBytes: UInt64 = 0
-        var extractedFiles = 0
-        for entry in archive
-        where entry.type == .file && entry.path.lowercased().hasSuffix(".cube") {
-            let entryBytes = UInt64(entry.uncompressedSize)
-            guard extractedFiles < maxFiles,
-                entryBytes <= maxEntryBytes,
-                entryBytes <= maxTotalBytes - extractedBytes
-            else { continue }
-            let fileName = (entry.path as NSString).lastPathComponent
-            let destination = directory.appendingPathComponent(fileName)
-            try? FileManager.default.removeItem(at: destination)
-            _ = try archive.extract(entry, to: destination)
-            extractedBytes += entryBytes
-            extractedFiles += 1
-        }
-        return list(category)
     }
 
-    /// Loads and parses a stored cube, or `nil` if it's missing or malformed.
     func cube(category: LUTCategory, fileName: String) -> CubeLUT? {
-        let url = directory(for: category).appendingPathComponent(fileName)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return try? CubeLUT.parse(text)
+        try? storedCategory(category).cube(fileName: fileName)
     }
 
-    /// Deletes one app-owned stored LUT. Built-ins have no file and are always protected.
     func remove(_ lut: StoredCustomLUT, from category: LUTCategory) throws {
-        guard category != .builtIn else { throw LUTDeletionError.builtInProtected }
-        let directory = directory(for: category).standardizedFileURL
-        let candidate = directory.appendingPathComponent(lut.fileName).standardizedFileURL
-        guard lut.fileName == (lut.fileName as NSString).lastPathComponent,
-            candidate.deletingLastPathComponent() == directory
-        else { throw LUTDeletionError.invalidFileName }
-        do {
-            try FileManager.default.removeItem(at: candidate)
-        } catch {
-            throw LUTDeletionError.deletionFailed(lut.displayName)
-        }
+        try storedCategory(category).remove(lut)
     }
 }
 
@@ -1054,7 +983,8 @@ final class NativeAppModel {
     /// prevents transient activation changes during presentation from prompting an immediate
     /// camera-AP rejoin over the page the person just opened.
     @ObservationIgnored private var externalInternetLinkSawBackground = false
-    @ObservationIgnored private var externalInternetLinkToken: MonitorInternetHop<NikonHopRoute>.Token?
+    @ObservationIgnored private var externalInternetLinkToken:
+        MonitorInternetHop<NikonHopRoute>.Token?
     /// The selected destination shown while iOS leaves the camera AP and settles on an
     /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
     /// panel collapse with the camera session.
@@ -2358,7 +2288,7 @@ final class NativeAppModel {
     var cameraLevelPitch: Double?
 
     init(
-        lutFileStore: LUTFileStore = LUTFileStore(),
+        lutFileStore: CustomLUTStore = CustomLUTStore(),
         mediaClipStore: MediaClipStore = MediaClipStore(),
         assist: NikonAssistState? = nil,
         scopePanels: NikonScopePanels? = nil
@@ -2403,7 +2333,7 @@ final class NativeAppModel {
         didSet { PreferencesStore.save(commandGridOrder) }
     }
     /// File store for custom-imported LUTs, and the current list (refreshed when the picker opens).
-    let lutFileStore: LUTFileStore
+    let lutFileStore: CustomLUTStore
     var customLUTs: [StoredCustomLUT] = []
     var redLUTs: [StoredCustomLUT] = []
     /// On-disk cache + index for camera clips (Media page), and the current library list.
@@ -3385,7 +3315,6 @@ final class NativeAppModel {
     private func markFirstPairWizardCompleted() {
         isPairingNewCamera = false
     }
-
 
     /// Starts a fresh discovery loop for the wizard's discover step.
     func beginPairingDiscovery() {
@@ -7021,7 +6950,8 @@ final class NativeAppModel {
             consume: { [weak self] frame, delivery in
                 guard let self, cameraSession === session else { return false }
                 return await consumeCameraFrame(
-                    frame, delivery: delivery, session: session, frameRate: &frameRate, incident: incident)
+                    frame, delivery: delivery, session: session, frameRate: &frameRate,
+                    incident: incident)
             },
             safePoint: { [weak self] count, pollEveryCall in
                 guard let self, cameraSession === session else { return }
@@ -7344,16 +7274,17 @@ final class NativeAppModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshLinkHealth()
-                incident?.publish(lifecycle: FeedIncidentLifecycle(
-                    foreground: !self.screenWakeSuppressedForBackground,
-                    settingsCovered: self.shouldPauseLiveFeed || self.streamsHeaderOnly
-                        || self.videoSource != .cameraLiveView,
-                    playbackActive: self.isMediaPlaybackActive,
-                    connected: self.cameraSession != nil,
-                    thermalState: String(ProcessInfo.processInfo.thermalState.rawValue),
-                    lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                    sceneActive: UIApplication.shared.applicationState == .active,
-                    assistState: "unknown"))
+                incident?.publish(
+                    lifecycle: FeedIncidentLifecycle(
+                        foreground: !self.screenWakeSuppressedForBackground,
+                        settingsCovered: self.shouldPauseLiveFeed || self.streamsHeaderOnly
+                            || self.videoSource != .cameraLiveView,
+                        playbackActive: self.isMediaPlaybackActive,
+                        connected: self.cameraSession != nil,
+                        thermalState: String(ProcessInfo.processInfo.thermalState.rawValue),
+                        lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                        sceneActive: UIApplication.shared.applicationState == .active,
+                        assistState: "unknown"))
                 try? await Task.sleep(
                     for: (self.isMonitorPresented && self.measuredLiveViewFPS > 0)
                         ? .seconds(1) : .seconds(3))
@@ -7743,7 +7674,8 @@ final class NativeAppModel {
             let decodeSource = frameDecoder.source(session)
         else { return false }
         incident?.received()
-        let cleanFrame = await frameDecoder.decode(frame.jpeg, source: decodeSource, incident: incident)
+        let cleanFrame = await frameDecoder.decode(
+            frame.jpeg, source: decodeSource, incident: incident)
         let decoded = await displayReadyLiveFrame(from: cleanFrame)
         guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame
         else { return false }
@@ -8143,7 +8075,8 @@ final class NativeAppModel {
                 logConnection("focus reset: EndTracking PTP OK")
             } catch {
                 showMonitorNotice(
-                    "Camera rejected end-tracking: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                    "Camera rejected end-tracking: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                )
                 focusResetStep = nil
                 return
             }
@@ -8168,7 +8101,8 @@ final class NativeAppModel {
                     )
                 } catch {
                     showMonitorNotice(
-                        "Camera rejected subject-detection suspend: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                        "Camera rejected subject-detection suspend: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                    )
                 }
             }
             try? await session.waitUntilDeviceReady()
@@ -8292,7 +8226,8 @@ final class NativeAppModel {
                     )
                 } catch {
                     showMonitorNotice(
-                        "Camera rejected subject-detection restore: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                        "Camera rejected subject-detection restore: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                    )
                 }
             }
             try? await session.waitUntilDeviceReady()
@@ -10504,41 +10439,58 @@ final class NativeAppModel {
 
     /// Captures one immutable consequence set for playback. Gallery/photo callers keep their
     /// existing preparation policy; playback drains only its exact outgoing item first.
-    func capturePlaybackMediaDeletion(_ clip: MediaClip,
+    func capturePlaybackMediaDeletion(
+        _ clip: MediaClip,
         cleanup: @escaping @MainActor () async -> Bool,
         deleteLocation: ((MediaObjectHandle) async -> Bool)? = nil
     ) -> MonitorOperatorPlaybackDeletionRequest? {
-        guard isConnected, mediaBrowserSource == .camera, clip.handle != nil, let owner = mediaLibrary,
+        guard isConnected, mediaBrowserSource == .camera, clip.handle != nil,
+            let owner = mediaLibrary,
             let current = mediaClips.first(where: { $0.id == clip.id }),
             NikonMediaLibraryAction.sameContent(clip, current)
         else { return nil }
         let plan = deletionPlan(for: [current])
-        guard let action = captureMediaLibraryAction(plan.targets), action.sourceIsCurrent else { return nil }
-        let authority = owner.captureDeletion(key: .init("playback-deletion"), ifCurrent: { [weak self] in
-            self?.isConnected == true && self?.mediaBrowserSource == .camera && action.sourceIsCurrent
-        })
-        let copy = MonitorPlaybackDeletionConfirmation(title: "Delete clip from camera?",
+        guard let action = captureMediaLibraryAction(plan.targets), action.sourceIsCurrent else {
+            return nil
+        }
+        let authority = owner.captureDeletion(
+            key: .init("playback-deletion"),
+            ifCurrent: { [weak self] in
+                self?.isConnected == true && self?.mediaBrowserSource == .camera
+                    && action.sourceIsCurrent
+            })
+        let copy = MonitorPlaybackDeletionConfirmation(
+            title: "Delete clip from camera?",
             message: deletionConfirmMessage(for: [current], plan: plan))
-        return .init(confirmation: copy, authority: authority, perform: { [weak self] in
-            guard let self, authority.isCurrent, self.mediaLibrary === owner,
-                self.playbackDeletionPlanIsCurrent(plan, requested: current) else { return }
-            guard await cleanup(), !Task.isCancelled, authority.isCurrent,
-                self.mediaLibrary === owner,
-                self.playbackDeletionPlanIsCurrent(plan, requested: current) else { return }
-            _ = await self.deleteMediaClips([current], deleteLocation: deleteLocation,
-                admitted: authority, frozenPlan: plan)
-        })
+        return .init(
+            confirmation: copy, authority: authority,
+            perform: { [weak self] in
+                guard let self, authority.isCurrent, self.mediaLibrary === owner,
+                    self.playbackDeletionPlanIsCurrent(plan, requested: current)
+                else { return }
+                guard await cleanup(), !Task.isCancelled, authority.isCurrent,
+                    self.mediaLibrary === owner,
+                    self.playbackDeletionPlanIsCurrent(plan, requested: current)
+                else { return }
+                _ = await self.deleteMediaClips(
+                    [current], deleteLocation: deleteLocation,
+                    admitted: authority, frozenPlan: plan)
+            })
     }
 
-    private func playbackDeletionPlanIsCurrent(_ captured: DeletionPlan, requested: MediaClip) -> Bool {
+    private func playbackDeletionPlanIsCurrent(_ captured: DeletionPlan, requested: MediaClip)
+        -> Bool
+    {
         guard let current = mediaClips.first(where: { $0.id == requested.id }),
-            NikonMediaLibraryAction.sameContent(requested, current) else { return false }
+            NikonMediaLibraryAction.sameContent(requested, current)
+        else { return false }
         let actual = deletionPlan(for: [current])
-        return actual.pairCount == captured.pairCount && actual.masterCount == captured.masterCount &&
-            actual.backupCount == captured.backupCount && actual.targets.count == captured.targets.count &&
-            zip(actual.targets, captured.targets).allSatisfy { current, old in
-                current.id == old.id && current.allLocations == old.allLocations &&
-                    NikonMediaLibraryAction.sameContent(old, current)
+        return actual.pairCount == captured.pairCount && actual.masterCount == captured.masterCount
+            && actual.backupCount == captured.backupCount
+            && actual.targets.count == captured.targets.count
+            && zip(actual.targets, captured.targets).allSatisfy { current, old in
+                current.id == old.id && current.allLocations == old.allLocations
+                    && NikonMediaLibraryAction.sameContent(old, current)
             }
     }
 
@@ -13924,18 +13876,19 @@ extension NativeAppModel {
         let root = mediaClipStore.root
         let revision = mediaActionStoreGeneration
         // Delivery exports nothing holds count and clear with it (A2-58).
-        return delivery.cacheSource(.init(
-            identity: .init(namespace: root.path, source: nil), revision: revision,
-            isCurrent: { [weak self] in self?.mediaClipStore.root == root },
-            count: { [weak self] in self?.totalMediaCacheByteCount() ?? 0 },
-            clear: { [weak self] in
-                guard let self, self.mediaClipStore.root == root,
-                    self.mediaActionStoreGeneration == revision
-                else {
-                    throw CancellationError()
-                }
-                self.clearAllMediaCaches()
-            }))
+        return delivery.cacheSource(
+            .init(
+                identity: .init(namespace: root.path, source: nil), revision: revision,
+                isCurrent: { [weak self] in self?.mediaClipStore.root == root },
+                count: { [weak self] in self?.totalMediaCacheByteCount() ?? 0 },
+                clear: { [weak self] in
+                    guard let self, self.mediaClipStore.root == root,
+                        self.mediaActionStoreGeneration == revision
+                    else {
+                        throw CancellationError()
+                    }
+                    self.clearAllMediaCaches()
+                }))
     }
 
     /// UI actions keep the actual relay source, lease revision and request peer they displayed.

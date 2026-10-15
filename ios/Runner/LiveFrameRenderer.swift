@@ -2,6 +2,8 @@ import CoreImage
 import OpenCineMedia
 import UIKit
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Bakes monitor analysis effects (LUT, peaking, zebra, false colour) **off the main actor**.
 ///
 /// Core Image's `createCGImage` readback is expensive; confining `LiveFrameProcessor` to this actor
@@ -14,7 +16,7 @@ actor LiveFrameRenderer {
         .cacheIntermediates: false,
     ])
 
-    init(fileStore: LUTFileStore) {
+    init(fileStore: CustomLUTStore) {
         processor = LiveFrameProcessor(fileStore: fileStore)
     }
 

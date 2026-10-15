@@ -11,8 +11,7 @@ import SwiftUI
 final class NikonMonitorLooks: MonitorLookProvider {
     /// Mirrors `AssistConfiguration.selectedLUT` (the model keeps them in step).
     var selection: LUTSelection = .builtIn(.log3G10Rec709)
-    // ponytail: no shared cube preparation; add one when a shared surface (inspector preview,
-    // export) renders Nikon looks through `MonitorAssistState`.
+    /// The shared preview borrows the calibrated native image; controls do not prepare its cube.
     var cube: CubeLUT? { nil }
     /// The calibrated native graph does not apply the shared input-exposure option.
     var appliesLUTExposure: Bool { false }

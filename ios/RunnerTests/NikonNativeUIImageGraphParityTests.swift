@@ -4,6 +4,7 @@ import OpenZCineCore
 import UIKit
 import XCTest
 
+import class OpenCineCameraVocabulary.CustomLUTStore
 import enum OpenCineMedia.MonitorZebraPaint
 
 @testable import Runner
@@ -62,7 +63,7 @@ import enum OpenCineMedia.MonitorZebraPaint
         let image = try decodedFixture()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore(root: root)
         let donor = FrozenNikonUIImageGraphProcessor(fileStore: store)
         let composed = LiveFrameProcessor(fileStore: store)
         XCTAssertTrue(donor.render(image, effects: LiveImageEffects()) === image)
@@ -96,7 +97,7 @@ import enum OpenCineMedia.MonitorZebraPaint
         let image = try decodedFixture()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = LUTFileStore(root: root)
+        let store = CustomLUTStore(root: root)
         let donor = FrozenNikonUIImageGraphProcessor(fileStore: store)
         let composed = LiveFrameProcessor(fileStore: store)
         let context = CIContext(options: [

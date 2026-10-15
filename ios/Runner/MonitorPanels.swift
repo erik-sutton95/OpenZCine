@@ -1739,6 +1739,9 @@ struct DrumSideAdjustButton: View {
 
 /// Nikon supplies catalogue values and actions; the shared picker owns tabs, rows and import UI.
 struct NikonLUTPicker: View {
+    let embedded: Bool
+
+    init(embedded: Bool = true) { self.embedded = embedded }
     @Environment(NativeAppModel.self) private var model
     @State private var redFilter = RedOutputFilter.all
 
@@ -1758,7 +1761,7 @@ struct NikonLUTPicker: View {
 
     var body: some View {
         MonitorLUTPickerView(
-            assist: model.assist, embedded: true,
+            assist: model.assist, embedded: embedded,
             haptics: OperatorHaptics(isEnabled: { model.preferences.hapticsEnabled }),
             palette: LiveDesign.self,
             prepare: {
@@ -2078,7 +2081,8 @@ struct OperatorSettingsPanel: View {
             }),
             transfer: model.exposureSignalMapping.curve.monitorTransfer,
             clipByte: model.exposureSignalMapping.clipByte,
-            lookLabel: lookLabel, lookCatalog: { AnyView(NikonLUTPicker().environment(model)) },
+            lookLabel: lookLabel,
+            lookCatalog: { AnyView(NikonLUTPicker(embedded: false).environment(model)) },
             input: .init(
                 remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
                 remoteTitle: "Bluetooth Remote Shutter",

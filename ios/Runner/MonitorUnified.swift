@@ -484,7 +484,10 @@ struct NikonMonitorShell: View {
             preview: {
                 if let tool = MonitorAssistTool(rawValue: $0.rawValue),
                     MonitorInspectorPreviewPolicy.isImage($0)
-                        || [.waveform, .parade, .histogram, .vectorscope, .trafficLights].contains(
+                        || [
+                            .waveform, .parade, .histogram, .vectorscope, .trafficLights,
+                            .audioMeters,
+                        ].contains(
                             tool)
                 {
                     NikonAssistInspectorPreview(tool: tool)
@@ -494,7 +497,8 @@ struct NikonMonitorShell: View {
         )
         .overlay { MonitorRecoveryOverlay() }
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
-        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value }
+        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value
+        }
         .onChange(of: model.shell.monitor?.id, initial: true) { _, monitor in
             model.operatorSession.synchronize(source: monitor)
         }

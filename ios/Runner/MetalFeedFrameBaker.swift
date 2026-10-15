@@ -4,6 +4,8 @@ import OpenCineApple
 import UIKit
 import os
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Source calibration and diagnostic adapter; shared native runtime owns bake work and targets.
 final class MetalFeedFrameBaker: @unchecked Sendable {
     let native: MonitorFrameBaker
@@ -11,7 +13,7 @@ final class MetalFeedFrameBaker: @unchecked Sendable {
     private let processor: LiveFrameProcessor
     private var lastCropSignature: String?
 
-    init(device: MTLDevice, fileStore: LUTFileStore) {
+    init(device: MTLDevice, fileStore: CustomLUTStore) {
         native = MonitorFrameBaker(
             device: device, workingSpace: .encodedSRGB,
             scheduling: .waitForGPUCompletion, unavailableTarget: .drop)
