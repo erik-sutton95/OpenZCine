@@ -1,6 +1,7 @@
 import Foundation
 import MonitorPresentation
 import MonitorUI
+import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineHostedAccessibility
 import OpenZCineCore
@@ -207,6 +208,19 @@ extension SettingsSharedOwnerTests {
 /// A2-31: Z's HDR display choice drives the shared HDR display owner the Metal feed, scopes and
 /// chrome read, on the common preference key; screen capture drops it to SDR.
 extension SettingsSharedOwnerTests {
+    /// A Settings browser link goes through the shared handoff on the app's one hop: off the
+    /// camera network it opens at once and holds nothing (Z adopts the shared owner).
+    @Test func settingsBrowserLinksUseTheSharedHandoff() async {
+        let model = NativeAppModel()
+        let handoff: MonitorBrowserInternetHandoff<NikonHopRoute> = model.browserHandoff
+        #expect(!model.isOnCameraAccessPoint)
+        let prepared = await handoff.prepare(
+            route: model.hopRoute(rehostActivePanel: false), admission: { true })
+        #expect(prepared != nil)
+        #expect(!handoff.isHolding)
+        #expect(handoff.becameActive() == nil)
+    }
+
     @Test func hdrDisplayDrivesTheSharedOwnerAndDropsWhileCaptured() {
         let saved = PreferencesStore.hdrDisplay
         defer {

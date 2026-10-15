@@ -40,28 +40,6 @@ struct ExternalBetaDiagnosticsTests {
         }
     }
 
-    @Test("External pages reconnect only after the accepted browser handoff backgrounds the app")
-    func externalBrowserReturnPolicy() {
-        #expect(
-            !ExternalInternetLinkReturnPolicy.shouldReconnect(
-                handoffActive: true,
-                sawBackground: false
-            )
-        )
-        #expect(
-            ExternalInternetLinkReturnPolicy.shouldReconnect(
-                handoffActive: true,
-                sawBackground: true
-            )
-        )
-        #expect(
-            !ExternalInternetLinkReturnPolicy.shouldReconnect(
-                handoffActive: false,
-                sawBackground: true
-            )
-        )
-    }
-
     @Test("Event-channel diagnostics ignore expected cancellation and stale sessions")
     func eventChannelDiagnosticPolicy() {
         #expect(

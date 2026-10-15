@@ -2364,10 +2364,12 @@ struct OperatorSettingsPanel: View {
             makeReport: { try await AppDiagnostics.shared.makeReport() },
             prepareBrowser: { [weak model] admission in
                 guard let model else { return nil }
-                return await model.prepareExternalInternetLinkHandoffCaptured(admission: {
-                    let admitted = admission()
-                    return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
-                })
+                return await model.browserHandoff.prepare(
+                    route: model.hopRoute(rehostActivePanel: false),
+                    admission: {
+                        let admitted = admission()
+                        return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
+                    })
             },
             open: { url in
                 await withCheckedContinuation { continuation in

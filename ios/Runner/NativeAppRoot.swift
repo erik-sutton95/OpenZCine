@@ -482,14 +482,6 @@ extension CustomLUTStore {
     }
 }
 
-enum ExternalInternetLinkReturnPolicy {
-    /// Rejoin only after an active browser handoff actually backgrounded the app. Presentation
-    /// transitions alone can produce active-state churn while the destination is still opening.
-    static func shouldReconnect(handoffActive: Bool, sawBackground: Bool) -> Bool {
-        handoffActive && sawBackground
-    }
-}
-
 enum EventChannelDiagnosticPolicy {
     static func shouldRecordUnexpectedEnd(isCancelled: Bool, ownsSession: Bool) -> Bool {
         !isCancelled && ownsSession
@@ -1038,15 +1030,9 @@ final class NativeAppModel {
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
     /// internet. Drives the download screen's "Switching networks…" state.
     var internetHopActive: Bool { internetHop.isActive }
-    /// True only while a browser link is intentionally using an internet hop. On return to the
-    /// foreground, the app rejoins the camera AP through the normal saved-profile pipeline.
-    private(set) var externalInternetLinkHandoffActive = false
-    /// Set only after an accepted external-browser handoff actually backgrounds OpenZCine. This
-    /// prevents transient activation changes during presentation from prompting an immediate
-    /// camera-AP rejoin over the page the person just opened.
-    @ObservationIgnored private var externalInternetLinkSawBackground = false
-    @ObservationIgnored private var externalInternetLinkToken:
-        MonitorInternetHop<NikonHopRoute>.Token?
+    /// Settings browser links (support, GitHub, privacy) hold the hop until the person returns
+    /// from the browser: the shared handoff every app uses (A2-22).
+    @ObservationIgnored lazy var browserHandoff = MonitorBrowserInternetHandoff(hop: internetHop)
     /// The selected destination shown while iOS leaves the camera AP and settles on an
     /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
     /// panel collapse with the camera session.
@@ -5480,49 +5466,6 @@ final class NativeAppModel {
         )
     }
 
-    /// Leaves the camera AP only when needed and waits for a validated internet route before an
-    /// external support, GitHub, or privacy link is opened.
-    func prepareExternalInternetLinkHandoff() async -> Bool {
-        await prepareExternalInternetLinkHandoffCaptured(admission: { true }) != nil
-    }
-
-    /// The common settings action retains its own route through native preparation and browser IO.
-    func prepareExternalInternetLinkHandoffCaptured(
-        admission: @escaping @MainActor () -> Bool
-    ) async -> MonitorSettingsBrowserHandoff? {
-        guard admission() else { return nil }
-        guard isOnCameraAccessPoint else {
-            return .init(isCurrent: admission, complete: { _ in })
-        }
-        guard
-            let token = internetHop.begin(hopRoute(rehostActivePanel: false), admission: admission)
-        else { return nil }
-        guard await internetHop.waitForInternet(token), internetHop.owns(token), admission()
-        else {
-            await internetHop.end(token)?.value
-            return nil
-        }
-        externalInternetLinkToken = token
-        externalInternetLinkSawBackground = false
-        externalInternetLinkHandoffActive = true
-        return .init(
-            isCurrent: { [weak self] in
-                guard let self, self.internetHop.owns(token) else { return false }
-                return admission() && self.internetHop.owns(token)
-            },
-            complete: { [weak self] accepted in
-                guard let self else { return }
-                if !accepted {
-                    if self.externalInternetLinkToken == token {
-                        self.externalInternetLinkToken = nil
-                        self.externalInternetLinkSawBackground = false
-                        self.externalInternetLinkHandoffActive = false
-                    }
-                    await self.internetHop.end(token)?.value
-                }
-            })
-    }
-
     /// Shows root-owned progress while an external destination waits for an internet route.
     func beginInternetDestinationPreparation(_ title: String) {
         internetDestinationPreparationTitle = title
@@ -5533,39 +5476,6 @@ final class NativeAppModel {
     func finishInternetDestinationPreparation(_ title: String) {
         guard internetDestinationPreparationTitle == title else { return }
         internetDestinationPreparationTitle = nil
-    }
-
-    /// Completes a rejected browser handoff immediately so the camera is not left disconnected.
-    func completeExternalInternetLinkHandoff(browserAccepted: Bool) {
-        guard !browserAccepted else { return }
-        guard externalInternetLinkHandoffActive else { return }
-        let captured = externalInternetLinkToken
-        externalInternetLinkToken = nil
-        externalInternetLinkSawBackground = false
-        externalInternetLinkHandoffActive = false
-        if let captured { internetHop.end(captured) }
-    }
-
-    /// Records that an accepted external page really took OpenZCine into the background. A mere
-    /// inactive/active transition is not enough evidence that the person finished with the page.
-    func noteExternalInternetLinkHandoffEnteredBackground() {
-        guard externalInternetLinkHandoffActive else { return }
-        externalInternetLinkSawBackground = true
-    }
-
-    /// Rejoins the camera after the person returns from the external browser.
-    func resumeExternalInternetLinkHandoffIfNeeded() {
-        guard
-            ExternalInternetLinkReturnPolicy.shouldReconnect(
-                handoffActive: externalInternetLinkHandoffActive,
-                sawBackground: externalInternetLinkSawBackground
-            )
-        else { return }
-        let captured = externalInternetLinkToken
-        externalInternetLinkToken = nil
-        externalInternetLinkSawBackground = false
-        externalInternetLinkHandoffActive = false
-        if let captured { internetHop.end(captured) }
     }
 
     /// Re-applies the camera AP config (throttled) while waiting for a just-paired camera to return,
@@ -13616,6 +13526,7 @@ struct NativeAppRoot: View {
         .background(MonitorTheme.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
+        .monitorBrowserHandoffReturn(model.browserHandoff)
         .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
             // paired/reachable or WatchConnectivity is unsupported.
@@ -13628,7 +13539,6 @@ struct NativeAppRoot: View {
             for await _ in NotificationCenter.default.notifications(
                 named: UIApplication.didEnterBackgroundNotification)
             {
-                model.noteExternalInternetLinkHandoffEnteredBackground()
                 model.shell.setSceneActive(false)
             }
         }
@@ -13648,7 +13558,6 @@ struct NativeAppRoot: View {
                 named: UIApplication.didBecomeActiveNotification)
             {
                 model.updateBluetoothShutter()
-                model.resumeExternalInternetLinkHandoffIfNeeded()
             }
         }
         .task {
