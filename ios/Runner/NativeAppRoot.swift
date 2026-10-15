@@ -658,8 +658,12 @@ final class NativeAppModel {
             transport: FirstPairTransportMethod,
             skipsPermissions: Bool
         ) -> [FirstPairWizardStep] {
-            var steps: [FirstPairWizardStep] = skipsPermissions ? [] : [.permissions]
-            steps.append(.chooseTransport)
+            // The path is chosen first, so a permission is asked only for a path that uses it:
+            // Local Network for the wireless paths, nothing for a cable (USB keeps its own
+            // control-access request, HDMI capture its own video-access request). Android's
+            // `PairingFlow` has the same order.
+            var steps: [FirstPairWizardStep] = [.chooseTransport]
+            if !skipsPermissions, !transport.isCableLink { steps.append(.permissions) }
             steps.append(.prepareCamera)
             // HDMI capture is a cable and a capture device: there is no network to set up.
             if transport != .hdmiCapture { steps.append(.connectNetwork) }
@@ -719,7 +723,7 @@ final class NativeAppModel {
         let password: String
     }
 
-    var firstPairWizardStep: FirstPairWizardStep = .permissions
+    var firstPairWizardStep: FirstPairWizardStep = .chooseTransport
     var firstPairTransportMethod: FirstPairTransportMethod = .cameraAccessPoint
 
     /// Forces the first-pair wizard even when saved cameras already exist — set when the operator
@@ -2805,7 +2809,7 @@ final class NativeAppModel {
         didPrepareStartup = true
         refreshSavedCameras()
         applyStartupDestination()
-        if shouldShowFirstPairWizard, firstPairWizardStep == .permissions {
+        if shouldShowFirstPairWizard, firstPairWizardStep == .chooseTransport {
             configureFirstPairWizardEntry()
         }
         Task { await refreshConnectedWiFiSSID() }
@@ -2899,25 +2903,33 @@ final class NativeAppModel {
         credentials: CameraWiFiPasswordSubmission,
         joinStrategy: WiFiJoinCoordinator.JoinStrategy
     ) async throws {
+        // Hotspot work still queued behind an earlier pending join runs only for this connection.
+        let generation = connectionGeneration
+        let isCurrent: CameraNetworkIsCurrent = { [weak self] in
+            self?.connectionGeneration == generation
+        }
         switch target {
         case .specificSSID(let ssid):
             try await WiFiJoinCoordinator.shared.joinCameraNetwork(
                 ssid: ssid,
                 password: credentials.password,
-                strategy: joinStrategy
+                strategy: joinStrategy,
+                isCurrent: isCurrent
             )
         case .ssidPrefix(let prefix):
             if let resolvedSSID = credentials.ssid, !resolvedSSID.isEmpty {
                 try await WiFiJoinCoordinator.shared.joinCameraNetwork(
                     ssid: resolvedSSID,
                     password: credentials.password,
-                    strategy: joinStrategy
+                    strategy: joinStrategy,
+                    isCurrent: isCurrent
                 )
             } else {
                 try await WiFiJoinCoordinator.shared.joinCameraNetwork(
                     ssidPrefix: prefix,
                     password: credentials.password,
-                    strategy: joinStrategy
+                    strategy: joinStrategy,
+                    isCurrent: isCurrent
                 )
             }
         }
@@ -3290,13 +3302,13 @@ final class NativeAppModel {
             skipsPermissions: firstPairWizardSkipsPermissions) != nil
     }
 
-    /// Seeds the wizard at permissions or the first post-permissions step.
+    /// Seeds the wizard at the transport choice; a wireless choice then visits permissions unless
+    /// Local Network access was already acknowledged.
     private func configureFirstPairWizardEntry() {
-        let skipPermissions = StartupPermissionsCoordinator.permissionsAlreadySatisfied(
+        firstPairWizardSkipsPermissions = StartupPermissionsCoordinator.permissionsAlreadySatisfied(
             alreadyPairedCameras: !savedCameras.isEmpty
         )
-        firstPairWizardSkipsPermissions = skipPermissions
-        firstPairWizardStep = skipPermissions ? .chooseTransport : .permissions
+        firstPairWizardStep = .chooseTransport
         // A device that only ever watches never pairs, so the wizard is the ONLY screen it sees —
         // and broadcasts must be findable from it, or a watcher is walled into a connection setup
         // it has no camera for. Browsing is idempotent and joining tears it down.

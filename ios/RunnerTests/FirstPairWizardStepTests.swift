@@ -1,5 +1,6 @@
 import MonitorPresentation
 import OpenCineApple
+import OpenCineCore
 import OpenZCineCore
 import Testing
 
@@ -7,6 +8,41 @@ import Testing
 
 @Suite("First-pair wizard step numbering")
 struct FirstPairWizardStepTests {
+
+    @Test("SIMULATED: transport is chosen before a wireless permission request")
+    func networkPermissionFollowsTransportChoice() {
+        for transport: NativeAppModel.FirstPairTransportMethod in [
+            .cameraAccessPoint, .phoneHotspot, .wiFiNetwork,
+        ] {
+            let steps = NativeAppModel.FirstPairWizardStep.sequence(
+                transport: transport, skipsPermissions: false)
+            #expect(Array(steps.prefix(2)) == [.chooseTransport, .permissions])
+        }
+    }
+
+    @Test("SIMULATED: USB control does not require phone camera or Local Network access")
+    func usbControlSkipsUnrelatedNetworkPermissions() {
+        let steps = NativeAppModel.FirstPairWizardStep.sequence(
+            transport: .usbC, skipsPermissions: false)
+        #expect(steps == [.chooseTransport, .prepareCamera, .connectNetwork, .discoverAndPair])
+    }
+
+    @Test("SIMULATED: capture requests its own video access without a Local Network gate")
+    func captureSkipsNetworkPermissionStep() {
+        let steps = NativeAppModel.FirstPairWizardStep.sequence(
+            transport: .hdmiCapture, skipsPermissions: false)
+        #expect(steps == [.chooseTransport, .prepareCamera, .discoverAndPair])
+    }
+
+    @Test("SIMULATED: pairing asks no phone camera permission; only Local Network is required")
+    func firstPairPermissionIsLocalNetworkOnly() {
+        #expect(StartupPermissionKind.allCases == [.localNetwork])
+        // Shared probe evidence maps onto the step's states; an unanswered probe is never denial.
+        #expect(StartupPermissionState(.unknown) == .notDetermined)
+        #expect(StartupPermissionState(.requested) == .requested)
+        #expect(StartupPermissionState(.allowed) == .granted)
+        #expect(StartupPermissionState(.denied) == .denied)
+    }
 
     @Test("Camera Access Point uses four steps when permissions are shown")
     func cameraAPWithPermissions() {
@@ -79,21 +115,24 @@ struct FirstPairWizardStepTests {
         #expect(hotspot.hint == "Waiting for the camera to join this phone's hotspot.")
     }
 
-    @Test("Phone Hotspot and USB-C keep five steps when permissions are shown")
+    /// USB-C asks no Local Network permission (A2-09), so it visits one step fewer than the
+    /// hotspot path when permissions are shown.
+    @Test("Phone Hotspot keeps five steps and USB-C four when permissions are shown")
     func hotspotAndUSBWithPermissions() {
         for transport: NativeAppModel.FirstPairTransportMethod in [.phoneHotspot, .usbC] {
+            let expected = transport == .usbC ? 4 : 5
             let count = NativeAppModel.FirstPairWizardStep.stepCount(
                 transport: transport,
                 skipsPermissions: false
             )
-            #expect(count == 5)
+            #expect(count == expected)
             #expect(
                 NativeAppModel.FirstPairWizardStep.discoverAndPair.isFinalStep(for: transport))
             #expect(
                 !NativeAppModel.FirstPairWizardStep.connectNetwork.isFinalStep(for: transport))
             #expect(
                 NativeAppModel.FirstPairWizardStep.discoverAndPair.displayNumber(
-                    transport: transport, skipsPermissions: false) == 5)
+                    transport: transport, skipsPermissions: false) == expected)
         }
     }
 
@@ -118,19 +157,19 @@ struct FirstPairWizardStepTests {
     func hdmiCaptureSkipsNetwork() {
         let steps = NativeAppModel.FirstPairWizardStep.sequence(
             transport: .hdmiCapture, skipsPermissions: false)
-        #expect(steps == [.permissions, .chooseTransport, .prepareCamera, .discoverAndPair])
+        #expect(steps == [.chooseTransport, .prepareCamera, .discoverAndPair])
         #expect(
             NativeAppModel.FirstPairWizardStep.stepCount(
-                transport: .hdmiCapture, skipsPermissions: false) == 4)
+                transport: .hdmiCapture, skipsPermissions: false) == 3)
         #expect(
             NativeAppModel.FirstPairWizardStep.stepCount(
                 transport: .hdmiCapture, skipsPermissions: true) == 3)
         #expect(NativeAppModel.FirstPairWizardStep.discoverAndPair.isFinalStep(for: .hdmiCapture))
         // The numbering is contiguous even though the visited steps are not — the whole reason the
-        // sequence replaced `rawValue` arithmetic, which would have numbered this one 5 of 4.
+        // sequence replaced `rawValue` arithmetic, which would have numbered this one 5 of 3.
         #expect(
             NativeAppModel.FirstPairWizardStep.discoverAndPair.displayNumber(
-                transport: .hdmiCapture, skipsPermissions: false) == 4)
+                transport: .hdmiCapture, skipsPermissions: false) == 3)
         // A step this path never visits reports no number rather than a misleading one.
         #expect(
             NativeAppModel.FirstPairWizardStep.connectNetwork.displayNumber(
@@ -151,13 +190,17 @@ struct FirstPairWizardStepTests {
         #expect(
             NativeAppModel.FirstPairWizardStep.discoverAndPair.next(
                 transport: transport, skipsPermissions: false) == nil)
-        // Skipping permissions removes the only step before the choice, so Back disappears there.
+        // The choice is the first step on every path, so Back never precedes it.
         #expect(
             NativeAppModel.FirstPairWizardStep.chooseTransport.previous(
                 transport: transport, skipsPermissions: true) == nil)
         #expect(
             NativeAppModel.FirstPairWizardStep.chooseTransport.previous(
-                transport: transport, skipsPermissions: false) == .permissions)
+                transport: transport, skipsPermissions: false) == nil)
+        // A wireless permission step returns to the choice.
+        #expect(
+            NativeAppModel.FirstPairWizardStep.permissions.previous(
+                transport: .wiFiNetwork, skipsPermissions: false) == .chooseTransport)
     }
 
     /// The wizard offers two cards, each grouping several paths — the operator picks a kind of
@@ -206,7 +249,7 @@ struct FirstPairWizardStepTests {
             transport: .wiFiNetwork, skipsPermissions: false)
         #expect(
             steps == [
-                .permissions, .chooseTransport, .prepareCamera, .connectNetwork, .discoverAndPair,
+                .chooseTransport, .permissions, .prepareCamera, .connectNetwork, .discoverAndPair,
             ]
         )
         #expect(
@@ -283,5 +326,133 @@ struct FirstPairWizardStepTests {
         #expect(model.pendingCameraWiFiJoinTarget == .specificSSID("NIKONZ_8_X12345"))
         #expect(model.cameraWiFiJoinKeyFromScan)
         #expect(model.cameraWiFiJoinHasPasswordDraft)
+    }
+}
+
+@Suite @MainActor
+struct CameraNetworkNativeCharacterizationTests {
+    @Test func cancellingAnOutstandingPickerIsCancellationNotFallback() async {
+        guard #available(iOS 18.0, *) else { return }
+        let session = ControlledAccessorySession()
+        let owner = AccessorySetupWiFiCoordinator(makeNative: { session.native })
+        let joining = Task {
+            try await owner.joinCameraNetwork(ssid: "NIKON_ZR_TEST", password: nil)
+        }
+        await session.waitForPicker()
+        joining.cancel()
+        do {
+            try await joining.value
+            Issue.record("Cancelled picker cannot succeed")
+        } catch { #expect(error is CancellationError) }
+    }
+
+    @Test func aCancelledNativePickerIsRetiredBeforeAnotherSessionIsAdmitted() async {
+        guard #available(iOS 18.0, *) else { return }
+        let factory = ControlledAccessoryFactory()
+        let owner = AccessorySetupWiFiCoordinator(makeNative: { factory.make() })
+        let joining = Task {
+            try await owner.joinCameraNetwork(ssid: "NIKON_ZR_TEST", password: nil)
+        }
+        await factory.sessions[0].waitForPicker()
+        joining.cancel()
+        _ = await joining.result
+        #expect(factory.sessions[0].invalidations == 1)
+        let replacement = Task {
+            try await owner.joinCameraNetwork(ssid: "NIKON_ZR_NEXT", password: nil)
+        }
+        await factory.waitForPicker(count: 2)
+        #expect(factory.sessions.count == 2)
+        factory.sessions[0].event?(.pickerDidDismiss)
+        replacement.cancel()
+        _ = await replacement.result
+    }
+
+    @Test func cancellationDuringNativeJoinCannotBecomeReadinessSuccess() async {
+        guard #available(iOS 18.0, *) else { return }
+        let session = ControlledAccessorySession(authorizedSSID: "NIKON_ZR_TEST")
+        let owner = AccessorySetupWiFiCoordinator(makeNative: { session.native })
+        let joining = Task {
+            try await owner.joinCameraNetwork(ssid: "NIKON_ZR_TEST", password: nil)
+        }
+        await session.waitForNativeJoin()
+        joining.cancel()
+        session.completeJoin()
+        do {
+            try await joining.value
+            Issue.record("Cancelled join cannot become ready")
+        } catch { #expect(error is CancellationError) }
+    }
+}
+
+/// SIMULATED: picker, native joins and events never call AccessorySetupKit or network APIs.
+@available(iOS 18.0, *)
+@MainActor private final class ControlledAccessorySession {
+    var event: (@MainActor (AccessorySetupWiFiCoordinator.Event) -> Void)?
+    var invalidations = 0
+    var onPicker: (() -> Void)?
+    private var pickerShown = false
+    private var pickerWaiter: CheckedContinuation<Void, Never>?
+    private var joinWaiter: CheckedContinuation<Void, Error>?
+    private var joinedWaiter: CheckedContinuation<Void, Never>?
+    let authorizedSSID: String?
+    init(authorizedSSID: String? = nil) { self.authorizedSSID = authorizedSSID }
+    var native: AccessorySetupWiFiCoordinator.Native {
+        .init(
+            activate: { [unowned self] callback in
+                event = callback
+                callback(.activated)
+            },
+            accessories: { [unowned self] in
+                authorizedSSID.map { [.init(ssid: $0, authorized: true, native: nil)] } ?? []
+            },
+            showPicker: { [unowned self] _, _ in
+                pickerShown = true
+                pickerWaiter?.resume()
+                pickerWaiter = nil
+                onPicker?()
+            },
+            join: { [unowned self] _, _ in
+                try await withCheckedThrowingContinuation { continuation in
+                    joinWaiter = continuation
+                    joinedWaiter?.resume()
+                    joinedWaiter = nil
+                }
+            }, invalidate: { [unowned self] in invalidations += 1 },
+            localAddresses: { [] }, currentSSID: { nil })
+    }
+    func waitForPicker() async {
+        if pickerShown { return }
+        await withCheckedContinuation { pickerWaiter = $0 }
+    }
+    func waitForNativeJoin() async {
+        if joinWaiter != nil { return }
+        await withCheckedContinuation { joinedWaiter = $0 }
+    }
+    func completeJoin() {
+        joinWaiter?.resume()
+        joinWaiter = nil
+    }
+}
+
+@available(iOS 18.0, *)
+@MainActor private final class ControlledAccessoryFactory {
+    var sessions: [ControlledAccessorySession] = []
+    private var pickerCount = 0
+    private var waiting: (Int, CheckedContinuation<Void, Never>)?
+    func make() -> AccessorySetupWiFiCoordinator.Native {
+        let session = ControlledAccessorySession()
+        session.onPicker = { [unowned self] in
+            pickerCount += 1
+            if let (count, continuation) = waiting, pickerCount >= count {
+                waiting = nil
+                continuation.resume()
+            }
+        }
+        sessions.append(session)
+        return session.native
+    }
+    func waitForPicker(count: Int) async {
+        if pickerCount >= count { return }
+        await withCheckedContinuation { waiting = (count, $0) }
     }
 }
