@@ -48,8 +48,10 @@ struct MulticamStage: View {
                     get: { coordinator.focusedSlot }, set: { coordinator.select(slot: $0) }),
                 fill: Binding(
                     get: { coordinator.presentation.fill },
-                    set: { coordinator.presentation.fill = $0 }), tools: [.layout, .fit],
+                    set: { coordinator.presentation.fill = $0 }),
+                tools: [.layout, .camera, .fit, .lut],
                 readouts: coordinator.program.flatMap { $0.isLive ? readouts($0) : nil },
+                lut: coordinator.lutOn,
                 recording: coordinator.anyRecording, groupBusy: coordinator.groupBusy,
                 confirmsRecord: confirmsRecord,
                 actions: MultiviewStageActions(
@@ -57,8 +59,11 @@ struct MulticamStage: View {
                         if let member = coordinator.member(atSlot: slot) { openLiveView(member.id) }
                     },
                     add: { addingSlot = $0 }, perform: perform, choose: choose,
+                    toggleLUT: coordinator.toggleLUT,
+                    openSettings: coordinator.openCameraSettings,
                     close: { leaving = true }, recordContext: recordContext,
-                    record: { plan, _ in await coordinator.run(plan) })
+                    record: { plan, _ in await coordinator.run(plan) },
+                    popupsClosed: coordinator.closePanels)
             ) { slot in
                 if let frame = coordinator.member(atSlot: slot)?.frame {
                     Image(uiImage: frame).resizable()
@@ -67,6 +72,13 @@ struct MulticamStage: View {
                 }
             }
             .multiviewStageState(coordinator.presentation)
+            .multiviewStageServices(
+                .init(
+                    availability: .init(
+                        cameraSettingsSlots: coordinator.cameraSettingsSlots,
+                        pictureLUTSlots: coordinator.pictureLUTSlots),
+                    configureLUT: { [coordinator] in coordinator.openLookSettings(slot: $0) })
+            )
             .overlay(alignment: .top) {
                 if let toast = coordinator.toast {
                     MulticamToast(text: toast) { coordinator.toast = nil }
@@ -75,11 +87,28 @@ struct MulticamStage: View {
                 }
             }
             .overlay {
+                if let editor = coordinator.cameraEditor {
+                    MulticamCameraSettings(
+                        coordinator: coordinator, editor: editor, viewport: viewport
+                    )
+                    .id(editor.id)
+                }
+            }
+            .overlay {
+                if let id = coordinator.lookEditor, let member = coordinator.member(id) {
+                    MulticamLookSettings(
+                        coordinator: coordinator, member: member, viewport: viewport
+                    )
+                    .id(id)
+                }
+            }
+            .overlay {
                 if let slot = addingSlot {
                     picker(slot)
                 }
             }
         }
+        .onDisappear(perform: coordinator.closePanels)
         .ignoresSafeArea()
         .background(MonitorTheme.canvas.ignoresSafeArea())
         .foregroundStyle(MonitorTheme.text)

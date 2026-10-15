@@ -2301,6 +2301,10 @@ final class NativeAppModel {
         let stageStore = MultiviewStagePreferencesStore(
             storage: .standard, key: "multiview.presentation")
         multicam.presentation.attachPersistence(load: stageStore.load, save: stageStore.save)
+        multicam.lutFileStore = lutFileStore
+        multicam.defaultLUT = { [weak self] in
+            self?.assistConfiguration.selectedLUT ?? .builtIn(.nLogRec709)
+        }
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -13491,6 +13495,7 @@ struct NativeRootContent: View {
                     openLiveView: model.openMulticamLiveView,
                     close: model.endMulticam
                 )
+                .multiviewStageVisible(model.shell.monitor == nil)
                 .opacity(model.shell.monitor == nil ? 1 : 0)
                 .allowsHitTesting(model.shell.monitor == nil)
                 .accessibilityHidden(model.shell.monitor != nil)
