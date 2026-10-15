@@ -1,4 +1,5 @@
 import MonitorUI
+import OpenCineAppKit
 import OpenZCineCore
 import SwiftUI
 import WebKit
@@ -22,6 +23,9 @@ struct RedDownloadView: View {
     /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
     private var reachability: InternetReachability { .shared }
     @State private var pageLoadWatchdog: Task<Void, Never>?
+    /// The internet hop this screen began, if any. Leaving the screen ends only this hop, never
+    /// one another owner started (A2-59).
+    @State private var hopToken: MonitorInternetHop<NikonHopRoute>.Token?
 
     /// Once the operator taps DOWNLOAD the flow takes over its own full-screen page, so they never
     /// drop back onto RED's store: downloading (with progress) → importing → success or failure.
@@ -141,9 +145,10 @@ struct RedDownloadView: View {
         .onDisappear {
             pageLoadWatchdog?.cancel()
             pageLoadWatchdog = nil
-            // If an internet hop is active, leaving this screen is the cue to rejoin the
-            // camera's Wi‑Fi and reconnect. No-op otherwise.
-            model.endInternetHop()
+            // Leaving this screen is the cue to rejoin the camera's Wi‑Fi and reconnect, but only
+            // for the hop this screen began and still owns. Another owner's hop keeps running.
+            if let hopToken, model.internetHop.owns(hopToken) { model.internetHop.end(hopToken) }
+            hopToken = nil
         }
     }
 
@@ -273,7 +278,11 @@ struct RedDownloadView: View {
 
                 if availability == .blockedOnCameraAccessPoint {
                     Button {
-                        model.beginInternetHop()
+                        // A refused begin (another hop already runs) keeps any token this
+                        // screen already holds.
+                        if let token = model.internetHop.begin(model.hopRoute()) {
+                            hopToken = token
+                        }
                     } label: {
                         Label(
                             "Download over internet",
