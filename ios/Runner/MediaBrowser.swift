@@ -1010,7 +1010,7 @@ struct MediaPlayerView: View {
                 } else {
                     Color.black
                 }
-            }, preview: { _ in EmptyView() }, lookMenu: { LUTPickerContent().environment(model) })
+            }, preview: { _ in EmptyView() }, lookMenu: { NikonLUTPicker().environment(model) })
     }
 
     private func closeAfterEnteredCleanup(_ captured: NikonOperatorPlaybackContext) {

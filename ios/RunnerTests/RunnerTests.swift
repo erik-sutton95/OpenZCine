@@ -3871,6 +3871,28 @@ extension RunnerTests {
 /// SIMULATED native compatibility and rendering through the public picker/preview interfaces.
 @MainActor
 final class SharedLUTPickerCompatibilityTests: XCTestCase {
+    func testProductionPickerDelegatesComparisonToInspectorAndDeclaresExposureUnavailable()
+        async throws
+    {
+        let model = NativeAppModel()
+        model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        let hosted = try Hosted(NikonLUTPicker().environment(model))
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if hosted.labels.contains("Built-in") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(hosted.labels.contains("Built-in"), hosted.labels.joined(separator: ", "))
+        XCTAssertEqual(
+            hosted.labels.filter { $0 == "50 / 50 split" }.count, 0,
+            "The actual embedded picker must leave its single comparison to the shared inspector footer"
+        )
+        XCTAssertFalse(
+            model.assist.looks.appliesLUTExposure,
+            "Nikon rendering does not consume lutExposureStops, so the provider must hide Exposure")
+    }
+
     func testTheOriginalGenericPickerStillRendersItsSuppliedFooter() async throws {
         let name = "lut-picker-compatibility." + UUID().uuidString
         let storage = try XCTUnwrap(UserDefaults(suiteName: name))

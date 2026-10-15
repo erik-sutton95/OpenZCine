@@ -14,6 +14,8 @@ final class NikonMonitorLooks: MonitorLookProvider {
     // ponytail: no shared cube preparation; add one when a shared surface (inspector preview,
     // export) renders Nikon looks through `MonitorAssistState`.
     var cube: CubeLUT? { nil }
+    /// The calibrated native graph does not apply the shared input-exposure option.
+    var appliesLUTExposure: Bool { false }
     var transfer: MonitorTransfer { .rec709 }
     var referenceClipByte: Int { 255 }
     func lutExposureTransfer(for transfer: MonitorTransfer) -> MonitorTransfer { transfer }

@@ -1737,27 +1737,11 @@ struct DrumSideAdjustButton: View {
     }
 }
 
-/// Tabbed LUT picker in the assist panel: category tabs over a drum of that category's looks.
-struct LUTPickerContent: View {
-    private struct PendingLUTDeletion: Identifiable {
-        let category: LUTCategory
-        let lut: StoredCustomLUT
-        var id: String { "\(category.rawValue):\(lut.fileName)" }
-    }
-
+/// Nikon supplies catalogue values and actions; the shared picker owns tabs, rows and import UI.
+struct NikonLUTPicker: View {
     @Environment(NativeAppModel.self) private var model
-    @State private var category: LUTCategory = .builtIn
-    @State private var importing = false
-    @State private var redFilter: RedOutputFilter = .all
-    @State private var pendingDeletion: PendingLUTDeletion?
-    @State private var deletionErrorMessage: String?
-    @State private var importErrorMessage: String?
-    /// Tracks whether a usable internet path exists, so the RED download (which needs the public
-    /// internet) is blocked while the phone is on the camera's local-only Wi‑Fi AP.
-    /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
-    private var reachability: InternetReachability { .shared }
+    @State private var redFilter = RedOutputFilter.all
 
-    /// Narrows the RED drum to one output color space (it ships ~16 looks per space).
     enum RedOutputFilter: String, CaseIterable {
         case all = "All"
         case rec709 = "Rec.709"
@@ -1772,398 +1756,126 @@ struct LUTPickerContent: View {
         }
     }
 
-    /// Fixed height of the region below the tabs so the popup is the same size on every tab.
-    ///
-    /// Landscape is ~400pt tall and this panel had no headroom left, so the 50/50 row below is
-    /// paid for out of the drum rather than added to the panel — at 180 the panel's own header
-    /// and the category tabs went off the top of the screen.
-    private let contentHeight: CGFloat = 146
-    private let footerHeight: CGFloat = 44
-
     var body: some View {
-        VStack(spacing: 8) {
-            SegmentedButtons(
-                items: LUTCategory.allCases.map(\.rawValue),
-                selected: category.rawValue
-            ) { raw in
-                guard let next = LUTCategory(rawValue: raw), next != category else { return }
-                category = next
-                // Switching tabs immediately applies that tab's look, so the live preview tracks the
-                // tab without the operator having to nudge the drum first.
-                applyRepresentativeLUT(for: next)
-            }
-            tabContent
-                .frame(height: contentHeight)
-            splitComparisonControls
-        }
-        .onAppear {
-            model.refreshCustomLUTs()
-            model.refreshRedLUTs()
-            // Open on the tab of whatever's currently applied, so the drum lands on the live look.
-            category = currentCategory
-            // Warm the built-in cubes off the main thread so the first scroll doesn't hitch.
-            Task.detached(priority: .utility) { LUTCubeCache.prewarmBuiltIns() }
-        }
-        .confirmationDialog(
-            pendingDeletion.map { "Delete \($0.lut.displayName)?" } ?? "Delete LUT?",
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }),
-            titleVisibility: .visible
-        ) {
-            if let pendingDeletion {
-                Button("Delete LUT", role: .destructive) {
-                    delete(pendingDeletion)
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingDeletion = nil }
-        } message: {
-            Text("This removes the stored LUT from this device. This action cannot be undone.")
-        }
-        .alert(
-            "Couldn’t Delete LUT",
-            isPresented: Binding(
-                get: { deletionErrorMessage != nil },
-                set: { if !$0 { deletionErrorMessage = nil } })
-        ) {
-            Button("OK") { deletionErrorMessage = nil }
-        } message: {
-            Text(deletionErrorMessage ?? "The LUT could not be deleted.")
-        }
-        .alert(
-            "Couldn’t Import LUT",
-            isPresented: Binding(
-                get: { importErrorMessage != nil },
-                set: { if !$0 { importErrorMessage = nil } })
-        ) {
-            Button("OK") { importErrorMessage = nil }
-        } message: {
-            Text(importErrorMessage ?? "The LUT could not be imported.")
-        }
-    }
-
-    /// The 50/50 Log-vs-LUT comparison: an off-by-default toggle, with its orientation revealed
-    /// beside it only while it is on. The orientation stays persisted either way, so switching the
-    /// comparison off and back on returns to the operator's own choice.
-    ///
-    /// One row, not a stacked toggle-then-picker: landscape is ~400pt tall and this panel already
-    /// spends most of it on the drum, so the two-row version pushed the category tabs off the top
-    /// of the screen.
-    private var splitComparisonControls: some View {
-        MonitorOperatorLookComparison(
-            assist: model.assist,
+        MonitorLUTPickerView(
+            assist: model.assist, embedded: true,
             haptics: OperatorHaptics(isEnabled: { model.preferences.hapticsEnabled }),
-            exposureAvailable: nil,
-            onArm: {
+            palette: LiveDesign.self,
+            prepare: {
+                model.refreshCustomLUTs()
+                model.refreshRedLUTs()
+                Task.detached(priority: .utility) { LUTCubeCache.prewarmBuiltIns() }
+            }, libraries: { libraries }
+        )
+        .onChange(of: model.assist.splitComparison) { _, enabled in
+            if enabled {
                 model.splitComparisonMuted = false
                 model.setAssist(.lut, visible: true)
+            }
+        }
+    }
+
+    /// These descriptors are also used by composition tests, without substituting another provider.
+    var libraries: [LUTPickerLibrary] {
+        let selected = model.assistConfiguration.selectedLUT
+        let builtIn = MonitorLUT.allCases.map {
+            LUTPickerLibrary.Entry(id: $0.rawValue, title: $0.rawValue)
+        }
+        let builtInLook: MonitorLUT? = {
+            if case .builtIn(let look) = selected { return look }
+            return nil
+        }()
+        let builtInLibrary = LUTPickerLibrary(
+            title: LUTCategory.builtIn.rawValue, entries: builtIn,
+            isCurrent: builtInLook != nil, selectedID: builtInLook?.rawValue,
+            representative: .init(
+                id: MonitorLUT.log3G10Rec709.rawValue,
+                title: MonitorLUT.log3G10Rec709.rawValue), caption: builtInLook?.credit ?? "",
+            select: { entry in
+                guard let look = MonitorLUT(rawValue: entry.id) else { return }
+                model.assistConfiguration.selectedLUT = .builtIn(look)
+                model.setAssist(.lut, visible: true)
             })
-    }
-
-    /// The tab matching the currently-applied LUT, so the picker opens where the operator left off.
-    private var currentCategory: LUTCategory {
-        switch model.assistConfiguration.selectedLUT {
-        case .builtIn: return .builtIn
-        case .stored(let category, _): return category
-        }
-    }
-
-    /// Applies a representative look when the operator switches to a tab: the current built-in (or
-    /// Log3G10→709), the recommended RED default, or the first custom import. No-ops for an empty
-    /// RED/Custom tab — its placeholder and import/download button shows instead.
-    private func applyRepresentativeLUT(for category: LUTCategory) {
-        switch category {
-        case .builtIn:
-            if case .builtIn = model.assistConfiguration.selectedLUT { return }
-            model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
-        case .red:
-            guard let lut = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs) else { return }
-            model.assistConfiguration.selectedLUT = .stored(category: .red, fileName: lut.fileName)
-        case .custom:
-            guard let lut = model.customLUTs.first else { return }
-            model.assistConfiguration.selectedLUT = .stored(
-                category: .custom, fileName: lut.fileName)
-        }
-        model.setAssist(.lut, visible: true)
-    }
-
-    /// Height reserved under the built-in drum for the contributor credit. Always reserved, never
-    /// conditional: a line that appears only on the contributed look would resize the drum mid-scroll.
-    private let creditHeight: CGFloat = 16
-
-    /// The look the built-in drum is currently on — `nil` while a stored LUT is applied.
-    private var selectedBuiltIn: MonitorLUT? {
-        guard case .builtIn(let look) = model.assistConfiguration.selectedLUT else { return nil }
-        return look
-    }
-
-    @ViewBuilder private var tabContent: some View {
-        switch category {
-        case .builtIn:
-            VStack(spacing: 0) {
-                AccentDrumWheel(
-                    options: MonitorLUT.allCases.map(\.rawValue),
-                    selection: Binding(
-                        get: {
-                            selectedBuiltIn?.rawValue
-                                ?? MonitorLUT.allCases.first?.rawValue ?? ""
-                        },
-                        set: { name in
-                            guard let look = MonitorLUT(rawValue: name) else { return }
-                            model.assistConfiguration.selectedLUT = .builtIn(look)
-                            // Picking a look turns the LUT on; the bar toggle is the only "off".
-                            model.setAssist(.lut, visible: true)
-                        }
-                    ),
-                    wheelHeight: contentHeight - creditHeight
-                )
-                // Community-contributed looks are credited here rather than in the label — the drum
-                // is one narrow monospaced line and a name would push the look's own name out.
-                Text(selectedBuiltIn?.credit ?? "")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(LiveDesign.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(height: creditHeight)
-            }
-        case .custom:
-            customTab
-        case .red:
-            redTab
-        }
-    }
-
-    /// Whether the RED download may be entered right now. Blocked (with a reason) while the phone
-    /// is on the camera's Wi‑Fi AP or otherwise has no internet path, so the operator never lands
-    /// on a broken/black download screen with no route to RED's servers.
-    private var redDownloadAvailability: RedLUTDownloadAvailability {
-        reachability.redLUTDownloadAvailability
-    }
-
-    @ViewBuilder private var redTab: some View {
-        if model.redLUTs.isEmpty {
-            VStack(spacing: 8) {
-                placeholder(
-                    "RED IPP2 LUTs",
-                    redDownloadAvailability.blockedReason
-                        ?? "Download RED's official looks — you'll accept RED's terms.")
-                downloadRedButton
-                    .frame(height: footerHeight)
-            }
-        } else {
-            // Already downloaded — a color-space filter over the drum, no download button.
-            VStack(spacing: 8) {
-                redFilterRow
-                redDrum
-            }
-        }
-    }
-
-    private var redFilterRow: some View {
-        HStack(spacing: 6) {
-            ForEach(RedOutputFilter.allCases, id: \.self) { filter in
-                let isOn = redFilter == filter
-                Button {
-                    redFilter = filter
-                } label: {
-                    Text(filter.rawValue)
-                        .font(.system(size: 12, weight: .semibold, design: .default))
-                        .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(isOn ? LiveDesign.accentDim : LiveDesign.glass, in: Capsule())
-                }
-                .buttonStyle(.monitorTapTarget)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .onChange(of: redFilter) { _, _ in
-            // Keep the applied RED LUT in sync with the visible drum: if the current selection falls
-            // outside the new filter, snap to the filter's first item so the displayed and applied
-            // looks can't diverge.
-            guard case .stored(.red, let fileName) = model.assistConfiguration.selectedLUT else {
-                return
-            }
-            if !filteredRedLUTs.contains(where: { $0.fileName == fileName }),
-                let first = filteredRedLUTs.first
-            {
-                model.assistConfiguration.selectedLUT = .stored(
-                    category: .red, fileName: first.fileName)
-            }
-        }
+        let availability = InternetReachability.shared.redLUTDownloadAvailability
+        let red = storedLibrary(
+            .red, files: filteredRedLUTs,
+            empty: .init(
+                title: "RED IPP2 LUTs",
+                hint: availability.blockedReason
+                    ?? "Download RED's official looks. You'll accept RED's terms.",
+                action: .init(
+                    title: "Download from RED",
+                    systemImage: availability.isAvailable ? "arrow.down.circle" : "wifi.slash",
+                    perform: { model.isRedDownloadPresented = true })))
+        let custom = storedLibrary(
+            .custom, files: model.customLUTs,
+            empty: .init(
+                title: "No custom LUTs yet", hint: "Import a .cube file to add your own look."))
+        return [builtInLibrary, red, custom]
     }
 
     private var filteredRedLUTs: [StoredCustomLUT] {
-        let base =
+        let filtered =
             redFilter.match.map { needle in
                 model.redLUTs.filter { $0.fileName.uppercased().contains(needle) }
             } ?? model.redLUTs
-        // Float the recommended default (REC.709 Medium Contrast Soft) to the top so it's the first
-        // item — and the one the drum lands on after a fresh download.
-        guard let defaultLUT = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs),
-            let index = base.firstIndex(of: defaultLUT)
-        else { return base }
-        var reordered = base
-        reordered.remove(at: index)
-        reordered.insert(defaultLUT, at: 0)
-        return reordered
+        guard let preferred = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs),
+            filtered.contains(preferred)
+        else { return filtered }
+        return [preferred] + filtered.filter { $0 != preferred }
     }
 
-    /// The short name of the recommended default, flagged with a star in the drum.
-    private var defaultRedShortName: String? {
-        LUTLibraryIndex.defaultRedLUT(from: model.redLUTs).map { RedPresetName.short($0.fileName) }
-    }
-
-    private var redDrum: some View {
-        AccentDrumWheel(
-            options: filteredRedLUTs.map { RedPresetName.short($0.fileName) },
-            selection: Binding(
-                get: {
-                    if case .stored(.red, let fileName) = model.assistConfiguration.selectedLUT,
-                        filteredRedLUTs.contains(where: { $0.fileName == fileName }),
-                        let lut = model.redLUTs.first(where: { $0.fileName == fileName })
-                    {
-                        return RedPresetName.short(lut.fileName)
-                    }
-                    return filteredRedLUTs.first.map { RedPresetName.short($0.fileName) } ?? ""
-                },
-                set: { shortName in
-                    // Resolve within the *filtered* list so colliding short names across output
-                    // spaces (Rec.709 vs Rec.2020) can't select the wrong stored file.
-                    guard
-                        let lut = filteredRedLUTs.first(where: {
-                            RedPresetName.short($0.fileName) == shortName
-                        })
-                    else { return }
-                    model.assistConfiguration.selectedLUT = .stored(
-                        category: .red, fileName: lut.fileName)
-                    model.setAssist(.lut, visible: true)
-                }
-            ),
-            markedValues: defaultRedShortName.map { [$0] } ?? [],
-            wheelHeight: contentHeight - 36,
-            onDeleteOption: { shortName in
-                guard
-                    let lut = filteredRedLUTs.first(where: {
-                        RedPresetName.short($0.fileName) == shortName
-                    })
-                else { return }
-                pendingDeletion = PendingLUTDeletion(category: .red, lut: lut)
+    private func storedLibrary(
+        _ category: LUTCategory, files: [StoredCustomLUT],
+        empty: LUTPickerLibrary.Empty
+    ) -> LUTPickerLibrary {
+        let selectedID: String? = {
+            if case .stored(let current, let name) = model.assistConfiguration.selectedLUT,
+                current == category
+            {
+                return name
             }
-        )
-    }
-
-    private var downloadRedButton: some View {
-        // Enabled even while blocked: the download screen's gateway explains the block and, on
-        // the camera AP, offers the internet hop (leave camera Wi‑Fi → download → reconnect).
-        let isAvailable = redDownloadAvailability.isAvailable
-        return Button {
-            model.isRedDownloadPresented = true
-        } label: {
-            Label(
-                "Download from RED",
-                systemImage: isAvailable ? "arrow.down.circle" : "wifi.slash"
-            )
-            .font(.system(size: 13, weight: .semibold, design: .default))
-            .foregroundStyle(LiveDesign.text)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(LiveDesign.glassBright, in: Capsule())
+            return nil
+        }()
+        let entries = files.map { lut in
+            LUTPickerLibrary.Entry(
+                id: lut.fileName,
+                title: category == .red ? RedPresetName.short(lut.fileName) : lut.displayName)
         }
-        .buttonStyle(.monitorTapTarget)
-    }
-
-    @ViewBuilder private var customTab: some View {
-        VStack(spacing: 8) {
-            if model.customLUTs.isEmpty {
-                placeholder("No custom LUTs yet", "Import a .cube file to add your own look.")
-            } else {
-                AccentDrumWheel(
-                    options: model.customLUTs.map(\.displayName),
+        let preferred =
+            category == .red
+            ? LUTLibraryIndex.defaultRedLUT(from: model.redLUTs)?.fileName : files.first?.fileName
+        return LUTPickerLibrary(
+            title: category.rawValue, layout: category == .custom ? .files : .drum,
+            entries: entries, isCurrent: selectedID != nil, selectedID: selectedID,
+            representative: entries.first { $0.id == preferred } ?? entries.first,
+            filter: category == .red && !model.redLUTs.isEmpty
+                ? .init(
+                    options: RedOutputFilter.allCases.map(\.rawValue),
                     selection: Binding(
-                        get: {
-                            if case .stored(.custom, let fileName) = model.assistConfiguration
-                                .selectedLUT,
-                                let lut = model.customLUTs.first(where: { $0.fileName == fileName })
+                        get: { redFilter.rawValue },
+                        set: { raw in
+                            guard let filter = RedOutputFilter(rawValue: raw) else { return }
+                            redFilter = filter
+                            if let selectedID,
+                                !filteredRedLUTs.contains(where: { $0.fileName == selectedID }),
+                                let first = filteredRedLUTs.first
                             {
-                                return lut.displayName
+                                model.assistConfiguration.selectedLUT = .stored(
+                                    category: .red, fileName: first.fileName)
                             }
-                            return model.customLUTs.first?.displayName ?? ""
-                        },
-                        set: { displayName in
-                            guard
-                                let lut = model.customLUTs.first(where: {
-                                    $0.displayName == displayName
-                                })
-                            else { return }
-                            model.assistConfiguration.selectedLUT = .stored(
-                                category: .custom, fileName: lut.fileName)
-                            model.setAssist(.lut, visible: true)
-                        }
-                    ),
-                    wheelHeight: contentHeight - footerHeight - 8,
-                    onDeleteOption: { displayName in
-                        guard
-                            let lut = model.customLUTs.first(where: {
-                                $0.displayName == displayName
-                            })
-                        else { return }
-                        pendingDeletion = PendingLUTDeletion(category: .custom, lut: lut)
-                    }
-                )
-            }
-            importButton
-                .frame(height: footerHeight)
-        }
-    }
-
-    private var importButton: some View {
-        Button {
-            importing = true
-        } label: {
-            Label("Import .cube", systemImage: "square.and.arrow.down")
-                .font(.system(size: 13, weight: .semibold, design: .default))
-                .foregroundStyle(LiveDesign.text)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(LiveDesign.glassBright, in: Capsule())
-        }
-        .buttonStyle(.monitorTapTarget)
-        .fileImporter(
-            isPresented: $importing,
-            allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data]
-        ) { result in
-            if case .success(let url) = result {
-                do {
-                    try model.importCustomLUT(from: url)
-                } catch {
-                    importErrorMessage = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func delete(_ pending: PendingLUTDeletion) {
-        pendingDeletion = nil
-        do {
-            try model.deleteStoredLUT(pending.lut, from: pending.category)
-            if pending.category == .red, filteredRedLUTs.isEmpty, !model.redLUTs.isEmpty {
-                redFilter = .all
-            }
-        } catch {
-            deletionErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func placeholder(_ title: String, _ subtitle: String) -> some View {
-        VStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold, design: .default))
-                .foregroundStyle(LiveDesign.text)
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(LiveDesign.muted)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        })) : nil,
+            markedIDs: category == .red ? Set(preferred.map { [$0] } ?? []) : [],
+            empty: empty,
+            select: { entry in
+                model.assistConfiguration.selectedLUT = .stored(
+                    category: category, fileName: entry.id)
+                model.setAssist(.lut, visible: true)
+            },
+            delete: { entry in
+                try model.deleteStoredLUT(StoredCustomLUT(fileName: entry.id), from: category)
+                if category == .red, filteredRedLUTs.isEmpty { redFilter = .all }
+            }, importCube: category == .custom ? { try model.importCustomLUT(from: $0) } : nil)
     }
 }
 
@@ -2366,7 +2078,7 @@ struct OperatorSettingsPanel: View {
             }),
             transfer: model.exposureSignalMapping.curve.monitorTransfer,
             clipByte: model.exposureSignalMapping.clipByte,
-            lookLabel: lookLabel, lookCatalog: { AnyView(LUTPickerContent().environment(model)) },
+            lookLabel: lookLabel, lookCatalog: { AnyView(NikonLUTPicker().environment(model)) },
             input: .init(
                 remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
                 remoteTitle: "Bluetooth Remote Shutter",
@@ -2611,7 +2323,8 @@ struct OperatorSettingsPanel: View {
                     isCurrent: { [weak model] in
                         model?.internetHop.owns(token) == true && account.isCurrent
                     },
-                    wait: { [weak model] in await model?.internetHop.waitForInternet(token) == true },
+                    wait: { [weak model] in await model?.internetHop.waitForInternet(token) == true
+                    },
                     restore: { [weak model] in await model?.internetHop.end(token)?.value })
             },
             internetFailure:

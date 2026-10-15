@@ -490,7 +490,7 @@ struct NikonMonitorShell: View {
                     NikonAssistInspectorPreview(tool: tool)
                 }
             },
-            lookMenu: { LUTPickerContent() }
+            lookMenu: { NikonLUTPicker() }
         )
         .overlay { MonitorRecoveryOverlay() }
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)

@@ -84,7 +84,7 @@ struct NikonAssistOptions: View {
                     }
                 }, onFinish: { model.assist.persist() })
         case .lut:
-            LUTPickerContent()
+            NikonLUTPicker()
         case .crosshair:
             Text("Tap the palette button to show or hide the centre crosshair.")
                 .font(.system(size: 13))
