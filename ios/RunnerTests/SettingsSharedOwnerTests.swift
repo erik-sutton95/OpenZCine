@@ -6,9 +6,15 @@ import UIKit
 @MainActor @Suite(.serialized) struct SettingsSharedOwnerTests {
     @Test func camerasAndSettingsHonorTheForegroundWakePreference() {
         let storage = UserDefaults.standard
+        let commonKeys = ["OpenZCine.KeepScreenAwake", "OpenZCine.RecordConfirmation", "OpenZCine.HapticsEnabled"]
+        let commonSaved = commonKeys.map { storage.object(forKey: $0) }
         let saved = storage.data(forKey: "operatorPreferences.v1")
         let previous = UIApplication.shared.isIdleTimerDisabled
         defer {
+            for (key, value) in zip(commonKeys, commonSaved) {
+                if let value { storage.set(value, forKey: key) }
+                else { storage.removeObject(forKey: key) }
+            }
             if let saved { storage.set(saved, forKey: "operatorPreferences.v1") }
             else { storage.removeObject(forKey: "operatorPreferences.v1") }
             UIApplication.shared.isIdleTimerDisabled = previous
@@ -26,14 +32,21 @@ import UIKit
 extension SettingsSharedOwnerTests {
     @Test func rootPhaseSeedsTheInitialForegroundAndRestoresTheCurrentPreference() {
         let storage = UserDefaults.standard
+        let commonKeys = ["OpenZCine.KeepScreenAwake", "OpenZCine.RecordConfirmation", "OpenZCine.HapticsEnabled"]
+        let commonSaved = commonKeys.map { storage.object(forKey: $0) }
         let saved = storage.data(forKey: "operatorPreferences.v1")
         let priorIdle = UIApplication.shared.isIdleTimerDisabled
         defer {
+            for (key, value) in zip(commonKeys, commonSaved) {
+                if let value { storage.set(value, forKey: key) }
+                else { storage.removeObject(forKey: key) }
+            }
             if let saved { storage.set(saved, forKey: "operatorPreferences.v1") }
             else { storage.removeObject(forKey: "operatorPreferences.v1") }
             UIApplication.shared.isIdleTimerDisabled = priorIdle
         }
         storage.removeObject(forKey: "operatorPreferences.v1")
+        for key in commonKeys { storage.removeObject(forKey: key) }
         UIApplication.shared.isIdleTimerDisabled = false
         let model = NativeAppModel()
         #expect(model.preferences.keepScreenAwake)
