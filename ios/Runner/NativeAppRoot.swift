@@ -4306,7 +4306,8 @@ final class NativeAppModel {
         /// Explicit SIMULATED graphical fixture, using the normal declared header projection.
         func seedGraphicalReviewTimecode() {
             guard isDemoSession else { return }
-            applyLiveViewHeaderTimecode(Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
+            applyLiveViewHeaderTimecode(
+                Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
             prefersMediaDuration = false
         }
 
@@ -13878,10 +13879,17 @@ extension NativeAppModel {
     }
 
     /// Total cached clip bytes across every camera bucket on disk (Settings → Storage readout).
+    /// It counts exactly what `clearAllMediaCaches` clears, so never the on-device library.
     func totalMediaCacheByteCount() -> UInt64 {
-        mediaClipStore.allBucketIDs().reduce(0) { total, bucket in
+        clearableMediaCacheBucketIDs().reduce(0) { total, bucket in
             total + mediaClipStore.cachedByteCount(cameraID: bucket)
         }
+    }
+
+    /// Camera buckets are cache: the camera re-enumerates them. The `local` bucket is the
+    /// operator's own offline media and is never counted or cleared as cache.
+    private func clearableMediaCacheBucketIDs() -> [String] {
+        mediaClipStore.allBucketIDs().filter { $0 != MediaClipStore.localBucketID }
     }
 
     /// The common settings owner counts and clears this canonical all-camera cache only.
@@ -13900,7 +13908,7 @@ extension NativeAppModel {
                     else {
                         throw CancellationError()
                     }
-                    self.clearAllMediaCaches()
+                    try self.clearAllMediaCaches()
                 }))
     }
 
@@ -13947,20 +13955,30 @@ extension NativeAppModel {
     /// Clears cached clip files and thumbnails for every camera bucket (Settings → Storage).
     /// Camera indexes are cache — preserving them after a format is what left thumbnail-less
     /// ghosts in the gallery (#296). The on-device `local` library is left intact.
-    func clearAllMediaCaches() {
+    /// - Throws: `MediaClipCacheClearError` for files that stayed on disk, after every bucket
+    ///   was tried and the gallery refreshed.
+    func clearAllMediaCaches() throws(MediaClipCacheClearError) {
         mediaActionStoreGeneration &+= 1
         cancelClipStream()
         mediaProducer?.service.cancelCatalog()
         mediaLibrary?.close()
         mediaLibraryBytes?.retire()
         mediaDownloadProgress.removeAll()
-        for bucket in mediaClipStore.allBucketIDs() where bucket != MediaClipStore.localBucketID {
-            mediaClipStore.clearCache(cameraID: bucket, preservingIndex: false)
+        var cleared = MediaClipCacheClearError(removedBytes: 0, remainingFiles: [])
+        for bucket in clearableMediaCacheBucketIDs() {
+            do {
+                cleared.removedBytes += try mediaClipStore.clearCache(
+                    cameraID: bucket, preservingIndex: false)
+            } catch {
+                cleared.removedBytes += error.removedBytes
+                cleared.remainingFiles += error.remainingFiles
+            }
         }
         refreshMediaClips()
         if mediaBrowserSource == .camera, cameraSession != nil {
             scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
         }
+        if !cleared.remainingFiles.isEmpty { throw cleared }
     }
 
     func isClipDownloaded(_ clip: MediaClip) -> Bool {
