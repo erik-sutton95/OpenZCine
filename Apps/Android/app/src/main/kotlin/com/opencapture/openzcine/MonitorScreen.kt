@@ -1,5 +1,8 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.media.recordingTimeLabel
+import com.opencapture.opencine.media.storageReadout
+import com.opencapture.opencine.media.StorageReadout
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import java.util.concurrent.atomic.AtomicReference
 import com.opencapture.monitorui.MonitorIcon
@@ -165,7 +168,8 @@ import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.runtime.nativeFeedContentRect
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
-import com.opencapture.opencine.nikon.ProductionSessionRetryScheduleBridge
+import com.opencapture.opencine.nikon.MonitorPictureClock
+import android.os.SystemClock
 
 /** Gives the live quick-settings panel first refusal on the system Back action. */
 @Composable
@@ -260,7 +264,7 @@ internal fun MonitorScreen(
      * Shared camera-AP → internet hop owner (Frame.io + RED download). Required
      * for "Download over internet" while bound to the camera access point.
      */
-    frameioController: com.opencapture.openzcine.frameio.FrameioDeliveryController? = null,
+    frameioController: com.opencapture.opencine.frameio.FrameioDeliveryController? = null,
     liveViewEnabled: Boolean = true,
     liveBackdrop: NikonLiveBackdrop? = null,
     mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
@@ -391,6 +395,9 @@ internal fun MonitorScreen(
     var sessionRecoveryState by
         remember(session) { mutableStateOf<SessionRecoveryUi>(SessionRecoveryUi.Idle) }
     var sessionRecoveryRetryTicket by remember(session) { mutableIntStateOf(0) }
+    // Recovery ends on a fresh camera frame the monitor presents, never on a returned control
+    // session alone (A6-02). The frame and present paths below stamp it.
+    val recoveryPictures = remember(session) { MonitorPictureClock(SystemClock::elapsedRealtime) }
     // The session is Disconnected while recovering, so the affordance needs the name from before
     // the drop rather than the live identity.
     var lastConnectedCameraName by remember(session) { mutableStateOf("") }
@@ -401,6 +408,7 @@ internal fun MonitorScreen(
     }
     MonitorSessionRecoveryEffect(
         session,
+        pictures = recoveryPictures,
         enabled = sessionRecoveryEnabled,
         retryTicket = sessionRecoveryRetryTicket,
         onRecoveryState = { sessionRecoveryState = it },
@@ -1267,7 +1275,7 @@ internal fun MonitorScreen(
         // clearance are common policy; this adapter supplies only the window's facts.
         val geometry = monitorOperatorFieldLayout(
             MonitorOperatorViewport(viewportWidth, viewportHeight, safeLeading, safeTrailing,
-                portraitPhoneSafeTop(safeTop, viewportWidth, viewportHeight), safeBottom, 1f,
+                safeTop, safeBottom, 1f,
                 safeLeading > 0f || safeTrailing > 0f),
             assists.shared, mounted, portraitAspect, portraitFeedAspectRatio, isVerticalFeed)
         val fieldLayout = checkNotNull(geometry.layout.field)
@@ -1388,12 +1396,13 @@ internal fun MonitorScreen(
                 actualLinkHealth.presentation.signalBars)
         }
         var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
-        val topBarMedia =
-            if (prefersMediaDuration) {
-                readoutRetention.media.durationLabel
-            } else {
-                readoutRetention.media.capacityLabel
-            }
+        val topBarMedia = if (relayedState != null) {
+            if (prefersMediaDuration) readoutRetention.media.durationLabel else readoutRetention.media.capacityLabel
+        } else {
+            val storage = sharedControlState.snapshot?.storage
+            if (prefersMediaDuration) storage?.recordingTimeLabel ?: "-- Min"
+            else storage?.storageReadout?.free ?: StorageReadout.UNAVAILABLE
+        }
         val watchRelayState =
             remember(
                 sessionState,
@@ -1492,6 +1501,20 @@ internal fun MonitorScreen(
                         }
                     }
                 }
+        }
+        // Recovery picture proof: frames of the current native stream only (a replayed JPEG from
+        // the dropped session proves nothing). Command presents the frame header, not its image,
+        // so there the delivery is the presented picture (iOS `consumeCameraFrame` parity). Keyed
+        // like the timecode collector, which already holds the stream open in every DISP mode.
+        LaunchedEffect(timecodeFrameSource, isCommand, recoveryPictures) {
+            val source = timecodeFrameSource ?: return@LaunchedEffect
+            val frames = (source as? SwiftCoreLiveFrameSource)?.currentStreamFrames ?: source.frames
+            withContext(Dispatchers.Default) {
+                frames.collect {
+                    recoveryPictures.noteSourceFrame()
+                    if (isCommand) recoveryPictures.notePresented()
+                }
+            }
         }
         LaunchedEffect(actualLinkHealth, propertyRefreshStatus) {
             actualLinkHealth.reportPropertyRefresh(propertyRefreshStatus)
@@ -1861,8 +1884,8 @@ internal fun MonitorScreen(
                 val library = lutLibrary
                 if (uri != null && library != null) {
                     recordScope.launch {
-                        when (val result = library.importFromDocument(uri)) {
-                            is com.opencapture.openzcine.lut.CustomLutImportResult.Imported -> {
+                        when (val result = library.importDocument(appContext.contentResolver, uri)) {
+                            is com.opencapture.opencine.cameracontrols.MonitorLutImportResult.Imported -> {
                                 // iOS importCustomLUT: select + enable the LUT immediately —
                                 // the graded feed is the confirmation the operator sees.
                                 if (library.prepare(result.entry.selection)) {
@@ -1870,7 +1893,7 @@ internal fun MonitorScreen(
                                 }
                                 commonControl.onNote("${result.entry.displayName} imported.")
                             }
-                            is com.opencapture.openzcine.lut.CustomLutImportResult.Rejected ->
+                            is com.opencapture.opencine.cameracontrols.MonitorLutImportResult.Rejected ->
                                 commonControl.onNote(result.message)
                         }
                     }
@@ -1919,9 +1942,9 @@ internal fun MonitorScreen(
         val currentPicture = rememberUpdatedState(pictureFrameSource)
         val statusStorage = if (isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE)) {
             val storage = cameraProperties.storage
-            val capacity = storage?.takeIf { photoPillShowsStorage && it.totalCapacityBytes > 0 }
+            val capacity = storage?.readout?.takeIf { photoPillShowsStorage && it.totalBytes != null }
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
-                if (capacity != null) "${capacity.freeSpaceBytes / 1_000_000_000} GB ${capacity.freeSpaceBytes * 100 / capacity.totalCapacityBytes}%"
+                if (capacity != null) "${capacity.free} ${capacity.percent}"
                 else cameraProperties.shotsRemaining?.let { "${shotsRemainingCompactLabel(it)} SHOTS" },
                 MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage })
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",
@@ -1943,7 +1966,7 @@ internal fun MonitorScreen(
                 if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else if (isDemoSession || relayedState != null) readoutRetention.resolution else recordingLabel,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",
-                if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else if (isDemoSession || relayedState != null) readoutRetention.codec else recordingFormat?.codec?.let(::monitorCodecShortLabel),
+                if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else if (isDemoSession || relayedState != null) readoutRetention.codec else recordingFormat?.codec?.let(com.opencapture.opencine.nikon.MonitorTextFormat::codecCompactLabel),
                 MonitorDisplaySection.CODEC, action = { openSharedPicker(codecKind) }))
         val quickPickers = nativeSettings.mapNotNull { setting -> setting.picker?.let { setting.kind to it } }.toMap() +
             if (isPhotographyMode) photographyTopPickers else topPillPickers
@@ -2010,8 +2033,10 @@ internal fun MonitorScreen(
             capture = captureInputs,
             record = MonitorOperatorRecordSource(isPhotographyMode, operatorSettings.recordConfirmationEnabled.value,
                 busy = !recordControlEnabled, openMode = null, confirmingChanged = { recordConfirmationOpen = it }),
-            // The Nikon EV needle and level stay native instruments (F04, A3-25).
-            exposure = null, level = null, levelViewFlip = false, audio = null,
+            // The body's 1/6 EV exposure indicator, photography only, on the shared gauge (A1-32);
+            // the level stays native (A3-25).
+            exposure = if (isPhotographyMode) { { nikonExposureStops(cameraProperties) } } else null,
+            level = null, levelViewFlip = false, audio = null,
             // Control held by a watcher, a camera this device cannot drive, or a card transfer that owns
             // the command channel: presentation stays, commands are refused.
             readOnly = controlsSurrendered || !availability.canDriveCamera || mediaOwnsCommandChannel ||
@@ -2192,6 +2217,7 @@ internal fun MonitorScreen(
                             // path only drives FPS + wear (decode can lag a take).
                             presentedFrames.presented(android.os.SystemClock.elapsedRealtime())
                             hasPresentedFrame = true
+                            recoveryPictures.notePresented()
                             inspectorPreview.accept(pictureFrameSource, bitmap)
                             wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
                             liveBackdrop?.accept(pictureFrameSource, bitmap, look)
@@ -2229,10 +2255,8 @@ internal fun MonitorScreen(
                 LiveFrameMetadataOverlay(
                     presentationState = liveFeedPresentation,
                     configuration = renderedFraming,
-                    cleanMode = isClean,
                     isPortrait = isPortrait,
                     aspectFill = portraitRasterFill,
-                    isPhotography = isPhotographyMode,
                     gaugeBottomChromeInset = levelGaugeBottomChromeInset,
                     focusPointLocked = focusPointLocked,
                     focusLockProgress = focusLockProgress,
@@ -2241,8 +2265,6 @@ internal fun MonitorScreen(
                     // The editor's outline, dimming and badge, through the surface's one editor.
                     focusBoxEditModifier = if (editingDisplay == null) null
                         else Modifier.monitorOperatorChromeEditable(MonitorDisplaySection.FOCUS_BOX),
-                    evIndicatorSixths = cameraProperties.evIndicatorSixths,
-                    evIndicatorLit = cameraProperties.evIndicatorLit,
                 )
             }
                 // Outside the rotated stack: reads as screen chrome, never sideways text.
@@ -2358,9 +2380,8 @@ internal fun MonitorScreen(
             state = recoveryStateOverride ?: sessionRecoveryState,
             cameraName = recoveryStateOverride?.let { "Nikon ZR" } ?: lastConnectedCameraName,
             onRetry = {
-                // Operator intent clears the storm ledger: the retry is not a drop, and the
-                // next pause should take a fresh cluster of drops to earn (iOS parity).
-                ProductionSessionRetryScheduleBridge.resetDropStormGuard()
+                // Operator intent: a fresh drop ledger and a fresh episode (iOS parity). The
+                // recovery effect hands the ticket to its coordinator.
                 sessionRecoveryRetryTicket += 1
             },
             onOperatorMenu = onBackToOperatorMenu,
@@ -2462,7 +2483,7 @@ internal fun MonitorDataAvailability.monitorSections(
  * the clock. From 44 dp up the band keeps the gap it has on a punch-hole phone.
  */
 internal fun portraitPhoneSafeTop(safeTop: Float, width: Float, height: Float): Float =
-    if (height > width && width < 600f) maxOf(safeTop, 44f) else safeTop
+    com.opencapture.monitorui.MonitorLayoutPolicy.portraitHeaderSafeTop(width, height, safeTop)
 
 /** Localized DISP mode label for the monitor's accessibility description. */
 @StringRes

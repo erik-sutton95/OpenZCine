@@ -6,6 +6,7 @@ import com.opencapture.monitorui.MonitorScopePoint
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
+import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
@@ -170,10 +171,7 @@ class ScopeLayoutTest {
             ) { null }?.lookOrdinal,
         )
         val stored =
-            StoredLutSelection.generated(
-                StoredLutCategory.CUSTOM,
-                "look-123456789abc.cube",
-            )
+            requireNotNull(StoredLutSelection.fromPersisted(StoredLutCategory.CUSTOM.name, "look-123456789abc.cube"))
         assertNull(
             scopeVectorLutRequest(
                 FeedLutSelection.Stored(stored),

@@ -14,6 +14,8 @@ import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.opencine.nikon.LiveFrameTimecode
+import com.opencapture.opencine.nikon.MediaStatus
+import com.opencapture.opencine.nikon.MonitorTextFormat
 import com.opencapture.opencine.vocabulary.ConnectionPhase
 import com.opencapture.opencine.vocabulary.SessionRecoveryUi
 import java.util.concurrent.atomic.AtomicInteger
@@ -62,17 +64,8 @@ internal fun monitorFrameRateLabel(frameRate: Int?): String =
         ?: UNAVAILABLE_MONITOR_VALUE
 
 /** Storage label derived from a complete, internally consistent camera readback. */
-internal fun monitorStorageLabel(storage: CameraStorageStatus?): String {
-    if (storage == null || storage.totalCapacityBytes <= 0L) return UNAVAILABLE_MONITOR_VALUE
-    if (storage.freeSpaceBytes !in 0L..storage.totalCapacityBytes) {
-        return UNAVAILABLE_MONITOR_VALUE
-    }
-    val percent =
-        (storage.freeSpaceBytes.toDouble() * 100.0 / storage.totalCapacityBytes.toDouble())
-            .toLong()
-    val freeGigabytes = storage.freeSpaceBytes / 1_000_000_000L
-    return "$freeGigabytes GB · $percent%"
-}
+internal fun monitorStorageLabel(storage: CameraStorageStatus?): String =
+    storage?.readout?.takeIf { it.totalBytes != null }?.label ?: UNAVAILABLE_MONITOR_VALUE
 
 /** Accepts only a real battery percentage; platform sentinels stay unavailable. */
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
@@ -89,121 +82,12 @@ internal fun nikonCameraBatteryReading(rawLevel: Int?, externalPower: Boolean?):
         power.exhausted.value, externalPower)
 }
 
-// ── iOS top-bar readout parity (MonitorTextFormat + MediaStatus + FrameRateSampler) ──
-
-/** iOS `MonitorTextFormat.resolutionLabel(fromProperty:)`: `"6048x3402"` + fps → `"6K · 25p"`. */
-internal fun monitorResolutionLabel(
-    resolution: String?,
-    frameRate: Int?,
-    fallback: String,
-): String {
-    val property = resolution.monitorValueOrNull() ?: return fallback
-    val parts = property.split("x")
-    val width = parts.getOrNull(0)?.trim()?.toIntOrNull()
-    val height = parts.getOrNull(1)?.trim()?.toIntOrNull()
-    if (parts.size != 2 || width == null || height == null) return fallback
-    val resolutionClass =
-        when {
-            width >= 7680 -> "8K"
-            width >= 5000 -> "6K"
-            width >= 3500 -> "4K"
-            else -> "$width"
-        }
-    return "$resolutionClass · ${frameRate ?: 0}p"
-}
-
-/** iOS `MonitorTextFormat.codecShortLabel`: `"R3D NE 12-bit R3D"` → `"R3D NE"`. */
-internal fun monitorCodecShortLabel(codec: String): String {
-    val stripped = codec.trim()
-    val redundantQualifier = Regex("""\s+\d+-bit\s+.+$""").find(stripped) ?: return stripped
-    return stripped.substring(0, redundantQualifier.range.first).trim()
-}
-
-/** iOS `MonitorTextFormat.codecCompactLabel`: `ProRes`→`PR`, H.26x drops the bit depth. */
-internal fun monitorCodecCompactLabel(codec: String?, fallback: String): String {
-    val value = codec.monitorValueOrNull() ?: return fallback
-    var label = monitorCodecShortLabel(value).replace("ProRes", "PR")
-    if (label.startsWith("H.26")) {
-        Regex("""\s+\d+-bit$""").find(label)?.let { label = label.substring(0, it.range.first) }
-    }
-    return label.trim()
-}
-
-/** iOS `MediaStatus`: free space plus the conservative remaining-minutes estimate. */
-internal data class MonitorMediaStatus(
-    val gigabytesFree: Long,
-    val percentFree: Long,
-    val minutesRemaining: Int,
-) {
-    /** iOS `MediaStatus.capacityLabel`. */
-    val capacityLabel: String get() = "$gigabytesFree GB · $percentFree%"
-
-    /** iOS `MediaStatus.durationLabel`. */
-    val durationLabel: String get() = "$minutesRemaining Min"
-}
-
 /**
- * iOS `RecordDurationEstimator`, ported table and scaling verbatim: per-codec
- * base Mbps at UHD 24p, scaled by pixel count and frame rate, rounded down so
- * the "Min" readout under-promises.
+ * The body's exposure indicator in stops for the shared EV gauge (A1-32, iOS
+ * `NikonMonitorShell.exposureReading`): 1/6 EV steps, unknown while the body reports it unlit.
  */
-internal object MonitorRecordDurationEstimator {
-    private val baseBitrateMbps =
-        mapOf(
-            "R3D NE" to 600.0,
-            "N-RAW" to 470.0,
-            "ProRes RAW HQ" to 1700.0,
-            "ProRes 422 HQ" to 707.0,
-            "H.265" to 190.0,
-            "H.264" to 75.0,
-        )
-    private const val FALLBACK_BITRATE_MBPS = 250.0
-    private const val REFERENCE_PIXELS = 3840.0 * 2160.0
-    private const val REFERENCE_FRAME_RATE = 24.0
-
-    fun minutesRemaining(
-        codecShortLabel: String,
-        resolutionWidth: Int,
-        resolutionHeight: Int,
-        frameRate: Int,
-        gigabytesFree: Long,
-    ): Int {
-        if (gigabytesFree <= 0L) return 0
-        val base = baseBitrateMbps[codecShortLabel] ?: FALLBACK_BITRATE_MBPS
-        val mbps =
-            base * (resolutionWidth.toDouble() * resolutionHeight / REFERENCE_PIXELS) *
-                (frameRate / REFERENCE_FRAME_RATE)
-        if (!mbps.isFinite() || mbps <= 0.0) return 0
-        val seconds = gigabytesFree * 8_000.0 / mbps
-        return (seconds / 60.0).toInt()
-    }
-}
-
-/** Builds the iOS-parity media status from an internally consistent storage readback. */
-internal fun monitorMediaStatus(
-    storage: CameraStorageStatus?,
-    codec: String?,
-    resolution: String?,
-    frameRate: Int?,
-): MonitorMediaStatus? {
-    if (storage == null || storage.totalCapacityBytes <= 0L) return null
-    if (storage.freeSpaceBytes !in 0L..storage.totalCapacityBytes) return null
-    val gigabytesFree = storage.freeSpaceBytes / 1_000_000_000L
-    val percentFree =
-        (storage.freeSpaceBytes.toDouble() * 100.0 / storage.totalCapacityBytes.toDouble()).toLong()
-    val parts = resolution.orEmpty().split("x")
-    val width = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 0
-    val height = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
-    val minutes =
-        MonitorRecordDurationEstimator.minutesRemaining(
-            codecShortLabel = codec?.let(::monitorCodecShortLabel).orEmpty(),
-            resolutionWidth = width,
-            resolutionHeight = height,
-            frameRate = validMonitorFrameRate(frameRate) ?: 0,
-            gigabytesFree = gigabytesFree,
-        )
-    return MonitorMediaStatus(gigabytesFree, percentFree, minutes)
-}
+internal fun nikonExposureStops(properties: CameraPropertySnapshot): Double? =
+    if (properties.evIndicatorLit == false) null else properties.evIndicatorSixths?.let { it / 6.0 }
 
 /**
  * iOS never blanks a top-bar readout: values seed from `CameraDisplayState.preview`
@@ -215,7 +99,7 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
         private set
     var codec: String by mutableStateOf(PREVIEW_CODEC)
         private set
-    var media: MonitorMediaStatus by mutableStateOf(PREVIEW_MEDIA)
+    var media: MediaStatus by mutableStateOf(PREVIEW_MEDIA)
         private set
 
     /**
@@ -227,11 +111,7 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
         codec = state.codec.monitorValueOrNull() ?: codec
         media =
             state.mediaStatus?.let {
-                MonitorMediaStatus(
-                    gigabytesFree = it.gigabytesFree.toLong(),
-                    percentFree = it.percentFree.toLong(),
-                    minutesRemaining = it.minutesRemaining,
-                )
+                MediaStatus(it.gigabytesFree, it.percentFree, it.minutesRemaining, it.estimatedMinutesRemaining, it.freeBytes)
             } ?: media
     }
 
@@ -242,17 +122,18 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
         // when this poll omitted those fields entirely.
         resolution =
             snapshot.resolutionFrameRate.monitorValueOrNull()
-                ?: monitorResolutionLabel(
-                    snapshot.resolution,
-                    snapshot.frameRate,
+                ?: MonitorTextFormat.resolutionLabel(
+                    snapshot.resolution.monitorValueOrNull(),
+                    validMonitorFrameRate(snapshot.frameRate) ?: 0,
                     resolution,
                 )
         codec =
-            snapshot.codecSelection.monitorValueOrNull()?.let { monitorCodecCompactLabel(it, it) }
-                ?: monitorCodecCompactLabel(snapshot.codec, codec)
+            (snapshot.codecSelection.monitorValueOrNull() ?: snapshot.codec.monitorValueOrNull())
+                ?.let(MonitorTextFormat::codecCompactLabel)
+                ?: codec
         media =
-            monitorMediaStatus(
-                snapshot.storage, snapshot.codec, snapshot.resolution, snapshot.frameRate,
+            MediaStatus.from(
+                snapshot.storage, snapshot.codec, snapshot.resolution, validMonitorFrameRate(snapshot.frameRate),
             ) ?: media
     }
 
@@ -260,7 +141,7 @@ internal class MonitorReadoutRetention(private val cameraIdentity: CameraIdentit
         // iOS `CameraDisplayState.preview` seeds.
         const val PREVIEW_RESOLUTION = "6K · 25p"
         const val PREVIEW_CODEC = "R3D NE"
-        val PREVIEW_MEDIA = MonitorMediaStatus(gigabytesFree = 521, percentFree = 47, minutesRemaining = 47)
+        val PREVIEW_MEDIA = MediaStatus(gigabytesFree = 521, percentFree = 47, minutesRemaining = 47)
     }
 }
 

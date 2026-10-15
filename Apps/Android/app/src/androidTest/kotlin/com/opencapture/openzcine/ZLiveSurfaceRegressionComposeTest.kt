@@ -1,6 +1,10 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import android.content.ContentValues
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.provider.MediaStore
 import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.compose.runtime.DisposableEffect
@@ -18,6 +22,9 @@ import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
+import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
@@ -87,12 +94,66 @@ class ZLiveSurfaceRegressionComposeTest {
         composeRule.onNodeWithContentDescription("Camera battery 3 of 5 bars", substring = true).assertExists()
     }
 
+    /** SIMULATED A1-32: actual camera sixths drive the common meter, including known zero. */
+    @Test fun reportedExposureUsesTheSharedMeterWithoutInventingUnknownZero() {
+        val orientation = InstrumentationRegistry.getArguments().getString("f04.orientation") ?: "portrait"
+        val landscape = orientation == "landscape"
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+            activity.requestedOrientation = if (landscape) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        composeRule.waitUntil(TIMEOUT_MILLIS) {
+            InstrumentationRegistry.getInstrumentation().targetContext.resources.configuration.orientation ==
+                if (landscape) Configuration.ORIENTATION_LANDSCAPE else Configuration.ORIENTATION_PORTRAIT
+        }
+        val camera = ExposureSession(connected("f04-a1-32"))
+        show(camera, "f04-a1-32", evMeter = true)
+        val negative = "Camera exposure meter, −0.2 EV"
+        composeRule.waitUntilAtLeastOneExists(hasContentDescription(negative), TIMEOUT_MILLIS)
+        composeRule.onNodeWithContentDescription(negative).assertExists()
+        composeRule.runOnIdle { camera.properties.value = camera.properties.value.copy(evIndicatorSixths = 0) }
+        composeRule.waitUntilAtLeastOneExists(hasContentDescription("Camera exposure meter, 0.0 EV"), TIMEOUT_MILLIS)
+        composeRule.onNodeWithContentDescription("Camera exposure meter, 0.0 EV").assertExists()
+        saveExposureScreenshot()
+        composeRule.runOnIdle { camera.properties.value = camera.properties.value.copy(evIndicatorSixths = null) }
+        composeRule.waitUntilAtLeastOneExists(hasContentDescription("Camera exposure meter, unavailable"), TIMEOUT_MILLIS)
+        composeRule.onNodeWithContentDescription("Camera exposure meter, unavailable").assertExists()
+    }
+
+    private fun saveExposureScreenshot() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val orientation = InstrumentationRegistry.getArguments().getString("f04.orientation") ?: "unknown"
+        val resolver = instrumentation.targetContext.contentResolver
+        val destination = requireNotNull(resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "exposure-$orientation.png")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/F04-values")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            }))
+        val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        assertTrue("Screenshot orientation must match $orientation", if (orientation == "landscape")
+            bitmap.width > bitmap.height else bitmap.height > bitmap.width)
+        try { requireNotNull(resolver.openOutputStream(destination)).use {
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+        } }
+        finally { bitmap.recycle() }
+        println("SIMULATED F04 exposure screenshot: $destination")
+    }
+
+    private class ExposureSession(camera: FakeCameraSession) : CameraSession by camera {
+        val properties = MutableStateFlow(camera.cameraProperties.value.copy(captureSelector = "photo",
+            exposureMode = "M", evIndicatorLit = true, evIndicatorSixths = -1))
+        override val cameraProperties: StateFlow<CameraPropertySnapshot> = properties
+        override val reportedCameraProperties: StateFlow<CameraPropertySnapshot> = properties
+    }
+
     private fun connected(serial: String): FakeCameraSession =
         FakeCameraSession(CameraIdentity("SIMULATED", "NIKON ZR", serial)).also { runBlocking { it.connect() } }
 
     private fun show(
         session: CameraSession, name: String, frames: LiveFrameSource? = null, liveView: Boolean = false,
-        surrendered: Boolean = false, returnToStage: (() -> Unit)? = null, configure: (OperatorSettings) -> Unit = {},
+        surrendered: Boolean = false, returnToStage: (() -> Unit)? = null, evMeter: Boolean = false, configure: (OperatorSettings) -> Unit = {},
     ) {
         composeRule.setContent {
             val context = LocalContext.current
@@ -104,7 +165,7 @@ class ZLiveSurfaceRegressionComposeTest {
             val common = remember { NikonOpenCineSession(session, scope) }
             val control = remember { MonitorControlModel(scope).also { it.bind(common) } }
             DisposableEffect(Unit) { onDispose { control.unbind() } }
-            val assists = remember { idleNikonAssists() }
+            val assists = remember { idleNikonAssists().also { if (evMeter) it.shared.toggle(MonitorAssistTool.EV) } }
             OpenZCineTheme {
                 MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), frames, assists,
                     settings, liveViewEnabled = liveView, sessionRecoveryEnabled = false,

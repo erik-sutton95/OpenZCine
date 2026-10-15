@@ -1,17 +1,9 @@
 package com.opencapture.openzcine.pairing
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
-import android.content.ContextWrapper
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.provider.Settings
 import android.util.Log
 import androidx.annotation.OptIn as AndroidxOptIn
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -77,8 +69,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.common.MlKitException
 import com.google.mlkit.vision.common.InputImage
@@ -270,7 +260,6 @@ internal fun CameraWifiScannerOverlay(
     onDiagnosticPhase: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val controller = remember { CameraWifiScannerController(SwiftCameraWifiTranscriptParser) }
     val debugCandidate = remember(context) { CameraWifiScannerDemo.initialCandidate(context) }
     val hasCamera = remember { deviceHasCamera(context) }
@@ -294,17 +283,11 @@ internal fun CameraWifiScannerOverlay(
             onConfirmed(candidate)
         }
     }
-    var cameraPermissionGranted by remember {
-        mutableStateOf(context.hasCameraPermission())
-    }
+    // Asked here, only when the scanner opens: typed entry pairs without it. The shared gate
+    // remembers a denial across process death and sends the next ask to Settings.
+    val camera = rememberPermissionGate("scanner.camera", listOf(Manifest.permission.CAMERA))
+    val cameraPermissionGranted = camera.granted
     var requestedCameraPermission by rememberSaveable { mutableStateOf(false) }
-    var cameraPermissionDenials by rememberSaveable { mutableIntStateOf(0) }
-
-    val permissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            cameraPermissionGranted = granted
-            cameraPermissionDenials = if (granted) 0 else cameraPermissionDenials + 1
-        }
 
     fun dismiss() {
         controller.close()
@@ -314,12 +297,13 @@ internal fun CameraWifiScannerOverlay(
 
     fun requestCameraPermission() {
         requestedCameraPermission = true
-        permissionLauncher.launch(Manifest.permission.CAMERA)
+        camera.request()
     }
 
     val needsLiveCamera = scannerState is CameraWifiScannerState.Scanning
     LaunchedEffect(needsLiveCamera, cameraPermissionGranted, requestedCameraPermission) {
-        if (needsLiveCamera && !cameraPermissionGranted && !requestedCameraPermission) {
+        // Opening the scanner asks once; it never opens Settings by itself.
+        if (needsLiveCamera && !cameraPermissionGranted && !requestedCameraPermission && !camera.needsSettings) {
             requestCameraPermission()
         }
     }
@@ -327,15 +311,6 @@ internal fun CameraWifiScannerOverlay(
         if (needsLiveCamera && cameraPermissionGranted && !SwiftCore.isAvailable) {
             fail(CameraWifiScannerFailure.CORE_UNAVAILABLE)
         }
-    }
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                cameraPermissionGranted = context.hasCameraPermission()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     DisposableEffect(Unit) {
         onDispose { controller.close() }
@@ -417,13 +392,8 @@ internal fun CameraWifiScannerOverlay(
 
                     !cameraPermissionGranted ->
                         CameraWifiScannerPermissionPanel(
-                            permanentlyDenied =
-                                shouldOpenCameraPermissionSettings(
-                                    denialCount = cameraPermissionDenials,
-                                    canRequestAgain = context.canRequestCameraPermissionAgain(),
-                                ),
-                            onRetry = ::requestCameraPermission,
-                            onOpenSettings = { context.openApplicationSettings() },
+                            permanentlyDenied = camera.needsSettings,
+                            onRequest = ::requestCameraPermission,
                         )
 
                     scannerState is CameraWifiScannerState.Scanning ->
@@ -507,8 +477,8 @@ internal fun CameraWifiScannerOverlay(
 @Composable
 private fun CameraWifiScannerPermissionPanel(
     permanentlyDenied: Boolean,
-    onRetry: () -> Unit,
-    onOpenSettings: () -> Unit,
+    /** The gate's ask: the dialog, or the app's Settings page once Android stops showing it. */
+    onRequest: () -> Unit,
 ) {
     Column(
         modifier =
@@ -544,7 +514,7 @@ private fun CameraWifiScannerPermissionPanel(
                         R.string.wifi_scanner_allow_camera
                     },
                 ),
-            onClick = if (permanentlyDenied) onOpenSettings else onRetry,
+            onClick = onRequest,
         )
     }
 }
@@ -969,7 +939,7 @@ private fun CameraWifiCameraPreview(
         modifier =
             modifier
                 .clip(RoundedCornerShape(16.dp))
-                .border(1.dp, StartupColors.border.copy(alpha = 0.26f), RoundedCornerShape(16.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.26f), RoundedCornerShape(16.dp))
                 .clearAndSetSemantics { contentDescription = viewfinderDescription },
     )
 }
@@ -1053,36 +1023,6 @@ internal class CameraWifiAnalysisGate {
     }
 }
 
-private fun Context.hasCameraPermission(): Boolean =
-    checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-
-/**
- * Android's rationale result is ambiguous after a first denial on some devices.
- * Keep one clear retry in-app before directing the operator to Settings.
- */
-internal fun shouldOpenCameraPermissionSettings(
-    denialCount: Int,
-    canRequestAgain: Boolean,
-): Boolean = denialCount > 1 && !canRequestAgain
-
-private fun Context.canRequestCameraPermissionAgain(): Boolean =
-    findActivity()?.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) == true
-
-private fun Context.openApplicationSettings() {
-    startActivity(
-        Intent(
-            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            Uri.fromParts("package", packageName, null),
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-    )
-}
-
-private tailrec fun Context.findActivity(): Activity? =
-    when (this) {
-        is Activity -> this
-        is ContextWrapper -> baseContext.findActivity()
-        else -> null
-    }
 
 /** The scanner card's light palette (the iOS scanner card's colors). */
 internal object PopupColors {

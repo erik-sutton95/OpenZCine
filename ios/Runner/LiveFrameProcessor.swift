@@ -5,6 +5,8 @@ import OpenZCineCore
 import UIKit
 import os
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Process-wide memo of generated/parsed LUT cubes, keyed by `LUTSelection.cacheKey` (or a
 /// false-colour scale key). The log-look cubes run ~10⁵ `pow`/`exp` calls to build, so generating
 /// each only once — and ideally off the main thread via `prewarmBuiltIns()` — keeps switching and
@@ -238,9 +240,8 @@ extension NativeAppModel {
                     read709: assist.falseColorRec709) : nil,
             peaking: visible.contains(.peaking)
                 ? PeakingSettings(
-                    color: Peaking.Color(rawValue: assist.peakingColor.rawValue) ?? .red,
-                    sensitivity: Peaking.Sensitivity(rawValue: assist.peakingSensitivity.rawValue)
-                        ?? .medium,
+                    color: assist.peakingColor,
+                    sensitivity: assist.peakingSensitivity,
                     // The photography feed is a display-referred preview, so its gradients run
                     // larger than the log video feed the gates were calibrated on. Shared core
                     // owns the squaring, so both shells resolve the same number.
@@ -408,12 +409,12 @@ private let armedScopeLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialSt
 
 /// Source cube and calibration facts; shared native runtime owns the complete image graph and memo.
 final class LiveFrameProcessor {
-    private let fileStore: LUTFileStore
+    private let fileStore: CustomLUTStore
     private let native = MonitorUIImageGraphProcessor<LiveImageEffects>(
         beginReadback: { LiveViewSignposts.beginCreateCGImageReadback() },
         endReadback: { LiveViewSignposts.endCreateCGImageReadback() })
 
-    init(fileStore: LUTFileStore) { self.fileStore = fileStore }
+    init(fileStore: CustomLUTStore) { self.fileStore = fileStore }
 
     func render(_ image: UIImage, effects: LiveImageEffects) -> UIImage {
         native.render(image, settings: effects, identity: effects.isIdentity) {

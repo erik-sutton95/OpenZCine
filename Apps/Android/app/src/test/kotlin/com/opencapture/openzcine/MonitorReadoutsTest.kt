@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.cameracontrols.MonitorOperatorExposureReading
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.opencine.nikon.LiveFrameTimecode
@@ -10,6 +11,18 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MonitorReadoutsTest {
+    @Test
+    fun `the body exposure indicator reaches the shared gauge in shared EV words`() {
+        // A1-32: the 1/6 EV indicator feeds the shared gauge; A5-16: it spells 0.0 and U+2212 like every EV.
+        fun stops(sixths: Int?, lit: Boolean?) =
+            nikonExposureStops(CameraPropertySnapshot(evIndicatorSixths = sixths, evIndicatorLit = lit))
+        assertEquals("0.0", MonitorOperatorExposureReading(stops(0, true)).label)
+        assertEquals("\u22120.3", MonitorOperatorExposureReading(stops(-2, true)).label)
+        assertEquals("+1.0", MonitorOperatorExposureReading(stops(6, null)).label)
+        assertNull(stops(6, false), "an unlit indicator is unknown")
+        assertNull(stops(null, true))
+    }
+
     @Test
     fun `monitor and multicam preserve the camera frame counter`() {
         val camera = LiveFrameTimecode(on = true, hour = 1, minute = 2, second = 3, frame = 17)
@@ -97,45 +110,5 @@ class MonitorReadoutsTest {
         // An unread battery is absent, never an empty red cell.
         assertNull(nikonCameraBatteryReading(null, externalPower = true))
         assertNull(nikonCameraBatteryReading(0, externalPower = null))
-    }
-
-    @Test
-    fun `resolution label classes width like iOS MonitorTextFormat`() {
-        assertEquals("6K · 25p", monitorResolutionLabel("6048x3402", 25, fallback = "held"))
-        assertEquals("4K · 24p", monitorResolutionLabel("4032x2268", 24, fallback = "held"))
-        assertEquals("8K · 30p", monitorResolutionLabel("7680x4320", 30, fallback = "held"))
-        assertEquals("1920 · 50p", monitorResolutionLabel("1920x1080", 50, fallback = "held"))
-        assertEquals("held", monitorResolutionLabel(null, 24, fallback = "held"))
-        assertEquals("held", monitorResolutionLabel("garbage", 24, fallback = "held"))
-    }
-
-    @Test
-    fun `codec labels collapse exactly like iOS`() {
-        assertEquals("R3D NE", monitorCodecShortLabel("R3D NE 12-bit R3D"))
-        assertEquals("ProRes RAW HQ", monitorCodecShortLabel("ProRes RAW HQ"))
-        assertEquals("R3D NE", monitorCodecCompactLabel("R3D NE 12-bit R3D", fallback = "held"))
-        assertEquals("PR RAW HQ", monitorCodecCompactLabel("ProRes RAW HQ", fallback = "held"))
-        assertEquals("H.265", monitorCodecCompactLabel("H.265 10-bit", fallback = "held"))
-        assertEquals("held", monitorCodecCompactLabel(null, fallback = "held"))
-    }
-
-    @Test
-    fun `media status estimates minutes with the iOS bitrate table`() {
-        val storage =
-            CameraStorageStatus(
-                totalCapacityBytes = 1_000_000_000_000L,
-                freeSpaceBytes = 470_000_000_000L,
-            )
-        val status =
-            monitorMediaStatus(storage, "R3D NE 12-bit R3D", "6048x3402", 25)
-        requireNotNull(status)
-        assertEquals(470L, status.gigabytesFree)
-        assertEquals(47L, status.percentFree)
-        assertEquals("470 GB · 47%", status.capacityLabel)
-        // 600 Mbps base × (6048·3402 / 3840·2160) × (25/24) ≈ 1550 Mbps →
-        // 470 GB ≈ 40 minutes, rounded down like iOS.
-        assertEquals(status.minutesRemaining, status.minutesRemaining.coerceIn(35, 45))
-        assertEquals("${status.minutesRemaining} Min", status.durationLabel)
-        assertNull(monitorMediaStatus(null, "R3D NE", "6048x3402", 25))
     }
 }

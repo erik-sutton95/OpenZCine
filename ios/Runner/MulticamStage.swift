@@ -3,6 +3,7 @@ import MonitorUI
 import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCore
+import OpenCineMedia
 import OpenCineMulticam
 import OpenZCineCore
 import SwiftUI
@@ -27,31 +28,28 @@ struct MulticamStage: View {
 
     @State private var addingSlot: Int?
     @State private var leaving = false
-    @State private var fill = false
-    @Environment(\.monitorWindowGeometry) private var windowGeometry
+    private var fill: Bool { coordinator.presentation.fill }
 
     var body: some View {
-        GeometryReader { proxy in
-            // The reader ignores the safe area, so its own insets are zero.
-            let insets = windowGeometry.safeArea
-            let layout = MultiviewPresentationLayout(
-                width: proxy.size.width, height: proxy.size.height,
-                safeArea: MonitorSafeArea(
-                    top: insets.top, leading: insets.leading, bottom: insets.bottom,
-                    trailing: insets.trailing),
-                arrangement: coordinator.arrangement, selected: coordinator.focusedSlot)
+        MultiviewStageSurface(
+            arrangement: coordinator.arrangement, selected: coordinator.focusedSlot
+        ) { viewport in
+            let insets = viewport.safeArea
+            let layout = viewport.layout
             MultiviewStage(
                 tiles: (0..<MulticamCoordinator.tileCount).map { slot in
                     coordinator.member(atSlot: slot).map(tile)
                 },
-                layout: layout, viewport: proxy.size,
+                layout: layout, viewport: viewport.size,
                 safeArea: EdgeInsets(
                     top: insets.top, leading: insets.leading, bottom: insets.bottom,
                     trailing: insets.trailing),
                 arrangement: $coordinator.arrangement,
                 selected: Binding(
                     get: { coordinator.focusedSlot }, set: { coordinator.select(slot: $0) }),
-                fill: $fill, tools: [.layout, .fit],
+                fill: Binding(
+                    get: { coordinator.presentation.fill },
+                    set: { coordinator.presentation.fill = $0 }), tools: [.layout, .fit],
                 readouts: coordinator.program.flatMap { $0.isLive ? readouts($0) : nil },
                 recording: coordinator.anyRecording, groupBusy: coordinator.groupBusy,
                 confirmsRecord: confirmsRecord,
@@ -69,10 +67,11 @@ struct MulticamStage: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .multiviewStageState(coordinator.presentation)
             .overlay(alignment: .top) {
                 if let toast = coordinator.toast {
                     MulticamToast(text: toast) { coordinator.toast = nil }
-                        .frame(maxWidth: min(420, proxy.size.width - 40))
+                        .frame(maxWidth: min(420, viewport.size.width - 40))
                         .padding(.top, insets.top + 20)
                 }
             }
@@ -87,10 +86,10 @@ struct MulticamStage: View {
         .foregroundStyle(MonitorTheme.text)
         .preferredColorScheme(.dark)
         .confirmationDialog(
-            "Close multicam? Recording continues on every camera.", isPresented: $leaving,
+            MultiviewNetworkRestore.none.closeQuestion, isPresented: $leaving,
             titleVisibility: .visible
         ) {
-            Button("Close multicam", role: .destructive, action: close)
+            Button(MultiviewNetworkRestore.closeAction, role: .destructive, action: close)
         }
     }
 
@@ -121,8 +120,9 @@ struct MulticamStage: View {
             name: member.displayName, model: SavedCameraPathGroups.pathLabel(for: member.record),
             // The body's five-step gauge (A5-01): bars, never a percent it did not report.
             batteryBars: battery?.bars,
-            batteryBarCount: battery?.barCount ?? 5,
-            storage: member.storage.map { "\($0.gigabytesFree) GB" } ?? MultiviewTally.unavailable,
+            batteryBarCount: battery?.barCount ?? CameraBatteryGauge.barCount,
+            storage: member.control?.session.refresh().storage.storageReadout?.free
+                ?? MultiviewTally.unavailable,
             timecode: member.timecode?.monitorLabel,
             tally: MultiviewTally.text(recording: rolling, waiting: coordinator.groupBusy),
             // Nikon reports no take length: the tile times it from the first recording frame.

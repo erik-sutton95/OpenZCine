@@ -22,6 +22,7 @@ import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
+import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import kotlin.test.Test
 import kotlin.test.assertEquals

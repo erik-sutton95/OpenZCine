@@ -1,10 +1,7 @@
 package com.opencapture.openzcine.media
 
 import com.opencapture.opencine.appkit.MonitorDeliveryAdmission
-import com.opencapture.opencine.appkit.MonitorDeliveryDestination
-import com.opencapture.opencine.appkit.MonitorDeliveryModel
 import com.opencapture.opencine.appkit.MonitorDeliveryOriginalService
-import com.opencapture.opencine.appkit.cacheOriginals
 import kotlinx.coroutines.CancellationException
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -189,49 +186,12 @@ internal data class MediaDeliverySelection(
     val clip: NikonMediaClipRecord,
 )
 
-/** What the delivery cache pre-pass produced, plus the clips the camera never handed over. */
-internal data class MediaDeliveryCachePass(
-    val items: List<MediaDeliveryWorkItem>,
-    val uncachedCount: Int,
+/** One complete-cache clip ready for external delivery. */
+internal data class MediaDeliveryWorkItem(
+    val cameraID: String,
+    val clip: NikonMediaClipRecord,
+    val entry: MediaCacheEntry,
 )
-
-/**
- * Pulls every selected clip that has no complete cache artifact off the camera before delivery
- * starts (iOS `MediaDeliveryRunner`'s pre-pass, `MediaDeliveryOverlay.swift`). Without it the
- * delivery paths filtered the selection down to whatever happened to be cached already, so
- * selecting ten clips with two cached shared two and dropped eight without a word.
- *
- * Sequential by contract: the Swift core serializes one PTP data channel, so a parallel pass
- * would only queue behind itself. A clip the camera still refuses is counted, never dropped
- * silently, so the run can say how many did not come across.
- */
-internal suspend fun cacheSelectionForDelivery(
-    selection: List<MediaDeliverySelection>,
-    cacheStore: MediaCacheStore,
-    cameraTransferAvailable: Boolean,
-    bridge: MediaObjectTransferBridge,
-    ioContext: CoroutineContext = Dispatchers.IO,
-    pollIntervalMillis: Long = CACHE_PASS_POLL_MILLIS,
-    /** `(1-based index among clips being cached, count being cached, clip, 0…1)`. */
-    onProgress: (Int, Int, MediaDeliverySelection, Double) -> Unit = { _, _, _, _ -> },
-): MediaDeliveryCachePass {
-    val originals = NikonDeliveryOriginals(selection, cacheStore, cameraTransferAvailable,
-        bridge, MonitorDeliveryAdmission { true }, ioContext, pollIntervalMillis)
-    originals.loadCompleteEntries()
-    val missing = selection.filter { !originals.service.available(it) }
-    val cached = MonitorDeliveryModel.cacheOriginals(
-        records = selection, destination = MonitorDeliveryDestination.NATIVE_SHARE,
-        admission = originals.admission, originals = originals.service,
-        filename = { it.clip.filename }, sleep = { delay(pollIntervalMillis) },
-        progress = { value ->
-            if (cameraTransferAvailable) missing.getOrNull(value.clipIndex - 1)?.let { item ->
-                onProgress(value.clipIndex, value.totalClips, item, value.clipFraction)
-            }
-        },
-    ) ?: throw CancellationException("Delivery cache source retired.")
-    val items = cached.ready.mapNotNull(originals::workItem)
-    return MediaDeliveryCachePass(items, uncachedCount = selection.size - items.size)
-}
 
 /** Captured native cache facts and the original one-clip SDK port; shared owners order the work. */
 internal class NikonDeliveryOriginals(
@@ -242,6 +202,8 @@ internal class NikonDeliveryOriginals(
     val admission: MonitorDeliveryAdmission,
     private val ioContext: CoroutineContext = Dispatchers.IO,
     private val pollIntervalMillis: Long = CACHE_PASS_POLL_MILLIS,
+    /** Camera transfer of an uncached original also needs the camera source that listed it. */
+    private val acquisition: MonitorDeliveryAdmission = admission,
 ) {
     private val resolved = mutableMapOf<MediaDeliverySelection, MediaCacheEntry?>()
     suspend fun loadCompleteEntries() = withContext(ioContext) {
@@ -253,15 +215,16 @@ internal class NikonDeliveryOriginals(
     val service = MonitorDeliveryOriginalService<MediaDeliverySelection>(
         available = { resolved[it]?.state == MediaCacheState.COMPLETE },
         acquire = { item ->
-            if (cameraTransferAvailable && admission.isCurrent()) {
+            if (cameraTransferAvailable && admission.isCurrent() && acquisition.isCurrent()) {
                 // Size resolution and first native start still address the captured connection owner.
+                fun admitted() = admission.isCurrent() && acquisition.isCurrent()
                 val admittedBridge = object : MediaObjectTransferBridge {
-                    override val isAvailable get() = admission.isCurrent() && bridge.isAvailable
+                    override val isAvailable get() = admitted() && bridge.isAvailable
                     override fun resolveMediaSize(handle: Int, reportedSize: Long): Long =
-                        if (admission.isCurrent()) bridge.resolveMediaSize(handle, reportedSize) else -1L
+                        if (admitted()) bridge.resolveMediaSize(handle, reportedSize) else -1L
                     override fun startMediaTransfer(handle: Int, reportedSize: Long, resumeOffset: Long,
                         listener: NikonNative.MediaTransferListener) {
-                        if (admission.isCurrent()) bridge.startMediaTransfer(handle, reportedSize, resumeOffset, listener)
+                        if (admitted()) bridge.startMediaTransfer(handle, reportedSize, resumeOffset, listener)
                         else listener.onFailed("Delivery cache source retired.")
                     }
                     override fun stopMediaTransfer() = bridge.stopMediaTransfer()

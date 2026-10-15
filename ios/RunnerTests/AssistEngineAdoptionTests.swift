@@ -258,7 +258,7 @@ final class AssistEngineScreens: XCTestCase {
             }
             let host = UIHostingController(
                 rootView: AnyView(
-                    NativeRootContent().environment(model).environment(MediaDeliveryCoordinator())))
+                    NativeRootContent().environment(model).environment(model.delivery)))
             host.safeAreaRegions = []
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(origin: .zero, size: size)

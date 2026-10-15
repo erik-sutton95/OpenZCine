@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.frameio
 
+import com.opencapture.opencine.frameio.FrameioHopAvailability
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.CameraSession
@@ -7,8 +8,6 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.pairing.PairedCamera
 import com.opencapture.openzcine.pairing.PairingCredentials
 import com.opencapture.openzcine.pairing.PairingEnvironment
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -20,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 class FrameioCameraApHopTest {
     @Test

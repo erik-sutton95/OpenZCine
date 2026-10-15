@@ -203,17 +203,23 @@ struct NikonMonitorShell: View {
     private typealias Readout = MonitorOperatorLiveReadout<NikonLiveReadoutKey, Section>
 
     private var sourceAspect: Double {
+        Self.picture(model).aspect
+    }
+    /// Picture facts read by the shared chrome, independently of the raster view.
+    static func picture(_ model: NativeAppModel) -> MonitorOperatorLivePicture {
         let raw: Double
-        if model.videoSource == .hdmiCapture, let image = model.liveFrameImage,
-            image.size.height > 0
-        {
-            raw = Double(image.size.width / image.size.height)
+        if model.videoSource == .hdmiCapture, let aspect = model.liveFrameAspect {
+            raw = aspect
         } else {
             raw =
                 model.isPhotographyMode
                 ? model.cameraPropertySnapshot.photographyFeedAspect : 16 / 9
         }
-        return model.displayedFeedRotation.isVertical ? 1 / raw : raw
+        return .init(
+            aspect: model.displayedFeedRotation.isVertical ? 1 / raw : raw,
+            waiting: !model.hasLiveFrameImage && !model.isDemoSession,
+            vertical: model.displayedFeedRotation.isVertical, flipped: false,
+            recovering: model.sessionRecovery.isRecovering)
     }
     /// The shared field-monitor geometry. Portrait fill yields to de-squeeze, as on every app.
     private var live: LiveMonitorLayout {
@@ -302,12 +308,12 @@ struct NikonMonitorShell: View {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: model.photoPillShowsStorage
-                    ? model.mediaReadout
+                    ? model.liveMediaReadout
                     : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() })
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
-                id: .storage, title: "Storage", value: model.mediaReadout,
+                id: .storage, title: "Storage", value: model.liveMediaReadout,
                 section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil
@@ -375,13 +381,7 @@ struct NikonMonitorShell: View {
     private var source: MonitorOperatorLiveSource<NikonLiveReadoutKey, NikonCaptureQuickIdentity> {
         .init(
             identity: { model.operatorLiveIdentity }, available: { model.monitorAvailableSections },
-            picture: {
-                .init(
-                    aspect: sourceAspect,
-                    waiting: model.liveFrameImage == nil && !model.isDemoSession,
-                    vertical: model.displayedFeedRotation.isVertical, flipped: false,
-                    recovering: model.sessionRecovery.isRecovering)
-            },
+            picture: { Self.picture(model) },
             status: { status }, cameraBattery: { cameraBattery }, capture: { captureInputs },
             record: { record },
             // The Nikon EV needle and level remain native instruments until F04 and A1-31.
@@ -490,17 +490,21 @@ struct NikonMonitorShell: View {
             preview: {
                 if let tool = MonitorAssistTool(rawValue: $0.rawValue),
                     MonitorInspectorPreviewPolicy.isImage($0)
-                        || [.waveform, .parade, .histogram, .vectorscope, .trafficLights].contains(
+                        || [
+                            .waveform, .parade, .histogram, .vectorscope, .trafficLights,
+                            .audioMeters,
+                        ].contains(
                             tool)
                 {
                     NikonAssistInspectorPreview(tool: tool)
                 }
             },
-            lookMenu: { LUTPickerContent() }
+            lookMenu: { NikonLUTPicker() }
         )
         .overlay { MonitorRecoveryOverlay() }
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
-        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value }
+        .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value
+        }
         .onChange(of: model.shell.monitor?.id, initial: true) { _, monitor in
             model.operatorSession.synchronize(source: monitor)
         }

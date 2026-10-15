@@ -1,8 +1,9 @@
 import MonitorPresentation
 import Network
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCore
+import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -20,7 +21,8 @@ enum DemoHarness {
     // MARK: Hook registry — every env toggle, one place.
 
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
-    /// first downloaded clip (read in `MediaBrowserView`).
+    /// first downloaded clip and `share` opens the delivery popup over it (read in
+    /// `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
@@ -286,6 +288,9 @@ enum DemoHarness {
                 environment: env, fallbackDirectoryPath: localDemoFallback)
             if env["ZC_DEMO_AUTOSTART"] == "1" {
                 model.startDemoSession()
+                if env["ZC_DEMO_GRAPHICAL_REVIEW"] == "1" {
+                    model.seedGraphicalReviewTimecode()
+                }
                 if env["ZC_DEMO_QUICK_SETTINGS"] == "1" {
                     model.seedQuickDemoCamera()
                 }
@@ -622,9 +627,12 @@ enum DemoHarness {
                             case "fpsReadout": [.fps]
                             // "rail" is the retired whole-rail blob: the rail controls.
                             case "rail": [.railRecord, .railMedia, .railSettings]
-                            default: MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] } ?? []
+                            default:
+                                MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] }
+                                    ?? []
                             }
-                        for section in sections where model.operatorSession.chrome(for: target).isVisible(section) {
+                        for section in sections
+                        where model.operatorSession.chrome(for: target).isVisible(section) {
                             model.operatorSession.toggle(section, in: target)
                         }
                     }
@@ -980,7 +988,15 @@ enum DemoHarness {
             case .media?, .playback?:
                 if review?.connected == true {
                     // The demo session has no card to list, so the Media panel it opened begins
-                    // on the staged index, as a finished listing pass would.
+                    // on the staged index, as a finished listing pass would. Its SIMULATED card (the
+                    // shared ReviewCard over the staged handles) removes what a deletion names.
+                    let card = ReviewCard(
+                        clips: (0..<(review?.mediaCount ?? 0)).map {
+                            MediaObjectHandle(storageID: 65_537, handle: UInt32($0 + 1))
+                        })
+                    model.reviewCameraDelete = { @MainActor location in
+                        card.delete { $0 == location }
+                    }
                     model.mediaLibrary?.begin()
                 } else {
                     // The startup screen's Media: everything cached on this phone.
@@ -1244,6 +1260,11 @@ enum DemoHarness {
             guard let model else { return .init(connection: .disconnected(.requested)) }
             var facts = model.nikonControlFacts
             facts.recording = false
+            if model.isDemoSession,
+                ProcessInfo.processInfo.environment["ZC_DEMO_GRAPHICAL_REVIEW"] == "1"
+            {
+                facts.timecode = model.liveTimecode.running
+            }
             return facts
         }
         func queueSettingWrites(

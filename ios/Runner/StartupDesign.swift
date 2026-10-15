@@ -568,7 +568,6 @@ enum StartupWizardContent {
 
 struct StartupFirstPairWizardView: View {
     @Environment(NativeAppModel.self) private var model
-    @Environment(\.openURL) private var openURL
     let isBusy: Bool
     let contentLayout: StartupContentLayout
     var safeArea = EdgeInsets()
@@ -615,9 +614,7 @@ struct StartupFirstPairWizardView: View {
                             model.showSavedCameras()
                         }
                     },
-                    content: AnyView(stepBody)),
-            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
-            onTerms: { openURL(SupportLinkCatalog.terms) }
+                    content: AnyView(stepBody))
         )
         .onReceive(
             NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)

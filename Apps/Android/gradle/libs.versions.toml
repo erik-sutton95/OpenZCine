@@ -7,7 +7,7 @@ kotlin = "2.4.20"
 coroutines = "1.11.0"
 composeBom = "2026.09.00"
 activityCompose = "1.13.0"
-media3 = "1.10.1"
+media3 = "1.11.1"
 androidxTest = "1.7.0"
 androidxTestExtJunit = "1.3.0"
 androidxCore = "1.18.0"
@@ -35,6 +35,7 @@ opencine-nikon = { module = "com.opencapture.opencine:nikon", version.ref = "ope
 opencine-appkit = { module = "com.opencapture.opencine:appkit", version.ref = "openCineCore" }
 opencine-camera-controls = { module = "com.opencapture.opencine:camera-controls", version.ref = "openCineCore" }
 opencine-native-runtime = { module = "com.opencapture.opencine:native-runtime", version.ref = "openCineCore" }
+opencine-media3 = { module = "com.opencapture.opencine:media3", version.ref = "openCineCore" }
 opencine-vulkan = { module = "com.opencapture.opencine:vulkan", version.ref = "openCineCore" }
 opencine-platform = { module = "com.opencapture.opencine:platform", version.ref = "openCineCore" }
 # The android-application module needs the explicit JUnit variant: AGP's built-in

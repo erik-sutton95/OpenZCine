@@ -11,6 +11,8 @@ import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
+import com.opencapture.opencine.nikon.MediaStatus
+import com.opencapture.opencine.nikon.MonitorTextFormat
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.opencine.relay.RelayHostControl
 import com.opencapture.opencine.relayruntime.RelayBroadcastAnnouncer
@@ -19,8 +21,6 @@ import com.opencapture.opencine.relayruntime.RelayBroadcastFrame
 import com.opencapture.opencine.relayruntime.RelayBroadcastOwner
 import com.opencapture.openzcine.UNAVAILABLE_MONITOR_VALUE
 import com.opencapture.openzcine.core.RelayEncoderProfile
-import com.opencapture.openzcine.monitorMediaStatus
-import com.opencapture.openzcine.monitorResolutionLabel
 import com.opencapture.openzcine.monitorStorageLabel
 import com.opencapture.openzcine.monitorValueOrNull
 import com.opencapture.openzcine.validBatteryPercent
@@ -160,11 +160,7 @@ class RelayBroadcastController(
                     MonitorRelayWire.State.RECORD_STATE_STANDBY
                 },
             resolutionFrameRate =
-                monitorResolutionLabel(
-                    resolution = snapshot.resolution,
-                    frameRate = snapshot.frameRate,
-                    fallback = ""
-                ),
+                MonitorTextFormat.resolutionLabel(snapshot.resolution.monitorValueOrNull(), snapshot.frameRate ?: 0, ""),
             codec = snapshot.codec.monitorValueOrNull() ?: "",
             media = monitorStorageLabel(snapshot.storage).takeIf { it != "\u2014" } ?: "",
             liveFPS = latestFPS?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "",
@@ -221,19 +217,8 @@ class RelayBroadcastController(
             // The MEDIA cell's capacity/duration flip-side, through the SAME estimator the
             // local top bar uses , null left a watcher's cell stuck on its preview value.
             mediaStatus =
-                monitorMediaStatus(
-                        storage = snapshot.storage,
-                        codec = snapshot.codec,
-                        resolution = snapshot.resolution,
-                        frameRate = snapshot.frameRate,
-                    )
-                    ?.let {
-                        MonitorRelayWire.MediaStatus(
-                            gigabytesFree = it.gigabytesFree.toInt(),
-                            percentFree = it.percentFree.toInt(),
-                            minutesRemaining = it.minutesRemaining,
-                        )
-                    },
+                MediaStatus.from(snapshot.storage, snapshot.codec, snapshot.resolution, snapshot.frameRate)
+                    ?.let { MonitorRelayWire.MediaStatus(it.gigabytesFree, it.percentFree, it.minutesRemaining, it.estimatedMinutesRemaining, it.freeBytes) },
             isRecording = recording,
             allowsControlRequests = allowsControlRequests,
             batteryReading = power.batteryReading, batteryExhausted = power.exhausted.value,

@@ -101,7 +101,7 @@ class WearRelayPhoneStateTest {
         assertEquals(WatchConnectionState.CONNECTED, state.connection)
         assertEquals("Nikon ZR", state.cameraName)
         assertEquals(83, state.cameraBatteryPercent)
-        assertEquals("4 GB · 50%", state.media)
+        assertEquals("4.29 GB · 50%", state.media)
         assertFalse(state.timecode.on)
         assertEquals("—", state.liveFPS)
         assertTrue(state.feedLive)

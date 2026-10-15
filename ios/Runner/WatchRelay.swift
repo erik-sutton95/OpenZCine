@@ -4,6 +4,8 @@ import OpenCineWatch
 import OpenZCineCore
 import UIKit
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Bounded native picture facts. The shared owner controls admission, encoding and SDK delivery;
 /// the existing native renderer retains the integration's calibrated look projection.
 private struct WatchNativePreview: @unchecked Sendable {
@@ -75,7 +77,9 @@ private struct WatchNativePreview: @unchecked Sendable {
         guard isReady else { return }
         let renderer: LiveFrameRenderer?
         if let effects, !effects.isIdentity {
-            if frameRenderer == nil { frameRenderer = LiveFrameRenderer(fileStore: LUTFileStore()) }
+            if frameRenderer == nil {
+                frameRenderer = LiveFrameRenderer(fileStore: CustomLUTStore())
+            }
             renderer = frameRenderer
         } else {
             renderer = nil

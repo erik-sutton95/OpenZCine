@@ -15,6 +15,7 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import com.opencapture.opencine.frameio.FrameioDeliveryException
 import com.opencapture.opencine.runtime.MonitorMovieExportLut
 import com.opencapture.opencine.runtime.MonitorMovieExportContainer
 import com.opencapture.opencine.runtime.MonitorMovieCodecFactory
@@ -31,16 +32,9 @@ import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.media.StagedMediaShare
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.nio.file.StandardOpenOption
-import java.time.Instant
-import java.util.UUID
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
 
 /** One explicit per-run configuration shared by every external media destination. */
 internal data class MediaDeliveryConfiguration(
@@ -64,6 +58,20 @@ internal data class FrameioArtifactContext(
     val supportsLutBake: Boolean,
     val stableClipIdentity: String = "",
 )
+
+/** One validated original staged from the complete camera cache for upload. */
+internal class FrameioDeliveryArtifact(
+    val share: StagedMediaShare,
+    val byteCount: Long,
+    val context: FrameioArtifactContext =
+        FrameioArtifactContext(
+            cameraID = "",
+            captureDate = "",
+            supportsLutBake = true,
+        ),
+) {
+    override fun toString(): String = "FrameioDeliveryArtifact(redacted)"
+}
 
 /** Upload-ready output plus the exact look that was actually baked, if any. */
 internal class FrameioPreparedArtifact(
@@ -247,170 +255,4 @@ private val frameioMovieExportErrors = MonitorMovieExportErrorFactory { reason, 
         MonitorMovieExportFailure.INCOMPLETE_CLEANUP -> "OpenZCine couldn't remove the incomplete Frame.io export."
         MonitorMovieExportFailure.TEMPORARY_CLEANUP -> "OpenZCine couldn't remove the temporary Frame.io export."
     })
-}
-
-/** Writes a local sidecar only after Frame.io confirms the upload. */
-internal interface FrameioMetadataSidecarWriter {
-    suspend fun recordSuccessfulDelivery(
-        artifact: FrameioDeliveryArtifact,
-        prepared: FrameioPreparedArtifact,
-        destination: FrameioDestination,
-        options: MediaDeliveryConfiguration,
-    )
-}
-
-internal object NoFrameioMetadataSidecarWriter : FrameioMetadataSidecarWriter {
-    override suspend fun recordSuccessfulDelivery(
-        artifact: FrameioDeliveryArtifact,
-        prepared: FrameioPreparedArtifact,
-        destination: FrameioDestination,
-        options: MediaDeliveryConfiguration,
-    ) = Unit
-}
-
-/** Stable, secret-free sidecar payload written only after a confirmed upload. */
-internal data class FrameioMetadataSidecar(
-    val cameraID: String,
-    val captureDate: String,
-    val deliveredAt: String,
-    val deliveryFilename: String,
-    val lutName: String?,
-    val originalFilename: String,
-    val projectName: String,
-    val sizeBytes: Long,
-)
-
-/** Small JSON encoder kept Android-free so escaping and field policy are host-testable. */
-internal object FrameioMetadataSidecarCodec {
-    fun encode(value: FrameioMetadataSidecar): String =
-        buildString {
-            append("{\n")
-            appendField("cameraID", value.cameraID)
-            appendField("captureDate", value.captureDate)
-            appendField("deliveredAt", value.deliveredAt)
-            appendField("deliveryFilename", value.deliveryFilename)
-            appendNullableField("lutName", value.lutName)
-            appendField("originalFilename", value.originalFilename)
-            appendField("projectName", value.projectName)
-            append("  \"sizeBytes\": ${value.sizeBytes},\n")
-            append("  \"version\": 1\n")
-            append('}')
-        }
-
-    private fun StringBuilder.appendField(name: String, value: String) {
-        append("  ")
-        append(jsonString(name))
-        append(": ")
-        append(jsonString(value))
-        append(",\n")
-    }
-
-    private fun StringBuilder.appendNullableField(name: String, value: String?) {
-        append("  ")
-        append(jsonString(name))
-        append(": ")
-        append(value?.let(::jsonString) ?: "null")
-        append(",\n")
-    }
-
-    private fun jsonString(value: String): String =
-        buildString {
-            append('"')
-            value.forEach { character ->
-                when (character) {
-                    '"' -> append("\\\"")
-                    '\\' -> append("\\\\")
-                    '\b' -> append("\\b")
-                    '\u000C' -> append("\\f")
-                    '\n' -> append("\\n")
-                    '\r' -> append("\\r")
-                    '\t' -> append("\\t")
-                    else ->
-                        if (character.code < 0x20) {
-                            append("\\u")
-                            append(character.code.toString(16).padStart(4, '0'))
-                        } else {
-                            append(character)
-                        }
-                }
-            }
-            append('"')
-        }
-}
-
-/** App-private, bounded metadata history. OAuth values and upload URLs never enter a sidecar. */
-internal class AndroidFrameioMetadataSidecarWriter(
-    private val root: Path,
-    private val clock: () -> Long = System::currentTimeMillis,
-) : FrameioMetadataSidecarWriter {
-    override suspend fun recordSuccessfulDelivery(
-        artifact: FrameioDeliveryArtifact,
-        prepared: FrameioPreparedArtifact,
-        destination: FrameioDestination,
-        options: MediaDeliveryConfiguration,
-    ) {
-        if (!options.includeMetadata) return
-        withContext(Dispatchers.IO) {
-            Files.createDirectories(root)
-            val deliveredAt = clock()
-            val body =
-                FrameioMetadataSidecarCodec.encode(
-                    FrameioMetadataSidecar(
-                        cameraID = artifact.context.cameraID,
-                        captureDate = artifact.context.captureDate,
-                        deliveredAt = Instant.ofEpochMilli(deliveredAt).toString(),
-                        deliveryFilename = prepared.share.displayName,
-                        lutName = prepared.appliedLutName,
-                        originalFilename = artifact.share.displayName,
-                        projectName = destination.projectName,
-                        sizeBytes = prepared.byteCount,
-                    ),
-                )
-            val stem = safeSidecarStem(artifact.share.displayName)
-            val target = root.resolve("$stem-$deliveredAt-${UUID.randomUUID()}.meta.json")
-            val temporary = root.resolve(".${target.fileName}.tmp")
-            try {
-                Files.write(temporary, body.toByteArray(Charsets.UTF_8))
-                Files.move(
-                    temporary,
-                    target,
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-                pruneSidecars()
-            } finally {
-                Files.deleteIfExists(temporary)
-            }
-        }
-    }
-
-    private fun pruneSidecars() {
-        val entries =
-            Files.list(root).use { paths ->
-                paths.iterator().asSequence()
-                    .filter { path -> path.fileName.toString().endsWith(".meta.json") }
-                    .sortedBy { path -> Files.getLastModifiedTime(path).toMillis() }
-                    .toList()
-            }
-        entries.take((entries.size - MAXIMUM_SIDECARS).coerceAtLeast(0)).forEach { path ->
-            runCatching { Files.deleteIfExists(path) }
-        }
-    }
-
-    private fun safeSidecarStem(filename: String): String =
-        filename.substringBeforeLast('.', missingDelimiterValue = filename)
-            .map { character ->
-                if (character.isLetterOrDigit() || character == '-' || character == '_') {
-                    character
-                } else {
-                    '_'
-                }
-            }
-            .joinToString("")
-            .take(64)
-            .ifBlank { "OpenZCine" }
-
-    private companion object {
-        const val MAXIMUM_SIDECARS = 100
-    }
 }

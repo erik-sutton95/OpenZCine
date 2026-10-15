@@ -26,6 +26,9 @@ val samplesDirectory = repositoryRoot.resolve("samples")
 // generated assets root without android.sourceset.disallowProvider overrides.
 val stagedDemoAssetsDirectory =
     layout.buildDirectory.get().asFile.resolve("generated/demoAssets")
+// The repository NOTICE, staged into the app's assets so Settings shows it offline.
+val stagedLegalAssetsDirectory =
+    layout.buildDirectory.get().asFile.resolve("generated/legalAssets")
 
 // Frame.io uses an Adobe IMS public PKCE client. These values are not a client
 // secret, but each Android redirect registration is deployment-specific, so a
@@ -154,6 +157,8 @@ android {
     }
 
     sourceSets {
+        getByName("androidTest").kotlin.srcDir(
+            gradle.includedBuild("opencine").projectDir.resolve("appkit-native/src/cacheOwnerProof/kotlin"))
         getByName("main").jniLibs.directories.apply {
             clear()
             add(swiftCoreJniLibsRoot.get().asFile.absolutePath)
@@ -161,6 +166,7 @@ android {
         // Debug-only: generated assets under build/generated/demoAssets/demo/
         // (copied from repo-root samples/ when present).
         getByName("debug").assets.srcDir(stagedDemoAssetsDirectory)
+        getByName("main").assets.srcDir(stagedLegalAssetsDirectory)
     }
 }
 
@@ -197,6 +203,15 @@ val stageDebugDemoSamples =
  * Gradle-owned output. `src/main/jniLibs` is deliberately not an input: a
  * clean clone must never package an ignored or stale local .so set.
  */
+/** Stages the repository NOTICE into the app assets, so the shipped attribution is the repository's. */
+val stageLegalAssets =
+    tasks.register<Copy>("stageLegalAssets") {
+        group = "build"
+        description = "Stage the repository NOTICE into the app assets."
+        from(repositoryRoot.resolve("NOTICE"))
+        into(stagedLegalAssetsDirectory)
+    }
+
 val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
     group = "build"
     description = "Cross-compile and stage the Swift camera core for arm64-v8a."
@@ -206,7 +221,8 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
             include("Package.swift", "Package.resolved", "Sources/**")
         },
         // The root Package.swift takes these from the sibling OpenCine checkout: OpenCineMedia
-        // (and OpenCineCore, which it depends on), OpenCineFrameIO (the Frame.io facade),
+        // (and OpenCineCore, which it depends on), OpenCineFrameIO and OpenCineFrameIOAndroid
+        // (the Frame.io wire and FrameioNative's JNI exports),
         // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it),
         // OpenCineNikonAndroid (the PTP-IP / USB session layer and NikonNative's JNI exports)
         // and OpenCineJNISupport (+ the OpenCineJNI header), so a package edit must restage the core.
@@ -216,6 +232,7 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineMedia/**",
                 "Sources/OpenCineCore/**",
                 "Sources/OpenCineFrameIO/**",
+                "Sources/OpenCineFrameIOAndroid/**",
                 "Sources/OpenCineNikon/**",
                 "Sources/OpenCineNikonAndroid/**",
                 "Sources/OpenCineJNISupport/**",
@@ -244,6 +261,7 @@ tasks.named("preBuild").configure {
     // Stage local demo clips before any debug asset/lint task reads the
     // generated assets directory (implicit-dependency hygiene).
     dependsOn(stageDebugDemoSamples)
+    dependsOn(stageLegalAssets)
 }
 
 // Brand resource tests compare Android derivatives with the canonical iOS
@@ -297,6 +315,7 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
 }
 
 dependencies {
+    androidTestImplementation("com.opencapture.opencine:app-ui-testing:0.1.0-SNAPSHOT")
     implementation(project(":core-api"))
     // OpenCine common camera contracts (CORE-02 candidate, composite build; see settings).
     implementation(libs.opencine.core)
@@ -311,6 +330,8 @@ dependencies {
     implementation(libs.opencine.camera.controls)
     // Shared prepared PCM sampling and decoded-audio source lifetime.
     implementation(libs.opencine.native.runtime)
+    // Shared Media3 player recipe, port, transport mapping and audio meter tap.
+    implementation(libs.opencine.media3)
     // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.
     implementation(libs.opencine.vulkan)
     // Keystore sealing for the camera Wi-Fi keys.
@@ -324,6 +345,8 @@ dependencies {
     // The shared reporting adapter: appkit's reporting sink, transport and problem report upload on
     // the Sentry SDK (sentry-android comes with it, at the version OpenCine pins).
     implementation("com.opencapture.opencine:appkit-sentry:0.1.0-SNAPSHOT")
+    // The one Frame.io owner (sign-in, upload, history, hop lease) over FrameioNative (A4-09).
+    implementation("com.opencapture.opencine:frameio:0.1.0-SNAPSHOT")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)

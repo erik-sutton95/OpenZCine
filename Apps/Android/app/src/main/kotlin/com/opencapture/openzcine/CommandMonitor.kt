@@ -17,6 +17,7 @@ import com.opencapture.opencine.cameracontrols.LadderSheet
 import com.opencapture.opencine.cameracontrols.LadderSheetPresentation
 import com.opencapture.opencine.cameracontrols.LadderTab
 import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.nikon.MonitorTextFormat
 import com.opencapture.opencine.vocabulary.CaptureLadder
 import com.opencapture.opencine.vocabulary.CaptureTint
 import com.opencapture.opencine.nikon.CameraPropertyRefreshFailure
@@ -835,10 +836,8 @@ internal fun compactRecordingModeFromRawDisplay(display: String): String? {
  * e-VR enum for an unrecognized codec (Sources/OpenZCineAndroidFacade/PTPIPClientSession.swift:
  * 439-442), and this gate must never be looser than the wire it guards.
  */
-internal fun electronicVRAllowsCodec(codec: String?): Boolean {
-    val upper = codec?.takeIf { it.isNotBlank() }?.uppercase() ?: return false
-    return !upper.contains("RAW") && !upper.contains("R3D")
-}
+internal fun electronicVRAllowsCodec(codec: String?): Boolean =
+    codec?.takeIf { it.isNotBlank() }?.let { !MonitorTextFormat.isRawCodec(it) } ?: false
 
 /** True only when a completed property refresh reflects the accepted control write. */
 internal fun cameraPropertyConfirmsSelection(
@@ -896,7 +895,7 @@ internal fun cameraPropertyConfirmsSelection(
                 recordingModeLabelsMatch(live, label)
             } else {
                 recordingModeLabelsMatch(
-                    monitorResolutionLabel(snapshot.resolution, snapshot.frameRate, ""),
+                    MonitorTextFormat.resolutionLabel(snapshot.resolution.monitorValueOrNull(), snapshot.frameRate ?: 0, ""),
                     label,
                 )
             }
@@ -904,7 +903,7 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.CODEC ->
             recordingModeLabelsMatch(snapshot.codecSelection, label) ||
                 recordingModeLabelsMatch(
-                    snapshot.codec?.let(::monitorCodecShortLabel),
+                    snapshot.codec?.let(MonitorTextFormat::codecShortLabel),
                     label,
                 )
         CameraControl.VIBRATION_REDUCTION -> snapshot.vibrationReduction == label

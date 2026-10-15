@@ -12,17 +12,18 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.MainActivity
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
+import com.opencapture.opencine.appkit.MonitorMediaCategoryFilter
 import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
@@ -31,6 +32,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaLayout
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** End-to-end device coverage for opening one completed cache with no camera session. */
 @RunWith(AndroidJUnit4::class)
@@ -117,6 +120,32 @@ class OfflineMediaMainActivityTest {
     }
 
     @Test
+    fun theCachedClipPlayerSharesThroughTheSharedDeliveryPopupAcrossRotation() {
+        scenario =
+            ActivityScenario.launch(
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+        try {
+            // A launch can replace the orientation the test host had, so set it after.
+            device.setOrientationNatural()
+            device.waitForOrientation(landscape = false)
+            device.waitForCamerasAction("Media library").click()
+            device.waitForText(CACHED_FILENAME).click()
+            device.waitForDescription("Share clip").click()
+            // The shared popup (A4-10), not a Z overlay, offers the native share destination.
+            assertNotNull(device.waitForText("Nearby Share, Files, and other apps"))
+            saveDeviceScreenshot("openzcine-android-delivery-popup-portrait.png")
+            device.setOrientationLeft()
+            device.waitForOrientation(landscape = true)
+            assertNotNull(device.waitForText("Nearby Share, Files, and other apps"))
+            saveDeviceScreenshot("openzcine-android-delivery-popup-landscape.png")
+        } finally {
+            device.setOrientationNatural()
+        }
+    }
+
+    @Test
     fun malformedCompletedCacheReportsFailureInsteadOfWaitingForever() {
         scenario = ActivityScenario.launch(
             Intent(context, MainActivity::class.java)
@@ -128,7 +157,8 @@ class OfflineMediaMainActivityTest {
         // An unopened offline library leaves the borrowed shared player preparing forever.
         assertNotNull(
             "The actual cached player must enter native preparation and publish its failure",
-            device.wait(Until.findObject(By.text("Source error")), UI_TIMEOUT_MILLIS),
+            // The app's failure copy replaces Media3's raw "Source error" message.
+            device.wait(Until.findObject(By.textStartsWith("Couldn't play this camera proxy")), UI_TIMEOUT_MILLIS),
         )
     }
 
@@ -145,6 +175,13 @@ class OfflineMediaMainActivityTest {
         device.waitForText("Operator Setup")
         device.revealSettingsTab("Storage").click()
         device.waitForText("Clear").click()
+        // Clearing asks first on every app (A4-06); confirm inside the dialog's own window.
+        var dialog: UiObject2 = device.wait(Until.findObject(By.text("Clear cache?")), UI_TIMEOUT_MILLIS)
+            ?: throw AssertionError("Clearing the cache asks first")
+        while (dialog.findObject(By.text("Clear")) == null) {
+            dialog = dialog.parent ?: throw AssertionError("The clear dialog has no confirmation")
+        }
+        dialog.findObject(By.text("Clear")).click()
         assertNotNull(
             device.wait(
                 Until.findObject(By.textStartsWith("Removed ")),
@@ -161,7 +198,8 @@ class OfflineMediaMainActivityTest {
     @Test
     fun actualSharedMediaShellKeepsCategoriesLayoutAndDensityAcrossRotationAndRelaunch() {
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
-        index.saveViewOptions(MediaLibraryViewOptions(source = MediaLibrarySource.LOCAL))
+        val preferences = index.mediaPreferences("view-only")
+        preferences.saveViewOptions(MonitorMediaViewOptions())
         try {
             scenario = ActivityScenario.launch(
                 Intent(context, MainActivity::class.java)
@@ -171,24 +209,24 @@ class OfflineMediaMainActivityTest {
             device.setOrientationLeft()
             device.waitForDescription("Show Photos media").click()
             device.waitForIdle()
-            assertEquals(MediaLibraryCategory.PHOTOS, index.viewOptions(MediaLibrarySource.LOCAL).category)
+            assertEquals(MonitorMediaCategoryFilter.PHOTOS, preferences.viewOptions().category)
             device.waitForDescription("Show Videos media").click()
             assertNotNull(device.waitForText(CACHED_FILENAME))
             device.waitForDescription("List view").click()
             device.waitForIdle()
-            assertEquals(MonitorMediaLayout.LIST, index.viewOptions(MediaLibrarySource.LOCAL).layout)
+            assertEquals(MonitorMediaLayout.LIST, preferences.viewOptions().layout)
             device.waitForDescription("Grid view").click()
             for ((size, label) in MonitorThumbnailSize.entries.zip(listOf("Small", "Medium", "Large"))) {
                 device.waitForDescription("$label thumbnails").click()
                 device.waitForIdle()
-                assertEquals(size, index.viewOptions(MediaLibrarySource.LOCAL).thumbnailSize)
+                assertEquals(size, preferences.viewOptions().thumbnailSize)
             }
             device.setOrientationNatural()
             assertNotNull(device.waitForText(CACHED_FILENAME))
             device.waitForDescription("List view").click()
             device.waitForIdle()
-            val retained = index.viewOptions(MediaLibrarySource.LOCAL)
-            assertEquals(MediaLibraryCategory.VIDEOS, retained.category)
+            val retained = preferences.viewOptions()
+            assertEquals(MonitorMediaCategoryFilter.VIDEOS, retained.category)
             assertEquals(MonitorMediaLayout.LIST, retained.layout)
             assertEquals(MonitorThumbnailSize.LARGE, retained.thumbnailSize)
             scenario?.close()
@@ -198,7 +236,7 @@ class OfflineMediaMainActivityTest {
             )
             device.waitForCamerasAction("Media library").click()
             assertNotNull(device.waitForText(CACHED_FILENAME))
-            assertEquals(retained, index.viewOptions(MediaLibrarySource.LOCAL))
+            assertEquals(retained, preferences.viewOptions())
         } finally {
             device.setOrientationNatural()
             device.unfreezeRotation()
@@ -211,12 +249,18 @@ class OfflineMediaMainActivityTest {
 
     private fun UiDevice.revealSettingsTab(description: String): UiObject2 {
         repeat(8) {
-            findObject(By.desc(description))?.let { tab ->
-                val observedBounds = tab.visibleBounds
-                waitForIdle()
-                findObject(By.desc(description))?.let { current ->
-                    if (current.visibleBounds == observedBounds) return current
-                }
+            // The live catalog's native frame clock retires nodes while automation reads
+            // them; requery by description instead of holding a UiObject2 across reads
+            // (the same discipline the media selection helpers use).
+            val observed = findObject(By.desc(description))?.let { tab ->
+                try { tab.visibleBounds } catch (_: StaleObjectException) { null }
+            }
+            waitForIdle()
+            val settled = findObject(By.desc(description))?.let { tab ->
+                try { tab.visibleBounds } catch (_: StaleObjectException) { null }
+            }
+            if (observed != null && settled == observed) {
+                findObject(By.desc(description))?.let { return it }
             }
             val rail = wait(
                 Until.findObject(By.clazz("android.widget.HorizontalScrollView").scrollable(true)),
@@ -239,6 +283,13 @@ class OfflineMediaMainActivityTest {
         }
         waitForIdle()
         return waitForDescription(description)
+    }
+
+    private fun UiDevice.waitForOrientation(landscape: Boolean) {
+        val deadline = System.currentTimeMillis() + UI_TIMEOUT_MILLIS
+        while ((displayWidth > displayHeight) != landscape && System.currentTimeMillis() < deadline) waitForIdle()
+        assertEquals(landscape, displayWidth > displayHeight)
+        waitForIdle()
     }
 
     private fun UiDevice.waitForDescription(description: String): UiObject2 =

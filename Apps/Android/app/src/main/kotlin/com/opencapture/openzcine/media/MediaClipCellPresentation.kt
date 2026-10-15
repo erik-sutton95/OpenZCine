@@ -29,7 +29,7 @@ private fun clipActionLabel(clip: NikonMediaClipRecord): String =
 
 /** A paired still's one cell announces both sides (iOS `RAW+J` badge). */
 private fun pairAwareBadgeLabel(clip: NikonMediaClipRecord, hasRawSibling: Boolean): String =
-    if (hasRawSibling) "${clip.sizeLabel} · RAW+J" else clip.badgeLabel
+    if (hasRawSibling) listOf(clip.sizeLabel, "RAW+J").filter { it.isNotEmpty() }.joinToString(" · ") else clip.badgeLabel
 
 private fun clipAccessibilityLabel(
     clip: NikonMediaClipRecord,

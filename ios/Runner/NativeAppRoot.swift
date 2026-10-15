@@ -3,6 +3,7 @@ import MonitorUI
 import Network
 import Observation
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
@@ -19,6 +20,9 @@ import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
 import enum MonitorPresentation.MonitorThumbnailSize
+import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
+import class OpenCineCameraVocabulary.CustomLUTStore
+import class OpenCineCameraVocabulary.LUTPreferences
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -366,140 +370,66 @@ struct MovablePanelStoredCenter: Codable, Equatable, Sendable {
     }
 }
 
-/// Why a LUT import failed.
-enum LUTImportError: LocalizedError {
-    case unreadableArchive
-    case unreadableFile
-
-    var errorDescription: String? {
-        switch self {
-        case .unreadableArchive: "The downloaded archive couldn't be read."
-        case .unreadableFile: "That file couldn't be read as a .cube LUT."
-        }
-    }
+/// The generated catalogue has no editable stored files. Category policy stays with app composition.
+private enum NikonLUTCategoryError: LocalizedError {
+    case generatedLooksReadOnly
+    var errorDescription: String? { "Built-in LUTs cannot be changed or deleted." }
 }
 
-/// Why a stored LUT could not be removed from the app-owned library.
-enum LUTDeletionError: LocalizedError, Equatable {
-    case builtInProtected
-    case invalidFileName
-    case deletionFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .builtInProtected: "Built-in LUTs cannot be deleted."
-        case .invalidFileName: "That LUT has an invalid stored file name."
-        case .deletionFailed(let displayName): "The LUT \(displayName) could not be deleted."
-        }
-    }
-}
-
-/// File-backed store for stored `.cube` LUTs under `<app documents>/luts/<category>` (custom
-/// imports, downloaded RED presets). Storage is platform-owned (shell); the portable
-/// indexing/parsing lives in OpenZCineCore.
-struct LUTFileStore {
-    /// Root of the per-category subdirectories, `<app documents>/luts`.
-    let root: URL
-
-    init(root: URL? = nil) {
-        if let root {
-            self.root = root
-            return
-        }
+extension CustomLUTStore {
+    /// Preserve the existing Nikon document path and saved category names.
+    convenience init(root: URL? = nil) {
         let documents =
             FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        self.root = documents.appendingPathComponent("luts", isDirectory: true)
+        self.init(
+            root: root ?? documents.appendingPathComponent("luts", isDirectory: true),
+            preferences: LUTPreferences(storage: .standard, namespace: "OpenZCine"))
     }
 
-    private func directory(for category: LUTCategory) -> URL {
-        root.appendingPathComponent(category.rawValue.lowercased(), isDirectory: true)
+    private func storedCategory(_ category: LUTCategory) throws -> CustomLUTStore {
+        guard category != .builtIn else { throw NikonLUTCategoryError.generatedLooksReadOnly }
+        return try self.category(named: category.rawValue.lowercased())
     }
 
-    /// The stored LUTs in `category`, sorted (empty until the directory exists).
     func list(_ category: LUTCategory) -> [StoredCustomLUT] {
-        let path = directory(for: category).path
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-        return CustomLUTIndex.stored(fromFileNames: names)
+        (try? storedCategory(category).list()) ?? []
     }
 
-    /// Copies an external `.cube` into `category`, replacing a same-named file.
-    ///
-    /// The file is parsed first so a cube the renderer cannot apply (wrong size, truncated table,
-    /// non-default domain) never appears in the library as a silent no-op.
     @discardableResult
     func importFile(from source: URL, into category: LUTCategory) throws -> StoredCustomLUT {
-        let data = try Data(contentsOf: source)
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw LUTImportError.unreadableFile
-        }
-        _ = try CubeLUT.parse(text)
-        let directory = directory(for: category)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let destination = directory.appendingPathComponent(source.lastPathComponent)
-        try? FileManager.default.removeItem(at: destination)
-        try data.write(to: destination, options: .atomic)
-        return StoredCustomLUT(fileName: source.lastPathComponent)
+        try storedCategory(category).importFile(from: source)
     }
 
-    /// Extracts every `.cube` from a zip's bytes into `category`, flattening nested folders to the
-    /// file name and skipping non-`.cube` entries. Returns the stored list (sorted).
+    /// ZIPFoundation owns decoding only. The shared store owns bounds, parse and replacement.
     @discardableResult
     func importZip(at zipURL: URL, into category: LUTCategory) throws -> [StoredCustomLUT] {
-        // Stream each entry straight to its destination file — never load the whole zip, or any
-        // extracted file, into memory (a large RED pack would otherwise sit fully resident).
-        let archive: Archive
-        do {
-            archive = try Archive(url: zipURL, accessMode: .read)
-        } catch {
-            throw LUTImportError.unreadableArchive
+        let store = try storedCategory(category)
+        let archive = try Archive(url: zipURL, accessMode: .read)
+        return try store.importArchive { accept in
+            for entry in archive where entry.type != .directory {
+                try accept(
+                    CustomLUTArchiveEntry(
+                        path: entry.path,
+                        uncompressedSize: UInt64(entry.uncompressedSize),
+                        isSymbolicLink: entry.type == .symlink,
+                        extract: { consume in
+                            let checksum = try archive.extract(
+                                entry, bufferSize: 64 * 1024, consumer: consume)
+                            guard checksum == entry.checksum else {
+                                throw Archive.ArchiveError.invalidCRC32
+                            }
+                        }))
+            }
         }
-        let directory = directory(for: category)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        // A .cube LUT is tens of KB to a few MB; cap per-entry, total bytes, and file count so a
-        // malformed or hostile archive (many entries / a zip bomb) can't fill the app container.
-        let maxEntryBytes: UInt64 = 64 * 1024 * 1024
-        let maxTotalBytes: UInt64 = 512 * 1024 * 1024
-        let maxFiles = 512
-        var extractedBytes: UInt64 = 0
-        var extractedFiles = 0
-        for entry in archive
-        where entry.type == .file && entry.path.lowercased().hasSuffix(".cube") {
-            let entryBytes = UInt64(entry.uncompressedSize)
-            guard extractedFiles < maxFiles,
-                entryBytes <= maxEntryBytes,
-                entryBytes <= maxTotalBytes - extractedBytes
-            else { continue }
-            let fileName = (entry.path as NSString).lastPathComponent
-            let destination = directory.appendingPathComponent(fileName)
-            try? FileManager.default.removeItem(at: destination)
-            _ = try archive.extract(entry, to: destination)
-            extractedBytes += entryBytes
-            extractedFiles += 1
-        }
-        return list(category)
     }
 
-    /// Loads and parses a stored cube, or `nil` if it's missing or malformed.
     func cube(category: LUTCategory, fileName: String) -> CubeLUT? {
-        let url = directory(for: category).appendingPathComponent(fileName)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return try? CubeLUT.parse(text)
+        try? storedCategory(category).cube(fileName: fileName)
     }
 
-    /// Deletes one app-owned stored LUT. Built-ins have no file and are always protected.
     func remove(_ lut: StoredCustomLUT, from category: LUTCategory) throws {
-        guard category != .builtIn else { throw LUTDeletionError.builtInProtected }
-        let directory = directory(for: category).standardizedFileURL
-        let candidate = directory.appendingPathComponent(lut.fileName).standardizedFileURL
-        guard lut.fileName == (lut.fileName as NSString).lastPathComponent,
-            candidate.deletingLastPathComponent() == directory
-        else { throw LUTDeletionError.invalidFileName }
-        do {
-            try FileManager.default.removeItem(at: candidate)
-        } catch {
-            throw LUTDeletionError.deletionFailed(lut.displayName)
-        }
+        try storedCategory(category).remove(lut)
     }
 }
 
@@ -875,7 +805,7 @@ final class NativeAppModel {
         operatorQuickPresentationRevision = UUID()
     }
 
-    var diagnosticsShareItem: DiagnosticsShareItem?
+    var diagnosticsShareItem: MonitorDiagnosticsShareItem?
     var diagnosticsErrorMessage: String?
     var isPreparingDiagnostics = false
 
@@ -892,7 +822,7 @@ final class NativeAppModel {
         Task {
             defer { isPreparingDiagnostics = false }
             do {
-                diagnosticsShareItem = DiagnosticsShareItem(
+                diagnosticsShareItem = MonitorDiagnosticsShareItem(
                     url: try await AppDiagnostics.shared.makeReport())
             } catch {
                 diagnosticsErrorMessage = error.localizedDescription
@@ -938,6 +868,10 @@ final class NativeAppModel {
     var selectedDiscoveredCameraID: String?
     var pendingPairingChallenge: PTPIPPairingChallenge?
     var isDemoSession = false
+    /// Demo review only (`ReviewLaunch(connected: true)`, set by `DemoHarness`): the SIMULATED
+    /// camera's card, which removes the objects a deletion names, standing in for the camera
+    /// session's delete. Nil everywhere else.
+    var reviewCameraDelete: ((MediaObjectHandle) async -> Bool)?
     /// Demo UI mode (⌘D in a demo session): the feed becomes an interactive stage — drag the eye
     /// marker itself to place it, drag elsewhere to move the AF box, and press 8 to toggle the eye.
     /// Simulator-only tooling for self-serve marketing captures; never reachable outside a demo.
@@ -1027,9 +961,21 @@ final class NativeAppModel {
     }
     /// Root-owned presentation state for the problem report sheet.
     var isBugReportPresented = false
+    /// The app's one internet hop (A2-16): the shared owner over the Nikon Wi‑Fi joiner.
+    @ObservationIgnored lazy var internetHop = MonitorInternetHop<NikonHopRoute>(
+        port: .init(
+            onCameraNetwork: { [weak self] in self?.isOnCameraAccessPoint ?? false },
+            leave: { [weak self] route, current in
+                await self?.leaveForInternetHop(route, current: current)
+            },
+            rejoin: { [weak self] route, current in
+                await self?.rejoinAfterInternetHop(route, current: current)
+            }))
+    /// The Nikon joiner seams of the hop; tests replace them.
+    @ObservationIgnored var hopNative = NikonHopNative()
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
     /// internet. Drives the download screen's "Switching networks…" state.
-    private(set) var internetHopActive = false
+    var internetHopActive: Bool { internetHop.isActive }
     /// True only while a browser link is intentionally using an internet hop. On return to the
     /// foreground, the app rejoins the camera AP through the normal saved-profile pipeline.
     private(set) var externalInternetLinkHandoffActive = false
@@ -1037,23 +983,12 @@ final class NativeAppModel {
     /// prevents transient activation changes during presentation from prompting an immediate
     /// camera-AP rejoin over the page the person just opened.
     @ObservationIgnored private var externalInternetLinkSawBackground = false
-    @ObservationIgnored private var externalInternetLinkToken: FrameioInternetHop.Token?
+    @ObservationIgnored private var externalInternetLinkToken:
+        MonitorInternetHop<NikonHopRoute>.Token?
     /// The selected destination shown while iOS leaves the camera AP and settles on an
     /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
     /// panel collapse with the camera session.
     private(set) var internetDestinationPreparationTitle: String?
-    /// Share context to restore after an internet hop re-hosts the media browser (the monitor
-    /// panel's view state dies with the monitor): the clips whose share sheet initiated the hop.
-    /// The standalone browser consumes this on mount — reopening a single cached clip, or the
-    /// share sheet for a multi-clip selection.
-    var pendingHopShareResumeClips: [MediaClip]?
-    var pendingMediaDelivery: NikonPendingMediaDelivery? {
-        didSet { if oldValue !== pendingMediaDelivery { oldValue?.releaseIfUnconsumed() } }
-    }
-    /// Where to return after the hop: the camera's host + AP SSID captured before leaving.
-    @ObservationIgnored private var internetHopReturn: (host: String, ssid: String)?
-    @ObservationIgnored private var internetHopOwnership = FrameioInternetHop()
-    @ObservationIgnored private var internetHopTask: Task<Void, Never>?
     /// The one display owner (Core): the DISP modes this source offers and the current one, each
     /// mode's chrome, the chrome editor, the interface lock and the connect-tap arming. Layouts
     /// saved before it seed once from the video side of the retired per-capture layouts.
@@ -2143,8 +2078,18 @@ final class NativeAppModel {
         return (source, image)
     }
     private(set) var liveFrameSource: LiveFrameSampleBus.Source?
+    /// Picture facts for chrome. Raster replacement is observed only by the feed view.
+    private(set) var hasLiveFrameImage = false
+    /// Source geometry changes independently of image identity, including HDMI format changes.
+    private(set) var liveFrameAspect: Double?
     var liveFrameImage: UIImage? {
         didSet {
+            let present = liveFrameImage != nil
+            if hasLiveFrameImage != present { hasLiveFrameImage = present }
+            let aspect = liveFrameImage.flatMap { image in
+                image.size.height > 0 ? Double(image.size.width / image.size.height) : nil
+            }
+            if liveFrameAspect != aspect { liveFrameAspect = aspect }
             if liveFrameImage == nil {
                 retireNativePictureSource()
                 liveFrameSource = nil
@@ -2263,8 +2208,11 @@ final class NativeAppModel {
             case .settings: shell.open(.settings)
             case .media: shell.open(.media)
             default:
-                // Only the panel's own cover closes with it, never a standalone one.
-                if oldValue == .settings || oldValue == .media { shell.dismissCover() }
+                // Only the panel's own cover closes with it, never a standalone one. Once the
+                // monitor has gone (an internet hop retains the page), the cover is standalone.
+                if oldValue == .settings || oldValue == .media, shell.monitor != nil {
+                    shell.dismissCover()
+                }
             }
             // The Bluetooth shutter only listens while the live view is front — re-reconcile
             // when a full-screen panel opens or closes over it.
@@ -2373,7 +2321,7 @@ final class NativeAppModel {
     var cameraLevelPitch: Double?
 
     init(
-        lutFileStore: LUTFileStore = LUTFileStore(),
+        lutFileStore: CustomLUTStore = CustomLUTStore(),
         mediaClipStore: MediaClipStore = MediaClipStore(),
         assist: NikonAssistState? = nil,
         scopePanels: NikonScopePanels? = nil
@@ -2383,6 +2331,9 @@ final class NativeAppModel {
         self.assist = assist ?? .restore()
         self.scopePanels = scopePanels ?? NikonScopePanels()
         self.assist.looks.selection = assistConfiguration.selectedLUT
+        let stageStore = MultiviewStagePreferencesStore(
+            storage: .standard, key: "multiview.presentation")
+        multicam.presentation.attachPersistence(load: stageStore.load, save: stageStore.save)
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -2418,7 +2369,7 @@ final class NativeAppModel {
         didSet { PreferencesStore.save(commandGridOrder) }
     }
     /// File store for custom-imported LUTs, and the current list (refreshed when the picker opens).
-    let lutFileStore: LUTFileStore
+    let lutFileStore: CustomLUTStore
     var customLUTs: [StoredCustomLUT] = []
     var redLUTs: [StoredCustomLUT] = []
     /// On-disk cache + index for camera clips (Media page), and the current library list.
@@ -2564,16 +2515,12 @@ final class NativeAppModel {
     /// Background task streaming the clip currently open in the player, if any.
     @ObservationIgnored private var clipStreamTask: Task<Void, Never>?
     @ObservationIgnored private var clipStreamClipID: String?
-    /// Frame.io integration state (Media upload): the connected user (nil = not connected), an
-    /// in-flight connect, and per-clip upload progress (`clip.id` → 0…1).
-    var frameioUser: FrameioUser?
-    var frameioConnecting = false
-    var frameioUploadProgress: [String: Double] = [:]
-    /// Clip ids with an upload task in flight — blocks duplicate taps before progress is set.
+    /// Frame.io: clip ids with an upload in flight (blocks a duplicate upload of one clip), and
+    /// the account epoch every captured delivery holds.
     @ObservationIgnored var frameioUploadInFlight: [String: UUID] = [:]
     @ObservationIgnored let frameioAccount = NikonFrameioAccount()
-    /// Last Frame.io upload error message, surfaced as a transient toast; cleared after it's shown.
-    var frameioUploadError: String?
+    /// The app-scoped delivery owner: a run survives leaving the gallery or the player (A4-10).
+    let delivery = MonitorDeliveryCoordinator()
     var linkHealth = 0
     var linkHealthDetail = "Not connected"
 
@@ -3405,7 +3352,6 @@ final class NativeAppModel {
         isPairingNewCamera = false
     }
 
-
     /// Starts a fresh discovery loop for the wizard's discover step.
     func beginPairingDiscovery() {
         disconnectCameraSession(resetConnection: false)
@@ -3648,7 +3594,7 @@ final class NativeAppModel {
         // the RECOV badge — the full-screen connection progress is for operator-initiated connects.
         if !preservingMonitorSurface {
             // A fresh operator connect starts a fresh storm ledger (`SessionDropStormGuard`).
-            sessionDropStormGuard.reset()
+            recoveryEpisode.resetStorm()
             beginConnectionProgress(
                 host: host,
                 discoveredCamera: discoveredCamera,
@@ -4212,7 +4158,7 @@ final class NativeAppModel {
         }
         setRelayBroadcasting(false)
         // Deliberate exit clears the storm ledger (`SessionDropStormGuard`) with the session.
-        sessionDropStormGuard.reset()
+        recoveryEpisode.resetStorm()
         disconnectCameraSession(resetConnection: true)
         startDiscoveryLoop(resetResults: false)
     }
@@ -4344,6 +4290,21 @@ final class NativeAppModel {
             beginSessionRecovery(host: cameraHost, reason: "transport detached (debug)")
         }
 
+        /// SIMULATED transport facts and clock for the recovery attempts, so a test drives the
+        /// shipped loop without a camera: what one attempt's connect does, whether it is still
+        /// establishing, whether its control session returned, the picture clocks, and time.
+        struct SessionRecoveryPeers {
+            var connect: @MainActor () -> Void
+            var isEstablishing: @MainActor () -> Bool
+            var hasControlSession: @MainActor () -> Bool
+            var picture: @MainActor () -> (sourceAt: TimeInterval?, presentedAt: TimeInterval?)
+            var now: @MainActor () -> TimeInterval
+            var sleep: @MainActor (Duration) async throws -> Void
+        }
+        @ObservationIgnored var sessionRecoveryPeers: SessionRecoveryPeers? {
+            didSet { recoveryEpisode = makeRecoveryEpisode() }
+        }
+
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
         /// reconnect never replays stale camera-setting writes. Keeps the real members private.
@@ -4354,17 +4315,9 @@ final class NativeAppModel {
         func debugAdoptEstablishedMediaSession(_ session: NativeCameraSession?) {
             cameraSession = session
         }
-        /// SIMULATED hosted picture source after startup, with no scan or physical capture owner.
-        func debugPresentHostedPictureMonitor(source: VideoSourceKind) {
-            didPrepareStartup = true
-            stopDiscoveryLoop()
-            connection = .connected
-            videoSource = source
-            isMonitorPresented = true
-        }
         var debugHoldsReportingCameraPath: Bool { reportingCameraPath != nil }
         var debugConnectionGeneration: Int { connectionGeneration }
-        var debugHasSessionRecoveryTask: Bool { sessionRecoveryTask != nil }
+        var debugHasSessionRecoveryTask: Bool { recoveryEpisode.isRunning }
         var debugPendingCameraWriteCount: Int { pendingCameraWrites.count }
         func debugEnqueueCameraWrite(_ property: PTPPropertyCode) {
             enqueueCameraWrite(
@@ -4387,6 +4340,13 @@ final class NativeAppModel {
         }
 
         @ObservationIgnored private var quickDemoDriver: NikonQuickDemoDriver?
+
+        /// Explicit SIMULATED graphical fixture, using the normal declared header projection.
+        func seedGraphicalReviewTimecode() {
+            guard isDemoSession else { return }
+            applyLiveViewHeaderTimecode(Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
+            prefersMediaDuration = false
+        }
 
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
         func seedQuickDemoCamera() {
@@ -4723,11 +4683,6 @@ final class NativeAppModel {
     /// Bounded-timeout watchdog for the in-flight attempt: fails a phase that stops making
     /// progress instead of letting the operator stare at a spinner (see `CameraConnectionTimeout`).
     @ObservationIgnored private var connectionTimeoutTask: Task<Void, Never>?
-    /// The bounded auto-reconnect loop that runs behind a preserved monitor after an established
-    /// session drops (cable knocked loose, camera power-cycled). Cancelled by any operator-driven
-    /// teardown so a manual disconnect can never race a retry back into a live session.
-    @ObservationIgnored private var sessionRecoveryTask: Task<Void, Never>?
-    @ObservationIgnored private var recoveryCardGraceTask: Task<Void, Never>?
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
@@ -5419,248 +5374,90 @@ final class NativeAppModel {
         return nil
     }
 
+    /// The route a hop leaves from, captured now: the camera's host and name, and whether the
+    /// open Media or Settings page stays over the cameras page while the phone is away.
+    func hopRoute(rehostActivePanel: Bool = true) -> NikonHopRoute {
+        .init(
+            host: connectedIdentity?.host ?? cameraHost,
+            displayName: connectedIdentity?.displayName, rehostActivePanel: rehostActivePanel)
+    }
+
     /// Leaves the camera's Wi‑Fi so iOS falls back to home Wi‑Fi or cellular, letting the RED LUT
     /// download reach the internet from camera-AP transport. The download screen unblocks itself
     /// reactively when reachability flips; ``endInternetHop()`` (fired when that screen
     /// dismisses) arms the rejoin + reconnect.
-    func beginInternetHop(rehostActivePanel: Bool = true) {
-        _ = beginInternetHopCaptured(rehostActivePanel: rehostActivePanel, admission: { true })
+    func beginInternetHop() { internetHop.begin(hopRoute()) }
+
+    /// Rejoins the camera after the RED download's hop. No-op when no hop is active.
+    func endInternetHop() {
+        if let token = internetHop.token { internetHop.end(token) }
     }
 
-    /// Captures the same native leave task and exact route; supplied admission never borrows a source.
-    @discardableResult func beginInternetHopCaptured(
-        rehostActivePanel: Bool = true,
-        admission: @escaping @MainActor () -> Bool,
-        handover: (@MainActor (FrameioInternetHop.Token) -> FrameioInternetHop.Token?)? = nil,
-        currentSSID: @escaping @MainActor () async -> String? = {
-            await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
-        },
-        leaveNetwork: @escaping @MainActor (String) -> Void = {
-            WiFiJoinCoordinator.shared.leaveCameraNetwork(ssid: $0)
-        }
-    ) -> FrameioInternetHop.Token? {
-        guard !internetHopActive, admission(), !internetHopActive else { return nil }
-        let host = connectedIdentity?.host ?? cameraHost
-        let displayName = connectedIdentity?.displayName
-        let captured = internetHopOwnership.begin()
-        internetHopActive = true
-        guard internetHopOwnership.owns(captured), admission(), internetHopOwnership.owns(captured)
-        else {
-            _ = endInternetHopCaptured(captured)
-            return nil
-        }
-        let previous = internetHopTask
-        internetHopTask = nil
-        previous?.cancel()
-        guard internetHopOwnership.owns(captured), admission(), internetHopOwnership.owns(captured)
-        else {
-            _ = endInternetHopCaptured(captured)
-            return nil
-        }
-        let task = Task { [weak self] in
-            guard let self else { return }
-            guard self.internetHopOwnership.owns(captured), admission(),
-                self.internetHopOwnership.owns(captured), !Task.isCancelled
-            else {
-                if self.internetHopOwnership.owns(captured) {
-                    _ = self.endInternetHopCaptured(captured)
-                }
-                return
-            }
-            let observedSSID = await currentSSID()
-            guard self.internetHopOwnership.owns(captured), admission(),
-                self.internetHopOwnership.owns(captured), !Task.isCancelled
-            else {
-                if self.internetHopOwnership.owns(captured) {
-                    _ = self.endInternetHopCaptured(captured)
-                }
-                return
-            }
-            let ssid =
-                observedSSID ?? self.cameraAccessPointSSID(host: host, displayName: displayName)
-            guard let ssid, !ssid.isEmpty else {
-                _ = self.endInternetHopCaptured(captured)
-                return
-            }
-            let leaving: FrameioInternetHop.Token
-            if let handover {
-                guard let transferred = handover(captured) else {
-                    _ = self.endInternetHopCaptured(captured)
-                    return
-                }
-                leaving = transferred
-            } else {
-                leaving = captured
-            }
-            guard self.internetHopOwnership.owns(leaving), admission(),
-                self.internetHopOwnership.owns(leaving), !Task.isCancelled
-            else {
-                _ = self.endInternetHopCaptured(leaving)
-                return
-            }
-            self.internetHopReturn = (host, ssid)
-            self.leaveMonitorForInternetHop(rehostActivePanel: rehostActivePanel)
-            guard self.internetHopOwnership.owns(leaving), !Task.isCancelled else { return }
-            leaveNetwork(ssid)
-            guard self.internetHopOwnership.owns(leaving), !Task.isCancelled else { return }
-            self.connectedWiFiSSID = nil
-            if self.internetHopOwnership.owns(leaving) { self.internetHopTask = nil }
-        }
-        guard internetHopOwnership.owns(captured) else {
-            task.cancel()
-            return nil
-        }
-        internetHopTask = task
-        return captured
-    }
-    func ownsInternetHop(_ captured: FrameioInternetHop.Token) -> Bool {
-        internetHopOwnership.owns(captured)
-    }
-    func endedInternetHop(_ captured: FrameioInternetHop.Token) -> Bool {
-        internetHopOwnership.ended(captured)
-    }
-
-    func transferInternetHop(_ captured: FrameioInternetHop.Token) -> FrameioInternetHop.Token? {
-        internetHopOwnership.transfer(captured)
-    }
-
-    /// The hop's teardown. Long-running downloads and account sign-in keep their initiating
-    /// surface alive as a standalone cover, opened once the monitor has gone (leaving it closes
-    /// its panels). Support/report actions skip this: their selected destination becomes the
-    /// next surface after the camera session drops.
-    func leaveMonitorForInternetHop(rehostActivePanel: Bool) {
-        let panel = rehostActivePanel ? activePanel : nil
-        if panel != .media { pendingHopShareResumeClips = nil }
+    /// The Nikon leave of the shared hop: reads the joined SSID, tears the camera session down
+    /// and leaves the AP. Nil when the phone never left.
+    private func leaveForInternetHop(
+        _ route: NikonHopRoute, current: @escaping @MainActor () -> Bool
+    ) async -> NikonHopRoute? {
+        let observed = await hopNative.currentSSID()
+        guard current(),
+            let ssid = observed
+                ?? cameraAccessPointSSID(host: route.host, displayName: route.displayName),
+            !ssid.isEmpty
+        else { return nil }
+        var left = route
+        left.ssid = ssid
         // Nothing may pull the phone back onto the camera AP mid-download.
         stopDiscoveryLoop()
-        disconnectCameraSession(resetConnection: true)
+        // The open Media or Settings page stays, with its view state, over the cameras page
+        // (A2-07); support and report links leave nothing behind.
+        disconnectCameraSession(
+            resetConnection: true, cover: route.rehostActivePanel ? .retain : .dismiss)
         connection = .disconnected
-        if panel == .media { isStandaloneMediaLibraryPresented = true }
-        if panel == .settings { isStandaloneSettingsPresented = true }
-    }
-
-    /// True when the phone is joined to the camera's local-only AP (no internet route).
-    /// Address + cached-SSID based — deliberately no `NEHotspotNetwork` call, which logs a
-    /// nehelper error line per invocation while the wifi-info capability isn't live.
-    var isOnCameraAccessPoint: Bool {
-        CameraWiFiJoinPolicy.isOnCameraAccessPoint(
-            localAddresses: NativeNetworkInterfaceSnapshot.localIPv4Addresses(),
-            connectedSSID: connectedWiFiSSID
-        )
-    }
-
-    /// Waits (post-hop) for iOS to settle on a network with a real internet path. Returns false
-    /// on timeout so the caller can rejoin the camera and surface a clear error.
-    func waitForInternetPath(timeoutSeconds: Int) async -> Bool {
-        await waitForInternetPath(timeoutSeconds: timeoutSeconds, admission: { true })
-    }
-    func waitForInternetPath(
-        captured: FrameioInternetHop.Token, timeoutSeconds: Int,
-        tick: @escaping @MainActor () async -> Void = {
-            try? await Task.sleep(for: .milliseconds(500))
-        },
-        path: @escaping @MainActor () async -> Bool = {
-            await NativeAppModel.hasSatisfiedNetworkPath()
-        }
-    ) async -> Bool {
-        await waitForInternetPath(
-            timeoutSeconds: timeoutSeconds,
-            admission: { self.internetHopOwnership.owns(captured) }, tick: tick, path: path)
-    }
-    private func waitForInternetPath(
-        timeoutSeconds: Int, admission: @escaping @MainActor () -> Bool,
-        tick: @escaping @MainActor () async -> Void = {
-            try? await Task.sleep(for: .milliseconds(500))
-        },
-        path: @escaping @MainActor () async -> Bool = {
-            await NativeAppModel.hasSatisfiedNetworkPath()
-        }
-    ) async -> Bool {
-        for _ in 0..<(timeoutSeconds * 2) {
-            guard !Task.isCancelled, admission(), !Task.isCancelled else { return false }
-            await tick()
-            guard !Task.isCancelled, admission(), !Task.isCancelled else { return false }
-            if !isOnCameraAccessPoint {
-                let online = await path()
-                guard !Task.isCancelled, admission(), !Task.isCancelled else { return false }
-                if online { return true }
-            }
-        }
-        return false
-    }
-
-    private static func hasSatisfiedNetworkPath() async -> Bool {
-        let monitor = NWPathMonitor()
-        defer { monitor.cancel() }
-        return await withCheckedContinuation { continuation in
-            let resumed = OSAllocatedUnfairLock(initialState: false)
-            monitor.pathUpdateHandler = { path in
-                let first = resumed.withLock { state -> Bool in
-                    if state { return false }
-                    state = true
-                    return true
-                }
-                guard first else { return }
-                continuation.resume(returning: path.status == .satisfied)
-            }
-            monitor.start(queue: .global(qos: .utility))
-        }
+        // The session is gone, so the return is owed even when the hop ended meanwhile.
+        guard current() else { return left }
+        hopNative.leaveNetwork(ssid)
+        connectedWiFiSSID = nil
+        return left
     }
 
     /// Rejoins the camera's Wi‑Fi after an internet hop via the FULL join pipeline the scan flow
     /// uses (`NEHotspotConfiguration` apply with transparent retries, subnet confirmation, then
     /// discovery → connect chaining, narrated in the white card). A fire-and-forget re-apply is
     /// not enough: leaving the AP removes the configuration, so the return is a fresh join racing
-    /// iOS settling back onto home Wi‑Fi. No-op when no hop is active.
-    func endInternetHop() {
-        guard let captured = internetHopOwnership.token else { return }
-        _ = endInternetHopCaptured(captured)
-    }
-    /// End is admitted once. Progress callbacks and the native join cannot revive after route ABA.
-    @discardableResult func endInternetHopCaptured(
-        _ captured: FrameioInternetHop.Token,
-        rejoin: (@MainActor (String, String) async -> Void)? = nil
-    ) -> Task<Void, Never>? {
-        guard internetHopOwnership.end(captured) else { return nil }
-        let hopReturn = internetHopReturn
-        let outgoing = internetHopTask
-        internetHopReturn = nil
-        internetHopTask = nil
-        outgoing?.cancel()
-        internetHopActive = false
-        guard internetHopOwnership.ended(captured), let hopReturn else { return nil }
+    /// iOS settling back onto home Wi‑Fi.
+    private func rejoinAfterInternetHop(
+        _ route: NikonHopRoute, current: @escaping @MainActor () -> Bool
+    ) async {
+        guard let ssid = route.ssid, current() else { return }
         connectionProgressDeviceName = cameraWiFiJoinDeviceName()
-        guard internetHopOwnership.ended(captured) else { return nil }
         connectionProgressIsUSB = false
-        guard internetHopOwnership.ended(captured) else { return nil }
         connectionProgressPathKind = nil
-        guard internetHopOwnership.ended(captured) else { return nil }
         isConnectionProgressPresented = true
-        guard internetHopOwnership.ended(captured) else { return nil }
         let previous = cameraWiFiJoinTask
         cameraWiFiJoinTask = nil
         previous?.cancel()
-        guard internetHopOwnership.ended(captured) else { return nil }
-        let task = Task { [weak self] in
-            guard let self, self.internetHopOwnership.ended(captured) else { return }
-            if let rejoin {
-                await rejoin(hopReturn.host, hopReturn.ssid)
-            } else {
-                await self.runCameraWiFiJoin(
-                    target: .specificSSID(hopReturn.ssid), joinStrategy: .hotspotConfigurationOnly,
-                    reconnectHost: hopReturn.host)
-            }
+        if let rejoin = hopNative.rejoin {
+            await rejoin(route.host, ssid)
+            return
         }
-        guard internetHopOwnership.ended(captured) else {
-            task.cancel()
-            return task
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runCameraWiFiJoin(
+                target: .specificSSID(ssid), joinStrategy: .hotspotConfigurationOnly,
+                reconnectHost: route.host)
         }
         cameraWiFiJoinTask = task
-        return task
+        await task.value
     }
-    func restoreInternetHop(_ captured: FrameioInternetHop.Token) async {
-        let entered = endInternetHopCaptured(captured)
-        await entered?.value
+
+    /// True when the phone is joined to the camera's local-only AP (no internet route).
+    /// Address + cached-SSID based; deliberately no `NEHotspotNetwork` call, which logs a
+    /// nehelper error line per invocation while the wifi-info capability isn't live.
+    var isOnCameraAccessPoint: Bool {
+        CameraWiFiJoinPolicy.isOnCameraAccessPoint(
+            localAddresses: NativeNetworkInterfaceSnapshot.localIPv4Addresses(),
+            connectedSSID: connectedWiFiSSID
+        )
     }
 
     /// Leaves the camera AP only when needed and waits for a validated internet route before an
@@ -5678,29 +5475,20 @@ final class NativeAppModel {
             return .init(isCurrent: admission, complete: { _ in })
         }
         guard
-            let token = await beginInternetHopCaptured(
-                rehostActivePanel: false, admission: admission)
+            let token = internetHop.begin(hopRoute(rehostActivePanel: false), admission: admission)
         else { return nil }
-        guard await waitForInternetPath(captured: token, timeoutSeconds: 30),
-            ownsInternetHop(token), admission(), ownsInternetHop(token)
+        guard await internetHop.waitForInternet(token), internetHop.owns(token), admission()
         else {
-            await restoreInternetHop(token)
+            await internetHop.end(token)?.value
             return nil
         }
         externalInternetLinkToken = token
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = true
-        guard externalInternetLinkToken == token, ownsInternetHop(token), admission(),
-            externalInternetLinkToken == token, ownsInternetHop(token)
-        else {
-            await restoreInternetHop(token)
-            return nil
-        }
         return .init(
             isCurrent: { [weak self] in
-                guard let self, self.ownsInternetHop(token) else { return false }
-                let admitted = admission()
-                return admitted && self.ownsInternetHop(token)
+                guard let self, self.internetHop.owns(token) else { return false }
+                return admission() && self.internetHop.owns(token)
             },
             complete: { [weak self] accepted in
                 guard let self else { return }
@@ -5710,7 +5498,7 @@ final class NativeAppModel {
                         self.externalInternetLinkSawBackground = false
                         self.externalInternetLinkHandoffActive = false
                     }
-                    await self.restoreInternetHop(token)
+                    await self.internetHop.end(token)?.value
                 }
             })
     }
@@ -5735,11 +5523,7 @@ final class NativeAppModel {
         externalInternetLinkToken = nil
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = false
-        if let captured {
-            _ = endInternetHopCaptured(captured)
-        } else if externalInternetLinkToken == nil {
-            endInternetHop()
-        }
+        if let captured { internetHop.end(captured) }
     }
 
     /// Records that an accepted external page really took OpenZCine into the background. A mere
@@ -5761,11 +5545,7 @@ final class NativeAppModel {
         externalInternetLinkToken = nil
         externalInternetLinkSawBackground = false
         externalInternetLinkHandoffActive = false
-        if let captured {
-            _ = endInternetHopCaptured(captured)
-        } else if externalInternetLinkToken == nil {
-            endInternetHop()
-        }
+        if let captured { internetHop.end(captured) }
     }
 
     /// Re-applies the camera AP config (throttled) while waiting for a just-paired camera to return,
@@ -6823,7 +6603,8 @@ final class NativeAppModel {
     }
 
     private func disconnectCameraSession(
-        resetConnection: Bool, preserveMonitorSurface: Bool = false
+        resetConnection: Bool, preserveMonitorSurface: Bool = false,
+        cover: ShellModel.CoverRetention = .dismiss
     ) {
         // A lent multicam member returns to its tile instead of closing; a recovery
         // (`preserveMonitorSurface`) still replaces its link, and the tile takes the replacement.
@@ -6833,7 +6614,7 @@ final class NativeAppModel {
         }
         let session = cameraSession
         let runtime = monitorRuntime
-        if !preserveMonitorSurface, shell.monitor != nil { shell.close() }
+        if !preserveMonitorSurface, shell.monitor != nil { shell.close(cover) }
         clearCameraSessionState(
             resetConnection: resetConnection, preserveMonitorSurface: preserveMonitorSurface)
         if !preserveMonitorSurface, let runtime {
@@ -6855,58 +6636,162 @@ final class NativeAppModel {
 
     // MARK: - Session recovery
 
-    /// Monotonic epoch for the recovery loop, so a cancelled run can't clear the handle of the run
-    /// that replaced it.
-    @ObservationIgnored private var sessionRecoveryGeneration = 0
+    /// The shared recovery episode (OpenCineCameraVocabulary): admission, the drop-storm pause,
+    /// the card grace, attempts on the shared backoff, the 180 s budget and the fresh-picture rule.
+    /// This model keeps only the Nikon transport behind its port, the held-frame presentation and
+    /// the relay heartbeat. A returned PTP control session never ends recovery on its own (A6-02).
+    @ObservationIgnored private lazy var recoveryEpisode = makeRecoveryEpisode()
+    /// The last live-view frame from the camera and the last picture this monitor published, on
+    /// the episode's wall clock. Header-only deliveries count: in Command and on an HDMI source
+    /// the header is what the monitor presents from the camera.
+    @ObservationIgnored private var recoverySourceFrameAt: TimeInterval?
+    @ObservationIgnored private var recoveryPresentedAt: TimeInterval?
 
-    /// Cross-run drop damping (see `SessionDropStormGuard`). Reset ONLY by operator action —
-    /// a reconnect that succeeds proves nothing during a storm, succeeding is what storms do.
-    @ObservationIgnored private var sessionDropStormGuard = SessionDropStormGuard()
-
-    /// How long the operator's card waits behind attempt 1 (attempt 2+ shows it at once).
-    private static let recoveryCardGrace: Duration = .seconds(2.5)
-    /// Ceiling on ONE automatic recovery attempt. Recovery connects run without the phase
-    /// watchdog, and a dial into a vanished network (a killed hotspot) can block a socket past
-    /// every cancellation — without this bound, attempt 1 never ends and the loop never marches.
-    private static let recoveryAttemptDeadline: Duration = .seconds(30)
+    private func makeRecoveryEpisode() -> SessionRecoveryEpisode {
+        var timing = SessionRecoveryEpisode.Timing.continuous
+        #if DEBUG
+            if let peers = sessionRecoveryPeers {
+                let origin = ContinuousClock().now
+                timing = .init(
+                    monotonicNow: { origin.advanced(by: .seconds(peers.now())) },
+                    uptime: { peers.now() }, wallNow: { peers.now() },
+                    sleep: { try await peers.sleep($0) }, jitter: { 0.5 })
+            }
+        #endif
+        return SessionRecoveryEpisode(
+            port: .init(
+                observe: { [weak self] in self?.recoveryObservation() ?? .init() },
+                cleanup: { [weak self] kind, attempt in
+                    self?.cleanUpRecovery(kind, attempt: attempt)
+                },
+                connect: { [weak self] attempt in
+                    guard let self else { return false }
+                    self.startRecoveryAttempt(host: attempt.targetID)
+                    return true
+                }),
+            attemptDeadline: NikonSessionRecovery.attemptDeadline, timing: timing,
+            changed: { [weak self] snapshot, episode in
+                self?.publishRecovery(snapshot, fromEpisode: episode != nil)
+            })
+    }
 
     /// Recovers an ESTABLISHED session that dropped underneath the operator — a knocked USB cable,
     /// a camera power cycle, a wedged command channel — without leaving live view.
     ///
-    /// The monitor stays up on the last decoded frame (badged as held, not live) while a bounded,
-    /// cancellable retry loop rebuilds the session through the normal `connectToCamera` path: the
-    /// stale transport, PTP session, sockets, tasks, queued property writes and camera identity are
-    /// all disposed (with a graceful `CloseSession`) before the replacement is built. When the
-    /// shared budget is spent the operator chooses — retry, or back to the operator menu.
+    /// The monitor stays up on the last decoded frame (badged as held, not live) while the episode
+    /// rebuilds the session through the normal `connectToCamera` path: the stale transport, PTP
+    /// session, sockets, tasks, queued property writes and camera identity are all disposed (with a
+    /// graceful `CloseSession`) before the replacement is built. When the shared budget is spent the
+    /// operator chooses: retry, or back to the operator menu.
     ///
     /// Only ever runs against a host this app was already connected to, so a retry can never
     /// blind-probe a camera sitting on its pairing wizard (probing knocks the body out of pairing).
-    private func beginSessionRecovery(host: String, reason: String) {
+    private func beginSessionRecovery(
+        host: String, reason: String, trigger: SessionRecoveryTrigger = .datalinkLost
+    ) {
         // Any evidence of a session to recover arms it — a control session that exists or
         // existed, or a presented monitor. Requiring the MONITOR alone (the old guard) silently
         // dropped every death before the first frame, on the ready page, or behind a
         // full-screen panel, while the UI said "connected" forever (the audit's H1/H5).
         guard !isDemoSession,
-            isCameraControlSession || cameraSession != nil || isMonitorPresented,
-            sessionRecoveryTask == nil
+            isCameraControlSession || cameraSession != nil || isMonitorPresented
         else { return }
-        // A paused storm is already waiting on the operator; the same dead session's other loss
-        // reporters (event channel AND stall watchdog fire for one drop) must not re-count it.
-        // The spent-budget card is equally an operator decision — a later loss reporter must
-        // not restart a whole fresh automatic run behind it.
+        // A paused storm or a spent budget is the operator's decision; the same dead session's
+        // other loss reporters (event channel AND stall watchdog fire for one drop) must not
+        // restart a run behind it. The episode refuses too; this also covers a painted state.
         if case .pausedAfterRepeatedDrops = sessionRecovery { return }
         if case .waitingForOperator = sessionRecovery { return }
         let target = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return }
-        connection = .reconnecting
-        liveFPS = SessionRecoveryCopy.heldFrameBadge
-        isStreamRecovering = true
-        sessionRecoveryGeneration += 1
-        let generation = sessionRecoveryGeneration
-        // Keep the watchers alive on the held frame: with no fresh camera frames, every
-        // viewer's stall watchdog would tear down and rejoin in a loop for the whole outage.
-        // A 2 s re-send of the frozen frame stays inside their 8 s stall threshold, so they
-        // keep the picture the broadcaster is holding — same as the broadcaster's own monitor.
+        recoveryEpisode.begin(targetID: target, trigger: trigger, reason: reason)
+    }
+
+    /// One attempt: the normal connect path, which disposes the previous session first.
+    private func startRecoveryAttempt(host: String) {
+        #if DEBUG
+            if let peers = sessionRecoveryPeers {
+                peers.connect()
+                return
+            }
+        #endif
+        cameraHost = host
+        connectToCamera(preservingMonitorSurface: true)
+    }
+
+    /// The attempt as the episode sees it: establishing or holding a control session is still
+    /// running; neither means the dial gave up. Only the picture clocks can end recovery.
+    private func recoveryObservation() -> SessionRecoveryEpisode.Observation {
+        var establishing = isEstablishingConnection
+        var hasControlSession = cameraSession != nil
+        var picture = (sourceAt: recoverySourceFrameAt, presentedAt: recoveryPresentedAt)
+        #if DEBUG
+            if let peers = sessionRecoveryPeers {
+                establishing = peers.isEstablishing()
+                hasControlSession = peers.hasControlSession()
+                picture = peers.picture()
+            }
+        #endif
+        return .init(
+            ownsConnection: true,
+            progress: establishing || hasControlSession ? .running : .failed,
+            sourceAt: picture.sourceAt, presentedAt: picture.presentedAt)
+    }
+
+    private func cleanUpRecovery(
+        _ kind: SessionRecoveryEpisode.Cleanup, attempt: SessionRecoveryEpisode.Attempt
+    ) {
+        switch kind {
+        case .initialDrop:
+            connection = .reconnecting
+            liveFPS = SessionRecoveryCopy.heldFrameBadge
+            isStreamRecovering = true
+            startRelayRecoveryHeartbeat()
+            logConnection(
+                "session lost host=\(attempt.targetID) (\(attempt.reason)) → bounded recovery")
+        case .stormPause:
+            // Reconnects keep succeeding and dying young: an external killer, not a blip.
+            // Retrying harder is what churns the body's PTP stack into its battery-pull wedge,
+            // so dispose the dead session gracefully and wait for the operator instead.
+            logConnection("session lost host=\(attempt.targetID) → storm pause")
+            disconnectCameraSession(resetConnection: false, preserveMonitorSurface: true)
+        case .failedAttempt, .budgetExhausted:
+            // A dial into a vanished network can block a socket past every cancellation, and a
+            // control session that never produced a picture is not a monitor. Retire either with
+            // a graceful close the next connect awaits.
+            guard isEstablishingConnection || cameraSession != nil else { return }
+            logConnection(
+                "recovery attempt ended without a picture host=\(attempt.targetID), abandoning it")
+            disconnectCameraSession(resetConnection: false, preserveMonitorSurface: true)
+        }
+    }
+
+    private func publishRecovery(_ snapshot: SessionRecoveryEpisode.Snapshot, fromEpisode: Bool) {
+        let previous = sessionRecovery
+        if previous != snapshot.state { sessionRecovery = snapshot.state }
+        if sessionRecoveryCardGraceElapsed != snapshot.cardGraceElapsed {
+            sessionRecoveryCardGraceElapsed = snapshot.cardGraceElapsed
+        }
+        guard fromEpisode, previous != snapshot.state else { return }
+        switch snapshot.state {
+        case .idle:
+            if case .retrying(let attempt, _) = previous, !snapshot.holdsPicture {
+                logConnection("recovered host=\(cameraHost) after \(attempt - 1) failed attempt(s)")
+            }
+        case .waitingForOperator(let attempts):
+            logConnection(
+                "recovery handed to the operator host=\(cameraHost) after \(attempts) attempt(s)")
+        case .pausedAfterRepeatedDrops(let drops):
+            logConnection("recovery paused after \(drops) drops host=\(cameraHost)")
+        case .retrying:
+            break
+        }
+    }
+
+    /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
+    /// stall watchdog would tear down and rejoin in a loop for the whole outage. A 2 s re-send of
+    /// the frozen frame stays inside their 8 s stall threshold, so they keep the picture the
+    /// broadcaster is holding, same as the broadcaster's own monitor.
+    private func startRelayRecoveryHeartbeat() {
         relayRecoveryHeartbeatTask?.cancel()
         relayRecoveryHeartbeatTask = Task { [weak self] in
             var heldBeats = 0
@@ -6931,82 +6816,6 @@ final class NativeAppModel {
                 }
             }
         }
-        if sessionDropStormGuard.noteDrop(now: ProcessInfo.processInfo.systemUptime) {
-            // Reconnects keep succeeding and dying young — an external killer, not a blip.
-            // Retrying harder is what churns the body's PTP stack into its battery-pull wedge,
-            // so dispose the dead session gracefully and wait for the operator instead.
-            logConnection(
-                "session lost host=\(target) (\(reason)) → storm pause after "
-                    + "\(sessionDropStormGuard.dropsInWindow) drops")
-            disconnectCameraSession(resetConnection: false, preserveMonitorSurface: true)
-            sessionRecovery = .pausedAfterRepeatedDrops(drops: sessionDropStormGuard.dropsInWindow)
-            recoveryCardGraceTask?.cancel()
-            sessionRecoveryCardGraceElapsed = true
-            return
-        }
-        logConnection("session lost host=\(target) (\(reason)) → bounded recovery")
-        sessionRecoveryTask = Task { [weak self] in
-            await self?.runSessionRecovery(host: target)
-            guard let self, self.sessionRecoveryGeneration == generation else { return }
-            self.sessionRecoveryTask = nil
-        }
-        // Attempt-1 card grace (see `sessionRecoveryCardGraceElapsed`): most drops heal on the
-        // immediate first retry, so the card waits this out — but it must always arrive if the
-        // attempt is still running, or a stalled attempt leaves the operator with no exit.
-        sessionRecoveryCardGraceElapsed = false
-        recoveryCardGraceTask?.cancel()
-        recoveryCardGraceTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.recoveryCardGrace)
-            guard let self, !Task.isCancelled else { return }
-            guard self.sessionRecoveryGeneration == generation else { return }
-            self.sessionRecoveryCardGraceElapsed = true
-        }
-    }
-
-    /// The bounded loop itself. Every pass delegates teardown-then-rebuild to `connectToCamera`, so
-    /// nothing here reimplements disposal; this only owns *when* to try and when to stop.
-    private func runSessionRecovery(host: String) async {
-        let policy = SessionRecoveryPolicy.monitor
-        var failures = 0
-        while !Task.isCancelled {
-            let state = policy.state(afterFailedAttempts: failures)
-            sessionRecovery = state
-            guard case .retrying = state else { return }
-            cameraHost = host
-            connectToCamera(preservingMonitorSurface: true)
-            // Bound the attempt by polling the establishment latch, NOT by awaiting the task:
-            // a wedged attempt's `value` never resolves (cancellation cannot interrupt a blocked
-            // socket read, per #264), and awaiting it would wedge this loop with it.
-            var attemptElapsed: Duration = .zero
-            while isEstablishingConnection, !Task.isCancelled,
-                attemptElapsed < Self.recoveryAttemptDeadline
-            {
-                try? await Task.sleep(for: .milliseconds(250))
-                attemptElapsed += .milliseconds(250)
-            }
-            if Task.isCancelled { return }
-            if isEstablishingConnection {
-                logConnection(
-                    "recovery attempt stalled past \(Self.recoveryAttemptDeadline) host=\(host) — abandoning it"
-                )
-                clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
-            }
-            if cameraSession != nil {
-                sessionRecovery = .idle
-                logConnection("recovered host=\(host) after \(failures) failed attempt(s)")
-                return
-            }
-            failures += 1
-            guard
-                case .retry(let wait) = policy.decision(
-                    afterFailedAttempts: failures, jitter: .random(in: 0...1))
-            else {
-                sessionRecovery = policy.state(afterFailedAttempts: failures)
-                logConnection("recovery exhausted host=\(host) after \(failures) attempts")
-                return
-            }
-            try? await Task.sleep(for: .seconds(wait))
-        }
     }
 
     /// Operator action from the recovery affordance: start a fresh bounded recovery run.
@@ -7023,9 +6832,9 @@ final class NativeAppModel {
         cancelSessionRecovery()
         // Operator intent clears the storm ledger: the retry itself is not a drop, and the next
         // pause should take a fresh cluster of drops to earn.
-        sessionDropStormGuard.reset()
+        recoveryEpisode.resetStorm()
         clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
-        beginSessionRecovery(host: host, reason: "operator retry")
+        beginSessionRecovery(host: host, reason: "operator retry", trigger: .operatorRetry)
     }
 
     /// Operator action from the recovery affordance: leave the held frame for the operator menu.
@@ -7035,16 +6844,13 @@ final class NativeAppModel {
         disconnect()
     }
 
-    /// Stops any in-flight recovery loop and clears the affordance.
+    /// Stops any in-flight recovery episode and clears the affordance.
     private func cancelSessionRecovery() {
-        sessionRecoveryGeneration += 1
-        sessionRecoveryTask?.cancel()
-        sessionRecoveryTask = nil
-        recoveryCardGraceTask?.cancel()
-        recoveryCardGraceTask = nil
-        sessionRecoveryCardGraceElapsed = false
+        recoveryEpisode.cancel()
         relayRecoveryHeartbeatTask?.cancel()
         relayRecoveryHeartbeatTask = nil
+        // A painted state (`forceSessionRecoveryState`) never reached the episode.
+        sessionRecoveryCardGraceElapsed = false
         sessionRecovery = .idle
     }
 
@@ -7096,6 +6902,7 @@ final class NativeAppModel {
         cancelThumbnailWork(resumingWaiters: true)
         resetLinkHealthMeasurements()
         cameraSession = nil
+        reviewCameraDelete = nil
         // Closing reports unfinished seam operations honestly and never sends a camera command.
         if preserveMonitorSurface {
             monitorRuntime?.recovering()
@@ -7186,7 +6993,8 @@ final class NativeAppModel {
             consume: { [weak self] frame, delivery in
                 guard let self, cameraSession === session else { return false }
                 return await consumeCameraFrame(
-                    frame, delivery: delivery, session: session, frameRate: &frameRate, incident: incident)
+                    frame, delivery: delivery, session: session, frameRate: &frameRate,
+                    incident: incident)
             },
             safePoint: { [weak self] count, pollEveryCall in
                 guard let self, cameraSession === session else { return }
@@ -7509,16 +7317,17 @@ final class NativeAppModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshLinkHealth()
-                incident?.publish(lifecycle: FeedIncidentLifecycle(
-                    foreground: !self.screenWakeSuppressedForBackground,
-                    settingsCovered: self.shouldPauseLiveFeed || self.streamsHeaderOnly
-                        || self.videoSource != .cameraLiveView,
-                    playbackActive: self.isMediaPlaybackActive,
-                    connected: self.cameraSession != nil,
-                    thermalState: String(ProcessInfo.processInfo.thermalState.rawValue),
-                    lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                    sceneActive: UIApplication.shared.applicationState == .active,
-                    assistState: "unknown"))
+                incident?.publish(
+                    lifecycle: FeedIncidentLifecycle(
+                        foreground: !self.screenWakeSuppressedForBackground,
+                        settingsCovered: self.shouldPauseLiveFeed || self.streamsHeaderOnly
+                            || self.videoSource != .cameraLiveView,
+                        playbackActive: self.isMediaPlaybackActive,
+                        connected: self.cameraSession != nil,
+                        thermalState: String(ProcessInfo.processInfo.thermalState.rawValue),
+                        lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                        sceneActive: UIApplication.shared.applicationState == .active,
+                        assistState: "unknown"))
                 try? await Task.sleep(
                     for: (self.isMonitorPresented && self.measuredLiveViewFPS > 0)
                         ? .seconds(1) : .seconds(3))
@@ -7898,16 +7707,22 @@ final class NativeAppModel {
             applyLiveViewHeaderTimecode(frame.timecode)
             captureRelayFrameMetadata(frame)
             publishWatchState()
+            // Command and an HDMI picture source present the camera's header, not its image.
+            let now = Date.timeIntervalSinceReferenceDate
+            recoverySourceFrameAt = now
+            recoveryPresentedAt = now
             return true
         }
         guard !Task.isCancelled, cameraSession === session,
             let decodeSource = frameDecoder.source(session)
         else { return false }
         incident?.received()
-        let cleanFrame = await frameDecoder.decode(frame.jpeg, source: decodeSource, incident: incident)
+        let cleanFrame = await frameDecoder.decode(
+            frame.jpeg, source: decodeSource, incident: incident)
         let decoded = await displayReadyLiveFrame(from: cleanFrame)
         guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame
         else { return false }
+        recoverySourceFrameAt = Date.timeIntervalSinceReferenceDate
         let arrival = CACurrentMediaTime()
         frameRate.recordFrame(at: arrival)
         lastGoodFrameAt = Date()
@@ -7940,6 +7755,7 @@ final class NativeAppModel {
             sampleScopesIfDue(clean: cleanFrame) { [weak self] in self?.cameraSession === session }
         }
         incident?.published()
+        recoveryPresentedAt = Date.timeIntervalSinceReferenceDate
         applyLiveViewHeaderState(frame)
         applyLiveViewHeaderTimecode(frame.timecode)
         if !delivery.bodyBusy { liveFPS = frameRate.formatted }
@@ -8302,7 +8118,8 @@ final class NativeAppModel {
                 logConnection("focus reset: EndTracking PTP OK")
             } catch {
                 showMonitorNotice(
-                    "Camera rejected end-tracking: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                    "Camera rejected end-tracking: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                )
                 focusResetStep = nil
                 return
             }
@@ -8327,7 +8144,8 @@ final class NativeAppModel {
                     )
                 } catch {
                     showMonitorNotice(
-                        "Camera rejected subject-detection suspend: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                        "Camera rejected subject-detection suspend: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                    )
                 }
             }
             try? await session.waitUntilDeviceReady()
@@ -8451,7 +8269,8 @@ final class NativeAppModel {
                     )
                 } catch {
                     showMonitorNotice(
-                        "Camera rejected subject-detection restore: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                        "Camera rejected subject-detection restore: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                    )
                 }
             }
             try? await session.waitUntilDeviceReady()
@@ -8758,16 +8577,17 @@ final class NativeAppModel {
     }
 
     /// Reflects `MovieTVLockSetting` poll readback into `lockedControls` for the shutter picker.
+    /// A pending write's target (`true` unlocks) wins over the readback until it lands.
+    ///
+    /// This runs after every camera property read, four times a second under a cover. An
+    /// in-place `insert`/`remove` notifies observers even when membership is unchanged, which
+    /// re-ran the hidden live surface on every poll (R-03), so only a real change is written.
     private func syncShutterLockFromSnapshot() {
-        if let pendingLock = pendingShutterLockState {
-            if pendingLock {
-                lockedControls.remove(.shutter)
-            } else {
-                lockedControls.insert(.shutter)
-            }
-            return
-        }
-        guard let locked = cameraPropertySnapshot.shutterLocked else { return }
+        guard
+            let locked = pendingShutterLockState.map({ !$0 })
+                ?? cameraPropertySnapshot.shutterLocked,
+            lockedControls.contains(.shutter) != locked
+        else { return }
         if locked {
             lockedControls.insert(.shutter)
         } else {
@@ -8803,6 +8623,7 @@ final class NativeAppModel {
     }
 
     /// Applies the integration's actual bootstrap reports to the app display and common facts.
+    /// The steady property poll applies each read through `.property` here too.
     func applyBootstrapObservation(_ observation: NikonBootstrapObservation) {
         switch observation {
         case .property(let property, let data):
@@ -8997,10 +8818,7 @@ final class NativeAppModel {
                 logConnection("cmd-tile \(property) ok bytes=[\(hex)] len=\(data.count)")
             }
             let previousSelector = cameraPropertySnapshot.captureSelector
-            applyCameraRead(property, data)
-            publishCameraDisplayState()
-            syncFocusFromSnapshot()
-            syncShutterLockFromSnapshot()
+            applyBootstrapObservation(.property(property, data))
             if property == .liveViewSelector,
                 let previousSelector,
                 cameraPropertySnapshot.captureSelector != previousSelector
@@ -9014,9 +8832,6 @@ final class NativeAppModel {
                 dismissActivePanel()
                 // Photography does not offer the command monitor.
                 operatorSession.declare(modes: displayModes)
-            }
-            if property == .warningStatus {
-                applyThermalStreamStepDownIfNeeded()
             }
             if property == .movieShutterMode,
                 let pending = pendingShutterMode,
@@ -9407,22 +9222,12 @@ final class NativeAppModel {
     /// Computes the current `MediaStatus` from cached storage + the camera's codec/resolution/fps.
     /// Returns nil when storage isn't known yet.
     private func currentMediaStatus() -> MediaStatus? {
-        guard let storage = lastKnownStorage else { return nil }
-        let gigabytes = storage.gigabytesFree
-        let percent = storage.percentFree
-        let minutes = RecordDurationEstimator.minutesRemaining(
-            codec: MonitorTextFormat.codecShortLabel(cameraPropertySnapshot.fileType ?? ""),
-            resolutionWidth: Int(
-                cameraPropertySnapshot.resolution?.split(separator: "x").first
-                    .flatMap { Int($0) } ?? 0),
-            resolutionHeight: Int(
-                cameraPropertySnapshot.resolution?.split(separator: "x").last
-                    .flatMap { Int($0) } ?? 0),
-            frameRate: cameraPropertySnapshot.fps ?? 0,
-            gigabytesFree: gigabytes
-        )
-        return MediaStatus(
-            gigabytesFree: gigabytes, percentFree: percent, minutesRemaining: minutes)
+        lastKnownStorage.flatMap {
+            MediaStatus(
+                storage: $0, codec: cameraPropertySnapshot.fileType,
+                resolution: cameraPropertySnapshot.resolution, frameRate: cameraPropertySnapshot.fps
+            )
+        }
     }
 
     /// Publishes property snapshot → monitor readouts, including ZR RAW `[FX]` / `[DX]` tags on the
@@ -9446,6 +9251,8 @@ final class NativeAppModel {
         if labeled != next.resolutionFrameRate {
             next = next.updating(resolutionFrameRate: labeled)
         }
+        // Whole-value assignment on purpose: `@Observable` skips an equal `CameraDisplayState`, so
+        // an unchanged poll notifies nothing. An in-place edit of `cameraState` would notify always.
         cameraState = next
         broadcastRelayState()
         // Every camera property read lands here, so the seam's snapshot follows the camera.
@@ -10609,7 +10416,7 @@ final class NativeAppModel {
     /// ponytail: requested rows only; an offline camera shot's phone-only RAW sibling is not
     /// offered on its own.
     func canDeleteMedia(_ clips: [MediaClip]) -> Bool {
-        let connected = cameraSession != nil
+        let connected = cameraSession != nil || reviewCameraDelete != nil
         return clips.contains { $0.allLocations.isEmpty || connected }
     }
 
@@ -10675,41 +10482,58 @@ final class NativeAppModel {
 
     /// Captures one immutable consequence set for playback. Gallery/photo callers keep their
     /// existing preparation policy; playback drains only its exact outgoing item first.
-    func capturePlaybackMediaDeletion(_ clip: MediaClip,
+    func capturePlaybackMediaDeletion(
+        _ clip: MediaClip,
         cleanup: @escaping @MainActor () async -> Bool,
         deleteLocation: ((MediaObjectHandle) async -> Bool)? = nil
     ) -> MonitorOperatorPlaybackDeletionRequest? {
-        guard isConnected, mediaBrowserSource == .camera, clip.handle != nil, let owner = mediaLibrary,
+        guard isConnected, mediaBrowserSource == .camera, clip.handle != nil,
+            let owner = mediaLibrary,
             let current = mediaClips.first(where: { $0.id == clip.id }),
             NikonMediaLibraryAction.sameContent(clip, current)
         else { return nil }
         let plan = deletionPlan(for: [current])
-        guard let action = captureMediaLibraryAction(plan.targets), action.sourceIsCurrent else { return nil }
-        let authority = owner.captureDeletion(key: .init("playback-deletion"), ifCurrent: { [weak self] in
-            self?.isConnected == true && self?.mediaBrowserSource == .camera && action.sourceIsCurrent
-        })
-        let copy = MonitorPlaybackDeletionConfirmation(title: "Delete clip from camera?",
+        guard let action = captureMediaLibraryAction(plan.targets), action.sourceIsCurrent else {
+            return nil
+        }
+        let authority = owner.captureDeletion(
+            key: .init("playback-deletion"),
+            ifCurrent: { [weak self] in
+                self?.isConnected == true && self?.mediaBrowserSource == .camera
+                    && action.sourceIsCurrent
+            })
+        let copy = MonitorPlaybackDeletionConfirmation(
+            title: "Delete clip from camera?",
             message: deletionConfirmMessage(for: [current], plan: plan))
-        return .init(confirmation: copy, authority: authority, perform: { [weak self] in
-            guard let self, authority.isCurrent, self.mediaLibrary === owner,
-                self.playbackDeletionPlanIsCurrent(plan, requested: current) else { return }
-            guard await cleanup(), !Task.isCancelled, authority.isCurrent,
-                self.mediaLibrary === owner,
-                self.playbackDeletionPlanIsCurrent(plan, requested: current) else { return }
-            _ = await self.deleteMediaClips([current], deleteLocation: deleteLocation,
-                admitted: authority, frozenPlan: plan)
-        })
+        return .init(
+            confirmation: copy, authority: authority,
+            perform: { [weak self] in
+                guard let self, authority.isCurrent, self.mediaLibrary === owner,
+                    self.playbackDeletionPlanIsCurrent(plan, requested: current)
+                else { return }
+                guard await cleanup(), !Task.isCancelled, authority.isCurrent,
+                    self.mediaLibrary === owner,
+                    self.playbackDeletionPlanIsCurrent(plan, requested: current)
+                else { return }
+                _ = await self.deleteMediaClips(
+                    [current], deleteLocation: deleteLocation,
+                    admitted: authority, frozenPlan: plan)
+            })
     }
 
-    private func playbackDeletionPlanIsCurrent(_ captured: DeletionPlan, requested: MediaClip) -> Bool {
+    private func playbackDeletionPlanIsCurrent(_ captured: DeletionPlan, requested: MediaClip)
+        -> Bool
+    {
         guard let current = mediaClips.first(where: { $0.id == requested.id }),
-            NikonMediaLibraryAction.sameContent(requested, current) else { return false }
+            NikonMediaLibraryAction.sameContent(requested, current)
+        else { return false }
         let actual = deletionPlan(for: [current])
-        return actual.pairCount == captured.pairCount && actual.masterCount == captured.masterCount &&
-            actual.backupCount == captured.backupCount && actual.targets.count == captured.targets.count &&
-            zip(actual.targets, captured.targets).allSatisfy { current, old in
-                current.id == old.id && current.allLocations == old.allLocations &&
-                    NikonMediaLibraryAction.sameContent(old, current)
+        return actual.pairCount == captured.pairCount && actual.masterCount == captured.masterCount
+            && actual.backupCount == captured.backupCount
+            && actual.targets.count == captured.targets.count
+            && zip(actual.targets, captured.targets).allSatisfy { current, old in
+                current.id == old.id && current.allLocations == old.allLocations
+                    && NikonMediaLibraryAction.sameContent(old, current)
             }
     }
 
@@ -10737,6 +10561,7 @@ final class NativeAppModel {
         frozenPlan: DeletionPlan? = nil
     ) async -> Int {
         let targets = (frozenPlan ?? deletionPlan(for: clips)).targets
+        let deleteLocation = deleteLocation ?? reviewCameraDelete
         let owner = mediaLibrary
         let producer = mediaProducer?.service
         let session = cameraSession
@@ -11346,6 +11171,8 @@ final class NativeAppModel {
 
     // MARK: Apple Watch relay
 
+    @ObservationIgnored private var watchCommandSource: NikonCommandAdmission?
+
     /// Activates the watch relay once and wires its callbacks. Called from the app root on launch.
     func activateWatchRelay() {
         guard !watchRelayActivated else { return }
@@ -11451,29 +11278,39 @@ final class NativeAppModel {
     private func watchCommandAdmission(_ receipt: RelayWatchCommandAdmission)
         -> NikonCommandAdmission?
     {
-        guard receipt.isCurrent, let owner = cameraSession?.commandOwner else { return nil }
-        return NikonCommandAdmission(owner: owner, isCurrent: { receipt.isCurrent })
+        guard receipt.isCurrent, let shown = watchCommandSource,
+            shown.admits(cameraSession?.commandOwner)
+        else { return nil }
+        return NikonCommandAdmission(
+            owner: shown.owner, isCurrent: { shown.isCurrent && receipt.isCurrent })
     }
 
     func watchCapture() -> OpenZCineCore.WatchCommandResult { watchCapture(admission: nil) }
 
+    private var watchCommandFacts: WatchCommandFacts {
+        WatchCommandFacts(
+            isRecording: isRecording,
+            isBusy: shell.control.recordPending || interfaceLocked || relayControlSurrendered,
+            isLive: isMonitorPresented && (isDemoSession || cameraSession != nil),
+            isPhotography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector))
+    }
+
     private func watchCapture(admission: NikonCommandAdmission?) -> OpenZCineCore.WatchCommandResult
     {
-        guard admitsCameraCommand(admission) else {
-            return OpenZCineCore.WatchCommandResult(
-                accepted: false, isRecording: isRecording, error: "unavailable")
-        }
-        let isPhotography = StillCapturePolicy.prefersPhotographyChrome(
-            selector: cameraPropertySnapshot.captureSelector)
-        guard isPhotography else {
-            return OpenZCineCore.WatchCommandResult(
-                accepted: false, isRecording: isRecording,
-                error: "Switch the camera to photo mode first.")
-        }
-        captureStill(admission: admission)
+        let result = WatchCommandPolicy.answer(
+            .capture, facts: { watchCommandFacts },
+            shutter: {
+                guard admitsCameraCommand(admission) else { return .targetChanged }
+                // Keep the existing still queue, bulb termination and native first-send admission.
+                guard !isStillCapturing || stillReleaseIsOpenShutter else { return .notSent }
+                captureStill(admission: admission)
+                return pendingStillCaptureWork != nil || pendingStillTerminateWork != nil
+                    || (isDemoSession && isStillCapturing) ? .sent : .notSent
+            })
         publishWatchState()
         return OpenZCineCore.WatchCommandResult(
-            accepted: true, isRecording: isRecording, error: nil)
+            accepted: result.accepted, isRecording: result.isRecording, error: result.error)
     }
 
     func watchToggleRecord() -> OpenZCineCore.WatchCommandResult {
@@ -11483,19 +11320,31 @@ final class NativeAppModel {
     private func watchToggleRecord(admission: NikonCommandAdmission?)
         -> OpenZCineCore.WatchCommandResult
     {
-        guard admitsCameraCommand(admission) else {
-            return OpenZCineCore.WatchCommandResult(
-                accepted: false, isRecording: isRecording, error: "unavailable")
-        }
-        let wasRecording = isRecording
-        executeRecord(start: !wasRecording, admission: admission)
-        let accepted = isRecording != wasRecording
-        let result = OpenZCineCore.WatchCommandResult(
-            accepted: accepted,
-            isRecording: isRecording,
-            error: accepted ? nil : "Start live view before recording.")
+        let result = WatchCommandPolicy.answer(
+            .toggleRecord, facts: { watchCommandFacts },
+            shutter: {
+                guard admitsCameraCommand(admission) else { return .targetChanged }
+                if isDemoSession {
+                    executeRecord(start: !isRecording, admission: admission)
+                    return .sent
+                }
+                guard shell.control.session != nil, !pictureOnlyMonitor else { return .notSent }
+                refreshCommonControlFacts()
+                guard let editor = shell.control.recordEditor() else { return .notSent }
+                let accepted: Bool
+                if let admission {
+                    guard let dispatch = sharedCommandAdmission(admission) else {
+                        return .targetChanged
+                    }
+                    accepted = shell.control.commitRecord(from: editor, admission: dispatch)
+                } else {
+                    accepted = shell.control.commitRecord(from: editor)
+                }
+                return accepted ? .sent : .notSent
+            })
         publishWatchState()
-        return result
+        return OpenZCineCore.WatchCommandResult(
+            accepted: result.accepted, isRecording: result.isRecording, error: result.error)
     }
 
     /// Builds the current wire snapshot from the live monitor fields.
@@ -11531,6 +11380,9 @@ final class NativeAppModel {
 
     /// Publishes the current state to the watch relay (coalesced; no-ops when nothing changed).
     func publishWatchState() {
+        let owner = cameraSession?.commandOwner
+        if watchCommandSource?.owner !== owner { watchRelay.retireSource() }
+        watchCommandSource = owner.map { NikonCommandAdmission(owner: $0, isCurrent: { true }) }
         watchRelay.ingestState(currentWatchRelayState())
     }
 
@@ -12565,10 +12417,26 @@ final class NativeAppModel {
 
     /// The MEDIA cell label, respecting the capacity/duration preference.
     var mediaReadout: String {
-        if let status = cameraState.mediaStatus {
-            return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+        // A relayed source supplies its own observations; the local camera uses the common session.
+        if videoSource == .relay {
+            if let status = cameraState.mediaStatus {
+                return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+            }
+            return cameraState.media
         }
-        return cameraState.media
+        let storage = shell.control.snapshot?.storage
+        return prefersMediaDuration
+            ? storage?.recordingTimeLabel ?? "-- Min"
+            : storage?.storageReadout?.label ?? StorageReadout.unavailable
+    }
+
+    /// Operator monitor storage uses the same units as every shared live surface.
+    var liveMediaReadout: String {
+        if videoSource == .relay { return mediaReadout }
+        let storage = shell.control.snapshot?.storage
+        return prefersMediaDuration
+            ? storage?.recordingTimeLabel ?? "-- Min"
+            : storage?.storageReadout?.free ?? StorageReadout.unavailable
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
@@ -13005,13 +12873,8 @@ extension NativeAppModel {
         feedIncidentProducer = nil
         // Lent multicam, demo and editor shells never retire a canonical incident source.
         if multicam.lentMember == nil, !isDemoSession {
-            let host = ReliabilityDiagnostics.host
-            let source = ReliabilityDiagnostics.incidents.beginBoundSession(.init(
-                sessionID: UUID().uuidString, appVersion: host.version, appBuild: host.build,
-                sourceRevision: host.sourceRevision, osName: "iOS", osVersion: UIDevice.current.systemVersion,
-                hardwareClass: UIDevice.current.model, cameraFamily: "nikon",
-                testSource: ReliabilityDiagnostics.origin.currentTestSource(),
-                buildIdentity: ReliabilityDiagnostics.origin.currentBuildIdentity()))
+            let source = ReliabilityDiagnostics.incidents.beginBoundSession(
+                ReliabilityDiagnostics.incidents.sessionContext(cameraFamily: "nikon"))
             feedIncidentProducer = NikonFeedIncidentProducer(source: source)
         }
         if let monitorRuntime {
@@ -13147,7 +13010,8 @@ extension NativeAppModel {
                 case nil: []
                 }
             }(),
-            apertureLabels: advertisedExposureOptions[.movieFNumber] ?? [])
+            apertureLabels: advertisedExposureOptions[.movieFNumber] ?? [],
+            storage: lastKnownStorage)
     }
 
 }
@@ -13652,23 +13516,29 @@ struct NativeRootContent: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if model.multicam.isPresented, model.shell.monitor == nil {
-            MulticamStage(
-                coordinator: model.multicam,
-                confirmsRecord: model.preferences.recordConfirmationEnabled,
-                pickerRows: model.multicamPickerRows,
-                openLiveView: model.openMulticamLiveView,
-                close: model.endMulticam)
-        } else {
-            LinkExperience()
-                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        ZStack {
+            if model.multicam.isPresented {
+                MulticamStage(
+                    coordinator: model.multicam,
+                    confirmsRecord: model.preferences.recordConfirmationEnabled,
+                    pickerRows: model.multicamPickerRows,
+                    openLiveView: model.openMulticamLiveView,
+                    close: model.endMulticam
+                )
+                .opacity(model.shell.monitor == nil ? 1 : 0)
+                .allowsHitTesting(model.shell.monitor == nil)
+                .accessibilityHidden(model.shell.monitor != nil)
+            }
+            if !model.multicam.isPresented || model.shell.monitor != nil {
+                LinkExperience()
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
         }
     }
 }
 
 struct NativeAppRoot: View {
     @State private var model = NativeAppModel()
-    @State private var deliveryCoordinator = MediaDeliveryCoordinator()
     @State private var showsLaunchSplash = true
     @State private var showsReliabilityPrompt = false
     @Environment(\.scenePhase) private var scenePhase
@@ -13678,7 +13548,9 @@ struct NativeAppRoot: View {
             MonitorTheme.background.ignoresSafeArea()
             NativeRootContent()
 
-            deliveryCoordinator.chrome(.root).zIndex(150)
+            MonitorOperatorDeliveryChrome(
+                model: model.delivery.lifetime, scope: .root, remoteDisplayName: "Frame.io"
+            ).zIndex(150)
 
             if let destinationTitle = model.internetDestinationPreparationTitle {
                 InternetDestinationPreparationOverlay(destinationTitle: destinationTitle)
@@ -13692,8 +13564,10 @@ struct NativeAppRoot: View {
                     .zIndex(100)
             }
         }
+        // The one share sheet, above every cover (A2-52).
+        .monitorDeliverySharePresenter(model.delivery.lifetime)
         .environment(model)
-        .environment(deliveryCoordinator)
+        .environment(model.delivery)
         .observeMonitorWindowGeometry()
         .task {
             try? await Task.sleep(for: LaunchSplashTiming.visibleDuration)
@@ -14061,18 +13935,20 @@ extension NativeAppModel {
     func captureOperatorMediaCacheSource() -> MonitorSettingsCacheSource {
         let root = mediaClipStore.root
         let revision = mediaActionStoreGeneration
-        return .init(
-            identity: .init(namespace: root.path, source: nil), revision: revision,
-            isCurrent: { [weak self] in self?.mediaClipStore.root == root },
-            count: { [weak self] in self?.totalMediaCacheByteCount() ?? 0 },
-            clear: { [weak self] in
-                guard let self, self.mediaClipStore.root == root,
-                    self.mediaActionStoreGeneration == revision
-                else {
-                    throw CancellationError()
-                }
-                self.clearAllMediaCaches()
-            })
+        // Delivery exports nothing holds count and clear with it (A2-58).
+        return delivery.cacheSource(
+            .init(
+                identity: .init(namespace: root.path, source: nil), revision: revision,
+                isCurrent: { [weak self] in self?.mediaClipStore.root == root },
+                count: { [weak self] in self?.totalMediaCacheByteCount() ?? 0 },
+                clear: { [weak self] in
+                    guard let self, self.mediaClipStore.root == root,
+                        self.mediaActionStoreGeneration == revision
+                    else {
+                        throw CancellationError()
+                    }
+                    self.clearAllMediaCaches()
+                }))
     }
 
     /// UI actions keep the actual relay source, lease revision and request peer they displayed.

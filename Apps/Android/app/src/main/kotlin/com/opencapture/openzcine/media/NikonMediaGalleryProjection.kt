@@ -2,6 +2,7 @@ package com.opencapture.openzcine.media
 
 import com.opencapture.opencine.media.*
 import com.opencapture.opencine.nikon.*
+import com.opencapture.opencine.appkit.MonitorMediaSort
 import java.time.LocalDate
 
 /** Actual payload mapping only; the shared result owns visible IDs, groups and expansion. */
@@ -11,7 +12,7 @@ internal class NikonAppGalleryProjection(
     category: MediaLibraryCategory,
     favoriteIDs: Set<String>,
     cameraID: String,
-    sortOrder: MediaLibrarySortOrder,
+    sortOrder: MonitorMediaSort,
     filters: MediaLibraryFilters = MediaLibraryFilters(),
     today: LocalDate = LocalDate.now(),
     libraryKey: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) },
@@ -35,7 +36,6 @@ internal class NikonAppGalleryProjection(
             requireLocal = false, selectionScope = MonitorMediaProjectionSelectionScope.ALL_SURVIVORS), policy)
     val displayedClips get() = result.displayIDs.mapNotNull(byID::get)
     val gridClips get() = result.gridIDs.mapNotNull(byID::get)
-    val visibleKeys get() = result.displayIDs.mapNotNullTo(linkedSetOf(), keysByID::get)
     val filterOptions get() = MediaFilterOptions(
         formats = result.offered.formats.mapNotNull { key -> MediaFormatFilter.entries.firstOrNull { it.title == key } },
         resolutions = result.offered.resolutions.mapNotNull { key -> MediaResolutionFilter.entries.firstOrNull { it.title == key } },
@@ -44,24 +44,10 @@ internal class NikonAppGalleryProjection(
     val legacyGroups get() = result.groups.map { group -> BurstSeries(group.members.mapNotNull(keysByID::get)) }
     fun members(clip: NikonMediaClipRecord, key: (NikonMediaClipRecord) -> String): List<NikonMediaClipRecord> =
         IDsByLegacy[key(clip)]?.let(result::group)?.members?.mapNotNull(byID::get).orEmpty()
-    fun expanded(clips: List<NikonMediaClipRecord>, key: (NikonMediaClipRecord) -> String): List<NikonMediaClipRecord> {
-        fun suppliedID(clip: NikonMediaClipRecord): MediaAssetID = IDsByLegacy[key(clip)]
-            ?: NikonMediaLibraryAssets.asset(ownerOf(clip), key(clip), clip).id
-        val supplied = linkedMapOf<MediaAssetID, NikonMediaClipRecord>()
-        for (clip in clips) supplied.putIfAbsent(suppliedID(clip), clip)
-        return result.expansion(clips.map(::suppliedID), availableMemberIDs = byID.keys).mapNotNull { entry ->
-            when (entry) {
-                is MonitorMediaProjectionExpansionEntry.Supplied -> supplied[entry.id]
-                is MonitorMediaProjectionExpansionEntry.Member -> byID[entry.id]
-            }
-        }
-    }
-    fun selected(keys: Set<String>): List<NikonMediaClipRecord> =
-        result.selected(keys.mapNotNullTo(linkedSetOf(), IDsByLegacy::get)).mapNotNull(byID::get)
     fun hasRawSibling(clip: NikonMediaClipRecord, key: (NikonMediaClipRecord) -> String): Boolean =
         IDsByLegacy[key(clip)]?.let(policy::rawCompanion) != null
     companion object {
-        fun sorted(clips: List<NikonMediaClipRecord>, sort: MediaLibrarySortOrder): List<NikonMediaClipRecord> {
+        fun sorted(clips: List<NikonMediaClipRecord>, sort: MonitorMediaSort): List<NikonMediaClipRecord> {
             // Preserve duplicate payloads accepted by the original sorting API.
             return clips.sortedWith { left, right ->
                 NikonAndroidGalleryProjectionPolicy.compareClips(left, right, sort.projectionSort())
@@ -75,8 +61,4 @@ private fun MediaLibraryCategory.projectionCategory() = when (this) {
     MediaLibraryCategory.PHOTOS -> MonitorMediaProjectionCategory.PHOTOS
     MediaLibraryCategory.FAVORITES -> MonitorMediaProjectionCategory.FAVORITES
 }
-private fun MediaLibrarySortOrder.projectionSort() = when (this) {
-    MediaLibrarySortOrder.NEWEST -> MonitorMediaProjectionSort.NEWEST
-    MediaLibrarySortOrder.OLDEST -> MonitorMediaProjectionSort.OLDEST
-    MediaLibrarySortOrder.NAME -> MonitorMediaProjectionSort.NAME
-}
+private fun MonitorMediaSort.projectionSort() = MonitorMediaProjectionSort.valueOf(name)

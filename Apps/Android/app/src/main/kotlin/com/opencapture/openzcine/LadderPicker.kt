@@ -12,7 +12,6 @@ import com.opencapture.opencine.cameracontrols.SheetHeader
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.monitorui.MonitorTypography
 import androidx.compose.ui.text.font.FontWeight
-import com.opencapture.openzcine.pairing.StartupColors
 import androidx.compose.ui.Modifier
 import com.opencapture.opencine.appkit.MonitorCaptureField
 import com.opencapture.opencine.appkit.MonitorControlModel
@@ -233,7 +232,7 @@ internal fun VideoLadderBody(
         }
         Column(modifier.testTag("ladder_sheet"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (!chromeless) SheetHeader(picker.title, picker.subtitle, onClose)
-            if (!error.isNullOrBlank()) Text(error, style = MonitorTypography.text(11f, FontWeight.Medium), color = StartupColors.destructive, maxLines = 2)
+            if (!error.isNullOrBlank()) Text(error, style = MonitorTypography.text(11f, FontWeight.Medium), color = MonitorPalette.recording, maxLines = 2)
             if (!controlsEnabled && !unavailable.isNullOrBlank()) Text(unavailable, style = MonitorTypography.text(11f, FontWeight.Medium), color = MonitorPalette.muted, maxLines = 2)
             val banner = if (picker.interactionLocked) picker.lockBanner else if (picker.drumInteractionLocked) picker.drumLockBanner else null
             if (!banner.isNullOrBlank()) Text(banner, style = MonitorTypography.text(11.5f, FontWeight.Medium), color = MonitorPalette.accent, maxLines = 2)

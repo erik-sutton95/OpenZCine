@@ -9,7 +9,7 @@ package com.opencapture.openzcine.pairing
  *
  * The two paths are HARD-separated (this cost real bugs on iOS):
  * - [CAMERA_ACCESS_POINT]: the phone joins the camera's own network via
- *   [CameraApJoiner] — the only class that requests or binds a Wi-Fi network.
+ *   the platform `CameraApJoiner`, the only class that requests or binds a Wi-Fi network.
  * - [PHONE_HOTSPOT]: the CAMERA joins the phone's hotspot; the phone hosts
  *   and must never scan or join anything — this path only ever watches NSD
  *   discovery for the camera to appear.
@@ -43,6 +43,14 @@ public enum class PairingPath {
      */
     public val joinsCameraAccessPoint: Boolean
         get() = this == CAMERA_ACCESS_POINT
+
+    /**
+     * Whether this path finds or joins the camera over Wi-Fi, the only thing the wizard's network
+     * permission (nearby Wi-Fi devices, or location before API 33) is for. The cable paths need
+     * none: USB-C asks for its per-device access at discovery, HDMI capture asks for nothing.
+     */
+    public val usesWifi: Boolean
+        get() = PairingCard.of(this) == PairingCard.WIRELESS
 }
 
 /**
@@ -62,14 +70,14 @@ public enum class PairingCard(public val options: List<PairingPath>) {
 }
 
 /**
- * Guided wizard steps, mirroring iOS `FirstPairWizardStep`: permissions →
- * choose path → prepare the camera → set up the network → (hotspot and USB-C)
- * find and pair. Camera-AP pairing ends at [NETWORK] — joining the camera's
- * Wi-Fi is the last operator action; connect runs against the fixed AP host.
+ * Guided wizard steps: choose path → (Wi-Fi paths) permissions → prepare the camera → set up the
+ * network → (hotspot, router and USB-C) find and pair. The permission is asked only for a path that
+ * needs it, so a denied Wi-Fi permission never blocks a cable. Camera-AP pairing ends at [NETWORK]:
+ * joining the camera's Wi-Fi is the last operator action; connect runs against the fixed AP host.
  */
 public enum class PairingStep {
-    PERMISSIONS,
     CHOOSE_PATH,
+    PERMISSIONS,
     PREPARE,
     NETWORK,
     DISCOVER,
@@ -81,17 +89,20 @@ public enum class PairingStep {
  * Wi-Fi joins, discovery, session connects) live with the UI layer.
  *
  * @property skipsPermissions Omits the permissions step (and adjusts the
- *   numbering) when the runtime permission is already granted, mirroring iOS
- *   `firstPairWizardSkipsPermissions`.
+ *   numbering) when the network permission was already granted as the wizard
+ *   opened, mirroring iOS `firstPairWizardSkipsPermissions`.
  */
 public data class PairingFlowState(
-    val step: PairingStep = PairingStep.PERMISSIONS,
+    val step: PairingStep = PairingStep.CHOOSE_PATH,
     val path: PairingPath = PairingPath.CAMERA_ACCESS_POINT,
     val skipsPermissions: Boolean = false,
 ) {
     init {
         require(!(skipsPermissions && step == PairingStep.PERMISSIONS)) {
             "The permissions step cannot be current while skipped"
+        }
+        require(!(!path.usesWifi && step == PairingStep.PERMISSIONS)) {
+            "A cable path asks for no network permission"
         }
         require(!(path == PairingPath.CAMERA_ACCESS_POINT && step == PairingStep.DISCOVER)) {
             "Camera-AP pairing ends at NETWORK; DISCOVER belongs to hotspot or USB-C pairing"
@@ -101,10 +112,11 @@ public data class PairingFlowState(
         }
     }
 
-    private val sequence: List<PairingStep>
+    /** The active path's visible steps, in order (the wizard rail). */
+    public val sequence: List<PairingStep>
         get() = buildList {
-            if (!skipsPermissions) add(PairingStep.PERMISSIONS)
             add(PairingStep.CHOOSE_PATH)
+            if (path.usesWifi && !skipsPermissions) add(PairingStep.PERMISSIONS)
             add(PairingStep.PREPARE)
             // HDMI capture has no network at all — the cable is the whole link.
             if (path != PairingPath.HDMI_CAPTURE) {
@@ -147,17 +159,17 @@ public data class PairingFlowState(
         return copy(step = sequence[index - 1])
     }
 
-    /** Selects a path from the choose step and advances (tap = select + advance, like iOS). */
+    /**
+     * Selects a path from the choose step and advances (tap = select + advance, like iOS): to the
+     * permissions step when the path needs the network permission and it is missing, else to
+     * preparing the camera.
+     */
     public fun choose(path: PairingPath): PairingFlowState =
-        copy(path = path, step = PairingStep.PREPARE)
+        copy(path = path, step = PairingStep.CHOOSE_PATH).advance()
 
     public companion object {
-        /** Initial wizard state, skipping straight past permissions when already granted. */
+        /** Initial wizard state: choosing the path, past permissions when already granted. */
         public fun initial(permissionGranted: Boolean): PairingFlowState =
-            if (permissionGranted) {
-                PairingFlowState(step = PairingStep.CHOOSE_PATH, skipsPermissions = true)
-            } else {
-                PairingFlowState()
-            }
+            PairingFlowState(skipsPermissions = permissionGranted)
     }
 }

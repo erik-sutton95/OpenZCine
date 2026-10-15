@@ -12,7 +12,6 @@ import androidx.test.uiautomator.Until
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.PreferencesSnapshot
 import com.opencapture.openzcine.R
-import java.util.regex.Pattern
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -51,9 +50,8 @@ class FirstRunPairingEntryTest {
         val offered = device.wait(Until.findObject(By.desc(entry)), TIMEOUT_MILLIS)
         assertNotNull("The pair page offers no way to the Nikon transport wizard", offered)
         offered.click()
-        // The wizard asks for its permissions first when they are missing, else shows the paths.
-        val wizard = Pattern.compile(Pattern.quote(context.getString(R.string.pairing_step_permissions)) + "|" +
-            Pattern.quote(context.getString(R.string.pairing_card_cable_link)))
+        // The wizard opens on the paths; only a Wi-Fi path asks for a permission, after the choice.
+        val wizard = context.getString(R.string.pairing_card_cable_link)
         assertNotNull("One tap did not open the transport wizard", device.wait(Until.findObject(By.text(wizard)), TIMEOUT_MILLIS))
 
         device.pressBack()

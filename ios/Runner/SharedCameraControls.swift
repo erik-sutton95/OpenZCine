@@ -25,7 +25,9 @@ extension NativeAppModel: ChromeEditHost {
     typealias ChromeMode = MonitorDisplayMode
     var hapticsEnabled: Bool { preferences.hapticsEnabled }
 
-    func isChromeVisible(_ section: MonitorDisplayChrome.Section, in mode: MonitorDisplayMode) -> Bool {
+    func isChromeVisible(_ section: MonitorDisplayChrome.Section, in mode: MonitorDisplayMode)
+        -> Bool
+    {
         operatorSession.chrome(for: mode).isVisible(section)
     }
 

@@ -19,7 +19,8 @@ class AppDiagnosticsTest {
             "com.opencapture.openzcine@${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
             host.currentRelease,
         )
-        assertEquals(if (BuildConfig.DEBUG) "development" else "production", host.environment)
+        // A local release build is local, never production; only a CI channel names another.
+        assertEquals(if (BuildConfig.DEBUG) "development" else "local", host.environment)
         assertEquals(BuildConfig.SENTRY_DSN_ANDROID, host.reportingDsn)
         assertEquals("openzcine-android", host.reportingClient)
         // Nikon keeps no network readable (A6-10); iOS redacts the same table identically.

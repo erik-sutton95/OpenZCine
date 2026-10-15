@@ -8,11 +8,13 @@ import kotlin.test.assertTrue
 /** The badge placement cases moved to Core `MonitorChromeEditBadgeLayoutTest` with the shared editor. */
 class PortraitPhoneSafeTopTest {
     @Test
-    fun aCutoutLessPortraitPhoneGetsThePunchHoleBandAboveTheStatusRow() {
-        // The FPS chip and batteries hang from gauges.y; the chip is 27.5 dp tall.
+    fun aCutoutLessPortraitPhoneKeepsTheOriginalStatusAnchorAndCenteredTelemetry() {
+        // Performance is centered in the48dp telemetry row; power has its13dp paint offset.
         fun bandGap(safeTop: Float): Float {
             val layout = MonitorLayoutPolicy.fieldMonitor(411f, 914f, safeTop = portraitPhoneSafeTop(safeTop, 411f, 914f))
-            return layout.status.y - (layout.gauges.y + 27.5f)
+            assertEquals(maxOf(44f, safeTop) - 6f, layout.status.y, 0.01f)
+            val performanceBottom = layout.telemetry.y - 13f + 48f / 2f + 27.5f / 2f
+            return layout.status.y - performanceBottom
         }
         val punchHole = bandGap(52f)
         assertTrue(punchHole > 0f)

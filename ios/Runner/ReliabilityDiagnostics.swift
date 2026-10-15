@@ -57,19 +57,22 @@ enum ReliabilityDiagnostics {
         static let verification = ReliabilityReportingVerification(
             sentry: reporting, isActive: { UIApplication.shared.applicationState == .active })
     #endif
-    static let incidents = FeedIncidentRuntime(reporting: reporting,
+    static let incidents = FeedIncidentRuntime(
+        reporting: reporting,
         directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("OpenZCine/Diagnostics/incidents", isDirectory: true))
     @MainActor static let problemReporting = ProblemReporting(
         host: host, gate: gate, dsnProvider: dsn.configured,
         isForeground: { UIApplication.shared.applicationState == .active })
 
+    /// Only store builds report `production`; Xcode and ad hoc release installs are `local`.
     private static var environment: String {
         #if DEBUG
-            return ReliabilityReportingVerification.mode == nil ? "development" : "verification"
+            ReliabilityEnvironment.apple(
+                debug: true, verification: ReliabilityReportingVerification.mode != nil
+            ).rawValue
         #else
-            return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
-                ? "testflight" : "production"
+            ReliabilityEnvironment.apple(debug: false, verification: false).rawValue
         #endif
     }
 }

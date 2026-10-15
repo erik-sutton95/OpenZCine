@@ -276,7 +276,7 @@ const val LIVE_FEED_MAX_LONG_SIDE: Int = 1024
  * The frame state is read inside the [Canvas] draw lambda only, so a new
  * frame costs one draw invalidation — no recomposition, no layout.
  *
- * [onFrame] observes each presented frame on the decode thread. The bitmap is
+ * [onFrame] observes each presented frame on Android Main. The bitmap is
  * pooled; it stays valid until two more frames have been decoded.
  * [onPresentedFrame] observes the exact source [LiveFrame], decoded bitmap,
  * optional [MonitorBitmapPreviewBaker] and live look accepted for display; the
@@ -333,6 +333,7 @@ internal fun LiveFeedView(
     val fallbackColorMode = remember(source) { mutableStateOf(LiveFeedColorMode.UNKNOWN) }
     // GPU present (Vulkan preferred, GLES fallback); a rotated feed stays on Compose Canvas.
     val gpuBackend = remember(source) { LiveFeedGpuBackendFactory.create(applicationContext) }
+    val effectPlans = rememberFeedEffectsRenderPlans(source)
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
     DisposableEffect(gpuBackend) {
@@ -373,6 +374,7 @@ internal fun LiveFeedView(
     // AGSL grade for the Compose present path (a rotated vertical feed), API 33+.
     var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
+        effectPlans,
         effects,
         configuration,
         cameraInput,
@@ -398,7 +400,7 @@ internal fun LiveFeedView(
         val previousComposable = composableEffectsRenderer
         val nextPlan =
             withContext(Dispatchers.Default) {
-                FeedEffectsRenderPlanFactory.create(
+                effectPlans.create(
                     effects,
                     configuration,
                     cameraInput,
@@ -518,6 +520,7 @@ internal fun LiveFeedView(
                 stats = stats,
                 timestampNanos = { it.timestampNanos },
                 isCurrent = isCurrent,
+                presentationDispatcher = Dispatchers.Main.immediate,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.
                 decode = { frame ->
@@ -822,7 +825,7 @@ internal fun FalseColorReferencePresentation.referenceValues(
                 // The shared ruler starts each label 10 dp before its stop and clips at the panel, so the
                 // Min and Max ends (0 and 1) are held 16 dp inside it, where the old ruler aligned them.
                 val edge = 16.0 / MonitorScopePanelSize.falseColorReference.width
-                copy.stopLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
+                reference.stopMarkerLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
                     MonitorFalseColorReferenceMarker(index, label, at.toDouble().coerceIn(edge, 1.0 - edge))
                 }
             } else {

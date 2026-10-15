@@ -61,9 +61,10 @@
           - "Sources/OpenZCineCore/*LUT*.swift"
           - "ios/Runner/Media*.swift"
           - "ios/Runner/*LUT*.swift"
-          # Frame.io delivery; the portable workflow is OpenCineCore's OpenCineFrameIO product.
+          # Frame.io delivery; the portable workflow is OpenCine's OpenCineFrameIO product and the
+          # Android owner is OpenCine's :frameio module.
           - "ios/Runner/Frameio/**/*"
-          - "Sources/OpenZCineAndroidFacade/FrameioWire.swift"
+          - "Apps/Android/app/src/main/kotlin/com/opencapture/openzcine/frameio/**/*"
 
 "area:ui":
   - changed-files:

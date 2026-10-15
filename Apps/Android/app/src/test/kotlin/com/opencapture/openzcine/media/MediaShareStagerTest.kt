@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.media
 
+import com.opencapture.opencine.media.MonitorMediaShareIntentSpec
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonStillPhotoClassification
@@ -233,9 +234,9 @@ class MediaShareStagerTest {
                     clip("C0005.M4V", NikonMediaContentKind.PLAYABLE_PROXY),
                 )
 
-            val spec = MediaShareIntentSpec.forShare(staged)
+            val spec = MonitorMediaShareIntentSpec.forShare(staged, ZMediaShareBatchLabel)
 
-            assertEquals(MediaShareIntentSpec.ACTION_SEND, spec.action)
+            assertEquals(MonitorMediaShareIntentSpec.ACTION_SEND, spec.action)
             assertEquals("video/*", spec.mimeType)
             assertTrue(spec.streamExtraIncluded)
             assertEquals("C0005.M4V", spec.clipDataLabel)
@@ -258,9 +259,9 @@ class MediaShareStagerTest {
                     clip("DSC_0007.JPG", NikonMediaContentKind.STILL_PHOTO),
                 )
 
-            val spec = MediaShareIntentSpec.forShares(listOf(video, still))
+            val spec = MonitorMediaShareIntentSpec.forShares(listOf(video, still), ZMediaShareBatchLabel)
 
-            assertEquals(MediaShareIntentSpec.ACTION_SEND_MULTIPLE, spec.action)
+            assertEquals(MonitorMediaShareIntentSpec.ACTION_SEND_MULTIPLE, spec.action)
             assertEquals("*/*", spec.mimeType)
             assertTrue(spec.streamExtraIncluded)
             assertEquals("OpenZCine media", spec.clipDataLabel)

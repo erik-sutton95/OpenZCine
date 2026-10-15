@@ -12,6 +12,7 @@
 
 import OpenZCineCore
 
+import struct OpenCineMedia.MonitorFalseColorReferencePlan
 import enum OpenCineMedia.MonitorZebraPaint
 
 /// Bakes monitor looks, false-colour cubes, and assist thresholds into flat
@@ -187,6 +188,49 @@ public enum FeedEffectsWire {
             cube: FalseColorMap.limitsWeightCube(mapping: mapping, read709: selection.read709))
     }
 
+    /// Current monitor pixels use the shared signal projection. Legacy public bakers above
+    /// retain their pinned compatibility vectors until their consumers migrate.
+    public static func bakedMonitorFalseColor(
+        scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double? = nil
+    ) -> [UInt8]? {
+        guard let selection = falseColorSelection(scaleOrdinal), selection.scale != .limits,
+            let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: NikonMonitorSignal.lattice(
+                scale: selection.scale, mapping: mapping,
+                read709: selection.read709
+            ).cube(.composite))
+    }
+
+    /// Shared monitor limits paint paired with the weight payload.
+    public static func bakedMonitorFalseColorLimitsPaint(curveOrdinal: Int, clipNative: Double)
+        -> [UInt8]?
+    {
+        guard let selection = falseColorCurveSelection(curveOrdinal),
+            let mapping = mapping(curveOrdinal: selection.ordinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: NikonMonitorSignal.lattice(
+                scale: .limits, mapping: mapping,
+                read709: selection.read709
+            ).cube(.paint))
+    }
+
+    /// Shared monitor limits weight paired with the paint payload.
+    public static func bakedMonitorFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Double)
+        -> [UInt8]?
+    {
+        guard let selection = falseColorCurveSelection(curveOrdinal),
+            let mapping = mapping(curveOrdinal: selection.ordinal, clipNative: clipNative)
+        else { return nil }
+        return packedRGBA(
+            cube: NikonMonitorSignal.lattice(
+                scale: .limits, mapping: mapping,
+                read709: selection.read709
+            ).cube(.weight))
+    }
+
     /// Renderer-ready false-colour reference geometry:
     /// `[version, curveOrdinal, segmentCount, markerCount,
     /// (lowerFraction, upperFraction, red, green, blue) × segmentCount,
@@ -195,6 +239,37 @@ public enum FeedEffectsWire {
     /// Segment and marker placement use the exact camera-aware scale domain as
     /// the iOS reference panel. Android only lays out this returned geometry;
     /// it never recreates exposure bands or curve policy.
+    /// Version 2 source ruler: the shared bands plus typed stop/clip marker records.
+    /// The version 1 compatibility entry remains available beside this monitor entry.
+    public static func bakedMonitorFalseColorReference(
+        scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double
+    ) -> [Float]? {
+        guard let selection = falseColorSelection(scaleOrdinal),
+            let mapping = mapping(curveOrdinal: curveOrdinal, clipNative: clipNative)
+        else { return nil }
+        let plan = MonitorFalseColorReferencePlan(
+            scale: selection.scale.sharedScale,
+            transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
+            lookCurve: NikonMonitorSignal.lookCurves[mapping.curve.monitorTransfer],
+            readThroughLook: selection.read709)
+        var result: [Float] = [
+            2, Float(Self.curveOrdinal(mapping.curve)),
+            Float(plan.segments.count), Float(plan.markers.count),
+        ]
+        for segment in plan.segments {
+            result += [
+                Float(segment.lowerFraction), Float(segment.upperFraction),
+                Float(segment.band.red), Float(segment.band.green), Float(segment.band.blue),
+            ]
+        }
+        for marker in plan.markers {
+            result += [
+                marker.kind == .clip ? 1 : 0, Float(marker.sceneStop), Float(marker.fraction),
+            ]
+        }
+        return result
+    }
+
     public static func falseColorReference(
         scaleOrdinal: Int, curveOrdinal: Int, clipNative: Double
     ) -> [Float]? {

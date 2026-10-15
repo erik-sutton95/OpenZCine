@@ -6,180 +6,18 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonMediaDeletionPlan
 import com.opencapture.opencine.nikon.NikonMediaObjectIdentity
-import java.util.Locale
-import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import com.opencapture.monitorui.MonitorConfirmPopup
 import com.opencapture.monitorui.MonitorStarRating
 
 /**
- * Camera-card deletion policy and the star-rating chrome shared by the still
- * viewer, the player, and the browse selection bar. The Swift facade owns the
- * PTP operations; this file owns only which records one deletion touches and
- * how the operator confirms it.
+ * Camera-card deletion confirmation and the star-rating chrome shared by the still viewer, the
+ * player, and the browse selection bar. The Swift facade owns the PTP operations and Core's
+ * `NikonMediaDeletionPlan` owns which records one deletion touches; this file owns how the
+ * operator confirms it.
  */
-
-/**
- * True for the display side of a RAW+JPEG pair (iOS `isJPEGPhoto`).
- *
- * Reads the classification the shared core already made and sent over the listing wire, rather
- * than re-deriving it from the extension here: Kotlin does not classify camera filenames, and a
- * second copy of the extension set only stays right until one copy learns a new extension. (`.HIF`
- * was missing from the core's HEIF set while two other places already special-cased it, and every
- * Nikon HEIF went unlisted as a result.) Stills always carry the label — `MediaLibraryState`
- * enforces `contentKind == STILL_PHOTO` iff `stillPhoto != null`, and the cache round-trips it.
- */
-internal val NikonMediaClipRecord.isJpegStill: Boolean
-    get() = formatFilter() == MediaFormatFilter.JPEG
-
-/** True for Nikon RAW stills (iOS `isRawPhoto`) — the tag-along pair side. */
-internal val NikonMediaClipRecord.isRawStill: Boolean
-    get() = formatFilter() == MediaFormatFilter.NEF
-
-private val NikonMediaClipRecord.filenameExtension: String
-    get() = filename.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.US)
-
-/**
- * Same-shot pair identity: cache bucket + storage slot + case-insensitive
- * stem (iOS `rawPairKey`). The slot is part of the key on purpose — split
- * recording writes RAW and JPEG to different cards, and those must stay
- * separate items. The bucket keeps two cameras' formulaic `DSC_0001` stems
- * apart in the offline multi-camera library.
- */
-internal fun NikonMediaClipRecord.rawPairKey(ownerCameraID: String): String =
-    "$ownerCameraID/$storageId/${filename.substringBeforeLast('.').lowercase(Locale.US)}"
-
-/** The same-shot RAW behind a JPEG's item; null for unpaired stills. */
-internal fun rawSibling(
-    catalog: List<NikonMediaClipRecord>,
-    clip: NikonMediaClipRecord,
-    ownerCameraID: (NikonMediaClipRecord) -> String,
-): NikonMediaClipRecord? {
-    if (!clip.isJpegStill) return null
-    val pairKey = clip.rawPairKey(ownerCameraID(clip))
-    return catalog.firstOrNull { it.isRawStill && it.rawPairKey(ownerCameraID(it)) == pairKey }
-}
-
-/**
- * The pair side the still viewer loads, names, and shares for a JPG ⇄ RAW
- * toggle state (iOS viewer `displayClip`). Ratings and deletion stay keyed on
- * the JPEG side regardless of the toggle.
- */
-internal fun stillViewerDisplaySide(
-    clip: NikonMediaClipRecord,
-    rawSibling: NikonMediaClipRecord?,
-    showingRaw: Boolean,
-): NikonMediaClipRecord = if (showingRaw) rawSibling ?: clip else clip
-
-private val masterExtensions = setOf("r3d", "nev")
-
-private fun NikonMediaClipRecord.stemLowercase(): String =
-    filename.substringBeforeLast('.').lowercase(Locale.US)
-
-/**
- * Cross-card copies of the same shot: same bucket + case-insensitive stem + capture second on
- * ANOTHER card. Backup recording writes the shot to both cards; series membership is
- * same-storage by design, so a delete must widen to the twins itself. An undated clip never
- * matches (every undated file would twin). [verify-on-HW: backup-mode capture dates match]
- */
-internal fun crossCardTwins(
-    catalog: List<NikonMediaClipRecord>,
-    clip: NikonMediaClipRecord,
-    ownerCameraID: (NikonMediaClipRecord) -> String,
-): List<NikonMediaClipRecord> {
-    if (clip.captureDate.isEmpty()) return emptyList()
-    val owner = ownerCameraID(clip)
-    val stem = clip.stemLowercase()
-    return catalog.filter {
-        it.storageId != clip.storageId &&
-            ownerCameraID(it) == owner &&
-            it.captureDate == clip.captureDate &&
-            it.stemLowercase() == stem
-    }
-}
-
-/**
- * Same-stem camera masters (`.R3D` / `.NEV`) on the same card as a playable proxy — the grid
- * hides them behind the proxy, so deleting the proxy must take them along.
- */
-internal fun linkedMasters(
-    catalog: List<NikonMediaClipRecord>,
-    clip: NikonMediaClipRecord,
-    ownerCameraID: (NikonMediaClipRecord) -> String,
-): List<NikonMediaClipRecord> {
-    if (clip.contentKind != NikonMediaContentKind.PLAYABLE_PROXY) return emptyList()
-    val owner = ownerCameraID(clip)
-    val stem = clip.stemLowercase()
-    return catalog.filter {
-        NikonMediaObjectIdentity(it) != NikonMediaObjectIdentity(clip) &&
-            it.storageId == clip.storageId &&
-            ownerCameraID(it) == owner &&
-            it.filenameExtension in masterExtensions &&
-            it.stemLowercase() == stem
-    }
-}
-
-/**
- * Everything one deletion will actually remove, and why — the confirm copy and the delete run
- * from the same expansion so they can never disagree (iOS `DeletionPlan`).
- */
-internal data class DeletionPlan(
-    val targets: List<NikonMediaClipRecord>,
-    /** RAW siblings pulled in behind requested JPEGs. */
-    val pairCount: Int,
-    /** Same-stem camera masters pulled in behind requested proxies. */
-    val masterCount: Int,
-    /** Cross-card copies of the same shots (backup recording, split RAW) pulled in. */
-    val backupCount: Int,
-)
-
-/**
- * Expands a deletion request to the full set of objects it honestly removes: each shot's RAW
- * sibling, its hidden camera master, and the cross-card twins of all of those.
- */
-internal fun deletionPlan(
-    catalog: List<NikonMediaClipRecord>,
-    selection: List<NikonMediaClipRecord>,
-    ownerCameraID: (NikonMediaClipRecord) -> String,
-): DeletionPlan {
-    val targets = LinkedHashMap<NikonMediaObjectIdentity, NikonMediaClipRecord>()
-    var pairs = 0
-    var masters = 0
-    var backups = 0
-    fun insert(clip: NikonMediaClipRecord): Boolean {
-        val identity = NikonMediaObjectIdentity(clip)
-        if (targets.containsKey(identity)) return false
-        targets[identity] = clip
-        return true
-    }
-    selection.forEach { clip ->
-        val shot = buildList {
-            add(clip)
-            rawSibling(catalog, clip, ownerCameraID)?.let(::add)
-            addAll(linkedMasters(catalog, clip, ownerCameraID))
-        }
-        shot.forEachIndexed { index, piece ->
-            if (insert(piece) && index > 0) {
-                if (piece.isRawStill) pairs += 1 else masters += 1
-            }
-            crossCardTwins(catalog, piece, ownerCameraID).forEach { twin ->
-                if (insert(twin)) backups += 1
-            }
-        }
-    }
-    return DeletionPlan(targets.values.toList(), pairs, masters, backups)
-}
-
-/**
- * Expands a deletion selection to every companion object of the same shots (RAW siblings,
- * hidden camera masters, cross-card backup twins), de-duplicated in selection order.
- */
-internal fun cameraDeletionTargets(
-    catalog: List<NikonMediaClipRecord>,
-    selection: List<NikonMediaClipRecord>,
-    ownerCameraID: (NikonMediaClipRecord) -> String,
-): List<NikonMediaClipRecord> = deletionPlan(catalog, selection, ownerCameraID).targets
 
 /**
  * Destructive-confirmation copy naming only what this request actually removes: still wording
@@ -191,10 +29,10 @@ internal fun deleteConfirmationMessage(
     selection: List<NikonMediaClipRecord>,
     ownerCameraID: (NikonMediaClipRecord) -> String,
 ): String {
-    return deleteConfirmationMessage(selection, deletionPlan(catalog, selection, ownerCameraID))
+    return deleteConfirmationMessage(selection, NikonMediaDeletionPlan.of(catalog, selection, ownerCameraID))
 }
 
-internal fun deleteConfirmationMessage(selection: List<NikonMediaClipRecord>, plan: DeletionPlan): String {
+internal fun deleteConfirmationMessage(selection: List<NikonMediaClipRecord>, plan: NikonMediaDeletionPlan): String {
     var message =
         if (selection.size == 1) {
             val only = selection.single()
@@ -213,7 +51,7 @@ internal fun deleteConfirmationMessage(selection: List<NikonMediaClipRecord>, pl
 }
 
 /** Revalidation never expands the confirmed request into newly discovered objects. */
-internal fun sameDeletionPlan(captured: DeletionPlan, current: DeletionPlan): Boolean =
+internal fun sameDeletionPlan(captured: NikonMediaDeletionPlan, current: NikonMediaDeletionPlan): Boolean =
     captured.pairCount == current.pairCount && captured.masterCount == current.masterCount &&
         captured.backupCount == current.backupCount && captured.targets.size == current.targets.size &&
         captured.targets.zip(current.targets).all { (old, actual) ->

@@ -457,7 +457,8 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
     @MainActor
     func manualReport() -> String {
         let report = store.manualReport(metadata: .current)
-        let incidents = ReliabilityDiagnostics.incidents.reportExtras()
+        let incidents =
+            ReliabilityDiagnostics.incidents.reportExtras()
             .first { $0.name == "incidents.txt" }?.body ?? ""
         return incidents.isEmpty ? report : report + "\n" + incidents
     }
@@ -502,22 +503,4 @@ enum SupportLinkCatalog {
         }
         return url
     }
-}
-
-struct DiagnosticsShareItem: Identifiable {
-    let id = UUID()
-    let url: URL
-}
-
-/// Small UIKit bridge for sharing the generated text report from the custom SwiftUI settings panel.
-struct DiagnosticsShareSheet: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url], applicationActivities: nil)
-    }
-
-    func updateUIViewController(
-        _ uiViewController: UIActivityViewController, context: Context
-    ) {}
 }

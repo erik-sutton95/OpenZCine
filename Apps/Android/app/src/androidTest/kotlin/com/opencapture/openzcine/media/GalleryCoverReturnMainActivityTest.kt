@@ -22,12 +22,12 @@ import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import com.opencapture.openzcine.MainActivity
 import com.opencapture.openzcine.PreferencesSnapshot
 import com.opencapture.openzcine.pairing.CAMERAS_DOCUMENT_PREFERENCES
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Comparator
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
+import com.opencapture.opencine.appkit.MonitorMediaSort
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -36,6 +36,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * Closing the still viewer or the player returns to the same gallery: no relist, no Loading, the
@@ -84,9 +86,8 @@ class GalleryCoverReturnMainActivityTest {
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
         index.rememberCameraListing(bucket, clips)
         index.rememberCameraBucket(record.id, bucket, record.displayTitle)
-        index.saveViewOptions(MediaLibraryViewOptions(
-            source = MediaLibrarySource.CAMERA, layout = MonitorMediaLayout.LIST,
-            sortOrder = MediaLibrarySortOrder.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
+        index.mediaPreferences(bucket).saveViewOptions(MonitorMediaViewOptions(
+            layout = MonitorMediaLayout.LIST, sort = MonitorMediaSort.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
         ))
         clips.forEach { clip ->
             cache.openEntry(bucket, MediaCacheObjectIdentity(clip), clip.sizeBytes).apply {

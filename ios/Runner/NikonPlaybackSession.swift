@@ -20,8 +20,8 @@ struct NikonPlaybackTailPresentation {
     let initial: MonitorMediaGalleryOpen<MediaClip>
     let library: MonitorMediaLibraryModel<MediaClip>
     @ObservationIgnored private let sourceAdmission: MonitorPlaybackAdmission
-    @ObservationIgnored private let captureDeliveryCleanup:
-        @MainActor () -> (@MainActor () async -> Void)
+    /// Waits while a delivery caches from the camera; never cancels it (A2-54).
+    @ObservationIgnored private let cameraTransferReleased: @MainActor () async -> Void
     @ObservationIgnored private weak var app: NativeAppModel?
     private struct Installation {
         let id: UUID
@@ -30,6 +30,7 @@ struct NikonPlaybackTailPresentation {
     }
     @ObservationIgnored private var installation: Installation?
     @ObservationIgnored private var factoryRevision = UUID()
+    @ObservationIgnored private var closeCleanupRevision: UUID?
     @ObservationIgnored private var notifying = false
     @ObservationIgnored private var pendingNotifications: [Field] = []
     private enum Field: Equatable { case native, assists }
@@ -81,12 +82,11 @@ struct NikonPlaybackTailPresentation {
             outgoing?.close()
             guard admission.isCurrent(), self.factoryRevision == revision else { return nil }
             let previousTransfer = self.native?.captureEnteredTransferCleanup()
-            let captureDelivery = self.captureDeliveryCleanup
+            let cameraTransferReleased = self.cameraTransferReleased
             let native = NikonPlaybackNativePort(captureBeforePrepare: {
-                let delivery = captureDelivery()
-                return {
+                {
                     await previousTransfer?()
-                    await delivery()
+                    await cameraTransferReleased()
                 }
             })
             let assists = NikonPlaybackAssistAdapter(model: app, native: native)
@@ -138,7 +138,7 @@ struct NikonPlaybackTailPresentation {
 
     init?(
         model: NativeAppModel, initial: MonitorMediaGalleryOpen<MediaClip>,
-        captureDeliveryCleanup: @escaping @MainActor () -> (@MainActor () async -> Void) = { {} }
+        cameraTransferReleased: @escaping @MainActor () async -> Void = {}
     ) {
         guard let library = model.mediaLibrary, library.isCurrent(initial.admission),
             let source = model.captureMediaLibraryAction([initial.record.payload]),
@@ -155,21 +155,27 @@ struct NikonPlaybackTailPresentation {
         self.initial = initial
         self.library = library
         app = model
-        self.captureDeliveryCleanup = captureDeliveryCleanup
+        self.cameraTransferReleased = cameraTransferReleased
     }
 
     /// Captures Back's SDK cleanup before the page schedules its asynchronous dismissal.
     /// The shared media owner retires the item; this leaf only joins its entered native work.
-    func captureCloseCleanup(run: MonitorDeliveryRunHandle?) -> (@MainActor () async -> Bool)? {
-        guard let owner = media.playback, let native,
-            media.playback === owner, self.native === native
-        else { return nil }
-        media.closePlayback()
-        let transfer = native.captureEnteredTransferCleanup()
+    /// An app-scoped delivery goes on: Back never cancels it (A2-54).
+    func captureCloseCleanup() -> (@MainActor () async -> Bool)? {
+        let revision = factoryRevision
+        guard closeCleanupRevision != revision else { return nil }
+        let capturedNative = native
+        guard media.playback == nil || capturedNative != nil else { return nil }
+        closeCleanupRevision = revision
+        // Shared retirement can clear the player before the unavailable surface offers Close.
+        // Keep its native cleanup join, including the empty join of a refused first open.
+        if media.playback != nil { media.closePlayback() }
+        let transfer = capturedNative?.captureEnteredTransferCleanup()
         return { [weak self] in
-            await run?.cancelAndJoin()
-            await transfer()
-            guard let self, self.media.playback == nil, self.native === native else { return false }
+            await transfer?()
+            guard let self, self.factoryRevision == revision,
+                self.media.playback == nil, self.native === capturedNative
+            else { return false }
             return true
         }
     }

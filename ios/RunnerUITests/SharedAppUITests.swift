@@ -9,10 +9,7 @@ final class PhysicalMigrationQualificationTests: OpenCineAppUITesting.PhysicalMi
 
 // The UI tests every app shares, run against this app through the demo harness's `ReviewLaunch`
 // staging. Motion records a capability skip: a Nikon body has no gimbal.
-final class CamerasPageFollowupTests: OpenCineAppUITesting.CamerasPageFollowupTests {
-    /// The shell keeps setup renaming (`ShellBrand` default in LinkExperience).
-    override var renamesSetups: Bool { true }
-}
+final class CamerasPageFollowupTests: OpenCineAppUITesting.CamerasPageFollowupTests {}
 final class DesqueezeUIFlowTests: OpenCineAppUITesting.DesqueezeUIFlowTests {}
 /// Parity finding A1-32: Z draws its own photography-only EV needle, not the shared camera EV
 /// meter these cases check. They still run; their failure is expected until Z adopts the shared
@@ -37,3 +34,12 @@ final class ConfirmationCancel: OpenCineAppUITesting.ConfirmationCancel {}
 final class ChromeEditReturn: OpenCineAppUITesting.ChromeEditReturn {}
 final class AccessibilityTraversal: OpenCineAppUITesting.AccessibilityTraversal {}
 final class ConformanceCoverageTests: OpenCineAppUITesting.ConformanceCoverageTests {}
+/// SIMULATED launch configuration only; layout and pixel assertions stay in OpenCine.
+final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshotLayoutTests {
+    override var expectedStorageText: String { "521 GB" }
+    override var expectedCameraPowerValue: String { "4 of 5 bars" }
+    override var expectedCameraPercentText: String? { nil }
+    override var reviewLaunchEnvironment: [String: String] {
+        ["ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live", "ZC_DEMO_GRAPHICAL_REVIEW": "1"]
+    }
+}

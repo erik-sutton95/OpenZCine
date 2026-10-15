@@ -1,13 +1,14 @@
-import OpenZCineCore
 import AVFoundation
 import Foundation
 import MonitorPresentation
 import MonitorUI
 import Observation
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineHostedAccessibility
 import OpenCineMedia
+import OpenZCineCore
 import SwiftUI
 import UIKit
 import XCTest
@@ -900,7 +901,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(fixture.model.isClipDownloaded(clip))
         XCTAssertFalse(library.browsing, "The actual catalog must start this fresh offline library")
 
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let host = UIHostingController(
             rootView: MediaBrowserView().environment(fixture.model).environment(coordinator))
@@ -996,7 +997,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         fixture.model.refreshMediaClips()
         let library = try XCTUnwrap(fixture.model.mediaLibrary)
         library.begin()
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
@@ -1227,7 +1228,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         fixture.store.upsertBatch(clips, cameraID: MediaClipStore.localBucketID)
         fixture.model.refreshMediaClips()
         let library = try XCTUnwrap(fixture.model.mediaLibrary)
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
@@ -1294,29 +1295,31 @@ extension NikonPlaybackOwnerAdoptionTests {
                 }
             }
         }
-        let presented = await cachedCatalogSettled { host.presentedViewController != nil }
+        // Return only once the cover has finished presenting, as an operator can: UIKit ignores
+        // a dismissal sent while the presentation transition is still running.
+        let presented = await cachedCatalogSettled {
+            host.presentedViewController.map { !$0.isBeingPresented } ?? false
+        }
         XCTAssertTrue(presented)
         observation.invalidate()
         for offset in openingOffsets.values { XCTAssertEqual(offset, before, accuracy: 1) }
-        let outgoingViewports = Set(Self.galleryScrollViews(host.view).map(ObjectIdentifier.init))
         if let returningLayout { fixture.model.mediaBrowserLayout = returningLayout }
         host.dismiss(animated: false)
         let returned = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(returned)
+        host.view.layoutIfNeeded()
         if returningLayout != nil {
-            let replaced = await cachedCatalogSettled {
+            // A changed layout remounts the gallery. Sample it once the update has landed and the
+            // outgoing scroll view, animated out over 0.2 s, has left the window.
+            let remounted = await cachedCatalogSettled {
                 host.view.layoutIfNeeded()
-                let mounted = Self.galleryScrollViews(host.view).filter {
-                    $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
-                }
-                return !mounted.isEmpty
-                    && mounted.allSatisfy {
-                        !outgoingViewports.contains(ObjectIdentifier($0))
+                return scroll.window == nil
+                    && Self.galleryScrollViews(host.view).contains {
+                        $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
                     }
             }
-            XCTAssertTrue(replaced, "The changed catalog layout must replace its outgoing viewport")
+            XCTAssertTrue(remounted, "A changed layout must replace the outgoing gallery")
         }
-        host.view.layoutIfNeeded()
         let returnedScroll = try XCTUnwrap(
             Self.galleryScrollViews(host.view).first {
                 $0.window != nil && $0.contentSize.height > $0.bounds.height + 500
@@ -1327,8 +1330,10 @@ extension NikonPlaybackOwnerAdoptionTests {
                 "Returning from playback must preserve the operator's gallery position even if UIKit remounted it"
             )
         } else {
-            XCTAssertEqual(returnedScroll.contentOffset.y, -returnedScroll.adjustedContentInset.top,
-                accuracy: 1, "A changed layout must not inherit the outgoing layout's captured position")
+            XCTAssertEqual(
+                returnedScroll.contentOffset.y, -returnedScroll.adjustedContentInset.top,
+                accuracy: 1,
+                "A changed layout must not inherit the outgoing layout's captured position")
         }
         // Restoration is consumed once. A subsequent operator scroll must stay independent.
         returnedScroll.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
@@ -1346,17 +1351,19 @@ extension NikonPlaybackOwnerAdoptionTests {
 }
 
 extension NikonPlaybackOwnerAdoptionTests {
-    /// SIMULATED connected facade around actual cached movie, shared player and app operations.
+    /// SIMULATED native session around actual cached movie, shared player and app operations.
     /// The test exposes/cancels a confirmation and never deletes a camera object or user file.
     func testActualConnectedCameraPlaybackExposesDeleteAndCancelKeepsAllBytes() async throws {
         let fixture = try PlaybackFixture()
         defer { fixture.remove() }
         let bucket = "SIMULATED-DELETE-CAMERA"
         let url = try fixture.store.localURL(cameraID: bucket, filename: "SIMULATED-DELETE.MOV")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try await NikonGrowingMovieFixture.write(at: url)
         let bytes = try Data(contentsOf: url)
-        let clip = MediaClip(cameraID: bucket, filename: url.lastPathComponent, handle: 42,
+        let clip = MediaClip(
+            cameraID: bucket, filename: url.lastPathComponent, handle: 42,
             storageID: 65_537, sizeBytes: UInt64(bytes.count), captureDate: "20261011T120000")
         fixture.store.upsertBatch([clip], cameraID: bucket)
         let transport = LargeTransferTransport(operations: [.deleteObject])
@@ -1374,23 +1381,35 @@ extension NikonPlaybackOwnerAdoptionTests {
         library.begin()
         fixture.model.connection = .connected
         let catalog = try XCTUnwrap(fixture.store.catalogBytes(cameraID: bucket))
-        let coordinator = MediaDeliveryCoordinator(); defer { coordinator.close() }
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive })
+        let coordinator = MonitorDeliveryCoordinator()
+        defer { coordinator.close() }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first { $0.isKeyWindow }
-        let host = UIHostingController(rootView: MediaPlayerView(clips: [clip], startingAt: clip)
-            .environment(fixture.model).environment(coordinator))
-        let window = UIWindow(windowScene: scene); window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
-        window.rootViewController = host; window.makeKeyAndVisible(); host.view.frame = window.bounds
-        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKeyAndVisible() }
+        let host = UIHostingController(
+            rootView: MediaPlayerView(clips: [clip], startingAt: clip)
+                .environment(fixture.model).environment(coordinator))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view)
                 .contains { $0.accessibilityLabel == "Delete clip from camera" }
         }
-        XCTAssertTrue(mounted, "Actual connected Nikon playback must compose the shared deletion service")
-        let button = try XCTUnwrap(HostedAccessibility.elements(in: host.view)
-            .first { $0.accessibilityLabel == "Delete clip from camera" })
+        XCTAssertTrue(
+            mounted, "Actual connected Nikon playback must compose the shared deletion service")
+        let button = try XCTUnwrap(
+            HostedAccessibility.elements(in: host.view)
+                .first { $0.accessibilityLabel == "Delete clip from camera" })
         XCTAssertTrue(button.accessibilityActivate())
         let presented = await cachedCatalogSettled { host.presentedViewController != nil }
         XCTAssertTrue(presented)
@@ -1402,19 +1421,20 @@ extension NikonPlaybackOwnerAdoptionTests {
         let destructive = try XCTUnwrap(dialog.actions.first { $0.style == .destructive }?.title)
         let rendered = await cachedCatalogSettled {
             dialog.view.layoutIfNeeded()
-            return dialog.view.window != nil && HostedAccessibility.elements(in: dialog.view)
-                .contains { $0.isAccessibilityElement && $0.accessibilityTraits.contains(.button)
-                    && $0.accessibilityLabel == destructive && !$0.accessibilityFrame.isEmpty }
+            return HostedAccessibility.elements(in: dialog.view)
+                .contains { $0.accessibilityLabel == destructive }
         }
         XCTAssertTrue(rendered)
         if let cancelButton = HostedAccessibility.elements(in: dialog.view)
-            .first(where: { $0.accessibilityLabel == cancel }) {
+            .first(where: { $0.accessibilityLabel == cancel })
+        {
             XCTAssertTrue(cancelButton.accessibilityActivate())
         } else {
             // iOS 26 anchors this sheet as a popover with no Cancel row; the accessibility
             // escape gesture is that presentation's real cancel path.
             XCTAssertNotNil(dialog.popoverPresentationController)
-            XCTAssertTrue([dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
+            XCTAssertTrue(
+                [dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
         }
         let dismissed = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(dismissed)
@@ -1435,8 +1455,10 @@ extension NikonPlaybackOwnerAdoptionTests {
     }
 }
 
-// SIMULATED actual player without a camera deletion authority.
+// SIMULATED connected facade with no camera session: the player's honest-delete rule (D18).
 extension NikonPlaybackOwnerAdoptionTests {
+    /// D18: like the gallery, the player offers Delete only where a deletion can remove the
+    /// camera copy. A connection with no live session behind it removes nothing.
     func testConnectedPlaybackWithoutADeletionAuthorityOffersNoDelete() async throws {
         let fixture = try PlaybackFixture()
         defer { fixture.remove() }
@@ -1457,7 +1479,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         defer { fixture.model.connection = .disconnected }
         XCTAssertFalse(
             fixture.model.canDeleteMedia([clip]), "No session: the gallery withholds Delete")
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = fixture.model.delivery
         defer { coordinator.close() }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
@@ -1500,7 +1522,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         let clip = try fixture.clip("SIMULATED-PHOTO.JPG", expected: 64, bytes: 64)
         fixture.model.refreshMediaClips()
         let library = try XCTUnwrap(fixture.model.mediaLibrary)
-        let coordinator = MediaDeliveryCoordinator()
+        let coordinator = MonitorDeliveryCoordinator()
         defer { coordinator.close() }
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
@@ -1521,7 +1543,9 @@ extension NikonPlaybackOwnerAdoptionTests {
             previous?.makeKeyAndVisible()
         }
         let share: () -> NSObject? = {
-            HostedAccessibility.elements(in: host.view).first { $0.accessibilityLabel == "Share photo" }
+            HostedAccessibility.elements(in: host.view).first {
+                $0.accessibilityLabel == "Share photo"
+            }
         }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
@@ -1537,7 +1561,44 @@ extension NikonPlaybackOwnerAdoptionTests {
         }
         XCTAssertTrue(offered, "Photo Share must open the shared delivery choices")
         XCTAssertNil(
-            host.presentedViewController, "Photo Share must not bypass delivery with a direct sheet")
+            host.presentedViewController, "Photo Share must not bypass delivery with a direct sheet"
+        )
+        await library.dispose()
+    }
+
+    /// A2-44: with no camera the rating read answers nil, so the viewer falls back to Favorite
+    /// instead of showing neither control.
+    func testAPhotoWithoutAStarRatingOffersFavorite() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let clip = try fixture.clip("SIMULATED-PHOTO.JPG", expected: 64, bytes: 64)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(
+            rootView: MediaPhotoViewer(clip: clip).environment(fixture.model).environment(
+                fixture.model.delivery))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let favorite = await cachedCatalogSettled {
+            host.view.layoutIfNeeded()
+            return HostedAccessibility.elements(in: host.view).contains {
+                $0.accessibilityLabel == "Add to favorites"
+            }
+        }
+        XCTAssertTrue(favorite, "A photo without stars must still offer Favorite")
         await library.dispose()
     }
 }

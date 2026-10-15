@@ -1,5 +1,6 @@
 import Foundation
 import MonitorPresentation
+import OpenCineAppKit
 import OpenCineCore
 import OpenCineMulticam
 import OpenZCineCore
@@ -132,9 +133,16 @@ final class MulticamCoordinator {
     }
 
     var isPresented = false
-    var arrangement = MultiviewPresentationLayout.Arrangement.centerStage
+    let presentation = MultiviewStageState(slotCount: MulticamCoordinator.tileCount)
+    var arrangement: MultiviewPresentationLayout.Arrangement {
+        get { presentation.layout.arrangement }
+        set { presentation.layout = newValue == .grid ? .grid : .centerStage }
+    }
     /// The selected tile; its member is the program camera (assists, values, Live View).
-    var focusedSlot = 0
+    var focusedSlot: Int {
+        get { presentation.selected }
+        set { presentation.selected = newValue }
+    }
     var toast: String?
     private(set) var members: [MulticamMember] = []
     private(set) var groupBusy = false
@@ -172,8 +180,6 @@ final class MulticamCoordinator {
     func begin() {
         end()
         isPresented = true
-        arrangement = .centerStage
-        focusedSlot = 0
     }
 
     /// Closes every member link (CloseSession). Never stops a recording.
@@ -562,7 +568,10 @@ final class MulticamCoordinator {
                 advertised: whiteBalancePresets, codec: facts.reported.fileType)
         }
         member.properties = control.nikonControlFacts.reported
-        if !recording, let storage = try? await link.readStorageInfo() { member.storage = storage }
+        if !recording, let storage = try? await link.readStorageInfo() {
+            member.storage = storage
+            control.update { $0.storage = storage }
+        }
     }
 
     /// The tile keeps its camera with a Retry; the engine stops addressing it.

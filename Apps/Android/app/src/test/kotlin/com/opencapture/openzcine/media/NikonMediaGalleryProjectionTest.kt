@@ -4,6 +4,7 @@ import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.nikon.NikonStillPhotoClassification
 import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
+import com.opencapture.opencine.appkit.MonitorMediaSort
 import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,8 +17,9 @@ class NikonMediaGalleryProjectionTest {
         NikonMediaClipRecord(handle, 11, 2, date, width, 4000, name, NikonMediaContentKind.STILL_PHOTO,
             NikonStillPhotoClassification(name.substringAfterLast('.').let { if (it == "JPG") "JPEG" else if (it == "TIF") "TIFF" else it }, NikonStillPreviewStrategy.THUMBNAIL_ONLY))
     private fun project(clips: List<NikonMediaClipRecord>, filters: MediaLibraryFilters = MediaLibraryFilters(),
-        favorites: Set<String> = emptySet(), category: MediaLibraryCategory = MediaLibraryCategory.PHOTOS) =
-        NikonAppGalleryProjection(clips, emptyMap(), category, favorites, "cam", MediaLibrarySortOrder.NEWEST,
+        favorites: Set<String> = emptySet(), category: MediaLibraryCategory = MediaLibraryCategory.PHOTOS,
+        sort: MonitorMediaSort = MonitorMediaSort.NEWEST) =
+        NikonAppGalleryProjection(clips, emptyMap(), category, favorites, "cam", sort,
             filters, LocalDate.of(2026, 7, 27))
     @Test fun actualCategoryRankPrecedesFormatAndFourWidthDomainStaysUnknown() {
         val rows = listOf(clip("L.JPG", width = 6048), clip("M.NEF", 2, 4032), clip("S.TIF", 3, 3024))
@@ -48,17 +50,21 @@ class NikonMediaGalleryProjectionTest {
         val projection = project(listOf(c, a, b))
         assertEquals(listOf("DSC_0003.JPG", "DSC_0002.JPG", "DSC_0001.JPG"), projection.displayedClips.map { it.filename })
         assertEquals(listOf("DSC_0001.JPG"), projection.gridClips.map { it.filename })
-        assertEquals(listOf(c, a), projection.selected(setOf(c.libraryKey("cam"), a.libraryKey("cam"))))
-        assertEquals(listOf(a, b, c), projection.expanded(listOf(a, b, a)) { it.libraryKey("cam") })
-        val late = clip("NOT_IN_PASS.JPG", 4, date = "20260727T120040")
-        assertEquals(listOf(a, b, c, late), projection.expanded(listOf(a, late, late)) { it.libraryKey("cam") })
-        assertEquals(listOf(late), project(emptyList()).expanded(listOf(late, late)) { it.libraryKey("cam") })
+        assertEquals(listOf(a, b, c), projection.members(a) { it.libraryKey("cam") })
     }
     @Test fun actualFavoriteSnapshotReplacementRebuildsCategoryWithoutInventedRatingHistory() {
         val a = clip("A.JPG")
         val b = clip("B.JPG", 2)
         assertEquals(listOf(a), project(listOf(a, b), favorites = setOf(a.libraryKey("cam")), category = MediaLibraryCategory.FAVORITES).displayedClips)
         assertEquals(listOf(b), project(listOf(a, b), favorites = setOf(b.libraryKey("cam")), category = MediaLibraryCategory.FAVORITES).displayedClips)
-        assertEquals(listOf(b, a, a), MediaLibraryFiltering.sort(listOf(a, b, a), MediaLibrarySortOrder.NEWEST))
+        assertEquals(listOf(b, a, a), MediaLibraryFiltering.sort(listOf(a, b, a), MonitorMediaSort.NEWEST))
+    }
+    @Test fun ratingSortPutsFavoritesFirstThenNewest() {
+        // A4-15: the Nikon gallery offers the shared RATING order.
+        val old = clip("OLD.JPG", 1, date = "20260701T120000")
+        val new = clip("NEW.JPG", 2, date = "20260720T120000")
+        val favorite = clip("FAV.JPG", 3, date = "20260710T120000")
+        assertEquals(listOf(favorite, new, old), project(listOf(old, new, favorite), favorites = setOf(favorite.libraryKey("cam")),
+            category = MediaLibraryCategory.ALL, sort = MonitorMediaSort.RATING).displayedClips)
     }
 }
