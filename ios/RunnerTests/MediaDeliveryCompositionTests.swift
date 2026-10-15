@@ -2,11 +2,11 @@ import AVFoundation
 import CoreVideo
 import MonitorPresentation
 import MonitorUI
-import OpenCineHostedAccessibility
 import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineCameraControls
 import OpenCineFrameIOApple
+import OpenCineHostedAccessibility
 import SwiftUI
 import UIKit
 import XCTest
@@ -232,7 +232,8 @@ final class MediaDeliveryCompositionTests: XCTestCase {
         XCTAssertNotNil(coordinator.lifetime.state.share)
         sheet.completionWithItemsHandler?(nil, false, nil, nil)
         sheet.completionWithItemsHandler?(nil, false, nil, nil)
-        XCTAssertNil(coordinator.lifetime.state.share, "The sheet's completion acknowledges its share")
+        XCTAssertNil(
+            coordinator.lifetime.state.share, "The sheet's completion acknowledges its share")
         for _ in 0..<200 where FileManager.default.fileExists(atPath: lease.path) {
             try await Task.sleep(for: .milliseconds(25))
         }
@@ -568,7 +569,8 @@ final class DeliveryOwnershipRuleTests: XCTestCase {
             "endInternetHopCaptured", "restoreInternetHop",
         ]
         let pattern = try NSRegularExpression(
-            pattern: "\\b(?:struct|enum|class|actor|typealias|protocol)\\s+(" + types.joined(separator: "|")
+            pattern: "\\b(?:struct|enum|class|actor|typealias|protocol)\\s+("
+                + types.joined(separator: "|")
                 + ")\\b|\\bfunc\\s+(" + steps.joined(separator: "|") + ")\\b")
         let files = try XCTUnwrap(
             FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
@@ -578,7 +580,8 @@ final class DeliveryOwnershipRuleTests: XCTestCase {
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
             for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                found.append(file.lastPathComponent + ": " + (text as NSString).substring(with: match.range))
+                found.append(
+                    file.lastPathComponent + ": " + (text as NSString).substring(with: match.range))
             }
         }
         XCTAssertEqual(found, [], "Delivery has one shared owner; these are app copies")

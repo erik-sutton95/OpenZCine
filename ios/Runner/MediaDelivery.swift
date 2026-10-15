@@ -87,7 +87,8 @@ enum NikonDelivery {
         MonitorDeliveryMetadataSummary.text(
             files: clips.map {
                 .init(
-                    filename: $0.filename, captureDate: $0.captureDate.isEmpty ? nil : $0.captureDate,
+                    filename: $0.filename,
+                    captureDate: $0.captureDate.isEmpty ? nil : $0.captureDate,
                     sizeBytes: $0.sizeBytes > 0 ? $0.sizeBytes : nil)
             },
             formatBytes: ByteCountLabel.label)
@@ -104,7 +105,8 @@ extension NativeAppModel {
         guard capture.isCurrent else { return nil }
         let current = MonitorDeliveryAdmission { capture.isCurrent }
         let hop = internetHop.deliveryService(
-            route: { [weak self] in self?.hopRoute() }, admission: { capture.action.sourceIsCurrent })
+            route: { [weak self] in self?.hopRoute() },
+            admission: { capture.action.sourceIsCurrent })
         // Once the camera session has gone, the lease the capture holds is its source.
         let internet = MonitorDeliveryInternetService<NikonHopToken>(
             needsHop: hop.needsHop,
@@ -115,13 +117,15 @@ extension NativeAppModel {
             }, owns: hop.owns, wait: hop.wait, restoreEntered: hop.restoreEntered,
             restore: hop.restore)
         let remote = frameioRemote(capture, current: current, internet: internet)
-        var configuration = NikonDeliveryConfiguration(logTransform: "unchanged", exportFormat: .mov)
+        var configuration = NikonDeliveryConfiguration(
+            logTransform: "unchanged", exportFormat: .mov)
         configuration.bakeLUT = capture.cube != nil
         let model = NikonDeliveryPopup.Preparation(
             selection: { [weak self] in
                 .init(
                     files: capture.clips.map {
-                        .init(filename: $0.filename, sizeBytes: $0.sizeBytes > 0 ? $0.sizeBytes : nil)
+                        .init(
+                            filename: $0.filename, sizeBytes: $0.sizeBytes > 0 ? $0.sizeBytes : nil)
                     },
                     cachedCount: capture.clips.filter(capture.isCached).count,
                     connected: capture.action.sourceIsCurrent && self?.isConnected == true)
@@ -136,7 +140,9 @@ extension NativeAppModel {
                 bakeExposureAvailable: { nil }, formatsForRemoteUpload: false,
                 filename: { configuration in
                     capture.clips.count == 1
-                        ? capture.clips.first.map { capture.filename($0, configuration: configuration) }
+                        ? capture.clips.first.map {
+                            capture.filename($0, configuration: configuration)
+                        }
                         : nil
                 }), remote: remote, preferredDestination: preferred,
             sourceCurrent: { capture.isCurrent },
@@ -163,10 +169,12 @@ extension NativeAppModel {
                 return await coordinator.run(
                     records: capture.clips, destination: request.destination,
                     action: request.action, admission: accepted,
-                    source: self.deliverySource(capture, configuration: configuration, admission: accepted),
+                    source: self.deliverySource(
+                        capture, configuration: configuration, admission: accepted),
                     includeMetadata: configuration.includeMetadata,
                     remote: remoteRun
-                        ? self.frameioRun(capture, configuration: configuration, admission: accepted)
+                        ? self.frameioRun(
+                            capture, configuration: configuration, admission: accepted)
                         : nil,
                     internet: internet, lease: request.internetLease, progress: progress)
             }
@@ -224,7 +232,9 @@ extension NativeAppModel {
         internet: MonitorDeliveryInternetService<NikonHopToken>
     ) -> MonitorDeliveryRemoteService<FrameioProject, NikonFrameioProjectContext, NikonHopToken> {
         let choice: (FrameioProject) -> MonitorDeliveryProject<FrameioProject> = {
-            .init(id: $0.id, name: $0.name, uploadable: $0.rootFolderID.map { _ in true }, payload: $0)
+            .init(
+                id: $0.id, name: $0.name, uploadable: $0.rootFolderID.map { _ in true }, payload: $0
+            )
         }
         return .init(
             presentation: .init(displayName: "Frame.io", progressCaption: "Uploading to Frame.io"),
@@ -280,7 +290,8 @@ struct NikonDeliveryRequest: Identifiable {
         NikonDeliveryPopup(
             selectionID: id,
             make: { model.deliveryPopup(capture, coordinator: coordinator) },
-            onDismiss: onDismiss
-        ) { FrameioMark() }
+            onDismiss: onDismiss,
+            remoteArtwork: { FrameioMark() }
+        )
     }
 }

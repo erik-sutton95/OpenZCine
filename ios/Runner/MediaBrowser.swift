@@ -1050,18 +1050,23 @@ struct MediaPlayerView: View {
                 else { return nil }
                 // Deleting removes the file a delivery may be reading, so this one action
                 // still ends the running delivery first.
-                let token = owner.token, run = deliveryCoordinator.capturedRun
-                return model.capturePlaybackMediaDeletion(record.payload, cleanup: {
-                    guard context === captured, captured.media.playback === owner,
-                        captured.native === native, captured.media.isCurrent(token) else { return false }
-                    owner.close()
-                    let transfer = native.captureEnteredTransferCleanup()
-                    await run?.cancelAndJoin()
-                    await transfer()
-                    return context === captured && captured.media.playback === owner &&
-                        captured.native === native && owner.closed &&
-                        owner.token == .init(owner: token.owner, revision: token.revision &+ 1)
-                })
+                let token = owner.token
+                let run = deliveryCoordinator.capturedRun
+                return model.capturePlaybackMediaDeletion(
+                    record.payload,
+                    cleanup: {
+                        guard context === captured, captured.media.playback === owner,
+                            captured.native === native, captured.media.isCurrent(token)
+                        else { return false }
+                        owner.close()
+                        let transfer = native.captureEnteredTransferCleanup()
+                        await run?.cancelAndJoin()
+                        await transfer()
+                        return context === captured && captured.media.playback === owner
+                            && captured.native === native && owner.closed
+                            && owner.token
+                                == .init(owner: token.owner, revision: token.revision &+ 1)
+                    })
             },
             favorite: { record in model.toggleClipFavorite(record.payload) }, access: access,
             rating: .init(

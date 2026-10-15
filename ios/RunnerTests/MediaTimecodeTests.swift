@@ -28,7 +28,8 @@ final class MediaTimecodeTests: XCTestCase {
         XCTAssertEqual(sourceStart?.frame, Self.startFrame, "synthesized source lost its tmcd")
 
         // mov → mp4 forces the transcode branch (the one that drops tmcd) without a LUT cube.
-        let result = try await Self.export(sourceURL, name: "tc-roundtrip-\(UUID().uuidString).mp4", format: .mp4, cube: nil)
+        let result = try await Self.export(
+            sourceURL, name: "tc-roundtrip-\(UUID().uuidString).mp4", format: .mp4, cube: nil)
         defer { try? FileManager.default.removeItem(at: result.videoURL) }
 
         let start = try await Self.readStartTimecode(of: result.videoURL)
@@ -46,7 +47,8 @@ final class MediaTimecodeTests: XCTestCase {
         try await Self.writeMovieWithTimecode(to: sourceURL)
         let source = AVURLAsset(
             url: sourceURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-        let exportable = try await MonitorReaderWriterMediaExporter.audioVisualExportAsset(from: source)
+        let exportable = try await MonitorReaderWriterMediaExporter.audioVisualExportAsset(
+            from: source)
         let output = dir.appendingPathComponent("out.mp4")
         guard
             let session = AVAssetExportSession(
@@ -86,7 +88,8 @@ final class MediaTimecodeTests: XCTestCase {
         let sourceTimecode = try await source.loadTracks(withMediaType: .timecode)
         XCTAssertFalse(sourceTimecode.isEmpty)
 
-        let exportable = try await MonitorReaderWriterMediaExporter.audioVisualExportAsset(from: source)
+        let exportable = try await MonitorReaderWriterMediaExporter.audioVisualExportAsset(
+            from: source)
         let exportTimecode = try await exportable.loadTracks(withMediaType: .timecode)
         let exportVideo = try await exportable.loadTracks(withMediaType: .video)
         XCTAssertTrue(exportTimecode.isEmpty)
@@ -102,7 +105,9 @@ final class MediaTimecodeTests: XCTestCase {
         let sourceURL = dir.appendingPathComponent("source.mov")
         try await Self.writeMovieWithTimecode(to: sourceURL)
 
-        let result = try await Self.export(sourceURL, name: "lut-bake-\(UUID().uuidString).mov", format: .mov, cube: Self.identityCube())
+        let result = try await Self.export(
+            sourceURL, name: "lut-bake-\(UUID().uuidString).mov", format: .mov,
+            cube: Self.identityCube())
         defer { try? FileManager.default.removeItem(at: result.videoURL) }
 
         let size =
@@ -148,7 +153,9 @@ final class MediaTimecodeTests: XCTestCase {
             for: truncatedURL, headerDuration: header)
         XCTAssertLessThan(scaled.seconds, header.seconds)
 
-        let result = try await Self.export(truncatedURL, name: "truncated-export-\(UUID().uuidString).mov", format: .mov, cube: Self.identityCube())
+        let result = try await Self.export(
+            truncatedURL, name: "truncated-export-\(UUID().uuidString).mov", format: .mov,
+            cube: Self.identityCube())
         defer { try? FileManager.default.removeItem(at: result.videoURL) }
 
         let size =
@@ -172,7 +179,8 @@ final class MediaTimecodeTests: XCTestCase {
 
         let source = AVURLAsset(
             url: sample, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-        let exportable = try await MonitorReaderWriterMediaExporter.audioVisualExportAsset(from: source)
+        let exportable = try await MonitorReaderWriterMediaExporter.audioVisualExportAsset(
+            from: source)
         let exportTimecode = try await exportable.loadTracks(withMediaType: .timecode)
         let exportVideo = try await exportable.loadTracks(withMediaType: .video)
         XCTAssertTrue(exportTimecode.isEmpty)
@@ -184,8 +192,10 @@ final class MediaTimecodeTests: XCTestCase {
         _ source: URL, name: String, format: MonitorMediaExporter.Format, cube: CubeLUT?
     ) async throws -> MonitorMediaExporter.ExportResult {
         try await MonitorReaderWriterMediaExporter.export(
-            sourceURL: source, outputURL: source.deletingLastPathComponent().appendingPathComponent(name),
-            format: format, cube: cube?.preparedForRenderer(), metadata: MediaClipDeliveryMetadata?.none
+            sourceURL: source,
+            outputURL: source.deletingLastPathComponent().appendingPathComponent(name),
+            format: format, cube: cube?.preparedForRenderer(),
+            metadata: MediaClipDeliveryMetadata?.none
         ) { _ in }
     }
 

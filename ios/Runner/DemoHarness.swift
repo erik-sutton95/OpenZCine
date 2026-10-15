@@ -1,7 +1,7 @@
 import MonitorPresentation
 import Network
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCore
 import OpenCineMedia
 import OpenZCineCore
@@ -624,9 +624,12 @@ enum DemoHarness {
                             case "fpsReadout": [.fps]
                             // "rail" is the retired whole-rail blob: the rail controls.
                             case "rail": [.railRecord, .railMedia, .railSettings]
-                            default: MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] } ?? []
+                            default:
+                                MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] }
+                                    ?? []
                             }
-                        for section in sections where model.operatorSession.chrome(for: target).isVisible(section) {
+                        for section in sections
+                        where model.operatorSession.chrome(for: target).isVisible(section) {
                             model.operatorSession.toggle(section, in: target)
                         }
                     }
@@ -984,10 +987,13 @@ enum DemoHarness {
                     // The demo session has no card to list, so the Media panel it opened begins
                     // on the staged index, as a finished listing pass would. Its SIMULATED card (the
                     // shared ReviewCard over the staged handles) removes what a deletion names.
-                    let card = ReviewCard(clips: (0..<(review?.mediaCount ?? 0)).map {
-                        MediaObjectHandle(storageID: 65_537, handle: UInt32($0 + 1))
-                    })
-                    model.reviewCameraDelete = { @MainActor location in card.delete { $0 == location } }
+                    let card = ReviewCard(
+                        clips: (0..<(review?.mediaCount ?? 0)).map {
+                            MediaObjectHandle(storageID: 65_537, handle: UInt32($0 + 1))
+                        })
+                    model.reviewCameraDelete = { @MainActor location in
+                        card.delete { $0 == location }
+                    }
                     model.mediaLibrary?.begin()
                 } else {
                     // The startup screen's Media: everything cached on this phone.
