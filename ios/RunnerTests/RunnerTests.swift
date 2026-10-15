@@ -2036,28 +2036,124 @@ extension RunnerTests {
     }
 
     /// Camera-bucket cache is not source of truth — clearing it must drop `index.json`.
-    func testClearingCameraCacheDropsTheIndex() {
+    func testClearingCameraCacheDropsTheIndex() throws {
         let root = mediaRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MediaClipStore(root: root)
         store.upsertBatch([mediaClip("DSC_0001.JPG")], cameraID: "cam")
 
-        store.clearCache(cameraID: "cam", preservingIndex: false)
+        try store.clearCache(cameraID: "cam", preservingIndex: false)
 
         XCTAssertTrue(store.list(cameraID: "cam").isEmpty)
     }
 
     /// The on-device library has no camera to rebuild from, so its index survives a cache clear.
-    func testClearingLocalCachePreservesTheIndex() {
+    func testClearingLocalCachePreservesTheIndex() throws {
         let root = mediaRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MediaClipStore(root: root)
         store.upsertBatch([mediaClip("IMPORT.MOV")], cameraID: MediaClipStore.localBucketID)
 
-        store.clearCache(cameraID: MediaClipStore.localBucketID, preservingIndex: true)
+        try store.clearCache(cameraID: MediaClipStore.localBucketID, preservingIndex: true)
 
         XCTAssertEqual(
             store.list(cameraID: MediaClipStore.localBucketID).map(\.filename), ["IMPORT.MOV"])
+    }
+
+    /// A file the clear could not remove stays counted as remaining, and its bytes are not
+    /// reported as removed.
+    func testClearingCacheReportsFilesItCouldNotRemove() throws {
+        let root = mediaRoot()
+        let store = MediaClipStore(root: root)
+        try writeCachedClip(store, cameraID: "cam", filename: "DSC_0001.JPG", bytes: 10)
+        let bucket = store.directory(for: "cam")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: bucket.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: bucket.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        XCTAssertThrowsError(try store.clearCache(cameraID: "cam", preservingIndex: false)) {
+            error in
+            let failure = error as? MediaClipCacheClearError
+            XCTAssertEqual(failure?.removedBytes, 0)
+            XCTAssertEqual(failure?.remainingFiles, ["DSC_0001.JPG", "index.json"])
+        }
+        XCTAssertEqual(store.cachedByteCount(cameraID: "cam"), 10)
+    }
+
+    /// Settings → Storage counts exactly what Clear removes. The on-device library is the
+    /// operator's own media, so it is neither counted nor cleared.
+    @MainActor
+    func testMediaCacheReadoutMatchesWhatClearRemoves() throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        try writeCachedClip(store, cameraID: "cam", filename: "DSC_0001.JPG", bytes: 10)
+        try writeCachedClip(
+            store, cameraID: MediaClipStore.localBucketID, filename: "IMPORT.MOV", bytes: 7)
+        let model = NativeAppModel(mediaClipStore: store)
+
+        XCTAssertEqual(model.totalMediaCacheByteCount(), 10)
+        try model.clearAllMediaCaches()
+
+        XCTAssertEqual(model.totalMediaCacheByteCount(), 0)
+        XCTAssertEqual(store.cachedByteCount(cameraID: MediaClipStore.localBucketID), 7)
+        XCTAssertEqual(
+            store.list(cameraID: MediaClipStore.localBucketID).map(\.filename), ["IMPORT.MOV"])
+    }
+
+    /// A clear that leaves files behind reaches the shared Settings owner as a failure instead
+    /// of a silent success.
+    @MainActor
+    func testSettingsReportsAMediaCacheClearThatLeftFilesBehind() async throws {
+        let root = mediaRoot()
+        let store = MediaClipStore(root: root)
+        try writeCachedClip(store, cameraID: "cam", filename: "DSC_0001.JPG", bytes: 10)
+        let bucket = store.directory(for: "cam")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: bucket.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: bucket.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let model = NativeAppModel(mediaClipStore: store)
+        let settings = MonitorSettingsCacheModel()
+        settings.refresh(model.captureOperatorMediaCacheSource())
+        try await waitUntil("the cache readout") { settings.bytes != nil }
+
+        settings.requestClear()
+        settings.clear()
+        try await waitUntil("the clear to finish") { !settings.clearing }
+
+        XCTAssertTrue(settings.clearFailed)
+        XCTAssertEqual(settings.failure, "2 cached files could not be removed.")
+        XCTAssertEqual(store.cachedByteCount(cameraID: "cam"), 10)
+    }
+
+    private func writeCachedClip(
+        _ store: MediaClipStore, cameraID: String, filename: String, bytes: Int
+    ) throws {
+        store.upsertBatch(
+            [
+                MediaClip(
+                    cameraID: cameraID, filename: filename, handle: nil, storageID: nil,
+                    sizeBytes: UInt64(bytes), captureDate: "")
+            ], cameraID: cameraID)
+        let url = try store.localURL(cameraID: cameraID, filename: filename)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: bytes).write(to: url)
+    }
+
+    @MainActor
+    private func waitUntil(_ what: String, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     // MARK: - Fused peaking kernel vs the reference filter chain
