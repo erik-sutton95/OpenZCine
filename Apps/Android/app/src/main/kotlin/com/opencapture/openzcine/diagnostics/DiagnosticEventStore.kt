@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.diagnostics
 
+import com.opencapture.opencine.media.DiagnosticJournal
 import java.io.File
 import java.time.Instant
 
@@ -230,11 +231,16 @@ internal data class DiagnosticReportMetadata(
 )
 
 /**
- * Thread-safe, fixed-count and fixed-byte file store for closed diagnostic events.
+ * Z's closed app events and connect-attempt trace over OpenCine's shared [DiagnosticJournal],
+ * the owner Pocket and Insta use: callers append to a bounded in-memory ring and never wait on
+ * disk, and the journal's writer thread persists off the caller's thread.
  *
- * Corrupt or hand-edited lines are ignored instead of entering the report. Every
- * successful write atomically rewrites the already-bounded event set, so the
- * store cannot grow without limit across beta sessions.
+ * The files keep the format earlier builds wrote, so a report after an update still carries
+ * the events retained before it: `events.log` holds one `<epoch millis>|<wire value>` line per
+ * event, bounded by count and bytes, and `connect-trace.log` holds `<epoch millis> <line>`
+ * lines. Each persist atomically rewrites the bounded set from the ring, so a line the
+ * journal's queue dropped under a burst is still written by the next persist. Corrupt or
+ * hand-edited lines are ignored instead of entering the report.
  */
 internal class DiagnosticEventStore(
     private val eventFile: File,
@@ -242,17 +248,29 @@ internal class DiagnosticEventStore(
     private val maximumEventBytes: Int = DEFAULT_MAXIMUM_EVENT_BYTES,
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
+    private val events: DiagnosticJournal
+    private val connectTrace = DiagnosticJournal(CONNECT_TRACE_MAXIMUM_LINES)
+
+    /** Keeps ring order equal to timestamp order across recording threads. */
+    private val recordLock = Any()
+
+    /** Serializes the writer threads' rewrites with [flush]. */
+    private val diskLock = Any()
+
     init {
         require(maximumEventCount > 0) { "maximumEventCount must be positive" }
         require(maximumEventBytes >= MINIMUM_EVENT_BYTES) {
             "maximumEventBytes must be at least $MINIMUM_EVENT_BYTES"
         }
+        events = DiagnosticJournal(maximumEventCount)
+        events.restore(readLines(eventFile).mapNotNull(::decodeLine).map(::encodeLine))
+        connectTrace.restore(readLines(connectTraceFile()).map(String::trim).filter(String::isNotEmpty))
+        events.startWriter { persistEvents() }
+        connectTrace.startWriter { persistConnectTrace() }
     }
 
-    @Synchronized
     fun record(event: AndroidDiagnosticEvent) {
-        val next = recentEvents() + DiagnosticBreadcrumb(nowMillis(), event)
-        writeEvents(bounded(next))
+        synchronized(recordLock) { events.append(encodeLine(DiagnosticBreadcrumb(nowMillis(), event))) }
     }
 
     /**
@@ -260,37 +278,16 @@ internal class DiagnosticEventStore(
      * the operator shares a diagnostics report or includes technical details in a
      * problem report; never enters the activity log.
      */
-    @Synchronized
     fun recordConnectTrace(line: String) {
         val sanitized = line.trim()
         if (sanitized.isEmpty() || sanitized.length > 240) return
         if (sanitized.any { it == '\n' || it == '\r' }) return
-        val file = connectTraceFile()
-        file.parentFile?.mkdirs()
-        file.appendText("${nowMillis()} $sanitized\n", Charsets.UTF_8)
-        trimConnectTrace(file)
+        synchronized(recordLock) { connectTrace.append("${nowMillis()} $sanitized") }
     }
 
-    @Synchronized
-    fun recentConnectTrace(): List<String> {
-        val file = connectTraceFile()
-        if (!file.isFile) return emptyList()
-        return file.useLines { lines ->
-            lines
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .toList()
-                .takeLast(CONNECT_TRACE_MAXIMUM_LINES)
-        }
-    }
+    fun recentConnectTrace(): List<String> = connectTrace.snapshot()
 
-    @Synchronized
-    fun recentEvents(): List<DiagnosticBreadcrumb> {
-        if (!eventFile.isFile) return emptyList()
-        return eventFile.useLines { lines ->
-            lines.mapNotNull(::decodeLine).toList()
-        }
-    }
+    fun recentEvents(): List<DiagnosticBreadcrumb> = bounded(events.snapshot()).mapNotNull(::decodeLine)
 
     /**
      * Returns the activity-log shape a problem report's technical details carry.
@@ -300,50 +297,59 @@ internal class DiagnosticEventStore(
      * [recentEvents] accepts only [AndroidDiagnosticEvent] wire values. Error
      * and warning values are closed incident codes.
      */
-    @Synchronized
     fun privacyFilteredActivityLog(): List<String> =
         recentEvents()
             .takeLast(ACTIVITY_LOG_MAXIMUM_EVENTS)
             .map { event -> event.event.wireValue }
 
-    private fun bounded(events: List<DiagnosticBreadcrumb>): List<DiagnosticBreadcrumb> {
-        val countBounded = events.takeLast(maximumEventCount)
-        val retained = ArrayDeque<DiagnosticBreadcrumb>()
+    /** Writes what the rings hold now, on the caller's thread. The writers do the same off it. */
+    fun flush() {
+        persistEvents()
+        persistConnectTrace()
+    }
+
+    private fun persistEvents() {
+        synchronized(diskLock) { rewrite(eventFile, bounded(events.snapshot())) }
+    }
+
+    private fun persistConnectTrace() {
+        synchronized(diskLock) { rewrite(connectTraceFile(), connectTrace.snapshot()) }
+    }
+
+    /** The newest lines whose UTF-8 bytes, newline included, fit [maximumEventBytes]. */
+    private fun bounded(lines: List<String>): List<String> {
+        val retained = ArrayDeque<String>()
         var retainedBytes = 0
-        for (event in countBounded.asReversed()) {
-            val lineBytes = encodeLine(event).toByteArray(Charsets.UTF_8).size + 1
+        for (line in lines.takeLast(maximumEventCount).asReversed()) {
+            val lineBytes = line.toByteArray(Charsets.UTF_8).size + 1
             if (retained.isNotEmpty() && retainedBytes + lineBytes > maximumEventBytes) break
             if (lineBytes > maximumEventBytes) continue
-            retained.addFirst(event)
+            retained.addFirst(line)
             retainedBytes += lineBytes
         }
         return retained.toList()
     }
 
-    private fun writeEvents(events: List<DiagnosticBreadcrumb>) {
-        eventFile.parentFile?.mkdirs()
-        val payload = events.joinToString(separator = "\n", postfix = if (events.isEmpty()) "" else "\n", transform = ::encodeLine)
-        val temporary = File(eventFile.parentFile, "${eventFile.name}.tmp")
+    /** Atomically replaces [file] with newline-terminated [lines]; nothing to write creates no file. */
+    private fun rewrite(file: File, lines: List<String>) {
+        if (lines.isEmpty() && !file.exists()) return
+        file.parentFile?.mkdirs()
+        val payload = lines.joinToString(separator = "\n", postfix = if (lines.isEmpty()) "" else "\n")
+        val temporary = File(file.parentFile, "${file.name}.tmp")
         temporary.writeText(payload, Charsets.UTF_8)
-        if (!temporary.renameTo(eventFile)) {
-            temporary.copyTo(eventFile, overwrite = true)
+        if (!temporary.renameTo(file)) {
+            temporary.copyTo(file, overwrite = true)
             temporary.delete()
         }
     }
+
+    private fun readLines(file: File): List<String> =
+        if (file.isFile) runCatching { file.readLines(Charsets.UTF_8) }.getOrDefault(emptyList()) else emptyList()
 
     private fun encodeLine(event: DiagnosticBreadcrumb): String =
         "${event.timestampMillis}|${event.event.wireValue}"
 
     private fun connectTraceFile(): File = File(eventFile.parentFile, "connect-trace.log")
-
-    private fun trimConnectTrace(file: File) {
-        val lines = file.readLines().filter { it.isNotBlank() }
-        if (lines.size <= CONNECT_TRACE_MAXIMUM_LINES) return
-        file.writeText(
-            lines.takeLast(CONNECT_TRACE_MAXIMUM_LINES).joinToString(separator = "\n", postfix = "\n"),
-            Charsets.UTF_8,
-        )
-    }
 
     private fun decodeLine(line: String): DiagnosticBreadcrumb? {
         val delimiter = line.indexOf('|')

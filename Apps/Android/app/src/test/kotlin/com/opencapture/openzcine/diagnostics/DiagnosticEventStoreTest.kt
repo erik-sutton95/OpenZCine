@@ -23,6 +23,7 @@ class DiagnosticEventStoreTest {
             )
 
         repeat(20) { store.record(AndroidDiagnosticEvent.APP_FOREGROUND) }
+        store.flush()
 
         assertEquals(5, store.recentEvents().size)
         assertTrue(file.length() <= 180)
