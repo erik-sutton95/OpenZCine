@@ -112,4 +112,51 @@ import Testing
         #expect(raw["futureSetting"] is NSNull)
     }
 
+    @Test func editingAnInheritedVideoCommandLayoutKeepsItsPhotoSibling() throws {
+        let original = Data(#"{"displayChrome":{"statusBarVisible":false,"sideRailsVisible":false},"futureSetting":"retain"}"#.utf8)
+        let document = OperatorPreferencesDocument(data: original)
+        let previous = document.decoded()
+        var next = previous
+        next.commandChrome.statusBarVisible = true
+        let updated = try document.updating(next, previous: previous)
+        #expect(OperatorPreferencesDocument(data: updated).decoded() == next,
+            "Editing one inherited layout must keep the photo layout that inherited from it")
+        let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        #expect(raw["futureSetting"] as? String == "retain")
+    }
+
+    @Test func unreadableLayoutsAndRailsKeepTheirInheritedChoicesAfterParentEdit() throws {
+        let original = Data(#"{"displayChrome":{"sideRailsVisible":false,"railRecordVisible":"yes","futureStyle":{"gain":7}},"commandChrome":"corrupt","photoDisplayChrome":7,"futureSetting":"retain"}"#.utf8)
+        let document = OperatorPreferencesDocument(data: original)
+        let previous = document.decoded()
+        var next = previous
+        next.displayChrome.sideRailsVisible = true
+        let updated = try document.updating(next, previous: previous)
+        #expect(OperatorPreferencesDocument(data: updated).decoded() == next,
+            "An unreadable stored value inherits like an absent one, so a parent edit must not move it")
+        let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        #expect(raw["futureSetting"] as? String == "retain")
+        let chrome = try #require(raw["displayChrome"] as? [String: Any])
+        #expect((chrome["futureStyle"] as? [String: Int])?["gain"] == 7)
+    }
+
+    @Test func untouchedChoicesOwnedElsewhereKeepTheirStoredBytes() throws {
+        // The app overlays choices that now live in shared keys onto the decoded document, so
+        // `previous` can differ from the document; an unrelated edit must not write them back.
+        let original = Data(#"{"displayChrome":{"sideRailsVisible":false},"hapticsEnabled":true}"#.utf8)
+        let document = OperatorPreferencesDocument(data: original)
+        var previous = document.decoded()
+        previous.keepScreenAwake = false
+        previous.hapticsEnabled = false
+        var next = previous
+        next.displayChrome.statusBarVisible = false
+        let updated = try document.updating(next, previous: previous)
+        let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
+        #expect(raw["keepScreenAwake"] == nil)
+        #expect(raw["hapticsEnabled"] as? Bool == true)
+        var expected = next
+        expected.keepScreenAwake = true
+        expected.hapticsEnabled = true
+        #expect(OperatorPreferencesDocument(data: updated).decoded() == expected)
+    }
 }
