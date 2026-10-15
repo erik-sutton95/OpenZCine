@@ -43,6 +43,7 @@ import com.opencapture.opencine.appkit.MultiviewTally
 import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.appkit.MultiviewTile
 import com.opencapture.opencine.appkit.MultiviewTileStatus
+import com.opencapture.opencine.appkit.withPower
 import com.opencapture.opencine.appkit.MultiviewTool
 import com.opencapture.opencine.core.Availability
 import com.opencapture.opencine.core.ISOValue
@@ -50,7 +51,6 @@ import com.opencapture.opencine.core.MonitorEntryID
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
-import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import kotlinx.coroutines.delay
 import com.opencapture.opencine.nikon.SavedCameraRecord
 
@@ -193,13 +193,11 @@ internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mul
             ),
         ) to state.reason
     }
-    val battery = com.opencapture.opencine.cameracontrols.cameraPowerReading(member.batteryReading)
+    // The session's snapshot: storage, and the body's five-step gauge (A5-01) as declared, never a percent.
+    val snapshot = member.control?.refresh()
     return MultiviewTile(
-        storage = member.control?.refresh()?.storage?.storageReadout?.free ?: MultiviewTally.UNAVAILABLE,
+        storage = snapshot?.storage?.storageReadout?.free ?: MultiviewTally.UNAVAILABLE,
         name = member.displayName, model = member.record.transport.displayName,
-        // The body's five-step gauge (A5-01): bars, never a percent it did not report.
-        batteryBars = battery?.bars,
-        batteryBarCount = battery?.barCount ?: NikonCameraBatteryGauge.BAR_COUNT,
         timecode = member.timecode,
         tally = MultiviewTally.text(rolling, waiting = coordinator.groupBusy),
         // Nikon reports no take length: the tile times it from the first recording frame.
@@ -218,7 +216,7 @@ internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mul
             MultiviewCameraAction(MulticamTileAction.REMOVE, "Remove camera", MultiviewCameraAction.Kind.DESTRUCTIVE),
         ),
         accessibilityValue = detail,
-    )
+    ).withPower(snapshot?.power)
 }
 
 /**

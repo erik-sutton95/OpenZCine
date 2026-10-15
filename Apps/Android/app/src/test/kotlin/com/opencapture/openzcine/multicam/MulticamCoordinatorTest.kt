@@ -246,6 +246,10 @@ class MulticamCoordinatorTest {
         member.properties = properties.value
         val reading = tile(member, stage)
         assertEquals(listOf(null, 3, 5), listOf(reading.battery, reading.batteryBars, reading.batteryBarCount))
+        assertFalse(reading.charging)
+        properties.value = CameraPropertySnapshot(batteryPercent = 58, externalPower = true)
+        member.properties = properties.value
+        assertTrue(tile(member, stage).charging, "external power reads as charging, as the live chrome does")
         member.properties = CameraPropertySnapshot(batteryPercent = 100)
         assertEquals(3, tile(member, stage).batteryBars, "the common report owns the gauge")
         properties.value = CameraPropertySnapshot()
