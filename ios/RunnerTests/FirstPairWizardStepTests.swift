@@ -285,3 +285,27 @@ struct FirstPairWizardStepTests {
         #expect(model.cameraWiFiJoinHasPasswordDraft)
     }
 }
+
+/// Device lane DEF-Z-FIRSTRUN-WIZARD: a fresh install with no saved camera opens the same
+/// transport wizard as Pair a new camera.
+@MainActor
+@Suite("First run")
+struct FirstRunTests {
+    private func freshModel() -> NativeAppModel {
+        let model = NativeAppModel()
+        model.savedCameras = []
+        model.showsCameraListWithoutSavedCameras = false
+        model.isPairingNewCamera = false
+        model.startupMode = .discovery
+        model.discoveryTransportFilter = .wiFi
+        return model
+    }
+
+    @Test("A fresh install opens the transport wizard, not the bare pair page")
+    func freshInstallOpensTheWizard() {
+        let model = freshModel()
+        #expect(model.shouldShowFirstPairWizard, "first run must reach Cable Link and Camera AP")
+        model.showsCameraListWithoutSavedCameras = true
+        #expect(!model.shouldShowFirstPairWizard, "choosing the camera list leaves the wizard")
+    }
+}

@@ -927,6 +927,16 @@ enum DemoHarness {
                 model.isPairingNewCamera = true
                 model.firstPairWizardStep = step
             }
+            if env["ZC_DEMO_FRESH_INSTALL"] == "1" {
+                // SIMULATED fresh install: no saved camera and no camera-list choice yet. Only
+                // this simulator's demo records are forgotten; nothing is dialled.
+                for record in NativeCameraConnectionStore.shared.savedCameras() {
+                    NativeCameraConnectionStore.shared.forgetPairing(host: record.host)
+                }
+                model.savedCameras = NativeCameraConnectionStore.shared.savedCameras()
+                model.showsCameraListWithoutSavedCameras = false
+                model.cameras.reloadSaved()
+            }
             if env["ZC_DEMO_CAMERA_LIST"] == "1" {
                 // Demo/screenshot affordance: land on the camera-list home even with zero saved
                 // cameras — the watcher's destination behind the wizard's "Open the camera list"

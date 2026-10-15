@@ -185,6 +185,31 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
     }
 }
 
+/// Device lane DEF-Z-FIRSTRUN-WIZARD: a fresh install reaches the same transport wizard as Pair a
+/// new camera (Cable Link, Camera AP), not a bare pair page without a way on.
+@MainActor
+final class FirstRunWizardTests: XCTestCase {
+    func testFreshInstallOpensTheTransportWizard() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_FRESH_INSTALL"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        // The wizard's first step: the transport choice, or the permissions step before it on
+        // builds that still ask first (A2-09 moves it after the choice).
+        let wizard = app.staticTexts.matching(
+            NSPredicate(format: "label IN %@", ["Choose how to connect", "Allow permissions"])
+        ).firstMatch
+        XCTAssertTrue(wizard.waitForExistence(timeout: 15), "first run must open the transport wizard")
+        XCTAssertFalse(app.staticTexts["Find your camera"].exists, "not the bare shared pair page")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "SIMULATED-first-run-wizard-landscape"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+}
+
 /// SIMULATED decisions over actual public AppKit screens with no integrations or transport.
 @MainActor
 final class StandaloneConsentPresentationTests: XCTestCase {
