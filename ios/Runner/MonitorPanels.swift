@@ -220,7 +220,7 @@ struct CommandHealthStrip: View {
     var body: some View {
         HStack(spacing: 10) {
             CommandStatusBlock(label: "Temp", value: tempValue)
-            CommandStatusBlock(label: "Storage", value: Text(model.mediaReadout))
+            CommandStatusBlock(label: "Storage", value: Text(model.liveMediaReadout))
             CommandStatusBlock(label: "Camera", value: Text(model.cameraState.cameraName))
             CommandStatusBlock(label: "Lens", value: Text(model.cameraState.lens))
             Spacer(minLength: 4)

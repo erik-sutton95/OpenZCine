@@ -4376,6 +4376,13 @@ final class NativeAppModel {
 
         @ObservationIgnored private var quickDemoDriver: NikonQuickDemoDriver?
 
+        /// Explicit SIMULATED graphical fixture, using the normal declared header projection.
+        func seedGraphicalReviewTimecode() {
+            guard isDemoSession else { return }
+            applyLiveViewHeaderTimecode(Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
+            prefersMediaDuration = false
+        }
+
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
         func seedQuickDemoCamera() {
             guard isDemoSession else { return }
@@ -12432,6 +12439,15 @@ final class NativeAppModel {
         return prefersMediaDuration
             ? storage?.recordingTimeLabel ?? "-- Min"
             : storage?.storageReadout?.label ?? StorageReadout.unavailable
+    }
+
+    /// Operator monitor storage uses the same units as every shared live surface.
+    var liveMediaReadout: String {
+        if videoSource == .relay { return mediaReadout }
+        let storage = shell.control.snapshot?.storage
+        return prefersMediaDuration
+            ? storage?.recordingTimeLabel ?? "-- Min"
+            : storage?.storageReadout?.free ?? StorageReadout.unavailable
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
