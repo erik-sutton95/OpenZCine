@@ -41,7 +41,7 @@ import com.opencapture.opencine.cameracontrols.MirrorAssist
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.reconciledLutSelectionAfterDeletion
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.nikonAssistSection
 import kotlinx.coroutines.launch
@@ -64,8 +64,8 @@ internal sealed interface NikonAssistChip {
 internal fun nikonLiveAssistChips(photography: Boolean, imageEffects: Boolean): List<NikonAssistChip> {
     val tools =
         MonitorAssistTool.settingsCases.filter {
-            it != MonitorAssistTool.ND && (imageEffects || !it.isImageEffect) &&
-                if (photography) it.appliesToPhotography else !it.isPhotographyOnly
+            nikonAssistCapabilities.offers(it, photography) && (imageEffects || !it.isImageEffect) &&
+                (!photography || it.appliesToPhotography)
         }.map(NikonAssistChip::Tool)
     return if (photography) listOf(NikonAssistChip.InstantReview) + tools else tools
 }
@@ -73,7 +73,7 @@ internal fun nikonLiveAssistChips(photography: Boolean, imageEffects: Boolean): 
 /** The shared playback set (no camera level or EV needle); this camera has no ND source. */
 internal fun nikonPlaybackAssistTools(imageEffects: Boolean): List<MonitorAssistTool> =
     MonitorAssistTool.playbackToolbarCases.filter {
-        it != MonitorAssistTool.ND && (imageEffects || !it.isImageEffect)
+        it !in nikonAssistCapabilities.unavailable && (imageEffects || !it.isImageEffect)
     }
 
 /** Whether an open live inspector still belongs to the visible, unlocked, resumed live monitor. */
@@ -221,8 +221,8 @@ private fun AssistOptions(
         else -> MonitorOptionGroup {
             when (tool) {
                 MonitorAssistTool.LEVEL ->
-                    MonitorSettingsChoices(LocalLevelStyle.entries, settings.levelStyle, accentSelection = true,
-                        title = LocalLevelStyle::label) { haptics.selection(); settings.levelStyle = it }
+                    MonitorSettingsChoices(nikonAssistCapabilities.levelStyles, settings.levelStyle, accentSelection = true,
+                        title = MonitorLevelStyle::title) { haptics.selection(); settings.levelStyle = it }
                 MonitorAssistTool.GUIDES ->
                     MonitorGuidesMenu(state.guideFamily, state.selectedGuides, state.guideMask,
                         { haptics.selection(); state.updateGuideFamily(it) },

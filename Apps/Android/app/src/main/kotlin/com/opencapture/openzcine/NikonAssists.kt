@@ -8,6 +8,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.opencapture.monitorui.MonitorAssistCapabilities
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorFalseColorSelection
 import com.opencapture.monitorui.MonitorGuideAspect
@@ -27,7 +28,7 @@ import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 
 /**
@@ -81,9 +82,17 @@ private val photographyTools =
         MonitorAssistTool.EV, MonitorAssistTool.DESQ, MonitorAssistTool.MIRROR,
     )
 
-/** The camera-fed EV needle is the body's stills exposure indicator, so cinema never offers it. */
-internal val MonitorAssistTool.isPhotographyOnly: Boolean
-    get() = this == MonitorAssistTool.EV
+/**
+ * What a Nikon body adds to the shared assist list (iOS `MonitorAssistCapabilities.nikon`): the
+ * body's EV needle is its stills exposure indicator, the level draws as a horizon or a gauge, and
+ * there is no ND source. PLAY is this camera's own chip ([NikonAssistChip.InstantReview]).
+ */
+internal val nikonAssistCapabilities =
+    MonitorAssistCapabilities(
+        photographyOnly = setOf(MonitorAssistTool.EV),
+        levelStyles = listOf(MonitorLevelStyle.HORIZON, MonitorLevelStyle.GAUGE),
+        unavailable = setOf(MonitorAssistTool.ND),
+    )
 
 /** Image effects need the API 29 floor and the Swift renderer core. */
 internal val MonitorAssistTool.isImageEffect: Boolean
@@ -173,7 +182,7 @@ internal val MonitorAssistState.feedEffectsConfiguration: FeedEffectsConfigurati
 /** The framing overlays for one visibility predicate; the level style is this camera's own. */
 internal fun MonitorAssistState.framing(
     visible: (MonitorAssistTool) -> Boolean,
-    levelStyle: LocalLevelStyle,
+    levelStyle: MonitorLevelStyle,
 ): LocalFramingAssistConfiguration =
     LocalFramingAssistConfiguration(
         guidesVisible = visible(MonitorAssistTool.GUIDES),

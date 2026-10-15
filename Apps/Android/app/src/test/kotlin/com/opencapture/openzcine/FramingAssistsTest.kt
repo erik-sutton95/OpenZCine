@@ -8,7 +8,7 @@ import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.opencine.media.MonitorDesqueezePreset
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -111,7 +111,7 @@ class FramingAssistsTest {
         state.selectDesqueezePreset(MonitorDesqueezePreset.X133)
         state.updateDesqueezeDirection(MonitorDesqueezeDirection.HORIZONTAL)
         fun configuration(mode: MonitorDisplayMode) =
-            state.framing({ state.rendersLive(it, mode, photography = false) }, LocalLevelStyle.HORIZON)
+            state.framing({ state.rendersLive(it, mode, photography = false) }, MonitorLevelStyle.HORIZON)
 
         // The render plan does not decide DISP policy: the caller hands it a configuration
         // already filtered by `rendersLive`. Clean with only GUIDES pinned keeps the
