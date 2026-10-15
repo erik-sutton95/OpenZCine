@@ -391,7 +391,7 @@ private fun supportSource(actions: SystemSettingsActions, onReportProblem: () ->
     var automaticReports by remember { mutableStateOf(AppDiagnostics.reporting.isOptedIn) }
     val report by AppDiagnostics.manualReport.snapshot.collectAsState()
     return MonitorSettingsSupportSource(onReportProblem, automaticReports, AppDiagnostics.reporting.isAvailable,
-        stringResource(R.string.help_system_automatic_reports), stringResource(R.string.help_system_automatic_reports_unavailable),
+        MonitorSettingsCopy.automaticReports, stringResource(R.string.help_system_automatic_reports_unavailable),
         { automaticReports = it; AppDiagnostics.reporting.setConsent(it) },
         stringResource(R.string.system_report_problem), stringResource(R.string.help_system_report_problem),
         stringResource(R.string.action_report),

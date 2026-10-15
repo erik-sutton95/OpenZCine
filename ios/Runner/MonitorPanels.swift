@@ -1932,13 +1932,17 @@ extension MonitorSettingsTab {
 /// platform's third-party notices. A build missing one shows the unavailable page.
 extension MonitorLegalDocuments {
     static let z = MonitorLegalDocuments(
-        wordmark: "OpenZCine", privacy: .link(SupportLinkCatalog.privacy), terms: .link(SupportLinkCatalog.terms),
+        wordmark: "OpenZCine", privacy: .link(SupportLinkCatalog.privacy),
+        terms: .link(SupportLinkCatalog.terms),
         licenses: bundledText([
             resource("LICENSE", extension: "txt", subdirectory: "Legal", in: .main),
             resource("THIRD-PARTY-NOTICES", extension: "txt", subdirectory: "Legal", in: .main),
             MonitorPlatformLegalNotices.text,
         ]),
-        notice: bundledText([resource("NOTICE", extension: "txt", subdirectory: "Legal", in: .main)]))
+        notice: bundledText([
+            resource("NOTICE", extension: "txt", subdirectory: "Legal", in: .main)
+        ])
+    )
 }
 
 /// The internet-backed destination selected from Operator Setup.
@@ -2049,7 +2053,7 @@ struct OperatorSettingsPanel: View {
     > {
         let menus = NikonAssistMenuAdapter(model: model, compact: true)
         return .init(
-            borrowedSafeArea: insets,
+            safeArea: insets,
             phase: isConnected
                 ? "\(model.cameraState.cameraName) · \(transportLabel)" : model.linkHealthDetail,
             isLive: isConnected, sharingSubtitle: "Broadcast this feed and manage its watchers.",
@@ -2063,59 +2067,61 @@ struct OperatorSettingsPanel: View {
                 model.settingsSupport.retire()
                 model.disconnect()
             }, feedback: settingsFeedback, link: linkSource, sharing: sharingSource,
-            account: accountSource, cache: model.captureOperatorMediaCacheSource(),
-            support: supportSource,
+            assist: .init(
+                state: model.assist, stores: model.scopePanels.operatorStores,
+                falseColorLooks: .signal, palette: LiveDesign.self,
+                haptics: .init(isEnabled: { [weak model] in
+                    model?.preferences.hapticsEnabled == true
+                }),
+                transfer: model.exposureSignalMapping.curve.monitorTransfer,
+                clipByte: model.exposureSignalMapping.clipByte,
+                signalOptions: .init(
+                    falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                    reference: menus.falseColorReference,
+                    resetFalseColor: { model.assist.resetOptions(.falseColor) },
+                    resetZebra: {
+                        model.assist.resetOptions(.zebra)
+                        model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
+                    }),
+                exposureHelp:
+                    "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
+                lookLabel: lookLabel,
+                lookCatalog: { AnyView(NikonLUTPicker(embedded: false).environment(model)) }),
+            controls: .init(
+                recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
+                haptics: .init(
+                    value: preferenceBinding(\.hapticsEnabled),
+                    help: "Short confirmation pulses for critical switches and setting changes."),
+                keepAwake: .init(
+                    value: preferenceBinding(\.keepScreenAwake),
+                    help: MonitorSettingsCopy.keepScreenAwake),
+                input: .init(
+                    remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
+                    remoteTitle: "Bluetooth Remote Shutter",
+                    remoteHelp:
+                        "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
+                    autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
+                    rotationHelp:
+                        "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
+                )),
+            display: .init(sections: [
+                .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
+                .timecode, .format, .codec, .storage, .fps, .railRecord, .railMedia, .railSettings,
+                .focusBox,
+            ]),
+            cache: .init(
+                source: model.captureOperatorMediaCacheSource(),
+                clearHelp:
+                    "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
+            ),
+            account: accountSource, support: supportSource,
             information: .init(
                 theme: "Charcoal", protocolName: "PTP / PTP-IP", version: MonitorSettingsAppInformation.version(),
                 themeHelp:
                     "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
                 protocolHelp:
                     "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
-                versionHelp: "Current OpenZCine build from the native project metadata."),
-            recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
-            haptics: preferenceBinding(\.hapticsEnabled),
-            keepAwake: preferenceBinding(\.keepScreenAwake),
-            hapticsHelp: "Short confirmation pulses for critical switches and setting changes.",
-            keepAwakeHelp:
-                MonitorSettingsCopy.keepScreenAwake,
-            hdrHelp: "", cacheHelp: "",
-            clearHelp:
-                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card.",
-            exposureHelp:
-                "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
-            availableDisplay: [
-                .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
-                .timecode, .format, .codec, .storage, .fps, .railRecord, .railMedia, .railSettings,
-                .focusBox,
-            ],
-            assist: model.assist, stores: model.scopePanels.operatorStores,
-            falseColorLooks: .signal,
-            palette: LiveDesign.self,
-            operatorHaptics: .init(isEnabled: { [weak model] in
-                model?.preferences.hapticsEnabled == true
-            }),
-            transfer: model.exposureSignalMapping.curve.monitorTransfer,
-            clipByte: model.exposureSignalMapping.clipByte,
-            lookLabel: lookLabel,
-            lookCatalog: { AnyView(NikonLUTPicker(embedded: false).environment(model)) },
-            input: .init(
-                remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
-                remoteTitle: "Bluetooth Remote Shutter",
-                remoteHelp:
-                    "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
-                autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
-                rotationHelp:
-                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
-            ),
-            signalOptions: .init(
-                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
-                reference: menus.falseColorReference,
-                resetFalseColor: { model.assist.resetOptions(.falseColor) },
-                resetZebra: {
-                    model.assist.resetOptions(.zebra)
-                    model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
-                })
-        )
+                versionHelp: MonitorSettingsCopy.versionHelp(app: "OpenZCine")))
     }
 
     private func settingsFeedback() {
@@ -2395,7 +2401,7 @@ struct OperatorSettingsPanel: View {
                     reliabilityOptIn = $0
                     ReliabilityDiagnostics.reporting.setConsent($0)
                 }), available: ReliabilityDiagnostics.reporting.isAvailable,
-            automaticHelp: Self.reliabilityReportsHelp,
+            automaticHelp: MonitorSettingsCopy.automaticReports,
             unavailableHelp: Self.reliabilityUnavailableHelp,
             sourceHelp: "View the OpenZCine project and contribute on GitHub.",
             termsHelp: "Read the OpenZCine terms of use.",
@@ -2424,7 +2430,8 @@ struct OperatorSettingsPanel: View {
             report: { AnyView(ProblemReportView().environment(model)) },
             shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) },
             deleteStoredReports: { ReliabilityDiagnostics.incidents.deleteStoredIncidents {} },
-            deleteReportsHelp: "Removes the feed incident and session reports stored on this phone.",
+            deleteReportsHelp:
+                "Removes the feed incident and session reports stored on this phone.",
             legal: .z)
     }
     private var lookLabel: String {
@@ -2433,8 +2440,6 @@ struct OperatorSettingsPanel: View {
         case .stored(_, let name): return (name as NSString).deletingPathExtension
         }
     }
-    static let reliabilityReportsHelp =
-        "Optional: send crash and error reports to OpenCapture through Sentry. Off by default. Turn off anytime without losing app features. Uploads wait until you leave camera Wi-Fi. No footage or GPS location. Sentry receives the connection IP; stored event IP and derived geography are removed. See Reporting Privacy below."
     static let reliabilityUnavailableHelp =
         "This build cannot send automatic reports. You can still share diagnostics stored on this phone."
 
