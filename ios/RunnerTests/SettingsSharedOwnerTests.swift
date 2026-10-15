@@ -1,6 +1,7 @@
 import Foundation
 import MonitorPresentation
 import MonitorUI
+import OpenCineAppKitApple
 import OpenCineHostedAccessibility
 import OpenZCineCore
 import SwiftUI
@@ -105,8 +106,8 @@ extension SettingsSharedOwnerTests {
     }
 }
 
-/// A2-35: Z composes the typed settings domains. It offers no HDR panel and no originals
-/// caching, so those rows are absent values, not rows hidden behind empty help strings.
+/// A2-35: Z composes the typed settings domains. It offers no originals caching, so that row is
+/// an absent value, not a row hidden behind an empty help string. A2-31: the HDR panel is present.
 extension SettingsSharedOwnerTests {
     @Test func settingsLeaveAbsentDomainsOutAndKeepTheSharedRows() async throws {
         let model = NativeAppModel()
@@ -151,7 +152,7 @@ extension SettingsSharedOwnerTests {
         #expect(
             ["Record confirmation", "Haptics", "Keep screen awake", "Bluetooth Remote Shutter"]
                 .allSatisfy { rows[.controls]?.contains($0) == true }, "\(rows[.controls] ?? [])")
-        #expect(rows[.display]?.contains("HDR display") == false, "\(rows[.display] ?? [])")
+        #expect(rows[.display]?.contains("HDR display") == true, "\(rows[.display] ?? [])")
         #expect(
             rows[.storage]?.contains("Full Resolution Caching") == false, "\(rows[.storage] ?? [])")
         #expect(rows[.storage]?.contains("Clear Cache") == true, "\(rows[.storage] ?? [])")
@@ -193,5 +194,28 @@ extension SettingsSharedOwnerTests {
         #expect(report.accessibilityActivate())
         #expect(model.isBugReportPresented, "The root report sheet is asked to present")
         #expect(host.presentedViewController == nil, "Settings presents no report sheet of its own")
+    }
+}
+
+/// A2-31: Z's HDR display choice drives the shared HDR display owner the Metal feed, scopes and
+/// chrome read, on the common preference key; screen capture drops it to SDR.
+extension SettingsSharedOwnerTests {
+    @Test func hdrDisplayDrivesTheSharedOwnerAndDropsWhileCaptured() {
+        let saved = PreferencesStore.hdrDisplay
+        defer {
+            PreferencesStore.hdrDisplay = saved
+            LiveHDRDisplay.app.setScreenCaptured(false)
+            LiveHDRDisplay.app.setEnabled(saved)
+        }
+        let model = NativeAppModel()
+        model.hdrDisplay = true
+        #expect(PreferencesStore.hdrDisplay)
+        #expect(UserDefaults.standard.bool(forKey: "OpenZCine.HDRDisplay"))
+        #expect(LiveHDRDisplay.app.preferredEnabled && LiveHDRDisplay.app.isEnabled && model.hdrDisplayActive)
+        model.screenCaptured = true
+        #expect(!LiveHDRDisplay.app.isEnabled && !model.hdrDisplayActive)
+        model.screenCaptured = false
+        model.hdrDisplay = false
+        #expect(!LiveHDRDisplay.app.preferredEnabled && !PreferencesStore.hdrDisplay)
     }
 }

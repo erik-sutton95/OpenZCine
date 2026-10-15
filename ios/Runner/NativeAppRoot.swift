@@ -200,6 +200,12 @@ enum PreferencesStore {
     private static let preferencesKey = "operatorPreferences.v1"
     private static let assistConfigKey = "assistConfiguration.v1"
 
+    /// The shared HDR display choice (A2-31), on the common key Pocket and Insta use too.
+    static var hdrDisplay: Bool {
+        get { MonitorOperatorPreferences(storage: .standard, keys: commonKeys).hdrDisplay }
+        set { MonitorOperatorPreferences(storage: .standard, keys: commonKeys).hdrDisplay = newValue }
+    }
+
     private static let commonKeys = MonitorOperatorPreferences.Keys(
         keepScreenAwake: "OpenZCine.KeepScreenAwake", hdrDisplay: "OpenZCine.HDRDisplay",
         recordConfirmation: "OpenZCine.RecordConfirmation", haptics: "OpenZCine.HapticsEnabled",
@@ -1004,6 +1010,19 @@ final class NativeAppModel {
     }
     /// Root-owned presentation state for the problem report sheet.
     var isBugReportPresented = false
+    /// HDR display, the phone's outdoor panel boost (A2-31): the shared `LiveHDRDisplay.app`
+    /// drives the Metal feed, scopes and chrome from it. Off by default.
+    var hdrDisplay: Bool = PreferencesStore.hdrDisplay {
+        didSet {
+            PreferencesStore.hdrDisplay = hdrDisplay
+            LiveHDRDisplay.app.setEnabled(hdrDisplay)
+        }
+    }
+    /// Screen recording, AirPlay or mirroring: the HDR present drops to SDR.
+    var screenCaptured = false {
+        didSet { LiveHDRDisplay.app.setScreenCaptured(screenCaptured) }
+    }
+    var hdrDisplayActive: Bool { hdrDisplay && !screenCaptured }
     /// The app's one internet hop (A2-16): the shared owner over the Nikon Wi‑Fi joiner.
     @ObservationIgnored lazy var internetHop = MonitorInternetHop<NikonHopRoute>(
         port: .init(
@@ -2842,6 +2861,7 @@ final class NativeAppModel {
     func prepareStartup() {
         guard !didPrepareStartup else { return }
         didPrepareStartup = true
+        LiveHDRDisplay.app.setEnabled(hdrDisplay)
         refreshSavedCameras()
         applyStartupDestination()
         if shouldShowFirstPairWizard, firstPairWizardStep == .permissions {
@@ -13553,6 +13573,7 @@ struct NativeAppRoot: View {
         }
         // The one share sheet, above every cover (A2-52).
         .monitorDeliverySharePresenter(model.delivery.lifetime)
+        .monitorHDRDisplay(.app, active: model.hdrDisplayActive, screenCaptured: Bindable(model).screenCaptured)
         .environment(model)
         .environment(model.delivery)
         .observeMonitorWindowGeometry()
@@ -14335,4 +14356,9 @@ extension NativeAppModel {
             cameraISO: reportedPropertySnapshot.iso.map { Int($0) },
             cameraISOIsAuto: reportedPropertySnapshot.isoAuto)
     }
+}
+
+extension LiveHDRDisplay {
+    /// The app's one HDR display owner (A2-31), as in Pocket and Insta.
+    static let app = LiveHDRDisplay()
 }

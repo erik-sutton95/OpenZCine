@@ -2099,7 +2099,11 @@ struct OperatorSettingsPanel: View {
                     rotationHelp:
                         "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
                 )),
-            display: .init(sections: [
+            display: .init(
+                hdr: .init(
+                    value: Binding(get: { model.hdrDisplay }, set: { model.hdrDisplay = $0 }),
+                    help: MonitorSettingsCopy.hdrPanel(cameraMode: "N-Log or HLG tone mode")),
+                sections: [
                 .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
                 .timecode, .format, .codec, .storage, .fps, .railRecord, .railMedia, .railSettings,
                 .focusBox,

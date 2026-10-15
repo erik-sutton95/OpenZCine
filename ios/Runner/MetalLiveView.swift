@@ -3,6 +3,7 @@ import CoreVideo
 import Metal
 import MetalKit
 import OpenCineApple
+import OpenCineAppKitApple
 import SwiftUI
 import UIKit
 import VideoToolbox
@@ -102,13 +103,13 @@ struct MetalLiveView: UIViewRepresentable {
         }
         view.isPaused = true  // Push model: redraw only when a new frame arrives (setNeedsDisplay).
         view.enableSetNeedsDisplay = true
-        view.colorPixelFormat = .bgra8Unorm
         // Fit, never fill: a frame/picture aspect mismatch must letterbox, not crop —
         // the operator loses exactly the frame edges they are checking (#115).
         view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
         context.coordinator.update(image: image, effects: effects, source: source)
         context.coordinator.attach(view: view)
+        context.coordinator.configureDisplay(view)
         if let qualification {
             context.coordinator.qualificationProbe = MonitorNativeQualificationProbe.install(
                 in: view
@@ -129,7 +130,10 @@ struct MetalLiveView: UIViewRepresentable {
             }
         }
         context.coordinator.noteDrawableSize(uiView.drawableSize)
-        if needsRedraw {
+        // HDR display follows the shared owner on every update, so a Settings change or a
+        // screen recording reaches the next present (A2-31).
+        let formatChanged = context.coordinator.configureDisplay(uiView)
+        if needsRedraw || formatChanged {
             uiView.setNeedsDisplay()
         }
     }
@@ -175,6 +179,7 @@ struct MetalLiveView: UIViewRepresentable {
                         upscaler: MonitorUpscaler(
                             rawValue: FeedUpscaleSwitch.rendererReadsUpscaler.rawValue)
                             ?? .lanczos,
+                        hdr: LiveHDRDisplay.app.isEnabled, hdrGain: LiveHDRDisplay.app.presentGain,
                         previewSuperResolutionInput: FeedUpscaleSwitch.presentsSuperResolutionInput,
                         resampling: .selectedUpscaler, exactCopyAtNativeSize: true)
                 },
@@ -205,6 +210,13 @@ struct MetalLiveView: UIViewRepresentable {
         @MainActor func attach(view: MTKView) {
             mtkView = view
             presenter.attach(view)
+        }
+        /// Applies the shared HDR display choice to the drawable; true when its format changed.
+        @MainActor @discardableResult func configureDisplay(_ view: MTKView) -> Bool {
+            LiveHDRDisplay.app.refreshGain(screen: view.window?.screen)
+            let format = view.colorPixelFormat
+            presenter.configureDisplay(view)
+            return view.colorPixelFormat != format
         }
         @MainActor func close() {
             mtkView = nil
