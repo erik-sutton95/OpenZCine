@@ -1468,8 +1468,8 @@ class MainActivity : ComponentActivity() {
                         extraNearby = nearbyBroadcastItems(broadcasts, filtersDiscovery),
                         prePage = if (showTransportWizard && !standaloneMedia) pairPage else null,
                     )
-                    if (monitored == null && !standaloneMedia) {
-                        if (multicam.presented) {
+                    if (multicam.presented) {
+                        com.opencapture.opencine.appkit.MultiviewStageVisibility(monitored == null && !standaloneMedia) {
                             MulticamStage(
                                 coordinator = multicam,
                                 confirmsRecord = operatorSettings.recordConfirmationEnabled.value,
@@ -1494,6 +1494,8 @@ class MainActivity : ComponentActivity() {
                                 close = multicam::end,
                             )
                         }
+                    }
+                    if (monitored == null && !standaloneMedia) {
                         MonitorLaunchSplash(LAUNCH_BRAND, launchSplash)
                         if (!launchSplash.visible && !multicam.presented && localReview == null) {
                             MonitorAutomaticReportsOffer(
