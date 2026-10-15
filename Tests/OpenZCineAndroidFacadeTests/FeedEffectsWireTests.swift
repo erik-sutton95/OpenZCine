@@ -258,3 +258,35 @@ struct FeedEffectsWireTests {
                 == nil)
     }
 }
+
+// Byte-for-byte original payload evidence, recorded before the shared look extraction.
+// Environment paths are test-run artifacts; no production behavior depends on them.
+@Test(
+    .enabled(
+        if: ProcessInfo.processInfo.environment["GENERATED_LOOK_PAYLOADS_RECORD"] != nil
+            || ProcessInfo.processInfo.environment["GENERATED_LOOK_PAYLOADS_VERIFY"] != nil)
+)
+func generatedLookPayloadsMatchRecordedOriginals() throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard
+        let directory = environment["GENERATED_LOOK_PAYLOADS_RECORD"]
+            ?? environment["GENERATED_LOOK_PAYLOADS_VERIFY"]
+    else {
+        return
+    }
+    let root = URL(fileURLWithPath: directory, isDirectory: true)
+    if environment["GENERATED_LOOK_PAYLOADS_RECORD"] != nil {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+    for size in [2, 17, 33, 64] {
+        for ordinal in 0...3 {
+            let actual = try #require(FeedEffectsWire.bakedLUT(lookOrdinal: ordinal, size: size))
+            let file = root.appendingPathComponent("look-\(ordinal)-\(size).rgba")
+            if environment["GENERATED_LOOK_PAYLOADS_RECORD"] != nil {
+                try Data(actual).write(to: file, options: .atomic)
+            } else {
+                #expect(Data(actual) == (try Data(contentsOf: file)))
+            }
+        }
+    }
+}

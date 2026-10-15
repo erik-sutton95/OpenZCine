@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineMedia
 import Testing
 
 @testable import OpenZCineCore
@@ -351,4 +352,95 @@ func cubeIsFinite(look: MonitorLUT) {
     let movieOnly = PTPCameraPropertySnapshot()
         .applying(property: .movieWhiteBalance, data: Data(ByteCoding.uint16LE(0x8011)))
     #expect(movieOnly.activeWBMode(photography: true) == "Shade")
+}
+
+// Frozen from OpenZCine be1dc05de7b098a50876b0c4cf89a858c66b2090
+// Sources/OpenZCineCore/MonitorLUT.swift and FalseColor.swift before the shared look extraction.
+// Keep this test-only oracle independent of the extracted transform/profile.
+private enum FrozenGeneratedLogLook {
+    static func cube(_ look: MonitorLUT, size: Int) -> CubeLUT {
+        let matrix: [Float] =
+            look == .log3G10Rec709
+            ? [
+                1.981880, -0.900388, -0.081540,
+                -0.178143, 1.500467, -0.322325,
+                -0.101811, -0.535343, 1.637304,
+            ]
+            : [
+                1.660491, -0.587641, -0.072850,
+                -0.124550, 1.132900, -0.008349,
+                -0.018151, -0.100579, 1.118730,
+            ]
+        func decode(_ value: Float) -> Float {
+            look == .log3G10Rec709
+                ? Float(Log3G10.decode(Double(value))) : Float(NLog.decode(Double(value)))
+        }
+        var rgb: [Float] = []
+        let denominator = Float(size - 1)
+        for b in 0..<size {
+            for g in 0..<size {
+                for r in 0..<size {
+                    let lr = decode(Float(r) / denominator)
+                    let lg = decode(Float(g) / denominator)
+                    let lb = decode(Float(b) / denominator)
+                    let outR = max(0, matrix[0] * lr + matrix[1] * lg + matrix[2] * lb)
+                    let outG = max(0, matrix[3] * lr + matrix[4] * lg + matrix[5] * lb)
+                    let outB = max(0, matrix[6] * lr + matrix[7] * lg + matrix[8] * lb)
+                    let tone = MonitorSceneToneMap(sceneWhite: Double(decode(1.0)))
+                    rgb.append(Float(tone.displayCode(sceneLinear: Double(outR))))
+                    rgb.append(Float(tone.displayCode(sceneLinear: Double(outG))))
+                    rgb.append(Float(tone.displayCode(sceneLinear: Double(outB))))
+                }
+            }
+        }
+        return CubeLUT(size: size, rgb: rgb)
+    }
+
+    static func curve(_ cube: CubeLUT) -> [Double] {
+        (0...255).map { index in
+            let code = Float(index) / 255
+            let rgb = cube.map(red: code, green: code, blue: code)
+            return 0.2126 * Double(rgb.red) + 0.7152 * Double(rgb.green)
+                + 0.0722 * Double(rgb.blue)
+        }
+    }
+}
+
+@Test func originalGeneratedLooksMatchFrozenArithmetic() throws {
+    var fixture =
+        "# Original OpenZCine be1dc05 generated looks: bounded RGB grid and interpolated gray-axis vectors\n"
+    fixture += "# kind\tcurve\tsize\tr\tg\tb\tred\tgreen\tblue\n"
+    for (look, transfer, name) in [
+        (MonitorLUT.log3G10Rec709, MonitorTransfer.log3G10, "log3G10"),
+        (.nLogRec709, .nlog, "nLog"),
+    ] {
+        for size in [2, 4, 17, 33, 64, 65] {
+            let original = FrozenGeneratedLogLook.cube(look, size: size)
+            let actual = look.cube(size: size)
+            #expect(actual.size == size)
+            #expect(actual.rgb.count == original.rgb.count)
+            #expect(zip(actual.rgb, original.rgb).allSatisfy { $0.bitPattern == $1.bitPattern })
+            if size == 33 {
+                for (r, g, b) in [
+                    (0, 0, 0), (32, 32, 32), (32, 0, 0), (0, 32, 0), (0, 0, 32),
+                    (16, 8, 24), (5, 21, 13), (1, 2, 3), (12, 12, 12), (24, 24, 24),
+                ] {
+                    let index = (r + g * size + b * size * size) * 3
+                    fixture += "rgb\t\(name)\t\(size)\t\(r)\t\(g)\t\(b)\t"
+                    fixture +=
+                        "\(original.rgb[index])\t\(original.rgb[index + 1])\t\(original.rgb[index + 2])\n"
+                }
+                let curve = FrozenGeneratedLogLook.curve(original)
+                let current = try #require(NikonMonitorSignal.lookCurves[transfer])
+                #expect(current.count == 256)
+                #expect(zip(current, curve).allSatisfy { $0.bitPattern == $1.bitPattern })
+                for index in [0, 1, 2, 31, 64, 85, 127, 191, 254, 255] {
+                    fixture += "gray\t\(name)\t33\t\(index)\t0\t0\t\(curve[index])\t0\t0\n"
+                }
+            }
+        }
+    }
+    if let path = ProcessInfo.processInfo.environment["LOOK_VECTOR_FIXTURE_OUTPUT"] {
+        try fixture.write(toFile: path, atomically: true, encoding: .utf8)
+    }
 }
