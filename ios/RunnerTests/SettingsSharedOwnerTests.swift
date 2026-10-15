@@ -115,7 +115,7 @@ extension SettingsSharedOwnerTests {
         model.preferences = OperatorPreferences.defaults
         defer { model.preferences = original }
         var rows: [MonitorSettingsTab: [String]] = [:]
-        for tab in [MonitorSettingsTab.controls, .display, .storage, .system] {
+        for tab in [MonitorSettingsTab.link, .controls, .display, .storage, .system] {
             model.operatorSettingsTab = tab
             let host = UIHostingController(
                 rootView: AnyView(OperatorSettingsPanel().environment(model)))
@@ -153,6 +153,13 @@ extension SettingsSharedOwnerTests {
             ["Record confirmation", "Haptics", "Keep screen awake", "Bluetooth Remote Shutter"]
                 .allSatisfy { rows[.controls]?.contains($0) == true }, "\(rows[.controls] ?? [])")
         #expect(rows[.display]?.contains("HDR display") == true, "\(rows[.display] ?? [])")
+        // A2-78: one Processing card, after the connection and before Your cameras, as in
+        // Pocket and Insta, with the shared Feed Upscaler first.
+        let link = rows[.link] ?? []
+        let processing = try #require(link.firstIndex(of: "Processing"), "\(link)")
+        let cameras = try #require(link.firstIndex(of: "Your cameras"), "\(link)")
+        #expect(processing < cameras, "\(link)")
+        #expect(link.firstIndex(of: "Feed Upscaler") == processing + 1, "\(link)")
         #expect(
             rows[.storage]?.contains("Full Resolution Caching") == false, "\(rows[.storage] ?? [])")
         #expect(rows[.storage]?.contains("Clear Cache") == true, "\(rows[.storage] ?? [])")

@@ -2149,7 +2149,13 @@ struct OperatorSettingsPanel: View {
             saved: model.savedCameras.map {
                 .init(id: $0.host, name: $0.displayName, detail: $0.host)
             },
-            savedHelp: "Cameras paired through the connection screen.", sourceGroups: sourceGroups,
+            savedHelp: "Cameras paired through the connection screen.",
+            processing: .init(
+                upscaler: Binding(
+                    get: { FeedUpscaleSwitch.shared.upscaler },
+                    set: { FeedUpscaleSwitch.shared.upscaler = $0 }),
+                feedback: settingsFeedback, rows: processingRows),
+            sourceGroups: sourceGroups,
             healthScore: model.linkHealth, healthCaption: linkHealthCaption)
     }
     private func choice(
@@ -2232,22 +2238,13 @@ struct OperatorSettingsPanel: View {
                         }
                     },
                 ]))
+        return groups
+    }
+
+    /// Z's own processing rows after the shared Feed Upscaler (A2-78): noise reduction and the
+    /// debug frame capture.
+    private var processingRows: [MonitorSettingsSourceProperty] {
         var processing: [MonitorSettingsSourceProperty] = []
-        if MonitorUpscaler.supportedOnThisDevice.count > 1 {
-            processing.append(
-                choice(
-                    id: "processing.upscaler", title: "Feed Upscaler",
-                    help:
-                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
-                    options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue),
-                    value: FeedUpscaleSwitch.shared.upscaler.rawValue,
-                    compact: true
-                ) {
-                    if let value = MonitorUpscaler(rawValue: $0) {
-                        FeedUpscaleSwitch.shared.upscaler = value
-                    }
-                })
-        }
         if LiveDenoiseSwitch.isSupportedOnThisDevice {
             if let reason = LiveDenoiseSwitch.decoderReportsUnavailable {
                 processing.append(
@@ -2278,10 +2275,7 @@ struct OperatorSettingsPanel: View {
                         "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end.",
                     value: .native(AnyView(LiveViewCaptureControl()))))
         #endif
-        if !processing.isEmpty {
-            groups.append(.init(id: "processing", title: "Processing", properties: processing))
-        }
-        return groups
+        return processing
     }
 
     private var sharingSource: MonitorSettingsSharingSource {
