@@ -159,3 +159,39 @@ extension SettingsSharedOwnerTests {
             rows[.system]?.contains("Automatic error reports") == true, "\(rows[.system] ?? [])")
     }
 }
+
+/// A2-24: Report a problem opens the app root's report from every Settings host, standalone
+/// included, so one presenter owns each draft and it outlives the camera session. Settings
+/// presents no report sheet of its own.
+extension SettingsSharedOwnerTests {
+    @Test func settingsReportAlwaysOpensTheRootReport() async throws {
+        let model = NativeAppModel()
+        model.operatorSettingsTab = .system
+        model.isStandaloneSettingsPresented = true
+        defer {
+            model.isStandaloneSettingsPresented = false
+            model.isBugReportPresented = false
+        }
+        let host = UIHostingController(rootView: AnyView(OperatorSettingsPanel().environment(model)))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 2_000))
+        window.rootViewController = host
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        var open: NSObject?
+        for _ in 0..<200 {
+            host.view.layoutIfNeeded()
+            open = HostedAccessibility.elements(in: host.view).first {
+                HostedAccessibility.identifier($0) == "support.report.open"
+            }
+            if open != nil { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let report = try #require(open, "System shows Report a Problem")
+        #expect(report.accessibilityActivate())
+        #expect(model.isBugReportPresented, "The root report sheet is asked to present")
+        #expect(host.presentedViewController == nil, "Settings presents no report sheet of its own")
+    }
+}

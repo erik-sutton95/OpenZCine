@@ -2029,9 +2029,7 @@ struct OperatorSettingsPanel: View {
                 scrollOffsets: Binding(
                     get: { model.operatorSettingsScrollOffsets },
                     set: { model.operatorSettingsScrollOffsets = $0 }),
-                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id,
-                initialReportPresented: model.isStandaloneSettingsPresented
-                    && DemoHarness.openBugReport)
+                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id)
         }
         .observeMonitorWindowGeometry()
         .onAppear {
@@ -2042,7 +2040,7 @@ struct OperatorSettingsPanel: View {
                 let value = browserDestination(destination)
             {
                 model.settingsSupport.request(value)
-            } else if DemoHarness.openBugReport && !model.isStandaloneSettingsPresented {
+            } else if DemoHarness.openBugReport {
                 model.isBugReportPresented = true
             }
         }
@@ -2425,9 +2423,7 @@ struct OperatorSettingsPanel: View {
             reportTitle: "Report a Problem", reportActionTitle: "Report",
             diagnosticsHelp:
                 "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
-            reportAction: model.isStandaloneSettingsPresented
-                ? nil : { model.isBugReportPresented = true },
-            report: { AnyView(ProblemReportView().environment(model)) },
+            report: { model.isBugReportPresented = true },
             shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) },
             deleteStoredReports: { ReliabilityDiagnostics.incidents.deleteStoredIncidents {} },
             deleteReportsHelp:
