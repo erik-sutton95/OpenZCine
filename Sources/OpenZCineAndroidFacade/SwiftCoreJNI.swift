@@ -240,6 +240,55 @@
         return javaFloatArray(env, values)
     }
 
+    // Distinct shared-monitor methods beside the retained legacy exports.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeMonitorFalseColorCube")
+    public func swiftCoreBakeMonitorFalseColorCube(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
+        curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedMonitorFalseColor(
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
+                clipNative: Double(clipNative))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeMonitorFalseColorLimitsPaint")
+    public func swiftCoreBakeMonitorFalseColorLimitsPaint(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedMonitorFalseColorLimitsPaint(
+                curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeMonitorFalseColorLimitsWeight")
+    public func swiftCoreBakeMonitorFalseColorLimitsWeight(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedMonitorFalseColorLimitsWeight(
+                curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_monitorFalseColorReference")
+    public func swiftCoreMonitorFalseColorReference(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
+        curveOrdinal: jint, clipNative: jfloat
+    ) -> jfloatArray? {
+        guard
+            let values = FeedEffectsWire.bakedMonitorFalseColorReference(
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
+                clipNative: Double(clipNative))
+        else { return nil }
+        return javaFloatArray(env, values)
+    }
+
     // MARK: - Stored LUT library
 
     /// `SwiftCore.packImportedLut(bytes): ByteArray?`: runs the shared `CubeLUT.validatedImport`

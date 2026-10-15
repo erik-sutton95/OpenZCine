@@ -1,4 +1,8 @@
 package com.opencapture.openzcine
+import com.opencapture.opencine.runtime.MonitorAssistEngine
+import com.opencapture.opencine.runtime.MonitorAssistScopeConfiguration
+import com.opencapture.opencine.runtime.MonitorAssistScopeSource
+import com.opencapture.opencine.media.ScopeTapPolicy
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -182,21 +186,16 @@ fun scopeSamplingDemand(
     )
 }
 
-/** Exact Android mirror of iOS `ScopeAssistSampling.thermalScopeInterval`. */
-internal fun scopePeriodNanos(activeScopeCount: Int, thermalTier: AndroidThermalTier): Long {
-    // iOS refreshes its scopes at ~10 Hz; ticking faster than the reference
-    // buys nothing visually and triples decode + raster + redraw work.
-    val baseFramesPerSecond = if (activeScopeCount > 3) 10.0 else 12.0
-    val multiplier =
-        when (thermalTier) {
-            AndroidThermalTier.NOMINAL, AndroidThermalTier.FAIR -> 1.0
-            // Core serious ×1.5 shedding, then iOS scope-specific ×2.
-            AndroidThermalTier.SERIOUS -> 3.0
-            // Core critical ×2 shedding, then iOS scope-specific ×2.5.
-            AndroidThermalTier.CRITICAL -> 5.0
-        }
-    return (NANOS_PER_SECOND / baseFramesPerSecond * multiplier).roundToInt().toLong()
-}
+/** Host thermal reports enter the shared scope cadence without a separate app scheduler. */
+internal fun scopePeriodNanos(activeScopeCount: Int, thermalTier: AndroidThermalTier): Long =
+    ScopeSampler.minIntervalNs(activeScopeCount, thermalTier.scopeMultiplier)
+
+private val AndroidThermalTier.scopeMultiplier: Double
+    get() = ScopeSampler.thermalMultiplier(when (this) {
+        AndroidThermalTier.NOMINAL, AndroidThermalTier.FAIR -> 0
+        AndroidThermalTier.SERIOUS -> 3
+        AndroidThermalTier.CRITICAL -> 4
+    })
 
 /**
  * Normalizes a persisted scope history without inventing recency for a
@@ -278,40 +277,44 @@ private fun nikonScopeLevelAxis(curveOrdinal: Int, clipNative: Float): ScopeLeve
     return ScopeLevelAxis(flat.copyOf(LEVEL_AXIS_BINS), flat[LEVEL_AXIS_BINS].toDouble())
 }
 
-/** The core Traffic Lights meter on this tick's shared histograms. */
-private fun nikonTrafficLights(samples: ScopeSamples, inputs: ScopeTickInputs): ScopeTrafficLightsReading {
-    if (!SwiftCore.isAvailable) return ScopeTrafficLightsReading.NONE
-    val histograms = FloatArray(4 * LEVEL_AXIS_BINS)
-    listOf(samples.histogramLuma, samples.histogramRed, samples.histogramGreen, samples.histogramBlue)
-        .forEachIndexed { channel, bins ->
-            for (index in 0 until minOf(bins.size, LEVEL_AXIS_BINS)) {
-                histograms[channel * LEVEL_AXIS_BINS + index] = bins[index].toFloat()
-            }
-        }
-    val flat =
-        SwiftCore.scopeTrafficLights(
-            histograms, inputs.curveOrdinal, inputs.clipNative, inputs.crushClipCompensationRaw)
-    if (flat.size != 9) return ScopeTrafficLightsReading.NONE
-    fun light(channel: Int) =
-        ScopeChannelLight(
-            clip = flat[channel * 3 + 1] != 0f,
-            crush = flat[channel * 3 + 2] != 0f,
-            level = flat[channel * 3].toDouble(),
-        )
-    return ScopeTrafficLightsReading(light(0), light(1), light(2))
-}
-
 /** Everything one sampler run needs; a change restarts the run. */
 internal data class ScopeTickInputs(
     val selected: Set<ScopeKind>,
     val histogramTrafficLightsEnabled: Boolean,
-    val crushClipCompensationRaw: Int,
-    val curveOrdinal: Int,
-    val clipNative: Float,
-    val axis: ScopeLevelAxis,
+    /** The operator's crush/clip compensation as the shared lamps' pixel fraction. */
+    val trafficThreshold: Double,
+    /** The camera curve as the shared transfer and its stated clip: the only Nikon facts. */
+    val transfer: MonitorTransfer,
+    val clipByte: Int,
     val vectorLut: ScopeVectorLutRequest?,
     val periodNanos: Long,
-)
+) {
+    constructor(selected: Set<ScopeKind>, assist: MonitorAssistState, mapping: ExposureAssistMapping,
+        vectorLut: ScopeVectorLutRequest?, periodNanos: Long) : this(selected, assist.histoTrafficLights,
+        assist.crushClipCompensation.pixelFractionThreshold, mapping.transfer, mapping.clipByte, vectorLut, periodNanos)
+
+    val ceiling: ScopeClipSnapshot get() = ScopeClipSnapshot(transfer, clipByte)
+
+    /** The camera's raw tap, sampled on its own curve. */
+    fun samples(frame: ReducedScopeFrame, includePoints: Boolean): ScopeSamples =
+        ScopeSampler.sampleRaw(frame.rgba, frame.width, frame.height, frame.bytesPerRow, transfer,
+            includePoints = includePoints, stride = SAMPLE_STRIDE, includeSampleCoordinates = true,
+            requireCompleteRows = true)
+
+    val policy: ScopeTapPolicy get() = ScopeTapPolicy(
+        waveform = ScopeKind.WAVEFORM in selected, parade = ScopeKind.PARADE in selected,
+        histogram = ScopeKind.HISTOGRAM in selected, vectorscope = ScopeKind.VECTORSCOPE in selected,
+        trafficLights = ScopeKind.TRAFFIC_LIGHTS in selected, trafficThreshold = trafficThreshold,
+        transfer = transfer)
+
+    fun configuration(look: MonitorLUTCube?): MonitorAssistScopeConfiguration =
+        MonitorAssistScopeConfiguration(transfer, ceiling, look)
+
+    /** Playback keeps its existing item owner and uses the same shared assist derivation as live. */
+    fun bundle(samples: ScopeSamples, look: MonitorLUTCube?, previous: ScopeAssistBundle): ScopeAssistBundle =
+        MonitorAssistEngine.bundle(samples, configuration(look), policy, previous)
+
+}
 
 @Composable
 private fun rememberScopeVectorLut(
@@ -346,51 +349,32 @@ internal fun rememberNikonLiveScopeBundles(
     thermalTier: AndroidThermalTier, source: LiveFrameSource, isPortrait: Boolean,
     portraitFloating: Boolean, scopeZone: MonitorRect?,
 ): Flow<ScopeAssistBundle>? {
-    val displayed =
-        displayedScopeKinds(
-            selectedScopes = selectedScopes,
-            portraitScopes = portraitScopes,
-            isPortrait = isPortrait,
-            portraitFloating = portraitFloating,
-        )
+    val displayed = displayedScopeKinds(selectedScopes, portraitScopes, isPortrait, portraitFloating)
+    if (displayed.isEmpty() || (isPortrait && !portraitFloating && scopeZone == null)) return null
+    return rememberNikonLiveScopeBundles(displayed.toSet(), assist, cameraInput, lutSelection,
+        lutLibrary, thermalTier, source)
+}
+
+@Composable
+internal fun rememberNikonLiveScopeBundles(
+    selectedScopes: Set<ScopeKind>, assist: MonitorAssistState,
+    cameraInput: ExposureAssistCameraInput, lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?,
+    thermalTier: AndroidThermalTier, source: LiveFrameSource,
+): Flow<ScopeAssistBundle>? {
+    val displayed = ScopeKind.canonical.filter(selectedScopes::contains)
     // This guard also stops all collection when no displayed panel exists.
     if (displayed.isEmpty()) return null
-    if (isPortrait && !portraitFloating && scopeZone == null) return null
     // A scope cannot honor camera-dependent display mapping without the Swift
     // facade, so fail closed rather than locally selecting a fallback curve.
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
-    val axis =
-        remember(mapping.curveOrdinal, mapping.clipNative) {
-            nikonScopeLevelAxis(mapping.curveOrdinal, mapping.clipNative)
-        } ?: return null
     val vectorLut = rememberScopeVectorLut(lutSelection, lutLibrary, mapping.curveOrdinal)
     val bus = remember { ScopeSampleBus() }
-    val inputs =
-        ScopeTickInputs(
-            selected = ScopeKind.canonical.filter(displayed::contains).toSet(),
-            histogramTrafficLightsEnabled = assist.histoTrafficLights,
-            crushClipCompensationRaw = assist.crushClipCompensation.raw,
-            curveOrdinal = mapping.curveOrdinal,
-            clipNative = mapping.clipNative,
-            axis = axis,
-            vectorLut = vectorLut,
-            periodNanos = scopePeriodNanos(displayed.size, thermalTier),
-        )
+    val inputs = ScopeTickInputs(ScopeKind.canonical.filter(displayed::contains).toSet(), assist, mapping,
+        vectorLut, scopePeriodNanos(displayed.size, thermalTier))
     LaunchedEffect(source, inputs) {
-        withContext(Dispatchers.Default) { pumpLiveScopes(source.frames, inputs, bus) }
+        withContext(Dispatchers.Default) { pumpLiveScopes(source.frames, inputs, bus, thermalTier.scopeMultiplier) }
     }
-    return remember(bus, axis, mapping.curveOrdinal, mapping.clipNative) {
-        val transfer = when (mapping.curveOrdinal) {
-            ExposureCurveOrdinals.NIKON_NLOG -> MonitorTransfer.NLOG
-            ExposureCurveOrdinals.RED_LOG3G10 -> MonitorTransfer.LOG3G10
-            ExposureCurveOrdinals.HLG -> MonitorTransfer.HDR
-            else -> MonitorTransfer.SRGB
-        }
-        bus.publications.map { publication ->
-            publication.bundle.copy(levelAxis = axis, transfer = transfer,
-                ceiling = ScopeClipSnapshot(transfer, mapping.clipNative.roundToInt()))
-        }
-    }
+    return remember(bus) { bus.publications.map { it.bundle } }
 }
 
 @Composable
@@ -435,37 +419,18 @@ internal fun ScopePanels(
     }
 }
 
-/**
- * Playback counterpart to [ScopePanels]. It renders the same panels from the
- * same shared sampler on the bus's playback role, but the frame tap is Media3's
- * TextureView rather than a camera JPEG flow. [currentFrameKey] is read on the
- * main thread and prevents a paused frame from being resampled indefinitely.
- * TextureView bitmap capture reads the decoded SurfaceTexture content before
- * the view's RenderEffect, preserving the clean-source scope invariant.
- */
 /** Native source calibration borrowed by the complete shared playback scope session. */
 internal data class NikonPlaybackScopeConfiguration(
     private val inputs: ScopeTickInputs,
     private val look: MonitorLUTCube?,
 ) {
     val cadenceMilliseconds: Long get() = (inputs.periodNanos / 1_000_000L).coerceAtLeast(1L)
-    val axis: ScopeLevelAxis get() = inputs.axis
-    val transfer: MonitorTransfer get() = when (inputs.curveOrdinal) {
-        ExposureCurveOrdinals.NIKON_NLOG -> MonitorTransfer.NLOG
-        ExposureCurveOrdinals.RED_LOG3G10 -> MonitorTransfer.LOG3G10
-        ExposureCurveOrdinals.HLG -> MonitorTransfer.HDR
-        else -> MonitorTransfer.SRGB
-    }
-    val clipByte: Int get() = inputs.clipNative.roundToInt()
-    fun samples(frame: ReducedScopeFrame): ScopeSamples {
-        val demand = scopeSamplingDemand(inputs.selected, inputs.histogramTrafficLightsEnabled)
-        return ScopeSampler.sampleRaw(frame.rgba, frame.width, frame.height, frame.bytesPerRow,
-            MonitorTransfer.REC709, includePoints = demand.pointTrace || look != null,
-            stride = SAMPLE_STRIDE, includeSampleCoordinates = true, requireCompleteRows = true)
-    }
+    val transfer: MonitorTransfer get() = inputs.transfer
+    val clipByte: Int get() = inputs.clipByte
+    fun samples(frame: ReducedScopeFrame): ScopeSamples = inputs.samples(frame,
+        scopeSamplingDemand(inputs.selected, inputs.histogramTrafficLightsEnabled).pointTrace || look != null)
     fun bundle(samples: ScopeSamples, previous: ScopeAssistBundle): ScopeAssistBundle =
-        deriveNikonScopeBundle(samples, inputs, look, previous).copy(
-            transfer = transfer, ceiling = ScopeClipSnapshot(transfer, clipByte), levelAxis = axis)
+        inputs.bundle(samples, look, previous)
 }
 
 @Composable
@@ -474,25 +439,10 @@ internal fun rememberNikonPlaybackScopeConfiguration(
     lutSelection: FeedLutSelection?, lutLibrary: AndroidLutLibrary?, thermalTier: AndroidThermalTier,
 ): NikonPlaybackScopeConfiguration? {
     val mapping = remember(cameraInput) { resolveExposureAssistMapping(cameraInput) } ?: return null
-    val axis = remember(mapping.curveOrdinal, mapping.clipNative) {
-        nikonScopeLevelAxis(mapping.curveOrdinal, mapping.clipNative)
-    } ?: return null
     val vector = rememberScopeVectorLut(lutSelection, lutLibrary, mapping.curveOrdinal)
     val look = remember(vector) { vector?.cube() }
-    return NikonPlaybackScopeConfiguration(ScopeTickInputs(selected, assist.histoTrafficLights,
-        assist.crushClipCompensation.raw, mapping.curveOrdinal, mapping.clipNative, axis, vector,
+    return NikonPlaybackScopeConfiguration(ScopeTickInputs(selected, assist, mapping, vector,
         scopePeriodNanos(selected.size, thermalTier)), look)
-}
-
-private fun deriveNikonScopeBundle(samples: ScopeSamples, inputs: ScopeTickInputs,
-    look: MonitorLUTCube?, previous: ScopeAssistBundle): ScopeAssistBundle {
-    val demand = scopeSamplingDemand(inputs.selected, inputs.histogramTrafficLightsEnabled)
-    return ScopeAssistBundle(revision = previous.revision + 1, samples = samples,
-        vectorscopePoints = look?.let { ScopeSampler.monitorPoints(samples.points, it) }.orEmpty(),
-        trailSamples = previous.samples, trailVectorscopePoints = previous.vectorscopePoints,
-        traffic = if (demand.trafficLights) nikonTrafficLights(samples, inputs) else ScopeTrafficLightsReading.NONE,
-        histogramDisplay = if (demand.histogram) ScopeSampler.histogramDisplay(samples, previous.histogramDisplay, inputs.axis)
-            else ScopeHistogramDisplay.EMPTY)
 }
 
 /** Resolves stacked portrait-fit scopes versus uncapped floating fill/landscape scopes. */
@@ -764,76 +714,29 @@ private fun trafficLightsStateDescription(
  * retains the iOS wall-clock anti-aliasing policy while sharing one decoder.
  */
 private suspend fun pumpLiveScopes(
-    frames: Flow<LiveFrame>,
-    inputs: ScopeTickInputs,
-    bus: ScopeSampleBus,
+    frames: Flow<LiveFrame>, inputs: ScopeTickInputs, bus: ScopeSampleBus, thermalMultiplier: Double,
 ): Unit = coroutineScope {
     val latest = AtomicReference<LiveScopeInput?>(null)
     var generation = 0L
-    val collector =
-        launch {
-            frames.collect { frame ->
-                generation += 1
-                latest.set(LiveScopeInput(generation, frame.jpegData))
-            }
+    val collector = launch {
+        frames.collect { frame ->
+            generation += 1
+            latest.set(LiveScopeInput(generation, frame.jpegData))
         }
+    }
     val tap = ScopeFrameTap()
     var lastGeneration = Long.MIN_VALUE
+    val look = if (inputs.policy.includeVectorPoints) inputs.vectorLut?.cube() else null
     try {
-        pumpReducedScopes(inputs, bus, ScopeSampleBus.Role.LIVE) {
-            val next = latest.get() ?: return@pumpReducedScopes null
-            if (next.generation == lastGeneration) return@pumpReducedScopes null
+        MonitorAssistEngine().run(MonitorAssistScopeSource { includePoints ->
+            val next = latest.get() ?: return@MonitorAssistScopeSource null
+            if (next.generation == lastGeneration) return@MonitorAssistScopeSource null
             lastGeneration = next.generation
-            tap.reduce(next.jpeg)
-        }
+            tap.reduce(next.jpeg)?.let { inputs.samples(it, includePoints) } ?: ScopeSamples.EMPTY
+        }, inputs.configuration(look), inputs.policy, bus, thermalMultiplier)
     } finally {
         collector.cancel()
-    }
-}
-
-/**
- * Absolute-schedule clean-frame sampler shared by live JPEG and playback
- * TextureView inputs. Sampling and plots are the shared OpenCine scopes; the
- * camera's level axis and Traffic Lights come from the Swift core. This loop
- * owns demand, cadence and the bus lease.
- */
-private suspend fun pumpReducedScopes(
-    inputs: ScopeTickInputs,
-    bus: ScopeSampleBus,
-    role: ScopeSampleBus.Role,
-    nextFrame: suspend () -> ReducedScopeFrame?,
-) {
-    val demand = scopeSamplingDemand(inputs.selected, inputs.histogramTrafficLightsEnabled)
-    if (!demand.traces && !demand.vector) return
-    val look = if (demand.vector) inputs.vectorLut?.cube() else null
-    if (demand.vector && look == null) {
-        Log.w(TAG, "active vectorscope LUT is unavailable; vectorscope rendering disabled")
-    }
-    val lease = bus.openSource(role)
-    try {
-        val stats = ScopeTickStats { if (BuildConfig.DEBUG) Log.d(TAG, it) }
-        var bundle = ScopeAssistBundle.EMPTY
-        val startNanos = System.nanoTime()
-        var tick = 0L
-        while (true) {
-            tick = max(tick + 1, (System.nanoTime() - startNanos) / inputs.periodNanos)
-            val waitMillis = (startNanos + tick * inputs.periodNanos - System.nanoTime()) / 1_000_000
-            if (waitMillis > 0) delay(waitMillis)
-
-            val tickStart = System.nanoTime()
-            val reduced = nextFrame() ?: continue
-            val samples =
-                ScopeSampler.sampleRaw(
-                    reduced.rgba, reduced.width, reduced.height, reduced.bytesPerRow,
-                    MonitorTransfer.REC709, includePoints = demand.pointTrace || look != null,
-                    stride = SAMPLE_STRIDE, includeSampleCoordinates = true, requireCompleteRows = true,
-                )
-            bundle = deriveNikonScopeBundle(samples, inputs, look, bundle)
-            if (!bus.publish(lease, bundle)) return
-            stats.tickCompleted(System.nanoTime() - tickStart, System.nanoTime())
-        }
-    } finally {
-        bus.closeSource(lease)
+        tap.close()
     }
 }
 
@@ -860,6 +763,12 @@ private class ScopeFrameTap {
     private val options = BitmapFactory.Options().apply { inMutable = true }
     private var bitmap: Bitmap? = null
     private var rgba = ByteArray(0)
+
+    fun close() {
+        bitmap?.recycle()
+        bitmap = null
+        rgba = ByteArray(0)
+    }
 
     fun reduce(jpeg: ByteArray): ReducedScopeFrame? {
         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, boundsOptions)

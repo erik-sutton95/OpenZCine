@@ -206,6 +206,23 @@ object SwiftCore {
         zebraMidtoneIre: Float,
     ): FloatArray?
 
+    // Distinct shared-monitor entries beside the retained legacy declarations.
+    external fun bakeMonitorFalseColorCube(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): ByteArray?
+
+    external fun bakeMonitorFalseColorLimitsPaint(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    external fun bakeMonitorFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    external fun monitorFalseColorReference(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): FloatArray?
+
     // ── Stored LUT library (strict Swift parser + existing packed cube path) ──
 
     /**
