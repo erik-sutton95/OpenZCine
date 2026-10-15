@@ -2,6 +2,8 @@ import CoreImage
 import OpenZCineCore
 import UIKit
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 @testable import Runner
 
 final class FrozenNikonUIImageGraphProcessor {
@@ -24,7 +26,7 @@ final class FrozenNikonUIImageGraphProcessor {
         .cacheIntermediates: false,
     ])
     private let outputColorSpace = displaySpace
-    private let fileStore: LUTFileStore
+    private let fileStore: CustomLUTStore
     // One CIColorCube filter per look, kept for the renderer's life so switching back to a look is
     // instant (the cube tables themselves are memoized process-wide in `LUTCubeCache`).
     private var cubeFilters: [String: CIFilter] = [:]
@@ -36,7 +38,7 @@ final class FrozenNikonUIImageGraphProcessor {
     private var lastRenderEffects: LiveImageEffects?
     private var lastRenderedImage: UIImage?
 
-    init(fileStore: LUTFileStore) {
+    init(fileStore: CustomLUTStore) {
         self.fileStore = fileStore
     }
 

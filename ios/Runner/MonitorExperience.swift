@@ -1,13 +1,15 @@
 import CoreImage
 import MonitorPresentation
 import MonitorUI
-import OpenCineApple
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
 import UIKit
+
+import class OpenCineCameraVocabulary.CustomLUTStore
 
 /// Shared field-monitor chrome. Surfaces, type, and hairlines come from `MonitorTheme`, the same
 /// tokens Pocket and Insta use. The accent is the OpenZCine gold assigned at launch
@@ -381,7 +383,7 @@ private struct LiveFrameFeedLayer: View {
     let effects: LiveImageEffects
     let source: LiveFrameSampleBus.Source?
     let isDemoSession: Bool
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
     let width: CGFloat
     let height: CGFloat
     let qualification: (@MainActor () -> MonitorNativeQualificationSnapshot?)?
@@ -418,7 +420,7 @@ private struct LiveFrameFeedLayer: View {
 private struct DemoProcessedLiveFrameView: UIViewRepresentable {
     let image: UIImage
     let effects: LiveImageEffects
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
 
     func makeCoordinator() -> Coordinator { Coordinator(fileStore: fileStore) }
 
@@ -449,7 +451,7 @@ private struct DemoProcessedLiveFrameView: UIViewRepresentable {
         private var currentImage: UIImage?
         private var currentEffects: LiveImageEffects?
 
-        init(fileStore: LUTFileStore) {
+        init(fileStore: CustomLUTStore) {
             renderer = LiveFrameRenderer(fileStore: fileStore)
         }
 

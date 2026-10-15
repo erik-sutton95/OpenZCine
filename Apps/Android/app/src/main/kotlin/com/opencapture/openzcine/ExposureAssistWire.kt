@@ -1,7 +1,9 @@
 package com.opencapture.openzcine
 
 import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.opencine.media.MonitorTransfer
 import com.opencapture.openzcine.bridge.SwiftCore
+import kotlin.math.roundToInt
 
 /** Label the applied native read: the facade supplies built-in looks for the two log curves. */
 internal fun FeedFalseColorReference.curveLabel(read709: Boolean): String = when (curveOrdinal) {
@@ -23,6 +25,18 @@ data class ExposureAssistMapping(
     val middleGrayNative: Float,
     val clipNative: Float,
 ) {
+    /** The shared monitor transfer naming this curve, which every shared assist reads (Swift `monitorTransfer`). */
+    val transfer: MonitorTransfer
+        get() = when (curveOrdinal) {
+            ExposureCurveOrdinals.NIKON_NLOG -> MonitorTransfer.NLOG
+            ExposureCurveOrdinals.RED_LOG3G10 -> MonitorTransfer.LOG3G10
+            ExposureCurveOrdinals.HLG -> MonitorTransfer.HDR
+            else -> MonitorTransfer.SRGB
+        }
+
+    /** The camera's clip on the shared 0...255 tap axis: the ceiling the shared assists take. */
+    val clipByte: Int get() = clipNative.roundToInt().coerceIn(1, 255)
+
     companion object {
         private const val FIELD_COUNT = 4
 
@@ -144,6 +158,7 @@ data class FeedFalseColorReference(
     val curveOrdinal: Int,
     val segments: List<FeedFalseColorReferenceSegment>,
     val stopMarkerFractions: FloatArray,
+    val stopMarkerLabels: List<String> = listOf("Min", "−2", "−1", "18%", "+1", "+2", "Clip").take(stopMarkerFractions.size),
 ) {
     companion object {
         private const val VERSION = 1
@@ -163,7 +178,7 @@ data class FeedFalseColorReference(
             val curve = values[1].toInt()
             val segmentCount = values[2].toInt()
             val markerCount = values[3].toInt()
-            require(values[0] == version.toFloat() && version == VERSION) { "invalid false-color version" }
+            require(values[0] == version.toFloat() && version in VERSION..2) { "invalid false-color version" }
             require(values[1] == curve.toFloat() && curve in ExposureCurveOrdinals.range) {
                 "invalid false-color curve"
             }
@@ -182,10 +197,13 @@ data class FeedFalseColorReference(
             require(values[2] == segmentCount.toFloat() && validSegmentCount) {
                 "invalid false-color segment count"
             }
-            require(values[3] == markerCount.toFloat() && markerCount == expectedMarkerCount) {
+            val validMarkers = if (version == VERSION) markerCount == expectedMarkerCount
+                else if (scale == FeedFalseColorScale.STOPS) markerCount in 1..32 else markerCount == 0
+            require(values[3] == markerCount.toFloat() && validMarkers) {
                 "invalid false-color marker count"
             }
-            require(values.size == HEADER_COUNT + segmentCount * SEGMENT_STRIDE + markerCount) {
+            val markerStride = if (version == VERSION) 1 else 3
+            require(values.size == HEADER_COUNT + segmentCount * SEGMENT_STRIDE + markerCount * markerStride) {
                 "invalid false-color reference length ${values.size}"
             }
             var previousUpper = 0f
@@ -206,12 +224,30 @@ data class FeedFalseColorReference(
                     FeedFalseColorReferenceSegment(lower, upper, color)
                 }
             val markerStart = HEADER_COUNT + segmentCount * SEGMENT_STRIDE
-            val markers = values.copyOfRange(markerStart, values.size)
+            val labels = mutableListOf<String>()
+            val markers = FloatArray(markerCount) { index ->
+                if (version == VERSION) values[markerStart + index] else {
+                    val start = markerStart + index * 3
+                    val kind = values[start]
+                    val stop = values[start + 1]
+                    require(kind == if (index == markerCount - 1) 1f else 0f) { "invalid source marker kind" }
+                    require(stop in -128f..128f) { "invalid source marker stop" }
+                    if (kind == 0f) {
+                        require(stop == stop.toInt().toFloat() && stop.toInt() == -6 + index * 2) {
+                            "invalid source marker cadence"
+                        }
+                    }
+                    labels += if (kind == 1f) "clip" else if (stop == 0f) "18%"
+                        else if (stop < 0) "−${(-stop).toInt()}" else "+${stop.toInt()}"
+                    values[start + 2]
+                }
+            }
             require(markers.all { it in 0f..1f }) { "invalid false-color marker geometry" }
             require(markers.asList().zipWithNext().all { (lower, upper) -> lower <= upper }) {
                 "non-monotonic false-color markers"
             }
-            return FeedFalseColorReference(curve, segments, markers)
+            return if (version == VERSION) FeedFalseColorReference(curve, segments, markers)
+                else FeedFalseColorReference(curve, segments, markers, labels)
         }
     }
 }
@@ -241,7 +277,7 @@ fun resolveFalseColorReference(
     return runCatching {
         val payload =
             requireNotNull(
-                SwiftCore.falseColorReference(
+                SwiftCore.monitorFalseColorReference(
                     scale.wireOrdinal + if (read709) 4 else 0, mapping.curveOrdinal, mapping.clipNative,
                 ),
             ) { "missing false-color reference" }

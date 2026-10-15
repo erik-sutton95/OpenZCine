@@ -1,4 +1,10 @@
 package com.opencapture.openzcine
+import com.opencapture.opencine.media.LiveFalseColorScale
+import com.opencapture.opencine.media.MonitorFalseColorCubeComponent
+import com.opencapture.opencine.media.MonitorFalseColorLattice
+import com.opencapture.opencine.media.MonitorFalseColorReferencePlan
+import com.opencapture.opencine.media.MonitorTransfer
+import com.opencapture.openzcine.bridge.SwiftCore
 
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -22,6 +28,34 @@ import org.junit.runner.RunWith
 /** SIMULATED known pixels through actual JNI, Vulkan sampling and native WSI readback. */
 @RunWith(AndroidJUnit4::class)
 class NikonBitmapColorContractTest {
+    @Test fun actualNikonJniFalseColorUsesTheSharedEncodedSignalLattice() {
+        assertTrue("The actual staged Nikon JNI library is required", SwiftCore.isAvailable)
+        for ((ordinal, transfer) in listOf(0 to MonitorTransfer.LOG3G10, 1 to MonitorTransfer.NLOG)) {
+            val lattice = MonitorFalseColorLattice.signal(LiveFalseColorScale.SCENE_STOPS,
+                transfer, clipByte = 180)
+            assertArrayEquals("Actual JNI source lattice $transfer",
+                lattice.packedCube(MonitorFalseColorCubeComponent.COMPOSITE).rgba,
+                requireNotNull(SwiftCore.bakeMonitorFalseColorCube(0, ordinal, 180f)))
+        }
+    }
+
+    @Test fun actualNikonJniReferenceUsesTheSharedEncodedSignalRuler() {
+        assertTrue("The actual staged Nikon JNI library is required", SwiftCore.isAvailable)
+        val plan = MonitorFalseColorReferencePlan.signal(LiveFalseColorScale.SCENE_STOPS,
+            MonitorTransfer.LOG3G10, 180)
+        val expected = mutableListOf(2f, 0f, plan.segments.size.toFloat(), plan.markers.size.toFloat())
+        for (segment in plan.segments) {
+            expected += listOf(segment.lowerFraction.toFloat(), segment.upperFraction.toFloat(),
+                segment.band.red.toFloat(), segment.band.green.toFloat(), segment.band.blue.toFloat())
+        }
+        for (marker in plan.markers) {
+            expected += listOf(if (marker.kind == MonitorFalseColorReferencePlan.Marker.Kind.CLIP) 1f else 0f,
+                marker.sceneStop.toFloat(), marker.fraction.toFloat())
+        }
+        assertArrayEquals("Actual JNI legend follows the shared source ruler", expected.toFloatArray(),
+            requireNotNull(SwiftCore.monitorFalseColorReference(0, 0, 180f)), .000002f)
+    }
+
     @Test fun bitmapPrimariesAndNeutralGrayKeepTheirActualChannels() {
         assertTrue("Actual Vulkan renderer required", OpcVulkan.isAvailable)
         val handle = OpcVulkan.nativeCreateBitmap()

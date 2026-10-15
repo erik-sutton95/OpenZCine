@@ -127,10 +127,11 @@ import os
                 cube: configuration.bakeLUT ? cube?.preparedForRenderer() : nil,
                 metadata: metadata(clip, configuration: configuration),
                 diagnostics: { NikonDelivery.logger.info("\($0, privacy: .public)") },
-                timecodeDiagnostics: NikonDelivery.traceTimecode
-            ) { fraction in
-                Task { @MainActor in if admission.isCurrent() { progress(fraction) } }
-            }
+                timecodeDiagnostics: NikonDelivery.traceTimecode,
+                progress: { fraction in
+                    Task { @MainActor in if admission.isCurrent() { progress(fraction) } }
+                }
+            )
             guard admission.isCurrent() else { throw CancellationError() }
             if configuration.bakeLUT { update(clip) { $0.exportStatus = .exported } }
             return exported.videoURL

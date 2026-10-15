@@ -22,8 +22,10 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
     private var stamps: [TimeInterval?] = [nil, nil, nil, nil]
     private var rateSampler = FeedIncidentRateSampler()
 
-    init(source: FeedIncidentSessionSource,
-        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    init(
+        source: FeedIncidentSessionSource,
+        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
         self.source = source
         self.clock = clock
     }
@@ -50,7 +52,8 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
     }
 
     func snapshot(lifecycle: FeedIncidentLifecycle, now: TimeInterval, wall: Date = Date())
-        -> FeedIncidentSnapshot {
+        -> FeedIncidentSnapshot
+    {
         lock.withLock {
             var life = lifecycle
             // A successful image return is observed output. Raster publication is not scanout.
@@ -62,7 +65,8 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
                 counts: .init(
                     accessUnit: counts[0],
                     decodeSubmit: counts[1], decodedOutput: counts[2]))
-            let sample = FeedIncidentSnapshot(monotonicNow: now, wallClock: wall,
+            let sample = FeedIncidentSnapshot(
+                monotonicNow: now, wallClock: wall,
                 rates: rates,
                 ages: .init(
                     accessUnitAge: FeedIncidentRateSampler.age(since: stamps[0], now: now),
@@ -80,7 +84,9 @@ final class NikonFeedIncidentProducer: @unchecked Sendable {
 
     func breadcrumb(_ kind: FeedIncidentBreadcrumbKind, detail: String = "") {
         lock.withLock {
-            if !closed { source.recordBreadcrumb(.init(monotonicAt: clock(), kind: kind, detail: detail)) }
+            if !closed {
+                source.recordBreadcrumb(.init(monotonicAt: clock(), kind: kind, detail: detail))
+            }
         }
     }
 

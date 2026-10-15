@@ -1330,8 +1330,10 @@ extension NikonPlaybackOwnerAdoptionTests {
                 "Returning from playback must preserve the operator's gallery position even if UIKit remounted it"
             )
         } else {
-            XCTAssertEqual(returnedScroll.contentOffset.y, -returnedScroll.adjustedContentInset.top,
-                accuracy: 1, "A changed layout must not inherit the outgoing layout's captured position")
+            XCTAssertEqual(
+                returnedScroll.contentOffset.y, -returnedScroll.adjustedContentInset.top,
+                accuracy: 1,
+                "A changed layout must not inherit the outgoing layout's captured position")
         }
         // Restoration is consumed once. A subsequent operator scroll must stay independent.
         returnedScroll.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
@@ -1356,10 +1358,12 @@ extension NikonPlaybackOwnerAdoptionTests {
         defer { fixture.remove() }
         let bucket = "SIMULATED-DELETE-CAMERA"
         let url = try fixture.store.localURL(cameraID: bucket, filename: "SIMULATED-DELETE.MOV")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try await NikonGrowingMovieFixture.write(at: url)
         let bytes = try Data(contentsOf: url)
-        let clip = MediaClip(cameraID: bucket, filename: url.lastPathComponent, handle: 42,
+        let clip = MediaClip(
+            cameraID: bucket, filename: url.lastPathComponent, handle: 42,
             storageID: 65_537, sizeBytes: UInt64(bytes.count), captureDate: "20261011T120000")
         fixture.store.upsertBatch([clip], cameraID: bucket)
         let transport = LargeTransferTransport(operations: [.deleteObject])
@@ -1377,23 +1381,35 @@ extension NikonPlaybackOwnerAdoptionTests {
         library.begin()
         fixture.model.connection = .connected
         let catalog = try XCTUnwrap(fixture.store.catalogBytes(cameraID: bucket))
-        let coordinator = MonitorDeliveryCoordinator(); defer { coordinator.close() }
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive })
+        let coordinator = MonitorDeliveryCoordinator()
+        defer { coordinator.close() }
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first { $0.isKeyWindow }
-        let host = UIHostingController(rootView: MediaPlayerView(clips: [clip], startingAt: clip)
-            .environment(fixture.model).environment(coordinator))
-        let window = UIWindow(windowScene: scene); window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
-        window.rootViewController = host; window.makeKeyAndVisible(); host.view.frame = window.bounds
-        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKeyAndVisible() }
+        let host = UIHostingController(
+            rootView: MediaPlayerView(clips: [clip], startingAt: clip)
+                .environment(fixture.model).environment(coordinator))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view)
                 .contains { $0.accessibilityLabel == "Delete clip from camera" }
         }
-        XCTAssertTrue(mounted, "Actual connected Nikon playback must compose the shared deletion service")
-        let button = try XCTUnwrap(HostedAccessibility.elements(in: host.view)
-            .first { $0.accessibilityLabel == "Delete clip from camera" })
+        XCTAssertTrue(
+            mounted, "Actual connected Nikon playback must compose the shared deletion service")
+        let button = try XCTUnwrap(
+            HostedAccessibility.elements(in: host.view)
+                .first { $0.accessibilityLabel == "Delete clip from camera" })
         XCTAssertTrue(button.accessibilityActivate())
         let presented = await cachedCatalogSettled { host.presentedViewController != nil }
         XCTAssertTrue(presented)
@@ -1410,13 +1426,15 @@ extension NikonPlaybackOwnerAdoptionTests {
         }
         XCTAssertTrue(rendered)
         if let cancelButton = HostedAccessibility.elements(in: dialog.view)
-            .first(where: { $0.accessibilityLabel == cancel }) {
+            .first(where: { $0.accessibilityLabel == cancel })
+        {
             XCTAssertTrue(cancelButton.accessibilityActivate())
         } else {
             // iOS 26 anchors this sheet as a popover with no Cancel row; the accessibility
             // escape gesture is that presentation's real cancel path.
             XCTAssertNotNil(dialog.popoverPresentationController)
-            XCTAssertTrue([dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
+            XCTAssertTrue(
+                [dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
         }
         let dismissed = await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(dismissed)
@@ -1525,7 +1543,9 @@ extension NikonPlaybackOwnerAdoptionTests {
             previous?.makeKeyAndVisible()
         }
         let share: () -> NSObject? = {
-            HostedAccessibility.elements(in: host.view).first { $0.accessibilityLabel == "Share photo" }
+            HostedAccessibility.elements(in: host.view).first {
+                $0.accessibilityLabel == "Share photo"
+            }
         }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
@@ -1541,7 +1561,8 @@ extension NikonPlaybackOwnerAdoptionTests {
         }
         XCTAssertTrue(offered, "Photo Share must open the shared delivery choices")
         XCTAssertNil(
-            host.presentedViewController, "Photo Share must not bypass delivery with a direct sheet")
+            host.presentedViewController, "Photo Share must not bypass delivery with a direct sheet"
+        )
         await library.dispose()
     }
 

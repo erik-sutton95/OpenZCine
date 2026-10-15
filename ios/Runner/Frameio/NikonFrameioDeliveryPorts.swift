@@ -42,7 +42,9 @@ final class NikonFrameioAccount: @unchecked Sendable {
 struct NikonFrameioCapturedTokens: FrameioTokenStorage {
     let account: NikonFrameioAccount.Receipt
     let native: any FrameioTokenStorage
-    init(account: NikonFrameioAccount.Receipt, native: any FrameioTokenStorage = NikonFrameio.tokens) {
+    init(
+        account: NikonFrameioAccount.Receipt, native: any FrameioTokenStorage = NikonFrameio.tokens
+    ) {
         self.account = account
         self.native = native
     }
@@ -111,7 +113,8 @@ extension NativeAppModel {
         captured: NikonMediaDeliveryCapture, admission: MonitorDeliveryAdmission
     ) async throws -> NikonFrameioProjectContext {
         // Every request of the shared listing passes the captured transport's admission.
-        let listing = try await captured.frameioClient(admission: admission).firstWorkspaceProjects()
+        let listing = try await captured.frameioClient(admission: admission)
+            .firstWorkspaceProjects()
         guard admission.isCurrent(), captured.account.isCurrent else { throw CancellationError() }
         return .init(listing: listing, account: captured.account)
     }
@@ -154,13 +157,16 @@ extension NativeAppModel {
         guard frameioUploadInFlight[clip.id] == nil else { throw FrameioError.uploadIncomplete }
         let ticket = UUID()
         frameioUploadInFlight[clip.id] = ticket
-        defer { if frameioUploadInFlight[clip.id] == ticket { frameioUploadInFlight[clip.id] = nil } }
+        defer {
+            if frameioUploadInFlight[clip.id] == ticket { frameioUploadInFlight[clip.id] = nil }
+        }
         let service = try capture.frameioClient(admission: admission)
         let destination: FrameioDestination
         if let saved = capture.frameioDestination {
             destination = saved
         } else {
-            let context = try await loadFrameioProjectListing(captured: capture, admission: admission)
+            let context = try await loadFrameioProjectListing(
+                captured: capture, admission: admission)
             guard let project = context.listing.projects.first,
                 let first = FrameioDestination(project: project, in: context.listing)
             else { throw FrameioError.noProject }

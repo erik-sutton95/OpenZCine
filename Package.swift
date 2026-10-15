@@ -24,7 +24,7 @@ let package = Package(
         // wire, properties, discovery and session policy (OpenCineNikon, re-exported from
         // OpenZCineCore in Sources/OpenZCineCore/OpenCineNikon.swift). Sibling checkout pinned in
         // opencine-pins.txt until it is published.
-        .package(path: "../OpenCine"),
+        .package(path: "../OpenCine")
     ],
     targets: [
         .target(

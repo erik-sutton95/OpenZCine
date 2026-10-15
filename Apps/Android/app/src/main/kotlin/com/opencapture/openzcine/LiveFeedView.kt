@@ -333,6 +333,7 @@ internal fun LiveFeedView(
     val fallbackColorMode = remember(source) { mutableStateOf(LiveFeedColorMode.UNKNOWN) }
     // GPU present (Vulkan preferred, GLES fallback); a rotated feed stays on Compose Canvas.
     val gpuBackend = remember(source) { LiveFeedGpuBackendFactory.create(applicationContext) }
+    val effectPlans = rememberFeedEffectsRenderPlans(source)
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestPresentedFrame = rememberUpdatedState(onPresentedFrame)
     DisposableEffect(gpuBackend) {
@@ -373,6 +374,7 @@ internal fun LiveFeedView(
     // AGSL grade for the Compose present path (a rotated vertical feed), API 33+.
     var composableEffectsRenderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
+        effectPlans,
         effects,
         configuration,
         cameraInput,
@@ -398,7 +400,7 @@ internal fun LiveFeedView(
         val previousComposable = composableEffectsRenderer
         val nextPlan =
             withContext(Dispatchers.Default) {
-                FeedEffectsRenderPlanFactory.create(
+                effectPlans.create(
                     effects,
                     configuration,
                     cameraInput,
@@ -823,7 +825,7 @@ internal fun FalseColorReferencePresentation.referenceValues(
                 // The shared ruler starts each label 10 dp before its stop and clips at the panel, so the
                 // Min and Max ends (0 and 1) are held 16 dp inside it, where the old ruler aligned them.
                 val edge = 16.0 / MonitorScopePanelSize.falseColorReference.width
-                copy.stopLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
+                reference.stopMarkerLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
                     MonitorFalseColorReferenceMarker(index, label, at.toDouble().coerceIn(edge, 1.0 - edge))
                 }
             } else {

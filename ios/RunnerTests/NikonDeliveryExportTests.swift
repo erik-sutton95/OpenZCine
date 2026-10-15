@@ -38,10 +38,12 @@ import XCTest
             at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
         try await Self.writeSupportedMovie(to: original)
         let model = NativeAppModel(mediaClipStore: clips)
-        let capture = try XCTUnwrap(NikonMediaDeliveryCapture(model: model, clips: [clip, uncached]))
+        let capture = try XCTUnwrap(
+            NikonMediaDeliveryCapture(model: model, clips: [clip, uncached]))
         let exports = MonitorDeliveryExportStore(
             root: root.appendingPathComponent("delivery", isDirectory: true))
-        var configuration = NikonDeliveryConfiguration(logTransform: "unchanged", exportFormat: .mov)
+        var configuration = NikonDeliveryConfiguration(
+            logTransform: "unchanged", exportFormat: .mov)
         configuration.bakeLUT = false
 
         let first = try await capture.export(
@@ -76,7 +78,8 @@ import XCTest
                 progress: { _ in })
             XCTFail("An uncached clip never exports")
         } catch {
-            XCTAssertEqual(error.localizedDescription, "SIMULATED-UNCACHED.MOV isn't fully cached yet.")
+            XCTAssertEqual(
+                error.localizedDescription, "SIMULATED-UNCACHED.MOV isn't fully cached yet.")
         }
     }
 
