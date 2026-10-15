@@ -299,7 +299,7 @@ internal fun OperatorSettingsScreen(
         { settings.recordConfirmationEnabled.value = it }, settings.hapticsEnabled.value,
         { settings.hapticsEnabled.value = it }, settings.keepScreenAwake.value,
         { settings.keepScreenAwake.value = it },
-        "Keeps the live monitor or clip playback awake while the app is active.",
+        MonitorSettingsCopy.keepScreenAwake,
         remoteShutter = settings.mediaRemoteShutterEnabled.value,
         setRemoteShutter = { settings.mediaRemoteShutterEnabled.value = it },
         remoteTitle = stringResource(R.string.settings_media_remote),
