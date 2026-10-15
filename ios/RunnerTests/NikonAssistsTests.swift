@@ -120,6 +120,9 @@ final class NikonAssistsTests: XCTestCase {
         for connected in [true, false] {
             let model = NativeAppModel(assist: relaunch())
             model.connection = connected ? .connected : .disconnected
+            // SIMULATED: a body that reports R3D NE. The chrome no longer starts from the
+            // preview fixture (A1-03), so the reported codec is stated here.
+            model.cameraState = .preview
             model.applyDemoProperty(.liveViewSelector, data: Data([0]))
             XCTAssertTrue(model.isPhotographyMode)
             XCTAssertFalse(model.isDemoSession)
@@ -242,7 +245,8 @@ final class NikonAssistsTests: XCTestCase {
     func testCommandShowsNoFeedTool() {
         let model = NativeAppModel(assist: .restore(storage: defaults))
         model.assist.set(.peaking, visible: true, context: .liveView)
-        model.displayMode = .command
+        model.operatorSession.declare(modes: [.live, .clean, .command])
+        model.setDisplayMode(.command)
         XCTAssertTrue(model.renderedLiveAssistTools.isEmpty)
     }
 
@@ -319,9 +323,23 @@ final class NikonAssistsTests: XCTestCase {
     // MARK: - Palette
 
     func testPhotographyLeadsWithInstantPlaybackThenTheEVMeter() {
-        let photo = MonitorAssistTool.activeCases.filter(\.appliesToPhotography).map(\.rawValue)
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        let photo = model.liveAssistPaletteTools.map(\.rawValue)
         let ranked = MonitorToolUsage().rankedIDs(in: photo, seed: nikonAssistUsageSeed)
         XCTAssertEqual(Array(ranked.prefix(2)), ["PLAY", "EV"])
+    }
+
+    /// A1-19: photography keeps the display tools Pocket, Insta and the Pocket baseline keep.
+    func testPhotographyKeepsTheDisplayTools() {
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.isPhotographyMode)
+        for tool in [MonitorAssistTool.lut, .waveform, .parade, .vectorscope, .guides, .crosshair] {
+            XCTAssertTrue(model.liveAssistPaletteTools.contains(tool), "\(tool) leaves photo mode")
+        }
+        model.assist.set(.waveform, visible: true, context: .liveView)
+        XCTAssertTrue(model.renderedLiveAssistTools.contains(.waveform))
     }
 
     func testPlaybackOffersNoCameraFedTool() {

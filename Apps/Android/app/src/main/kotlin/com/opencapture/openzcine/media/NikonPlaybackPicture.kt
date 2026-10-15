@@ -14,7 +14,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
-import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
@@ -24,7 +23,6 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoFrameProcessor
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DataSource
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
@@ -38,12 +36,13 @@ import com.opencapture.opencine.appkit.MonitorPlaybackScopeSession
 import com.opencapture.opencine.media.MonitorPlaybackEvent
 import com.opencapture.opencine.media.MonitorPlaybackItemToken
 import com.opencapture.opencine.media.MonitorPlaybackMetadata
-import com.opencapture.opencine.media.MonitorPlaybackTransportState
 import com.opencapture.opencine.media.ScopeAssistBundle
+import com.opencapture.opencine.media3.Media3AudioMeter
+import com.opencapture.opencine.media3.Media3Playback
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.FeedEffectsRenderer
 import com.opencapture.openzcine.FeedEffectsRenderPlan
-import com.opencapture.openzcine.FeedEffectsRenderPlanFactory
+import com.opencapture.openzcine.rememberFeedEffectsRenderPlans
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.NikonPlaybackScopeConfiguration
@@ -84,14 +83,6 @@ internal class NikonPlaybackPicture(
     val picture: @Composable (MonitorPlaybackPictureGeometry) -> Unit,
 )
 
-/** Native Media3 state conversion only; shared model preserves the operator's requested intent. */
-private fun observedTransport(player: Player): MonitorPlaybackTransportState? = when {
-    player.playbackState == Player.STATE_IDLE -> null
-    player.isPlaying -> MonitorPlaybackTransportState.PLAYING
-    !player.playWhenReady || player.playbackState == Player.STATE_ENDED -> MonitorPlaybackTransportState.PAUSED
-    else -> MonitorPlaybackTransportState.WAITING
-}
-
 @Composable
 internal fun rememberNikonPlaybackPicture(
     playback: MonitorMediaPlaybackModel<NikonLibraryClip, Unit>,
@@ -105,19 +96,11 @@ internal fun rememberNikonPlaybackPicture(
     scope: CoroutineScope,
 ): NikonPlaybackPicture {
     val context = LocalContext.current
-    val audioMeterCoordinator = remember(entry, itemToken) { PlaybackAudioMeterCoordinator() }
+    val audioMeter = remember(entry, itemToken) { Media3AudioMeter() }
     val player =
-        remember(entry, itemToken, audioMeterCoordinator) {
+        remember(entry, itemToken, audioMeter) {
             val dataSourceFactory = DataSource.Factory { GrowingFileDataSource(entry) }
-            ExoPlayer.Builder(context, audioMeterCoordinator.renderersFactory(context)).build().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .build(),
-                    true,
-                )
-                setHandleAudioBecomingNoisy(true)
+            Media3Playback.player(context, audioMeter).apply {
                 setSeekParameters(SeekParameters.EXACT)
                 val source =
                     ProgressiveMediaSource.Factory(dataSourceFactory)
@@ -129,7 +112,7 @@ internal fun rememberNikonPlaybackPicture(
                 prepare()
             }
         }
-    val audio = remember(audioMeterCoordinator, scope) { audioMeterCoordinator.sharedSession(scope) }
+    val audio = remember(audioMeter, scope) { audioMeter.session(scope) }
     val playerView =
         remember(context) {
             LayoutInflater.from(context)
@@ -145,7 +128,8 @@ internal fun rememberNikonPlaybackPicture(
             player, itemToken,
             beforeRelease = {
                 if (playerView.player === player) playerView.player = null
-                audioMeterCoordinator.close()
+                audio.close()
+                audioMeter.close()
             },
             seekNative = { target, preview ->
                 player.setSeekParameters(if (preview) SeekParameters.CLOSEST_SYNC else SeekParameters.EXACT)
@@ -182,7 +166,7 @@ internal fun rememberNikonPlaybackPicture(
                 }
 
                 override fun onEvents(player: Player, events: Player.Events) {
-                    native.publish(attachment, MonitorPlaybackEvent.Transport(observedTransport(player)))
+                    native.publish(attachment, MonitorPlaybackEvent.Transport(Media3Playback.transport(player)))
                 }
 
                 override fun onVideoSizeChanged(size: VideoSize) {
@@ -228,18 +212,12 @@ internal fun rememberNikonPlaybackPicture(
                         captureRate = selectedPlaybackVideoFrameRate(player.currentTracks)?.toDouble()),
                 ),
             ))
-            // Prefer ExoPlayer buffered window; fall back to cache-download progress.
-            val playerBuffered =
-                if (observedDuration != null) {
-                    (player.bufferedPosition.toFloat() / observedDuration.toFloat()).coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
-            bufferedFraction =
-                max(playerBuffered, entry.progress.toFloat().coerceIn(0f, 1f))
-            native.updateBuffer(attachment, bufferedFraction)
+            val through = native.updateBuffer(attachment)
+            bufferedFraction = if (through != null && observedDuration != null) {
+                (through / (observedDuration / 1000.0)).coerceIn(0.0, 1.0).toFloat()
+            } else 0f
             native.publish(attachment, MonitorPlaybackEvent.Playing(player.isPlaying))
-            native.publish(attachment, MonitorPlaybackEvent.Transport(observedTransport(player)))
+            native.publish(attachment, MonitorPlaybackEvent.Transport(Media3Playback.transport(player)))
             playbackState = player.playbackState
             playbackError = player.playerError
             delay(200)
@@ -250,6 +228,7 @@ internal fun rememberNikonPlaybackPicture(
     val effectsConfiguration = assists.shared.feedEffectsConfiguration
     val playbackScopes = scopesShown(assists.shared::isPlaybackVisible)
     val cameraInput = exposureAssistCameraInput
+    val effectPlans = rememberFeedEffectsRenderPlans(itemToken)
     var reference by remember(entry, itemToken) { mutableStateOf<MonitorFalseColorReferenceValues?>(null) }
     val playbackEffectDisplaySize = remember(entry) { PlaybackEffectDisplaySize() }
     val playbackScopeFrameSource =
@@ -264,6 +243,7 @@ internal fun rememberNikonPlaybackPicture(
     var renderPlan by remember { mutableStateOf<FeedEffectsRenderPlan?>(null) }
     var renderer by remember { mutableStateOf<FeedEffectsRenderer?>(null) }
     LaunchedEffect(
+        effectPlans,
         effects,
         effectsConfiguration,
         cameraInput,
@@ -275,7 +255,7 @@ internal fun rememberNikonPlaybackPicture(
         if (effects.isIdentity || Build.VERSION.SDK_INT < 29) return@LaunchedEffect
         val nextPlan =
             withContext(Dispatchers.Default) {
-                FeedEffectsRenderPlanFactory.create(
+                effectPlans.create(
                     effects,
                     effectsConfiguration,
                     cameraInput,

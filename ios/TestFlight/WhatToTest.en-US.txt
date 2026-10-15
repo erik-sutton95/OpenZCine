@@ -1,17 +1,16 @@
 New and changed
 
-- A new shared OpenCine interface for the monitor, camera list, settings and media player, with compact View Assist captions and a new app icon.
-- Live View and Multicam show timecode frames when the camera supplies them; cameras without frame timecode keep the seconds display.
-- Format keeps image area, resolution and compatible frame rates grouped, with codec as a separate control.
+- Exposure, shutter angle, storage and link readouts follow the values supplied by the camera.
+- Recording duration follows confirmed recording state.
+- Live View and Multicam share consistent clock and camera-control presentation.
 
 Fixes
 
-- Media clip taps stay usable after a camera source changes or reconnects. Completed cached clips also open while offline.
-- On iPhone and iPad, playback waits for missing clip data and resumes when it arrives. Pause keeps it stopped; an interrupted transfer reports an error.
-- Large camera clips use their full file size and keep partial downloads for retry. A camera without large-file support reports an error instead of repeating clip data.
+- Returning from Media restores the selected camera's live picture.
+- Storage readouts retain reported precision and mark missing measurements as unavailable.
 
 What to test
 
-- Reconnect, open Media and try short, long and partially downloaded clips in portrait and both landscape directions.
-- On a clip that is still downloading, watch playback wait for more data, then press Pause. It should restart only when you press Play.
-- Check timecode against the camera display, including frame zero. Try a clip over 4 GB if available and report any transfer error.
+- Connect your camera and compare exposure, storage, link and recording duration with its display.
+- Record a short clip, open it in Media, then return to Live View and reconnect.
+- Check landscape first, then rotate the phone and compare the clock in Live View and Multicam.

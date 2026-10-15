@@ -26,3 +26,18 @@ paths = [
   # This config talks about secret patterns on purpose.
   '''\.gitleaks\.toml$''',
 ]
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Exact persistent destination preference key, not a credential"
+condition = "AND"
+regexTarget = "secret"
+regexes = [
+  '''^frameio\.destination\.v1$''',
+]
+paths = [
+  '''^ios/Runner/Frameio/NikonFrameioDeliveryPorts\.swift$''',
+  '''^ios/RunnerTests/CameraWiFiCredentialStoreTests\.swift$''',
+]

@@ -9,7 +9,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -246,6 +248,26 @@ class StillCaptureControllerTest {
         advanceUntilIdle()
 
         assertEquals(1, failures.size)
+        assertFalse(controller.isCapturing.value)
+    }
+
+    @Test
+    fun `a cancelled release is not reported as a camera failure`() = runTest {
+        // A3-30: leaving the screen cancels the run; that is not a refused release.
+        val session = FakeSession()
+        val controller = StillCaptureController(session, pollDelayMillis = 10)
+        val failures = mutableListOf<String>()
+        controller.onFailure = { failures += it }
+        session.polls.addAll(List(10) { StillReleasePoll.IN_PROGRESS })
+        val owner = Job(coroutineContext[Job])
+
+        controller.pressed(this + owner, continuousDrive = false)
+        testScheduler.advanceTimeBy(25)
+        owner.cancel()
+        advanceUntilIdle()
+
+        assertEquals(1, session.initiates)
+        assertTrue(failures.isEmpty(), "cancellation surfaced as $failures")
         assertFalse(controller.isCapturing.value)
     }
 }

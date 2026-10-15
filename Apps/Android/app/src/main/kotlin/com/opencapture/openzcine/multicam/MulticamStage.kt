@@ -44,6 +44,7 @@ import com.opencapture.opencine.appkit.MultiviewRecordContext
 import com.opencapture.opencine.appkit.MultiviewStage
 import com.opencapture.opencine.appkit.MultiviewStageActions
 import com.opencapture.opencine.appkit.MultiviewTally
+import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.appkit.MultiviewTile
 import com.opencapture.opencine.appkit.MultiviewTileStatus
 import com.opencapture.opencine.appkit.MultiviewTool
@@ -53,8 +54,10 @@ import com.opencapture.opencine.core.MonitorEntryID
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
-import com.opencapture.openzcine.pairing.SavedCameraRecord
+import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
+import com.opencapture.openzcine.nikonCameraBatteryReading
 import kotlinx.coroutines.delay
+import com.opencapture.opencine.nikon.SavedCameraRecord
 
 /** One saved body offered by Add camera; [refusal] says why it cannot join, null when it can. */
 data class MulticamPickerRow(val record: SavedCameraRecord, val refusal: String?)
@@ -115,12 +118,9 @@ fun MulticamStage(
                 close = { leaving = true },
                 recordContext = { slot ->
                     val plan = slot?.let(coordinator::memberAt)?.let { coordinator.plan(it.id) } ?: coordinator.groupPlan()
-                    MultiviewRecordContext(
-                        plan, busy = coordinator.groupBusy,
-                        prompt = MulticamCopy.confirm(plan.direction, coordinator.names(plan)),
-                    )
+                    MultiviewRecordContext(plan, busy = coordinator.groupBusy)
                 },
-                record = { plan, _ -> coordinator.start(plan) },
+                record = { plan, slot -> coordinator.start(plan, together = slot == null) },
                 // The value the operator picked, by the name shown: one no longer advertised writes nothing.
                 choose = { slot, readout, choice ->
                     coordinator.memberAt(slot)?.takeIf { readout == 0 || readout == 2 }?.let { member ->
@@ -193,7 +193,7 @@ private object MulticamTileAction {
 }
 
 /** The member's values as the shared stage shows them; unknown stays unknown. */
-private fun tile(member: MulticamMember, coordinator: MulticamCoordinator): MultiviewTile {
+internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): MultiviewTile {
     val rolling = member.recording.takeIf { member.isLive }
     val (status, detail) = when (val state = member.status) {
         MemberStatus.Live -> null to "Connected"
@@ -207,7 +207,11 @@ private fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mult
         ) to state.reason
     }
     return MultiviewTile(
-        name = member.displayName, model = member.record.transport.displayName, battery = member.batteryPercent,
+        storage = member.control?.refresh()?.storage?.storageReadout?.free ?: MultiviewTally.UNAVAILABLE,
+        name = member.displayName, model = member.record.transport.displayName,
+        // The body's five-step gauge (A5-01): bars, never a percent it did not report.
+        batteryBars = nikonCameraBatteryReading(member.batteryPercent, null)?.bars,
+        batteryBarCount = NikonCameraBatteryGauge.BAR_COUNT,
         timecode = member.timecode,
         tally = MultiviewTally.text(rolling, waiting = coordinator.groupBusy),
         // Nikon reports no take length: the tile times it from the first recording frame.

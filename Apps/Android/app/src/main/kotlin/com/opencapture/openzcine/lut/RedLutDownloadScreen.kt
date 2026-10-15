@@ -11,8 +11,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,12 +21,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -40,26 +35,25 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.chromeStyle
-import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioHopAvailability
-import com.opencapture.openzcine.frameio.FrameioInternetHopState
+import com.opencapture.opencine.frameio.FrameioDeliveryController
+import com.opencapture.opencine.frameio.FrameioHopAvailability
+import com.opencapture.opencine.frameio.FrameioInternetHopState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.res.stringResource
+import com.opencapture.monitorui.MonitorActionButton
+import com.opencapture.monitorui.MonitorCameraAction
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.openzcine.R
 
@@ -258,40 +252,16 @@ internal fun RedLutDownloadScreen(
         }
 
         // Above the WebView (AndroidView) so ✕ always receives taps.
-        RedCloseChip(
-            onClick = ::finishAndClose,
+        MonitorActionButton(
+            stringResource(R.string.action_close),
             modifier =
                 Modifier
                     .align(Alignment.TopStart)
                     .zIndex(2f)
                     .statusBarsPadding()
                     .padding(start = 8.dp, top = 4.dp),
-        )
-    }
-}
-
-/** Top-leading close control that stays above WebView hit targets. */
-@Composable
-private fun RedCloseChip(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    Box(
-        modifier =
-            modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(LiveDesign.glassBright.copy(alpha = 0.92f))
-                .clickable(
-                    interactionSource = interaction,
-                    indication = null,
-                    role = Role.Button,
-                    onClick = onClick,
-                ),
-        contentAlignment = Alignment.Center,
-    ) {
-        MonitorIcon(MonitorIcon.X, stringResource(R.string.action_close), Modifier.size(18.dp), LiveDesign.text)
+            onClick = ::finishAndClose,
+        ) { tint -> MonitorIcon(MonitorIcon.X, null, Modifier.size(18.dp), tint) }
     }
 }
 
@@ -360,10 +330,13 @@ private fun RedDownloadGateway(
                 )
                 Spacer(Modifier.height(20.dp))
                 if (readiness.network == RedLutNetworkAvailability.ON_CAMERA_ACCESS_POINT) {
-                    CapsuleButton(
+                    MonitorCameraAction(
                         "Download over internet",
-                        onClick = onHop,
+                        primary = true,
                         enabled = canHop,
+                        contentDescription = "Download over internet",
+                        onClick = onHop,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -379,10 +352,14 @@ private fun RedDownloadGateway(
                 }
             }
             Spacer(Modifier.height(16.dp))
-            CapsuleButton(
-                if (switchingNetworks) "Cancel" else "Close",
+            val dismiss = if (switchingNetworks) "Cancel" else "Close"
+            MonitorCameraAction(
+                dismiss,
+                primary = false,
+                enabled = true,
+                contentDescription = dismiss,
                 onClick = onClose,
-                bright = false,
+                modifier = Modifier.fillMaxWidth(),
             )
         } else {
             Text(
@@ -399,42 +376,24 @@ private fun RedDownloadGateway(
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(24.dp))
-            CapsuleButton("Continue to RED's page", onClick = onContinue)
+            MonitorCameraAction(
+                "Continue to RED's page",
+                primary = true,
+                enabled = true,
+                contentDescription = "Continue to RED's page",
+                onClick = onContinue,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Spacer(Modifier.height(12.dp))
-            CapsuleButton("Close", onClick = onClose, bright = false)
+            MonitorCameraAction(
+                "Close",
+                primary = false,
+                enabled = true,
+                contentDescription = "Close",
+                onClick = onClose,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
-    }
-}
-
-@Composable
-private fun CapsuleButton(
-    label: String,
-    onClick: () -> Unit,
-    bright: Boolean = true,
-    enabled: Boolean = true,
-) {
-    TextButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(
-                    when {
-                        !enabled -> LiveDesign.glass.copy(alpha = 0.5f)
-                        bright -> LiveDesign.glassBright
-                        else -> LiveDesign.glass
-                    },
-                ),
-    ) {
-        Text(
-            label,
-            color = if (enabled) LiveDesign.text else LiveDesign.muted,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-        )
     }
 }
 
@@ -483,11 +442,25 @@ private fun RedStatusPage(
         }
         primary?.let { (label, action) ->
             Spacer(Modifier.height(20.dp))
-            CapsuleButton(label, onClick = action)
+            MonitorCameraAction(
+                label,
+                primary = true,
+                enabled = true,
+                contentDescription = label,
+                onClick = action,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         secondary?.let { (label, action) ->
             Spacer(Modifier.height(10.dp))
-            CapsuleButton(label, onClick = action, bright = false)
+            MonitorCameraAction(
+                label,
+                primary = false,
+                enabled = true,
+                contentDescription = label,
+                onClick = action,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

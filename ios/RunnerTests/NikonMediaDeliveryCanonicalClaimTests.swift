@@ -1,5 +1,5 @@
 import Foundation
-import OpenCineFrameIO
+import OpenCineAppKit
 import XCTest
 
 @testable import Runner
@@ -13,6 +13,10 @@ import XCTest
 
 /// SIMULATED canonical files and the actual byte-store producer retirement.
 @MainActor final class NikonMediaDeliveryCanonicalClaimTests: XCTestCase {
+    /// A SIMULATED hop that never leaves a network: only its token authority is used.
+    private static func route() -> MonitorInternetHop<Int> {
+        .init(port: .init(onCameraNetwork: { false }, leave: { route, _ in route }, rejoin: { _, _ in }))
+    }
     func testPlannedProducerRetirementRequiresTheCapturedCurrentRouteForDelivery() throws {
         try fixture { store, clip, codec, bytes in
             let facts = DeliveryCanonicalFacts()
@@ -25,8 +29,8 @@ import XCTest
                 }, admitted: { facts.native })
             XCTAssertTrue(action.isCurrent)
             XCTAssertEqual(facts.canonicalReads, 0)
-            var route = FrameioInternetHop()
-            let captured = route.begin()
+            let route = Self.route()
+            let captured = try XCTUnwrap(route.begin(0))
             bytes.retire()
             facts.native = false
             XCTAssertFalse(action.sourceIsCurrent)
@@ -50,8 +54,8 @@ import XCTest
                     canonicalCurrent: {
                         facts.root == "SIMULATED-root" && facts.generation == 0
                     }, admitted: { facts.native })
-                var route = FrameioInternetHop()
-                let captured = route.begin()
+                let route = Self.route()
+                let captured = try XCTUnwrap(route.begin(0))
                 bytes.retire()
                 facts.native = false
                 XCTAssertTrue(action.contentIsCurrent && route.owns(captured))

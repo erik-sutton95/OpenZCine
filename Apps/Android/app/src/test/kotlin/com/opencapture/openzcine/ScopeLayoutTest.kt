@@ -6,6 +6,7 @@ import com.opencapture.monitorui.MonitorScopePoint
 import com.opencapture.openzcine.lut.PackedStoredLut
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
+import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.appkit.MonitorAssistState
 import kotlin.test.Test
@@ -17,7 +18,7 @@ import kotlin.test.assertTrue
 /** Pure multi-scope selection, demand, and placement policy checks. */
 class ScopeLayoutTest {
     @Test
-    fun `portrait keeps two newest selections in canonical presentation order`() {
+    fun `portrait keeps the first two eligible canonical selections`() {
         val selected =
             setOf(
                 ScopeKind.WAVEFORM,
@@ -26,29 +27,9 @@ class ScopeLayoutTest {
                 ScopeKind.TRAFFIC_LIGHTS,
             )
 
-        val displayed =
-            portraitDisplayedScopes(
-                selected,
-                listOf(
-                    ScopeKind.WAVEFORM,
-                    ScopeKind.PARADE,
-                    ScopeKind.HISTOGRAM,
-                    ScopeKind.TRAFFIC_LIGHTS,
-                ),
-            )
-
-        assertEquals(listOf(ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS), displayed)
-    }
-
-    @Test
-    fun `portrait migration without order falls back to canonical prefix`() {
-        assertEquals(
-            listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
-            portraitDisplayedScopes(
-                setOf(ScopeKind.WAVEFORM, ScopeKind.PARADE, ScopeKind.HISTOGRAM),
-                emptyList(),
-            ),
-        )
+        val displayed = portraitDisplayedScopes(selected)
+        assertEquals(listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE), displayed)
+        assertEquals(4, selected.size, "Fit placement must not alter the active selection")
     }
 
     @Test
@@ -190,10 +171,7 @@ class ScopeLayoutTest {
             ) { null }?.lookOrdinal,
         )
         val stored =
-            StoredLutSelection.generated(
-                StoredLutCategory.CUSTOM,
-                "look-123456789abc.cube",
-            )
+            requireNotNull(StoredLutSelection.fromPersisted(StoredLutCategory.CUSTOM.name, "look-123456789abc.cube"))
         assertNull(
             scopeVectorLutRequest(
                 FeedLutSelection.Stored(stored),

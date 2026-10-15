@@ -1,6 +1,5 @@
 package com.opencapture.openzcine.media
 
-import com.opencapture.opencine.media.MonitorMediaShareIntentSpec
 import com.opencapture.opencine.media.MonitorMediaShareStager
 import com.opencapture.opencine.media.MonitorMediaShareStagingPolicy
 import com.opencapture.opencine.media.isSafeMonitorMediaDisplayName
@@ -17,26 +16,11 @@ public typealias StagedMediaShare = com.opencapture.opencine.media.MonitorStaged
 
 internal fun isSafeMediaDisplayName(filename: String): Boolean = isSafeMonitorMediaDisplayName(filename)
 
-/** Exact Android intent content over the shared one/many-file policy. */
-internal data class MediaShareIntentSpec(
-    val action: String,
-    val mimeType: String,
-    val streamExtraIncluded: Boolean,
-    val clipDataLabel: String,
-    val grantsReadUriPermission: Boolean,
-    val chooserTitle: String,
-) {
-    companion object {
-        fun forShare(share: StagedMediaShare): MediaShareIntentSpec = forShares(listOf(share))
-        fun forShares(shares: List<StagedMediaShare>): MediaShareIntentSpec {
-            val value = MonitorMediaShareIntentSpec.forShares(shares, batchLabel = "OpenZCine media")
-            return MediaShareIntentSpec(value.action, value.mimeType, value.streamExtraIncluded,
-                value.clipDataLabel, value.grantsReadUriPermission, value.chooserTitle)
-        }
-        const val ACTION_SEND: String = MonitorMediaShareIntentSpec.ACTION_SEND
-        const val ACTION_SEND_MULTIPLE: String = MonitorMediaShareIntentSpec.ACTION_SEND_MULTIPLE
-    }
-}
+/** The batch label OpenZCine's chooser shows for several files (the shared intent policy). */
+internal const val ZMediaShareBatchLabel: String = "OpenZCine media"
+
+/** OpenZCine's chooser and Gallery owner over the `share/ready` FileProvider subtree. */
+internal val ZMediaShare = com.opencapture.opencine.appkit.MediaShare("OpenZCine", ".media-share", ZMediaShareBatchLabel)
 
 /** Source metadata and the deployed FileProvider retention facts; shared Media owns file IO. */
 class MediaShareStager private constructor(private val owner: MonitorMediaShareStager) {

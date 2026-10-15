@@ -1,7 +1,18 @@
 import Foundation
 import OpenCineAppKit
 import OpenCineFrameIO
+import OpenCineFrameIOApple
+import OpenCineMedia
+import OpenZCineCore
 import os
+
+/// OpenZCine's Frame.io namespaces over the shared Apple host (A2-57). The keychain service and
+/// destination key are unchanged, so saved sign-ins and the remembered project keep working.
+enum NikonFrameio {
+    static var tokens: FrameioKeychainTokenStore { .init(service: "OpenZCine.frameio") }
+    static var destinations: FrameioDestinationStore { .init(key: "frameio.destination.v1") }
+    static let logger = Logger(subsystem: "OpenZCine", category: "frameio")
+}
 
 /// One instance account epoch. The native token transaction and retirement share this lock.
 final class NikonFrameioAccount: @unchecked Sendable {
@@ -31,9 +42,7 @@ final class NikonFrameioAccount: @unchecked Sendable {
 struct NikonFrameioCapturedTokens: FrameioTokenStorage {
     let account: NikonFrameioAccount.Receipt
     let native: any FrameioTokenStorage
-    init(
-        account: NikonFrameioAccount.Receipt, native: any FrameioTokenStorage = FrameioTokenStore()
-    ) {
+    init(account: NikonFrameioAccount.Receipt, native: any FrameioTokenStorage = NikonFrameio.tokens) {
         self.account = account
         self.native = native
     }
@@ -69,24 +78,42 @@ struct NikonFrameioProjectContext: Sendable {
 }
 
 extension NativeAppModel {
+    var frameioConfiguration: FrameioConfiguration? { FrameioAppConfiguration.read() }
+    var isFrameioConfigured: Bool { frameioConfiguration != nil }
+    /// Configured AND holding a token. The keychain token outlives app deletion, so a build
+    /// without Frame.io config can still find one; reporting it as "connected" there showed a
+    /// Log out button in a build that can't use (or clear) the session.
+    var isFrameioConnected: Bool { isFrameioConfigured && NikonFrameio.tokens.load() != nil }
+
+    /// The settings task retains the exact account receipt it presented before native sign-in.
+    func connectFrameio(captured account: NikonFrameioAccount.Receipt) async throws {
+        guard let config = frameioConfiguration else { throw FrameioError.notConfigured }
+        guard account.isCurrent, !Task.isCancelled else { throw CancellationError() }
+        _ = try await FrameioWebAuthenticator(
+            config: config,
+            transport: NikonFrameioAdmittedTransport(
+                native: FrameioURLSessionTransport(session: .shared),
+                admission: .init { account.isCurrent }),
+            tokens: NikonFrameioCapturedTokens(account: account)
+        ).signIn()
+        guard account.isCurrent, !Task.isCancelled else { throw CancellationError() }
+    }
+
+    func disconnectFrameio() {
+        // Clearing the stored token needs no OAuth config. Never gate log-out on it, or an
+        // unconfigured build can't shed a keychain session left by a previous install.
+        _ = frameioAccount.retire()
+        NikonFrameio.tokens.clear()
+        NikonFrameio.destinations.persist(nil)
+    }
+
     func loadFrameioProjectListing(
-        captured: NikonMediaDeliveryCapture,
-        admission: MonitorDeliveryAdmission
+        captured: NikonMediaDeliveryCapture, admission: MonitorDeliveryAdmission
     ) async throws -> NikonFrameioProjectContext {
-        let service = try captured.frameioClient(admission: admission)
-        guard admission.isCurrent() else { throw CancellationError() }
-        guard let account = try await service.accounts().first else { throw FrameioError.noProject }
-        guard admission.isCurrent() else { throw CancellationError() }
-        guard let workspace = try await service.workspaces(accountID: account.id).first else {
-            throw FrameioError.noProject
-        }
-        guard admission.isCurrent() else { throw CancellationError() }
-        let projects = try await service.projects(accountID: account.id, workspaceID: workspace.id)
+        // Every request of the shared listing passes the captured transport's admission.
+        let listing = try await captured.frameioClient(admission: admission).firstWorkspaceProjects()
         guard admission.isCurrent(), captured.account.isCurrent else { throw CancellationError() }
-        return .init(
-            listing: .init(
-                accountID: account.id, workspaceID: workspace.id,
-                workspaceName: workspace.name, projects: projects), account: captured.account)
+        return .init(listing: listing, account: captured.account)
     }
     func createFrameioProject(
         name: String, captured: NikonMediaDeliveryCapture,
@@ -108,69 +135,47 @@ extension NativeAppModel {
         project: FrameioProject, context: NikonFrameioProjectContext,
         captured: NikonMediaDeliveryCapture
     ) {
-        guard context.account.isCurrent, captured.account.isCurrent, captured.isCurrent else {
-            return
-        }
-        guard let folder = project.rootFolderID else { return }
-        let destination = FrameioDestination(
-            accountID: context.listing.accountID, workspaceID: context.listing.workspaceID,
-            projectID: project.id, projectName: project.name, folderID: folder)
+        guard context.account.isCurrent, captured.account.isCurrent, captured.isCurrent,
+            let destination = FrameioDestination(project: project, in: context.listing)
+        else { return }
         captured.frameioDestination = destination
-        FrameioDestination.persist(destination)
+        NikonFrameio.destinations.persist(destination)
     }
     func uploadCapturedFrameio(
-        _ clip: MediaClip, source: URL, metadata: MediaClipDeliveryMetadata?,
+        _ clip: MediaClip, source: URL,
         capture: NikonMediaDeliveryCapture,
         admission supplied: MonitorDeliveryAdmission,
-        progress: @escaping @MainActor @Sendable (Double) -> Void,
-        uploadName: String? = nil, existingTicket: UUID? = nil
+        progress: @escaping @MainActor @Sendable (Double) -> Void
     ) async throws {
         let admission = MonitorDeliveryAdmission {
-            supplied.isCurrent() && capture.account.isCurrent && supplied.isCurrent()
-                && capture.account.isCurrent
+            supplied.isCurrent() && capture.account.isCurrent
         }
-        guard admission.isCurrent(), capture.account.isCurrent else { throw CancellationError() }
-        let ticket: UUID
-        if let existingTicket {
-            guard frameioUploadInFlight[clip.id] == existingTicket else {
-                throw CancellationError()
-            }
-            ticket = existingTicket
-        } else {
-            guard frameioUploadInFlight[clip.id] == nil else { throw FrameioError.uploadIncomplete }
-            ticket = UUID()
-            frameioUploadInFlight[clip.id] = ticket
-        }
-        defer {
-            if existingTicket == nil, frameioUploadInFlight[clip.id] == ticket {
-                frameioUploadInFlight[clip.id] = nil
-            }
-        }
+        guard admission.isCurrent() else { throw CancellationError() }
+        guard frameioUploadInFlight[clip.id] == nil else { throw FrameioError.uploadIncomplete }
+        let ticket = UUID()
+        frameioUploadInFlight[clip.id] = ticket
+        defer { if frameioUploadInFlight[clip.id] == ticket { frameioUploadInFlight[clip.id] = nil } }
         let service = try capture.frameioClient(admission: admission)
         let destination: FrameioDestination
         if let saved = capture.frameioDestination {
             destination = saved
         } else {
-            let context = try await loadFrameioProjectListing(
-                captured: capture, admission: admission)
+            let context = try await loadFrameioProjectListing(captured: capture, admission: admission)
             guard let project = context.listing.projects.first,
-                let folder = project.rootFolderID
+                let first = FrameioDestination(project: project, in: context.listing)
             else { throw FrameioError.noProject }
-            destination = .init(
-                accountID: context.listing.accountID, workspaceID: context.listing.workspaceID,
-                projectID: project.id, projectName: project.name, folderID: folder)
             guard admission.isCurrent() else { throw CancellationError() }
-            capture.frameioDestination = destination
-            FrameioDestination.persist(destination)
+            destination = first
+            capture.frameioDestination = first
+            NikonFrameio.destinations.persist(first)
         }
-        try MediaShareStaging.validateReadableFile(at: source)
+        try MonitorMediaShareStaging.validateShareableFile(at: source)
         let size =
             (try FileManager.default.attributesOfItem(atPath: source.path)[.size] as? NSNumber)?
             .intValue ?? 0
         guard size > 0, admission.isCurrent() else { throw CancellationError() }
-        frameioUploadProgress[clip.id] = 0
         capture.update(clip) { $0.frameioStatus = .uploading }
-        let name = uploadName ?? source.lastPathComponent
+        let name = source.lastPathComponent
         do {
             let fileID = try await service.upload(
                 fileURL: source, name: name,
@@ -180,25 +185,21 @@ extension NativeAppModel {
                 await MainActor.run {
                     guard admission.isCurrent(), self.frameioUploadInFlight[clip.id] == ticket
                     else { return }
-                    self.frameioUploadProgress[clip.id] = fraction
                     progress(fraction)
                 }
             }
             guard admission.isCurrent(), frameioUploadInFlight[clip.id] == ticket else {
                 throw CancellationError()
             }
-            frameioLogger.info(
+            NikonFrameio.logger.info(
                 "uploaded \(name, privacy: .private(mask: .hash)) → file \(fileID, privacy: .private(mask: .hash))"
             )
-            frameioUploadProgress[clip.id] = nil
-            if metadata != nil { try? writeFrameioMetadataSidecar(metadata, nextTo: source) }
             capture.update(clip) {
                 $0.frameioStatus = .uploaded
                 $0.frameioFileID = fileID
             }
         } catch {
             if admission.isCurrent(), frameioUploadInFlight[clip.id] == ticket {
-                frameioUploadProgress[clip.id] = nil
                 capture.update(clip) { $0.frameioStatus = .failed }
             }
             throw error

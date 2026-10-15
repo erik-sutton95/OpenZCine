@@ -113,8 +113,6 @@
     <string name="pairing_hotspot_camera_3">Search for Wi‑Fi network → join this phone\'s hotspot</string>
     <string name="pairing_hotspot_camera_4">IP address → Obtain automatically</string>
     <string name="pairing_permissions_group">Android permissions</string>
-    <string name="pairing_permission_camera">Camera</string>
-    <string name="pairing_permission_camera_detail">Scan the Wi‑Fi details off the camera screen.</string>
     <string name="pairing_permission_nearby">Nearby devices</string>
     <string name="pairing_permission_location">Location</string>
     <string name="pairing_permission_nearby_detail">Find and stream from your camera over Wi‑Fi.</string>
@@ -133,7 +131,6 @@
     <string name="watch_on_camera_ap_message">This phone is on the camera\'s own Wi‑Fi, which doesn\'t pass traffic between devices — the broadcast can\'t reach it here. Switch to your regular Wi‑Fi, then join.</string>
     <string name="conn_share_diagnostics">Share diagnostics</string>
     <string name="pairing_connect_my_camera">Connect my camera</string>
-    <string name="pairing_permission_required">Both are required to connect to your camera — grant them to continue.</string>
     <string name="pairing_on_camera">On camera</string>
     <string name="pairing_on_phone">On this phone</string>
     <string name="pairing_looking_for_cameras">Looking for cameras</string>
@@ -164,6 +161,15 @@
     <string name="conn_connected_detail">%1$s is ready.</string>
     <string name="conn_failed_title">Couldn\'t connect</string>
     <string name="conn_failed_detail">Check your network and try again.</string>
+    <!-- Saved-setup reconnect failures (SavedCameraConnector). -->
+    <string name="conn_usb_not_ready">Connect your saved USB-C camera and approve Android access before reconnecting.</string>
+    <string name="conn_wifi_off_detail">Joining the camera\'s Wi‑Fi needs Wi‑Fi turned on. Turn on Wi‑Fi, then try again.</string>
+    <string name="conn_ap_ssid_missing">This camera needs its Wi‑Fi network name. Pair it again to refresh the profile.</string>
+    <string name="conn_ap_key_missing">The Wi‑Fi key for %1$s is not available on this phone. Pair again to save it.</string>
+    <string name="conn_ap_join_failed">Couldn\'t join %1$s. Keep the camera\'s network screen on, stay near the camera, and try again. If Android shows \"Searching for devices…\" and finds nothing, re-pair with a fresh SSID/key scan.</string>
+    <string name="conn_ap_camera_not_found">Joined %1$s but couldn\'t find the camera on its network. Keep the camera on its connection screen and try again.</string>
+    <string name="conn_unreachable_detail">Couldn\'t reach %1$s. Check the camera connection and try again.</string>
+    <string name="conn_wrong_network_hint">If the camera is on a router or hotspot, make sure this device is on the same network, where it was reached last time.</string>
 
     <!-- Saved cameras: the add-setup card and the cameras page rows. -->
     <string name="saved_your_cameras">Your cameras</string>
@@ -300,7 +306,6 @@
     <string name="camera_state_other_change">. Another camera change is in progress.</string>
     <string name="camera_state_read_only">Read-only on this camera.</string>
     <string name="camera_state_locked">. Camera controls are locked.</string>
-    <string name="camera_state_change_hint">. Double tap to change.</string>
     <string name="camera_picker_description">%1$s camera control picker. %2$s.</string>
     <string name="action_close">Close</string>
     <string name="camera_controls_unavailable">Controls are unavailable until the camera is connected and unlocked.</string>
@@ -389,29 +394,9 @@
     <string name="temperature_check">CHECK</string>
     <string name="temperature_hot">HOT</string>
     <string name="command_dashboard_description">Command dashboard. Swipe up to view Image, Focus, Audio, and Monitor controls.</string>
-    <string name="command_side_description">Image, Focus, Audio, and Monitor controls. Swipe up to reveal more command controls.</string>
-    <string name="command_health_temp">Temp</string>
-    <string name="command_health_storage">Storage</string>
-    <string name="command_health_camera">Camera</string>
-    <string name="command_health_lens">Lens</string>
     <string name="command_health_fps">FPS</string>
     <string name="command_health_read">Read</string>
-    <string name="command_move_earlier">Move %1$s earlier</string>
-    <string name="command_move_later">Move %1$s later</string>
-    <string name="command_state_applying">. Applying change.</string>
-    <string name="command_state_pending">. Another control is being applied.</string>
-    <string name="command_state_read_only">Read-only.</string>
-    <string name="command_state_read_only_reorder">. %1$s Long press and drag to reorder.</string>
-    <string name="command_state_locked_reorder">. Controls are locked. Long press and drag to reorder.</string>
-    <string name="command_state_change_reorder">. Double tap to change; long press and drag to reorder.</string>
-    <string name="command_state_locked">. Controls are locked.</string>
-    <string name="command_change_description">Change %1$s</string>
-    <string name="command_more">MORE ⌄</string>
-    <string name="command_more_description">More command controls below. Swipe up to reveal them.</string>
     <string name="command_current_value">Current: %1$s</string>
-    <string name="command_health_value_description">%1$s %2$s</string>
-    <string name="command_value_description">%1$s: %2$s</string>
-    <string name="command_read_only_description">. %1$s</string>
 
     <!-- Shared monitor chrome. -->
     <string name="timecode_unavailable_description">Camera timecode unavailable</string>
@@ -830,6 +815,7 @@
     <string name="settings_help">Help</string>
     <string name="settings_control_this_device">This device</string>
     <string name="settings_control_broadcaster">The broadcaster</string>
+    <string name="help_link_saved_cameras">Saved setups on this phone. Pair, rename or forget a camera from Your cameras.</string>
     <string name="help_link_transport">Transport is selected on the connection screen; USB-C and Wi-Fi are exclusive for the current session.</string>
     <string name="help_link_held_by">Which device the camera is currently taking commands from.</string>
     <string name="help_link_stream_preset">Combines Nikon live-view stream size and compression grade into three operator-facing choices.</string>
@@ -862,10 +848,6 @@
     <!-- Wave 2 parity: feed-state words the FPS chip shows instead of a stale number, the
         armed add-setup watch pills, and the TalkBack labels the landscape chrome never had.
         Added centrally so no two agents contend on this file. -->
-    <string name="monitor_fps_no_link">NO LINK</string>
-    <string name="monitor_fps_recov">RECOV</string>
-    <string name="monitor_fps_busy">BUSY</string>
-    <string name="monitor_fps_fail">FAIL</string>
     <string name="monitor_waiting_live_view">WAITING FOR LIVE VIEW</string>
     <string name="conn_watch_usb_detail">Connect %1$s with a USB-C cable.</string>
     <string name="conn_watch_hotspot_detail">Turn on Personal Hotspot, then set the camera to join it.</string>

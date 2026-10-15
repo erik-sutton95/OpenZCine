@@ -4,8 +4,10 @@ import MonitorPresentation
 import MonitorUI
 import OSLog
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineCameraControls
+import OpenCineCameraVocabulary
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -110,89 +112,24 @@ enum MediaCellThumbnailCache {
 
 // MARK: - Browser
 
-/// Geometry for a media popup panel anchored to its trigger button.
-///
-/// The preferred width is a *preference, not a promise*: a 400pt panel cannot fit a 393pt phone,
-/// and no clamp rescues a width that does not fit — a trailing-aligned `min(max(…))` silently
-/// inverts and shoves the panel off the leading edge. So the width is bounded by the safe
-/// viewport first, which is precisely what makes the two-edge clamp well-formed afterwards.
-///
-/// Pure and host-local (the values feed straight into `.offset`/`.frame`) so the phone-width
-/// matrix is covered by unit tests instead of twenty screenshots.
-struct MediaPopupPlacement: Equatable {
-    /// Leading edge relative to the host origin.
-    let x: CGFloat
-    /// Top edge relative to the host origin.
-    let y: CGFloat
-    let width: CGFloat
-    let maxHeight: CGFloat
-
-    /// Gap kept between the panel and every safe-area edge.
-    static let margin: CGFloat = 12
-
-    /// Width and leading edge — the rule every anchored media popup shares. Only the vertical
-    /// rule differs between the below-anchor and above-anchor panels.
-    static func fitted(
-        anchor: CGRect,
-        host: CGRect,
-        safeArea: MonitorEdgeInsets,
-        preferredWidth: CGFloat
-    ) -> (x: CGFloat, width: CGFloat) {
-        let minX = host.minX + max(0, CGFloat(safeArea.leading))
-        let maxX = host.maxX - max(0, CGFloat(safeArea.trailing))
-        let width = max(0, min(preferredWidth, maxX - minX - margin * 2))
-        // Trailing-align to the trigger, then clamp inside BOTH margins. With the width already
-        // bounded, `minX + margin <= maxX - width - margin`, so the outer `min` can no longer
-        // overrule the inner `max`.
-        let trailing = anchor.width > 1 ? anchor.maxX : maxX - margin
-        let x = min(max(trailing - width, minX + margin), maxX - width - margin)
-        return (x - host.minX, width)
-    }
-
-    /// Panel hanging below its trigger, kept clear of every safe-area edge. A stale anchor (one
-    /// frame behind a rotation or an iPad window resize) can shift the panel but can no longer
-    /// push it off-screen: both axes are clamped into the live safe viewport every layout pass.
-    static func below(
-        anchor: CGRect,
-        host: CGRect,
-        safeArea: MonitorEdgeInsets,
-        preferredWidth: CGFloat,
-        minimumHeight: CGFloat
-    ) -> MediaPopupPlacement {
-        let (x, width) = fitted(
-            anchor: anchor, host: host, safeArea: safeArea, preferredWidth: preferredWidth)
-        let minY = host.minY + max(0, CGFloat(safeArea.top))
-        let maxY = host.maxY - max(0, CGFloat(safeArea.bottom))
-        let desiredTop = anchor.width > 1 ? anchor.maxY + 8 : minY + 120
-        let top = max(minY + margin, min(desiredTop, maxY - margin - minimumHeight))
-        return MediaPopupPlacement(
-            x: x,
-            y: top - host.minY,
-            width: width,
-            maxHeight: max(0, maxY - margin - top)
-        )
-    }
-}
-
 /// Source composition for the complete shared catalog; card, RAW and delivery facts stay typed.
 struct MediaBrowserView: View {
     var safeArea: MonitorEdgeInsets? = nil
     @Environment(NativeAppModel.self) private var model
     @Environment(\.monitorWindowGeometry) private var windowGeometry
-    @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
+    @Environment(MonitorDeliveryCoordinator.self) private var deliveryCoordinator
     @State private var playing: MonitorMediaGalleryOpen<MediaClip>?
     @State private var photo: MonitorMediaGalleryOpen<MediaClip>?
     @State private var series: MonitorMediaGalleryOpen<MediaClip>?
-    @State private var resumeShareDestination: MediaDeliveryDestination?
-    @State private var deliveryRequest: MediaDeliveryRequest?
-    @State private var deliveryAdmission: NikonMediaLibraryAction?
+    @State private var deliveryRequest: NikonDeliveryRequest?
 
     var body: some View {
         ZStack {
             if let library = model.mediaLibrary {
                 let projection = model.mediaGalleryProjection
                 MonitorOperatorCatalogScreen(
-                    library: library, brand: "OpenZCine", safeArea: resolvedSafeArea,
+                    library: library, brand: model.connectedIdentity?.displayName ?? "OpenZCine",
+                    safeArea: resolvedSafeArea,
                     sourceAvailable: model.isConnected, operations: operations,
                     presentation: model.mediaGalleryPresentation(projection), navigation: navigate,
                     sourceFilter: model.applyMediaGalleryFilter,
@@ -241,8 +178,7 @@ struct MediaBrowserView: View {
                                 model: model, clips: records.map(\.payload), action: admission),
                             library.isCurrent(token), capture.isCurrent
                         else { return }
-                        deliveryAdmission = admission
-                        deliveryRequest = .init(clips: capture.clips, capture: capture)
+                        deliveryRequest = .init(capture: capture)
                     }
                 ) { request in
                     let clip = request.record.payload
@@ -263,23 +199,26 @@ struct MediaBrowserView: View {
             deliveryOverlays
         }
         .ignoresSafeArea().observeMonitorWindowGeometry()
-        .fullScreenCover(item: $playing, onDismiss: { resumeShareDestination = nil }) { request in
+        .overlay {
+            MonitorOperatorDeliveryChrome(
+                model: deliveryCoordinator.lifetime, scope: .surface, remoteDisplayName: "Frame.io")
+        }
+        .fullScreenCover(item: $playing) { request in
             MediaPlayerView(
                 clips: request.playlist.map(\.payload), startingAt: request.record.payload,
-                initialShareDestination: resumeShareDestination, opening: request
+                opening: request
             )
             .environment(model).environment(deliveryCoordinator)
         }
         .fullScreenCover(item: $photo) { request in
-            MediaPhotoViewer(clip: request.record.payload, opening: request).environment(model)
+            MediaPhotoViewer(clip: request.record.payload, opening: request)
+                .environment(model).environment(deliveryCoordinator)
         }
         .fullScreenCover(item: $series) { request in
-            MediaBurstSeriesView(opening: request).environment(model)
+            MediaBurstSeriesView(opening: request)
+                .environment(model).environment(deliveryCoordinator)
         }
         .animation(.spring(duration: 0.32), value: deliveryCoordinator.isActive)
-        .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
-        .onDisappear { deliveryCoordinator.exitLocalOverlayContext() }
-        .mediaDeliveryShareSheet(enabled: playing == nil)
     }
 
     private var operations: MonitorMediaGalleryOperations<MediaClip> {
@@ -300,7 +239,7 @@ struct MediaBrowserView: View {
                 .init(
                     download: model.isConnected && record.payload.handle != nil
                         && !model.isClipDownloaded(record.payload),
-                    share: true, delete: true)
+                    share: true, delete: model.canDeleteMedia([record.payload]))
             }, deletionMessage: { model.deletionConfirmMessage(for: $0.map(\.payload)) },
             openNotice: { record in
                 MediaClipFilename.isR3D(record.payload.filename)
@@ -328,41 +267,9 @@ struct MediaBrowserView: View {
         }
     }
     private func begin() {
-        if let pending = model.pendingMediaDelivery {
-            let captured = pending.take()
-            model.pendingMediaDelivery = nil
-            if let captured {
-                deliveryAdmission = captured.action
-                deliveryRequest = .init(
-                    clips: captured.clips, preferredDestination: .frameio, capture: captured)
-            }
-        }
         model.refreshMediaClips()
         if !model.isConnected || model.mediaBrowserSource != .camera {
             model.mediaLibrary?.begin()
-        }
-        if let resume = model.pendingHopShareResumeClips {
-            model.pendingHopShareResumeClips = nil
-            let records =
-                model.mediaLibrary?.records.filter { row in
-                    resume.contains { $0.id == row.payload.id }
-                } ?? []
-            if resume.count == 1, let record = records.first,
-                model.isClipDownloaded(record.payload), let library = model.mediaLibrary
-            {
-                resumeShareDestination = .frameio
-                open(.init(record: record, playlist: records, admission: library.actionToken))
-            } else if !resume.isEmpty, let action = model.captureMediaLibraryAction(resume),
-                action.isCurrent
-            {
-                if let captured = NikonMediaDeliveryCapture(
-                    model: model, clips: resume, action: action)
-                {
-                    deliveryAdmission = action
-                    deliveryRequest = .init(
-                        clips: captured.clips, preferredDestination: .frameio, capture: captured)
-                }
-            }
         }
         if !model.isStandaloneMediaLibraryPresented, model.mediaBrowserSource == .iPhone,
             !model.hasLocalMediaClips
@@ -378,47 +285,18 @@ struct MediaBrowserView: View {
         {
             open(.init(record: record, playlist: library.records, admission: library.actionToken))
         }
+        if DemoHarness.openMediaAction == "share", let library = model.mediaLibrary,
+            let record = library.records.first(where: { model.isClipDownloaded($0.payload) }),
+            let capture = NikonMediaDeliveryCapture(model: model, clips: [record.payload])
+        {
+            deliveryRequest = .init(capture: capture)
+        }
     }
     @ViewBuilder private var deliveryOverlays: some View {
-        if let toast = deliveryCoordinator.completionToast, deliveryCoordinator.showsLocalOverlay {
-            VStack {
-                Spacer()
-                Text(toast).font(MonitorTheme.font(13, weight: .medium)).foregroundStyle(
-                    MonitorTheme.text
-                )
-                .multilineTextAlignment(.center).padding(.horizontal, 16).padding(.vertical, 10)
-                .liquidGlass(in: Capsule(), interactive: false).padding(
-                    .bottom, max(CGFloat(safeArea?.bottom ?? 0) + 80, 96))
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).transition(.opacity).zIndex(5)
-        }
         if let request = deliveryRequest {
-            MediaDeliveryPopupOverlay(
-                clips: request.clips, anchorFrame: .zero, placement: .aboveAnchor,
-                preferredDestination: request.preferredDestination, safeArea: safeArea ?? .zero,
-                capture: request.capture,
-                onBeginDelivery: { value in
-                    guard let capture = value.capture, capture === request.capture,
-                        capture.isCurrent
-                    else { return }
-                    if deliveryRequest?.id == request.id {
-                        deliveryRequest = nil
-                        deliveryAdmission = nil
-                    }
-                    deliveryCoordinator.beginCaptured(value, model: model)
-                },
-                onDismiss: {
-                    if deliveryRequest?.id == request.id {
-                        deliveryRequest = nil
-                        deliveryAdmission = nil
-                    }
-                }
-            )
-            .environment(model)
-        }
-        if deliveryCoordinator.showsLocalOverlay, let state = deliveryCoordinator.overlayState {
-            MediaDeliveryTopAnchor(horizontalPadding: 24) {
-                MediaDeliveryOverlay(state: state, onCancel: { deliveryCoordinator.cancel() })
-            }.transition(.move(edge: .top).combined(with: .opacity)).zIndex(50)
+            request.popup(model, coordinator: deliveryCoordinator) {
+                if deliveryRequest?.id == request.id { deliveryRequest = nil }
+            }
         }
     }
     private var resolvedSafeArea: EdgeInsets {
@@ -577,7 +455,7 @@ private struct MediaClipThumbnail: View {
         guard !isPhoto, needsDuration, isDownloaded, let localURL else { return }
         let asset = AVURLAsset(url: localURL)
         if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
-            onDuration(MediaClipFormatting.durationLabel(seconds: duration.seconds))
+            onDuration(MediaClipFormatting.durationLabel(seconds: Int(duration.seconds)))
         }
     }
 }
@@ -768,10 +646,10 @@ struct MediaPhotoViewer: View {
     var onSelected: ((MediaClip) -> Void)? = nil
     var onDeletedReturning: ((MonitorMediaLibraryActionToken) -> Void)? = nil
     @Environment(NativeAppModel.self) private var model
+    @Environment(MonitorDeliveryCoordinator.self) private var deliveryCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var context: NikonPhotoContext?
-    @State private var shareURL: URL?
-    @State private var isSharePresented = false
+    @State private var delivery: NikonDeliveryRequest?
 
     var body: some View {
         Group {
@@ -783,7 +661,9 @@ struct MediaPhotoViewer: View {
                     haptics: .init(isEnabled: { [weak model] in
                         model?.preferences.hapticsEnabled == true
                     }),
-                    coverPresented: isSharePresented, variants: context.variants,
+                    coverPresented: delivery != nil || deliveryCoordinator.isActive
+                        || deliveryCoordinator.lifetime.state.share != nil,
+                    variants: context.variants,
                     rating: rating,
                     sharing: .init(readiness: { [weak model] request in
                         guard request.isCurrent(), let model else { return .unavailable }
@@ -799,11 +679,13 @@ struct MediaPhotoViewer: View {
                     close: { dismiss() },
                     deleted: { if let onDeleted { onDeleted() } else { dismiss() } },
                     share: { request in
+                        // The same delivery choices as a clip; a still travels as its original.
                         guard request.isCurrent(),
-                            let url = model.clipLocalURL(request.record.payload)
+                            let capture = NikonMediaDeliveryCapture(
+                                model: model, clips: [request.record.payload]),
+                            capture.isCurrent
                         else { return }
-                        shareURL = url
-                        isSharePresented = true
+                        delivery = .init(capture: capture)
                     }, deletedReturning: onDeletedReturning)
             } else {
                 ProgressView().tint(MonitorTheme.accent).frame(
@@ -845,10 +727,16 @@ struct MediaPhotoViewer: View {
                 action: model.captureMediaLibraryAction(
                     [clip] + (raw.map { [$0.payload] } ?? []) + collection))
         }
-        .sheet(isPresented: $isSharePresented) {
-            if let shareURL {
-                MultiShareSheet(urls: [shareURL], metadataText: nil) { isSharePresented = false }
+        .overlay {
+            if let request = delivery {
+                request.popup(model, coordinator: deliveryCoordinator) {
+                    if delivery?.id == request.id { delivery = nil }
+                }
             }
+        }
+        .overlay {
+            MonitorOperatorDeliveryChrome(
+                model: deliveryCoordinator.lifetime, scope: .surface, remoteDisplayName: "Frame.io")
         }
     }
     private var operations: MonitorMediaGalleryOperations<MediaClip> {
@@ -859,7 +747,10 @@ struct MediaPhotoViewer: View {
                 perform: { rows, authority in
                     _ = await model.deleteMediaClips(
                         rows.map(\.payload), deleteLocation: nil, admitted: authority)
-                }), access: { _ in .init(share: true, delete: true) },
+                }),
+            access: { record in
+                .init(share: true, delete: model.canDeleteMedia([record.payload]))
+            },
             deletionMessage: { rows in
                 if rows.count > 1, !collection.isEmpty {
                     return burstDeletionMessage(rows.map(\.payload))
@@ -1006,30 +897,24 @@ struct MediaPlayerView: View {
     private let startingClip: MediaClip
     private let opening: MonitorMediaGalleryOpen<MediaClip>?
     @Environment(NativeAppModel.self) private var model
-    @Environment(MediaDeliveryCoordinator.self) private var deliveryCoordinator
+    @Environment(MonitorDeliveryCoordinator.self) private var deliveryCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var context: NikonOperatorPlaybackContext?
-    @State private var deliveryPresentation: MediaDeliveryPresentation?
-    @State private var shareButtonFrame = CGRect.zero
+    @State private var deliveryPresentation: NikonDeliveryRequest?
 
     init(
         clips: [MediaClip], startingAt clip: MediaClip,
-        initialShareDestination: MediaDeliveryDestination? = nil,
         opening: MonitorMediaGalleryOpen<MediaClip>? = nil
     ) {
         self.clips = clips
         startingClip = clip
         self.opening = opening
-        if let initialShareDestination {
-            _deliveryPresentation = State(
-                initialValue: .init(clip: clip, preferredDestination: initialShareDestination))
-        }
     }
     private var player: MonitorMediaPlaybackModel<MediaClip, String>? { context?.media.playback }
     private var playing: Bool { player?.reportedPlaying ?? player?.playRequested ?? false }
     private var covered: Bool {
         deliveryPresentation != nil || deliveryCoordinator.isActive
-            || deliveryCoordinator.sharePayload != nil
+            || deliveryCoordinator.lifetime.state.share != nil
     }
 
     var body: some View {
@@ -1062,9 +947,10 @@ struct MediaPlayerView: View {
             guard
                 let created = NikonOperatorPlaybackContext(
                     model: model, initial: request,
-                    captureDeliveryCleanup: {
-                        let outgoing = deliveryCoordinator.capturedRun
-                        return { await outgoing?.cancelAndJoin() }
+                    // Playback waits only while a delivery caches from the camera, never
+                    // cancelling it (A2-54).
+                    cameraTransferReleased: { [deliveryCoordinator] in
+                        await deliveryCoordinator.cameraTransferReleased()
                     })
             else {
                 dismiss()
@@ -1072,16 +958,11 @@ struct MediaPlayerView: View {
             }
             context = created
         }
-        .onAppear { deliveryCoordinator.enterLocalOverlayContext() }
-        .onDisappear {
-            model.isMediaPlaybackActive = false
-            deliveryCoordinator.exitLocalOverlayContext()
-        }
+        .onDisappear { model.isMediaPlaybackActive = false }
         .onChange(of: playing) { _, value in model.isMediaPlaybackActive = value }
         .onChange(of: model.playbackImageEffects) { _, _ in synchronizeNativeFacts() }
         .onChange(of: model.playbackExposureSignalMapping) { _, _ in synchronizeNativeFacts() }
         .onChange(of: model.assist.crushClipCompensation) { _, _ in synchronizeNativeFacts() }
-        .mediaDeliveryShareSheet()
     }
 
     private func sharedPlayer(_ context: NikonOperatorPlaybackContext) -> some View {
@@ -1106,14 +987,14 @@ struct MediaPlayerView: View {
                     let capture = NikonMediaDeliveryCapture(model: model, clips: [record.payload]),
                     context.media.isCurrent(owner.token), capture.isCurrent
                 else { return }
-                deliveryPresentation = .init(clip: record.payload, capture: capture)
-            }, onShareButtonFrame: { shareButtonFrame = $0 },
+                deliveryPresentation = .init(capture: capture)
+            },
             initialRatingShadeOpen: DemoHarness.ratingShade == "open",
             signalOptions: .init(
                 falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
                 reference: menus.falseColorReference),
             availableAssistTools: Set(model.playbackAssistPaletteTools.map(\.selection)),
-            initialChromeVisible: !DemoHarness.playbackCleanView, loopAvailable: false,
+            initialChromeVisible: !DemoHarness.playbackCleanView,
             paradeIntensityScale: 1,
             picture: { owner, _ in
                 if let native = context.native, context.media.playback === owner {
@@ -1134,7 +1015,7 @@ struct MediaPlayerView: View {
 
     private func closeAfterEnteredCleanup(_ captured: NikonOperatorPlaybackContext) {
         guard context === captured,
-            let finish = captured.captureCloseCleanup(run: deliveryCoordinator.capturedRun)
+            let finish = captured.captureCloseCleanup()
         else { return }
         Task { @MainActor in
             let completed = await finish()
@@ -1156,12 +1037,32 @@ struct MediaPlayerView: View {
         .init(
             download: model.isConnected && record.payload.handle != nil
                 && !model.isClipDownloaded(record.payload),
-            share: MediaDeliveryEligibility.canDeliver(
-                clipIsLocal: model.isClipDownloaded(record.payload),
-                cameraConnected: model.isConnected))
+            share: model.isClipDownloaded(record.payload) || model.isConnected,
+            delete: model.canDeleteMedia([record.payload]) && model.mediaBrowserSource == .camera
+                && record.payload.handle != nil && !covered && model.mediaDeletionProgress == nil)
     }
     private var operations: MonitorOperatorPlaybackOperations<MediaClip, String> {
         .init(
+            captureDeletion: { record in
+                guard let captured = context, let owner = captured.media.playback,
+                    let native = captured.native, captured.media.isCurrent(owner.token),
+                    owner.active?.asset.id == record.asset.id, access(record).delete == true
+                else { return nil }
+                // Deleting removes the file a delivery may be reading, so this one action
+                // still ends the running delivery first.
+                let token = owner.token, run = deliveryCoordinator.capturedRun
+                return model.capturePlaybackMediaDeletion(record.payload, cleanup: {
+                    guard context === captured, captured.media.playback === owner,
+                        captured.native === native, captured.media.isCurrent(token) else { return false }
+                    owner.close()
+                    let transfer = native.captureEnteredTransferCleanup()
+                    await run?.cancelAndJoin()
+                    await transfer()
+                    return context === captured && captured.media.playback === owner &&
+                        captured.native === native && owner.closed &&
+                        owner.token == .init(owner: token.owner, revision: token.revision &+ 1)
+                })
+            },
             favorite: { record in model.toggleClipFavorite(record.payload) }, access: access,
             rating: .init(
                 levels: [1, 2, 3, 4, 5], noticeDuration: .seconds(4),
@@ -1187,16 +1088,18 @@ struct MediaPlayerView: View {
         var rows: [MonitorPlaybackMetadataValue] = []
         if let master = clip.linkedR3DFilename { rows.append(.init("Master", master)) }
         if let storage = clip.storageID { rows.append(.init("Storage", String(storage))) }
+        let buffered = context?.media.playback.flatMap { owner -> Double? in
+            guard let context, owner.ready, context.media.isCurrent(owner.token),
+                owner.active?.asset.id == record.asset.id
+            else { return nil }
+            return context.native?.bufferedThroughSeconds(token: owner.token)
+        }
         return .init(
             availability: model.isClipDownloaded(clip) ? .original : .camera,
             progress: model.mediaDownloadProgress[clip.id],
-            buffered: model.clipBufferedFraction(clip),
             colorLabel: mapping.curve.rawValue,
-            transfer: NikonPlaybackScopeConfiguration(
-                trafficLightsCrushClip: model.assist.crushClipCompensation, mapping: mapping,
-                vectorscopeCube: nil
-            ).transfer, clipByte: Int(mapping.clipNative.rounded()),
-            metadata: rows, clockStyle: .roundedMinutesSeconds)
+            transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
+            metadata: rows, clockStyle: .roundedMinutesSeconds, bufferedThroughSeconds: buffered)
     }
     private func synchronizeNativeFacts() {
         guard let context, let player = context.media.playback,
@@ -1211,39 +1114,14 @@ struct MediaPlayerView: View {
     }
 
     @ViewBuilder private var deliveryOverlays: some View {
-        if let toast = deliveryCoordinator.completionToast, deliveryCoordinator.showsLocalOverlay {
-            VStack {
-                Spacer()
-                Text(toast).font(MonitorTheme.font(13, weight: .medium))
-                    .foregroundStyle(MonitorTheme.text).multilineTextAlignment(.center)
-                    .padding(.horizontal, 16).padding(.vertical, 10).liquidGlass(
-                        in: Capsule(), interactive: false
-                    )
-                    .padding(.bottom, 96)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).transition(.opacity).zIndex(5)
-        }
-        if deliveryCoordinator.showsLocalOverlay, let state = deliveryCoordinator.overlayState {
-            MediaDeliveryTopAnchor(horizontalPadding: 24) {
-                MediaDeliveryOverlay(state: state) { deliveryCoordinator.cancel() }
-            }.transition(.move(edge: .top).combined(with: .opacity)).zIndex(50)
-        }
+        MonitorOperatorDeliveryChrome(
+            model: deliveryCoordinator.lifetime, scope: .surface, remoteDisplayName: "Frame.io"
+        ).zIndex(50)
         if let request = deliveryPresentation {
-            MediaDeliveryPopupOverlay(
-                clips: [request.clip], anchorFrame: shareButtonFrame,
-                placement: .aboveAnchor, preferredDestination: request.preferredDestination,
-                capture: request.capture,
-                onBeginDelivery: { value in
-                    guard let capture = value.capture, capture.isCurrent,
-                        request.capture == nil || capture === request.capture
-                    else { return }
-                    if deliveryPresentation?.id == request.id { deliveryPresentation = nil }
-                    deliveryCoordinator.beginCaptured(value, model: model)
-                },
-                onDismiss: {
-                    if deliveryPresentation?.id == request.id { deliveryPresentation = nil }
-                }
-            )
-            .environment(model).zIndex(3)
+            request.popup(model, coordinator: deliveryCoordinator) {
+                if deliveryPresentation?.id == request.id { deliveryPresentation = nil }
+            }
+            .zIndex(3)
         }
     }
 }

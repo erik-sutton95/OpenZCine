@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 import com.opencapture.opencine.media.MonitorLUTCube
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -57,7 +59,7 @@ class LegacyLiveFeedGlSurfaceTest {
                     Box(
                         Modifier.padding(top = 8.dp)
                             .size(width = 280.dp, height = 46.dp)
-                            .glass(ChromeShape),
+                            .monitorMaterial(MonitorMaterial.Compact, ChromeShape),
                     )
                     LiveFeedColorModeNotice(
                         colorMode = LiveFeedColorMode.HDR,

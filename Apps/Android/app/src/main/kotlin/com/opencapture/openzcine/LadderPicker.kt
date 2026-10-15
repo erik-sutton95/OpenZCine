@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.WhiteBalanceTint
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
@@ -11,7 +12,6 @@ import com.opencapture.opencine.cameracontrols.SheetHeader
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.monitorui.MonitorTypography
 import androidx.compose.ui.text.font.FontWeight
-import com.opencapture.openzcine.pairing.StartupColors
 import androidx.compose.ui.Modifier
 import com.opencapture.opencine.appkit.MonitorCaptureField
 import com.opencapture.opencine.appkit.MonitorControlModel
@@ -53,8 +53,8 @@ internal val ladderKinds: Set<MonitorPickerKind> = setOf(
 /** The photo timer shot row rides on the drive tabs that ask for it. */
 internal fun ladderShowsTimerShots(
     picker: MonitorPickerPresentation,
-    tab: LadderTab<CameraControl>,
-): Boolean = picker.modes.firstOrNull { it.label == tab.label }?.showsTimerShots == true
+    tab: LadderTab<LadderTabKey>,
+): Boolean = picker.modes.getOrNull(tab.key.tab)?.showsTimerShots == true
 
 /**
  * A typed core drum is the ISO, shutter, iris and white-balance preset circuits.
@@ -68,20 +68,25 @@ internal fun ladderUsesCoreDrum(kind: MonitorPickerKind, mode: MonitorPickerMode
     return mode.request.control in NikonOpenCineSession.CONTROLS
 }
 
-/** The request a ladder write should travel on. The active control wins; a fine value may sit off the list. */
+/**
+ * A ladder write's address: the tab that fired it and the control it drives. Tabs can share a
+ * control (the three DRIVE tabs all write STILL_DRIVE), so the tab index keeps them apart.
+ */
+internal data class LadderTabKey(val tab: Int, val control: CameraControl)
+
+/** The request a ladder write travels on: its own tab's value or circuit request, never a sibling's. */
 internal fun requestForLadderWrite(
     picker: MonitorPickerPresentation,
-    write: LadderWrite<CameraControl>,
+    write: LadderWrite<LadderTabKey>,
 ): CommandControlRequest? {
-    val requests = picker.modes.flatMap { mode -> listOfNotNull(mode.request, mode.activateRequest) }
-    return requests.firstOrNull { it.control == write.key && write.value in it.options }
-        ?: requests.firstOrNull { it.control == write.key }
+    val mode = picker.modes.getOrNull(write.key.tab) ?: return null
+    return listOfNotNull(mode.request, mode.activateRequest).firstOrNull { it.control == write.key.control }
 }
 
 internal fun videoLadderPresentation(
     picker: MonitorPickerPresentation,
     field: MonitorCaptureField? = null,
-): LadderSheetPresentation<CameraControl> {
+): LadderSheetPresentation<LadderTabKey> {
     val lock = when {
         picker.interactionLocked -> CaptureLock.CAMERA_CONTROL
         picker.drumInteractionLocked -> CaptureLock.AUTO
@@ -95,7 +100,7 @@ internal fun videoLadderPresentation(
     return LadderSheetPresentation(
         title = picker.title,
         subtitle = picker.subtitle,
-        tabs = picker.modes.map { mode -> ladderTab(picker.kind, mode, field) },
+        tabs = picker.modes.mapIndexed { index, mode -> ladderTab(picker.kind, index, mode, field) },
         initialTab = picker.initialModeIndex,
         lock = lock,
         lockBanner = banner,
@@ -104,9 +109,10 @@ internal fun videoLadderPresentation(
 
 private fun ladderTab(
     kind: MonitorPickerKind,
+    index: Int,
     mode: MonitorPickerModePresentation,
     field: MonitorCaptureField?,
-): LadderTab<CameraControl> {
+): LadderTab<LadderTabKey> {
     val request = mode.request
     val kelvin = kind == MonitorPickerKind.WHITE_BALANCE && mode.label.equals("Kelvin", ignoreCase = true)
     val apply = mode.applyValueOnActivate &&
@@ -115,15 +121,15 @@ private fun ladderTab(
         kind != MonitorPickerKind.SHUTTER
     return LadderTab(
         label = mode.label,
-        key = request.control,
+        key = LadderTabKey(index, request.control),
         ladder = CaptureLadder(
-            current = request.currentValue,
+            current = request.currentValue.ifBlank { null },
             values = request.options,
             marked = mode.markedValues,
             lock = if (mode.drumLocked) CaptureLock.AUTO else null,
         ),
         detail = mode.detail,
-        activate = mode.activateRequest?.let { LadderWrite(it.control, it.currentValue) },
+        activate = mode.activateRequest?.let { LadderWrite(LadderTabKey(index, it.control), it.currentValue) },
         applyOnActivate = apply,
         disabled = mode.disabled,
         field = coreField(kind, mode, field),
@@ -151,8 +157,8 @@ private fun coreField(
 
 private fun tintOf(mode: MonitorPickerModePresentation): CaptureTint? {
     if (mode.request.control != CameraControl.WHITE_BALANCE_TINT) return null
-    val (amber, green) = WhiteBalanceTintGrid.cellsFromLabel(mode.request.currentValue.ifBlank { "Neutral" })
-    return CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTintGrid.cellRange)
+    val (amber, green) = WhiteBalanceTint.cellsFromLabel(mode.request.currentValue.ifBlank { "Neutral" })
+    return CaptureTint(greenMagenta = green, amberBlue = amber, range = WhiteBalanceTint.cellRange)
 }
 
 /**
@@ -208,7 +214,7 @@ internal fun VideoLadderBody(
     onHold: (() -> Unit)?,
     tintLabel: (CaptureTint) -> String,
     tintHelp: String?,
-    footer: @Composable (LadderTab<CameraControl>) -> Unit,
+    footer: @Composable (LadderTab<LadderTabKey>) -> Unit,
     modifier: Modifier = Modifier,
     chromeless: Boolean = false,
 ) {
@@ -224,7 +230,7 @@ internal fun VideoLadderBody(
         }
         Column(modifier.testTag("ladder_sheet"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (!chromeless) SheetHeader(picker.title, picker.subtitle, onClose)
-            if (!error.isNullOrBlank()) Text(error, style = MonitorTypography.text(11f, FontWeight.Medium), color = StartupColors.destructive, maxLines = 2)
+            if (!error.isNullOrBlank()) Text(error, style = MonitorTypography.text(11f, FontWeight.Medium), color = MonitorPalette.recording, maxLines = 2)
             if (!controlsEnabled && !unavailable.isNullOrBlank()) Text(unavailable, style = MonitorTypography.text(11f, FontWeight.Medium), color = MonitorPalette.muted, maxLines = 2)
             val banner = if (picker.interactionLocked) picker.lockBanner else if (picker.drumInteractionLocked) picker.drumLockBanner else null
             if (!banner.isNullOrBlank()) Text(banner, style = MonitorTypography.text(11.5f, FontWeight.Medium), color = MonitorPalette.accent, maxLines = 2)

@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -17,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -158,6 +160,21 @@ class LadderSheetComposeTest {
         save("size", folder)
     }
 
+    /** A3-03: on the App-timer tab, Off clears the app delay; it never reaches the body's Built-in Timer. */
+    @Test
+    fun appTimerOffWritesTheAppTimerNotTheBuiltInTimer() {
+        val harness = harness()
+        val drive = photoDrive().let { picker ->
+            picker.copy(modes = picker.modes.map { mode ->
+                if (mode.label == "App-timer") mode.copy(request = mode.request.copy(currentValue = "5s")) else mode
+            })
+        }
+        show(harness, drive)
+        composeRule.onNodeWithText("APP-TIMER").performClick()
+        composeRule.onNodeWithContentDescription("5s").performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
+        composeRule.runOnIdle { assertEquals(listOf("App-timer" to "Off"), harness.titled) }
+    }
+
     @Test
     fun commandDialogIsOneLadderSheet() {
         val writes = mutableListOf<String>()
@@ -205,6 +222,8 @@ class LadderSheetComposeTest {
         var legacy by mutableStateOf<MonitorPickerPresentation?>(null)
         var live by mutableStateOf<MonitorPickerPresentation?>(null)
         val writes = mutableListOf<Pair<CameraControl, String>>()
+        /** Each write by the request's title: several tabs can share one control. */
+        val titled = mutableListOf<Pair<String, String>>()
         val shots = mutableListOf<Int>()
     }
 
@@ -236,7 +255,10 @@ class LadderSheetComposeTest {
                         controlsEnabled = true,
                         pendingControl = null,
                         feedback = null,
-                        onSelect = { request, label -> harness.writes += request.control to label },
+                        onSelect = { request, label ->
+                            harness.writes += request.control to label
+                            harness.titled += request.title to label
+                        },
                         onDismiss = {},
                         slideFromTop = live.kind.isTopBarPicker(),
                         onToggleMfScrub = {},

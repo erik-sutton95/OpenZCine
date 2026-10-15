@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkit.MonitorReviewOptions
+import com.opencapture.opencine.appkit.MonitorReviewDuration
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorAssistUsage
 import com.opencapture.monitorui.MonitorFalseColorSelection
@@ -20,6 +22,7 @@ import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
+import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.openzcine.settings.LocalLevelStyle
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -39,6 +42,16 @@ class NikonAssistsTest {
     ) = restoreNikonAssists(assist, operator, playback, debugEffects, debugScopes, availableStoredLut)
 
     private val NikonAssists.live: FeedEffects get() = feedEffects(shared::isOn)
+
+    @Test fun `review duration focus and capture info survive restoring the operator preferences`() {
+        val options = MonitorReviewOptions(MonitorReviewDuration.SEVEN_SECONDS, false, false)
+        restore().updateReviewOptions(options)
+        assertEquals(options, restore().reviewOptions)
+        val held = options.copy(duration = MonitorReviewDuration.UNTIL_DISMISSED)
+        restore().updateReviewOptions(held)
+        assertEquals(held, restore().reviewOptions)
+        assertNull(restore().reviewOptions.duration.automaticDismissMillis)
+    }
 
     @Test
     fun `canonical false color choices reach distinct native scales and retain read mode`() {
@@ -131,14 +144,14 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `portrait fit shows the two newest scopes in canonical order`() {
+    fun `portrait fit shows the first two eligible scopes regardless of activation order`() {
         val state = restore().shared
         state.toggle(MonitorAssistTool.WAVE)
         state.toggle(MonitorAssistTool.VECTOR)
         state.toggle(MonitorAssistTool.HISTO)
 
         assertEquals(
-            listOf(ScopeKind.HISTOGRAM, ScopeKind.VECTORSCOPE),
+            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM),
             state.portraitScopes(scopesShown(state::isOn)),
         )
         state.toggle(MonitorAssistTool.HISTO)
@@ -269,7 +282,7 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `legacy multi scope selection keeps canonical selection and portrait recency`() {
+    fun `legacy multi scope selection keeps all selections with canonical fit placement`() {
         assist.edit()
             .putString("scopes", "wave,parade,histo,lights")
             .putString("scopeActivationOrder", "wave,parade,histo,lights")
@@ -281,7 +294,7 @@ class NikonAssistsTest {
             scopesShown(state::isOn),
         )
         assertEquals(
-            listOf(ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS),
+            listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
             state.portraitScopes(scopesShown(state::isOn)),
         )
         state.toggle(MonitorAssistTool.WAVE)

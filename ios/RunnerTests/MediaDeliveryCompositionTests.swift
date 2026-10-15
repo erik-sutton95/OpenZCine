@@ -2,6 +2,11 @@ import AVFoundation
 import CoreVideo
 import MonitorPresentation
 import MonitorUI
+import OpenCineHostedAccessibility
+import OpenCineAppKit
+import OpenCineAppKitApple
+import OpenCineCameraControls
+import OpenCineFrameIOApple
 import SwiftUI
 import UIKit
 import XCTest
@@ -20,16 +25,34 @@ final class MediaDeliveryCompositionTests: XCTestCase {
             cameraID: movie.clip.cameraID, filename: "SIMULATED-UNCACHED.MOV", handle: 2,
             storageID: 65_537, sizeBytes: movie.clip.sizeBytes, captureDate: "")
         XCTAssertFalse(model.isClipDownloaded(uncached))
+        let coordinator = MonitorDeliveryCoordinator(
+            exports: .init(
+                root: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "SIMULATED-composition-\(UUID().uuidString)", isDirectory: true)))
+        defer { coordinator.close() }
+        /// The app's actual popup composition; the request is captured, never run.
+        func popup(
+            _ clip: MediaClip, preferred: MonitorDeliveryDestination? = nil, height: CGFloat,
+            onBegin: @escaping (NikonDeliveryPopup.Preparation.Request) -> Void,
+            onClose: @escaping () -> Void
+        ) throws -> AnyView {
+            let capture = try XCTUnwrap(NikonMediaDeliveryCapture(model: model, clips: [clip]))
+            let made = try XCTUnwrap(
+                model.deliveryPopup(capture, preferred: preferred, coordinator: coordinator))
+            return AnyView(
+                MonitorOperatorDeliveryScreen(
+                    model: made.model, maxCardHeight: height, onClose: onClose, onBegin: onBegin,
+                    remoteArtwork: { FrameioMark() }
+                ).environment(model).padding(20))
+        }
 
         for size in geometries {
-            var requests: [MediaDeliveryBeginRequest] = []
+            var requests: [NikonDeliveryPopup.Preparation.Request] = []
             var closes = 0
             let host = UIHostingController(
-                rootView: AnyView(
-                    MediaDeliveryPopup(
-                        clip: movie.clip, maxCardHeight: size.height - 48,
-                        onBeginDelivery: { requests.append($0) }, onClose: { closes += 1 }
-                    ).environment(model).padding(20)))
+                rootView: try popup(
+                    movie.clip, height: size.height - 48, onBegin: { requests.append($0) },
+                    onClose: { closes += 1 }))
             let (window, originalKeyWindow) = try mount(host, size: size)
             defer { retire(window, restoring: originalKeyWindow) }
             try await activate(identifier: "monitor.share.destination.nativeShare", in: host)
@@ -38,7 +61,9 @@ final class MediaDeliveryCompositionTests: XCTestCase {
             let format = try await element(label: "MP4", in: host, button: true, scroll: true)
             XCTAssertTrue(format.accessibilityActivate())
             XCTAssertTrue(
-                elements(host.view).contains { $0.accessibilityLabel == "Include metadata" })
+                HostedAccessibility.elements(in: host.view).contains {
+                    $0.accessibilityLabel == "Include metadata"
+                })
             let save = try await element(label: "Save to Photos", in: host, button: true)
             XCTAssertTrue(save.accessibilityActivate())
             let begin = try await element(identifier: "monitor.share.begin", in: host, button: true)
@@ -48,20 +73,16 @@ final class MediaDeliveryCompositionTests: XCTestCase {
             XCTAssertTrue(begin.accessibilityActivate())
             XCTAssertEqual(requests.count, 1)
             let request = try XCTUnwrap(requests.first)
-            XCTAssertEqual(request.clips.map(\.id), [movie.clip.id])
             XCTAssertEqual(request.destination, .nativeShare)
-            XCTAssertEqual(request.configuration.exportFormat, .mp4)
-            XCTAssertTrue(request.configuration.includeMetadata)
-            XCTAssertEqual(request.configuration.bakeLUT, model.currentLUTCube() != nil)
-            XCTAssertEqual(request.postExportAction, .saveToPhotos)
-            XCTAssertEqual(closes, 1)
+            XCTAssertEqual(request.configuration?.exportFormat, .mp4)
+            XCTAssertEqual(request.configuration?.includeMetadata, true)
+            XCTAssertEqual(request.configuration?.bakeLUT, model.currentLUTCube() != nil)
+            XCTAssertEqual(request.action, .saveToPhotos)
+            XCTAssertEqual(closes, 1, "Begin closes the popup")
 
-            host.rootView = AnyView(
-                MediaDeliveryPopup(
-                    clip: uncached, preferredDestination: .nativeShare,
-                    maxCardHeight: size.height - 48,
-                    onBeginDelivery: { requests.append($0) }, onClose: { closes += 1 }
-                ).environment(model).padding(20))
+            host.rootView = try popup(
+                uncached, preferred: .nativeShare, height: size.height - 48,
+                onBegin: { requests.append($0) }, onClose: { closes += 1 })
             let refused = try await element(
                 identifier: "monitor.share.begin", in: host, button: true)
             XCTAssertTrue(refused.accessibilityTraits.contains(.notEnabled))
@@ -78,25 +99,24 @@ final class MediaDeliveryCompositionTests: XCTestCase {
 
     @MainActor
     func testActualExpandedAndCommonCompactKeepIndependentProgressActions() async throws {
+        func state(
+            _ destination: MonitorDeliveryDestination, _ total: Int, _ index: Int,
+            _ fraction: Double, switching: Bool = false,
+            stage: MonitorDeliveryBatchProgress.Stage = .preparing
+        ) -> MonitorDeliveryBatchProgress {
+            var value = MonitorDeliveryBatchProgress(
+                destination: destination, totalClips: total, clipIndex: index,
+                clipFraction: fraction, isSwitchingNetworks: switching)
+            value.stage = stage
+            return value
+        }
         let states = [
-            MediaDeliveryOverlayState(
-                destination: .nativeShare, totalClips: 1, clipIndex: 1, clipFraction: 0),
-            MediaDeliveryOverlayState(
-                destination: .nativeShare, totalClips: 2, clipIndex: 2, clipFraction: 0),
-            MediaDeliveryOverlayState(
-                destination: .nativeShare, totalClips: 1, clipIndex: 1, clipFraction: 0.5),
-            MediaDeliveryOverlayState(
-                destination: .nativeShare, totalClips: 1, clipIndex: 1, clipFraction: 1),
-            MediaDeliveryOverlayState(
-                destination: .nativeShare, totalClips: 2, clipIndex: 2, clipFraction: 0.75,
-                postExportAction: .saveToPhotos, phase: .awaitingPhotosAccess),
-            MediaDeliveryOverlayState(
-                destination: .nativeShare, totalClips: 2, clipIndex: 2, clipFraction: 0.75,
-                postExportAction: .saveToPhotos, phase: .savingToPhotos),
-            MediaDeliveryOverlayState(
-                destination: .frameio, totalClips: 1, clipIndex: 1, clipFraction: 0.4,
-                isSwitchingNetworks: true),
-        ]
+            state(.nativeShare, 1, 1, 0), state(.nativeShare, 2, 2, 0),
+            state(.nativeShare, 1, 1, 0.5), state(.nativeShare, 1, 1, 1),
+            state(.nativeShare, 2, 2, 0.75, stage: .awaitingPhotosAccess),
+            state(.nativeShare, 2, 2, 0.75, stage: .saving),
+            state(.remoteUpload, 1, 1, 0.4, switching: true),
+        ].map { $0.chromeFacts(remoteDisplayName: "Frame.io").value }
         for size in geometries {
             var cancels = 0
             var expands = 0
@@ -106,8 +126,11 @@ final class MediaDeliveryCompositionTests: XCTestCase {
             defer { retire(window, restoring: originalKeyWindow) }
             for (index, state) in states.enumerated() {
                 host.rootView = AnyView(
-                    MediaDeliveryOverlay(state: state, onCancel: { cancels += 1 }).padding(20))
-                _ = try await element(label: state.statusLine, in: host)
+                    MonitorMediaDeliveryProgressPanel(
+                        value: state, onCancel: { cancels += 1 },
+                        destinationIcon: { EmptyView() }
+                    ).frame(maxWidth: 420).padding(20))
+                _ = try await element(label: state.status, in: host)
                 let cancel = try await element(label: "Cancel", in: host, button: true)
                 XCTAssertTrue(contained(cancel, in: window))
                 XCTAssertTrue(cancel.accessibilityActivate())
@@ -156,7 +179,8 @@ final class MediaDeliveryCompositionTests: XCTestCase {
                 MonitorMediaDeliveryProgressPanel(value: zero, destinationIcon: { EmptyView() })
                     .frame(maxWidth: 420).padding(20))
             _ = try await element(label: zero.status, in: host)
-            let labels = Set(elements(host.view).compactMap(\.accessibilityLabel))
+            let labels = Set(
+                HostedAccessibility.elements(in: host.view).compactMap(\.accessibilityLabel))
             XCTAssertFalse(labels.contains("SIMULATED.MOV"))
             XCTAssertFalse(labels.contains("Destination: SIMULATED destination"))
             XCTAssertFalse(labels.contains("Collapse"))
@@ -165,6 +189,56 @@ final class MediaDeliveryCompositionTests: XCTestCase {
                 host,
                 "SIMULATED-common-expanded-absent-details-\(Int(size.width))x\(Int(size.height))")
         }
+    }
+
+    /// A2-52: the app's one root share presenter shows the sheet above a photo or player cover,
+    /// also when the share finishes while the cover is still arriving, and the sheet's completion
+    /// acknowledges its share once and releases its lease.
+    @MainActor
+    func testTheRootPresenterSharesAboveACoverThatIsStillArriving() async throws {
+        let coordinator = MonitorDeliveryCoordinator(
+            exports: .init(
+                root: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "SIMULATED-presenter-\(UUID().uuidString)", isDirectory: true)))
+        defer {
+            coordinator.close()
+            try? FileManager.default.removeItem(at: coordinator.exports.root)
+        }
+        let host = UIHostingController(
+            rootView: Color.black.monitorDeliverySharePresenter(coordinator.lifetime))
+        let (window, originalKeyWindow) = try mount(host, size: CGSize(width: 402, height: 874))
+        defer { retire(window, restoring: originalKeyWindow) }
+        try await Task.sleep(for: .milliseconds(300))
+        let source = coordinator.exports.root.appendingPathComponent("SIMULATED.mp4")
+        try FileManager.default.createDirectory(
+            at: coordinator.exports.root, withIntermediateDirectories: true)
+        try Data([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]).write(to: source)
+        let staged = try coordinator.exports.stage([source])
+        let lease = try XCTUnwrap(staged.stagingCleanupURL)
+        // A player or photo cover over the root, still animating in when the share is ready.
+        let cover = UIViewController()
+        cover.modalPresentationStyle = .fullScreen
+        host.present(cover, animated: true)
+        coordinator.begin { _, _ in
+            .share(urls: staged.urls, metadataText: "SIMULATED.mp4", stagingCleanupURL: lease)
+        }
+        var shown = false
+        for _ in 0..<200 where !shown {
+            try await Task.sleep(for: .milliseconds(25))
+            shown = cover.presentedViewController is UIActivityViewController
+        }
+        XCTAssertTrue(shown, "The sheet shows above the cover")
+        let sheet = try XCTUnwrap(cover.presentedViewController as? UIActivityViewController)
+        XCTAssertNotNil(coordinator.lifetime.state.share)
+        sheet.completionWithItemsHandler?(nil, false, nil, nil)
+        sheet.completionWithItemsHandler?(nil, false, nil, nil)
+        XCTAssertNil(coordinator.lifetime.state.share, "The sheet's completion acknowledges its share")
+        for _ in 0..<200 where FileManager.default.fileExists(atPath: lease.path) {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lease.path))
+        sheet.dismiss(animated: false)
+        cover.dismiss(animated: false)
     }
 
     private var geometries: [CGSize] {
@@ -214,27 +288,6 @@ final class MediaDeliveryCompositionTests: XCTestCase {
     }
 
     @MainActor
-    private func elements(_ root: NSObject) -> [NSObject] {
-        var seen = Set<ObjectIdentifier>()
-        var result: [NSObject] = []
-        func visit(_ object: NSObject) {
-            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-            result.append(object)
-            let count = object.accessibilityElementCount()
-            if count > 0 && count < 256 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject {
-                        visit(child)
-                    }
-                }
-            }
-            if let view = object as? UIView { for child in view.subviews { visit(child) } }
-        }
-        visit(root)
-        return result
-    }
-
-    @MainActor
     private func activate(
         label: String? = nil, identifier: String? = nil, in host: UIViewController
     ) async throws {
@@ -252,7 +305,7 @@ final class MediaDeliveryCompositionTests: XCTestCase {
         while ContinuousClock.now < deadline {
             host.view.layoutIfNeeded()
             await Task.yield()
-            let matches = elements(host.view).filter { object in
+            let matches = HostedAccessibility.elements(in: host.view).filter { object in
                 (label == nil || object.accessibilityLabel == label)
                     && (identifier == nil || publicIdentifier(of: object) == identifier)
                     && (!button || object.accessibilityTraits.contains(.button))
@@ -273,8 +326,9 @@ final class MediaDeliveryCompositionTests: XCTestCase {
                     return object
                 }
                 if scroll,
-                    let viewport = elements(host.view).compactMap({ $0 as? UIScrollView }).first(
-                        where: {
+                    let viewport = HostedAccessibility.elements(in: host.view)
+                        .compactMap({ $0 as? UIScrollView })
+                        .first(where: {
                             $0.contentSize.height > $0.bounds.height && !$0.isHidden
                         })
                 {
@@ -307,7 +361,7 @@ final class MediaDeliveryCompositionTests: XCTestCase {
         let window = host.view.window
         let identifierGetter = NSSelectorFromString("accessibilityIdentifier")
         var candidates = 0
-        let rows: [[String: Any]] = elements(host.view).map { object in
+        let rows: [[String: Any]] = HostedAccessibility.elements(in: host.view).map { object in
             let supportsIdentifierGetter = object.responds(to: identifierGetter)
             let identification = object as? UIAccessibilityIdentification
             let actualIdentifier = publicIdentifier(of: object)
@@ -482,5 +536,51 @@ final class MediaDeliveryCompositionTests: XCTestCase {
         } catch {
             XCTFail("SIMULATED delivery bucket restoration failed: \(error)")
         }
+    }
+}
+
+/// One delivery owner (A2-16, A2-52, A2-55, A2-57, A2-61, A2-73, A2-74, A2-76): delivery, Frame.io,
+/// export, the share sheet and the internet hop are the shared owners. The app keeps only its
+/// session adapter, copy and namespaces, so no app copy of a retired type or hop step comes back.
+final class DeliveryOwnershipRuleTests: XCTestCase {
+    func testDeliveryHasNoAppCopyOfASharedOwner() throws {
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Runner")
+        let types = [
+            "FrameioAuthCoordinator", "FrameioConfig", "FrameioTokenStore", "FrameioModel",
+            "FrameioProjectListing", "FrameioDestination", "FrameioMark", "MediaExportFormat",
+            "MediaDeliveryDestination", "MediaDeliveryEligibility", "MediaDeliveryConfiguration",
+            "MediaDeliveryBatchResult", "MediaDeliveryPostExportAction",
+            "MediaDeliveryBeginRequest", "MediaDeliveryRunOutcome", "MediaDeliveryOverlayState",
+            "MediaDeliveryCoordinator", "MediaDeliveryOwnedProgress",
+            "MediaDeliveryShareResources", "NikonDeliveryArtifact", "MediaDeliveryRunner",
+            "PreparedMediaShare", "MediaShareStaging", "MediaPhotosSaver", "MediaSharePayload",
+            "ShareableFileItem", "ShareActivityHostViewController", "MultiShareSheet",
+            "MediaDeliveryShareSheetModifier", "MediaDeliveryPanelValue",
+            "MediaDeliveryPresentation", "MediaDeliveryRequest", "MediaDeliveryPopupPlacement",
+            "MediaDeliveryPopup", "CapturedNikonMediaDeliveryPopup",
+            "NikonMediaDeliveryPreparationSource", "NikonPendingMediaDelivery",
+            "MediaDeliveryUploadOptions", "ExportError", "ExportResult",
+        ]
+        let steps = [
+            "beginInternetHopCaptured", "ownsInternetHop", "endedInternetHop",
+            "transferInternetHop", "leaveMonitorForInternetHop", "waitForInternetPath",
+            "endInternetHopCaptured", "restoreInternetHop",
+        ]
+        let pattern = try NSRegularExpression(
+            pattern: "\\b(?:struct|enum|class|actor|typealias|protocol)\\s+(" + types.joined(separator: "|")
+                + ")\\b|\\bfunc\\s+(" + steps.joined(separator: "|") + ")\\b")
+        let files = try XCTUnwrap(
+            FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" })
+        XCTAssertGreaterThan(files.count, 10, "The rule must read the app's sources")
+        var found: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                found.append(file.lastPathComponent + ": " + (text as NSString).substring(with: match.range))
+            }
+        }
+        XCTAssertEqual(found, [], "Delivery has one shared owner; these are app copies")
     }
 }

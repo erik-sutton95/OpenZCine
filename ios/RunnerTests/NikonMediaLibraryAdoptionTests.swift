@@ -8,7 +8,113 @@ import XCTest
 
 @testable import Runner
 
+@Suite("Playback favorite persistence")
+@MainActor struct NikonPlaybackFavoritePersistenceTests {
+    @Test func retainedPlaybackCannotFavoriteReplacementContent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        let original = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "REPLACED.MOV", handle: nil,
+            storageID: nil, sizeBytes: 4, captureDate: "20261011T120000")
+        store.upsertBatch([original], cameraID: original.cameraID)
+        model.refreshMediaClips()
+        let library = try #require(model.mediaLibrary)
+        let playbackRecord = try #require(library.records.first)
+        var replacement = original
+        replacement.sizeBytes = 8
+        replacement.captureDate = "20261011T120001"
+        store.upsertBatch([replacement], cameraID: replacement.cameraID)
+        let beforeBytes = try store.catalogBytes(cameraID: replacement.cameraID)
+        let before = try #require(beforeBytes)
+        model.toggleClipFavorite(playbackRecord.payload)
+        #expect(try store.catalogBytes(cameraID: replacement.cameraID) == before)
+        await library.dispose()
+    }
+
+    @Test func cameraRatingOnlyFavoriteClearsAndStalePlaybackRecordTogglesCurrentRow() async throws
+    {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        var clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "RATED.MOV", handle: nil,
+            storageID: nil, sizeBytes: 4, captureDate: "20261011T120000")
+        clip.starRating = 4
+        clip.isFavorite = false
+        store.upsertBatch([clip], cameraID: clip.cameraID)
+        model.refreshMediaClips()
+        let library = try #require(model.mediaLibrary)
+        let record = try #require(library.records.first)
+        #expect(record.favorite)
+        // Playback keeps its captured record while the canonical catalog amends operator flags.
+        model.toggleClipFavorite(record.payload)
+        let cleared = try #require(store.list(cameraID: clip.cameraID).first)
+        #expect(!cleared.isFavorited)
+        #expect(cleared.starRating == 0)
+        #expect(library.record(record.asset.id)?.favorite == false)
+        model.toggleClipFavorite(record.payload)
+        let selected = try #require(store.list(cameraID: clip.cameraID).first)
+        #expect(selected.isFavorite)
+        #expect(selected.starRating == 1)
+        #expect(library.record(record.asset.id)?.favorite == true)
+        let reopened = MediaClipStore(root: root)
+        #expect(reopened.list(cameraID: clip.cameraID).first?.starRating == 1)
+        await library.dispose()
+    }
+}
+
 @MainActor final class NikonMediaLibraryAdoptionTests: XCTestCase {
+    /// Actual source capture, frozen related targets and performer; all locations are SIMULATED.
+    func testPlaybackDeletionLateMasterRequiresFreshConfirmationAndPerformsNoDelete() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        var proxy = sample(); proxy.cameraID = MediaClipStore.localBucketID; proxy.filename = "SIMULATED.MOV"
+        store.upsertBatch([proxy], cameraID: proxy.cameraID); model.refreshMediaClips()
+        model.mediaBrowserSource = .camera; model.connection = .connected
+        let before = try XCTUnwrap(store.catalogBytes(cameraID: proxy.cameraID))
+        var deletes = 0; var cleanups = 0
+        let request = try XCTUnwrap(model.capturePlaybackMediaDeletion(proxy, cleanup: {
+            cleanups += 1; return true
+        }, deleteLocation: { _ in deletes += 1; return true }))
+        XCTAssertFalse(request.confirmation.message?.contains("master") ?? true)
+        var master = proxy; master.filename = "SIMULATED.NEV"; master.handle = 99
+        // The actually displayed mutable catalog discovers a master after the request was captured.
+        model.mediaClips.append(master)
+        await request.perform()
+        XCTAssertEqual(cleanups, 0); XCTAssertEqual(deletes, 0)
+        XCTAssertEqual(try store.catalogBytes(cameraID: proxy.cameraID), before)
+        request.authority.retire(); await model.mediaLibrary?.dispose()
+    }
+
+    func testPlaybackDeletionSourceRetirementDuringCleanupPerformsNoNativeDelete() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root); let model = NativeAppModel(mediaClipStore: store)
+        model.mediaBrowserSource = .iPhone
+        var clip = sample(); clip.cameraID = MediaClipStore.localBucketID
+        store.upsertBatch([clip], cameraID: clip.cameraID); model.refreshMediaClips()
+        model.mediaBrowserSource = .camera; model.connection = .connected
+        let library = try XCTUnwrap(model.mediaLibrary)
+        let before = try XCTUnwrap(store.catalogBytes(cameraID: clip.cameraID))
+        let entered = LibrarySignal(); let release = LibrarySignal(); var deletes = 0
+        let request = try XCTUnwrap(model.capturePlaybackMediaDeletion(clip, cleanup: {
+            entered.signal(); await release.wait(); return true
+        }, deleteLocation: { _ in deletes += 1; return true }))
+        let task = Task { await request.perform() }; await entered.wait()
+        XCTAssertEqual(deletes, 0)
+        library.close(); release.signal(); await task.value
+        XCTAssertEqual(deletes, 0); XCTAssertEqual(try store.catalogBytes(cameraID: clip.cameraID), before)
+        request.authority.retire(); await library.dispose()
+    }
+
     func testPlaybackEligibilityPreservesNativeKindAndCanonicalRawMasterIdentity() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -778,7 +884,7 @@ import XCTest
     func queueRecord(start: Bool, operation: OperationID) {}
 }
 
-private actor LargeTransferTransport: CameraTransport {
+actor LargeTransferTransport: CameraTransport {
     struct Call: Sendable {
         let operation: PTPOperationCode
         let parameters: [UInt32]
@@ -860,3 +966,95 @@ private actor LargeTransferTransport: CameraTransport {
         return Data(bytes)
     }
 }
+
+/// SIMULATED source identity only; no camera IO is performed.
+@MainActor private final class RebindIO: NikonMediaIO {
+    let session = CameraSessionID()
+    let native = NSObject()
+    let cameraNamespace = "SIMULATED-CAMERA"
+    var sourceIdentity: NikonMediaSourceIdentity? {
+        .init(native: ObjectIdentifier(native), session: session, epoch: ControlEpoch(1))
+    }
+    func storage(source _: NikonMediaSourceIdentity) async throws -> [NikonMediaStorageRecord] {
+        []
+    }
+    func handles(source _: NikonMediaSourceIdentity) async throws -> NikonMediaHandleSnapshot {
+        .init(handles: [], authoritativeStorages: [], storageListAuthoritative: true)
+    }
+    func handles(formats _: [UInt32], source _: NikonMediaSourceIdentity) async throws
+        -> [MediaObjectHandle]
+    { [] }
+    func object(_ location: MediaObjectHandle, source _: NikonMediaSourceIdentity) async throws
+        -> NikonMediaObjectRecord?
+    { nil }
+    func header(_ location: MediaObjectHandle, source _: NikonMediaSourceIdentity) async throws
+        -> Data?
+    { nil }
+}
+
+extension NikonMediaLibraryAdoptionTests {
+    /// A2-02: a link change rebinds the open gallery's owner; only a new bucket replaces it.
+    func testServiceChangeRebindsTheGalleryOwnerInsteadOfReplacingIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(mediaClipStore: MediaClipStore(root: root))
+        model.prepareMediaLibrary(rows: [], bucket: "SIMULATED-CAMERA", service: nil)
+        let owner = try XCTUnwrap(model.mediaLibrary)
+        XCTAssertFalse(owner.canRefresh)
+        let io = RebindIO()
+        model.prepareMediaLibrary(
+            rows: [], bucket: "SIMULATED-CAMERA",
+            service: NikonMediaService(session: io.session, io: io))
+        XCTAssertTrue(
+            model.mediaLibrary === owner, "A link change must rebind, not replace, the owner")
+        XCTAssertTrue(owner.canRefresh)
+        model.prepareMediaLibrary(rows: [], bucket: "SIMULATED-CAMERA", service: nil)
+        XCTAssertTrue(model.mediaLibrary === owner)
+        XCTAssertFalse(owner.canRefresh)
+        model.prepareMediaLibrary(rows: [], bucket: MediaClipStore.localBucketID, service: nil)
+        XCTAssertFalse(model.mediaLibrary === owner, "A different bucket is a different owner")
+        await model.mediaLibrary?.dispose()
+        await owner.dispose()
+    }
+}
+
+extension NikonMediaLibraryAdoptionTests {
+    /// A2-43: offline, Delete is offered only where deletion removes something.
+    func testOfflineDeleteIsOfferedOnlyForPhoneOnlyCopies() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(mediaClipStore: MediaClipStore(root: root))
+        let onCamera = MediaClip(
+            cameraID: "SIMULATED-CAMERA", filename: "SIMULATED-CAMERA.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 10, captureDate: "20261012T120000")
+        let phoneOnly = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-PHONE.MOV", handle: nil,
+            storageID: nil, sizeBytes: 10, captureDate: "20261012T120000")
+        XCTAssertFalse(model.isConnected)
+        XCTAssertFalse(
+            model.canDeleteMedia([onCamera]), "Offline, a camera object cannot be removed")
+        XCTAssertTrue(model.canDeleteMedia([phoneOnly]))
+        XCTAssertTrue(model.canDeleteMedia([onCamera, phoneOnly]))
+    }
+}
+
+#if DEBUG
+extension NikonMediaLibraryAdoptionTests {
+    /// SIMULATED card ownership ends with the demo, even if a cached camera row remains.
+    func testReviewCameraDeleteRetiresWithDemoSession() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeAppModel(mediaClipStore: MediaClipStore(root: root))
+        let onCamera = MediaClip(
+            cameraID: "SIMULATED-CAMERA", filename: "SIMULATED-CAMERA.MOV", handle: 7,
+            storageID: 65_537, sizeBytes: 10, captureDate: "20261012T120000")
+        model.isDemoSession = true
+        model.reviewCameraDelete = { _ in true }
+        XCTAssertTrue(model.canDeleteMedia([onCamera]))
+        model.clearCameraSessionState(resetConnection: true)
+        XCTAssertFalse(model.isDemoSession)
+        XCTAssertNil(model.reviewCameraDelete)
+        XCTAssertFalse(model.canDeleteMedia([onCamera]), "Retired review cannot authorize camera deletion")
+    }
+}
+#endif

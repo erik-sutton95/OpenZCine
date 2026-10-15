@@ -1,6 +1,6 @@
 package com.opencapture.openzcine
 
-import androidx.compose.ui.geometry.Offset
+import com.opencapture.opencine.nikon.WhiteBalanceTint
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlCapabilities
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -20,14 +20,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CommandMonitorTest {
-    @Test
-    fun `long command values shrink instead of clipping in the portrait grid`() {
-        assertEquals(24f, commandTileValueSize("5600K"))
-        assertEquals(20f, commandTileValueSize("R3D NE HQ"))
-        assertEquals(16f, commandTileValueSize("6000x3336 · 25p"))
-        assertEquals(16f, commandTileValueSize("[DX] 4K · 100p"))
-    }
-
     @Test
     fun `dashboard preserves raw frame size image area labels`() {
         val presentation =
@@ -172,10 +164,11 @@ class CommandMonitorTest {
             assertNotNull(resolution.request).options,
         )
 
-        assertEquals("OK", presentation.temperature)
-        assertEquals("470 GB · 47%", presentation.storage)
+        assertEquals("OK", presentation.health.temperature)
+        assertTrue(presentation.health.temperatureOk)
+        assertEquals("470 GB · 47%", presentation.health.storage)
         assertEquals("25.00", presentation.frameRate)
-        assertEquals("NIKON ZR", presentation.camera)
+        assertEquals("NIKON ZR", presentation.health.camera)
         assertEquals(
             "Log3G10",
             presentation.sideSections.first { it.title == "Image" }.cells.first {
@@ -263,9 +256,10 @@ class CommandMonitorTest {
                 .flatMap(CommandSideSectionPresentation::cells)
                 .all { it.value == "—" && it.request == null },
         )
-        assertEquals("—", presentation.storage)
-        assertEquals("—", presentation.camera)
-        assertEquals("—", presentation.lens)
+        assertEquals(UNAVAILABLE_MONITOR_VALUE, presentation.health.storage)
+        assertEquals(UNAVAILABLE_MONITOR_VALUE, presentation.health.camera)
+        assertEquals(UNAVAILABLE_MONITOR_VALUE, presentation.health.lens)
+        assertFalse(presentation.health.temperatureOk)
         assertEquals("—", presentation.frameRate)
     }
 
@@ -592,11 +586,10 @@ class CommandMonitorTest {
 
         val iris = presentation.tiles.first { it.kind == CommandTileKind.IRIS }
         assertEquals("f/2.8", iris.value)
-        // iOS/shared-core ladder keeps IRIS writable when the body has not
-        // advertised an f-number enum yet (was permanently grayed out before).
-        val request = assertNotNull(iris.request)
-        assertContains(request.options, "f/2.8")
-        assertNull(iris.unavailableReason)
+        // A3-20: no advertised f-number enum means no invented ladder. The facade supplies the
+        // lens ladder itself where the body accepts that write.
+        assertNull(iris.request)
+        assertNotNull(iris.unavailableReason)
     }
 
     @Test
@@ -717,110 +710,71 @@ class CommandMonitorTest {
     }
 
     @Test
-    fun `side section rows match iOS CmdRow packing`() {
-        val audio =
-            CommandSideSectionPresentation(
-                kind = CommandSideSectionKind.AUDIO,
-                title = "Audio",
-                cells =
-                    listOf(
-                        CommandTilePresentation(title = "Sens", value = "Auto"),
-                        CommandTilePresentation(title = "32-bit Float", value = "ON"),
-                        CommandTilePresentation(title = "Input", value = "MIC"),
-                        CommandTilePresentation(title = "Wind", value = "OFF"),
-                        CommandTilePresentation(title = "Atten", value = "OFF"),
-                    ),
-            )
-        val rows = commandSideSectionRows(audio)
-        assertEquals(3, rows.size)
-        assertEquals(listOf("Sens", "32-bit Float"), rows[0].map { it.title })
-        assertEquals(listOf("Input", "Wind"), rows[1].map { it.title })
-        assertEquals(listOf("Atten"), rows[2].map { it.title })
-
-        val focus =
-            CommandSideSectionPresentation(
-                kind = CommandSideSectionKind.FOCUS,
-                title = "Focus",
-                cells =
-                    listOf(
-                        CommandTilePresentation(title = "Mode", value = "AF-C"),
-                        CommandTilePresentation(title = "Area", value = "Wide-L"),
-                        CommandTilePresentation(title = "Subject", value = "People"),
-                    ),
-            )
-        val focusRows = commandSideSectionRows(focus)
-        assertEquals(listOf("Mode", "Area"), focusRows[0].map { it.title })
-        assertEquals(listOf("Subject"), focusRows[1].map { it.title })
-    }
-
-    @Test
-    fun `portrait dashboard reserves a compact primary grid for its scrollable secondary controls`() {
-        assertEquals(1, commandPrimaryGridRows(tileCount = 1))
-        assertEquals(3, commandPrimaryGridRows(tileCount = CommandTileKind.entries.size))
-        assertEquals(76, portraitCommandGridHeightDp(tileCount = 1))
-        assertEquals(246, portraitCommandGridHeightDp(tileCount = CommandTileKind.entries.size))
-    }
-
-    @Test
-    fun `command drag resolves every edge to a valid direct destination`() {
-        assertEquals(
-            0,
-            commandGridSlot(Offset(-50f, -20f), 100f, 60f, 9f, columns = 3, itemCount = 8),
-        )
-        assertEquals(
-            4,
-            commandGridSlot(Offset(115f, 72f), 100f, 60f, 9f, columns = 3, itemCount = 8),
-        )
-        assertEquals(
-            7,
-            commandGridSlot(Offset(900f, 900f), 100f, 60f, 9f, columns = 3, itemCount = 8),
-        )
-    }
-
-    @Test
-    fun `command drag can start only inside a real tile`() {
-        assertEquals(
-            4,
-            commandGridHitSlot(Offset(115f, 72f), 100f, 60f, 9f, columns = 3, itemCount = 8),
-        )
-        assertEquals(
-            null,
-            commandGridHitSlot(Offset(105f, 20f), 100f, 60f, 9f, columns = 3, itemCount = 8),
-        )
-        assertEquals(
-            null,
-            commandGridHitSlot(Offset(20f, 65f), 100f, 60f, 9f, columns = 3, itemCount = 8),
-        )
-        assertEquals(
-            null,
-            commandGridHitSlot(Offset(230f, 150f), 100f, 60f, 9f, columns = 3, itemCount = 8),
-        )
-    }
-
-    @Test
-    fun `tile order normalizes, moves, and survives a reload`() {
+    fun `tile order keeps the stored key and comma format existing installs hold`() {
         val preferences = TestSharedPreferences()
-        val store = CommandTileOrderStore(preferences)
-        store.save(
-            listOf(
-                CommandTileKind.CODEC,
-                CommandTileKind.ISO,
-                CommandTileKind.ISO,
-            ),
-        )
-
-        val restored = CommandTileOrderStore(preferences).load()
-        assertEquals(CommandTileKind.CODEC, restored.first())
-        assertEquals(CommandTileKind.ISO, restored[1])
+        preferences.edit().putString("display.commandGrid.order.v1", "CODEC,ISO,ISO,RETIRED").apply()
+        val restored = commandTileOrderStore(preferences).load()
+        assertEquals(listOf(CommandTileKind.CODEC, CommandTileKind.ISO), restored.take(2))
         assertEquals(CommandTileKind.entries.toSet(), restored.toSet())
+        assertEquals(CommandTileKind.entries.size, restored.size)
 
         val moved = moveCommandTile(restored, CommandTileKind.CODEC, targetIndex = 3)
         assertEquals(CommandTileKind.CODEC, moved[3])
-        assertFalse(moved == restored)
-        assertTrue(moved.containsAll(CommandTileKind.entries))
+        commandTileOrderStore(preferences).save(moved)
+        assertEquals(
+            moved.joinToString(",") { it.name },
+            preferences.getString("display.commandGrid.order.v1", null),
+        )
+        assertEquals(moved, commandTileOrderStore(preferences).load())
+    }
 
-        store.save(moved)
-        assertEquals(moved, CommandTileOrderStore(preferences).load())
+    @Test
+    fun `dashboard tiles and side sections map from a fixture snapshot in the stored order`() {
+        val order = listOf(CommandTileKind.CODEC, CommandTileKind.ISO, CommandTileKind.ISO)
+        val presentation =
+            commandDashboardPresentation(
+                snapshot =
+                    CameraPropertySnapshot(
+                        iso = 800,
+                        codec = "R3D NE",
+                        codecSelection = "R3D NE",
+                        tone = "Log3G10",
+                        temperatureStatus = CameraTemperatureStatus.WARNING,
+                        lens = "NIKKOR Z 24-70mm f/2.8",
+                        cameraGrid = "ON",
+                        controlCapabilities =
+                            CameraControlCapabilities(
+                                isoValues = listOf("800", "1600"),
+                                codecs = listOf("H.265", "R3D NE"),
+                            ),
+                    ),
+                refreshStatus = CameraPropertyRefreshStatus.Ready,
+                sessionState =
+                    CameraSessionState.Connected(
+                        CameraIdentity(name = "NIKON ZR", model = "ZR", serialNumber = "ZR-01"),
+                    ),
+                tileOrder = order,
+            )
+
+        // Every Nikon tile once, the stored order first, the rest in declared order.
+        assertEquals(normalizeCommandTileOrder(order), presentation.tiles.map { it.kind })
+        assertEquals(CommandTileKind.entries.size, presentation.tiles.size)
+        val iso = presentation.tiles[1]
+        assertEquals("800", iso.value)
+        assertEquals(CameraControl.ISO, assertNotNull(iso.request).control)
+        assertEquals(CameraControl.CODEC, assertNotNull(presentation.tiles[0].request).control)
+
+        // The shared dashboard draws the side column from the same cells, in order.
+        assertEquals(listOf("Image", "Focus", "Audio", "Monitor"), presentation.sections.map { it.title })
+        assertEquals(presentation.sideSections.map { it.cells }, presentation.sections.map { it.cells })
+        assertEquals("Log3G10", presentation.sections[0].cells[0].value)
+        assertEquals("ON", presentation.sections[3].cells[0].value)
+        assertTrue(presentation.sections.flatMap { it.cells }.all { it.kind == null })
+
+        // Health is only good for a NORMAL body; the lens and camera come from the snapshot.
+        assertFalse(presentation.health.temperatureOk)
+        assertEquals("NIKON ZR", presentation.health.camera)
+        assertEquals("NIKKOR Z 24-70mm f/2.8", presentation.health.lens)
     }
 
     @Test
@@ -850,6 +804,6 @@ class CommandMonitorTest {
                 options = listOf("Neutral"),
             ),
         )
-        assertEquals(WhiteBalanceTintGrid.cellRange, tint.tabs.single().tint?.range)
+        assertEquals(WhiteBalanceTint.cellRange, tint.tabs.single().tint?.range)
     }
 }

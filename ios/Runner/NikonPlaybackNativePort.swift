@@ -32,6 +32,7 @@ import OpenCineMedia
     private var enteredTransfer: Task<Void, Never>?
     private var preparationBarrier: (@MainActor () async -> Void)?
     private var facts = MonitorPlaybackMetadata()
+    private weak var preparedBufferItem: AVPlayerItem?
     private let playable: @MainActor (AVURLAsset) async -> Bool
     private let poll: @MainActor () async throws -> Void
     private let captureBeforePrepare: @MainActor () -> (@MainActor () async -> Void)
@@ -238,6 +239,7 @@ import OpenCineMedia
             self.facts.conform = conform
             self.onEvent?(admitted, .metadata(self.facts))
         }
+        preparedBufferItem = nativeItem
         return facts
     }
 
@@ -406,6 +408,22 @@ import OpenCineMedia
 
     private func current(_ admitted: MonitorPlaybackItemToken) -> Bool { token == admitted }
 
+    /// Current native temporal extent, independent of camera transfer byte completion.
+    func bufferedThroughSeconds(token admitted: MonitorPlaybackItemToken) -> Double? {
+        guard current(admitted), let captured = source, let item = preparedBufferItem,
+            player.currentItem === item, item.status == .readyToPlay
+        else { return nil }
+        guard current(admitted), source?.item == captured.item,
+            preparedBufferItem === item, player.currentItem === item
+        else { return nil }
+        let ranges = item.loadedTimeRanges
+        guard current(admitted), source?.item == captured.item,
+            preparedBufferItem === item, player.currentItem === item
+        else { return nil }
+        return ranges.map { CMTimeGetSeconds(CMTimeRangeGetEnd($0.timeRangeValue)) }
+            .filter { $0.isFinite && $0 >= 0 }.max()
+    }
+
     /// Back joins the actual entered native task after the shared item owner retires it.
     func captureEnteredTransferCleanup() -> (@MainActor () async -> Void) {
         let captured = enteredTransfer
@@ -413,6 +431,7 @@ import OpenCineMedia
     }
 
     private func retireNativeItem() {
+        preparedBufferItem = nil
         bufferRecovery?.close()
         bufferRecovery = nil
         progressiveAsset?.close()

@@ -1,4 +1,6 @@
 pluginManagement {
+    // OpenCine's Gradle plugins (the reporting adapter's DSN), from the same sibling checkout.
+    includeBuild("../../../OpenCine/Android/build-logic")
     repositories {
         google()
         mavenCentral()
@@ -24,6 +26,7 @@ includeBuild("../../../OpenCine/Android") {
     name = "opencine"
     dependencySubstitution {
         substitute(module("com.opencapture.opencine:core")).using(project(":core"))
+        substitute(module("com.opencapture.opencine:media")).using(project(":media"))
         // Shared Compose monitor UI and the multicam engine (NIKON-01).
         substitute(module("com.opencapture.opencine:monitor-ui")).using(project(":monitor-ui"))
         substitute(module("com.opencapture.opencine:multicam")).using(project(":multicam"))
@@ -31,8 +34,12 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:nikon")).using(project(":nikon"))
         // The shared cameras page, connection model and saved-camera document (SHELL-02).
         substitute(module("com.opencapture.opencine:appkit")).using(project(":appkit"))
+        // The optional reporting adapter: appkit's reporting on the Sentry SDK.
+        substitute(module("com.opencapture.opencine:appkit-sentry")).using(project(":appkit-sentry"))
+        substitute(module("com.opencapture.opencine:media3")).using(project(":media3"))
         // The shared capture sheets over the camera vocabulary (LadderSheet).
         substitute(module("com.opencapture.opencine:camera-controls")).using(project(":camera-controls"))
+        substitute(module("com.opencapture.opencine:app-ui-testing")).using(project(":app-ui-testing"))
         substitute(module("com.opencapture.opencine:native-runtime")).using(project(":native-runtime"))
         // Shared relay/watch owners and transport-free deployed Nikon schemas.
         substitute(module("com.opencapture.opencine:relay")).using(project(":relay"))
@@ -43,6 +50,8 @@ includeBuild("../../../OpenCine/Android") {
         substitute(module("com.opencapture.opencine:vulkan")).using(project(":vulkan"))
         // Device-only Keystore sealing for camera Wi-Fi keys.
         substitute(module("com.opencapture.opencine:platform")).using(project(":platform"))
+        // The one Android Frame.io owner over the shared Swift wire (A4-09).
+        substitute(module("com.opencapture.opencine:frameio")).using(project(":frameio"))
     }
 }
 

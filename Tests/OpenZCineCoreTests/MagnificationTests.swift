@@ -16,12 +16,12 @@ struct MagnificationTests {
         #expect(AssistConfiguration.Magnification.Factor.x4.scale == 4)
     }
 
-    /// It is a view-assist tool with a popup, and it has to reach photography — punching in to
-    /// confirm focus matters at least as much for stills as for cinema.
-    @Test("Magnification is a configurable tool and reaches photography")
+    /// It is a view-assist tool with a popup for stills and cinema alike: punching in to confirm
+    /// focus matters at least as much for stills.
+    @Test("Magnification is a configurable tool in both capture modes")
     func toolPolicy() {
         #expect(MonitorAssistTool.magnification.hasConfiguration)
-        #expect(MonitorAssistTool.magnification.appliesToPhotography)
+        #expect(!MonitorAssistTool.magnification.isPhotographyOnly)
         #expect(MonitorAssistTool.magnification.displaySettingsTitle == "Magnification")
     }
 

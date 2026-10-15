@@ -133,7 +133,7 @@ internal fun nikonFalseColorReference(scale: FeedFalseColorScale,
     input: ExposureAssistCameraInput, read709: Boolean = false): MonitorFalseColorReferenceValues? {
     val reference = resolveFalseColorReference(scale, input, read709) ?: return null
     val curve = reference.curveLabel(read709)
-    val labels = listOf("Min", "−2", "−1", "18%", "+1", "+2", "Clip")
+    val labels = reference.stopMarkerLabels
     return MonitorFalseColorReferenceValues(subtitle = "${scale.label} · $curve",
         segments = reference.segments.mapIndexed { index, segment ->
             MonitorFalseColorReferenceSegment(index, segment.lowerFraction.toDouble(), segment.upperFraction.toDouble(),

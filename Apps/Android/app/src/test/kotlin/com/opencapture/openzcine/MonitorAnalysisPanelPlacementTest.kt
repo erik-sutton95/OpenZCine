@@ -5,7 +5,6 @@ import com.opencapture.monitorui.MonitorRect
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.opencine.appkit.MonitorAssistState
-import com.opencapture.openzcine.settings.SideRailPlan
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -15,219 +14,15 @@ import kotlin.test.assertTrue
 /** Focused OPE-68 geometry, normalization, migration, and lifecycle contracts. */
 class MonitorAnalysisPanelPlacementTest {
     @Test
-    fun `landscape safe frame comes from mapped chrome and clears every control band`() {
-        val zones = landscapeZones()
-        val layout =
-            requireNotNull(
-                monitorAnalysisPanelLayout(
-                    layout = zones,
-                    physicalViewport = LANDSCAPE_VIEWPORT,
-                    isPortrait = false,
-                    isPortraitFill = false,
-                    statusBarVisible = true,
-                    chromeMounts = LANDSCAPE_LIVE_CHROME,
-                ),
-            )
-
-        assertEquals(LANDSCAPE_VIEWPORT, layout.viewport)
-        // Side rails only — full height, left of record/media/settings, right of lock/battery.
-        assertEquals(MonitorRect(64f, 0f, 704f, 393f), layout.safeBounds)
-        assertTrue(layout.safeBounds.x > zones.lock.x + zones.lock.width)
-        assertTrue(layout.safeBounds.x > zones.gauges.x + zones.gauges.width)
-        assertTrue(layout.safeBounds.x + layout.safeBounds.width < zones.record.x)
-        // Top status / bottom strips are intentionally *not* carved (iOS free-roam parity).
-        assertEquals(LANDSCAPE_VIEWPORT.y, layout.safeBounds.y)
-        assertEquals(LANDSCAPE_VIEWPORT.height, layout.safeBounds.height)
-    }
-
-    @Test
-    fun `hidden landscape rails release only space without mounted recovery controls`() {
-        val zones = landscapeZones()
-        val hiddenChrome =
-            monitorAnalysisChromeMounts(
-                isPortrait = false,
-                isPortraitFill = false,
-                isClean = false,
-                isCommand = false,
-                assistToolbarVisible = true,
-                cameraValuesVisible = true,
-                landscapeRail = RAIL_SETTINGS_ONLY,
-            )
-        val hiddenRecordingChrome =
-            hiddenChrome.copy(landscapeRail = RAIL_SETTINGS_ONLY.copy(record = true))
-        val hiddenLayout =
-            requireNotNull(
-                monitorAnalysisPanelLayout(
-                    layout = zones,
-                    physicalViewport = LANDSCAPE_VIEWPORT,
-                    isPortrait = false,
-                    isPortraitFill = false,
-                    statusBarVisible = true,
-                    chromeMounts = hiddenChrome,
-                ),
-            )
-        val hiddenRecordingLayout =
-            requireNotNull(
-                monitorAnalysisPanelLayout(
-                    layout = zones,
-                    physicalViewport = LANDSCAPE_VIEWPORT,
-                    isPortrait = false,
-                    isPortraitFill = false,
-                    statusBarVisible = true,
-                    chromeMounts = hiddenRecordingChrome,
-                ),
-            )
-
-        assertEquals(MonitorRect(0f, 0f, 774f, 393f), hiddenLayout.safeBounds)
-        assertEquals(MonitorRect(0f, 0f, 768f, 393f), hiddenRecordingLayout.safeBounds)
-        assertEquals(zones.settings.x - 8f, hiddenLayout.safeBounds.x + hiddenLayout.safeBounds.width)
-        assertEquals(
-            zones.record.x - 8f,
-            hiddenRecordingLayout.safeBounds.x + hiddenRecordingLayout.safeBounds.width,
-        )
-    }
-
-    @Test
-    fun `portrait fill clears top capture system and the assist palette column`() {
-        val zones = portraitZones()
-        val layout =
-            requireNotNull(
-                monitorAnalysisPanelLayout(
-                    layout = zones,
-                    physicalViewport = PORTRAIT_VIEWPORT,
-                    isPortrait = true,
-                    isPortraitFill = true,
-                    statusBarVisible = true,
-                    chromeMounts = PORTRAIT_FILL_CHROME,
-                ),
-            )
-        val palette = zones.assists
-
-        assertEquals(zones.picture, layout.viewport)
-        // Palette column 8 + 56 wide, then the 8 dp control clearance.
-        assertEquals(MonitorRect(72f, 60f, 328f, 542f), layout.safeBounds)
-        assertTrue(layout.safeBounds.x > palette.x + palette.width)
-        assertTrue(layout.safeBounds.y + layout.safeBounds.height < zones.values.y)
-        assertTrue(layout.safeBounds.y + layout.safeBounds.height < zones.system.y)
-    }
-
-    @Test
-    fun `chrome mount policy matches live clean and command rendering conditions`() {
-        val livePortraitFill =
-            monitorAnalysisChromeMounts(
-                isPortrait = true,
-                isPortraitFill = true,
-                isClean = false,
-                isCommand = false,
-                assistToolbarVisible = true,
-                cameraValuesVisible = true,
-            )
-        val cleanPortraitFill =
-            monitorAnalysisChromeMounts(
-                isPortrait = true,
-                isPortraitFill = true,
-                isClean = true,
-                isCommand = false,
-                assistToolbarVisible = true,
-                cameraValuesVisible = true,
-            )
-        val commandPortraitFill =
-            monitorAnalysisChromeMounts(
-                isPortrait = true,
-                isPortraitFill = true,
-                isClean = false,
-                isCommand = true,
-                assistToolbarVisible = true,
-                cameraValuesVisible = true,
-            )
-        val cleanLandscape =
-            monitorAnalysisChromeMounts(
-                isPortrait = false,
-                isPortraitFill = false,
-                isClean = true,
-                isCommand = false,
-                assistToolbarVisible = true,
-                cameraValuesVisible = true,
-            )
-
-        assertEquals(MonitorAnalysisChromeMounts(assistStrip = true, captureStrip = true), livePortraitFill)
-        assertEquals(livePortraitFill, cleanPortraitFill)
-        assertEquals(MonitorAnalysisChromeMounts(assistStrip = false, captureStrip = false), commandPortraitFill)
-        assertEquals(MonitorAnalysisChromeMounts(assistStrip = false, captureStrip = false), cleanLandscape)
-        assertEquals(
-            MonitorRect(72f, 60f, 328f, 542f),
-            requireNotNull(
-                monitorAnalysisPanelLayout(
-                    layout = portraitZones(),
-                    physicalViewport = PORTRAIT_VIEWPORT,
-                    isPortrait = true,
-                    isPortraitFill = true,
-                    statusBarVisible = true,
-                    chromeMounts = cleanPortraitFill,
-                ),
-            ).safeBounds,
-        )
-    }
-
-    @Test
-    fun `portrait fit has no movable analysis canvas`() {
-        assertNull(
-            monitorAnalysisPanelLayout(
-                layout = portraitZones(),
-                physicalViewport = PORTRAIT_VIEWPORT,
-                isPortrait = true,
-                isPortraitFill = false,
-                statusBarVisible = true,
-                chromeMounts = PORTRAIT_FIT_CHROME,
-            ),
-        )
-    }
-
-    @Test
     fun `landscape false colour default preserves its legacy anchor then clamps once`() {
         val zones = landscapeZones()
-        val layout =
-            requireNotNull(
-                monitorAnalysisPanelLayout(
-                    layout = zones,
-                    physicalViewport = LANDSCAPE_VIEWPORT,
-                    isPortrait = false,
-                    isPortraitFill = false,
-                    statusBarVisible = true,
-                    chromeMounts = LANDSCAPE_LIVE_CHROME,
-                ),
-            )
+        val layout = MonitorAnalysisPanelLayout(LANDSCAPE_VIEWPORT, MonitorRect(64f, 62f, 704f, 251f))
 
         assertEquals(
             MonitorRect(64f, 259f, 264f, 52f),
             controlSafeFalseColorReferenceDefaultFrame(
                 feed = zones.picture,
-                layout = layout.copy(safeBounds = MonitorRect(64f, 62f, 704f, 251f)),
-            ),
-        )
-    }
-
-    @Test
-    fun `portrait fill false colour default preserves its legacy anchor then clamps once`() {
-        val zones = portraitZones()
-        val panelLayout =
-            requireNotNull(
-                monitorAnalysisPanelLayout(
-                    layout = zones,
-                    physicalViewport = PORTRAIT_VIEWPORT,
-                    isPortrait = true,
-                    isPortraitFill = true,
-                    statusBarVisible = true,
-                    chromeMounts = PORTRAIT_FILL_CHROME,
-                ),
-            )
-
-        assertEquals(
-            MonitorRect(136f, 540f, 264f, 52f),
-            controlSafeFalseColorReferenceDefaultFrame(
-                feed = zones.picture,
-                layout = panelLayout,
-                horizontalFraction = 1f,
+                layout = layout,
             ),
         )
     }
@@ -491,66 +286,6 @@ class MonitorAnalysisPanelPlacementTest {
         assertNull(stored.load())
     }
 
-    @Test
-    fun `focus reset base frame preserves landscape and portrait feed corners`() {
-        assertEquals(
-            MonitorRect(69f, 271f, 40f, 40f),
-            focusResetButtonBaseFrame(
-                feed = landscapeZones().picture,
-                isPortrait = false,
-                bottomChromeInset = 72f,
-            ),
-        )
-        assertEquals(
-            MonitorRect(350f, 560f, 40f, 40f),
-            focusResetButtonBaseFrame(
-                feed = portraitZones().picture,
-                isPortrait = true,
-                bottomChromeInset = 64f,
-            ),
-        )
-    }
-
-
-    @Test
-    fun `focus reset climbs overlapping panels from lowest to highest`() {
-        val bounds = MonitorRect(0f, 0f, 400f, 320f)
-        val base = MonitorRect(20f, 270f, 40f, 40f)
-        val panels =
-            listOf(
-                MonitorRect(10f, 250f, 180f, 70f),
-                MonitorRect(10f, 160f, 180f, 50f),
-            )
-
-        assertEquals(
-            MonitorRect(20f, 110f, 40f, 40f),
-            focusResetButtonClearFrame(base, panels, bounds),
-        )
-    }
-
-    @Test
-    fun `focus reset ignores distant panels and clamps impossible stacks to feed top`() {
-        val bounds = MonitorRect(0f, 20f, 400f, 300f)
-        val base = MonitorRect(20f, 270f, 40f, 40f)
-
-        assertEquals(
-            base,
-            focusResetButtonClearFrame(
-                base = base,
-                panelFrames = listOf(MonitorRect(220f, 240f, 100f, 70f)),
-                bounds = bounds,
-            ),
-        )
-        assertEquals(
-            MonitorRect(20f, 20f, 40f, 40f),
-            focusResetButtonClearFrame(
-                base = base,
-                panelFrames = listOf(MonitorRect(0f, 20f, 160f, 300f)),
-                bounds = bounds,
-            ),
-        )
-    }
-
     private fun landscapeZones(): MonitorFieldLayout =
         testFieldLayout(
             picture = MonitorRect(59f, 0f, 734f, 393f),
@@ -566,50 +301,8 @@ class MonitorAnalysisPanelPlacementTest {
             gauges = MonitorRect(16f, 80f, 38f, 233f),
         )
 
-    private fun portraitZones(): MonitorFieldLayout =
-        testFieldLayout(
-            picture = MonitorRect(0f, 52f, 400f, 622f),
-            status = MonitorRect(0f, 0f, 400f, 52f),
-            values = MonitorRect(0f, 610f, 400f, 64f),
-            // The shared portrait palette (MonitorLayoutPolicy.portraitAssists): 48 + 8 wide at x 8.
-            assists = MonitorRect(8f, 511f, 56f, 83f),
-            system = MonitorRect(0f, 680f, 400f, 90f),
-            lock = MonitorRect(0f, 680f, 80f, 90f),
-            display = MonitorRect(80f, 680f, 80f, 90f),
-            record = MonitorRect(160f, 680f, 80f, 90f),
-            media = MonitorRect(240f, 680f, 80f, 90f),
-            settings = MonitorRect(320f, 680f, 80f, 90f),
-        )
-
     private companion object {
-        val RAIL_ALL =
-            SideRailPlan(
-                lock = true,
-                batteries = true,
-                disp = true,
-                record = true,
-                media = true,
-                settings = true,
-            )
-        val RAIL_SETTINGS_ONLY =
-            SideRailPlan(
-                lock = false,
-                batteries = false,
-                disp = false,
-                record = false,
-                media = false,
-                settings = true,
-            )
         val LANDSCAPE_VIEWPORT = MonitorRect(0f, 0f, 848f, 393f)
-        val PORTRAIT_VIEWPORT = MonitorRect(0f, 0f, 400f, 800f)
-        val LANDSCAPE_LIVE_CHROME =
-            MonitorAnalysisChromeMounts(
-                assistStrip = true,
-                captureStrip = true,
-                landscapeRail = RAIL_ALL,
-            )
-        val PORTRAIT_FILL_CHROME = MonitorAnalysisChromeMounts(assistStrip = true, captureStrip = true)
-        val PORTRAIT_FIT_CHROME = MonitorAnalysisChromeMounts(assistStrip = true, captureStrip = false)
     }
 }
 

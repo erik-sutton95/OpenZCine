@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.multicam
 
+import com.opencapture.opencine.multicam.RecordAll
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -24,28 +25,21 @@ import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.TelemetrySource
 import com.opencapture.opencine.multicam.EditorLeaseException
 import com.opencapture.opencine.multicam.EditorLeases
-import com.opencapture.opencine.multicam.ExclusionReason
 import com.opencapture.opencine.multicam.MulticamGroup
 import com.opencapture.opencine.multicam.MulticamSnapshot
 import com.opencapture.opencine.multicam.RecordDirection
 import com.opencapture.opencine.multicam.RecordPlan
-import com.opencapture.opencine.multicam.RecordSubmissionError
-import com.opencapture.opencine.multicam.RecordSubmissionException
 import com.opencapture.opencine.multicam.ResourceAdmission
 import com.opencapture.opencine.multicam.AdmissionReason
 import com.opencapture.opencine.multicam.ResourceBudget
 import com.opencapture.opencine.multicam.ResourceClaim
 import com.opencapture.opencine.multicam.ResourceRequest
-import com.opencapture.opencine.multicam.TargetOutcome
-import com.opencapture.opencine.multicam.TargetPolicy
 import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.opencine.nikon.NikonMulticamPolicy
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.LiveFrame
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +51,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** One member's open link: its own Nikon session and that session's live frames. */
 class MulticamLink(val session: CameraSession, val frames: Flow<LiveFrame>)
@@ -73,20 +69,6 @@ object MulticamCopy {
     const val EMPTY_PICKER = "No other cameras reachable. Pair one, or plug USB-C / join the same network."
     const val COULDNT_CONNECT = "Couldn't connect"
     const val LOST_CONNECTION = "Connection lost"
-    const val COULDNT_REC = "Couldn't rec"
-    const val CHANGED = "Cameras changed. Try again."
-
-    fun confirm(direction: RecordDirection, names: List<String>): String =
-        if (direction == RecordDirection.START) {
-            "Start recording on ${names.joinToString(", ")}?"
-        } else {
-            "Stop recording on ${names.size} ${if (names.size == 1) "camera" else "cameras"}?"
-        }
-
-    /** `null` when every addressed camera rolls. */
-    fun mixedStart(rolling: Int, total: Int, firstFailed: String): String? =
-        if (rolling < total) "$rolling of $total rolling. $firstFailed didn't start." else null
-
     fun notApplied(setting: String): String = "$setting not applied"
 }
 
@@ -285,73 +267,48 @@ class MulticamCoordinator(
         memberAt(slot)?.id?.takeIf { group[it] != null }?.let(group::setStage)
     }
 
-    // MARK: Group record
+    // MARK: Group record (the shared RecordAll policy, plan rule and copy)
 
-    /** Group start (nothing rolling) or stop; Nikon keeps its eligible-subset default. */
+    /** Record all: stop when any member rolls, else start; refused while any member cannot record. */
     fun groupPlan(): RecordPlan = plan(group.entries.map { it.id })
 
-    /** One camera's own start or stop (its tile menu, or a Couldn't rec retry). */
+    /** One camera's own start or stop (its tile menu). */
     fun plan(id: MonitorEntryID): RecordPlan = plan(listOf(id))
 
-    fun names(plan: RecordPlan): List<String> =
-        plan.targets.flatMap { it.entries }.mapNotNull { member(it)?.displayName }
-
-    /** Runs [plan] in the coordinator's scope, so Live View replacing the stage does not cancel it. */
-    fun start(plan: RecordPlan) {
-        scope.launch { run(plan) }
+    /**
+     * Runs [plan] in the coordinator's scope, so Live View replacing the stage does not cancel it.
+     * [together]: Record all, which also reports one group line.
+     */
+    fun start(plan: RecordPlan, together: Boolean) {
+        scope.launch { run(plan, together) }
     }
 
-    suspend fun run(plan: RecordPlan) {
+    suspend fun run(plan: RecordPlan, together: Boolean) {
         if (groupBusy) return
         groupBusy = true
         try {
-            val sessions = sessionMap()
-            val submission =
-                try {
-                    plan.submit(group, engineState(), sessions)
-                } catch (error: RecordSubmissionException) {
-                    if (error.error == RecordSubmissionError.STALE) toast = MulticamCopy.CHANGED
-                    return
-                }
-            apply(plan, submission.finished(sessions).outcomes)
+            if (together) toast = RecordAll.progress(plan.direction)
+            for (target in plan.targets) target.entries.forEach { member(it)?.note = RecordAll.WAITING }
+            val result = RecordAll.run(plan, group, engineState(), sessionMap())
+            if (result == null) {
+                toast = RecordAll.CHANGED
+                return
+            }
+            for (member in members) {
+                val outcome = result.outcome(member.id, group) ?: continue
+                RecordAll.note(outcome, plan.direction)?.let { member.note = it }
+            }
+            if (together) {
+                val start = plan.direction == RecordDirection.START
+                toast = RecordAll.summary(result, allMatch = members.all { it.recording == start })
+            }
         } finally {
             groupBusy = false
         }
     }
 
-    private fun plan(entries: List<MonitorEntryID>): RecordPlan {
-        val rolling = entries.any { member(it)?.recording == true }
-        return RecordPlan.make(
-            if (rolling) RecordDirection.STOP else RecordDirection.START,
-            TargetPolicy.ELIGIBLE_SUBSET,
-            entries,
-            group,
-            engineState(),
-        )
-    }
-
-    private fun apply(plan: RecordPlan, outcomes: Map<com.opencapture.opencine.core.CameraSessionID, TargetOutcome>) {
-        val failed = mutableListOf<MulticamMember>()
-        for (target in plan.targets) {
-            val confirmed = outcomes[target.session] == TargetOutcome.Confirmed
-            for (id in target.entries) {
-                val member = member(id)?.takeIf { it.control?.id == target.session } ?: continue
-                member.note = if (confirmed) null else MulticamCopy.COULDNT_REC
-                if (!confirmed) failed += member
-            }
-        }
-        // Shown but not sent (no live view, closed link) did not start either; a lent camera is
-        // simply in its Live View.
-        val excluded =
-            plan.exclusions.filter { it.reason != ExclusionReason.Busy }.mapNotNull { member(it.entry) }
-        excluded.forEach { it.note = MulticamCopy.COULDNT_REC }
-        if (plan.direction != RecordDirection.START) return
-        val total = plan.targets.size + plan.satisfied.size + excluded.size
-        val notRolling = failed + excluded
-        notRolling.firstOrNull()?.let { first ->
-            MulticamCopy.mixedStart(total - notRolling.size, total, first.displayName)?.let { toast = it }
-        }
-    }
+    private fun plan(entries: List<MonitorEntryID>): RecordPlan =
+        RecordAll.plan(entries, { member(it)?.recording == true }, group, engineState())
 
     // MARK: Camera values (that member's own readback-confirmed writes)
 

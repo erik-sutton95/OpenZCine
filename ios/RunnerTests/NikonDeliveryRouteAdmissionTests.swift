@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineAppKit
 import XCTest
 
 @testable import Runner
@@ -10,144 +11,143 @@ import XCTest
     func release(_ value: T) { waiting.removeFirst().resume(returning: value) }
 }
 
-/// SIMULATED native SSID/leave/join callbacks exercise the actual root route, never a camera.
+/// SIMULATED Nikon Wi‑Fi joiner: each hop reads the next SSID answer.
+@MainActor private final class NikonHopFake {
+    var answers: [@MainActor () async -> String?] = []
+    var leaves: [String] = []
+    var joins: [String] = []
+    var joinGate: NikonRouteGate<Void>?
+
+    func install(on model: NativeAppModel) {
+        model.hopNative = .init(
+            currentSSID: { [self] in await answers.removeFirst()() },
+            leaveNetwork: { [self] in leaves.append($0) },
+            rejoin: { [self] _, ssid in
+                if let joinGate { await joinGate.wait() }
+                joins.append(ssid)
+            })
+    }
+}
+
+/// The Nikon port of the shared internet hop (A2-16): the actual root route over SIMULATED
+/// native SSID, leave and join callbacks, never a camera.
 @MainActor final class NikonDeliveryRouteAdmissionTests: XCTestCase {
-    func testCurrentCapturedRouteLeavesAndRestoresItsOriginalSSIDOnce() async throws {
+    private func hop(_ fake: NikonHopFake) -> NativeAppModel {
         let model = NativeAppModel()
-        var leaves: [String] = []
-        var joins: [String] = []
-        let token = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { "SIMULATED-A" }, leaveNetwork: { leaves.append($0) }))
-        await settle { leaves.count == 1 }
-        XCTAssertTrue(model.ownsInternetHop(token))
-        let entered = try XCTUnwrap(
-            model.endInternetHopCaptured(token, rejoin: { _, ssid in joins.append(ssid) }))
+        fake.install(on: model)
+        return model
+    }
+
+    func testCurrentRouteLeavesAndRestoresItsOriginalSSIDOnce() async throws {
+        let fake = NikonHopFake()
+        fake.answers = [{ "SIMULATED-A" }]
+        let model = hop(fake)
+        let token = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 1 }
+        XCTAssertTrue(model.internetHop.owns(token) && model.internetHopActive)
+        let entered = try XCTUnwrap(model.internetHop.end(token))
         await entered.value
-        XCTAssertEqual(leaves, ["SIMULATED-A"])
-        XCTAssertEqual(joins, ["SIMULATED-A"])
+        XCTAssertEqual(fake.leaves, ["SIMULATED-A"])
+        XCTAssertEqual(fake.joins, ["SIMULATED-A"])
         XCTAssertFalse(model.internetHopActive)
-        XCTAssertNil(model.endInternetHopCaptured(token, rejoin: { _, ssid in joins.append(ssid) }))
-        XCTAssertEqual(joins, ["SIMULATED-A"])
+        XCTAssertNil(model.internetHop.end(token))
+        XCTAssertEqual(fake.joins, ["SIMULATED-A"])
+    }
+
+    func testASecondHopIsRefusedWhileOneRuns() async throws {
+        let fake = NikonHopFake()
+        fake.answers = [{ "SIMULATED-A" }]
+        let model = hop(fake)
+        let token = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        XCTAssertNil(model.internetHop.begin(model.hopRoute()), "A running hop is never stolen")
+        await settle { fake.leaves.count == 1 }
+        await model.internetHop.end(token)?.value
+        XCTAssertEqual(fake.leaves, ["SIMULATED-A"])
     }
 
     func testLateOldSSIDCannotLeaveOrReleaseTheSuccessorRoute() async throws {
-        let model = NativeAppModel()
+        let fake = NikonHopFake()
         let oldSSID = NikonRouteGate<String?>()
-        var leaves: [String] = []
-        var joins: [String] = []
-        let old = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { await oldSSID.wait() }, leaveNetwork: { leaves.append($0) }))
+        fake.answers = [{ await oldSSID.wait() }, { "SIMULATED-B" }]
+        let model = hop(fake)
+        let old = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
         await settle { oldSSID.count == 1 }
-        XCTAssertNil(model.endInternetHopCaptured(old))
-        let successor = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { "SIMULATED-B" }, leaveNetwork: { leaves.append($0) }))
-        await settle { leaves.count == 1 }
+        XCTAssertNil(model.internetHop.end(old), "Nothing has left yet")
+        let successor = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 1 }
         oldSSID.release("SIMULATED-A")
         for _ in 0..<10 { await Task.yield() }
-        XCTAssertEqual(leaves, ["SIMULATED-B"])
-        XCTAssertTrue(model.ownsInternetHop(successor) && model.internetHopActive)
-        XCTAssertNil(model.endInternetHopCaptured(old))
-        let entered = try XCTUnwrap(
-            model.endInternetHopCaptured(successor, rejoin: { _, ssid in joins.append(ssid) }))
-        await entered.value
-        XCTAssertEqual(joins, ["SIMULATED-B"])
+        XCTAssertEqual(fake.leaves, ["SIMULATED-B"])
+        XCTAssertTrue(model.internetHop.owns(successor) && model.internetHopActive)
+        XCTAssertNil(model.internetHop.end(old))
+        await model.internetHop.end(successor)?.value
+        XCTAssertEqual(fake.joins, ["SIMULATED-B"])
     }
 
     func testSourceRevokedDuringSSIDReadRefusesUnsentLeave() async throws {
-        let model = NativeAppModel()
+        let fake = NikonHopFake()
         let ssid = NikonRouteGate<String?>()
+        fake.answers = [{ await ssid.wait() }]
+        let model = hop(fake)
         var current = true
-        var leaves = 0
-        let token = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { current },
-                currentSSID: { await ssid.wait() }, leaveNetwork: { _ in leaves += 1 }))
+        let token = try XCTUnwrap(model.internetHop.begin(model.hopRoute(), admission: { current }))
         await settle { ssid.count == 1 }
         current = false
         ssid.release("SIMULATED-A")
         await settle { !model.internetHopActive }
-        XCTAssertFalse(model.ownsInternetHop(token))
-        XCTAssertEqual(leaves, 0)
+        XCTAssertFalse(model.internetHop.owns(token))
+        XCTAssertTrue(fake.leaves.isEmpty)
+        XCTAssertTrue(fake.joins.isEmpty, "A phone that never left has nothing to rejoin")
     }
 
-    func testPopupTransferKeepsOnlyTheOriginalNativeReturnFacts() async throws {
-        let model = NativeAppModel()
-        var leaves: [String] = []
-        var joins: [String] = []
-        let popup = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { "SIMULATED-A" }, leaveNetwork: { leaves.append($0) }))
-        await settle { leaves.count == 1 }
-        let delivery = try XCTUnwrap(model.transferInternetHop(popup))
-        XCTAssertFalse(model.ownsInternetHop(popup))
-        XCTAssertTrue(model.ownsInternetHop(delivery))
-        XCTAssertNil(model.endInternetHopCaptured(popup))
-        let entered = try XCTUnwrap(
-            model.endInternetHopCaptured(delivery, rejoin: { _, ssid in joins.append(ssid) }))
-        await entered.value
-        XCTAssertEqual(leaves, ["SIMULATED-A"])
-        XCTAssertEqual(joins, ["SIMULATED-A"])
+    func testTransferKeepsOnlyTheOriginalNativeReturnFacts() async throws {
+        let fake = NikonHopFake()
+        fake.answers = [{ "SIMULATED-A" }]
+        let model = hop(fake)
+        let popup = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 1 }
+        let delivery = try XCTUnwrap(model.internetHop.transfer(popup))
+        XCTAssertFalse(model.internetHop.owns(popup))
+        XCTAssertTrue(model.internetHop.owns(delivery))
+        XCTAssertNil(model.internetHop.end(popup))
+        await model.internetHop.end(delivery)?.value
+        XCTAssertEqual(fake.leaves, ["SIMULATED-A"])
+        XCTAssertEqual(fake.joins, ["SIMULATED-A"])
     }
 
     func testBeginEndABABeforeQueuedRejoinCannotReviveOldNativeDispatch() async throws {
-        let model = NativeAppModel()
-        var leaves: [String] = []
-        var joins: [String] = []
-        let old = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { "SIMULATED-A" }, leaveNetwork: { leaves.append($0) }))
-        await settle { leaves.count == 1 }
-        let oldJoin = try XCTUnwrap(
-            model.endInternetHopCaptured(old, rejoin: { _, ssid in joins.append(ssid) }))
-        let successor = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { "SIMULATED-B" }, leaveNetwork: { leaves.append($0) }))
-        XCTAssertNil(model.endInternetHopCaptured(successor))
+        let fake = NikonHopFake()
+        fake.answers = [{ "SIMULATED-A" }, { "SIMULATED-B" }]
+        let model = hop(fake)
+        let old = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 1 }
+        let oldJoin = try XCTUnwrap(model.internetHop.end(old))
+        let successor = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        XCTAssertNil(model.internetHop.end(successor))
         await oldJoin.value
-        XCTAssertTrue(joins.isEmpty)
-        XCTAssertEqual(leaves, ["SIMULATED-A"])
+        XCTAssertTrue(fake.joins.isEmpty)
+        XCTAssertEqual(fake.leaves, ["SIMULATED-A"])
     }
 
-    func testEnteredRejoinCleanupStillJoinsOnlyItsOriginalTask() async throws {
-        let model = NativeAppModel()
+    func testEnteredRejoinStillJoinsOnlyItsOriginalRoute() async throws {
+        let fake = NikonHopFake()
         let join = NikonRouteGate<Void>()
-        var leaves: [String] = []
-        var joins: [String] = []
-        let old = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { "SIMULATED-A" }, leaveNetwork: { leaves.append($0) }))
-        await settle { leaves.count == 1 }
-        let entered = try XCTUnwrap(
-            model.endInternetHopCaptured(
-                old,
-                rejoin: { _, ssid in
-                    await join.wait()
-                    joins.append(ssid)
-                }))
+        fake.joinGate = join
+        fake.answers = [{ "SIMULATED-A" }, { "SIMULATED-B" }]
+        let model = hop(fake)
+        let old = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 1 }
+        let entered = try XCTUnwrap(model.internetHop.end(old))
         await settle { join.count == 1 }
-        let successor = try XCTUnwrap(
-            model.beginInternetHopCaptured(
-                admission: { true },
-                currentSSID: { "SIMULATED-B" }, leaveNetwork: { leaves.append($0) }))
-        await settle { leaves.count == 2 }
+        fake.joinGate = nil
+        let successor = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 2 }
         join.release(())
         await entered.value
-        XCTAssertEqual(joins, ["SIMULATED-A"])
-        XCTAssertTrue(model.ownsInternetHop(successor))
-        let successorJoin = try XCTUnwrap(
-            model.endInternetHopCaptured(successor, rejoin: { _, ssid in joins.append(ssid) }))
-        await successorJoin.value
-        XCTAssertEqual(joins, ["SIMULATED-A", "SIMULATED-B"])
+        XCTAssertEqual(fake.joins, ["SIMULATED-A"])
+        XCTAssertTrue(model.internetHop.owns(successor))
+        await model.internetHop.end(successor)?.value
+        XCTAssertEqual(fake.joins, ["SIMULATED-A", "SIMULATED-B"])
     }
 
     private func settle(_ predicate: () -> Bool) async {

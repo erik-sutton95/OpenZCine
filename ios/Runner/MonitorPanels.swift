@@ -2282,8 +2282,6 @@ struct OperatorSettingsPanel: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var relayPasscodeDraft: String?
-    @State private var expandedDispSection: DispMode?
-    @State private var displayCaptureMode: CaptureLayoutMode?
     @State private var reliabilityOptIn = ReliabilityDiagnostics.reporting.isOptedIn
 
     var body: some View {
@@ -2297,7 +2295,7 @@ struct OperatorSettingsPanel: View {
                 scrollOffsets: Binding(
                     get: { model.operatorSettingsScrollOffsets },
                     set: { model.operatorSettingsScrollOffsets = $0 }),
-                borrowedDisplay: borrowedDisplay, sourceIdentity: model.shell.monitor?.id,
+                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id,
                 initialReportPresented: model.isStandaloneSettingsPresented
                     && DemoHarness.openBugReport)
         }
@@ -2355,13 +2353,19 @@ struct OperatorSettingsPanel: View {
                 "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card.",
             exposureHelp:
                 "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
+            availableDisplay: [
+                .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
+                .timecode, .format, .codec, .storage, .fps, .railRecord, .railMedia, .railSettings,
+                .focusBox,
+            ],
             assist: model.assist, stores: model.scopePanels.operatorStores,
             falseColorLooks: .signal,
             palette: LiveDesign.self,
             operatorHaptics: .init(isEnabled: { [weak model] in
                 model?.preferences.hapticsEnabled == true
             }),
-            transfer: model.scopeAssist.transfer, clipByte: model.scopeAssist.clipByte,
+            transfer: model.exposureSignalMapping.curve.monitorTransfer,
+            clipByte: model.exposureSignalMapping.clipByte,
             lookLabel: lookLabel, lookCatalog: { AnyView(LUTPickerContent().environment(model)) },
             input: .init(
                 remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
@@ -2601,17 +2605,14 @@ struct OperatorSettingsPanel: View {
             disconnect: { [weak model] in if account.isCurrent { model?.disconnectFrameio() } },
             beginInternet: { [weak model] admission in
                 guard let model,
-                    let token = await model.beginInternetHopCaptured(admission: admission)
+                    let token = model.internetHop.begin(model.hopRoute(), admission: admission)
                 else { return nil }
                 return .init(
                     isCurrent: { [weak model] in
-                        model?.ownsInternetHop(token) == true && account.isCurrent
+                        model?.internetHop.owns(token) == true && account.isCurrent
                     },
-                    wait: { [weak model] in
-                        await model?.waitForInternetPath(captured: token, timeoutSeconds: 30)
-                            == true
-                    },
-                    restore: { [weak model] in await model?.restoreInternetHop(token) })
+                    wait: { [weak model] in await model?.internetHop.waitForInternet(token) == true },
+                    restore: { [weak model] in await model?.internetHop.end(token)?.value })
             },
             internetFailure:
                 "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi."
@@ -2717,118 +2718,6 @@ struct OperatorSettingsPanel: View {
         case .stored(_, let name): return (name as NSString).deletingPathExtension
         }
     }
-    private var borrowedDisplay: MonitorOperatorBorrowedDisplay {
-        let capture = editedCaptureMode
-        return .init(
-            layoutHelp:
-                "Video and photo keep their own monitor layouts. This picks which one the DISP sections set up; the camera's own mode dial picks which one the monitor renders.",
-            choices: CaptureLayoutMode.allCases.map { .init(id: $0.rawValue, title: $0.title) },
-            selection: Binding(
-                get: { editedCaptureMode.rawValue },
-                set: {
-                    guard let choice = CaptureLayoutMode(rawValue: $0) else { return }
-                    settingsFeedback()
-                    editedCaptureMode = choice
-                }),
-            expandedSection: Binding(
-                get: { expandedDispSection?.rawValue },
-                set: { expandedDispSection = $0.flatMap(DispMode.init(rawValue:)) }),
-            sections: DispMode.allCases.map { mode in
-                let eligible = mode != .command && capture == model.captureLayoutMode
-                return .init(
-                    id: mode.rawValue, title: "DISP \(dispNumber(mode)) · \(mode.title)",
-                    caption: dispCaption(mode),
-                    reset: {
-                        settingsFeedback()
-                        model.resetChromeVisibility(for: mode, capture: capture)
-                    },
-                    editHint: "Opens the monitor with an eye on each element you can show or hide",
-                    edit: eligible ? { model.beginChromeEditing(mode) } : nil,
-                    unavailableEditHelp: mode == .command
-                        ? nil
-                        : "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor.",
-                    visibility: chromeToggles(for: mode, capture: capture),
-                    pinsTitle: "View assists that stay on in clean view",
-                    pins: mode == .clean ? cleanPins : [])
-            }, order: displayOrder,
-            returnedFromEditor: {
-                if let returning = model.chromeEditorReturnMode {
-                    expandedDispSection = returning
-                    model.chromeEditorReturnMode = nil
-                }
-            })
-    }
-    private var editedCaptureMode: CaptureLayoutMode {
-        get { displayCaptureMode ?? model.captureLayoutMode }
-        nonmutating set { displayCaptureMode = newValue }
-    }
-
-    private var cleanPins: [MonitorDisplayToggle] {
-        MonitorAssistTool.activeCases.filter { $0 != .evMeter }.map { tool in
-            MonitorDisplayToggle(
-                id: tool.rawValue, title: tool.displaySettingsTitle,
-                isOn: model.assist.cleanViewPinnedTools.contains(tool.selection),
-                accessibilityLabel: "Keep \(tool.displaySettingsTitle) in clean view"
-            ) {
-                model.toggleCleanViewPin(tool)
-            }
-        }
-    }
-
-    private var displayOrder: MonitorDisplayOrderGroup {
-        MonitorDisplayOrderGroup(
-            title: "DISP Button Order",
-            caption: "Drag to reorder; tap to enable or disable modes.",
-            items: model.preferences.dispOrder.map { mode in
-                MonitorDisplayOrderItem(
-                    id: mode.rawValue, title: mode.title,
-                    isOn: model.preferences.enabledDispModes.contains(mode),
-                    highlighted: mode == model.displayMode
-                        && model.preferences.enabledDispModes.contains(mode),
-                    toggle: { model.toggleDispMode(mode) })
-            },
-            reset: {
-                settingsFeedback()
-                model.resetDispPreferences()
-            },
-            move: { id, target in
-                let current = model.preferences.dispOrder
-                guard let source = current.firstIndex(where: { $0.rawValue == id }),
-                    current.indices.contains(target), source != target
-                else { return }
-                model.moveDispOrder(
-                    from: IndexSet(integer: source), to: source < target ? target + 1 : target)
-            })
-    }
-
-    private func dispNumber(_ mode: DispMode) -> Int {
-        (DispMode.allCases.firstIndex(of: mode) ?? 0) + 1
-    }
-
-    private func dispCaption(_ mode: DispMode) -> String {
-        switch mode {
-        case .live:
-            "The full monitor. Set what it shows in Edit view, and which tools reach the tool bar."
-        case .clean:
-            "A stripped-back image. Same elements as DISP 1 — the rail, focus box and batteries start on, everything else off."
-        case .command:
-            "The data dashboard — no feed, so no image assists. Only the side rail is on screen."
-        }
-    }
-
-    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode)
-        -> [MonitorDisplayToggle]
-    {
-        DisplayChromeVisibility.configurableSections(in: mode).map { section in
-            MonitorDisplayToggle(
-                id: section.rawValue, title: section.title,
-                isOn: model.preferences.chrome(for: mode, capture: capture).isVisible(section)
-            ) {
-                model.toggleChrome(section, for: mode, capture: capture)
-            }
-        }
-    }
-
     /// Marketing version + build number from the bundle, e.g. "0.2.0 (9)", matching what
     /// TestFlight shows for the installed build (CI stamps CFBundleVersion per upload).
     static var appVersionText: String {

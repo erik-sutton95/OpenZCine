@@ -38,16 +38,15 @@ import Testing
 
     // MARK: - displayedFitScopes (R8)
 
-    @Test func displayedFitScopesPicksTwoMostRecentInCanonicalOrder() {
+    @Test func displayedFitScopesUsesCanonicalPrefixDespiteRecordedRecency() {
         var prefs = OperatorPreferences()
         let on: [MonitorAssistTool] = [.waveform, .parade, .histogram]
         for tool in on { prefs.recordScopeActivation(tool, on: true) }
-        // Order is [.waveform, .parade, .histogram]; two most recent = {.parade, .histogram},
-        // re-sorted into canonical order.
-        #expect(prefs.displayedFitScopes(on: Set(on)) == [.parade, .histogram])
+        // Stored activation history stays intact; fit uses the canonical eligible prefix.
+        #expect(prefs.displayedFitScopes(on: Set(on)) == [.waveform, .parade])
     }
 
-    @Test func displayedFitScopesFallsBackToCanonicalPrefixWhenOrderEmpty() {
+    @Test func displayedFitScopesUsesCanonicalPrefixForMigratedSelection() {
         var prefs = OperatorPreferences()
         // Migrated install: active scopes but no recorded order.
         prefs.scopeActivationOrder = []
@@ -55,18 +54,18 @@ import Testing
             prefs.displayedFitScopes(on: [.waveform, .parade, .histogram]) == [.waveform, .parade])
     }
 
-    @Test func deactivatingDisplayedScopePromotesRememberedOne() {
+    @Test func deactivatingDisplayedScopePromotesNextEligibleSelection() {
         var prefs = OperatorPreferences()
         var on: Set<MonitorAssistTool> = []
         for tool in [MonitorAssistTool.waveform, .parade, .histogram] {
             on.insert(tool)
             prefs.recordScopeActivation(tool, on: true)
         }
-        // Displayed = [.parade, .histogram]; .waveform is remembered.
-        #expect(prefs.displayedFitScopes(on: on) == [.parade, .histogram])
-        on.remove(.histogram)
-        prefs.recordScopeActivation(.histogram, on: false)
-        // .waveform (remembered) now rejoins the display alongside .parade, canonical order.
+        // The first two display; histogram stays selected but hidden in fit.
         #expect(prefs.displayedFitScopes(on: on) == [.waveform, .parade])
+        on.remove(.waveform)
+        prefs.recordScopeActivation(.waveform, on: false)
+        // Removing the first eligible selection admits the next one in canonical order.
+        #expect(prefs.displayedFitScopes(on: on) == [.parade, .histogram])
     }
 }

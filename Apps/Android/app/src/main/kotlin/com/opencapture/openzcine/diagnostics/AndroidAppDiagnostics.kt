@@ -13,7 +13,7 @@ import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportEnvelope
 import com.opencapture.opencine.media.BoundedDiagnosticFormatter
 import com.opencapture.opencine.platform.LocalVPNProbe
 import com.opencapture.openzcine.BuildConfig
-import com.opencapture.openzcine.pairing.looksLikeNikonAccessPointSsid
+import com.opencapture.opencine.nikon.NikonAccessPointSsid
 import java.io.File
 
 private const val DIAGNOSTICS_AUTHORITY_SUFFIX = ".diagnostics-share"
@@ -147,7 +147,7 @@ internal class AndroidAppDiagnostics private constructor(
                 exceptions = emptyList(),
                 extras = runCatching { AppDiagnostics.incidents.reportExtras() }.getOrDefault(emptyList()),
                 cap = minOf(ManualProblemReport.ATTACHMENT_MAX_CHARS, BoundedDiagnosticFormatter.CHARACTER_CAP),
-                isSafeNetwork = ::looksLikeNikonAccessPointSsid,
+                isSafeNetwork = NikonAccessPointSsid::isNikonZAccessPoint,
             )
         return ManualProblemReportEnvelope.utf8Prefix(body, ManualProblemReport.ATTACHMENT_MAX_BYTES)
     }

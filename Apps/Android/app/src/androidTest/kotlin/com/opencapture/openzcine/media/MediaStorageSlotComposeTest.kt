@@ -21,6 +21,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.openzcine.OpenZCineTheme
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryNavigationRail
+import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryStorageCards
+import com.opencapture.opencine.vocabulary.MediaLibraryTab
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -28,7 +31,7 @@ import org.junit.runner.RunWith
 import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaLayout
 
-/** Device contract for the shared portrait/landscape camera-slot selector. */
+/** Device contract for the Nikon slot values in the shared portrait/landscape storage cards and rail. */
 @RunWith(AndroidJUnit4::class)
 class MediaStorageSlotComposeTest {
     @get:Rule
@@ -39,11 +42,10 @@ class MediaStorageSlotComposeTest {
         var selectedStorageId by mutableStateOf<Long?>(null)
         composeRule.setContent {
             OpenZCineTheme {
-                MediaStorageSlotSelector(
-                    slots = slots,
-                    selectedStorageId = selectedStorageId,
+                MonitorMediaGalleryStorageCards(
+                    values = mediaGalleryStorageValues(slots, selectedStorageId),
+                    select = { selectedStorageId = it.toLong() },
                     horizontal = true,
-                    onSelect = { selectedStorageId = it },
                 )
             }
         }
@@ -67,11 +69,10 @@ class MediaStorageSlotComposeTest {
     fun landscapeCardsExposeSelectedStateSemantically() {
         composeRule.setContent {
             OpenZCineTheme {
-                MediaStorageSlotSelector(
-                    slots = slots,
-                    selectedStorageId = 131_073,
+                MonitorMediaGalleryStorageCards(
+                    values = mediaGalleryStorageValues(slots, 131_073),
+                    select = {},
                     horizontal = false,
-                    onSelect = {},
                 )
             }
         }
@@ -89,17 +90,16 @@ class MediaStorageSlotComposeTest {
             CompositionLocalProvider(LocalDensity provides Density(deviceDensity, fontScale = 2f)) {
                 OpenZCineTheme {
                     Box(Modifier.width(172.dp).height(180.dp)) {
-                        MediaLibraryRail(
-                            category = MediaLibraryCategory.ALL,
-                            storageSlots = compactSlots,
-                            selectedStorageId = null,
-                            onCategoryChange = {},
-                            onStorageSelect = {},
-                            showsGridControls = false,
+                        MonitorMediaGalleryNavigationRail(
+                            category = MediaLibraryTab.ALL,
+                            storage = mediaGalleryStorageValues(compactSlots, null),
+                            selectCategory = {},
+                            selectStorage = {},
                             layout = MonitorMediaLayout.GRID,
                             thumbnailSize = MonitorThumbnailSize.MEDIUM,
-                            onLayoutChange = {},
-                            onThumbnailSizeChange = {},
+                            selectLayout = {},
+                            selectThumbnailSize = {},
+                            showsDisplayControls = false,
                             modifier = Modifier.width(172.dp),
                         )
                     }

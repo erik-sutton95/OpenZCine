@@ -2,6 +2,8 @@ package com.opencapture.openzcine.media
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -15,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.monitorui.*
 import com.opencapture.opencine.media.MonitorConformPreview
@@ -30,6 +33,39 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class NikonPlaybackPageCompositionTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun ratingAnchorAlignsWithActionsInLandscape() = ratingAnchorAlignment(900, 420)
+
+    @Test fun ratingAnchorAlignsWithActionsInPortrait() = ratingAnchorAlignment(420, 900)
+
+    private fun ratingAnchorAlignment(width: Int, height: Int) {
+        val expanded = mutableStateOf(false)
+        val stars = mutableStateOf(4)
+        compose.setContent {
+            Box(Modifier.requiredSize(width.dp, height.dp)) {
+                MonitorPlaybackScreen(presentation(clean = false), actions(),
+                    slots = MonitorPlaybackPageSlots(headerAccessory = {
+                        MonitorPlaybackRatingDetails(stars.value, (1..5).toList(), true, null,
+                            expanded.value, { stars.value = it }, Modifier.fillMaxWidth())
+                    }, canvasDetails = {}, onChromeVisibilityChanged = {}, onAssistExpansionChanged = {},
+                        headerActionAccessory = {
+                            MonitorPlaybackRatingAnchor(stars.value, expanded.value, { expanded.value = it })
+                        }), picture = { Box(Modifier.fillMaxSize()) }, feedAssists = {},
+                    canvasAssists = {}, tools = {}, assistInspector = {})
+            }
+        }
+        fun requireAligned() {
+            val rating = compose.onNodeWithTag("monitor.playback.rating").fetchSemanticsNode().boundsInRoot
+            val favorite = compose.onNodeWithContentDescription("Favorite clip").fetchSemanticsNode().boundsInRoot
+            assertEquals(favorite.center.y, rating.center.y, 1f)
+        }
+        requireAligned()
+        compose.onNodeWithTag("monitor.playback.rating").performClick()
+        compose.onNodeWithTag("monitor.playback.rating.5").assertExists()
+        requireAligned()
+        compose.onNodeWithTag("monitor.playback.rating.4").performClick()
+        compose.runOnIdle { assertEquals(0, stars.value) }
+    }
 
     @Test fun cleanStartAndRestoredAccessoryPersistWithinCommonPageAcrossPendingItemReplacement() {
         val value = mutableStateOf(presentation(clean = true))

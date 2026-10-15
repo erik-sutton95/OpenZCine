@@ -4,9 +4,13 @@ import MonitorPresentation
 import MonitorUI
 import Network
 import Observation
+import OpenCineAppKitApple
 import OpenCineApple
+import OpenCineAppKit
 import OpenCineCameraControls
+import OpenCineCameraVocabulary
 import OpenCineCore
+import OpenCineHostedAccessibility
 import OpenCineMedia
 import SwiftUI
 import Testing
@@ -48,7 +52,8 @@ final class RunnerTests: XCTestCase {
             let end = try await nativeFilterElement("End", host: host)
             XCTAssertEqual(start.accessibilityValue, "Any")
             XCTAssertEqual(end.accessibilityValue, "Any")
-            let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
+            let labels = Set(
+                HostedAccessibility.elements(in: host.view).compactMap(\.accessibilityLabel))
             XCTAssertFalse(labels.contains("SIZE"))
             XCTAssertFalse(labels.contains("STORAGE"))
             XCTAssertFalse(labels.contains("TODAY"))
@@ -75,29 +80,6 @@ final class RunnerTests: XCTestCase {
     }
 
     @MainActor
-    private func nativeFilterElements(_ root: NSObject) -> [NSObject] {
-        var seen = Set<ObjectIdentifier>()
-        var result: [NSObject] = []
-        func visit(_ object: NSObject) {
-            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-            result.append(object)
-            let count = object.accessibilityElementCount()
-            if count > 0 && count < 256 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject {
-                        visit(child)
-                    }
-                }
-            }
-            if let view = object as? UIView {
-                for child in view.subviews { visit(child) }
-            }
-        }
-        visit(root)
-        return result
-    }
-
-    @MainActor
     private func nativeFilterElement(_ label: String, host: UIViewController) async throws
         -> NSObject
     {
@@ -105,7 +87,7 @@ final class RunnerTests: XCTestCase {
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
             await Task.yield()
-            if let element = nativeFilterElements(host.view).first(where: {
+            if let element = HostedAccessibility.elements(in: host.view).first(where: {
                 $0.accessibilityLabel == label && $0.accessibilityTraits.contains(.button)
             }) {
                 return element
@@ -113,7 +95,7 @@ final class RunnerTests: XCTestCase {
         }
         XCTFail("Default common form did not expose its native \(label) button")
         return try XCTUnwrap(
-            nativeFilterElements(host.view).first { $0.accessibilityLabel == label })
+            HostedAccessibility.elements(in: host.view).first { $0.accessibilityLabel == label })
     }
 
     @MainActor
@@ -341,9 +323,12 @@ final class RunnerTests: XCTestCase {
         }
         let clampedNative = try await enterAndFinish("999")
         XCTAssertEqual(clampedNative, "255")
+        // A native code is the shared zebra's code on this camera's transfer and clip.
         XCTAssertEqual(
             model.assist.zebraHighlightIRE,
-            model.exposureSignalMapping.monitorPercent(signalNative: 255), accuracy: 0.0001)
+            OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                1, transfer: model.exposureSignalMapping.curve.monitorTransfer,
+                clipByte: model.exposureSignalMapping.clipByte), accuracy: 0.0001)
         // Codes above the tone curve's clipping point map to the existing normalized maximum.
         // After committing, the real binding displays that converted threshold again.
         XCTAssertEqual(
@@ -355,11 +340,199 @@ final class RunnerTests: XCTestCase {
         _ = try await enterAndFinish("128")
         XCTAssertEqual(
             model.assist.zebraHighlightIRE,
-            model.exposureSignalMapping.monitorPercent(signalNative: 128), accuracy: 0.0001)
+            OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                128.0 / 255, transfer: model.exposureSignalMapping.curve.monitorTransfer,
+                clipByte: model.exposureSignalMapping.clipByte), accuracy: 0.0001)
         let retained = model.assist.zebraHighlightIRE
         _ = try await enterAndFinish("")
         XCTAssertEqual(threshold.text, "128")
         XCTAssertEqual(model.assist.zebraHighlightIRE, retained)
+    }
+
+    @MainActor
+    func testActualSharedNikonInspectorUsesAcceptedNativePictureAndRetiresChangedMeaning()
+        async throws
+    {
+        // SIMULATED raster enters the same accepted local picture path used by still/demo feeds.
+        // The actual shared monitor composes the inspector and drives the native renderer task.
+        let model = NativeAppModel()
+        let savedPreferences = model.preferences
+        let savedConfiguration = model.assistConfiguration
+        let savedTools = model.assist.liveTools
+        let savedInspector = model.assist.configureTool
+        defer {
+            model.assist.configureTool = savedInspector
+            for tool in MonitorAssistTool.activeCases {
+                model.assist.set(tool, visible: savedTools.contains(tool), context: .liveView)
+            }
+            model.preferences = savedPreferences
+            model.assistConfiguration = savedConfiguration
+        }
+        model.preferences = OperatorPreferences.defaults
+        model.isMonitorPresented = true
+        model.videoSource = .hdmiCapture
+        for tool in MonitorAssistTool.activeCases {
+            model.assist.set(tool, visible: false, context: .liveView)
+        }
+        func raster(_ color: UIColor) -> UIImage {
+            UIGraphicsImageRenderer(size: CGSize(width: 640, height: 360)).image {
+                color.setFill()
+                $0.fill(CGRect(x: 0, y: 0, width: 640, height: 360))
+            }
+        }
+        model.liveFrameImage = raster(.green)
+        model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        model.shell.present(
+            ConnectedCamera(
+                saved: SavedCamera(
+                    id: "SIMULATED-inspector",
+                    integration: IntegrationID("org.opencapture.nikon-ptp"),
+                    advertisedName: "SIMULATED camera", model: "SIMULATED"),
+                session: NikonPictureLifetimeSession()))
+        let delivery = MonitorDeliveryCoordinator()
+        let host = UIHostingController(
+            rootView: GeometryReader { proxy in
+                NikonMonitorShell(
+                    context: LiveViewLayoutContext(
+                        proxy: proxy, deviceOrientation: .unknown, screenWidth: nil)
+                )
+                .environment(model).environment(delivery).environment(\.scenePhase, .active)
+            })
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
+        let previousKey = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKey?.makeKeyAndVisible()
+        }
+        func renderedElement(_ identifier: String) -> NSObject? {
+            HostedAccessibility.elements(in: host.view).first {
+                HostedAccessibility.identifier($0) == identifier
+            }
+        }
+        func previewElement() -> NSObject? { renderedElement("monitor.inspector.preview") }
+        func mountedElement(_ identifier: String) async throws -> NSObject {
+            let ready = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    MainActor.assumeIsolated {
+                        host.view.layoutIfNeeded()
+                        return renderedElement(identifier) != nil
+                    }
+                }, object: nil)
+            let result = await XCTWaiter.fulfillment(of: [ready], timeout: 5)
+            XCTAssertEqual(
+                result, .completed, "Actual monitor control did not mount: \(identifier)")
+            return try XCTUnwrap(renderedElement(identifier))
+        }
+        func openRenderedLUTOptions() async throws {
+            if renderedElement("monitor.assists.collapse") == nil {
+                let expand = try await mountedElement("monitor.assists.expand")
+                XCTAssertTrue(expand.accessibilityActivate())
+                _ = try await mountedElement("monitor.assists.collapse")
+            }
+            let element = try await mountedElement("monitor.assist.LUT")
+            let action = try XCTUnwrap(
+                element.accessibilityCustomActions?.first { $0.name == "Options" })
+            let handler = try XCTUnwrap(action.actionHandler)
+            XCTAssertTrue(handler(action))
+            XCTAssertEqual(model.assist.configureTool, MonitorAssistTool.lut.selection)
+        }
+        func settledImage() async throws -> CGImage {
+            for _ in 0..<250 {
+                host.view.layoutIfNeeded()
+                if previewElement()?.accessibilityValue == "Picture",
+                    let meaning = model.nativeInspectorMeaning(tool: .lut),
+                    let image = model.nativeInspectorPreview.image(matching: meaning)
+                {
+                    return image
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let meaning = model.nativeInspectorMeaning(tool: .lut)
+            let element = previewElement()
+            let hasImage =
+                meaning.flatMap { model.nativeInspectorPreview.image(matching: $0) } != nil
+            XCTFail(
+                "Actual composed LUT inspector did not publish a current native preview: "
+                    + "element=\(element != nil), accessibility=\(String(describing: element?.accessibilityValue)), "
+                    + "frame=\(model.nativeInspectorFrame != nil), meaning=\(meaning != nil), image=\(hasImage), "
+                    + "tool=\(String(describing: model.assist.configureTool)), "
+                    + "scene=\(model.assist.inspectorSceneActive), covered=\(model.assist.liveCovered), "
+                    + "playback=\(model.assist.gradesClip), locked=\(model.interfaceLocked), "
+                    + "editor=\(String(describing: model.chromeEditorMode)), "
+                    + "panel=\(String(describing: model.activePanel)), display=\(model.displayMode)"
+            )
+            return try XCTUnwrap(nil as CGImage?)
+        }
+        func center(_ image: CGImage) -> [UInt8] {
+            var pixel = [UInt8](repeating: 0, count: 4)
+            pixel.withUnsafeMutableBytes { bytes in
+                let context = CGContext(
+                    data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                    bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                context?.draw(
+                    image,
+                    in: CGRect(
+                        x: -CGFloat(image.width) / 2, y: -CGFloat(image.height) / 2,
+                        width: CGFloat(image.width), height: CGFloat(image.height)))
+            }
+            return pixel
+        }
+        try await openRenderedLUTOptions()
+        let colored = try await settledImage()
+        XCTAssertLessThanOrEqual(max(colored.width, colored.height), 320)
+        XCTAssertGreaterThan(Int(center(colored)[1]), Int(center(colored)[0]) + 20)
+        XCTAssertFalse(model.assist.isOn(.lut), "Previewing a tool must not enable its live switch")
+        model.assistConfiguration.selectedLUT = .builtIn(.monochrome)
+        let nextMeaning = try XCTUnwrap(model.nativeInspectorMeaning(tool: .lut))
+        XCTAssertNil(
+            model.nativeInspectorPreview.image(matching: nextMeaning),
+            "The old look must retire synchronously")
+        let mono = center(try await settledImage())
+        XCTAssertLessThan(abs(Int(mono[0]) - Int(mono[1])), 3)
+        XCTAssertLessThan(abs(Int(mono[1]) - Int(mono[2])), 3)
+        let oldSource = try XCTUnwrap(model.liveFrameSource)
+        let retiredScopePublication = model.captureLiveScopePublication()
+        model.liveFrameImage = nil
+        XCTAssertFalse(oldSource.isActive)
+        XCTAssertNil(model.nativeInspectorMeaning(tool: .lut))
+        model.assist.configureTool = nil
+        for _ in 0..<20 { await Task.yield() }
+        let red = raster(.red)
+        model.liveFrameImage = red
+        await model.refreshScopes(from: red, full: true)
+        let currentScopeBundle = model.scopeAssist
+        XCTAssertNotEqual(currentScopeBundle, .empty)
+        retiredScopePublication(.empty)
+        XCTAssertEqual(
+            model.scopeAssist, currentScopeBundle,
+            "Retired native sampling must not replace the new source's bundle")
+        XCTAssertFalse(model.liveFrameSource === oldSource)
+        model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        try await openRenderedLUTOptions()
+        let reopened = center(try await settledImage())
+        XCTAssertGreaterThan(Int(reopened[0]), Int(reopened[1]) + 20)
+        model.beginChromeEditing(.live)
+        XCTAssertNil(model.nativeInspectorMeaning(tool: .lut))
+        model.endChromeEditing()
+        // Done returns to Display settings; the operator closes it to reach the palette again.
+        XCTAssertEqual(model.activePanel, .settings)
+        model.activePanel = nil
+        try await openRenderedLUTOptions()
+        _ = try await settledImage()
+        model.retireOperatorQuickPresentation()
+        let retired = try XCTUnwrap(model.nativeInspectorMeaning(tool: .lut))
+        XCTAssertNil(
+            model.nativeInspectorPreview.image(matching: retired),
+            "Geometry/source receipts retire old pictures")
     }
 
     @MainActor
@@ -391,7 +564,7 @@ final class RunnerTests: XCTestCase {
                 model.shell.present(camera)
             }
             let monitor = model.shell.monitor?.id
-            let delivery = MediaDeliveryCoordinator()
+            let delivery = MonitorDeliveryCoordinator()
             let content = GeometryReader { proxy in
                 NikonMonitorShell(
                     context: LiveViewLayoutContext(
@@ -411,8 +584,9 @@ final class RunnerTests: XCTestCase {
             for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
                 window.frame.size = size
                 host.view.frame.size = size
-                for mode in [DispMode.live, .clean, .command] {
-                    model.displayMode = mode
+                model.operatorSession.declare(modes: [.live, .clean, .command])
+                for mode in [MonitorDisplayMode.live, .clean, .command] {
+                    model.setDisplayMode(mode)
                     host.view.setNeedsLayout()
                     host.view.layoutIfNeeded()
                     let next = try await picture(in: host)
@@ -421,7 +595,7 @@ final class RunnerTests: XCTestCase {
                         "Rotation and DISP must preserve the actual native picture view")
                 }
             }
-            model.displayMode = .live
+            model.setDisplayMode(.live)
             for panel in [NativeAppModel.ActivePanel.settings, .media] {
                 model.activePanel = panel
                 let coveredPicture = try await picture(in: host)
@@ -490,7 +664,7 @@ final class RunnerTests: XCTestCase {
             integration: IntegrationID("org.opencapture.nikon-ptp"),
             advertisedName: "SIMULATED camera", model: "SIMULATED")
         model.shell.present(ConnectedCamera(saved: saved, session: session))
-        let delivery = MediaDeliveryCoordinator()
+        let delivery = MonitorDeliveryCoordinator()
         let content = GeometryReader { proxy in
             NikonMonitorShell(
                 context: LiveViewLayoutContext(
@@ -1258,7 +1432,7 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(MonitorAudioMetrics.panelSize.height, 168)
     }
 
-    /// Live view samples the feed JPEG's raw codes straight through UIKit; playback taps the
+    /// Live view samples the feed JPEG's raw codes on the shared working raster; playback taps the
     /// composition through Core Image with an explicit BT.709 output space to undo AVFoundation's
     /// working-space conversion. This pins the two pipelines to each other: the same pixels
     /// sampled through both must produce (near-)identical scope readings. [1:1 live/playback]
@@ -1285,14 +1459,18 @@ final class RunnerTests: XCTestCase {
                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
                 provider: data, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
 
-        // Path A — live view: straight UIKit decode into the untagged sampling context.
-        let live = try XCTUnwrap(
-            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: cgImage), maxWidth: 256))
-        let liveSamples = OpenCineMedia.ScopeSampler.sampleRaw(
-            bytes: live.data, width: live.width, height: live.height,
-            bytesPerRow: live.bytesPerRow, transfer: .rec709, includePoints: true, layout: .rgba,
-            stride: ScopeAssistSampling.pointStride, includeSampleCoordinates: true,
-            requireCompleteRows: true)
+        // Both paths end on the shared engine's tap: the working raster and its 200-wide copy.
+        let raster = MonitorWorkingRaster()
+        func tap(_ image: CGImage) throws -> OpenCineMedia.ScopeSamples {
+            let buffer = try XCTUnwrap(raster.prepared(image))
+            let tap = try XCTUnwrap(
+                LiveFrameTap.copyBGRA8(buffer, maxWidth: OpenCineMedia.ScopeSampler.maxWidth))
+            return OpenCineMedia.ScopeSampler.sampleRaw(
+                bytes: tap.bytes, width: tap.width, height: tap.height,
+                bytesPerRow: tap.bytesPerRow, transfer: .rec709, includePoints: true)
+        }
+        // Path A (live view): the decoded frame's own codes.
+        let liveSamples = try tap(cgImage)
 
         // Path B — playback: through the composition render context (working sRGB) with the
         // BT.709 output space, exactly like the player's scope tap.
@@ -1301,13 +1479,7 @@ final class RunnerTests: XCTestCase {
             MediaLUT.renderContext.createCGImage(
                 ciImage, from: ciImage.extent, format: .RGBA8,
                 colorSpace: MonitorImageSampling.fileCodeColorSpace))
-        let playback = try XCTUnwrap(
-            MonitorImageSampling.rgbaBuffer(from: UIImage(cgImage: rendered), maxWidth: 256))
-        let playbackSamples = OpenCineMedia.ScopeSampler.sampleRaw(
-            bytes: playback.data, width: playback.width, height: playback.height,
-            bytesPerRow: playback.bytesPerRow, transfer: .rec709, includePoints: true,
-            layout: .rgba, stride: ScopeAssistSampling.pointStride,
-            includeSampleCoordinates: true, requireCompleteRows: true)
+        let playbackSamples = try tap(rendered)
 
         XCTAssertEqual(
             liveSamples.histogramLuma.reduce(0, +), playbackSamples.histogramLuma.reduce(0, +),
@@ -1332,43 +1504,51 @@ final class RunnerTests: XCTestCase {
         }
     }
 
-    func testScopeBundleKeepsRawSamples() {
+    /// Playback scopes are the shared derivation on the clip's Nikon transfer and clip.
+    func testPlaybackScopeBundleIsTheSharedDerivation() {
         let point = OpenCineMedia.ScopePoint(
             xRatio: 0.5, yRatio: 0, red: 112, green: 68, blue: 62, luma: 82)
         var luma = Array(repeating: 0, count: 256)
         luma[82] = 1
+        var red = Array(repeating: 0, count: 256)
+        red[112] = 1
+        var green = Array(repeating: 0, count: 256)
+        green[68] = 1
+        var blue = Array(repeating: 0, count: 256)
+        blue[62] = 1
         let samples = OpenCineMedia.ScopeSamples(
-            histogramLuma: luma,
-            histogramRed: Array(repeating: 0, count: 256),
-            histogramGreen: Array(repeating: 0, count: 256),
-            histogramBlue: Array(repeating: 0, count: 256),
+            histogramLuma: luma, histogramRed: red, histogramGreen: green, histogramBlue: blue,
             points: [point])
-        let mapping = ExposureSignalMapping(curve: .redLog3G10)
+        let configuration = NikonPlaybackScopeConfiguration(
+            mapping: ExposureSignalMapping(curve: .redLog3G10), compensation: .quarter,
+            vectorscope: false, look: nil)
 
-        let bundle = ScopeAssistSampling.bundle(
-            samples: samples,
-            trafficLightsCrushClip: .quarter,
-            mapping: mapping)
-        // Every scope — vectorscope included — reads the untouched source/log points.
+        let bundle = configuration.bundle(samples: samples, previous: .empty)
+        // Every scope reads the untouched source/log points.
         XCTAssertEqual(bundle.samples, samples)
         XCTAssertEqual(bundle.revision, 1)
-        // The shared histogram is drawn on this camera's axis, not a shared transfer curve.
+        XCTAssertEqual(bundle.transfer, .log3G10)
+        XCTAssertEqual(bundle.clipByte, 180)
+        XCTAssertNil(bundle.levelAxis, "the shared axis follows the transfer and clip")
         XCTAssertEqual(
             bundle.histogramDisplay,
             OpenCineMedia.ScopeSampler.histogramDisplay(
-                samples: samples, previous: .empty, axis: mapping.scopeLevelAxis))
-        let next = ScopeAssistSampling.bundle(
-            samples: samples, trafficLightsCrushClip: .quarter, mapping: mapping,
-            previous: bundle)
+                samples: samples, previous: .empty, transfer: .log3G10, clipByte: 180))
+        XCTAssertEqual(
+            bundle.traffic,
+            ScopeTrafficLights.reading(
+                red: red, green: green, blue: blue, luma: luma, transfer: .log3G10, clipByte: 180,
+                threshold: MonitorCrushClipCompensation.quarter.pixelFractionThreshold))
+        let next = configuration.bundle(samples: samples, previous: bundle)
         XCTAssertEqual(next.revision, 2)
         XCTAssertEqual(next.trailSamples, samples)
     }
 
     func testWaveformAndParadePaletteUsesCalibratedBrightness() {
-        // The intensity the Nikon scope plot hands the shared plots.
-        XCTAssertEqual(NikonScopePlot.traceIntensity(0), 0)
-        XCTAssertEqual(NikonScopePlot.traceIntensity(100), 0.25)
-        XCTAssertEqual(NikonScopePlot.traceIntensity(200), 0.5)
+        // The intensity the shared surface hands the waveform and parade plots.
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(0), 0)
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(100), 0.25)
+        XCTAssertEqual(MonitorScopeGeometry.waveformIntensity(200), 0.5)
         // The vectorscope keeps its unity baseline.
         XCTAssertEqual(MonitorScopeGeometry.vectorscopeIntensity(100), 1)
     }
@@ -3040,7 +3220,7 @@ struct NikonSettingsScrollTests {
         }
         let display = try await scroll(in: host) { abs($0.contentOffset.y - 180) < 1 }
         #expect(model.operatorSettingsTab == .display)
-        #expect(model.chromeEditorReturnMode == nil)
+        #expect(model.operatorSession.returnedMode == nil)
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
         try await settle(in: host) { model.operatorSettingsScrollOffsets["Display"] == 320 }
         model.operatorSettingsTab = .controls
@@ -3500,7 +3680,8 @@ extension RunnerTests {
             originalKeyWindow?.makeKeyAndVisible()
         }
         let favorite = try await nativeFilterElement("Add favorite", host: host)
-        let labels = Set(nativeFilterElements(host.view).compactMap(\.accessibilityLabel))
+        let labels = Set(
+            HostedAccessibility.elements(in: host.view).compactMap(\.accessibilityLabel))
         XCTAssertTrue(labels.contains("ON CAMERA"))
         XCTAssertTrue(labels.contains("RAW+J"))
         XCTAssertTrue(labels.contains("4 frames"))
@@ -3529,7 +3710,7 @@ extension RunnerTests {
         let model = NativeAppModel()
         model.preferences = OperatorPreferences.defaults
         model.startDemoSession()
-        let delivery = MediaDeliveryCoordinator()
+        let delivery = MonitorDeliveryCoordinator()
         let host = UIHostingController(
             rootView: GeometryReader { proxy in
                 NikonMonitorShell(
@@ -3562,31 +3743,12 @@ extension RunnerTests {
             }
         }
         func elements(_ root: NSObject) -> [NSObject] {
-            var seen = Set<ObjectIdentifier>()
-            var result: [NSObject] = []
-            func visit(_ object: NSObject) {
-                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-                result.append(object)
-                // SwiftUI vends its nodes through `accessibilityElements`; `accessibilityElement(at:)`
-                // can answer nil for them.
-                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
-                let count = object.accessibilityElementCount()
-                if count > 0 && count < 512 {
-                    for index in 0..<count {
-                        if let child = object.accessibilityElement(at: index) as? NSObject {
-                            visit(child)
-                        }
-                    }
-                }
-                if let view = object as? UIView { for child in view.subviews { visit(child) } }
+            HostedAccessibility.elements(in: root).filter {
+                $0.isAccessibilityElement && !$0.accessibilityFrame.isEmpty
             }
-            visit(root)
-            return result.filter { $0.isAccessibilityElement && !$0.accessibilityFrame.isEmpty }
         }
         func identifier(_ object: NSObject) -> String {
-            let getter = NSSelectorFromString("accessibilityIdentifier")
-            guard object.responds(to: getter) else { return "" }
-            return object.perform(getter)?.takeUnretainedValue() as? String ?? ""
+            HostedAccessibility.identifier(object) ?? ""
         }
         func render() -> CGImage? {
             let format = UIGraphicsImageRendererFormat()
@@ -3619,7 +3781,8 @@ extension RunnerTests {
             "Exposed: \(elements(host.view).map(identifier).filter { !$0.isEmpty })")
         XCTAssertTrue(expand.accessibilityActivate())
         try await settle()
-        let bar = model.captureBarFrame
+        let bar = elements(host.view).filter { identifier($0).hasPrefix("monitor.capture.") }
+            .map(\.accessibilityFrame).reduce(CGRect.null) { $0.union($1) }
         let covered = elements(host.view).filter { identifier($0).hasPrefix("monitor.assist.") }
             .map { $0.accessibilityFrame.intersection(bar) }
             .filter { !$0.isNull && $0.width >= 8 && $0.height >= 8 }
@@ -3640,7 +3803,7 @@ extension RunnerTests {
             resolutionFrameRate: state.resolutionFrameRate, codec: state.codec,
             media: state.media, liveFPS: state.liveFPS,
             cameraBatteryPercent: state.cameraBatteryPercent,
-            phoneBatteryPercent: state.phoneBatteryPercent, cameraName: state.cameraName,
+            cameraName: state.cameraName,
             lens: state.lens, temperature: state.temperature,
             values: state.values.map { CameraValue(label: $0.label, value: "8888") },
             mediaStatus: state.mediaStatus)
@@ -3702,5 +3865,352 @@ extension RunnerTests {
                 #expect(scale.height == (vertical ? -squeeze.height : squeeze.height))
             }
         }
+    }
+}
+
+/// SIMULATED native compatibility and rendering through the public picker/preview interfaces.
+@MainActor
+final class SharedLUTPickerCompatibilityTests: XCTestCase {
+    func testTheOriginalGenericPickerStillRendersItsSuppliedFooter() async throws {
+        let name = "lut-picker-compatibility." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer {
+            storage.removePersistentDomain(forName: name)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let preferences = LUTPreferences(storage: storage, namespace: name)
+        let looks = MonitorLUTLooks(
+            official: OfficialLUTs(catalog: { _ in [.officialAuto] }, cube: { _ in nil }),
+            preferences: preferences,
+            customLUTs: CustomLUTStore(root: root, preferences: preferences))
+        let assist = MonitorAssistState(
+            looks: looks, storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        let picker: LUTPickerView<MonitorDefaultLivePalette, Text> = LUTPickerView(
+            assist: assist,
+            context: .init(
+                colorMode: nil, isPhoto: false, inPlayback: false,
+                family: .fallback, cameraName: nil, isWatching: false),
+            copy: .init(
+                officialTab: "Camera", officialLockedCaption: "", officialCaption: "",
+                customEmptyHint: "Import a look"), palette: MonitorDefaultLivePalette.self
+        ) {
+            Text("Legacy supplied footer")
+        }
+        let hosted = try Hosted(picker)
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if hosted.labels.contains("Legacy supplied footer") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(
+            hosted.labels.contains("Legacy supplied footer"), hosted.labels.joined(separator: ", "))
+    }
+
+    /// The shared inspector preview consumes the actual audio source and draws its signal.
+    func testTheSharedInspectorAudioPreviewConsumesItsSourceAndDrawsItsSignal() async throws {
+        let name = "look-preview-compatibility." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { storage.removePersistentDomain(forName: name) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let preferences = LUTPreferences(storage: storage, namespace: name)
+        let looks = MonitorLUTLooks(
+            official: OfficialLUTs(catalog: { _ in [.officialAuto] }, cube: { _ in nil }),
+            preferences: preferences,
+            customLUTs: CustomLUTStore(root: root, preferences: preferences))
+        let assist = MonitorAssistState(
+            looks: looks, storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        let samples = LiveFrameSampleBus()
+        let renderer = MonitorInspectorImageRenderer(lookCurves: [:])
+        var audioReads = 0
+        let preview = MonitorOperatorInspectorPreview(
+            tool: .audioMeters, assist: assist,
+            stores: AssistPanelStores(storage: storage, namespace: name),
+            haptics: OperatorHaptics(isEnabled: { false }),
+            source: MonitorInspectorImageSource(renderer: renderer, samples: samples),
+            readCustomName: { nil },
+            prepareEffects: { frame in
+                assist.inspectorImageEffects(
+                    tool: .audioMeters, transfer: frame.transfer,
+                    clipByte: frame.exposureCeiling.clipByte(transfer: frame.transfer))
+            }, readBundle: { .empty },
+            readAudio: {
+                audioReads += 1
+                return MonitorAudioMeterLevels(
+                    left: .init(levelDB: -18, peakDB: -12), right: .init(levelDB: -12, peakDB: -6))
+            })
+        let hosted = try Hosted(preview.frame(width: 300))
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if audioReads > 0 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertGreaterThan(audioReads, 0, "The generic preview must use the actual audio source")
+        let image = UIGraphicsImageRenderer(bounds: hosted.window.bounds).image { _ in
+            hosted.window.drawHierarchy(in: hosted.window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "SIMULATED-independent-look-audio-preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(
+            try greenPixels(image), 20, "The native shared meter must actually draw its signal")
+    }
+
+    private final class IndependentLooks: MonitorLookProvider {
+        var selection = 7
+        var cube: CubeLUT? { nil }
+        var transfer: MonitorTransfer { .rec709 }
+        var referenceClipByte: Int { 255 }
+        func lutExposureTransfer(for transfer: MonitorTransfer) -> MonitorTransfer { transfer }
+        var appliesLUTExposure: Bool { false }
+    }
+
+    @MainActor
+    private final class Hosted {
+        let host: UIHostingController<AnyView>
+        let window: UIWindow
+        let previous: UIWindow?
+        init(_ view: some View) throws {
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }.first {
+                        $0.activationState == .foregroundActive
+                    })
+            previous = scene.keyWindow
+            host = UIHostingController(rootView: AnyView(view))
+            host.safeAreaRegions = []
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 420, height: 900)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.frame = window.bounds
+        }
+        func close() {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        var labels: [String] {
+            var seen = Set<ObjectIdentifier>()
+            var result: [String] = []
+            @MainActor func visit(_ object: NSObject) {
+                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+                if object.isAccessibilityElement, let label = object.accessibilityLabel {
+                    result.append(label)
+                }
+                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
+                let count = object.accessibilityElementCount()
+                if count > 0 && count < 512 {
+                    for index in 0..<count {
+                        if let child = object.accessibilityElement(at: index) as? NSObject {
+                            visit(child)
+                        }
+                    }
+                }
+                if let view = object as? UIView { for child in view.subviews { visit(child) } }
+            }
+            visit(window)
+            return result
+        }
+    }
+
+    private func greenPixels(_ image: UIImage) throws -> Int {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
+        try bytes.withUnsafeMutableBytes { raw in
+            let context = try XCTUnwrap(
+                CGContext(
+                    data: raw.baseAddress, width: cgImage.width,
+                    height: cgImage.height, bitsPerComponent: 8, bytesPerRow: cgImage.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(
+                cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+        }
+        return stride(from: 0, to: bytes.count, by: 4).filter {
+            Int(bytes[$0 + 1]) > 90 && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0]) * 13
+                && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0 + 2]) * 13
+        }.count
+    }
+}
+
+extension SharedLUTPickerCompatibilityTests {
+    private func legacyComparisonFixture() throws -> (
+        MonitorAssistState<IndependentLooks>, UserDefaults, String
+    ) {
+        let name = "legacy-comparison-native." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
+        let assist = MonitorAssistState(
+            looks: IndependentLooks(), storage: storage,
+            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
+            cleanPinCases: [])
+        assist.lutEnabled = false
+        assist.splitComparison = false
+        return (assist, storage, name)
+    }
+
+    private static func legacyComparisonElements(_ root: NSObject) -> [NSObject] {
+        var seen = Set<ObjectIdentifier>()
+        var result: [NSObject] = []
+        func walk(_ object: NSObject) {
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            if object.isAccessibilityElement { result.append(object) }
+            for child in object.accessibilityElements as? [NSObject] ?? [] { walk(child) }
+            let count = object.accessibilityElementCount()
+            if count > 0 && count < 512 {
+                for index in 0..<count {
+                    if let child = object.accessibilityElement(at: index) as? NSObject {
+                        walk(child)
+                    }
+                }
+            }
+            if let view = object as? UIView { for child in view.subviews { walk(child) } }
+        }
+        walk(root)
+        return result
+    }
+
+    private func legacyComparisonSettle(_ host: Hosted, _ predicate: () -> Bool) async throws
+        -> Bool
+    {
+        for _ in 0..<150 {
+            host.host.view.layoutIfNeeded()
+            if predicate() { return true }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        return predicate()
+    }
+
+    func testPublishedAvailabilityTrueFalseAndNilStillDriveTheActualExposureControl() async throws {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        let originalDefault = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist, haptics: OperatorHaptics(isEnabled: { false })))
+        let defaultReady = try await legacyComparisonSettle(originalDefault) {
+            Self.legacyComparisonElements(originalDefault.window).contains {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }
+        }
+        XCTAssertTrue(
+            defaultReady, "The published two-argument call defaults to exposure available")
+        XCTAssertEqual(
+            Self.legacyComparisonElements(originalDefault.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.count, 1)
+        originalDefault.close()
+        for availability: Bool? in [true, false, nil] {
+            let host = try Hosted(
+                MonitorOperatorLookComparison(
+                    assist: assist,
+                    haptics: OperatorHaptics(isEnabled: { false }), exposureAvailable: availability)
+            )
+            defer { host.close() }
+            let ready = try await legacyComparisonSettle(host) {
+                Self.legacyComparisonElements(host.window).contains {
+                    $0.accessibilityLabel == "50 / 50 split"
+                        && $0.accessibilityTraits.contains(.button)
+                }
+            }
+            XCTAssertTrue(ready)
+            let controls = Self.legacyComparisonElements(host.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }
+            XCTAssertEqual(controls.count, availability == true ? 1 : 0)
+            for control in controls {
+                XCTAssertFalse(control.accessibilityFrame.isEmpty)
+                XCTAssertTrue(host.window.bounds.contains(control.accessibilityFrame))
+            }
+        }
+    }
+
+    func testPublishedCustomArmRunsOnEveryEnableAndRetainsTheCallbackOnlyExposureDefault()
+        async throws
+    {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        var calls = 0
+        let host = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), onArm: { calls += 1 }))
+        defer { host.close() }
+        let ready = try await legacyComparisonSettle(host) {
+            Self.legacyComparisonElements(host.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(ready)
+        let controls = Self.legacyComparisonElements(host.window)
+        XCTAssertEqual(
+            controls.filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.count, 1)
+        let toggle = try XCTUnwrap(
+            controls.first {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            })
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.splitComparison)
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(assist.lutArmed, "The supplied callback retains arming ownership")
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertFalse(assist.splitComparison)
+        XCTAssertEqual(calls, 1, "Disabling split never arms")
+        assist.armLastLUT()
+        XCTAssertTrue(assist.lutArmed)
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.splitComparison)
+        XCTAssertEqual(calls, 2, "The published callback also runs when the look is already armed")
+    }
+
+    func testPublishedNilArmKeepsFallbackAndCanonicalProviderAvailabilityStaysTyped() async throws {
+        let (assist, storage, name) = try legacyComparisonFixture()
+        defer { storage.removePersistentDomain(forName: name) }
+        let host = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), exposureAvailable: nil, onArm: nil))
+        defer { host.close() }
+        let ready = try await legacyComparisonSettle(host) {
+            Self.legacyComparisonElements(host.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(ready)
+        let controls = Self.legacyComparisonElements(host.window)
+        XCTAssertTrue(
+            controls.filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.isEmpty)
+        let toggle = try XCTUnwrap(
+            controls.first {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            })
+        XCTAssertTrue(toggle.accessibilityActivate())
+        XCTAssertTrue(assist.lutArmed, "Nil callback retains the shared fallback arming")
+        host.close()
+        let canonical = try Hosted(
+            MonitorOperatorLookComparison(
+                assist: assist,
+                haptics: OperatorHaptics(isEnabled: { false }), exposure: .provider))
+        defer { canonical.close() }
+        let canonicalReady = try await legacyComparisonSettle(canonical) {
+            Self.legacyComparisonElements(canonical.window).contains {
+                $0.accessibilityLabel == "50 / 50 split" && $0.accessibilityTraits.contains(.button)
+            }
+        }
+        XCTAssertTrue(canonicalReady)
+        XCTAssertTrue(
+            Self.legacyComparisonElements(canonical.window).filter {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }.isEmpty, "Canonical source that does not apply exposure stays unavailable")
     }
 }

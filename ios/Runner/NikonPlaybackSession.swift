@@ -3,62 +3,6 @@ import Observation
 import OpenCineAppKit
 import OpenCineMedia
 
-/// Borrows the actual gallery lifetime and immutable caller playlist. PTP/cache/rating stay
-/// on NativeAppModel; the shared model owns the logical player instead of a second view state.
-@MainActor final class NikonPlaybackSession {
-    let owner: MonitorMediaPlaybackModel<MediaClip, String>
-    let native: NikonPlaybackNativePort
-
-    init(
-        clips: [MediaClip], startingAt clip: MediaClip, model: NativeAppModel,
-        native: NikonPlaybackNativePort = NikonPlaybackNativePort()
-    ) throws {
-        guard let library = model.mediaLibrary else { throw MonitorPlaybackError.unavailable }
-        let codec = NikonMediaLibraryCodec(
-            store: model.mediaClipStore, bucket: clip.cameraID, service: nil,
-            downloaded: { model.isClipDownloaded($0) })
-        let records = try clips.map(codec.record)
-        guard let first = records.first(where: { $0.payload.id == clip.id }) else {
-            throw MonitorPlaybackError.unavailable
-        }
-        self.native = native
-        owner = MonitorMediaPlaybackModel<MediaClip, String>(
-            library: library, native: native, readyTimeout: nil, retryNativeFailures: false,
-            startTiming: .afterNativeItemInstallation,
-            candidates: { record in native.candidates(for: record.payload, model: model) })
-        native.isScrubbing = { [weak owner] in owner?.scrubbing ?? true }
-        owner.load(first, playlist: records)
-    }
-    struct DeliveryPause {
-        let item: MonitorPlaybackItemToken
-        let resume: Bool
-    }
-
-    func pauseForDelivery(playing: Bool) -> DeliveryPause? {
-        guard owner.isActive else { return nil }
-        let captured = DeliveryPause(item: owner.token, resume: playing)
-        owner.setPlaying(false)
-        return captured
-    }
-
-    func resumeAfterDelivery(_ captured: DeliveryPause) {
-        guard captured.resume, owner.isActive, owner.token == captured.item else { return }
-        owner.setPlaying(true)
-    }
-
-    func navigate(to clip: MediaClip, clips: [MediaClip], model: NativeAppModel) {
-        guard owner.isActive else { return }
-        let codec = NikonMediaLibraryCodec(
-            store: model.mediaClipStore, bucket: clip.cameraID, service: nil,
-            downloaded: { model.isClipDownloaded($0) })
-        guard let records = try? clips.map(codec.record),
-            let next = records.first(where: { $0.payload.id == clip.id })
-        else { return }
-        owner.load(next, playlist: records)
-    }
-
-}
-
 /// Exact retained Nikon presentation policy. This does not change shared transport seek math.
 struct NikonPlaybackTailPresentation {
     private(set) var reachedEnd = false
@@ -76,8 +20,8 @@ struct NikonPlaybackTailPresentation {
     let initial: MonitorMediaGalleryOpen<MediaClip>
     let library: MonitorMediaLibraryModel<MediaClip>
     @ObservationIgnored private let sourceAdmission: MonitorPlaybackAdmission
-    @ObservationIgnored private let captureDeliveryCleanup:
-        @MainActor () -> (@MainActor () async -> Void)
+    /// Waits while a delivery caches from the camera; never cancels it (A2-54).
+    @ObservationIgnored private let cameraTransferReleased: @MainActor () async -> Void
     @ObservationIgnored private weak var app: NativeAppModel?
     private struct Installation {
         let id: UUID
@@ -86,6 +30,7 @@ struct NikonPlaybackTailPresentation {
     }
     @ObservationIgnored private var installation: Installation?
     @ObservationIgnored private var factoryRevision = UUID()
+    @ObservationIgnored private var closeCleanupRevision: UUID?
     @ObservationIgnored private var notifying = false
     @ObservationIgnored private var pendingNotifications: [Field] = []
     private enum Field: Equatable { case native, assists }
@@ -137,12 +82,11 @@ struct NikonPlaybackTailPresentation {
             outgoing?.close()
             guard admission.isCurrent(), self.factoryRevision == revision else { return nil }
             let previousTransfer = self.native?.captureEnteredTransferCleanup()
-            let captureDelivery = self.captureDeliveryCleanup
+            let cameraTransferReleased = self.cameraTransferReleased
             let native = NikonPlaybackNativePort(captureBeforePrepare: {
-                let delivery = captureDelivery()
-                return {
+                {
                     await previousTransfer?()
-                    await delivery()
+                    await cameraTransferReleased()
                 }
             })
             let assists = NikonPlaybackAssistAdapter(model: app, native: native)
@@ -194,7 +138,7 @@ struct NikonPlaybackTailPresentation {
 
     init?(
         model: NativeAppModel, initial: MonitorMediaGalleryOpen<MediaClip>,
-        captureDeliveryCleanup: @escaping @MainActor () -> (@MainActor () async -> Void) = { {} }
+        cameraTransferReleased: @escaping @MainActor () async -> Void = {}
     ) {
         guard let library = model.mediaLibrary, library.isCurrent(initial.admission),
             let source = model.captureMediaLibraryAction([initial.record.payload]),
@@ -211,21 +155,27 @@ struct NikonPlaybackTailPresentation {
         self.initial = initial
         self.library = library
         app = model
-        self.captureDeliveryCleanup = captureDeliveryCleanup
+        self.cameraTransferReleased = cameraTransferReleased
     }
 
     /// Captures Back's SDK cleanup before the page schedules its asynchronous dismissal.
     /// The shared media owner retires the item; this leaf only joins its entered native work.
-    func captureCloseCleanup(run: MonitorDeliveryRunHandle?) -> (@MainActor () async -> Bool)? {
-        guard let owner = media.playback, let native,
-            media.playback === owner, self.native === native
-        else { return nil }
-        media.closePlayback()
-        let transfer = native.captureEnteredTransferCleanup()
+    /// An app-scoped delivery goes on: Back never cancels it (A2-54).
+    func captureCloseCleanup() -> (@MainActor () async -> Bool)? {
+        let revision = factoryRevision
+        guard closeCleanupRevision != revision else { return nil }
+        let capturedNative = native
+        guard media.playback == nil || capturedNative != nil else { return nil }
+        closeCleanupRevision = revision
+        // Shared retirement can clear the player before the unavailable surface offers Close.
+        // Keep its native cleanup join, including the empty join of a refused first open.
+        if media.playback != nil { media.closePlayback() }
+        let transfer = capturedNative?.captureEnteredTransferCleanup()
         return { [weak self] in
-            await run?.cancelAndJoin()
-            await transfer()
-            guard let self, self.media.playback == nil, self.native === native else { return false }
+            await transfer?()
+            guard let self, self.factoryRevision == revision,
+                self.media.playback == nil, self.native === capturedNative
+            else { return false }
             return true
         }
     }

@@ -560,7 +560,10 @@ final class MulticamCoordinator {
                 advertised: whiteBalancePresets, codec: facts.reported.fileType)
         }
         member.properties = control.nikonControlFacts.reported
-        if !recording, let storage = try? await link.readStorageInfo() { member.storage = storage }
+        if !recording, let storage = try? await link.readStorageInfo() {
+            member.storage = storage
+            control.update { $0.storage = storage }
+        }
     }
 
     /// The tile keeps its camera with a Retry; the engine stops addressing it.

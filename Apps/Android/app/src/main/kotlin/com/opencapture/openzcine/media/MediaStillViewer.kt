@@ -5,7 +5,6 @@ import android.graphics.BitmapFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.cameracontrols.MonitorOperatorPhotoScreen
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
@@ -24,7 +23,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
-private const val MAX_PREVIEW_DIMENSION_PX = 2_048
 private const val PROGRESSIVE_DECODE_STEP_BYTES = 256L * 1_024L
 
 /** Native image/record ports composed into the complete shared still-picture owner. */
@@ -49,9 +47,10 @@ internal fun MediaStillViewer(
     onResolvedObjectSize: (NikonMediaClipRecord, Long) -> Unit = { _, _ -> },
     onDeleted: (() -> Unit)? = null,
     onDeletedReturning: ((MonitorMediaLibraryActionToken) -> Unit)? = null,
+    /** Opens the shared delivery popup for the still, the same entry as clips (A4-18). */
+    onShare: ((MonitorMediaRecord<NikonLibraryClip>) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
-    val context = LocalContext.current
     val io = remember(library, record.asset.id, admission, cacheStore, connectionOwner) {
         NikonStillPictureIO(cacheStore, cameraTransferAvailable, connectionOwner, onResolvedObjectSize)
     }
@@ -112,19 +111,11 @@ internal fun MediaStillViewer(
     val sharing = MonitorMediaPictureSharing<NikonLibraryClip>(readiness = { request ->
         if (io.completed(request) != null && operations.access?.invoke(request.record)?.share != false)
             MonitorMediaPictureShareReadiness.READY else MonitorMediaPictureShareReadiness.UNAVAILABLE
-    }, perform = { request ->
-        val entry = io.completed(request)
-        if (entry != null && request.isCurrent()) {
-            val staged = withContext(Dispatchers.IO) {
-                MediaShareStager(context.cacheDir.toPath()).stage(entry, request.record.payload.clip)
-            }
-            if (request.isCurrent()) context.startActivity(AndroidMediaShareIntent.chooserIntent(context, staged))
-        }
     })
     MonitorOperatorPhotoScreen(library = library, record = record, admission = admission, assist = assist,
         loaders = MonitorMediaPictureLoaders(preview = io::preview, cached = io::cached, progressive = io::progressive),
         operations = operations, sourceCurrent = sourceCurrent, variants = variants, rating = rating, sharing = sharing,
-        share = {}, collection = collection, selectRecord = selectRecord, collectionThumbnail = thumbnail,
+        share = onShare?.let { open -> { request -> if (request.isCurrent()) open(request.record) } }, collection = collection, selectRecord = selectRecord, collectionThumbnail = thumbnail,
         deleted = onDeleted, deletedReturning = onDeletedReturning, close = onClose)
 }
 
@@ -259,22 +250,5 @@ private fun decodeCacheBitmap(entry: MediaCacheEntry): Bitmap? =
 
 private fun decodeBitmap(path: Path): Bitmap? {
     if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return null
-    return try {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path.toString(), bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = previewSampleSize(bounds.outWidth, bounds.outHeight)
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-        BitmapFactory.decodeFile(path.toString(), options)?.upright(MediaExifOrientation.fromFile(path))
-    } catch (_: OutOfMemoryError) { null }
-    catch (_: RuntimeException) { null }
-}
-
-/** Largest power-of-two sample that preserves the original 2K native decode ceiling. */
-internal fun previewSampleSize(width: Int, height: Int): Int {
-    var sampleSize = 1
-    while (width / sampleSize > MAX_PREVIEW_DIMENSION_PX || height / sampleSize > MAX_PREVIEW_DIMENSION_PX) sampleSize *= 2
-    return sampleSize
+    return MonitorBitmapDecoder.decode(path.toFile(), MonitorBitmapDecoder.PAGE_EDGE)?.upright(MediaExifOrientation.fromFile(path))
 }

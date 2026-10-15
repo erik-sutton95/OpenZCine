@@ -2,6 +2,7 @@ import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
 import OpenCineCore
+import OpenCineMedia
 import OpenCineMulticam
 import OpenZCineCore
 import SwiftUI
@@ -117,8 +118,12 @@ struct MulticamStage: View {
         }
         return MultiviewTile(
             name: member.displayName, model: SavedCameraPathGroups.pathLabel(for: member.record),
-            battery: member.batteryPercent,
-            storage: member.storage.map { "\($0.gigabytesFree) GB" } ?? MultiviewTally.unavailable,
+            // The body's five-step gauge (A5-01): bars, never a percent it did not report.
+            batteryBars: member.batteryPercent.map(CameraBatteryGauge.gauge(rawBatteryLevel:))
+                .flatMap { $0 == .unknown ? nil : $0.filledBars },
+            batteryBarCount: CameraBatteryGauge.barCount,
+            storage: member.control?.session.refresh().storage.storageReadout?.free
+                ?? MultiviewTally.unavailable,
             timecode: member.timecode?.monitorLabel,
             tally: MultiviewTally.text(recording: rolling, waiting: coordinator.groupBusy),
             // Nikon reports no take length: the tile times it from the first recording frame.

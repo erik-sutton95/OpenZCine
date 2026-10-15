@@ -3,6 +3,8 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
+    // BuildConfig.SENTRY_DSN_ANDROID: the CI secret, else the ignored .local/reliability.properties.
+    id("com.opencapture.opencine.reporting")
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -24,6 +26,9 @@ val samplesDirectory = repositoryRoot.resolve("samples")
 // generated assets root without android.sourceset.disallowProvider overrides.
 val stagedDemoAssetsDirectory =
     layout.buildDirectory.get().asFile.resolve("generated/demoAssets")
+// The repository NOTICE, staged into the app's assets so Settings shows it offline.
+val stagedLegalAssetsDirectory =
+    layout.buildDirectory.get().asFile.resolve("generated/legalAssets")
 
 // Frame.io uses an Adobe IMS public PKCE client. These values are not a client
 // secret, but each Android redirect registration is deployment-specific, so a
@@ -98,8 +103,10 @@ android {
             "FRAMEIO_REDIRECT_SCHEME",
             quotedBuildConfig(frameioRedirectScheme),
         )
-        // Empty unless a build supplies one (below); without a DSN no report can be sent.
-        buildConfigField("String", "SENTRY_DSN_ANDROID", "\"\"")
+        buildConfigField("String", "SOURCE_REVISION", "\"unknown\"")
+        // Play CI sets it before bundleRelease and uploads the R8 mapping under the same UUID
+        // (OpenCine scripts/sentry); the adapter's manifest binds it to io.sentry.proguard-uuid.
+        manifestPlaceholders["sentryProguardUuid"] = System.getenv("SENTRY_PROGUARD_UUID").orEmpty()
 
         ndk {
             abiFilters += supportedAndroidAbi
@@ -150,6 +157,8 @@ android {
     }
 
     sourceSets {
+        getByName("androidTest").kotlin.srcDir(
+            gradle.includedBuild("opencine").projectDir.resolve("appkit-native/src/cacheOwnerProof/kotlin"))
         getByName("main").jniLibs.directories.apply {
             clear()
             add(swiftCoreJniLibsRoot.get().asFile.absolutePath)
@@ -157,6 +166,7 @@ android {
         // Debug-only: generated assets under build/generated/demoAssets/demo/
         // (copied from repo-root samples/ when present).
         getByName("debug").assets.srcDir(stagedDemoAssetsDirectory)
+        getByName("main").assets.srcDir(stagedLegalAssetsDirectory)
     }
 }
 
@@ -193,6 +203,15 @@ val stageDebugDemoSamples =
  * Gradle-owned output. `src/main/jniLibs` is deliberately not an input: a
  * clean clone must never package an ignored or stale local .so set.
  */
+/** Stages the repository NOTICE into the app assets, so the shipped attribution is the repository's. */
+val stageLegalAssets =
+    tasks.register<Copy>("stageLegalAssets") {
+        group = "build"
+        description = "Stage the repository NOTICE into the app assets."
+        from(repositoryRoot.resolve("NOTICE"))
+        into(stagedLegalAssetsDirectory)
+    }
+
 val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
     group = "build"
     description = "Cross-compile and stage the Swift camera core for arm64-v8a."
@@ -202,7 +221,8 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
             include("Package.swift", "Package.resolved", "Sources/**")
         },
         // The root Package.swift takes these from the sibling OpenCine checkout: OpenCineMedia
-        // (and OpenCineCore, which it depends on), OpenCineFrameIO (the Frame.io facade),
+        // (and OpenCineCore, which it depends on), OpenCineFrameIO and OpenCineFrameIOAndroid
+        // (the Frame.io wire and FrameioNative's JNI exports),
         // OpenCineNikon (PTP wire, properties, session policy; OpenZCineCore re-exports it),
         // OpenCineNikonAndroid (the PTP-IP / USB session layer and NikonNative's JNI exports)
         // and OpenCineJNISupport (+ the OpenCineJNI header), so a package edit must restage the core.
@@ -212,6 +232,7 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Sources/OpenCineMedia/**",
                 "Sources/OpenCineCore/**",
                 "Sources/OpenCineFrameIO/**",
+                "Sources/OpenCineFrameIOAndroid/**",
                 "Sources/OpenCineNikon/**",
                 "Sources/OpenCineNikonAndroid/**",
                 "Sources/OpenCineJNISupport/**",
@@ -240,6 +261,7 @@ tasks.named("preBuild").configure {
     // Stage local demo clips before any debug asset/lint task reads the
     // generated assets directory (implicit-dependency hygiene).
     dependsOn(stageDebugDemoSamples)
+    dependsOn(stageLegalAssets)
 }
 
 // Brand resource tests compare Android derivatives with the canonical iOS
@@ -273,7 +295,27 @@ val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibr
     )
 }
 
+// ML Kit instantiates its ComponentRegistrar classes reflectively (#267); OpenCine's dex check fails
+// every bundleRelease whose registrars lost their constructors to R8.
+val releaseBundle = releaseAabDirectory.map { it.file("app-release.aab") }
+val verifyReleaseComponentRegistrars = tasks.register<Exec>("verifyReleaseComponentRegistrars") {
+    group = "verification"
+    description = "Fail when R8 strips a ComponentRegistrar constructor from the release bundle."
+    dependsOn("bundleRelease")
+    inputs.file(releaseBundle)
+    environment("ANDROID_HOME", androidComponents.sdkComponents.sdkDirectory.get().asFile.absolutePath)
+    commandLine(
+        "bash",
+        repositoryRoot.resolve("../OpenCine/scripts/android-verify-component-registrars.sh").absolutePath,
+        releaseBundle.get().asFile.absolutePath,
+    )
+}
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    finalizedBy(verifyReleaseComponentRegistrars)
+}
+
 dependencies {
+    androidTestImplementation("com.opencapture.opencine:app-ui-testing:0.1.0-SNAPSHOT")
     implementation(project(":core-api"))
     // OpenCine common camera contracts (CORE-02 candidate, composite build; see settings).
     implementation(libs.opencine.core)
@@ -288,6 +330,8 @@ dependencies {
     implementation(libs.opencine.camera.controls)
     // Shared prepared PCM sampling and decoded-audio source lifetime.
     implementation(libs.opencine.native.runtime)
+    // Shared Media3 player recipe, port, transport mapping and audio meter tap.
+    implementation(libs.opencine.media3)
     // Shared Vulkan renderer: the Bitmap probe and its legacy OpcVulkan JNI class.
     implementation(libs.opencine.vulkan)
     // Keystore sealing for the camera Wi-Fi keys.
@@ -298,9 +342,11 @@ dependencies {
     implementation("com.opencapture.opencine:relay-runtime:0.1.0-SNAPSHOT")
     implementation("com.opencapture.opencine:watch-runtime:0.1.0-SNAPSHOT")
     implementation("com.opencapture.opencine:nikon-wire:0.1.0-SNAPSHOT")
-    // Sentry adapters for the shared problem report and reliability reporting (as Pocket).
-    implementation(libs.okhttp)
-    implementation(libs.sentry.android)
+    // The shared reporting adapter: appkit's reporting sink, transport and problem report upload on
+    // the Sentry SDK (sentry-android comes with it, at the version OpenCine pins).
+    implementation("com.opencapture.opencine:appkit-sentry:0.1.0-SNAPSHOT")
+    // The one Frame.io owner (sign-in, upload, history, hop lease) over FrameioNative (A4-09).
+    implementation("com.opencapture.opencine:frameio:0.1.0-SNAPSHOT")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -312,10 +358,6 @@ dependencies {
     implementation(libs.compose.material3)
     // Playback transport SF-symbol stand-ins (play/pause/share/volume/star).
     implementation(libs.compose.material.icons.extended)
-    // Liquid glass: Kyant0/AndroidLiquidGlass layer-backdrop + AGSL lens path.
-    implementation(libs.kyant.backdrop)
-    // Runtime of backdrop, pinned here.
-    implementation(libs.kyant.shapes)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.effect)
     implementation(libs.media3.exoplayer)
@@ -333,50 +375,69 @@ dependencies {
     testImplementation(libs.json)
     testImplementation(libs.kotlinx.coroutines.test)
 
+    // NikonFeedIncidentProducerTest asserts with kotlin.test, as the unit tests do.
+    androidTestImplementation(libs.kotlin.test.junit)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.kotlin.test.junit)
     // Retired donor renderer for exact Vulkan pixel parity; test APK only.
     androidTestImplementation(project(":frozen-vulkan-donor"))
 
     debugImplementation(libs.compose.ui.test.manifest)
 }
 
-// Non-empty SENTRY_DSN_ANDROID wins; otherwise optional ignored repo-root properties (as Pocket).
-val sentryDsnAndroidField =
-    providers.environmentVariable("SENTRY_DSN_ANDROID")
-        .orElse("")
+// The commit this build came from (+ when the checkout is dirty), as Pocket and Insta stamp it.
+val sourceRevisionField =
+    providers.exec {
+        workingDir = repositoryRoot
+        commandLine("git", "rev-parse", "--short=12", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText
         .zip(
-            providers.of(LocalReliabilityDsnValueSource::class.java) {
-                parameters.propertiesFile.set(repositoryRoot.resolve(".local/reliability.properties"))
-            },
-        ) { env, file ->
-            val raw = env.trim().ifEmpty { file.trim() }
-            val escaped = raw.replace("\\", "\\\\").replace("\"", "\\\"")
-            com.android.build.api.variant.BuildConfigField("String", "\"$escaped\"", "optional Sentry Android DSN")
+            providers.exec {
+                workingDir = repositoryRoot
+                commandLine("git", "status", "--porcelain")
+                isIgnoreExitValue = true
+            }.standardOutput.asText,
+        ) { rev, status ->
+            val cleaned =
+                (System.getenv("GITHUB_SHA")?.take(12) ?: rev.trim())
+                    .filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }
+                    .ifEmpty { "unknown" }
+            val value = if (status.isNotBlank()) "$cleaned+" else cleaned
+            com.android.build.api.variant.BuildConfigField("String", "\"$value\"", "git source revision")
         }
 
+// Windows CPython installs put `python` on PATH and no `python3`. `PYTHON` overrides both.
+val pythonExecutable: Provider<String> =
+    providers.environmentVariable("PYTHON").orElse(
+        providers.systemProperty("os.name").map { osName ->
+            if (osName.startsWith("Windows", ignoreCase = true)) "python" else "python3"
+        }
+    )
+
 androidComponents {
-    onVariants { variant -> variant.buildConfigFields?.put("SENTRY_DSN_ANDROID", sentryDsnAndroidField) }
-}
-
-abstract class LocalReliabilityDsnValueSource :
-    ValueSource<String, LocalReliabilityDsnValueSource.Params> {
-    interface Params : ValueSourceParameters {
-        @get:org.gradle.api.tasks.Optional
-        @get:InputFile
-        @get:PathSensitive(PathSensitivity.NONE)
-        val propertiesFile: RegularFileProperty
-    }
-
-    override fun obtain(): String {
-        val file = parameters.propertiesFile.orNull?.asFile ?: return ""
-        if (!file.isFile) return ""
-        val props = Properties()
-        file.inputStream().use { props.load(it) }
-        return props.getProperty("SENTRY_DSN_ANDROID")?.trim().orEmpty()
+    onVariants { variant ->
+        variant.buildConfigFields?.put("SOURCE_REVISION", sourceRevisionField)
+        // Content identity of the build inputs this app lists in tools/build-identity.json (OpenCine
+        // scripts/sentry). Exec output participates in configuration-cache validation.
+        val identity = providers.exec {
+            workingDir = repositoryRoot
+            commandLine(
+                pythonExecutable.get(),
+                repositoryRoot.resolve("../OpenCine/scripts/sentry/build-identity.py").absolutePath,
+                "--root", repositoryRoot.absolutePath, "--platform", "android", "--configuration",
+                "${variant.name}-$resolvedVersionName-$resolvedVersionCode-${gradle.gradleVersion}",
+            )
+        }.standardOutput.asText.map { value ->
+            com.android.build.api.variant.BuildConfigField(
+                "String", "\"${value.trim()}\"", "content identity of build inputs",
+            )
+        }
+        variant.buildConfigFields?.put("BUILD_IDENTITY", identity)
     }
 }

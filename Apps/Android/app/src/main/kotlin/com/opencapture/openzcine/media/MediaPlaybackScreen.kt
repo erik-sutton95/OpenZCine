@@ -34,8 +34,8 @@ import com.opencapture.openzcine.StoredPanelCenter
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
-import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.MediaDeliveryConfiguration
+import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliveryHost
+import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.nikonPlaybackAssistTools
 import com.opencapture.openzcine.settings.OperatorSettings
@@ -63,8 +63,7 @@ internal fun MediaPlaybackScreen(
     exposureAssistCameraInput: ExposureAssistCameraInput,
     operatorSettings: OperatorSettings,
     lutLibrary: AndroidLutLibrary?,
-    frameioController: FrameioDeliveryController,
-    mediaDeliveryCoordinator: MediaDeliveryCoordinator,
+    mediaDelivery: NikonMediaDelivery,
     onToggleFavorite: (NikonMediaClipRecord) -> Unit,
     onRatingMirrored: (NikonMediaClipRecord, Int) -> Unit = { _, _ -> },
     onCaptureRatingCompletion: ((NikonMediaClipRecord) -> NikonMediaRatingCompletion)? = null,
@@ -74,15 +73,20 @@ internal fun MediaPlaybackScreen(
     opening: MonitorMediaGalleryOpen<NikonLibraryClip>? = null,
     sourceCurrent: () -> Boolean = { true },
     captureRecord: ((MonitorMediaRecord<NikonLibraryClip>) -> MonitorPlaybackAdmission)? = null,
+    captureDeletion: ((MonitorMediaRecord<NikonLibraryClip>, suspend () -> Boolean) -> MonitorOperatorPlaybackDeletionRequest?)? = null,
 ): Unit {
-    val actualLibrary = library ?: run { PlaybackLoading("Preparing media library…"); return }
+    val actualLibrary = library ?: run {
+        com.opencapture.opencine.cameracontrols.MonitorOperatorMediaUnavailable(close = onClose); return
+    }
     val initial = remember(actualLibrary, opening?.id, initialClip.libraryKey(cameraID)) {
         opening ?: playbackRecords.firstOrNull {
             it.payload.bucket == cameraID && it.payload.clip == initialClip
         }?.let { record -> MonitorMediaGalleryOpen(record,
             playbackRecords.filter { it.payload.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY },
             actualLibrary.actionToken) }
-    } ?: run { PlaybackFailure("This clip is not in the current media library."); return }
+    } ?: run {
+        com.opencapture.opencine.cameracontrols.MonitorOperatorMediaUnavailable(close = onClose); return
+    }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val currentOwner = rememberUpdatedState(connectionOwner)
@@ -103,12 +107,19 @@ internal fun MediaPlaybackScreen(
         }
         NikonPlaybackSourceCapture(::source, admission)
     }
-    val delivery = remember(actualLibrary, initial.id, connectionOwner, mediaDeliveryCoordinator, frameioController) {
-        NikonMediaDeliveryHost(scope, mediaDeliveryCoordinator, frameioController, cacheStore,
-            actualLibrary, initial, connectionOwner, capture.source, capture.record,
-            configuration = { MediaDeliveryConfiguration(selectedLut = assists.lut) })
+    val coordinator = mediaDelivery.coordinator
+    var deliveryPopup by remember(actualLibrary, initial.id) { mutableStateOf<NikonDeliverySelection?>(null) }
+    fun share(record: MonitorMediaRecord<NikonLibraryClip>) {
+        if (coordinator.isActive) return
+        val lut = assists.lut
+        val label = when (lut) {
+            is FeedLutSelection.BuiltIn -> lut.value.label
+            is FeedLutSelection.Stored -> lutLibrary?.displayName(lut.value)
+        }
+        deliveryPopup = mediaDelivery.selection(listOf(record), actualLibrary, initial, connectionOwner, capture.source,
+            capture.record, selectedLut = lut.takeIf { label != null }, lutLabel = label)
     }
-    val playerContext = remember(actualLibrary, initial.id, connectionOwner, cacheStore, delivery) {
+    val playerContext = remember(actualLibrary, initial.id, connectionOwner, cacheStore) {
         NikonOperatorPlaybackContext(actualLibrary, initial, scope, capture.source, capture.record,
             transferFactory = { record, ifCurrent ->
                 val clip = record.payload.clip
@@ -130,7 +141,8 @@ internal fun MediaPlaybackScreen(
                     }
                 })
             }, captureDeliveryCleanup = {
-                val outgoing = delivery.capturedRun
+                // One PTP data channel: a delivery still caching from the camera yields to playback.
+                val outgoing = coordinator.capturedRun.takeIf { coordinator.holdsCameraTransfer }
                 suspend { outgoing?.cancelAndJoin() }
             })
     }
@@ -145,7 +157,7 @@ internal fun MediaPlaybackScreen(
         rememberNikonPlaybackPicture(logical, native, source.token, entry, assists,
             exposureAssistCameraInput, operatorSettings, lutLibrary, scope)
     } else null
-    val cover by delivery.coverPresented.collectAsState()
+    val cover = deliveryPopup != null
     val usage = remember(context) { MonitorToolUsagePreferences(
         context.getSharedPreferences("assist", Context.MODE_PRIVATE), "assistToolUsage.v1") }
     val placements = remember(context, assists.shared) { playbackPanelPlacement(context, assists) }
@@ -163,13 +175,37 @@ internal fun MediaPlaybackScreen(
             exposureAssistCameraInput, {})?.Menu() },
         reference = picture?.reference, referenceAvailable = picture?.reference != null)
     val operations = MonitorOperatorPlaybackOperations<NikonLibraryClip, Unit>(
+        captureDeletion = { record ->
+            val outgoing = playerContext.media.state.value.playback
+            val outgoingNative = playerContext.native
+            // Deleting from the camera needs its channel; only a run caching from it yields.
+            val run = coordinator.capturedRun.takeIf { coordinator.holdsCameraTransfer }
+            if (captureDeletion == null || outgoing == null || outgoingNative == null ||
+                !currentTransfer.value || cover || !capture.record(record).isCurrent() ||
+                !playerContext.media.isCurrent(outgoing.state.value.token) ||
+                outgoing.state.value.active?.asset?.id != record.asset.id) null else {
+                val token = outgoing.state.value.token
+                captureDeletion(record) {
+                    if (playerContext.media.state.value.playback !== outgoing || playerContext.native !== outgoingNative ||
+                        !playerContext.media.isCurrent(token)) false else {
+                        outgoing.close()
+                        run?.cancelAndJoin()
+                        outgoingNative.finishEnteredTransfer()
+                        val retired = outgoing.state.value
+                        playerContext.media.state.value.playback === outgoing && playerContext.native === outgoingNative &&
+                            retired.closed && retired.token == token.copy(revision = token.revision + 1)
+                    }
+                }
+            }
+        },
         favorite = { record -> if (capture.record(record).isCurrent()) onToggleFavorite(record.payload.clip) },
         access = { record ->
             val preparedRecord = prepared?.takeIf { it.record.asset.id == record.asset.id }
             val completed = (preparedRecord?.preparation as? MediaTransferPreparation.Ready)?.entry
             val ready = completed?.let { playbackShareState(it.state, it.downloadedBytes, it.expectedLength) == PlaybackShareState.READY } == true
             MonitorMediaGalleryAccess(share = capture.record(record).isCurrent() &&
-                canDeliverMedia(if (ready) 1 else 0, 1, currentTransfer.value), delete = null)
+                canDeliverMedia(if (ready) 1 else 0, 1, currentTransfer.value),
+                delete = captureDeletion != null && currentTransfer.value && !cover && capture.record(record).isCurrent())
         }, rating = playbackRating(cameraTransferAvailable, connectionOwner, onRatingMirrored,
             onCaptureRatingCompletion, onRatingDiagnostic))
     var closing by remember(playerContext) { mutableStateOf(false) }
@@ -177,19 +213,15 @@ internal fun MediaPlaybackScreen(
         if (closing) return
         closing = true
         val outgoing = playerContext.native
-        val run = delivery.capturedRun
         playerContext.media.closePlayback()
+        // A delivery run belongs to the app and continues after the player closes (A4-10).
         scope.launch {
-            run?.cancelAndJoin()
             outgoing?.finishEnteredTransfer()
             onClose()
         }
     }
-    DisposableEffect(playerContext, delivery) {
-        onDispose {
-            playerContext.media.closePlayback()
-            delivery.close()
-        }
+    DisposableEffect(playerContext) {
+        onDispose { playerContext.media.closePlayback() }
     }
     Box(Modifier.fillMaxSize()) {
         MonitorOperatorPlaybackScreen(model = playerContext.media, initial = initial,
@@ -197,21 +229,26 @@ internal fun MediaPlaybackScreen(
             effects = picture?.effects ?: FeedEffectsRenderPlan.IDENTITY, cacheOriginal = false,
             deliveryPresented = cover, operations = operations,
             source = { record ->
-                val captured = prepared?.takeIf { it.record.asset.id == record.asset.id }
+                val captured = prepared?.takeIf {
+                    it.record.asset.id == record.asset.id && logical?.state?.value?.let { current ->
+                        current.ready && current.token == it.token && playerContext.media.isCurrent(it.token)
+                    } == true
+                }
                 val item = (captured?.preparation as? MediaTransferPreparation.Ready)?.entry
                 MonitorPlaybackSourceValues(progress = item?.progress,
-                    buffered = captured?.buffered?.toDouble(), colorLabel = record.asset.colorLabel,
+                    colorLabel = record.asset.colorLabel,
                     transfer = picture?.transfer, clipByte = picture?.clipByte,
-                    clockStyle = MonitorPlaybackClockStyle.ELAPSED_MINUTES_SECONDS)
+                    clockStyle = MonitorPlaybackClockStyle.ELAPSED_MINUTES_SECONDS,
+                    bufferedThroughSeconds = captured?.bufferedThroughSeconds)
             }, nativeAudio = { value -> picture?.audio?.takeIf { value === logical } },
-            close = ::close, share = delivery::share,
+            close = ::close, share = ::share,
             signalOptions = signal,
             availableAssistTools = nikonPlaybackAssistTools(picture?.imageEffectsAvailable == true).toSet(),
-            initialChromeVisible = true, loopAvailable = false,
+            initialChromeVisible = true,
             interaction = picture?.interaction ?: MonitorPlaybackInteractionOptions(
                 doubleTapResetsZoom = true, continuousPanBounds = true, zoomAgainstCanvas = true),
             picture = { _, _, geometry -> picture?.picture?.invoke(geometry) })
-        NikonMediaDeliveryHostView(delivery)
+        MonitorOperatorDeliveryHost(deliveryPopup, onDismissPopup = { deliveryPopup = null }, coordinator)
         if (closing) PlaybackLoading("Closing camera media…")
     }
 }

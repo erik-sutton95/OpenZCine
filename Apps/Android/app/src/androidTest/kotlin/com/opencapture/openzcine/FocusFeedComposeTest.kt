@@ -41,7 +41,7 @@ import com.opencapture.monitorui.MonitorGuideAspect
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.opencine.media.MonitorDesqueezePreset
 import com.opencapture.openzcine.settings.OperatorSettings
-import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.opencine.cameracontrols.PortraitFeedAspect
 import java.io.ByteArrayOutputStream
 import java.util.Collections
 import kotlinx.coroutines.delay
@@ -68,7 +68,7 @@ class FocusFeedComposeTest {
         setMonitor(session, source, "focus-feed-compose-test")
 
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule
             .onNodeWithContentDescription(
@@ -120,7 +120,7 @@ class FocusFeedComposeTest {
             up()
         }
         assertDisplayMode("Live")
-        composeRule.onNodeWithTag("focus_reset_button").performClick()
+        composeRule.onNodeWithTag("monitor.system.focusReset").performClick()
         composeRule.waitUntil(5_000) { session.resetCount == 1 }
     }
 
@@ -162,7 +162,7 @@ class FocusFeedComposeTest {
         val session = FocusSession(focusDelayMillis = 250)
         setMonitor(session, FocusFrameSource(testJpeg()), "focus-feed-rapid-tap-test")
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
         val feed = composeRule.onNodeWithTag("monitor_live_feed")
 
@@ -186,9 +186,9 @@ class FocusFeedComposeTest {
         val session = FocusSession()
         val settings =
             setMonitor(session, FocusFrameSource(testJpeg()), "focus-feed-pinch-test")
-        settings.portraitFeedAspect = PortraitFeedAspect.FIT_16_9
+        settings.portraitFeedAspect = PortraitFeedAspect.FIT_16X9
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
 
         composeRule.onNodeWithTag("monitor_live_feed").performTouchInput {
@@ -208,7 +208,7 @@ class FocusFeedComposeTest {
 
         // Pinch magnifies the current feed; FIT/FILL remains an explicit operator preference.
         composeRule.waitForIdle()
-        assertEquals(PortraitFeedAspect.FIT_16_9, settings.portraitFeedAspect)
+        assertEquals(PortraitFeedAspect.FIT_16X9, settings.portraitFeedAspect)
         assertDisplayMode("Live")
         assertEquals(null, session.lastFocusPoint)
     }
@@ -241,7 +241,7 @@ class FocusFeedComposeTest {
             }
 
             composeRule.waitUntil(5_000) {
-                composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+                composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
             }
             composeRule
                 .onNodeWithContentDescription(
@@ -281,10 +281,10 @@ class FocusFeedComposeTest {
                     session = session,
                     commonSession = common,
                     commonControl = control,
+                    operatorSession = rememberTestOperatorSession(assists, settings),
                     frameSource = source,
                     assists = assists,
                     operatorSettings = settings,
-                    glassTierOverride = "flat",
                 )
             }
         }

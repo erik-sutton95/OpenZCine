@@ -1,14 +1,12 @@
 package com.opencapture.openzcine.pairing
 
-import android.content.SharedPreferences
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -17,26 +15,28 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.monitorui.MonitorCameraAction
 import com.opencapture.monitorui.MonitorConnectFailure
+import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.opencine.appkit.CameraItem
+import com.opencapture.opencine.appkit.DiscoveryPermissions
 import com.opencapture.opencine.appkit.IntegrationSlots
-import com.opencapture.opencine.appkit.SavedCamerasStore
-import com.opencapture.opencine.appkit.StoredString
-import com.opencapture.opencine.appkit.stored
 import com.opencapture.opencine.core.RouteDraft
 import com.opencapture.opencine.core.SavedCamera
+import com.opencapture.opencine.nikon.NikonAccessPointSsid
 import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.opencine.nikon.NikonSavedRecordsV0
 import com.opencapture.opencine.nikon.NikonTakeOverPrompt
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.relay.RelayBroadcast
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
@@ -48,7 +48,7 @@ import com.opencapture.openzcine.transport.UsbPtpCameraAccess
  * network screen. Twin of iOS `CameraWiFiSSID.resolve(for:) ?? deriveSSID(fromCameraName:)`.
  */
 internal fun accessPointSsidFor(record: SavedCameraRecord): String? =
-    record.wifiSsid?.takeIf(::looksLikeNikonAccessPointSsid)
+    record.wifiSsid?.takeIf(NikonAccessPointSsid::isNikonZAccessPoint)
         ?: runCatching { NikonNative.deriveAccessPointSSID(record.cameraName) }.getOrNull()
 
 /** The kinds this camera could still be set up for (mirror of the iOS list). */
@@ -69,54 +69,6 @@ internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCamera
 /** The shared saved-camera document's preferences (SHELL-02): `openzcine.cameras` / `document`. */
 internal const val CAMERAS_DOCUMENT_PREFERENCES: String = "openzcine.cameras"
 
-/**
- * The shared saved-camera document over this app's own records, which stay in
- * `openzcine.saved-cameras` / `records-json` where every older build reads them (mirrored, merged
- * on every load). [onRecordsPatched] runs right after the shared page patched the records (a
- * rename, a forgotten setup) so the app reads them back. Wi-Fi keys are never touched here.
- */
-internal fun nikonCamerasStore(
-    document: SharedPreferences,
-    records: SharedPreferences,
-    onRecordsPatched: () -> Unit,
-): SavedCamerasStore =
-    SavedCamerasStore(
-        document.stored("document"),
-        SavedCamerasStore.Legacy(
-            object : StoredString {
-                override fun read(): String? = records.getString(SharedPreferencesSavedCameraStore.RECORDS_KEY, null)
-
-                override fun write(value: String) {
-                    records.edit().putString(SharedPreferencesSavedCameraStore.RECORDS_KEY, value).apply()
-                    onRecordsPatched()
-                }
-            },
-            NikonSavedRecordsV0(),
-            "records",
-        ),
-    )
-
-/** The app's records after the shared page patched them; a removed access point setup takes its key. */
-internal fun recordsAfterSharedEdit(
-    before: List<SavedCameraRecord>,
-    store: SavedCameraStore,
-    removeKey: (String) -> Unit,
-): List<SavedCameraRecord> = store.records().also { after -> removedAccessPointSsids(before, after).forEach(removeKey) }
-
-/** The app's forget: every setup at [hosts] goes, each access point setup taking its own key. */
-internal fun recordsForgetting(
-    hosts: List<String>,
-    records: List<SavedCameraRecord>,
-    removeKey: (String) -> Unit,
-): List<SavedCameraRecord> {
-    var remaining = records
-    for (record in records.filter { r -> hosts.any { it.equals(r.host, ignoreCase = true) } }) {
-        record.wifiSsid?.takeIf { record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT }?.let(removeKey)
-        remaining = SavedCameraRecords.removing(record.host, record.cameraName, remaining)
-    }
-    return remaining
-}
-
 /** The app records behind a camera of the shared document (its routes name host and transport). */
 internal fun recordsOf(camera: SavedCamera, records: List<SavedCameraRecord>): List<SavedCameraRecord> =
     records.filter { record ->
@@ -127,17 +79,21 @@ internal fun recordsOf(camera: SavedCamera, records: List<SavedCameraRecord>): L
     }
 
 /**
- * This app's slots on the shared pages: adding a setup (its add-setup choices; an access point
- * without a stored key goes through [onScanAccessPoint], the full-screen credential scanner) and
- * the take-over question.
+ * This app's slots on the shared pages: the pair page's way into the transport wizard
+ * ([onChooseConnection]: the camera access point, hotspot, router, USB-C and HDMI paths that nearby
+ * discovery alone never offers), adding a setup (its add-setup choices; an access point without a
+ * stored key goes through [onScanAccessPoint], the full-screen credential scanner) and the take-over
+ * question.
  */
 internal fun nikonIntegrationSlots(
     connector: SavedCameraConnector,
     records: () -> List<SavedCameraRecord>,
     credentials: PairingCredentials,
     onScanAccessPoint: (SavedCamera) -> Unit,
+    onChooseConnection: () -> Unit,
 ): IntegrationSlots =
     IntegrationSlots(
+        pairing = { ChooseConnectionEntry(onChooseConnection) },
         addRoute = { camera, done ->
             AddSetupCard(camera, recordsOf(camera, records()), connector, credentials, done, onScanAccessPoint)
         },
@@ -145,6 +101,17 @@ internal fun nikonIntegrationSlots(
             (prompt as? NikonTakeOverPrompt)?.let { TakeOverConfirmationDialog(it.holder, it.confirm, it.cancel) }
         },
     )
+
+/** The pair page's entry to the transport wizard, in the cameras page's own action style. */
+@Composable
+private fun ChooseConnectionEntry(onClick: () -> Unit) {
+    val title = stringResource(R.string.pairing_step_choose_path)
+    MonitorCameraAction(
+        text = title, primary = false, enabled = true, contentDescription = title, onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        icon = { tint -> MonitorIcon(MonitorIcon.PLUS, null, Modifier.size(14.dp), tint = tint) },
+    )
+}
 
 /**
  * "+ Add setup": the kinds this camera does not have yet. Every row does something: a reachable
@@ -167,27 +134,25 @@ private fun AddSetupCard(
                 androidx.compose.runtime.LaunchedEffect(camera.id) { done(null) }
                 return
             }
-    val context = LocalContext.current
     // Asked for here only: naming a network is the one thing this permission buys, and a second
     // router setup is the one place the name is needed.
-    var networkNameGranted by remember { mutableStateOf(ConnectedNetworkName.isPermissionGranted(context)) }
-    val networkNameLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { networkNameGranted = it }
+    val networkName =
+        rememberPermissionGate("setup.networkName", DiscoveryPermissions.wifiName, DiscoveryPermissions.wifiNameRequest)
     val usbCameras by connector.usbCameras.collectAsState()
     val discovered by connector.discoveredCameras.collectAsState()
     val usbReady = usbCameras.any { it.access == UsbPtpCameraAccess.READY }
     val routerFound = discovered.any { SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName) }
     val apKeyStored = remember(anchor.id) { accessPointSsidFor(anchor)?.let(credentials::passphrase) != null }
     Column(
-        Modifier.background(StartupColors.surface, RoundedCornerShape(20.dp)).padding(20.dp).verticalScroll(rememberScrollState()),
+        Modifier.background(MonitorPalette.surface, RoundedCornerShape(20.dp)).padding(20.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.saved_add_setup_title, anchor.displayTitle), color = StartupColors.ink, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-        Text(stringResource(R.string.saved_add_setup_body), color = StartupColors.muted, fontSize = 13.sp, lineHeight = 18.sp)
-        if (group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE } && !networkNameGranted) {
-            Text(stringResource(R.string.saved_setup_router_name_permission), color = StartupColors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
-            TextButton(onClick = { networkNameLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION) }) {
-                Text(stringResource(R.string.saved_setup_router_name_permission_action), color = StartupColors.accent, fontSize = 13.sp)
+        Text(stringResource(R.string.saved_add_setup_title, anchor.displayTitle), color = MonitorPalette.text, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.saved_add_setup_body), color = MonitorPalette.muted, fontSize = 13.sp, lineHeight = 18.sp)
+        if (group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE } && !networkName.granted) {
+            Text(stringResource(R.string.saved_setup_router_name_permission), color = MonitorPalette.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+            TextButton(onClick = networkName::request) {
+                Text(stringResource(R.string.saved_setup_router_name_permission_action), color = MonitorPalette.accent, fontSize = 13.sp)
             }
         }
         for (kind in missingSetupKinds(group)) {
@@ -209,8 +174,8 @@ private fun AddSetupCard(
                     SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_wait_for_camera
                 }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(title), color = StartupColors.ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(stringResource(body), color = StartupColors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+                Text(stringResource(title), color = MonitorPalette.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(body), color = MonitorPalette.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
                 TextButton(
                     onClick = {
                         if (kind == SavedCameraTransport.CAMERA_ACCESS_POINT && !apKeyStored) {

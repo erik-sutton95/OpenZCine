@@ -15,8 +15,9 @@ import java.security.MessageDigest
 import java.time.LocalDate
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
-import com.opencapture.monitorui.MonitorThumbnailSize
-import com.opencapture.monitorui.MonitorMediaLayout
+import com.opencapture.opencine.appkit.MonitorMediaPreferenceStorage
+import com.opencapture.opencine.appkit.MonitorMediaPreferences
+import com.opencapture.opencine.appkit.MonitorMediaSort
 
 /** The two safe library sources exposed by the Android browser. */
 internal enum class MediaLibrarySource(val title: String) {
@@ -132,33 +133,13 @@ internal data class MediaLibraryFilters(
     }
 }
 
-/** Stable ordering choices for a media-library result set. */
-internal enum class MediaLibrarySortOrder(val title: String) {
-    NEWEST("Newest"),
-    OLDEST("Oldest"),
-    NAME("Name"),
-}
-
-/** Persisted browser controls, independent of any camera command state. */
-internal data class MediaLibraryViewOptions(
-    val source: MediaLibrarySource,
-    val category: MediaLibraryCategory = MediaLibraryCategory.ALL,
-    val layout: MonitorMediaLayout = MonitorMediaLayout.GRID,
-    val sortOrder: MediaLibrarySortOrder = MediaLibrarySortOrder.NEWEST,
-    val thumbnailSize: MonitorThumbnailSize = MonitorThumbnailSize.MEDIUM,
-)
 
 /**
- * Minimal persistence boundary for the Android media index.
- *
- * A narrow interface keeps the index and its wire codec JVM-testable while
- * the production adapter remains a normal private SharedPreferences store.
+ * Minimal persistence boundary for the Android media index: the shared media preferences storage,
+ * so the index, its wire codec and the shared favorites/view owner stay JVM-testable while the
+ * production adapter remains a normal private SharedPreferences store.
  */
-internal interface MediaLibraryPreferences {
-    fun getString(key: String): String?
-
-    fun putString(key: String, value: String?)
-}
+internal typealias MediaLibraryPreferences = MonitorMediaPreferenceStorage
 
 /** Android-owned persistence adapter; this store is never visible to other apps. */
 internal class SharedPreferencesMediaLibraryPreferences(context: Context) : MediaLibraryPreferences {
@@ -337,13 +318,9 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
             )
         }
         if (!ifCurrent()) return
-        val favorites = favoriteIDs(cameraID)
-        if (identity in favorites && ifCurrent()) {
-            preferences.putString(
-                favoritesKey(cameraID),
-                (favorites - identity).sorted().joinToString(separator = "\n").ifEmpty { null },
-            )
-        }
+        val store = mediaPreferences(cameraID)
+        val favorites = store.favorites()
+        if (identity in favorites && ifCurrent()) store.saveFavorites(favorites - identity)
     }
 
     private fun persistedClipsLocked(cameraID: String): List<NikonMediaClipRecord> =
@@ -392,23 +369,23 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
             }
         }
 
+    /**
+     * One camera bucket's favorites and the browser view options, in the shared media preferences
+     * owner. The keys and the newline separator are the ones this index always wrote, so existing
+     * favorites and view choices read back unchanged.
+     */
+    fun mediaPreferences(cameraID: String): MonitorMediaPreferences =
+        MonitorMediaPreferences(preferences, favoritesKey(cameraID), LAST_CAMERA_KEY, "\n", viewKeyPrefix = VIEW_KEY_PREFIX)
+
     /** Reads the persisted favorite identities for the given camera bucket. */
-    fun favoriteIDs(cameraID: String): Set<String> =
-        preferences.getString(favoritesKey(cameraID))
-            ?.lineSequence()
-            ?.filter { it.isNotBlank() }
-            ?.toSet()
-            .orEmpty()
+    fun favoriteIDs(cameraID: String): Set<String> = mediaPreferences(cameraID).favorites()
 
     /** Changes one favorite and returns the complete updated set for UI state. */
     fun toggleFavorite(cameraID: String, clip: NikonMediaClipRecord): Set<String> {
-        val updated = favoriteIDs(cameraID).toMutableSet()
+        val store = mediaPreferences(cameraID)
         val identity = clip.libraryKey(cameraID)
-        if (!updated.add(identity)) updated.remove(identity)
-        preferences.putString(
-            favoritesKey(cameraID),
-            updated.sorted().joinToString(separator = "\n").ifEmpty { null },
-        )
+        val updated = store.favorites().let { if (identity in it) it - identity else it + identity }
+        store.saveFavorites(updated)
         return updated
     }
 
@@ -419,41 +396,13 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
      * property — agrees with shots starred during a shoot. iOS `mirrorRatingIntoIndex`.
      */
     fun setFavorite(cameraID: String, clip: NikonMediaClipRecord, favorite: Boolean): Set<String> {
-        val updated = favoriteIDs(cameraID).toMutableSet()
+        val store = mediaPreferences(cameraID)
         val identity = clip.libraryKey(cameraID)
-        val changed = if (favorite) updated.add(identity) else updated.remove(identity)
-        if (changed) {
-            preferences.putString(
-                favoritesKey(cameraID),
-                updated.sorted().joinToString(separator = "\n").ifEmpty { null },
-            )
-        }
+        val current = store.favorites()
+        val updated = if (favorite) current + identity else current - identity
+        if (updated != current) store.saveFavorites(updated)
         return updated
     }
-
-    /** Restores browser controls without trusting a corrupted preference value. */
-    fun viewOptions(defaultSource: MediaLibrarySource): MediaLibraryViewOptions =
-        MediaLibraryViewOptions(
-            source = enumValue(PREF_SOURCE, defaultSource),
-            category = enumValue(PREF_CATEGORY, MediaLibraryCategory.ALL),
-            layout = enumValue(PREF_LAYOUT, MonitorMediaLayout.GRID),
-            sortOrder = enumValue(PREF_SORT, MediaLibrarySortOrder.NEWEST),
-            thumbnailSize = enumValue(PREF_THUMBNAIL_SIZE, MonitorThumbnailSize.MEDIUM),
-        )
-
-    /** Persists only local browsing preferences; camera commands are never stored here. */
-    fun saveViewOptions(options: MediaLibraryViewOptions) {
-        preferences.putString(PREF_SOURCE, options.source.name)
-        preferences.putString(PREF_CATEGORY, options.category.name)
-        preferences.putString(PREF_LAYOUT, options.layout.name)
-        preferences.putString(PREF_SORT, options.sortOrder.name)
-        preferences.putString(PREF_THUMBNAIL_SIZE, options.thumbnailSize.name)
-    }
-
-    private inline fun <reified Value : Enum<Value>> enumValue(key: String, fallback: Value): Value =
-        preferences.getString(key)
-            ?.let { value -> enumValues<Value>().firstOrNull { it.name == value } }
-            ?: fallback
 
     private fun indexKey(cameraID: String): String = "index.${digest(cameraID)}"
 
@@ -486,11 +435,8 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
     private companion object {
         const val CAMERA_BUCKETS_KEY = "camera-buckets"
         const val INDEXED_CAMERAS_KEY = "indexed-cameras"
-        const val PREF_SOURCE = "view.source"
-        const val PREF_CATEGORY = "view.category"
-        const val PREF_LAYOUT = "view.layout"
-        const val PREF_SORT = "view.sort"
-        const val PREF_THUMBNAIL_SIZE = "view.thumbnail-size"
+        const val LAST_CAMERA_KEY = "last-camera"
+        const val VIEW_KEY_PREFIX = "view"
     }
 }
 
@@ -566,7 +512,7 @@ internal class MediaLibraryListingCheckpoint(
         val candidate =
             MediaLibraryFiltering.sort(
                 clipsByIdentity.values.toList(),
-                MediaLibrarySortOrder.NEWEST,
+                MonitorMediaSort.NEWEST,
             )
         return commitCatalog(candidate, dirty)
     }
@@ -575,13 +521,13 @@ internal class MediaLibraryListingCheckpoint(
 /** Legacy source callers delegate to the same captured neutral projection owner as the gallery. */
 internal object MediaLibraryFiltering {
     fun displayed(clips: List<NikonMediaClipRecord>, category: MediaLibraryCategory,
-        favoriteIDs: Set<String>, cameraID: String, sortOrder: MediaLibrarySortOrder,
+        favoriteIDs: Set<String>, cameraID: String, sortOrder: MonitorMediaSort,
         filters: MediaLibraryFilters = MediaLibraryFilters(), today: LocalDate = LocalDate.now(),
         libraryKey: (NikonMediaClipRecord) -> String = { it.libraryKey(cameraID) },
         ownerOf: (NikonMediaClipRecord) -> String = { cameraID }): List<NikonMediaClipRecord> =
         NikonAppGalleryProjection(clips, emptyMap(), category, favoriteIDs, cameraID,
             sortOrder, filters, today, libraryKey, ownerOf).displayedClips
-    fun sort(clips: List<NikonMediaClipRecord>, sortOrder: MediaLibrarySortOrder): List<NikonMediaClipRecord> =
+    fun sort(clips: List<NikonMediaClipRecord>, sortOrder: MonitorMediaSort): List<NikonMediaClipRecord> =
         NikonAppGalleryProjection.sorted(clips, sortOrder)
 }
 
@@ -597,44 +543,6 @@ internal data class MediaFilterOptions(
     val dateWindows: List<MediaDateWindowFilter> = emptyList(),
 ) {
     val isEmpty get() = formats.isEmpty() && resolutions.isEmpty() && photoSizes.isEmpty() && dateWindows.isEmpty()
-}
-
-/** Pure set updates used by long-press, tap, and sweep selection. */
-internal object MediaLibrarySelection {
-    fun begin(identity: String): Set<String> = setOf(identity)
-
-    fun toggle(current: Set<String>, identity: String): Set<String> =
-        current.toMutableSet().apply {
-            if (!add(identity)) remove(identity)
-        }
-
-    /** Sweeps only add unseen items, avoiding a repeated drag toggling an item back off. */
-    fun addSweep(current: Set<String>, identities: Collection<String>): Set<String> = current + identities
-
-    /**
-     * Photos-style range paint (iOS `MediaSweepSelectGesture.paint`): selection is the
-     * pre-sweep [snapshot] with the contiguous `[anchor…current]` range painted on or off.
-     * Shrinking the range restores trailing cells from the snapshot.
-     */
-    fun paintRange(
-        snapshot: Set<String>,
-        orderedIDs: List<String>,
-        anchorIndex: Int,
-        currentIndex: Int,
-        paintSelect: Boolean,
-    ): Set<String> {
-        if (orderedIDs.isEmpty()) return snapshot
-        val lo = minOf(anchorIndex, currentIndex).coerceIn(0, orderedIDs.lastIndex)
-        val hi = maxOf(anchorIndex, currentIndex).coerceIn(0, orderedIDs.lastIndex)
-        val result = snapshot.toMutableSet()
-        for (index in lo..hi) {
-            val id = orderedIDs[index]
-            if (paintSelect) result.add(id) else result.remove(id)
-        }
-        return result
-    }
-
-    fun retainVisible(current: Set<String>, visible: Set<String>): Set<String> = current.intersect(visible)
 }
 
 /** Stable private favorite/index identity — never a filename-only key. */

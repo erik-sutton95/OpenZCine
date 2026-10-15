@@ -4,7 +4,7 @@ import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorGuideAspect
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.settings.LocalLevelStyle
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

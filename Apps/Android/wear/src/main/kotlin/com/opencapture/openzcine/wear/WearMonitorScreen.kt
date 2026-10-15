@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.wear
 
+import com.opencapture.opencine.media.ByteCountLabel
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
@@ -45,7 +46,8 @@ internal fun WearMonitorContent(presentation: WearMonitorPresentation, onToggleR
     current: () -> WearMonitorPresentation = { presentation }) {
     val resources = LocalResources.current
     val value = presentation.neutral(presentation.state?.mediaStatus?.let {
-        resources.getString(R.string.wear_storage_capacity, it.gigabytesFree, it.percentFree)
+        it.freeBytes?.let { bytes -> "${ByteCountLabel.label(bytes)} · ${it.percentFree}%" }
+            ?: resources.getString(R.string.wear_storage_capacity, it.gigabytesFree, it.percentFree)
     })
     val copy = MonitorWristCopy(
         monitorDescription = stringResource(R.string.wear_monitor_description),

@@ -77,7 +77,9 @@
         <!-- Sensor-based portrait + landscape (iOS allows Portrait + LandscapeRight;
           "user" is the closest platform posture: it follows the rotation lock).
           configChanges keeps the activity (camera session, live feed, glass
-          pipeline) alive across rotation; the zone map recomputes in compose.
+          pipeline) alive across rotation, resize, unfold, dark mode, display
+          size, font scale and game controllers (OpenCine
+          MonitorActivityConfigChanges); the zone map recomputes in compose.
           ponytail: reverse-landscape also rotates here (Android convention);
           pinning to one landscape would need a manual OrientationEventListener. -->
         <activity
@@ -86,7 +88,7 @@
             android:launchMode="singleTop"
             android:theme="@style/Theme.OpenZCine.Starting"
             android:screenOrientation="user"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -117,10 +119,6 @@
                     android:host="${frameioRedirectHost}" />
             </intent-filter>
         </activity>
-        <!-- Manual Sentry init only after consent + DSN. Never auto-start. -->
-        <meta-data
-            android:name="io.sentry.auto-init"
-            android:value="false" />
     </application>
 
 </manifest>

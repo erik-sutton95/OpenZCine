@@ -9,7 +9,6 @@ import com.opencapture.openzcine.wearrelay.WatchConnectionState
 import com.opencapture.openzcine.wearrelay.WatchRecordState
 import com.opencapture.openzcine.wearrelay.WatchRelayState
 import com.opencapture.openzcine.wearrelay.WatchTimecode
-import kotlin.math.roundToInt
 
 /**
  * Current safety conditions for a record request arriving from the wearable.
@@ -142,14 +141,4 @@ internal fun androidWatchRelayState(
     )
 }
 
-private fun storageLabel(storage: CameraStorageStatus): String {
-    val freeGiB = storage.freeSpaceBytes.coerceAtLeast(0L) / BYTES_PER_GIB
-    if (storage.totalCapacityBytes <= 0L) return "$freeGiB GB"
-    val percent =
-        ((storage.freeSpaceBytes.toDouble() / storage.totalCapacityBytes.toDouble()) * 100)
-            .roundToInt()
-            .coerceIn(0, 100)
-    return "$freeGiB GB · $percent%"
-}
-
-private const val BYTES_PER_GIB: Long = 1_073_741_824L
+private fun storageLabel(storage: CameraStorageStatus): String = storage.readout?.label ?: "\u2014"

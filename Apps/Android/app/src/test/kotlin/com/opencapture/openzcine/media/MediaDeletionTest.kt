@@ -2,17 +2,35 @@ package com.opencapture.openzcine.media
 
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
+import com.opencapture.opencine.nikon.NikonMediaDeletionPlan
 import com.opencapture.opencine.nikon.NikonStillPhotoClassification
 import com.opencapture.opencine.nikon.NikonStillPreviewStrategy
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** JVM coverage for the camera-card deletion policy and its local purge. */
 class MediaDeletionTest {
+    @Test
+    fun `frozen playback deletion copy and targets reject a late master or backup`() {
+        val proxy = still(handle = 5, filename = "SIMULATED.MP4")
+        val master = still(handle = 6, filename = "SIMULATED.NEV")
+        val captured = NikonMediaDeletionPlan.of(listOf(proxy), listOf(proxy), oneBucket)
+        val copy = deleteConfirmationMessage(listOf(proxy), captured)
+        assertFalse("master" in copy)
+        assertTrue(sameDeletionPlan(captured, NikonMediaDeletionPlan.of(listOf(proxy), listOf(proxy), oneBucket)))
+        val widened = NikonMediaDeletionPlan.of(listOf(proxy, master), listOf(proxy), oneBucket)
+        assertFalse(sameDeletionPlan(captured, widened))
+        assertEquals(listOf(proxy), captured.targets)
+        assertEquals(copy, deleteConfirmationMessage(listOf(proxy), captured))
+        val backup = proxy.copy(handle = 55, storageId = 2)
+        assertFalse(sameDeletionPlan(captured, NikonMediaDeletionPlan.of(listOf(proxy, backup), listOf(proxy), oneBucket)))
+    }
+
     @Test
     fun `rating write result decodes confirmed stars, coded refusals, and no-code failures`() {
         assertEquals(RatingWriteResult.Confirmed(3), ratingWriteResult(3))
@@ -34,113 +52,28 @@ class MediaDeletionTest {
     }
 
     @Test
-    fun `raw sibling pairs the same stem on the same card only`() {
-        val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
-        val raw = still(handle = 2, filename = "DSC_0001.NEF")
-        val otherCardRaw = still(handle = 3, filename = "DSC_0001.NEF", storageId = 2)
-        val unrelated = still(handle = 4, filename = "DSC_0002.NEF")
-        val catalog = listOf(jpeg, raw, otherCardRaw, unrelated)
-
-        assertEquals(raw, rawSibling(catalog, jpeg, oneBucket))
-        // Case-insensitive stem matching, like iOS.
-        assertEquals(
-            raw,
-            rawSibling(catalog, jpeg.copy(filename = "dsc_0001.jpg"), oneBucket),
-        )
-        // RAW cells and non-stills never claim a sibling of their own.
-        assertNull(rawSibling(catalog, raw, oneBucket))
-        assertNull(rawSibling(catalog, still(handle = 5, filename = "C0001.MOV"), oneBucket))
-        // Split recording: a same-stem RAW on another card is a separate item.
-        assertNull(rawSibling(listOf(jpeg, otherCardRaw), jpeg, oneBucket))
-    }
-
-    @Test
-    fun `pair key scopes formulaic stems to the owning camera bucket`() {
-        val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
-        val foreignRaw = still(handle = 2, filename = "DSC_0001.NEF")
-        // Two cameras produce identical DSC_0001 stems and formulaic storage
-        // IDs; the offline library must never pair them across buckets.
-        val owners = mapOf<Long, String>(1L to "camera-a", 2L to "camera-b")
-        assertNull(rawSibling(listOf(jpeg, foreignRaw), jpeg) { owners.getValue(it.handle) })
-        // The same catalog pairs normally inside one bucket.
-        assertEquals(
-            foreignRaw,
-            rawSibling(listOf(jpeg, foreignRaw), jpeg, oneBucket),
-        )
-        assertEquals("camera/7/dsc_0001", still(handle = 3, filename = "DSC_0001.JPG", storageId = 7).rawPairKey("camera"))
-    }
-
-    @Test
-    fun `deletion targets expand pairs once and keep raw-only selections narrow`() {
-        val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
-        val raw = still(handle = 2, filename = "DSC_0001.NEF")
-        val movie = still(handle = 3, filename = "C0001.MOV")
-        val catalog = listOf(jpeg, raw, movie)
-
-        // Deleting the JPEG deletes both sides of the pair.
-        assertEquals(listOf(jpeg, raw), cameraDeletionTargets(catalog, listOf(jpeg), oneBucket))
-        // Selecting both sides still deletes each object exactly once.
-        assertEquals(
-            listOf(jpeg, raw),
-            cameraDeletionTargets(catalog, listOf(jpeg, raw), oneBucket),
-        )
-        // A RAW cell only surfaces when its JPEG side is absent; deleting it
-        // then deletes only the RAW, exactly like iOS.
-        assertEquals(listOf(raw), cameraDeletionTargets(catalog, listOf(raw), oneBucket))
-        assertEquals(listOf(movie), cameraDeletionTargets(catalog, listOf(movie), oneBucket))
-    }
-
-    @Test
-    fun `deletion widens to cross-card backup twins and says so`() {
+    fun `confirmation copy names pairs, backups and masters only when the plan has them`() {
         val jpeg = still(handle = 1, filename = "DSC_0001.JPG")
         val raw = still(handle = 2, filename = "DSC_0001.NEF")
         val backupJpeg = still(handle = 21, filename = "DSC_0001.JPG", storageId = 2)
         val backupRaw = still(handle = 22, filename = "DSC_0001.NEF", storageId = 2)
-        val bystander = still(handle = 3, filename = "DSC_0002.JPG", captureDate = "20260714T110000")
-        val catalog = listOf(jpeg, raw, backupJpeg, backupRaw, bystander)
+        val stills = deleteConfirmationMessage(listOf(jpeg, raw, backupJpeg, backupRaw), listOf(jpeg), oneBucket)
+        assertTrue("backup copies on the other card" in stills)
+        assertTrue("RAW and JPEG" in stills)
 
-        val plan = deletionPlan(catalog, listOf(jpeg), oneBucket)
-
-        assertEquals(setOf(jpeg, raw, backupJpeg, backupRaw), plan.targets.toSet())
-        assertEquals(1, plan.pairCount)
-        assertEquals(2, plan.backupCount)
-        val message = deleteConfirmationMessage(catalog, listOf(jpeg), oneBucket)
-        assertTrue("backup copies on the other card" in message)
-        assertTrue("RAW and JPEG" in message)
-    }
-
-    @Test
-    fun `deleting a proxy takes its hidden camera master and uses video wording`() {
         val proxy = still(handle = 5, filename = "A001_0001.MP4")
         val master = still(handle = 6, filename = "A001_0001.NEV")
-        val otherProxy = still(handle = 7, filename = "A001_0002.MP4", captureDate = "20260714T111000")
-        val catalog = listOf(proxy, master, otherProxy)
+        val video = deleteConfirmationMessage(listOf(proxy, master), listOf(proxy), oneBucket)
+        assertTrue("A001_0001.MP4" in video)
+        assertTrue("master" in video)
+        assertTrue("RAW and JPEG" !in video)
+        assertTrue("backup copies" !in video)
 
-        val plan = deletionPlan(catalog, listOf(proxy), oneBucket)
-
-        assertEquals(listOf(proxy, master), plan.targets)
-        assertEquals(1, plan.masterCount)
-        assertEquals(0, plan.pairCount)
-        val message = deleteConfirmationMessage(catalog, listOf(proxy), oneBucket)
-        assertTrue("A001_0001.MP4" in message)
-        assertTrue("master" in message)
-        assertTrue("RAW and JPEG" !in message)
-        assertTrue("backup copies" !in message)
-    }
-
-    @Test
-    fun `undated clips never twin and plain singles keep the plain copy`() {
-        val jpeg = still(handle = 1, filename = "DSC_0003.JPG", captureDate = "")
+        val undated = still(handle = 1, filename = "DSC_0003.JPG", captureDate = "")
         val elsewhere = still(handle = 2, filename = "DSC_0003.NEF", storageId = 2, captureDate = "")
-        val catalog = listOf(jpeg, elsewhere)
-
-        val plan = deletionPlan(catalog, listOf(jpeg), oneBucket)
-
-        assertEquals(listOf(jpeg), plan.targets)
-        assertEquals(0, plan.backupCount)
         assertEquals(
             "Delete this photo from the camera card?",
-            deleteConfirmationMessage(catalog, listOf(jpeg), oneBucket),
+            deleteConfirmationMessage(listOf(undated, elsewhere), listOf(undated), oneBucket),
         )
     }
 

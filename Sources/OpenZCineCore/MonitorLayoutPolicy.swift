@@ -58,16 +58,6 @@ public struct MonitorModuleFrame: Equatable, Sendable {
     }
 }
 
-/// Live-view chrome bands the floating assists clear.
-public enum MonitorLiveViewModuleLayout {
-    /// Margin between the bottom chrome bars and the true screen edge. Tighter than the chrome
-    /// inset so the bars hug the bottom of the feed, matching the wireframe.
-    public static let bottomBarBottomInset = 14.0
-
-    /// Vertical space reserved for the top information deck.
-    public static let topInfoDeckHeight = 46.0
-}
-
 /// The record button's size, which the photography chrome matches.
 public enum MonitorSideRailControlLayout {
     public static let recordButtonSize = 82.8

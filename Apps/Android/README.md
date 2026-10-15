@@ -67,8 +67,9 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   to confirm the wrist UI becomes unavailable, resume to confirm it waits for a fresh heartbeat,
   feel all haptic outcomes, and inspect the tightest round/square watch layout for clipping.
 - **Pairing (`app/.../pairing/`):** the app opens on the first-pair wizard, a port of the iOS
-  startup flow (`ios/Runner/StartupDesign.swift`) in its design language: permissions → choose
-  path → prepare → network (→ find and pair). Three hard-separated paths: **camera-AP** (the phone
+  startup flow (`ios/Runner/StartupDesign.swift`) drawn in the shared pair page's slots and
+  monitor tokens: choose path → (Wi-Fi paths only: the nearby or location permission) → prepare
+  → network (→ find and pair). Three hard-separated paths: **camera-AP** (the phone
   joins the camera's `NIKON_ZR_…` network via `WifiNetworkSpecifier` + `bindProcessToNetwork`,
   key entered once and remembered in a Keystore-encrypted store) and **phone-hotspot** (the
   CAMERA joins the phone's hotspot — the phone hosts, never scans or joins; NSD discovery waits
@@ -173,13 +174,10 @@ edge-to-edge runtime theme. Do not replace either raster with an Android-specifi
   physical fallback check covers the latter. Debug-frame metadata is visibly and semantically
   marked as a fixture, never as camera telemetry. Nikon-header calibration still requires a real
   camera pass.
-- **Liquid-glass chrome:** on API 33+ (**FULL**), monitor chrome uses
-  [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)
-  (`io.github.kyant0:backdrop`) 1:1 — `rememberLayerBackdrop` on the live feed,
-  `drawBackdrop { vibrancy(); blur(); lens() }` on chrome. On older APIs chrome is
-  **FLAT**: a more opaque solid fill (same policy as pre–iOS 26). Auto frame-budget
-  demote is off by default (live-view pacing was collapsing FULL on mid-range
-  phones). Debug: `--es zc.glass.tier flat` (`full`/`flat`; lowers only).
+- **Chrome material:** every monitor panel uses the shared Core material (`monitorMaterial`), the
+  same as Pocket and Insta. On devices that sustain it (API 31+, 4 GB RAM, hardware rendering) the
+  material blurs a bounded sample of the presented picture, graded with the live look; elsewhere it
+  is the shared plain fill.
 - **Scopes:** waveform, RGB parade, histogram, vectorscope, and Traffic Lights render from one
   monitor-owned clean-frame sampler at 30 Hz (24 Hz above three active scopes), with the same
   thermal slowdown tiers as iOS. The shared core owns all axis/curve and Traffic

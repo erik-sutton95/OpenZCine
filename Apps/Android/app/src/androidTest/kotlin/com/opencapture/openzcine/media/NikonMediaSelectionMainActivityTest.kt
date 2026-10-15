@@ -28,8 +28,6 @@ import androidx.test.uiautomator.Until
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.MainActivity
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
@@ -40,6 +38,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONObject
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
+import com.opencapture.opencine.appkit.MonitorMediaSort
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -50,6 +50,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaLayout
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** Actual source-owned offline library; all content is SIMULATED metadata/stub bytes. */
 @RunWith(AndroidJUnit4::class)
@@ -95,9 +97,8 @@ class NikonMediaSelectionMainActivityTest {
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
         index.rememberCameraListing(bucket, clips)
         index.rememberCameraBucket(record.id, bucket, record.displayTitle)
-        index.saveViewOptions(MediaLibraryViewOptions(
-            source = MediaLibrarySource.CAMERA, layout = MonitorMediaLayout.LIST,
-            sortOrder = MediaLibrarySortOrder.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
+        index.mediaPreferences(bucket).saveViewOptions(MonitorMediaViewOptions(
+            layout = MonitorMediaLayout.LIST, sort = MonitorMediaSort.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
         ))
         clips.forEach { clip ->
             cache.openEntry(bucket, MediaCacheObjectIdentity(clip), clip.sizeBytes).apply {
@@ -606,7 +607,7 @@ class NikonMediaSelectionMainActivityTest {
         if (includeFavorites) receipt.put("persistedFavoriteIDs", JSONArray(
             MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context)).favoriteIDs(bucket).sorted()))
         receipt.put("storedViewOptions", MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
-            .viewOptions(MediaLibrarySource.CAMERA).toString())
+            .mediaPreferences(bucket).viewOptions().toString())
         directory.resolve("$name.json").writeText(receipt.toString(2))
         println("SIMULATED_SELECTION_DIAGNOSTIC=" + JSONObject()
             .put("name", name).put("rotation", device.displayRotation).put("elapsedMs", elapsed)

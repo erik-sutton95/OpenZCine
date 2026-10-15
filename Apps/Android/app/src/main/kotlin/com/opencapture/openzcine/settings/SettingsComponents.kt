@@ -13,12 +13,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.settings.MonitorSettingsColorDot
 import com.opencapture.openzcine.LiveDesign
-import com.opencapture.openzcine.glass
 import com.opencapture.openzcine.R
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.res.stringResource
 import com.opencapture.monitorui.MonitorIcon
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 @Composable
 internal fun Modifier.settingsClickable(role: Role, onClick: () -> Unit): Modifier =
@@ -57,7 +58,7 @@ public object SettingsPalette {
 public fun PanelCloseButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val close = stringResource(R.string.action_close)
     Box(
-        modifier.size(37.dp).glass(CircleShape).settingsClickable(role = Role.Button, onClick = onClick)
+        modifier.size(37.dp).monitorMaterial(MonitorMaterial.Compact, CircleShape).settingsClickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = close },
         contentAlignment = Alignment.Center,
     ) {
