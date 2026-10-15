@@ -107,7 +107,11 @@ struct ShellAdoptionTests {
             model.activePanel = panel
             let cover = model.shell.cover
             let coverWritten = CoverWrite()
-            withObservationTracking { _ = model.shell.cover } onChange: { coverWritten.seen = true }
+            withObservationTracking {
+                _ = model.shell.cover
+            } onChange: {
+                coverWritten.seen = true
+            }
             let token = model.internetHop.begin(model.hopRoute(rehostActivePanel: true))
             #expect(token != nil)
             for _ in 0..<500 where model.shell.monitor != nil { await Task.yield() }

@@ -4,9 +4,9 @@ import MonitorPresentation
 import MonitorUI
 import Network
 import Observation
+import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
-import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCameraVocabulary
 import OpenCineCore
@@ -16,6 +16,7 @@ import SwiftUI
 import Testing
 import UIKit
 import XCTest
+import ZIPFoundation
 
 @testable import OpenZCineCore
 @testable import Runner
@@ -391,21 +392,37 @@ final class RunnerTests: XCTestCase {
                 session: NikonPictureLifetimeSession()))
         let delivery = MonitorDeliveryCoordinator()
         let host = UIHostingController(
-            rootView: GeometryReader { proxy in
-                NikonMonitorShell(
-                    context: LiveViewLayoutContext(
-                        proxy: proxy, deviceOrientation: .unknown, screenWidth: nil)
-                )
+            rootView: MonitorExperience()
                 .environment(model).environment(delivery).environment(\.scenePhase, .active)
-            })
+                .observeMonitorWindowGeometry())
+        host.safeAreaRegions = []
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
                 .first { $0.activationState == .foregroundActive })
         let previousKey = scene.windows.first { $0.isKeyWindow }
+        let previousOrientation: UIInterfaceOrientationMask =
+            switch scene.interfaceOrientation {
+            case .landscapeLeft: .landscapeLeft
+            case .landscapeRight: .landscapeRight
+            case .portraitUpsideDown: .portraitUpsideDown
+            default: .portrait
+            }
+        defer { scene.requestGeometryUpdate(.iOS(interfaceOrientations: previousOrientation)) }
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.frame = scene.coordinateSpace.bounds
         window.rootViewController = host
         window.makeKeyAndVisible()
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+        let landscape = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                MainActor.assumeIsolated {
+                    scene.interfaceOrientation.isLandscape
+                        && scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
+                }
+            }, object: nil)
+        let landscapeResult = await XCTWaiter.fulfillment(of: [landscape], timeout: 5)
+        XCTAssertEqual(landscapeResult, .completed)
+        window.frame = scene.coordinateSpace.bounds
         host.view.frame = window.bounds
         defer {
             window.isHidden = true
@@ -488,6 +505,34 @@ final class RunnerTests: XCTestCase {
         }
         try await openRenderedLUTOptions()
         let colored = try await settledImage()
+        let inspectorElements = HostedAccessibility.elements(in: host.view)
+        let comparisonFrames = Set(
+            inspectorElements.filter {
+                $0.accessibilityLabel == "50 / 50 split"
+                    && $0.accessibilityTraits.contains(.button)
+            }.map { NSCoder.string(for: $0.accessibilityFrame) })
+        XCTAssertEqual(comparisonFrames.count, 1, "The actual inspector owns one comparison")
+        XCTAssertFalse(
+            inspectorElements.contains {
+                $0.accessibilityLabel == "Exposure" && $0.accessibilityTraits.contains(.adjustable)
+            }, "The actual Nikon inspector must hide unsupported LUT exposure")
+        // Capture the settled drawer rather than its intentionally clipped reveal frame.
+        let revealed = expectation(description: "Actual inspector drawer reveal completed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + MonitorMotion.drawerDuration + 0.1) {
+            revealed.fulfill()
+        }
+        let revealResult = await XCTWaiter.fulfillment(of: [revealed], timeout: 2)
+        XCTAssertEqual(revealResult, .completed)
+        host.view.layoutIfNeeded()
+        let close = try await mountedElement("monitor.assist.close")
+        XCTAssertTrue(window.convert(window.bounds, to: nil).contains(close.accessibilityFrame))
+        let inspectorScreenshot = UIGraphicsImageRenderer(size: window.bounds.size).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let inspectorAttachment = XCTAttachment(image: inspectorScreenshot)
+        inspectorAttachment.name = "SIMULATED-actual-Nikon-shared-LUT-inspector-landscape"
+        inspectorAttachment.lifetime = .keepAlways
+        add(inspectorAttachment)
         XCTAssertLessThanOrEqual(max(colored.width, colored.height), 320)
         XCTAssertGreaterThan(Int(center(colored)[1]), Int(center(colored)[0]) + 20)
         XCTAssertFalse(model.assist.isOn(.lut), "Previewing a tool must not enable its live switch")
@@ -857,53 +902,6 @@ final class RunnerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
-    func testLUTFileStoreImportRejectsUnusableCubeBeforeCopy() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let source = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString)-bad.cube")
-        try Data("LUT_3D_SIZE 66\n0 0 0\n".utf8).write(to: source)
-        defer { try? FileManager.default.removeItem(at: source) }
-        let store = LUTFileStore(root: root)
-
-        XCTAssertThrowsError(try store.importFile(from: source, into: .custom))
-        XCTAssertTrue(store.list(.custom).isEmpty)
-    }
-
-    func testLUTFileStoreImportAcceptsValidCube() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let source = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString)-Clean Whites.cube")
-        try Data(
-            """
-            TITLE "Generated by Resolve"
-            LUT_3D_SIZE 2
-            0.03 0.04 0.05
-            1 0 0
-            0 1 0
-            1 1 0
-            0 0 1
-            1 0 1
-            0 1 1
-            1 1 1
-            """.utf8
-        ).write(to: source)
-        defer { try? FileManager.default.removeItem(at: source) }
-        let store = LUTFileStore(root: root)
-
-        let stored = try store.importFile(from: source, into: .custom)
-        let cube = try XCTUnwrap(store.cube(category: .custom, fileName: stored.fileName))
-
-        XCTAssertEqual(stored.fileName, source.lastPathComponent)
-        XCTAssertEqual(cube.size, 2)
-        XCTAssertEqual(Array(cube.rgb.prefix(3)), [0.03, 0.04, 0.05])
-    }
-
     @MainActor
     func testImportCustomLUTSelectsAndEnablesTheLook() throws {
         let root = FileManager.default.temporaryDirectory
@@ -926,7 +924,7 @@ final class RunnerTests: XCTestCase {
             """.utf8
         ).write(to: source)
         defer { try? FileManager.default.removeItem(at: source) }
-        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        let model = NativeAppModel(lutFileStore: CustomLUTStore(root: root))
 
         try model.importCustomLUT(from: source)
 
@@ -937,40 +935,22 @@ final class RunnerTests: XCTestCase {
         XCTAssertNotNil(model.currentLUTCube())
     }
 
-    func testLUTFileStoreDeletesStoredLUTAndRejectsBuiltInDeletion() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let custom = root.appendingPathComponent("custom", isDirectory: true)
-        try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+    func testGeneratedLookCategoryRemainsReadOnlyInSharedStoreComposition() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let lut = StoredCustomLUT(fileName: "Operator Look.cube")
-        let lutURL = custom.appendingPathComponent(lut.fileName)
-        try Data("stored".utf8).write(to: lutURL)
-        let store = LUTFileStore(root: root)
-
-        try store.remove(lut, from: .custom)
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: lutURL.path))
-        XCTAssertThrowsError(try store.remove(lut, from: .builtIn)) { error in
-            XCTAssertEqual(error as? LUTDeletionError, .builtInProtected)
-        }
-    }
-
-    func testLUTFileStoreRejectsTraversalDeletionAndPreservesOutsideFile() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let outsideURL = root.appendingPathComponent("outside.cube")
-        try Data("keep".utf8).write(to: outsideURL)
-        let store = LUTFileStore(root: root)
-
+        let store = CustomLUTStore(root: root)
+        let generated = StoredCustomLUT(fileName: "generated.cube")
+        XCTAssertThrowsError(try store.remove(generated, from: .builtIn))
         XCTAssertThrowsError(
-            try store.remove(StoredCustomLUT(fileName: "../outside.cube"), from: .custom)
-        ) { error in
-            XCTAssertEqual(error as? LUTDeletionError, .invalidFileName)
-        }
-        XCTAssertEqual(try Data(contentsOf: outsideURL), Data("keep".utf8))
+            try store.importFile(
+                from: root.appendingPathComponent("input.cube"),
+                into: .builtIn))
+        XCTAssertThrowsError(
+            try store.importZip(
+                at: root.appendingPathComponent("input.zip"),
+                into: .builtIn))
+        XCTAssertTrue(store.list(.builtIn).isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
 
     func testLUTCubeCacheInvalidationRebuildsSameNamedStoredLook() throws {
@@ -1001,7 +981,7 @@ final class RunnerTests: XCTestCase {
         for fileName in ["A.cube", "B.cube"] {
             try Data(fileName.utf8).write(to: custom.appendingPathComponent(fileName))
         }
-        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        let model = NativeAppModel(lutFileStore: CustomLUTStore(root: root))
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
@@ -1030,7 +1010,7 @@ final class RunnerTests: XCTestCase {
         for fileName in ["A.cube", "B.cube"] {
             try Data(fileName.utf8).write(to: custom.appendingPathComponent(fileName))
         }
-        let model = NativeAppModel(lutFileStore: LUTFileStore(root: root))
+        let model = NativeAppModel(lutFileStore: CustomLUTStore(root: root))
         model.refreshCustomLUTs()
         model.assistConfiguration.selectedLUT = .stored(category: .custom, fileName: "B.cube")
 
@@ -1320,7 +1300,7 @@ final class RunnerTests: XCTestCase {
             ).setFill()
             context.cgContext.fill(CGRect(origin: .zero, size: CGSize(width: 8, height: 4)))
         }
-        let renderer = LiveFrameRenderer(fileStore: LUTFileStore())
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore())
 
         var lutEffects = LiveImageEffects()
         lutEffects.lut = .builtIn(.log3G10Rec709)
@@ -1562,7 +1542,7 @@ final class RunnerTests: XCTestCase {
 
     @MainActor
     func testDemoRendererMapsBothCurvesToSharedStopZones() async {
-        let renderer = LiveFrameRenderer(fileStore: LUTFileStore())
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore())
         for curve in ExposureToneCurve.allCases {
             let encoded = curve.encode(linearLight: 0.18 * 2)
             let source = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 4)).image {
@@ -1715,7 +1695,7 @@ final class RunnerTests: XCTestCase {
         }
         var effects = LiveImageEffects()
         effects.lut = .builtIn(.log3G10Rec709)
-        let renderer = LiveFrameRenderer(fileStore: LUTFileStore())
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore())
 
         let rawJPEG = await WatchRelay.thumbnailJPEG(
             from: source, maxWidth: 416, quality: 0.32)
@@ -3907,6 +3887,209 @@ extension RunnerTests {
 /// SIMULATED native compatibility and rendering through the public picker/preview interfaces.
 @MainActor
 final class SharedLUTPickerCompatibilityTests: XCTestCase {
+    private var validArchiveCube: Data {
+        Data("LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n".utf8)
+    }
+
+    func testSeparateWatchRendererReadsModelReimportAndDeletion() async throws {
+        // SIMULATED source uses the actual Watch renderer and operator import/delete actions.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent(UUID().uuidString + ".cube")
+        let library = root.appendingPathComponent("luts")
+        let model = NativeAppModel(lutFileStore: CustomLUTStore(root: library))
+        let savedPreferences = model.preferences
+        let savedConfiguration = model.assistConfiguration
+        let savedTools = model.assist.liveTools
+        defer {
+            model.preferences = savedPreferences
+            model.assistConfiguration = savedConfiguration
+            for tool in MonitorAssistTool.activeCases {
+                model.assist.set(tool, visible: savedTools.contains(tool), context: .liveView)
+            }
+        }
+        func writeConstantCube(_ value: String) throws {
+            let text =
+                "LUT_3D_SIZE 2\n" + String(repeating: "\(value) \(value) \(value)\n", count: 8)
+            try Data(text.utf8).write(to: source)
+        }
+        func pixel(_ image: CGImage) -> [UInt8] {
+            var rgba = [UInt8](repeating: 0, count: 4)
+            rgba.withUnsafeMutableBytes {
+                let context = CGContext(
+                    data: $0.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                    bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                context?.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            }
+            return rgba
+        }
+        try writeConstantCube("0")
+        try model.importCustomLUT(from: source)
+        let selection = model.assistConfiguration.selectedLUT
+        let effects = LiveImageEffects(lut: selection)
+        let renderer = LiveFrameRenderer(fileStore: CustomLUTStore(root: library))
+        func nextFrame() -> UIImage {
+            UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image {
+                UIColor.red.setFill()
+                $0.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+        }
+        func watchPixel() async throws -> [UInt8] {
+            let encoded = await WatchRelay.thumbnailJPEG(
+                from: nextFrame(), applying: effects, renderer: renderer, maxWidth: 8, quality: 1)
+            let bytes = try XCTUnwrap(encoded)
+            return pixel(try XCTUnwrap(UIImage(data: bytes)?.cgImage))
+        }
+        let first = try await watchPixel()
+        XCTAssertLessThan(first[0], 10)
+        try writeConstantCube("1")
+        try model.importCustomLUT(from: source)
+        let second = try await watchPixel()
+        XCTAssertGreaterThan(second[0], 240)
+        XCTAssertGreaterThan(second[1], 240)
+        let stored = try XCTUnwrap(model.lutFileStore.list(.custom).first)
+        try model.deleteStoredLUT(stored, from: .custom)
+        let ungraded = try await watchPixel()
+        XCTAssertGreaterThan(ungraded[0], 240)
+        XCTAssertLessThan(ungraded[1], 10)
+        let deleted = await renderer.renderInspectorFrame(nextFrame(), effects: effects)
+        XCTAssertNil(
+            deleted, "A separate Watch store must not repopulate the invalidated cube cache")
+    }
+
+    private func assertRejectedZipPreservesExistingCube(
+        payload: Data, expectedError: CustomLUTArchiveError? = nil,
+        changeArchive: ((inout Data) throws -> Void)? = nil
+    ) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("same.cube")
+        try validArchiveCube.write(to: source)
+        let store = CustomLUTStore(root: root.appendingPathComponent("luts"))
+        try store.importFile(from: source, into: .red)
+        let destination = store.root.appendingPathComponent("red/same.cube")
+        let zip = root.appendingPathComponent("bad.zip")
+        do {
+            let archive = try Archive(url: zip, accessMode: .create)
+            try archive.addEntry(
+                with: "nested/same.cube", type: .file,
+                uncompressedSize: Int64(payload.count), compressionMethod: .deflate
+            ) { position, size in
+                payload.subdata(in: Int(position)..<min(payload.count, Int(position) + size))
+            }
+        }
+        if let changeArchive {
+            var bytes = try Data(contentsOf: zip)
+            try changeArchive(&bytes)
+            try bytes.write(to: zip)
+        }
+        XCTAssertThrowsError(try store.importZip(at: zip, into: .red)) { error in
+            if let expectedError { XCTAssertEqual(error as? CustomLUTArchiveError, expectedError) }
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), validArchiveCube)
+        XCTAssertEqual(store.cube(category: .red, fileName: "same.cube")?.size, 2)
+    }
+
+    private func zeroZipField(_ bytes: inout Data, signature: [UInt8], offset: Int) throws {
+        let header = try XCTUnwrap(bytes.range(of: Data(signature)))
+        bytes.replaceSubrange(
+            (header.lowerBound + offset)..<(header.lowerBound + offset + 4),
+            with: [0, 0, 0, 0])
+    }
+
+    func testZipAdapterRejectsMalformedCubeAndPreservesPreviouslyUsableDestination() throws {
+        try assertRejectedZipPreservesExistingCube(payload: Data("LUT_3D_SIZE 2\n0 0 0\n".utf8))
+    }
+
+    func testZipAdapterChecksCRCBeforeReplacingUsableDestination() throws {
+        try assertRejectedZipPreservesExistingCube(payload: validArchiveCube) { bytes in
+            try self.zeroZipField(&bytes, signature: [0x50, 0x4b, 0x03, 0x04], offset: 14)
+            try self.zeroZipField(&bytes, signature: [0x50, 0x4b, 0x01, 0x02], offset: 16)
+        }
+    }
+
+    func testZipAdapterBoundsActualDeflatedOutputDespiteZeroSizeHeaders() throws {
+        var payload = validArchiveCube
+        payload.append(Data(repeating: 32, count: CubeLUT.maximumImportBytes))
+        try assertRejectedZipPreservesExistingCube(payload: payload, expectedError: .limitExceeded)
+        { bytes in
+            try self.zeroZipField(&bytes, signature: [0x50, 0x4b, 0x03, 0x04], offset: 22)
+            try self.zeroZipField(&bytes, signature: [0x50, 0x4b, 0x01, 0x02], offset: 24)
+        }
+    }
+
+    func testSettingsLookSheetHasExactlyOneComparisonAndNoUnsupportedExposure() async throws {
+        let model = NativeAppModel()
+        let previousSplit = model.assist.splitComparison
+        model.assist.splitComparison = false
+        defer { model.assist.splitComparison = previousSplit }
+        let hosted = try Hosted(NikonLUTPicker(embedded: false).environment(model))
+        defer { hosted.close() }
+        for size in [CGSize(width: 874, height: 402), CGSize(width: 420, height: 900)] {
+            hosted.window.frame.size = size
+            hosted.host.view.frame.size = size
+            var comparisonFrames = Set<String>()
+            for _ in 0..<100 {
+                hosted.host.view.layoutIfNeeded()
+                comparisonFrames = Set(
+                    HostedAccessibility.elements(in: hosted.host.view)
+                        .filter {
+                            $0.accessibilityLabel == "50 / 50 split"
+                                && $0.accessibilityTraits.contains(.button)
+                        }
+                        .map { NSCoder.string(for: $0.accessibilityFrame) })
+                if !comparisonFrames.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertEqual(
+                comparisonFrames.count, 1,
+                "A sheet has one shared comparison; an embedded picker has none")
+            XCTAssertFalse(hosted.labels.contains("Exposure"))
+            if size.width > size.height {
+                let comparison = try XCTUnwrap(
+                    HostedAccessibility.elements(in: hosted.host.view).first {
+                        $0.accessibilityLabel == "50 / 50 split"
+                            && $0.accessibilityTraits.contains(.button)
+                    })
+                XCTAssertTrue(comparison.accessibilityActivate())
+                XCTAssertTrue(model.assist.splitComparison)
+                hosted.host.view.layoutIfNeeded()
+            }
+            let image = UIGraphicsImageRenderer(size: size).image { _ in
+                hosted.window.drawHierarchy(in: hosted.window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "SIMULATED-Z-shared-look-sheet-\(Int(size.width))x\(Int(size.height))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    func testProductionPickerDelegatesComparisonToInspectorAndDeclaresExposureUnavailable()
+        async throws
+    {
+        let model = NativeAppModel()
+        model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
+        let hosted = try Hosted(NikonLUTPicker().environment(model))
+        defer { hosted.close() }
+        for _ in 0..<100 {
+            hosted.host.view.layoutIfNeeded()
+            if hosted.labels.contains("Built-in") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(hosted.labels.contains("Built-in"), hosted.labels.joined(separator: ", "))
+        XCTAssertEqual(
+            hosted.labels.filter { $0 == "50 / 50 split" }.count, 0,
+            "The actual embedded picker must leave its single comparison to the shared inspector footer"
+        )
+        XCTAssertFalse(
+            model.assist.looks.appliesLUTExposure,
+            "Nikon rendering does not consume lutExposureStops, so the provider must hide Exposure")
+    }
+
     func testTheOriginalGenericPickerStillRendersItsSuppliedFooter() async throws {
         let name = "lut-picker-compatibility." + UUID().uuidString
         let storage = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -3948,57 +4131,30 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
 
     /// The shared inspector preview consumes the actual audio source and draws its signal.
     func testTheSharedInspectorAudioPreviewConsumesItsSourceAndDrawsItsSignal() async throws {
-        let name = "look-preview-compatibility." + UUID().uuidString
-        let storage = try XCTUnwrap(UserDefaults(suiteName: name))
-        defer { storage.removePersistentDomain(forName: name) }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        let preferences = LUTPreferences(storage: storage, namespace: name)
-        let looks = MonitorLUTLooks(
-            official: OfficialLUTs(catalog: { _ in [.officialAuto] }, cube: { _ in nil }),
-            preferences: preferences,
-            customLUTs: CustomLUTStore(root: root, preferences: preferences))
-        let assist = MonitorAssistState(
-            looks: looks, storage: storage,
-            keys: .init(assist: "assist", cleanPins: "pins", playback: "playback"),
-            cleanPinCases: [])
-        let samples = LiveFrameSampleBus()
-        let renderer = MonitorInspectorImageRenderer(lookCurves: [:])
-        var audioReads = 0
-        let preview = MonitorOperatorInspectorPreview(
-            tool: .audioMeters, assist: assist,
-            stores: AssistPanelStores(storage: storage, namespace: name),
-            haptics: OperatorHaptics(isEnabled: { false }),
-            source: MonitorInspectorImageSource(renderer: renderer, samples: samples),
-            readCustomName: { nil },
-            prepareEffects: { frame in
-                assist.inspectorImageEffects(
-                    tool: .audioMeters, transfer: frame.transfer,
-                    clipByte: frame.exposureCeiling.clipByte(transfer: frame.transfer))
-            }, readBundle: { .empty },
-            readAudio: {
-                audioReads += 1
-                return MonitorAudioMeterLevels(
-                    left: .init(levelDB: -18, peakDB: -12), right: .init(levelDB: -12, peakDB: -6))
-            })
+        let model = NativeAppModel()
+        model.observedLiveAudioLevels = MonitorAudioMeterLevels(
+            left: .init(levelDB: -18, peakDB: -12), right: .init(levelDB: -12, peakDB: -6))
+        let preview = NikonAssistInspectorPreview(tool: .audioMeters).environment(model)
         let hosted = try Hosted(preview.frame(width: 300))
         defer { hosted.close() }
         for _ in 0..<100 {
             hosted.host.view.layoutIfNeeded()
-            if audioReads > 0 { break }
+            if hosted.labels.contains("Audio Meters preview") { break }
             try await Task.sleep(for: .milliseconds(20))
         }
-        XCTAssertGreaterThan(audioReads, 0, "The generic preview must use the actual audio source")
         let image = UIGraphicsImageRenderer(bounds: hosted.window.bounds).image { _ in
             hosted.window.drawHierarchy(in: hosted.window.bounds, afterScreenUpdates: true)
         }
         let attachment = XCTAttachment(image: image)
-        attachment.name = "SIMULATED-independent-look-audio-preview"
+        attachment.name = "SIMULATED-actual-Nikon-shared-audio-preview"
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertGreaterThan(
-            try greenPixels(image), 20, "The native shared meter must actually draw its signal")
+            try greenPixels(image), 20,
+            "The actual Nikon adapter must compose the shared meter and draw its observed signal")
     }
 
+    /// Retained only for published comparison call forms, never Nikon production rendering proof.
     private final class IndependentLooks: MonitorLookProvider {
         var selection = 7
         var cube: CubeLUT? { nil }

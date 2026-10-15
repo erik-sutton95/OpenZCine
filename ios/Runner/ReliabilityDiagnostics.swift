@@ -57,7 +57,8 @@ enum ReliabilityDiagnostics {
         static let verification = ReliabilityReportingVerification(
             sentry: reporting, isActive: { UIApplication.shared.applicationState == .active })
     #endif
-    static let incidents = FeedIncidentRuntime(reporting: reporting,
+    static let incidents = FeedIncidentRuntime(
+        reporting: reporting,
         directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("OpenZCine/Diagnostics/incidents", isDirectory: true))
     @MainActor static let problemReporting = ProblemReporting(

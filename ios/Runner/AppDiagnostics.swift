@@ -457,7 +457,8 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
     @MainActor
     func manualReport() -> String {
         let report = store.manualReport(metadata: .current)
-        let incidents = ReliabilityDiagnostics.incidents.reportExtras()
+        let incidents =
+            ReliabilityDiagnostics.incidents.reportExtras()
             .first { $0.name == "incidents.txt" }?.body ?? ""
         return incidents.isEmpty ? report : report + "\n" + incidents
     }

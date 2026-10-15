@@ -8,6 +8,8 @@ import UIKit
 import VideoToolbox
 import os
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 // MetalFX is a device-only framework — there is no `MetalFX.framework` in the iOS Simulator SDK,
 // so an unconditional import breaks `just ios-build` and `just ios-test`. Every use below is behind
 // the same check, with a `false`-returning stub for the simulator that routes to Lanczos.
@@ -81,7 +83,7 @@ extension Notification.Name {
 struct MetalLiveView: UIViewRepresentable {
     let image: UIImage
     let effects: LiveImageEffects
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
     var source: LiveFrameSampleBus.Source? = nil
     var qualification: (@MainActor () -> MonitorNativeQualificationSnapshot?)? = nil
 
@@ -161,7 +163,7 @@ struct MetalLiveView: UIViewRepresentable {
             return value
         }
 
-        init(fileStore: LUTFileStore) {
+        init(fileStore: CustomLUTStore) {
             device = MTLCreateSystemDefaultDevice()!
             baker = MetalFeedFrameBaker(device: device, fileStore: fileStore)
             presenter = MonitorMetalPicturePresenter(

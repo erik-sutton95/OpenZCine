@@ -3,6 +3,8 @@ import OpenCineMedia
 import OpenZCineCore
 import os
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Media library diagnostics (Media page cache). Filter Console for subsystem `OpenZCine`, category
 /// `media-store`.
 let mediaLibraryLogger = Logger(subsystem: "OpenZCine", category: "media-store")
@@ -251,7 +253,7 @@ enum MediaClipStorePathError: LocalizedError, Equatable {
     }
 }
 
-/// On-disk cache for camera clips, mirroring `LUTFileStore`. Files live under
+/// On-disk cache for camera clips, mirroring `CustomLUTStore`. Files live under
 /// `Documents/media/{cameraID}/`; a sibling `index.json` holds metadata not derivable from the
 /// files (favorites, camera handles, upload/export status). Clip bytes are streamed to a
 /// `FileHandle` during download — never buffered whole.

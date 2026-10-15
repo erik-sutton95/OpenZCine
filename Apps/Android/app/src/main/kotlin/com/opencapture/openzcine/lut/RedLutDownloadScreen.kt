@@ -886,7 +886,7 @@ internal data class RedLutImportResult(
 /**
  * Imports a RED zip (or a lone .cube) into the RED stored-LUT category.
  *
- * Mirrors iOS `LUTFileStore.importZip`: walk every `.cube` entry (nested folders
+ * Mirrors shared iOS `CustomLUTStore.importArchive` policy: walk every `.cube` entry (nested folders
  * OK, skip `__MACOSX`), keep original basenames for display, and accept up to
  * 512 files / 16 MB each (shared parser limit).
  *

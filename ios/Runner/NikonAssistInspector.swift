@@ -8,6 +8,8 @@ import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// The approved palette defaults, with the between-shots PLAY and EV leading the photo toolset.
 let nikonAssistUsageSeed = MonitorToolUsage.fieldMonitorSeed.merging(["PLAY": 8, "EV": 7]) { $1 }
 
@@ -84,7 +86,7 @@ struct NikonAssistOptions: View {
                     }
                 }, onFinish: { model.assist.persist() })
         case .lut:
-            LUTPickerContent()
+            NikonLUTPicker()
         case .crosshair:
             Text("Tap the palette button to show or hide the centre crosshair.")
                 .font(.system(size: 13))
@@ -183,7 +185,7 @@ extension NativeAppModel {
     @ObservationIgnored private var publishedMeaning: NikonInspectorImageMeaning?
     private(set) var image: CGImage?
 
-    init(fileStore: LUTFileStore) { renderer = LiveFrameRenderer(fileStore: fileStore) }
+    init(fileStore: CustomLUTStore) { renderer = LiveFrameRenderer(fileStore: fileStore) }
 
     func image(matching meaning: NikonInspectorImageMeaning) -> CGImage? {
         let retained = image
@@ -241,114 +243,46 @@ extension NativeAppModel {
     }
 }
 
-/// Draw-only preview composed in the existing shared inspector slot. Scopes use the existing
-/// immutable sample bundle; image previews consume the accepted clean native raster.
+/// Nikon supplies its calibrated image source and observations; the shared view owns preview UI.
 struct NikonAssistInspectorPreview: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
-    @State private var availableWidth: CGFloat = 0
     let tool: MonitorAssistTool
 
     private var meaning: NikonInspectorImageMeaning? {
         scenePhase == .active ? model.nativeInspectorMeaning(tool: tool) : nil
     }
-    private var activity: NikonInspectorImageMeaning? {
-        MonitorInspectorPreviewPolicy.isImage(tool.selection) ? meaning : nil
+
+    private var picture: MonitorInspectorRenderedPictureSource {
+        let identity = meaning.flatMap { meaning in
+            model.nativeInspectorFrame.map {
+                MonitorInspectorRenderedPictureSource.Identity(
+                    source: ObjectIdentifier($0.source),
+                    presentation: meaning.presentation)
+            }
+        }
+        return .init(
+            identity: identity,
+            read: {
+                guard let meaning, let image = model.nativeInspectorPreview.image(matching: meaning)
+                else { return nil }
+                return MonitorInspectorRenderedPicture(
+                    image: image,
+                    aspectMultiplier: meaning.desqueezeHorizontal
+                        ? meaning.desqueeze : 1 / meaning.desqueeze,
+                    mirrorHorizontal: meaning.mirrored, mirrorVertical: meaning.flipped)
+            }, run: { await model.nativeInspectorPreview.run(model: model, tool: tool) })
     }
 
     var body: some View {
-        preview
-            .frame(maxWidth: .infinity)
-            .frame(
-                height: CGFloat(
-                    MonitorInspectorPreviewPolicy.height(
-                        width: Double(availableWidth), tool: tool.selection))
-            )
-            .onGeometryChange(for: CGFloat.self) {
-                $0.size.width
-            } action: {
-                availableWidth = $0
-            }
-            .background(MonitorTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(MonitorTheme.border))
-            .allowsHitTesting(false)
-            .accessibilityElement(children: .ignore)
-            .accessibilityAddTraits(.isImage)
-            .accessibilityLabel("\(tool.title) preview")
-            .accessibilityValue(previewAvailable ? "Picture" : "Waiting for picture")
-            .accessibilityIdentifier("monitor.inspector.preview")
-            .task(id: activity) {
-                guard activity != nil else { return }
-                await model.nativeInspectorPreview.run(model: model, tool: tool)
-            }
-            .onChange(of: meaning) { _, next in model.nativeInspectorPreview.synchronize(next) }
-    }
-
-    private var previewAvailable: Bool {
-        guard let meaning else { return false }
-        if MonitorInspectorPreviewPolicy.isImage(tool.selection) {
-            return model.nativeInspectorPreview.image(matching: meaning) != nil
-        }
-        return model.scopeAssist != .empty
-    }
-
-    @ViewBuilder private var preview: some View {
-        if MonitorInspectorPreviewPolicy.isImage(tool.selection) {
-            if let meaning, let image = model.nativeInspectorPreview.image(matching: meaning) {
-                Image(decorative: image, scale: 1).resizable()
-                    .aspectRatio(
-                        CGFloat(image.width) / CGFloat(max(1, image.height))
-                            * (meaning.desqueezeHorizontal
-                                ? CGFloat(meaning.desqueeze) : 1 / CGFloat(meaning.desqueeze)),
-                        contentMode: .fit
-                    )
-                    .scaleEffect(x: meaning.mirrored ? -1 : 1, y: meaning.flipped ? -1 : 1)
-                    .overlay {
-                        GeometryReader { proxy in
-                            let aspect = CGFloat(image.width) / CGFloat(max(1, image.height))
-                            let width = min(proxy.size.width, proxy.size.height * aspect)
-                            let height = width / aspect
-                            let frame = CGRect(
-                                x: (proxy.size.width - width) / 2,
-                                y: (proxy.size.height - height) / 2, width: width, height: height)
-                            switch tool {
-                            case .guides:
-                                GuidesAssist.overlay(
-                                    feed: frame, assist: model.assist,
-                                    fallback: model.assist.guideAspect)
-                            case .grid:
-                                GridAssist.overlay(
-                                    feed: frame, thirds: model.assist.gridThirds,
-                                    phi: model.assist.gridPhi, diagonal: model.assist.gridDiagonal)
-                            case .crosshair: CrosshairAssist.overlay(feed: frame)
-                            default: EmptyView()
-                            }
-                        }
-                    }
-            } else {
-                waiting
-            }
-        } else if [.waveform, .parade, .histogram, .vectorscope, .trafficLights].contains(tool),
-            meaning != nil, model.scopeAssist != .empty
-        {
-            MonitorScopeOverlay(
-                tool: tool.selection, assist: model.assist,
-                stores: model.scopePanels.operatorStores,
-                haptics: .init(isEnabled: { model.preferences.hapticsEnabled }),
-                readBundle: { model.scopeAssist },
-                fittedSize: CGSize(
-                    width: availableWidth,
-                    height: CGFloat(
-                        MonitorInspectorPreviewPolicy.height(
-                            width: Double(availableWidth), tool: tool.selection))),
-                paradeIntensityScale: 1)
-        } else {
-            waiting
-        }
-    }
-
-    private var waiting: some View {
-        Text("Waiting for picture").font(MonitorTheme.font(11)).foregroundStyle(MonitorTheme.muted)
+        MonitorLookInspectorPreview(
+            tool: tool.selection, assist: model.assist,
+            stores: model.scopePanels.operatorStores,
+            haptics: .init(isEnabled: { model.preferences.hapticsEnabled }),
+            picture: picture, readBundle: { model.scopeAssist },
+            readAudio: { model.observedLiveAudioLevels },
+            readAudioSensitivity: { model.cameraPropertySnapshot.audioSensitivity }
+        )
+        .onChange(of: meaning) { _, next in model.nativeInspectorPreview.synchronize(next) }
     }
 }

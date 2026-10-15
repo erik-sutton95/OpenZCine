@@ -15,7 +15,9 @@ import XCTest
 @MainActor final class NikonMediaDeliveryCanonicalClaimTests: XCTestCase {
     /// A SIMULATED hop that never leaves a network: only its token authority is used.
     private static func route() -> MonitorInternetHop<Int> {
-        .init(port: .init(onCameraNetwork: { false }, leave: { route, _ in route }, rejoin: { _, _ in }))
+        .init(
+            port: .init(
+                onCameraNetwork: { false }, leave: { route, _ in route }, rejoin: { _, _ in }))
     }
     func testPlannedProducerRetirementRequiresTheCapturedCurrentRouteForDelivery() throws {
         try fixture { store, clip, codec, bytes in

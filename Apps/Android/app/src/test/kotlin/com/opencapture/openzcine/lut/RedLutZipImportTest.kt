@@ -1,12 +1,14 @@
 package com.opencapture.openzcine.lut
 
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
@@ -130,6 +132,50 @@ class RedLutZipImportTest {
         assertEquals("Look.cube", sanitizeCubeFileName("/REC709/Look.cube"))
         assertEquals("Bad_name.cube", sanitizeCubeFileName("Bad name.cube"))
         assertEquals("lut.cube", sanitizeCubeFileName("///"))
+    }
+
+    @Test
+    fun `central directory bounds actual aggregate deflated output`() {
+        assertAggregateBound(localOnly = false)
+    }
+
+    @Test
+    fun `local headers bound actual aggregate stored output`() {
+        assertAggregateBound(localOnly = true)
+    }
+
+    private fun assertAggregateBound(localOnly: Boolean) {
+        val cube = MINIMAL_CUBE.toByteArray()
+        val zip = temp.newFile("aggregate-$localOnly.zip")
+        ZipOutputStream(zip.outputStream()).use { out ->
+            for (name in listOf("A.cube", "B.cube")) {
+                val entry = ZipEntry(name)
+                if (localOnly) {
+                    entry.method = ZipEntry.STORED
+                    entry.size = cube.size.toLong()
+                    entry.compressedSize = cube.size.toLong()
+                    entry.crc = CRC32().apply { update(cube) }.value
+                }
+                out.putNextEntry(entry)
+                out.write(cube)
+                out.closeEntry()
+            }
+        }
+        if (localOnly) {
+            val bytes = zip.readBytes()
+            val central = bytes.indices.first { i ->
+                i + 3 < bytes.size && bytes[i] == 0x50.toByte() &&
+                    bytes[i + 1] == 0x4b.toByte() && bytes[i + 2] == 0x01.toByte() &&
+                    bytes[i + 3] == 0x02.toByte()
+            }
+            zip.writeBytes(bytes.copyOf(central))
+        }
+        assertEquals(2, RedZipCubeExtractor.extractCubes(
+            zip, maxTotalBytes = cube.size.toLong() * 2,
+        ).size)
+        assertFailsWith<IOException> {
+            RedZipCubeExtractor.extractCubes(zip, maxTotalBytes = cube.size.toLong() * 2 - 1)
+        }
     }
 
     companion object {

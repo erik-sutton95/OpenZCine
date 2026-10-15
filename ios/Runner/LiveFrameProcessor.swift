@@ -5,6 +5,8 @@ import OpenZCineCore
 import UIKit
 import os
 
+import class OpenCineCameraVocabulary.CustomLUTStore
+
 /// Process-wide memo of generated/parsed LUT cubes, keyed by `LUTSelection.cacheKey` (or a
 /// false-colour scale key). The log-look cubes run ~10⁵ `pow`/`exp` calls to build, so generating
 /// each only once — and ideally off the main thread via `prewarmBuiltIns()` — keeps switching and
@@ -407,12 +409,12 @@ private let armedScopeLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialSt
 
 /// Source cube and calibration facts; shared native runtime owns the complete image graph and memo.
 final class LiveFrameProcessor {
-    private let fileStore: LUTFileStore
+    private let fileStore: CustomLUTStore
     private let native = MonitorUIImageGraphProcessor<LiveImageEffects>(
         beginReadback: { LiveViewSignposts.beginCreateCGImageReadback() },
         endReadback: { LiveViewSignposts.endCreateCGImageReadback() })
 
-    init(fileStore: LUTFileStore) { self.fileStore = fileStore }
+    init(fileStore: CustomLUTStore) { self.fileStore = fileStore }
 
     func render(_ image: UIImage, effects: LiveImageEffects) -> UIImage {
         native.render(image, settings: effects, identity: effects.isIdentity) {
