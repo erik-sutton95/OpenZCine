@@ -89,7 +89,6 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
-import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.appkit.MonitorPhotoRelease
 import com.opencapture.opencine.appkit.MonitorPhotoTimer
 import com.opencapture.opencine.appkit.MonitorNativeWrites
@@ -532,13 +531,8 @@ internal fun MonitorScreen(
     val quickCaptureOwner = remember(session) { NikonCaptureQuickOwner() }
     DisposableEffect(quickCaptureOwner) { onDispose { quickCaptureOwner.retire() } }
     LaunchedEffect(activeMonitorPickerKind, activeCommandControl?.control) {
-        val key = when {
-            activeMonitorPickerKind == MonitorPickerKind.ISO || activeCommandControl?.control == CameraControl.ISO -> SettingKey.ISO
-            activeMonitorPickerKind == MonitorPickerKind.WHITE_BALANCE || activeCommandControl?.control == CameraControl.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
-            activeMonitorPickerKind == MonitorPickerKind.SHUTTER || activeCommandControl?.control == CameraControl.SHUTTER -> SettingKey.SHUTTER
-            activeMonitorPickerKind == MonitorPickerKind.IRIS || activeCommandControl?.control == CameraControl.IRIS -> SettingKey.APERTURE
-            else -> null
-        }
+        val key = activeMonitorPickerKind?.commonSettingKey
+            ?: activeCommandControl?.control?.commonPickerKind?.commonSettingKey
         commonEditor = key?.let(commonControl::edit)
     }
     // The other side's panels/popups make no sense after a photo ↔ movie flip —
@@ -1829,26 +1823,11 @@ internal fun MonitorScreen(
             commandControlFeedback = null
         }
         val nativeSettings = if (isPhotographyMode) photographySettings else captureSettings
-        fun fieldFor(kind: MonitorPickerKind): MonitorCaptureField? {
-            if (isPhotographyMode) return null
-            val key = when (kind) {
-                MonitorPickerKind.ISO -> SettingKey.ISO
-                MonitorPickerKind.SHUTTER -> SettingKey.SHUTTER
-                MonitorPickerKind.IRIS -> SettingKey.APERTURE
-                MonitorPickerKind.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
-                else -> return null
-            }
-            return commonControl.captureField(key)
-        }
+        fun fieldFor(kind: MonitorPickerKind): MonitorCaptureField? =
+            if (isPhotographyMode) null else kind.commonSettingKey?.let(commonControl::captureField)
         val readouts: List<MonitorOperatorLiveReadout<String, MonitorDisplaySection>> = nativeSettings.map { setting ->
             val field = fieldFor(setting.kind)
-            val key = when (setting.kind) {
-                MonitorPickerKind.ISO -> SettingKey.ISO
-                MonitorPickerKind.SHUTTER -> SettingKey.SHUTTER
-                MonitorPickerKind.IRIS -> SettingKey.APERTURE
-                MonitorPickerKind.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
-                else -> null
-            }
+            val key = setting.kind.commonSettingKey
             val value = if (!isPhotographyMode && !isDemoSession && relayedState == null && key != null)
                 commonControl.captureValue(key, com.opencapture.opencine.appkit.MonitorCaptureSelection.PENDING)
                     ?.let(MonitorCapturePresentation::label) ?: "--" else setting.value
