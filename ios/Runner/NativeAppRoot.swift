@@ -1053,9 +1053,6 @@ final class NativeAppModel {
     /// moving it; the camera remains the source of truth, this just suppresses our ChangeAfArea
     /// sends. Session-only.
     var focusPointLocked = false
-    /// Whether the live view is punched in. Transient by design: a session that restored itself
-    /// already magnified would read as a broken feed.
-    var magnificationActive = DemoHarness.magnificationActive
     /// Where the monitor's picture comes from.
     ///
     /// Deliberately independent of the control link: a camera reached over Wi-Fi keeps every
@@ -12401,12 +12398,6 @@ final class NativeAppModel {
         guard !interfaceLocked else { return }
         assist.set(tool, visible: visible, context: context)
         if context == .liveView { preferences.recordScopeActivation(tool, on: visible) }
-        // Switching the tool off cannot leave the feed punched in: the button goes with the tool,
-        // so an armed transform would have no visible control explaining it. This is the only
-        // place the tool can be turned off.
-        if tool == .magnification, !visible {
-            magnificationActive = false
-        }
         if tool == .instantReview, visible {
             // Arm the post-capture diff with the card's current handles right away.
             seedInstantReviewBaseline()
@@ -13406,32 +13397,6 @@ struct PickerMode: Equatable, Sendable {
     var options: [String] = []
     /// The value to centre on when this mode is selected (e.g. the native base ISO for that circuit).
     var base: String = ""
-}
-
-extension MonitorAssistTool {
-    var title: String {
-        switch self {
-        case .lut: "LUT"
-        case .peaking: "Peaking"
-        case .falseColor: "False Color"
-        case .zebra: "Zebra"
-        case .waveform: "Waveform"
-        case .parade: "RGB Parade"
-        case .histogram: "Histogram"
-        case .vectorscope: "Vectorscope"
-        case .trafficLights: "Traffic Lights"
-        case .audioMeters: "Audio Levels"
-        case .guides: "Guides"
-        case .grid: "Grid"
-        case .crosshair: "Crosshair"
-        case .level: "Horizon"
-        case .evMeter: "EV Meter"
-        case .desqueeze: "Desqueeze"
-        case .mirror: "Mirror"
-        case .magnification: "Magnify"
-        case .instantReview: "Instant Playback"
-        }
-    }
 }
 
 /// The root's live tree: the multicam stage, or the shell with its monitor, pages and covers.

@@ -44,6 +44,14 @@ extension MonitorFalseColorSelection {
     }
 }
 
+extension MonitorAssistCapabilities {
+    /// What a Nikon body adds to the shared list: PLAY and the body's EV needle are stills tools,
+    /// the level draws as a horizon or a gauge, and there is no ND source.
+    static let nikon = MonitorAssistCapabilities(
+        photographyOnly: [.instantReview, .evMeter], levelStyles: [.horizon, .gauge],
+        unavailable: [.ndMeter])
+}
+
 extension MonitorAssistTool {
     /// The shared selection with the same saved name. Every Nikon raw value is a shared one.
     var selection: MonitorAssistSelection { MonitorAssistSelection(rawValue: rawValue)! }

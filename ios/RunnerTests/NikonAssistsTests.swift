@@ -342,6 +342,24 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertTrue(model.renderedLiveAssistTools.contains(.waveform))
     }
 
+    /// Nikon's own assist entries are typed declarations on the shared list (EV and PLAY for
+    /// stills, two level styles, no ND), and its level style is the shared one.
+    func testNikonDeclaresItsOwnAssistsOnTheSharedList() {
+        let nikon = MonitorAssistCapabilities.nikon
+        XCTAssertEqual(nikon.photographyOnly, [.instantReview, .evMeter])
+        XCTAssertEqual(nikon.levelStyles, [.horizon, .gauge])
+        XCTAssertTrue(nikon.unavailable.contains(.ndMeter))
+        XCTAssertTrue(AssistConfiguration.Level.Style.self == MonitorLevelStyle.self)
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        XCTAssertFalse(model.isPhotographyMode)
+        XCTAssertFalse(model.liveAssistPaletteTools.contains(.evMeter))
+        XCTAssertFalse(model.liveAssistPaletteTools.contains(.instantReview))
+        XCTAssertTrue(model.liveAssistPaletteTools.contains(.level))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.liveAssistPaletteTools.contains(.evMeter))
+        XCTAssertTrue(model.liveAssistPaletteTools.contains(.instantReview))
+    }
+
     func testPlaybackOffersNoCameraFedTool() {
         let tools = NativeAppModel(assist: .restore(storage: defaults)).playbackAssistPaletteTools
         for tool in [MonitorAssistTool.level, .evMeter, .instantReview, .magnification] {

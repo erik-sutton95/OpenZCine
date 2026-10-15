@@ -1,4 +1,5 @@
 import Foundation
+import enum MonitorPresentation.MonitorLevelStyle
 import enum OpenCineMedia.ScopeDisplayScale
 
 /// Whether view-assist tool visibility applies to the live monitor or media playback.
@@ -61,42 +62,11 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         }
     }
 
-    /// Tools that only exist in the photography toolset — the cinema strip never offers them.
-    /// The EV meter mirrors the body's stills exposure indicator, so it is a photography tool.
-    public var isPhotographyOnly: Bool {
-        self == .instantReview || self == .evMeter
-    }
-
     /// Scope-type tools: rendered as panels (floating in landscape/portrait-fill, stacked in
     /// portrait-fit) and subject to the portrait-fit 2-scope display cap.
     public static let scopeTools: [MonitorAssistTool] = [
         .waveform, .parade, .histogram, .vectorscope, .trafficLights,
     ]
-
-    /// Operator-facing label for Display settings strips.
-    public var displaySettingsTitle: String {
-        switch self {
-        case .lut: "LUT"
-        case .peaking: "Peaking"
-        case .falseColor: "False Color"
-        case .zebra: "Zebra"
-        case .waveform: "Waveform"
-        case .parade: "Parade"
-        case .histogram: "Histogram"
-        case .vectorscope: "Vectorscope"
-        case .trafficLights: "Traffic Lights"
-        case .audioMeters: "Audio Levels"
-        case .guides: "Guides"
-        case .grid: "Grid"
-        case .crosshair: "Crosshair"
-        case .level: "Horizon"
-        case .evMeter: "EV Meter"
-        case .desqueeze: "Desqueeze"
-        case .mirror: "Mirror"
-        case .instantReview: "Instant Playback"
-        case .magnification: "Magnification"
-        }
-    }
 }
 
 /// Which capture side of the camera a monitor layout belongs to.
@@ -775,10 +745,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
 /// still decodes, its moved keys read once by the app's migration.
 public struct AssistConfiguration: Codable, Equatable, Sendable {
     public struct Level: Codable, Equatable, Sendable {
-        public enum Style: String, CaseIterable, Codable, Equatable, Sendable {
-            case horizon = "Horizon"
-            case gauge = "Gauge"
-        }
+        /// The shared level styles; Nikon declares both (`MonitorAssistCapabilities.nikon`).
+        public typealias Style = MonitorLevelStyle
 
         public init(style: Style = .horizon) {
             self.style = style
