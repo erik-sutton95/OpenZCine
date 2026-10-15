@@ -3122,8 +3122,6 @@ final class NikonSharedStorageReadoutTests: XCTestCase {
     }
 }
 
-/// SIMULATED descriptor reports enter through the actual app bootstrap producer.
-@MainActor
 @Suite("Nikon FORMAT readout")
 struct NikonRecordingFormatLabelTests {
     @Test("The image-area tag leads the common recording label, as the body shows it")
@@ -3135,6 +3133,8 @@ struct NikonRecordingFormatLabelTests {
     }
 }
 
+/// SIMULATED descriptor reports enter through the actual app bootstrap producer.
+@MainActor
 @Suite("Common Nikon exposure provenance")
 struct NikonExposureProvenanceTests {
     private func movieModel() throws -> NativeAppModel {
