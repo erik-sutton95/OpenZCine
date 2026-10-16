@@ -121,17 +121,26 @@ internal fun requestForLadderWrite(
     return request to (request.options.firstOrNull { it.equals(write.value, ignoreCase = true) } ?: write.value)
 }
 
-/** A recording-format picker's choices for the shared format picker; null for every other picker. */
-internal fun ladderFormats(picker: MonitorPickerPresentation): List<CaptureFormatChoice<String>>? =
+/**
+ * A recording-format picker's choices for the shared format picker; null for every other picker.
+ * The body's reported formats group each token; a token it does not describe stays unclassified.
+ */
+internal fun ladderFormats(
+    picker: MonitorPickerPresentation,
+    recordingFormats: List<NikonRecordingFormatPresentation> = emptyList(),
+): List<CaptureFormatChoice<String>>? =
     if (picker.kind == MonitorPickerKind.RESOLUTION) {
-        picker.modes.firstOrNull()?.request?.options?.map(::nikonFormatChoice)
+        picker.modes.firstOrNull()?.request?.options?.map { token ->
+            nikonFormatChoice(recordingFormats.firstOrNull { it.token == token }
+                ?: NikonRecordingFormatPresentation(token, null, null, null))
+        }
     } else {
         null
     }
 
-/** One Nikon recording-format token as the shared format picker's area / size / rate choice. */
-internal fun nikonFormatChoice(token: String): CaptureFormatChoice<String> {
-    val format = NikonRecordingFormatPresentation.fromToken(token)
+/** One Nikon recording format as the shared format picker's area / size / rate choice. */
+internal fun nikonFormatChoice(format: NikonRecordingFormatPresentation): CaptureFormatChoice<String> {
+    val token = format.token
     return CaptureFormatChoice(value = token, title = token,
         imageArea = format.imageArea?.let { CaptureFormatGroup(it, it) },
         resolution = format.resolution?.let { CaptureFormatGroup(it, it) },

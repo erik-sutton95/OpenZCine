@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.cameracontrols.LadderSheet
 import com.opencapture.opencine.nikon.NikonLadderControl
+import com.opencapture.opencine.nikon.NikonRecordingFormatPresentation
 import com.opencapture.opencine.vocabulary.CaptureTint
 import com.opencapture.opencine.vocabulary.LadderTab
 
@@ -25,6 +26,7 @@ internal fun VideoLadderBody(
     footer: @Composable (LadderTab<NikonLadderControl>) -> Unit,
     modifier: Modifier = Modifier,
     chromeless: Boolean = false,
+    recordingFormats: List<NikonRecordingFormatPresentation> = emptyList(),
 ) {
     LadderSheet(
         presentation = videoLadderPresentation(picker),
@@ -44,6 +46,6 @@ internal fun VideoLadderBody(
         tintLabel = tintLabel,
         tintHelp = tintHelp,
         footer = footer,
-        formats = ladderFormats(picker),
+        formats = ladderFormats(picker, recordingFormats),
     )
 }

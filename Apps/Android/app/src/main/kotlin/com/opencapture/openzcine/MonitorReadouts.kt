@@ -6,9 +6,7 @@ import androidx.compose.runtime.setValue
 import com.opencapture.monitorui.MonitorTimecodeFormat
 import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
-import com.opencapture.opencine.cameracontrols.MonitorOperatorPowerReading
 import com.opencapture.opencine.core.Rational
-import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -71,17 +69,11 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String =
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }
 
 /**
- * The camera battery as the body's own five-step gauge (A5-01, iOS `MonitorUnified.cameraBattery`): bars,
- * never a percent, since `BatteryLevel` reads 60 for anything from 40 to 59 percent. An unread battery is
- * absent, never an empty red cell.
+ * The FORMAT readout: the common recording label behind the displayed movie token's image-area
+ * tag (`[FX] 6K · 25p`), as the body shows it. Swift twin: `nikonRecordingFormatLabel`.
  */
-internal fun nikonCameraBatteryReading(rawLevel: Int?, externalPower: Boolean?): MonitorOperatorPowerReading? {
-    val gauge = NikonCameraBatteryGauge.gauge(rawLevel ?: 0)
-    if (gauge == NikonCameraBatteryGauge.Unknown) return null
-    return MonitorOperatorPowerReading(camera = true, percent = null, charging = externalPower,
-        bars = gauge.filledBars, barCount = NikonCameraBatteryGauge.BAR_COUNT,
-        warning = gauge.urgency != NikonCameraBatteryGauge.Urgency.NOMINAL, exhausted = gauge.pulses)
-}
+internal fun nikonRecordingFormatLabel(label: String?, imageArea: String?): String? =
+    label?.let { text -> imageArea?.let { "[$it] $text" } ?: text }
 
 /**
  * The body's exposure indicator in stops for the shared EV gauge (A1-32, iOS

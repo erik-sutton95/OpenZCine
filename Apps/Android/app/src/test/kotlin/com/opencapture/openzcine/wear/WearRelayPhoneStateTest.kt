@@ -1,6 +1,7 @@
 package com.opencapture.openzcine.wear
 
 import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.core.PowerStatus
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -97,6 +98,7 @@ class WearRelayPhoneStateTest {
                 monitorFront = true,
                 applicationResumed = true,
                 liveFeedActive = true,
+                power = PowerStatus.unknown,
             )
         assertEquals(WatchConnectionState.CONNECTED, state.connection)
         assertEquals("Nikon ZR", state.cameraName)
@@ -114,6 +116,7 @@ class WearRelayPhoneStateTest {
                 monitorFront = true,
                 applicationResumed = false,
                 liveFeedActive = true,
+                power = PowerStatus.unknown,
             )
         assertEquals(WatchConnectionState.DISCONNECTED, background.connection)
         assertFalse(background.feedLive)
@@ -182,4 +185,26 @@ class WearRelayPhoneStateTest {
         assertEquals("fresh replacement", dispatched.last().value)
         assertEquals(3, dispatched.count { pump.isActive(it.token) })
     }
+    @Test fun commonPowerSuppressesLegacyBatteryFallbackAndKeepsIndependentExhaustion() {
+        val identity = CameraIdentity(name = "SIMULATED", model = "SIMULATED", serialNumber = "SIMULATED")
+        fun state(power: com.opencapture.opencine.core.PowerStatus) = androidWatchRelayState(
+            CameraSessionState.Connected(identity), CameraPropertySnapshot(batteryPercent = 80),
+            false, true, true, true, power = power)
+        val unknown = state(com.opencapture.opencine.core.PowerStatus.unknown)
+        assertEquals(80, unknown.cameraBatteryPercent)
+        assertNull(unknown.batteryReading)
+        assertNull(unknown.batteryExhausted)
+        for (exhausted in listOf(false, true)) {
+            val power = com.opencapture.opencine.core.PowerStatus(
+                battery = com.opencapture.opencine.core.ObservedValue(0.25,
+                    com.opencapture.opencine.core.ObservationOrigin.CAMERA_REPORTED, null,
+                    precision = com.opencapture.opencine.core.ObservationPrecision.Quantized(0.25)),
+                exhausted = com.opencapture.opencine.core.ObservedValue(exhausted,
+                    com.opencapture.opencine.core.ObservationOrigin.CAMERA_REPORTED, null))
+            val reported = state(power)
+            assertEquals(com.opencapture.opencine.core.BatteryReading.Steps(1, 4), reported.batteryReading)
+            assertEquals(exhausted, reported.batteryExhausted)
+        }
+    }
+
 }

@@ -419,6 +419,53 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             context.fill(CGRect(origin: .zero, size: size))
         }
     }
+
+    // MARK: Shared capture popups
+
+    /// Every camera picker except the two independent-switch panels draws on the shared ladder
+    /// sheet, movie and photo alike, so no Nikon-only drum panel remains.
+    func testEveryValuePickerDrawsTheSharedLadderSheet() {
+        XCTAssertEqual(
+            Set(CameraPicker.allCases.filter { !$0.usesLadderSheet }), [.stillQuality, .stabilization])
+    }
+
+    /// The camera's AF area becomes the shared focus mark at the size it declares, and detected
+    /// subjects become the shared brackets, in normalized picture coordinates (mirroring applied).
+    func testCameraAFBoxesBecomeTheSharedFocusMarkAndSubjectBrackets() throws {
+        let focus = PTPLiveViewFocusInfo(
+            coordinateWidth: 1_000, coordinateHeight: 500,
+            focusResult: .focused, subjectDetectionActive: true, selectedBoxIndex: 0,
+            boxes: [
+                PTPLiveViewAFBox(centerX: 250, centerY: 250, width: 100, height: 50),
+                PTPLiveViewAFBox(centerX: 500, centerY: 100, width: 200, height: 100),
+            ])
+        let marks = LiveFocusBoxOverlay.marks(
+            focus, in: CGSize(width: 800, height: 400), desqueeze: .off, mirrored: true,
+            mirroredVertically: false)
+        let area = try XCTUnwrap(marks.area)
+        XCTAssertEqual(area.midX, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(area.midY, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(area.width, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(area.height, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(marks.subjects.count, 1)
+        XCTAssertEqual(marks.subjects[0].midX, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(marks.subjects[0].midY, 0.2, accuracy: 0.0001)
+        let empty = LiveFocusBoxOverlay.marks(
+            focus, in: .zero, desqueeze: .off, mirrored: false, mirroredVertically: false)
+        XCTAssertNil(empty.area)
+        XCTAssertTrue(empty.subjects.isEmpty)
+    }
+
+    /// The body's exposure indicator reaches the shared EV meter in photography.
+    func testTheCameraIndicatorFeedsTheSharedExposureMeter() {
+        let model = NativeAppModel()
+        model.applyDemoProperty(.exposureIndicateStatus, data: Data([UInt8(bitPattern: -9)]))
+        model.applyDemoProperty(.exposureIndicateLightup, data: Data([0]))
+        XCTAssertEqual(model.cameraPropertySnapshot.exposureMeter.stops, -1.5)
+        XCTAssertEqual(model.cameraPropertySnapshot.exposureMeter.label, "\u{2212}1.5")
+        model.applyDemoProperty(.exposureIndicateLightup, data: Data([1]))
+        XCTAssertNil(model.cameraPropertySnapshot.exposureMeter.stops)
+    }
 }
 
 @MainActor
