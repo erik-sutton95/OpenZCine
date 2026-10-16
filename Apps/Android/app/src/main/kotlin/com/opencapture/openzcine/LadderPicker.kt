@@ -217,12 +217,14 @@ internal fun VideoLadderBody(
     footer: @Composable (LadderTab<LadderTabKey>) -> Unit,
     modifier: Modifier = Modifier,
     chromeless: Boolean = false,
+    recordingFormats: List<NikonRecordingFormatPresentation> = emptyList(),
 ) {
     if (picker.kind == MonitorPickerKind.RESOLUTION) {
         val request = picker.modes.singleOrNull()?.request ?: return
         val source = control?.state?.collectAsState()?.value?.snapshot?.let { it.session to it.epoch }
         val choices = request.options.map { token ->
-            val format = NikonRecordingFormatPresentation.fromToken(token)
+            val format = recordingFormats.firstOrNull { it.token == token }
+                ?: NikonRecordingFormatPresentation(token, null, null, null)
             CaptureFormatChoice(value = token, title = token,
                 imageArea = format.imageArea?.let { CaptureFormatGroup(it, it) },
                 resolution = format.resolution?.let { CaptureFormatGroup(it, it) },

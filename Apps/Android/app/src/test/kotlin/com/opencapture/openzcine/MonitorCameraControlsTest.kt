@@ -14,6 +14,7 @@ import com.opencapture.opencine.nikon.withOptimisticControlValue
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CodecBitDepthOption
+import com.opencapture.opencine.core.SettingKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -26,6 +27,20 @@ import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class MonitorCameraControlsTest {
     private val strings = PhoneStringResolver { resource, _ -> resource.toString() }
+
+    @Test
+    fun `pickers and command controls name one common setting each`() {
+        assertEquals(SettingKey.ISO, MonitorPickerKind.ISO.commonSettingKey)
+        assertEquals(SettingKey.SHUTTER, MonitorPickerKind.SHUTTER.commonSettingKey)
+        assertEquals(SettingKey.APERTURE, MonitorPickerKind.IRIS.commonSettingKey)
+        assertEquals(SettingKey.WHITE_BALANCE, MonitorPickerKind.WHITE_BALANCE.commonSettingKey)
+        assertNull(MonitorPickerKind.FOCUS.commonSettingKey)
+        assertNull(MonitorPickerKind.CODEC.commonSettingKey)
+        assertEquals(SettingKey.APERTURE, CameraControl.IRIS.commonPickerKind?.commonSettingKey)
+        assertEquals(SettingKey.WHITE_BALANCE, CameraControl.WHITE_BALANCE.commonPickerKind?.commonSettingKey)
+        assertNull(CameraControl.FOCUS_MODE.commonPickerKind)
+        assertNull(CameraControl.ISO_AUTO.commonPickerKind)
+    }
 
     @Test
     fun `live capture settings reuse typed command requests`() {

@@ -109,9 +109,6 @@ final class MulticamMember: Identifiable {
     var displayName: String { record.displayTitle }
     var letter: String { ["A", "B", "C", "D"][min(3, max(0, slot))] }
     var isLive: Bool { status == .live }
-    var batteryPercent: Int? {
-        properties.batteryPercent.flatMap { (0...100).contains($0) ? $0 : nil }
-    }
 }
 
 /// OpenZCine multicam on the shared engine: up to four Nikon bodies on four fixed tiles. The

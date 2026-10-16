@@ -1168,6 +1168,9 @@ class MainActivity : ComponentActivity() {
                                                     relayBroadcastEnabled =
                                                         relayBroadcastController.start(
                                                             session = active,
+                                                            common =
+                                                                multicam.lentMember(active)?.control
+                                                                    ?: shellSessions.acquire(active),
                                                             frames = frames,
                                                             cameraName =
                                                                 activeSavedCamera
