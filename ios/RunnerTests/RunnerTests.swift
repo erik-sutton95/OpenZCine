@@ -1484,44 +1484,14 @@ final class RunnerTests: XCTestCase {
         }
     }
 
-    /// Playback scopes are the shared derivation on the clip's Nikon transfer and clip.
-    func testPlaybackScopeBundleIsTheSharedDerivation() {
-        let point = OpenCineMedia.ScopePoint(
-            xRatio: 0.5, yRatio: 0, red: 112, green: 68, blue: 62, luma: 82)
-        var luma = Array(repeating: 0, count: 256)
-        luma[82] = 1
-        var red = Array(repeating: 0, count: 256)
-        red[112] = 1
-        var green = Array(repeating: 0, count: 256)
-        green[68] = 1
-        var blue = Array(repeating: 0, count: 256)
-        blue[62] = 1
-        let samples = OpenCineMedia.ScopeSamples(
-            histogramLuma: luma, histogramRed: red, histogramGreen: green, histogramBlue: blue,
-            points: [point])
-        let configuration = NikonPlaybackScopeConfiguration(
-            mapping: ExposureSignalMapping(curve: .redLog3G10), compensation: .quarter,
-            vectorscope: false, look: nil)
-
-        let bundle = configuration.bundle(samples: samples, previous: .empty)
-        // Every scope reads the untouched source/log points.
-        XCTAssertEqual(bundle.samples, samples)
-        XCTAssertEqual(bundle.revision, 1)
-        XCTAssertEqual(bundle.transfer, .log3G10)
-        XCTAssertEqual(bundle.clipByte, 180)
-        XCTAssertNil(bundle.levelAxis, "the shared axis follows the transfer and clip")
-        XCTAssertEqual(
-            bundle.histogramDisplay,
-            OpenCineMedia.ScopeSampler.histogramDisplay(
-                samples: samples, previous: .empty, transfer: .log3G10, clipByte: 180))
-        XCTAssertEqual(
-            bundle.traffic,
-            ScopeTrafficLights.reading(
-                red: red, green: green, blue: blue, luma: luma, transfer: .log3G10, clipByte: 180,
-                threshold: MonitorCrushClipCompensation.quarter.pixelFractionThreshold))
-        let next = configuration.bundle(samples: samples, previous: bundle)
-        XCTAssertEqual(next.revision, 2)
-        XCTAssertEqual(next.trailSamples, samples)
+    /// Playback scopes are the shared engine's derivation over Nikon's calibration: the live
+    /// scope looks for VECTOR and the profile's read-through-display curves for false colour.
+    func testPlaybackScopesUseTheSharedEngineWithNikonLooks() {
+        let configuration = MonitorAssistConfiguration.nikonPlayback
+        XCTAssertEqual(Set(configuration.lookCurves.keys), [.log3G10, .nlog])
+        XCTAssertNotNil(configuration.defaultScopeLook(.nlog))
+        XCTAssertNotNil(configuration.defaultScopeLook(.log3G10))
+        XCTAssertNil(configuration.defaultScopeLook(.rec709))
     }
 
     func testWaveformAndParadePaletteUsesCalibratedBrightness() {
@@ -1629,25 +1599,6 @@ final class RunnerTests: XCTestCase {
                 colorSpace: nil)
         }
         return pixel
-    }
-
-    /// The paused-frame refresh keys off whether the composition payload actually changed, so the
-    /// effects box must report mutations accurately: `true` only for a genuinely new payload,
-    /// `false` for repeats (unrelated `assistConfiguration` changes re-set the same effects).
-    func testPlaybackEffectsBoxReportsWhetherEffectsChanged() {
-        let box = MediaLUT.PlaybackEffectsBox()
-
-        XCTAssertFalse(box.set(effects: ImageEffectsCompositor.ResolvedEffects()))
-
-        var effects = ImageEffectsCompositor.ResolvedEffects()
-        effects.peaking = PeakingSettings()
-        XCTAssertTrue(box.set(effects: effects))
-        XCTAssertFalse(box.set(effects: effects))
-
-        effects.peaking?.sensitivity = .high
-        XCTAssertTrue(box.set(effects: effects))
-
-        XCTAssertTrue(box.set(effects: ImageEffectsCompositor.ResolvedEffects()))
     }
 
     /// The watch relay now encodes the display-baked frame (an RGBAh 16-bit-float bitmap out of the

@@ -132,7 +132,8 @@ import XCTest
             }, poll: { XCTFail("The admitted partial probe is playable; no second poll is needed") }
         )
         var installedNames: [String] = []
-        native.afterItemInstallation = { item in
+        native.onItemChanged = { item in
+            guard let item else { return }
             installedNames.append((item.asset as? AVURLAsset)?.url.lastPathComponent ?? "")
             installed.signal()
         }
@@ -187,11 +188,12 @@ import XCTest
         let retired = PlaybackSignal()
         var attachments = 0
         var retiringNames: [String] = []
-        native.afterItemInstallation = { _ in
-            attachments += 1
-            if attachments == 1 { firstInstalled.signal() } else { secondInstalled.signal() }
-        }
-        native.beforeItemRetirement = {
+        native.onItemChanged = { installed in
+            guard installed == nil else {
+                attachments += 1
+                if attachments == 1 { firstInstalled.signal() } else { secondInstalled.signal() }
+                return
+            }
             guard let item = native.player.currentItem else { return }
             retiringNames.append((item.asset as? AVURLAsset)?.url.lastPathComponent ?? "")
             if retiringNames.count == 2 { retired.signal() }
@@ -415,7 +417,7 @@ import XCTest
 
 @MainActor private final class PlaybackFactoryPublicationCapture {
     var native: NikonPlaybackNativePort?
-    var assists: NikonPlaybackAssistAdapter?
+    var assists: MonitorPlaybackAssistSession?
     var entered = false
 }
 extension NikonPlaybackOwnerAdoptionTests {
@@ -635,7 +637,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ])
-        native.afterItemInstallation = { $0.add(output) }
+        native.onItemChanged = { $0?.add(output) }
         var transport: MonitorPlaybackTransportState?
         var expectedToken = token
         var observedTokens: [MonitorPlaybackItemToken] = []
@@ -683,7 +685,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         var successorItem: AVPlayerItem?
         if retireDuringWait {
             item.remove(output)
-            native.afterItemInstallation = nil
+            native.onItemChanged = nil
             let next = MediaClip(
                 cameraID: clip.cameraID, filename: "SUCCESSOR.MOV", handle: 5,
                 storageID: clip.storageID, sizeBytes: UInt64(bytes.count),
@@ -1174,11 +1176,11 @@ extension NikonPlaybackOwnerAdoptionTests {
             try XCTUnwrap(native.bufferedThroughSeconds(token: token)), expected, accuracy: 0.001)
         XCTAssertTrue(fixture.model.isClipDownloaded(clip))
         XCTAssertNotEqual(expected, 1, "A complete byte transfer is not the native temporal extent")
-        let prior = native.beforeItemRetirement
+        let prior = native.onItemChanged
         var retiringReads: [Double?] = []
-        native.beforeItemRetirement = {
-            retiringReads.append(native.bufferedThroughSeconds(token: token))
-            prior?()
+        native.onItemChanged = { item in
+            if item == nil { retiringReads.append(native.bufferedThroughSeconds(token: token)) }
+            prior?(item)
         }
         session.owner.close()
         XCTAssertEqual(retiringReads.count, 1)
@@ -1659,7 +1661,8 @@ extension NikonPlaybackOwnerAdoptionTests {
         else { return XCTFail("Actual completed clip candidate missing") }
         _ = try await native.prepare(item, token: token, readyTimeout: nil)
         let current = try XCTUnwrap(native.player.currentItem)
-        XCTAssertTrue(current.outputs.contains { $0 === feed.output }, "the shared feed reads the item")
+        XCTAssertTrue(
+            current.outputs.contains { $0 === feed.output }, "the shared feed reads the item")
         XCTAssertEqual(changes.values, [true])
         native.retireItem(for: .init(owner: identity, revision: 2))
         XCTAssertEqual(changes.values, [true, nil])
@@ -1693,7 +1696,8 @@ extension NikonPlaybackOwnerAdoptionTests {
                 * MemoryLayout<Float>.size)
         model.assist.set(.lut, visible: false, context: .playback)
         XCTAssertGreaterThanOrEqual(
-            model.nikonPlaybackEffects(model.assist.playbackEffects, forceLook: true).lutDimension, 2,
+            model.nikonPlaybackEffects(model.assist.playbackEffects, forceLook: true).lutDimension,
+            2,
             "an inspector preview arms the selected look while the picture has none")
     }
 
@@ -1749,7 +1753,9 @@ extension NikonPlaybackOwnerAdoptionTests {
         }
         host.view.frame = window.bounds
         func picture() -> UIView? {
-            Self.descendants(of: host.view).first { $0.accessibilityIdentifier == "monitor.native.picture" }
+            Self.descendants(of: host.view).first {
+                $0.accessibilityIdentifier == "monitor.native.picture"
+            }
         }
         let mounted = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
@@ -1763,13 +1769,129 @@ extension NikonPlaybackOwnerAdoptionTests {
         let previewed = await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view).contains {
-                ($0 as? UIAccessibilityIdentification)?.accessibilityIdentifier
-                    == "monitor.inspector.preview"
+                HostedAccessibility.identifier($0) == "monitor.inspector.preview"
             }
         }
         XCTAssertTrue(previewed, "the playback inspector shows the shared preview")
         library.close()
         await library.dispose()
+    }
+
+    /// A2-71 on Z through the shared host: a finished delivery whose share sheet is still up
+    /// covers playback exactly like a running delivery (`coversPlayback`).
+    func testPendingShareKeepsNikonPlaybackPausedUntilTheSheetCompletes() async throws {
+        let fixture = try PlaybackFixture()
+        defer { fixture.remove() }
+        let url = try fixture.store.localURL(
+            cameraID: MediaClipStore.localBucketID, filename: "SIMULATED-COVER.MOV")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try await Self.writeSixSecondClip(to: url)
+        let clip = MediaClip(
+            cameraID: MediaClipStore.localBucketID, filename: url.lastPathComponent,
+            handle: nil, storageID: nil, sizeBytes: UInt64(try Data(contentsOf: url).count),
+            captureDate: "20261011T120000")
+        fixture.store.upsertBatch([clip], cameraID: clip.cameraID)
+        fixture.model.refreshMediaClips()
+        let library = try XCTUnwrap(fixture.model.mediaLibrary)
+        library.begin()
+        let delivery = fixture.model.delivery
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let host = UIHostingController(
+            rootView: MediaPlayerView(clips: [clip], startingAt: clip)
+                .environment(fixture.model).environment(delivery)
+                .environment(\.scenePhase, .active))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 420)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        host.view.frame = window.bounds
+        func player() -> AVPlayer? {
+            (Self.descendants(of: host.view).first {
+                $0.accessibilityIdentifier == "monitor.native.picture"
+            } as? MonitorPlaybackFeedHost)?.playerLayer.player
+        }
+        let playing = await settledFor(seconds: 10) {
+            host.view.layoutIfNeeded()
+            return (player()?.rate ?? 0) > 0
+        }
+        XCTAssertTrue(playing, "The cached clip must play on the shared picture")
+        let native = try XCTUnwrap(player())
+        let gate = NikonShareCoverGate()
+        delivery.begin { _, _ in await gate.wait() }
+        let paused = await settledFor(seconds: 5) { gate.waiting && native.rate == 0 }
+        XCTAssertTrue(paused, "A running delivery covers playback")
+        gate.release(.share(urls: [url], metadataText: nil, stagingCleanupURL: nil))
+        let shared = await settledFor(seconds: 5) {
+            delivery.lifetime.state.share != nil && !delivery.isActive
+        }
+        XCTAssertTrue(shared, "The finished run leaves its share pending")
+        let resumedBehindSheet = await settledFor(seconds: 1.5) { native.rate > 0 }
+        XCTAssertFalse(resumedBehindSheet, "Playback stays paused behind the pending share sheet")
+        delivery.lifetime.clearSharePresentation()
+        let resumed = await settledFor(seconds: 5) { native.rate > 0 }
+        XCTAssertTrue(resumed, "Completing the share sheet uncovers playback")
+        library.close()
+        await library.dispose()
+    }
+
+    private func settledFor(seconds: TimeInterval, _ predicate: @escaping @MainActor () -> Bool)
+        async -> Bool
+    {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in MainActor.assumeIsolated { predicate() } },
+            object: nil)
+        return await XCTWaiter.fulfillment(of: [expectation], timeout: seconds) == .completed
+    }
+
+    /// SIMULATED six second flat H.264 clip, long enough that a resumed player still plays.
+    private static func writeSixSecondClip(to url: URL) async throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64,
+                AVVideoHeightKey: 64,
+            ])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 64, kCVPixelBufferHeightKey as String: 64,
+            ])
+        writer.add(input)
+        guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+        writer.startSession(atSourceTime: .zero)
+        var created: CVPixelBuffer?
+        CVPixelBufferCreate(
+            nil, 64, 64, kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &created)
+        let buffer = try XCTUnwrap(created)
+        CVPixelBufferLockBaseAddress(buffer, [])
+        memset(CVPixelBufferGetBaseAddress(buffer), 0x80, CVPixelBufferGetDataSize(buffer))
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        for frame in 0..<180 {
+            let until = ContinuousClock.now.advanced(by: .seconds(5))
+            while !input.isReadyForMoreMediaData, ContinuousClock.now < until {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw writer.error ?? CocoaError(.fileWriteUnknown)
+        }
     }
 
     private static func descendants(of view: UIView) -> [UIView] {
@@ -1780,4 +1902,17 @@ extension NikonPlaybackOwnerAdoptionTests {
 @MainActor private final class PlaybackItemChanges {
     var values: [Bool?] = []
     var currentAtReport: [Bool] = []
+}
+
+/// SIMULATED delivery run held open by the test, so the share outcome lands while playing.
+@MainActor private final class NikonShareCoverGate {
+    private var waiter: CheckedContinuation<MonitorDeliveryCoordinator.Outcome, Never>?
+    var waiting: Bool { waiter != nil }
+    func wait() async -> MonitorDeliveryCoordinator.Outcome {
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func release(_ outcome: MonitorDeliveryCoordinator.Outcome) {
+        waiter?.resume(returning: outcome)
+        waiter = nil
+    }
 }
