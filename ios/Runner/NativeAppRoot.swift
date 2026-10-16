@@ -4908,11 +4908,11 @@ final class NativeAppModel {
     /// with `cameraSession` and closed with it. Those three commands run through it and only it.
     @ObservationIgnored private var monitorRuntime: NikonMonitorRuntime?
     private var controlSession: NikonCameraSession? { monitorRuntime?.session }
-    /// The Nikon integration's one control model of the connected body, else its static profile.
+    /// The Nikon integration's one control model of the connected body, else the shared
+    /// pre-connection rule over the Nikon static profile.
     var controlCapabilities: ControlCapabilities {
         controlSession?.controlCapabilities(codecColor: codecColorChoices)
-            ?? ControlCapabilities(snapshot: CapabilitySnapshot(), profile: NikonCameraSession.captureProfile,
-                codecColor: codecColorChoices)
+            ?? ControlCapabilities(beforeConnection: NikonCameraSession.captureProfile, codecColor: codecColorChoices)
     }
     /// Recording as the CAMERA last reported it (live-view header or record events), apart from
     /// the optimistic `isRecording` the button shows. `nil` until the body says.

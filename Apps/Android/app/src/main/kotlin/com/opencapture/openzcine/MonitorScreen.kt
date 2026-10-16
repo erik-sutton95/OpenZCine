@@ -2454,10 +2454,10 @@ internal fun MonitorDataAvailability.monitorSections(
     isPhotographyMode: Boolean,
     /** The active codec has a reported tone (or a fixed one): the colour readout has a source. */
     reportsColor: Boolean = false,
-    /** The connected body's one control model, else the static Nikon profile. */
+    /** The connected body's one control model, else the shared pre-connection rule over the Nikon profile. */
     controls: com.opencapture.opencine.vocabulary.ControlCapabilities =
-        com.opencapture.opencine.vocabulary.ControlCapabilities.derive(
-            com.opencapture.opencine.core.CapabilitySnapshot(), com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE),
+        com.opencapture.opencine.vocabulary.ControlCapabilities.beforeConnection(
+            com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE),
 ): Set<MonitorDisplaySection> =
     MonitorDisplaySection.entries.filter { section ->
         when (section) {
