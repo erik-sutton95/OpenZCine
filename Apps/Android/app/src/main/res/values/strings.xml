@@ -248,18 +248,6 @@
     <string name="false_color_scale_stops">ZC Stops</string>
     <string name="false_color_scale_ire">IRE</string>
     <string name="false_color_scale_limits">Limits</string>
-    <string name="false_color_axis_min">Min</string>
-    <string name="false_color_axis_minus_three">−3</string>
-    <string name="false_color_axis_middle_gray">18%</string>
-    <string name="false_color_axis_skin">Skin</string>
-    <string name="false_color_axis_plus_two">+2</string>
-    <string name="false_color_axis_max">Max</string>
-    <string name="false_color_axis_clip_shadows">clip / shadows</string>
-    <string name="false_color_axis_skin_high">skin hi</string>
-    <string name="false_color_axis_highlights_clip">highlights → clip</string>
-    <string name="false_color_axis_crushed">crushed</string>
-    <string name="false_color_axis_midtones">midtones untouched</string>
-    <string name="false_color_axis_clipped">clipped</string>
 
     <!-- Live monitor camera controls. -->
     <string name="camera_mode_af">AF Mode</string>

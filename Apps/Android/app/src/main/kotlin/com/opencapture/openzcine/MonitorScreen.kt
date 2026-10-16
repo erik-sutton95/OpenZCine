@@ -1852,7 +1852,7 @@ internal fun MonitorScreen(
             thermalTier, source, isPortrait, isPortraitFill, scopeZone) } ?: emptyScopes
         val floating = MonitorAnalysisPanelLayout(physicalViewport, geometry.scopePlacement)
         val reference = liveFeedEffectsPresentation.falseColorReference?.let { value ->
-            value.referenceValues(falseColorReferenceCopy(value.scale)).takeIf { it.segments.isNotEmpty() }
+            value.referenceValues().takeIf { it.segments.isNotEmpty() }
         }
         val placement = MonitorAssistPanelPlacement(
             read = { tool, portrait -> if (tool == MonitorAssistTool.AUDIO) assists.shared.audioCenterFor(portrait)
