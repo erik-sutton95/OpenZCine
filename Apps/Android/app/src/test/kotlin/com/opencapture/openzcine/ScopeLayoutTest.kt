@@ -155,8 +155,8 @@ class ScopeLayoutTest {
     @Test
     fun `operator scale clamps to the shared range`() {
         assertEquals(
-            1.6f,
-            MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.scaleFor(ScopeKind.VECTORSCOPE),
+            1.6,
+            MonitorAssistState().apply { setScale(MonitorAssistTool.VECTOR, 2.0) }.vectorScale,
         )
     }
 

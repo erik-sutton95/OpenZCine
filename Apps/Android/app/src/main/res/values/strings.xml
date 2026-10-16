@@ -243,7 +243,6 @@
     <!-- Live-feed notices and false-color reference panel. -->
     <string name="feed_hdr_assists_off">HDR LIVE VIEW · IMAGE ASSISTS OFF</string>
     <string name="feed_color_assists_off">LIVE COLOR FORMAT · IMAGE ASSISTS OFF</string>
-    <string name="false_color_reference_description">False color reference, movable panel</string>
     <string name="false_color_recenter_description">Recenter false color reference</string>
     <string name="false_color_title">False Color</string>
     <string name="false_color_scale_stops">ZC Stops</string>
@@ -449,25 +448,6 @@
     <string name="display_mode_command">Command</string>
 
     <!-- Scope panels. -->
-    <string name="scope_title_waveform">WAVE</string>
-    <string name="scope_title_parade">PARADE</string>
-    <string name="scope_title_histogram">HISTO</string>
-    <string name="scope_title_vectorscope">VECTOR</string>
-    <string name="scope_title_traffic_lights">TL</string>
-    <string name="scope_panel_description">%1$s analysis panel, movable</string>
-    <string name="scope_traffic_lights">Traffic Lights</string>
-    <string name="scope_direction_balanced">balanced</string>
-    <string name="scope_direction_over">over</string>
-    <string name="scope_direction_under">under</string>
-    <string name="scope_flag_clip">clip</string>
-    <string name="scope_flag_crush">crush</string>
-    <string name="scope_flags_both">%1$s, %2$s</string>
-    <string name="scope_channel_red">red</string>
-    <string name="scope_channel_green">green</string>
-    <string name="scope_channel_blue">blue</string>
-    <string name="scope_channel_state">%1$s %2$s</string>
-    <string name="scope_channel_state_flags">%1$s %2$s (%3$s)</string>
-    <string name="scope_state_description">%1$s, %2$s, %3$s</string>
 
     <!-- Operator settings navigation and header. -->
     <string name="settings_tab_link">Link</string>
