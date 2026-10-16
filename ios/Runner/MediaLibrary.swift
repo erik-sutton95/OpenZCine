@@ -90,19 +90,6 @@ struct MediaClip: Codable, Equatable, Identifiable, Sendable {
 
 // MARK: - Browser filters & formatting
 
-/// Progress of an in-flight batch deletion — drives the delete progress bar and defers the grid
-/// refresh until it finishes.
-struct MediaDeletionProgress: Equatable, Sendable {
-    var completed: Int
-    /// Total files removed (a RAW+JPEG pair or a proxy+master counts as 2+).
-    var total: Int
-    /// Shots the operator selected — smaller than `total` when pairs/masters/backups ride along.
-    var selectedCount: Int
-    var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
-    /// True when companions (RAW, master, backup copies) inflate the file count above the picks.
-    var hasCompanionFiles: Bool { total > selectedCount }
-}
-
 /// Clips shown from the connected camera bucket vs the on-device `local` bucket.
 enum MediaBrowserSource: String, CaseIterable, Sendable {
     case camera = "CAMERA"
@@ -250,6 +237,19 @@ enum MediaClipStorePathError: LocalizedError, Equatable {
         case .containmentViolation:
             "The media path escaped its cache directory."
         }
+    }
+}
+
+/// Cached files a clear could not remove. Only bytes actually removed are counted, so Settings
+/// never reports a clear that did not happen.
+struct MediaClipCacheClearError: LocalizedError, Equatable {
+    var removedBytes: UInt64
+    var remainingFiles: [String]
+
+    var errorDescription: String? {
+        remainingFiles.count == 1
+            ? "1 cached file could not be removed."
+            : "\(remainingFiles.count) cached files could not be removed."
     }
 }
 
@@ -482,34 +482,50 @@ struct MediaClipStore {
     /// the camera re-enumerates the truth on the next connected pass.
     ///
     /// - Returns: Bytes removed from disk (partial caches count at their written size).
+    /// - Throws: `MediaClipCacheClearError` naming every file that stayed on disk, after all of
+    ///   them were tried. Its byte count covers only what was actually removed.
     @discardableResult
-    func clearCache(cameraID: String, preservingIndex: Bool = true) -> UInt64 {
+    func clearCache(
+        cameraID: String, preservingIndex: Bool = true
+    ) throws(MediaClipCacheClearError) -> UInt64 {
         let dir = directory(for: cameraID)
         let fm = FileManager.default
         var removedBytes: UInt64 = 0
+        var remainingFiles: [String] = []
+        func remove(_ url: URL, named name: String) {
+            let size = fileSize(at: url)
+            do {
+                try fm.removeItem(at: url)
+                removedBytes += size
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // Already gone: nothing was removed and nothing remains.
+            } catch {
+                remainingFiles.append(name)
+            }
+        }
 
         let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
-        for name in names where Self.isBrowsableMediaFile(name) {
-            let url = dir.appendingPathComponent(name)
-            removedBytes += fileSize(at: url)
-            try? fm.removeItem(at: url)
+        for name in names.sorted() where Self.isBrowsableMediaFile(name) {
+            remove(dir.appendingPathComponent(name), named: name)
         }
 
         let thumbsDir = dir.appendingPathComponent("thumbs", isDirectory: true)
         let thumbNames = (try? fm.contentsOfDirectory(atPath: thumbsDir.path)) ?? []
-        for name in thumbNames {
-            let url = thumbsDir.appendingPathComponent(name)
-            removedBytes += fileSize(at: url)
-            try? fm.removeItem(at: url)
+        for name in thumbNames.sorted() {
+            remove(thumbsDir.appendingPathComponent(name), named: "thumbs/" + name)
         }
 
         if !preservingIndex {
-            try? fm.removeItem(at: indexURL(cameraID: cameraID))
+            remove(indexURL(cameraID: cameraID), named: "index.json")
         }
 
         mediaLibraryLogger.info(
-            "cleared media cache for \(cameraID, privacy: .private(mask: .hash)) (\(removedBytes, privacy: .public) bytes removed, index \(preservingIndex ? "kept" : "cleared", privacy: .public))"
+            "cleared media cache for \(cameraID, privacy: .private(mask: .hash)) (\(removedBytes, privacy: .public) bytes removed, \(remainingFiles.count, privacy: .public) files remain, index \(preservingIndex ? "kept" : "cleared", privacy: .public))"
         )
+        guard remainingFiles.isEmpty else {
+            throw MediaClipCacheClearError(
+                removedBytes: removedBytes, remainingFiles: remainingFiles)
+        }
         return removedBytes
     }
 
