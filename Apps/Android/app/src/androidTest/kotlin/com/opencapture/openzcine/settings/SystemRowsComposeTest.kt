@@ -65,9 +65,9 @@ class SystemRowsComposeTest {
         compose.onNodeWithText("Diagnostic options").performScrollTo().performClick()
         compose.onNodeWithText("Save", ignoreCase = true).performScrollTo().performClick()
 
-        // The shared Project & Legal card rows are the operator's real web destinations
-        // (browser launches owned by the shared card); the System tab still must present
-        // each of them, so assert the wiring surface stays complete.
+        // The shared Project & Legal card rows: source code opens the web (owned by the shared
+        // card), privacy and terms open Z's bundled legal pages (A2-27). The System tab must
+        // present each of them, so assert the wiring surface stays complete.
         listOf("Open Source Code", "Open Privacy Policy", "Open Terms of Use").forEach { description ->
             compose.onNodeWithContentDescription(description)
                 .performScrollTo()
