@@ -1743,7 +1743,10 @@ extension RunnerTests {
     @discardableResult
     private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil) async throws -> String? {
         let host = UIHostingController(rootView: view)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        // Drawing needs a window in the app's scene; a detached window renders blank.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer {
