@@ -10,15 +10,29 @@ import UIKit
             defaults.set(enabled, forKey: Self.preferenceKey)
             if !enabled { stop(reason: .disabled) }
             if enabled && !oldValue {
-                if loaded { latestRecordingMount = mountPreset }
+                if loaded {
+                    latestRecordingMount = mountPreset
+                    latestRecordingCalibration = mountCalibration
+                }
                 failure = nil
                 reconcile()
             }
         }
     }
     var mountPreset: GyroMountPreset {
-        didSet { defaults.set(mountPreset.rawValue, forKey: Self.mountPreferenceKey) }
+        didSet {
+            defaults.set(mountPreset.rawValue, forKey: Self.mountPreferenceKey)
+            clearSavedCalibration()
+            cancelMountCalibration()
+        }
     }
+    private(set) var mountCalibration: GyroMountCalibration?
+    private(set) var calibrationInProgress = false
+    private(set) var calibrationPoseCount = 0
+    private(set) var calibrationMessage: String?
+    private(set) var calibrationCameraAvailable = false
+    private(set) var calibrationCameraHasReading = false
+    private(set) var calibrationCameraRecording: Bool?
     private(set) var logs: [GyroLogEntry] = []
     private(set) var failure: String?
     private(set) var storageWarning: String?
@@ -37,17 +51,23 @@ import UIKit
     @ObservationIgnored private var buffer = GyroSampleBuffer()
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var loading: Task<Void, Never>?
-    @ObservationIgnored private var observations: [(Bool, Double, Date, String, GyroMountPreset)] =
-        []
+    @ObservationIgnored private var observations:
+        [(Bool, Double, Date, String, GyroMountPreset, GyroMountCalibration?)] = []
     @ObservationIgnored private var stopping: GyroLogTermination?
     @ObservationIgnored private var cameraLabel = "Nikon camera"
     @ObservationIgnored private var latestRecording: Bool?
     @ObservationIgnored private var latestRecordingMount: GyroMountPreset = .unconfigured
+    @ObservationIgnored private var latestRecordingCalibration: GyroMountCalibration?
+    @ObservationIgnored private var calibrationSession = GyroMountCalibrationSession()
+    @ObservationIgnored private var calibrationGravityToken: UUID?
+    @ObservationIgnored private var calibrationSourceID: Int?
+    @ObservationIgnored private var calibrationCamera: (down: GyroVector3, timestamp: Double)?
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var processing = false
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     static let preferenceKey = "gyroLoggingEnabled.v1"
     static let mountPreferenceKey = "gyroMountPreset.v1"
+    static let calibrationPreferenceKey = "gyroMountCalibration.v1"
 
     init(
         defaults: UserDefaults = .standard,
@@ -65,6 +85,9 @@ import UIKit
         mountPreset =
             defaults.string(forKey: Self.mountPreferenceKey)
             .flatMap(GyroMountPreset.init(rawValue:)) ?? .unconfigured
+        mountCalibration = defaults.data(forKey: Self.calibrationPreferenceKey).flatMap {
+            try? JSONDecoder().decode(GyroMountCalibration.self, from: $0)
+        }
         loading = Task { [weak self] in
             guard let self else { return }
             do {
@@ -91,16 +114,41 @@ import UIKit
             ? "GYRO ARMED" : "Starting gyro logger"
     }
     var statusIsFailure: Bool { failure != nil }
+    var mountName: String { mountCalibration == nil ? mountPreset.shortLabel : "Calibrated" }
+    var canBeginMountCalibration: Bool {
+        calibrationCameraAvailable && calibrationCameraRecording == false
+    }
+    var canCaptureMountCalibration: Bool {
+        calibrationInProgress && canBeginMountCalibration && calibrationCameraHasReading
+    }
 
     func openLogs() { logsPresented = true }
     func openMount() { mountPresented = true }
 
     func waitUntilLoaded() async { await loading?.value }
 
-    func configure(eligible: Bool, cameraLabel: String, recording: Bool?) {
+    func configure(
+        eligible: Bool, cameraLabel: String, recording: Bool?, calibrationSourceID: Int? = nil
+    ) {
         self.cameraLabel = cameraLabel
         self.eligible = eligible
-        if latestRecording != recording { latestRecordingMount = mountPreset }
+        if self.calibrationSourceID != calibrationSourceID {
+            invalidateMountCalibration(message: "Camera source changed. Start calibration again.")
+            self.calibrationSourceID = calibrationSourceID
+        }
+        calibrationCameraAvailable = calibrationSourceID != nil
+        calibrationCameraRecording = recording
+        if recording == true, calibrationInProgress {
+            invalidateMountCalibration(
+                message: "Recording started. Start calibration again after stopping.")
+            self.calibrationSourceID = calibrationSourceID
+            calibrationCameraAvailable = calibrationSourceID != nil
+            calibrationCameraRecording = recording
+        }
+        if latestRecording != recording {
+            latestRecordingMount = mountPreset
+            latestRecordingCalibration = mountCalibration
+        }
         latestRecording = recording
         guard eligible else {
             stop(reason: .disconnected)
@@ -111,7 +159,10 @@ import UIKit
     }
 
     func observeRecording(_ recording: Bool) {
-        if latestRecording != recording { latestRecordingMount = mountPreset }
+        if latestRecording != recording {
+            latestRecordingMount = mountPreset
+            latestRecordingCalibration = mountCalibration
+        }
         latestRecording = recording
         guard motionRunning, stopping == nil, reportedRecording != recording else { return }
         guard observations.count < GyroTakeSession.maximumBufferedSamples else {
@@ -120,11 +171,16 @@ import UIKit
             return
         }
         reportedRecording = recording
-        observations.append((recording, now(), Date(), cameraLabel, latestRecordingMount))
+        observations.append(
+            (
+                recording, now(), Date(), cameraLabel, latestRecordingMount,
+                latestRecordingCalibration
+            ))
     }
 
     func stop(reason: GyroLogTermination) {
         if reason == .backgrounded || reason == .disconnected {
+            invalidateMountCalibration(message: "Camera connection ended. Start calibration again.")
             eligible = false
             latestRecording = nil
         }
@@ -186,11 +242,12 @@ import UIKit
         var remaining = batch.samples[...]
         // Interleave camera observations with their sensor-time prefixes. Ingesting a whole
         // delayed batch first would prune pre-roll that belongs to an earlier REC observation.
-        for (recording, timestamp, date, label, mount) in observations {
+        for (recording, timestamp, date, label, mount, calibration) in observations {
             let boundary = remaining.firstIndex { $0.timestamp > timestamp } ?? remaining.endIndex
             updates += session.ingest(Array(remaining[..<boundary]))
             updates += session.observeRecording(
-                recording, at: timestamp, date: date, cameraLabel: label, mountPreset: mount)
+                recording, at: timestamp, date: date, cameraLabel: label, mountPreset: mount,
+                mountCalibration: calibration)
             remaining = remaining[boundary...]
         }
         updates += session.ingest(Array(remaining))
@@ -229,6 +286,89 @@ import UIKit
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
+    }
+
+    /// Uses only a raw, current-session camera header, never the display's filtered level.
+    func receiveCalibrationCamera(_ down: GyroVector3?, at timestamp: Double, sourceID: Int) {
+        guard sourceID == calibrationSourceID else { return }
+        calibrationCamera = down.map { ($0, timestamp) }
+        calibrationCameraHasReading = down != nil
+    }
+
+    func beginMountCalibration() {
+        guard canBeginMountCalibration else {
+            calibrationMessage = "Connect a camera with live view and stop recording to calibrate."
+            return
+        }
+        cancelMountCalibration()
+        calibrationMessage = nil
+        calibrationInProgress = true
+        do {
+            calibrationGravityToken = try driver.startGravity { [weak self] down, timestamp in
+                self?.receiveCalibrationPhone(down, at: timestamp)
+            }
+        } catch {
+            cancelMountCalibration()
+            calibrationMessage = error.localizedDescription
+        }
+    }
+
+    func receiveCalibrationPhone(_ down: GyroVector3, at timestamp: Double) {
+        guard calibrationInProgress, let camera = calibrationCamera else { return }
+        calibrationSession.add(
+            phoneDown: down, phoneTimestamp: timestamp,
+            cameraDown: camera.down, cameraTimestamp: camera.timestamp)
+    }
+
+    func captureMountCalibration() {
+        guard canCaptureMountCalibration else {
+            calibrationMessage = "Wait for fresh camera level readings with recording stopped."
+            return
+        }
+        do {
+            let result = try calibrationSession.capture(at: now())
+            calibrationPoseCount = calibrationSession.poseCount
+            calibrationMessage = nil
+            if let result {
+                let data = try JSONEncoder().encode(result)
+                defaults.set(data, forKey: Self.calibrationPreferenceKey)
+                mountCalibration = result
+                cancelMountCalibration()
+            }
+        } catch {
+            calibrationPoseCount = calibrationSession.poseCount
+            calibrationMessage = error.localizedDescription
+        }
+    }
+
+    func cancelMountCalibration() {
+        if let token = calibrationGravityToken { driver.stopGravity(token) }
+        calibrationGravityToken = nil
+        calibrationSession.reset()
+        calibrationPoseCount = 0
+        calibrationInProgress = false
+        calibrationMessage = nil
+    }
+
+    func clearMountCalibration() {
+        mountPreset = .unconfigured
+        calibrationMessage = nil
+    }
+
+    private func clearSavedCalibration() {
+        mountCalibration = nil
+        defaults.removeObject(forKey: Self.calibrationPreferenceKey)
+    }
+
+    func invalidateMountCalibration(message: String? = nil) {
+        let wasCalibrating = calibrationInProgress
+        cancelMountCalibration()
+        calibrationCamera = nil
+        calibrationCameraHasReading = false
+        calibrationSourceID = nil
+        calibrationCameraAvailable = false
+        calibrationCameraRecording = nil
+        if wasCalibrating { calibrationMessage = message }
     }
 
     func share(_ entry: GyroLogEntry) async -> URL? {

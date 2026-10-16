@@ -39,11 +39,19 @@ final class GyroSampleBuffer: @unchecked Sendable {
 @MainActor protocol GyroMotionDriving: AnyObject {
     func startGyro(into buffer: GyroSampleBuffer) throws
     func stopGyro()
+    func startGravity(_ receive: @escaping (GyroVector3, Double) -> Void) throws -> UUID
+    func stopGravity(_ id: UUID)
 }
 
 enum PhoneMotionError: LocalizedError {
     case unavailable
-    var errorDescription: String? { "This phone's gyroscope is unavailable." }
+    case gravityUnavailable
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: "This phone's gyroscope is unavailable."
+        case .gravityUnavailable: "This phone's gravity data is unavailable."
+        }
+    }
 }
 
 /// One motion manager serves the raw gyro logger and the independently paced level overlay.
@@ -57,7 +65,7 @@ enum PhoneMotionError: LocalizedError {
         queue.qualityOfService = .userInitiated
         return queue
     }()
-    private var gravityConsumers: [UUID: (Double, Double, Double) -> Void] = [:]
+    private var gravityConsumers: [UUID: (Double, Double, Double, Double) -> Void] = [:]
 
     func startGyro(into buffer: GyroSampleBuffer) throws {
         guard manager.isGyroAvailable else { throw PhoneMotionError.unavailable }
@@ -83,16 +91,31 @@ enum PhoneMotionError: LocalizedError {
     func stopGyro() { manager.stopGyroUpdates() }
 
     func startLevel(_ receive: @escaping (Double, Double, Double) -> Void) -> UUID {
+        addGravityConsumer { x, y, z, _ in receive(x, y, z) }
+    }
+
+    func startGravity(_ receive: @escaping (GyroVector3, Double) -> Void) throws -> UUID {
+        guard manager.isDeviceMotionAvailable else { throw PhoneMotionError.gravityUnavailable }
+        return addGravityConsumer { x, y, z, timestamp in
+            receive(GyroVector3(x: x, y: y, z: z), timestamp)
+        }
+    }
+
+    private func addGravityConsumer(
+        _ receive: @escaping (Double, Double, Double, Double) -> Void
+    ) -> UUID {
         let id = UUID()
         gravityConsumers[id] = receive
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return id }
         manager.deviceMotionUpdateInterval = 1.0 / 30.0
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
-            guard let gravity = motion?.gravity else { return }
+            guard let motion else { return }
+            let gravity = motion.gravity
+            let timestamp = motion.timestamp
             MainActor.assumeIsolated {
                 guard let self else { return }
                 for consumer in self.gravityConsumers.values {
-                    consumer(gravity.x, gravity.y, gravity.z)
+                    consumer(gravity.x, gravity.y, gravity.z, timestamp)
                 }
             }
         }
@@ -103,4 +126,6 @@ enum PhoneMotionError: LocalizedError {
         gravityConsumers.removeValue(forKey: id)
         if gravityConsumers.isEmpty { manager.stopDeviceMotionUpdates() }
     }
+
+    func stopGravity(_ id: UUID) { stopLevel(id) }
 }
