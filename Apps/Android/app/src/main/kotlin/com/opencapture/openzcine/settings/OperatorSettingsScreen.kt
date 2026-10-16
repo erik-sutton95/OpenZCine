@@ -335,7 +335,8 @@ internal fun OperatorSettingsScreen(
             "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
             "Current OpenZCine build from the native project metadata."),
     )
-    remember(operatorSession, initialTab) { initialTab?.let { operatorSession.settingsTab = it } }
+    // Seeds the session once per requested landing tab, before the first frame draws.
+    remember(operatorSession, initialTab) { initialTab?.also { operatorSession.settingsTab = it } }
     MonitorOperatorSettingsScreen(configuration, assistSections, display, operatorSession, cacheOwner)
 }
 
