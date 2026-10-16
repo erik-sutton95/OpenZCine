@@ -7,10 +7,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -112,14 +115,19 @@ class MonitorPickerDismissComposeTest {
                 "SIMULATED-picker-dismiss", Context.MODE_PRIVATE).also { it.edit().clear().commit() }) }
             TestMonitorScreen(session, remember { idleNikonAssists() }, settings)
         }
-        composeRule.waitUntilAtLeastOneExists(hasContentDescription("FOCUS", substring = true), 5_000)
+        // A cold first launch can take longer than the default wait.
+        composeRule.waitForIdle()
+        composeRule.waitUntilAtLeastOneExists(hasContentDescription("FOCUS", substring = true), 15_000)
     }
 
     /** Opens the FOCUS picker through its readout and sends a focus-mode write the camera never answers. */
     private fun openFocusWithPendingWrite(session: PendingCamera) {
-        composeRule.onNode(hasContentDescription("FOCUS", substring = true)).performClick()
+        // The readout can sit outside the test window's touch area; its click action is what opens the picker.
+        composeRule.onNode(hasContentDescription("FOCUS", substring = true)).performSemanticsAction(SemanticsActions.OnClick)
         composeRule.waitUntilAtLeastOneExists(hasTestTag("ladder_sheet"), 5_000)
-        composeRule.onNodeWithText("MF").performClick()
+        // The drum draws its labels; its accessibility action picks by position (MF leads the AF ladder).
+        composeRule.onNode(hasContentDescription("AF-C") and SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
         composeRule.waitUntil(5_000) { session.queued }
         composeRule.onNodeWithTag("ladder_sheet").assertExists()
         assertTrue(session.writes.isEmpty())
