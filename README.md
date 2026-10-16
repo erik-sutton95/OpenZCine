@@ -208,6 +208,7 @@ Releases: TestFlight builds come from Xcode Cloud, with a GitHub Actions fallbac
 
 - **[Docs](https://opencapture.org/openzcine/docs/)**: the OpenZCine handbook.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): shared Swift core and platform shells
+- [`docs/connect-presentation.md`](docs/connect-presentation.md): shared progress, setup choices and consent
 - [`docs/ROADMAP.md`](docs/ROADMAP.md): engineering phases and status
 - [`docs/nikon-sdk.md`](docs/nikon-sdk.md): the public sources behind the camera protocol
 - [`docs/flows/`](docs/flows/): user journeys and screen-level design as git-tracked Excalidraw

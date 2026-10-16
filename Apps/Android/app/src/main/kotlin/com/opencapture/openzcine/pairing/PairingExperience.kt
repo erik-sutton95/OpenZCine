@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.opencapture.opencine.nikon.NikonTakeOverPrompt
 import com.opencapture.monitorui.MonitorPairingCheck
 import com.opencapture.monitorui.MonitorPairingCheckState
 import com.opencapture.monitorui.MonitorPairingDevice
@@ -1146,16 +1147,9 @@ public fun PairingExperience(
     // Connecting to a held camera drops the holder's session (the single-initiator mechanism the
     // discovery shield exists to avoid): the row names whose it is, and this stops the tap being
     // the whole decision.
-    var takeOverTarget by remember { mutableStateOf<DiscoveredCamera?>(null) }
-    takeOverTarget?.let { held ->
-        TakeOverConfirmationDialog(
-            holder = held.heldByDeviceName,
-            onConfirm = {
-                takeOverTarget = null
-                connect(held.host)
-            },
-            onDismiss = { takeOverTarget = null },
-        )
+    val consentSource = remember { Any() }
+    DisposableEffect(camerasModel, consentSource) {
+        onDispose { camerasModel.consent.retire(consentSource) }
     }
     val discovery =
         discoveryPane(flow.path, cameras, usbCameras, hdmiCaptureReady, wifiSearchMiss)
@@ -1166,7 +1160,16 @@ public fun PairingExperience(
             id.startsWith(USB_DEVICE_PREFIX) ->
                 usbCameras.firstOrNull { USB_DEVICE_PREFIX + it.token == id }?.let(::connectUsb)
             else -> cameras.firstOrNull { it.host == id }?.let { camera ->
-                if (camera.isHeldByAnotherDevice) takeOverTarget = camera else connect(camera.host)
+                if (camera.isHeldByAnotherDevice) {
+                    camerasModel.consent.present(
+                        NikonTakeOverPrompt(camera.name, camera.heldByDeviceName, confirm = { connect(camera.host) }, cancel = {}),
+                        source = consentSource,
+                        isCurrent = { flow.step == PairingStep.DISCOVER && cameras.any { it.host == camera.host && it.isHeldByAnotherDevice } },
+                    )
+                } else {
+                    camerasModel.consent.retire(consentSource)
+                    connect(camera.host)
+                }
             }
         }
     }
@@ -1655,44 +1658,6 @@ private fun networkInstructions(path: PairingPath): List<MonitorPairingInstructi
             card(phone, MonitorPairingInstructionIcon.PHONE, R.string.pairing_network_router_phone_1),
         )
     }
-}
-
-/**
- * Asks before connecting to a camera another device is holding.
- *
- * Lives out here, not inside the wizard's list, because the wizard and the saved-camera home both
- * reach the same connect — a second entry point to connecting must not be a second way to drop
- * someone else's session without asking (iOS `TakeOverConfirmation`, mounted at the app root). The
- * dialog names the device that loses its session: "are you sure" without that is not a decision
- * anyone can make.
- */
-@Composable
-internal fun TakeOverConfirmationDialog(
-    holder: String?,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.pairing_take_over_title)) },
-        text = {
-            Text(
-                holder?.takeIf(String::isNotBlank)?.let {
-                    stringResource(R.string.pairing_take_over_message_named, it)
-                } ?: stringResource(R.string.pairing_take_over_message),
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.action_take_over))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
 }
 
 internal const val USB_DEBUG_FIXTURE_LABEL: String = "DEBUG FIXTURE — NOT USB HARDWARE"

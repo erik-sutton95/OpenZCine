@@ -120,6 +120,45 @@ enum DemoHarness {
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) async {}
     #endif
 
+    #if DEBUG
+        /// Exercises typed/legacy precedence at the real shared cameras screen, without a camera.
+        @MainActor static func addSetupSlots(_ supplied: IntegrationSlots) -> IntegrationSlots {
+            guard let mode = value("ZC_DEMO_CHOOSER_SLOT") else { return supplied }
+            var slots = supplied
+            slots.addRoute = { _, done in
+                AnyView(
+                    VStack {
+                        Text("Legacy chooser")
+                        Button("Cancel") { done(nil) }
+                    }.padding())
+            }
+            if mode == "legacy" {
+                slots.addSetup = nil
+            } else if let typed = slots.addSetup {
+                slots.addSetup = { camera, done in
+                    var flow = typed(camera, done)
+                    flow.chooser.title = "Typed chooser"
+                    return flow
+                }
+            }
+            return slots
+        }
+    #else
+        @MainActor static func addSetupSlots(_ supplied: IntegrationSlots) -> IntegrationSlots {
+            supplied
+        }
+    #endif
+
+    /// Actual shared-screen consent review; release builds have no review path.
+    @MainActor static func connectConsentReview() -> AnyView? {
+        #if DEBUG
+            guard let mode = value("ZC_DEMO_CONSENT_SCREEN") else { return nil }
+            return AnyView(ConnectConsentReview(mode: mode))
+        #else
+            return nil
+        #endif
+    }
+
     // MARK: Live-view frame capture
 
     #if DEBUG
@@ -891,6 +930,16 @@ enum DemoHarness {
                 model.isPairingNewCamera = true
                 model.firstPairWizardStep = step
             }
+            if env["ZC_DEMO_FRESH_INSTALL"] == "1" {
+                // SIMULATED fresh install: no saved camera and no camera-list choice yet. Only
+                // this simulator's demo records are forgotten; nothing is dialled.
+                for record in NativeCameraConnectionStore.shared.savedCameras() {
+                    NativeCameraConnectionStore.shared.forgetPairing(host: record.host)
+                }
+                model.savedCameras = NativeCameraConnectionStore.shared.savedCameras()
+                model.showsCameraListWithoutSavedCameras = false
+                model.cameras.reloadSaved()
+            }
             if env["ZC_DEMO_CAMERA_LIST"] == "1" {
                 // Demo/screenshot affordance: land on the camera-list home even with zero saved
                 // cameras — the watcher's destination behind the wizard's "Open the camera list"
@@ -940,6 +989,41 @@ enum DemoHarness {
                 // "connecting" holds it on its steps, "failed" fails it with the funnel's copy.
                 model.nikonPort.demoOutcome = outcome
                 if let camera = model.cameras.saved.first { model.cameras.connect(camera) }
+            }
+            if let mode = env["ZC_DEMO_CONNECT_PREPARING"] {
+                // SIMULATED post-handshake state with shared or app-owned progress: an
+                // established session still waiting for its first frame. No session, network
+                // command or first frame is created by this fixture. (`.connected` also ends the
+                // discovery loop, which would otherwise overwrite a staged state.)
+                // "neverStarted": live view did not start, so the progress sheet is gone.
+                model.connection = .connected
+                model.isConnectionProgressPresented = mode != "neverStarted"
+                model.connectionProgressDeviceName = "SIMULATED ZR"
+                model.connectionPhase = .preparingLiveView
+                model.connectionProgressUsesCard = mode != "standalone" && mode != "neverStarted"
+                model.connectionMessage =
+                    mode == "neverStarted" ? "SIMULATED live view did not start." : "Reading camera settings…"
+            }
+            if let entry = env["ZC_DEMO_CONNECT_CONSENT"] {
+                // SIMULATED consent on actual model paths; the test only cancels, and the integration port is staged.
+                let held = DiscoveredCamera(
+                    ip: "192.0.2.45", name: "SIMULATED camera", source: .heldByAnotherDevice,
+                    heldByDeviceName: "SIMULATED other phone")
+                model.nikonPort.demoOutcome = "connecting"
+                if entry == "direct" {
+                    model.connectToCamera(held)
+                } else {
+                    _ = model.cameras
+                    model.nikonPort.demoSightings = [held]
+                    model.nikonPort.found([])
+                    for _ in 0..<100
+                    where !model.cameras.nearby.contains(where: { $0.id == held.id }) {
+                        await Task.yield()
+                    }
+                    if let sighting = model.cameras.nearby.first(where: { $0.id == held.id }) {
+                        model.cameras.connect(sighting)
+                    }
+                }
             }
             if let raw = env["ZC_DEMO_HOTSPOT_CARD"] {
                 // Stages the hotspot-recovery strip on the camera list ("active" / "needed") —
@@ -1291,5 +1375,65 @@ enum DemoHarness {
             return writes.count
         }
         func queueRecord(start: Bool, operation: OperationID) {}
+    }
+#endif
+
+#if DEBUG
+    /// SIMULATED consent over the actual public screens; empty integrations cannot dial.
+    @MainActor
+    private struct ConnectConsentReview: View {
+        let mode: String
+        @State private var cameras = CamerasModel(
+            integrations: [],
+            store: SavedCamerasStore(document: StoredData(read: { nil }, write: { _ in })))
+        @State private var parentCameras = CamerasModel(
+            integrations: [],
+            store: SavedCamerasStore(document: StoredData(read: { nil }, write: { _ in })))
+        @State private var answers = 0
+        @State private var cancellations = 0
+        @State private var showsChild = true
+
+        var body: some View {
+            VStack {
+                HStack {
+                    Button("Show decision") { present(on: cameras.consent) }
+                    Button("Hide child") { showsChild = false }
+                    Button("Show parent decision") { present(on: parentCameras.consent) }
+                    Text("Answers: \(answers), cancels: \(cancellations)")
+                }
+                if mode.hasPrefix("nested") {
+                    AppShell(
+                        model: ShellModel(cameras: mode == "nestedSame" ? cameras : parentCameras),
+                        brand: ShellBrand(name: "SIMULATED"),
+                        actions: ShellActions(diagnostics: {}, reportProblem: {}),
+                        prePage: { _ in AnyView(child) },
+                        monitor: { _ in EmptyView() }, page: { _ in EmptyView() })
+                } else {
+                    child
+                }
+            }
+        }
+
+        @ViewBuilder private var child: some View {
+            if showsChild {
+                if mode == "pair" {
+                    PairScreen(model: cameras, onDone: {}, onDiagnostics: {}, onReportProblem: {})
+                } else {
+                    CamerasScreen(
+                        model: cameras, brandName: "SIMULATED", onPair: {}, onMedia: {},
+                        onSettings: {})
+                }
+            } else {
+                Text("Child removed")
+            }
+        }
+
+        private func present(on owner: OperatorConsent) {
+            owner.present(
+                OperatorConsentRequest(
+                    title: "SIMULATED decision", message: "No camera commands are connected.",
+                    confirmTitle: "Continue", onConfirm: { answers += 1 },
+                    onCancel: { cancellations += 1 }), source: "review")
+        }
     }
 #endif
