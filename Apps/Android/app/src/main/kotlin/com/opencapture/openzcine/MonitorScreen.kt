@@ -2262,7 +2262,6 @@ internal fun MonitorScreen(
                     MonitorControlPickerPanel(
                         picker = picker,
                         commonControl = if (isPhotographyMode) null else commonControl,
-                        commonField = fieldFor(picker.kind),
                         controlsEnabled = commandControlsEnabled,
                         feedback = commandControlFeedback,
                         onSelect =

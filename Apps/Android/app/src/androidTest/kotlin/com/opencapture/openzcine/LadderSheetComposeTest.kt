@@ -20,6 +20,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.opencapture.opencine.cameracontrols.LocalViewportPortrait
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CodecBitDepthOption
+import com.opencapture.opencine.nikon.NikonCapturePopupKind
+import com.opencapture.opencine.nikon.NikonCapturePopupState
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -59,7 +61,7 @@ class LadderSheetComposeTest {
     fun codecDepthsFlankTheRowAndDoNotReplaceIt() {
         val harness = harness()
         show(harness, codec())
-        composeRule.onNodeWithContentDescription("Record H.265 at 10-bit").performClick()
+        composeRule.onNodeWithContentDescription("Record H.265 at 10 bit").performClick()
         composeRule.runOnIdle {
             assertEquals(listOf(CameraControl.CODEC to "H.265 10-bit"), harness.writes)
         }
@@ -82,7 +84,7 @@ class LadderSheetComposeTest {
         val harness = harness()
         show(harness, iso(auto = true))
         composeRule.onNodeWithText("800 / 4000").assertIsDisplayed()
-        composeRule.onNodeWithText("ISO is automatic", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Auto ISO is on", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("AUTO OFF").assertIsDisplayed()
         save("iso-auto")
     }
@@ -96,10 +98,10 @@ class LadderSheetComposeTest {
         composeRule.runOnIdle { assertTrue(harness.writes.isEmpty()) }
         save("focus")
         show(harness, resolution())
-        composeRule.onNodeWithText("RESOLUTION").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("RESOLUTION. Frame size").assertIsDisplayed()
         save("resolution")
         show(harness, iris())
-        composeRule.onNodeWithText("IRIS").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("IRIS. Aperture").assertIsDisplayed()
         save("iris")
     }
 
@@ -125,18 +127,16 @@ class LadderSheetComposeTest {
         save("drive-timer", folder)
 
         show(harness, photoMeter())
-        composeRule.onNodeWithText("METER").assertIsDisplayed()
-        composeRule.onNodeWithText("METERING PATTERN").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("METER. Metering pattern").assertIsDisplayed()
         save("meter", folder)
 
         show(harness, photoProfile())
-        composeRule.onNodeWithText("PROFILE").assertIsDisplayed()
-        composeRule.onNodeWithText("PICTURE CONTROL").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("PROFILE. Picture control").assertIsDisplayed()
         save("profile", folder)
 
         show(harness, photoSize())
         composeRule.onNodeWithText("AREA").assertIsDisplayed()
-        composeRule.onNodeWithText("AREA · SIZE").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("SIZE. Area · size").assertIsDisplayed()
         save("size", folder)
     }
 
@@ -329,7 +329,10 @@ class LadderSheetComposeTest {
             ),
         ),
         interactionLocked = locked,
-        lockBanner = if (locked) "Shutter locked on camera. Hold anywhere to unlock" else null,
+        popup = NikonCapturePopupState(
+            kind = NikonCapturePopupKind.SHUTTER, title = "SHUTTER", subtitle = "Angle / speed",
+            modes = emptyList(), shutterLockedOnCamera = locked,
+        ),
     )
 
     private fun iso(auto: Boolean) = MonitorPickerPresentation(
@@ -351,7 +354,10 @@ class LadderSheetComposeTest {
             ),
         ),
         drumInteractionLocked = auto,
-        drumLockBanner = if (auto) "ISO is automatic" else null,
+        popup = NikonCapturePopupState(
+            kind = NikonCapturePopupKind.ISO, title = "ISO", subtitle = "Sensitivity", modes = emptyList(),
+            codec = "H.265", autoIso = true, isoCameraOwned = auto,
+        ),
     )
 
     private fun focus() = MonitorPickerPresentation(

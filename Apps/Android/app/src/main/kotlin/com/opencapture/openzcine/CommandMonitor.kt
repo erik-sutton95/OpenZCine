@@ -14,8 +14,8 @@ import com.opencapture.monitorui.monitorCommandTileOrder
 import com.opencapture.monitorui.moveMonitorCommandTile
 import com.opencapture.opencine.appkit.MonitorCommandTileOrderPreferences
 import com.opencapture.opencine.cameracontrols.LadderSheet
-import com.opencapture.opencine.cameracontrols.LadderSheetPresentation
-import com.opencapture.opencine.cameracontrols.LadderTab
+import com.opencapture.opencine.vocabulary.LadderSheetPresentation
+import com.opencapture.opencine.vocabulary.LadderTab
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.MonitorTextFormat
 import com.opencapture.opencine.vocabulary.CaptureLadder

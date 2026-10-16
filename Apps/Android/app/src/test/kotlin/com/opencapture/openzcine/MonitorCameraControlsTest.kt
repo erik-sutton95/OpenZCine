@@ -184,7 +184,7 @@ class MonitorCameraControlsTest {
         val lockedPicker = requireNotNull(lockedShutter.picker)
         assertEquals(listOf("Angle", "Speed"), lockedPicker.modes.map { it.label })
         assertTrue(lockedPicker.interactionLocked)
-        assertNotNull(lockedPicker.lockBanner)
+        assertEquals(true, lockedPicker.popup?.shutterLockedOnCamera)
         assertEquals("Shutter is locked on the camera.", lockedShutter.unavailableReason)
         assertTrue(lockedShutter.controlLocked)
         assertTrue(lockedShutter.dimmed)
@@ -464,7 +464,6 @@ class MonitorCameraControlsTest {
         assertEquals(2, iso.picker?.modes?.size)
         assertEquals(listOf("Low Base", "High Base"), iso.picker?.modes?.map { it.label })
         assertEquals(false, iso.picker?.drumInteractionLocked)
-        assertEquals(null, iso.picker?.drumLockBanner)
     }
 
     @Test

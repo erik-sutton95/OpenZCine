@@ -6,7 +6,6 @@ import com.opencapture.opencine.nikon.ShutterPickerPolicy
 import com.opencapture.opencine.nikon.StillPickerLadders
 import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
 import com.opencapture.opencine.appkit.MonitorControlModel
-import com.opencapture.opencine.appkit.MonitorCaptureField
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -54,6 +53,8 @@ import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
+import com.opencapture.opencine.nikon.NikonCapturePopupKind
+import com.opencapture.opencine.nikon.NikonCapturePopupState
 import com.opencapture.opencine.cameracontrols.chromeClickable
 import com.opencapture.monitorui.MonitorMaterial
 import com.opencapture.monitorui.monitorMaterial
@@ -131,17 +132,21 @@ internal data class MonitorPickerPresentation(
     /** Which mode tab to open on (iOS dual-base follows `movieBaseISO`). */
     val initialModeIndex: Int = 0,
     /**
-     * Dim drum + mode bar and show [lockBanner] (iOS shutter Control-lock /
+     * Dim drum + mode bar (iOS shutter Control-lock /
      * ISO-while-recording).
      */
     val interactionLocked: Boolean = false,
-    val lockBanner: String? = null,
     /**
      * Dim/disable only the value drum (Auto ISO On). Mode tabs stay interactive so the
      * operator can switch to Auto Off / Manual.
      */
     val drumInteractionLocked: Boolean = false,
-    val drumLockBanner: String? = null,
+    /**
+     * The body's circuit facts for the shared Nikon capture popup (ISO base or Auto, shutter
+     * circuit and lock, white balance mode and tune); its modes come from [modes]. Null for a
+     * picker that is one setting or independent settings.
+     */
+    val popup: NikonCapturePopupState? = null,
 )
 
 /** One readout in the live monitor's capture strip. */
@@ -396,7 +401,7 @@ internal fun monitorCaptureSettings(
         run {
             val wbTile = primary[CommandTileKind.WHITE_BALANCE]
             val tintTile = exposure.getOrNull(3)
-            val wbPresentation = wbPickerPresentation(wbTile, tintTile, strings)
+            val wbPresentation = wbPickerPresentation(wbTile, tintTile, strings, codec)
             MonitorCaptureSettingPresentation(
                 kind = MonitorPickerKind.WHITE_BALANCE,
                 label = strings.resolve(R.string.camera_label_wb),
@@ -592,6 +597,7 @@ internal fun wbPickerPresentation(
     wbTile: CommandTilePresentation?,
     tintTile: CommandTilePresentation?,
     strings: PhoneStringResolver,
+    codec: String = "",
 ): MonitorPickerPresentation? {
     val live = wbTile?.value?.takeIf { it != "—" } ?: return null
     // Open when the body has a WB readout even if the write domain is still
@@ -660,6 +666,13 @@ internal fun wbPickerPresentation(
                 ),
             ),
         initialModeIndex = initialMode,
+        popup = NikonCapturePopupState(
+            kind = NikonCapturePopupKind.WHITE_BALANCE, title = title, subtitle = WbPickerPolicy.SUBTITLE,
+            modes = emptyList(), codec = codec,
+            whiteBalanceMode = if (initialMode == 0) "Color temp" else live,
+            tintCells = WhiteBalanceTint.cells(tintCurrent) ?: (0 to 0),
+            tintAvailable = tintTile?.request != null,
+        ),
     )
 }
 
@@ -726,12 +739,10 @@ internal fun shutterPickerPresentation(
             ),
         initialModeIndex = if (modeIsSpeed) 1 else 0,
         interactionLocked = lockedOnCamera,
-        lockBanner =
-            if (lockedOnCamera) {
-                "Shutter locked on camera — hold anywhere to unlock"
-            } else {
-                null
-            },
+        popup = NikonCapturePopupState(
+            kind = NikonCapturePopupKind.SHUTTER, title = title, subtitle = ShutterPickerPolicy.SUBTITLE,
+            modes = emptyList(), circuitIndex = if (modeIsSpeed) 1 else 0, shutterLockedOnCamera = lockedOnCamera,
+        ),
     )
 }
 
@@ -836,16 +847,11 @@ internal fun isoPickerPresentation(
                 IsoPickerPolicy.autoISOModeIndex(codec, isoAuto, exposureMode),
             // Drum is camera-owned while Auto is on or (non-R3D) mode is not M.
             drumInteractionLocked = cameraOwned,
-            drumLockBanner =
-                if (cameraOwned) {
-                    if (IsoPickerPolicy.allowsManualISO(codec, exposureMode)) {
-                        strings.resolve(R.string.iso_auto_drum_locked)
-                    } else {
-                        strings.resolve(R.string.iso_manual_requires_m_mode)
-                    }
-                } else {
-                    null
-                },
+            popup = isoPopup(title, subtitle, codec, live).copy(
+                circuitIndex = IsoPickerPolicy.autoISOModeIndex(codec, isoAuto, exposureMode),
+                autoIso = true, isoCameraOwned = cameraOwned,
+                allowsManualIso = IsoPickerPolicy.allowsManualISO(codec, exposureMode),
+            ),
         )
     }
 
@@ -868,6 +874,7 @@ internal fun isoPickerPresentation(
                         markedValues = IsoPickerPolicy.markedValues(codec, 0),
                     ),
                 ),
+            popup = isoPopup(title, subtitle, codec, live),
         )
     }
     val baseLabel = baseIsoTile?.value?.takeIf { it != "—" }
@@ -907,8 +914,15 @@ internal fun isoPickerPresentation(
         subtitle = subtitle,
         modes = modes,
         initialModeIndex = if (highBase) 1 else 0,
+        popup = isoPopup(title, subtitle, codec, live).copy(circuitIndex = if (highBase) 1 else 0, dualBaseIso = true),
     )
 }
+
+/** The movie ISO popup's facts every layout shares: the codec picks the ladders and marks. */
+private fun isoPopup(title: String, subtitle: String, codec: String, live: String?) = NikonCapturePopupState(
+    kind = NikonCapturePopupKind.ISO, title = title, subtitle = subtitle, modes = emptyList(),
+    codec = codec, liveIso = live?.toIntOrNull(),
+)
 
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */
 internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
@@ -927,7 +941,6 @@ internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
 internal fun MonitorControlPickerPanel(
     picker: MonitorPickerPresentation,
     commonControl: MonitorControlModel? = null,
-    commonField: MonitorCaptureField? = null,
     controlsEnabled: Boolean,
     feedback: CommandControlFeedback?,
     onSelect: (CommandControlRequest, String) -> Unit,
@@ -964,7 +977,6 @@ internal fun MonitorControlPickerPanel(
     }
     VideoLadderBody(
         picker = picker,
-        field = commonField,
         control = commonControl,
         controlsEnabled = writeEnabled,
         error = feedback?.takeIf { it.isError }?.message,
