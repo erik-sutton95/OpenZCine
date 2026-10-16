@@ -4363,6 +4363,14 @@ final class NativeAppModel {
             liveFrameImage = nil
             cameraState = .preview
             resetCameraPropertyState()
+            // The monitor reads storage from the common session observation, which a body fills
+            // from its card readback. Report the demo card (CameraDisplayState.preview) the same
+            // way, so the demo header shows its capacity instead of the unknown placeholder.
+            lastKnownStorage = cameraState.mediaStatus.map { status in
+                let free = UInt64(max(0, status.gigabytesFree)) * 1_000_000_000
+                let total = status.percentFree > 0 ? free * 100 / UInt64(status.percentFree) : 0
+                return PTPStorageInfo(totalCapacityBytes: total, freeSpaceBytes: free)
+            }
             resetLinkHealthMeasurements()
             discoveredCameras = []
             connectionMessage = "Demo UI session. No camera commands are being sent."
