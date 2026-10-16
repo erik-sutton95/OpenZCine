@@ -96,11 +96,18 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             model.preferences = OperatorPreferences.defaults
             switch source {
             case "hdmi":
+                // The state `startHDMIMonitorSession` leaves once a capture card streams, staged
+                // without a UVC device (the simulator has none) and so without its wait for one.
                 model.isMonitorPresented = true
+                model.connection = .connected
                 model.videoSource = .hdmiCapture
+                model.hdmiCaptureState = .streaming(
+                    deviceName: "SIMULATED capture", format: "1920×1080 @30")
             case "relay":
+                // The state `joinRelay` leaves, without a broadcast to join.
                 model.videoSource = .relay
                 model.isMonitorPresented = true
+                model.connection = .connected
             default:
                 model.startDemoSession()
             }
@@ -129,6 +136,10 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             XCTAssertTrue(
                 backToLive,
                 "\(source): closing Settings must return to the monitor: \(hosted.identifiers)")
+            // A connected monitor starts no camera discovery when the root appears: no sweep of
+            // the machine's real network runs behind it and takes the monitor down.
+            XCTAssertEqual(
+                model.connection, .connected, "\(source): no discovery may run behind the monitor")
         }
     }
 
