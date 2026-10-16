@@ -263,9 +263,7 @@ internal fun restoreNikonAssists(
             .apply()
         operator.edit().apply { droppedToolbarKeys.forEach(::remove) }.apply()
     }
-    val storedLut =
-        storedLut(assist)?.takeIf(availableStoredLut)?.let(FeedLutSelection::Stored)
-            ?: FeedLutSelection.BuiltIn((assist.all[LUT_KEY] as? String)?.let(FeedLut::fromId) ?: FeedLut.LOG3G10_709)
+    val storedLut = persistedMonitorLut(assist, availableStoredLut)
     if (debugEffects != null || debugScopes != null) {
         val effects = debugEffects ?: FeedEffects.NONE
         val kept =
@@ -311,6 +309,18 @@ internal fun restoreNikonAssists(
 private const val REVIEW_SECONDS_KEY = "instantReview.seconds.v1"
 private const val REVIEW_FOCUS_KEY = "instantReview.focusPoint.v1"
 private const val REVIEW_INFO_KEY = "instantReview.captureInfo.v1"
+
+/** The operator's saved monitor look (kept while LUT is off); a missing stored cube falls back. */
+internal fun persistedMonitorLut(
+    assist: SharedPreferences,
+    availableStoredLut: (StoredLutSelection) -> Boolean = { true },
+): FeedLutSelection =
+    storedLut(assist)?.takeIf(availableStoredLut)?.let(FeedLutSelection::Stored)
+        ?: FeedLutSelection.BuiltIn((assist.all[LUT_KEY] as? String)?.let(FeedLut::fromId) ?: FeedLut.LOG3G10_709)
+
+/** [persistedMonitorLut] from the app's assist preferences, read when it is needed. */
+internal fun persistedMonitorLut(context: Context, availableStoredLut: (StoredLutSelection) -> Boolean): FeedLutSelection =
+    persistedMonitorLut(context.getSharedPreferences(ASSIST_PREFERENCES, Context.MODE_PRIVATE), availableStoredLut)
 
 private fun storedLut(assist: SharedPreferences): StoredLutSelection? =
     if (assist.all[LUT_KIND_KEY] != LUT_STORED) null

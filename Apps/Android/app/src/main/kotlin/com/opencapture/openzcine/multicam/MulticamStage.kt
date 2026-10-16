@@ -13,6 +13,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,10 @@ import com.opencapture.opencine.appkit.MultiviewRecordContext
 import com.opencapture.opencine.appkit.MultiviewStage
 import com.opencapture.opencine.appkit.MultiviewStageSurface
 import com.opencapture.opencine.appkit.MultiviewStageStateProvider
+import com.opencapture.opencine.appkit.MultiviewStageServices
+import com.opencapture.opencine.appkit.MultiviewStageServicesProvider
+import com.opencapture.opencine.appkit.MultiviewToolAvailability
+import com.opencapture.opencine.appkit.LocalMultiviewStageVisible
 import com.opencapture.opencine.appkit.MultiviewNetworkRestore
 import com.opencapture.opencine.appkit.MultiviewStageActions
 import com.opencapture.opencine.appkit.MultiviewTally
@@ -74,18 +79,38 @@ fun MulticamStage(
     var adding by remember { mutableStateOf<Int?>(null) }
     var leaving by remember { mutableStateOf(false) }
     val fill = coordinator.presentation.fill
-    BackHandler(enabled = coordinator.lent == null && com.opencapture.opencine.appkit.LocalMultiviewStageVisible.current) { leaving = true }
+    val visible = LocalMultiviewStageVisible.current
+    // A covered stage keeps its pictures but retires transient editors (no command is sent).
+    LaunchedEffect(visible) {
+        if (!visible) {
+            coordinator.closeCameraSettings()
+            coordinator.closeLookSettings()
+        }
+    }
+    DisposableEffect(coordinator) {
+        onDispose {
+            coordinator.closeCameraSettings()
+            coordinator.closeLookSettings()
+        }
+    }
+    BackHandler(enabled = coordinator.lent == null && visible) { leaving = true }
     MultiviewStageSurface(coordinator.arrangement, coordinator.focusedSlot,
         // The stage covers Your cameras; it takes every touch that no control of its own takes.
         Modifier.fillMaxSize().background(MonitorPalette.backgroundDeep).pointerInput(Unit) { detectTapGestures {} }
             .testTag("multicam.stage"),
     ) { viewport ->
         val layout = viewport.layout
+        val services = MultiviewStageServices(
+            MultiviewToolAvailability(coordinator.cameraSettingsSlots, coordinator.pictureLUTSlots),
+            configureLUT = coordinator::openLookSettings,
+        )
         MultiviewStageStateProvider(coordinator.presentation) {
+        MultiviewStageServicesProvider(services) {
         MultiviewStage(
             tiles = (0 until MulticamCoordinator.TILES).map { slot -> coordinator.memberAt(slot)?.let { tile(it, coordinator) } },
             layout = layout, arrangement = coordinator.arrangement, selected = coordinator.focusedSlot, fill = fill,
-            tools = listOf(MultiviewTool.LAYOUT, MultiviewTool.FIT),
+            tools = listOf(MultiviewTool.LAYOUT, MultiviewTool.CAMERA, MultiviewTool.FIT, MultiviewTool.LUT),
+            lut = coordinator.lutOn,
             readouts = coordinator.program?.takeIf { it.isLive }?.let { readouts(it, coordinator) },
             recording = coordinator.anyRecording, groupBusy = coordinator.groupBusy, confirmsRecord = confirmsRecord,
             actions = MultiviewStageActions(
@@ -116,12 +141,24 @@ fun MulticamStage(
                             ?.let { (value, _) -> coordinator.set(value, member.id, if (readout == 0) "ISO" else "WB") }
                     }
                 },
+                toggleLut = coordinator::toggleLUT,
+                openSettings = coordinator::openCameraSettings,
+                popupsClosed = coordinator::closeCameraSettings,
             ),
         ) { slot ->
             coordinator.memberAt(slot)?.frame?.let {
-                Image(it, null, Modifier.fillMaxSize(), contentScale = if (fill) ContentScale.Crop else ContentScale.Fit)
+                Image(it, null, Modifier.fillMaxSize().testTag("multicam.tile.picture.$slot"),
+                    contentScale = if (fill) ContentScale.Crop else ContentScale.Fit)
             }
         }
+        }
+        }
+        coordinator.cameraEditor?.let { editor ->
+            androidx.compose.runtime.key(editor) { MulticamCameraSettings(coordinator, editor, viewport) }
+        }
+        coordinator.lookSettingsSlot?.let { slot ->
+            MulticamLookSettings(coordinator, slot, viewport, close = coordinator::closeLookSettings,
+                select = coordinator::openLookSettings)
         }
         coordinator.toast?.let { text ->
             LaunchedEffect(text) {

@@ -113,6 +113,9 @@ internal class AppRoot(
             scope = scope,
             connect = { record -> withContext(Dispatchers.IO) { multicamLink(record, pairingEnvironment) } },
             decoder = ::multicamDecoder,
+            lookRenderer = com.opencapture.openzcine.multicam.multicamLookRendererFactory(lutLibrary),
+            operatorLook = { persistedMonitorLut(app, lutLibrary::contains) },
+            lutLibrary = lutLibrary,
         ).also {
             val store = com.opencapture.opencine.appkit.MultiviewStagePreferencesStore(
                 app.getSharedPreferences("multiview-presentation", Context.MODE_PRIVATE), "stage",
