@@ -33,14 +33,15 @@
     public func gyroObserveJNI(
         _ env: UnsafeMutablePointer<JNIEnv?>, _: jobject?, owner: jstring?,
         recording: jboolean, timestamp: jdouble, dateSeconds: jdouble, cameraLabel: jstring?,
-        mountPreset: jstring?
+        mountPreset: jstring?, calibrationJSON: jstring?
     ) -> jstring? {
         guard let owner = swiftString(env, owner), let label = swiftString(env, cameraLabel),
             let mount = swiftString(env, mountPreset),
+            let calibration = swiftString(env, calibrationJSON),
             let reply = GyroLoggingWire.shared.observe(
                 owner: owner, recording: recording != 0,
                 timestamp: timestamp, dateSeconds: dateSeconds, cameraLabel: label,
-                mountPreset: mount)
+                mountPreset: mount, calibrationJSON: calibration)
         else { return nil }
         return javaString(env, reply)
     }

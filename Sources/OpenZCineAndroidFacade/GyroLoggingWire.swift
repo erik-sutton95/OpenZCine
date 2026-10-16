@@ -56,16 +56,20 @@ public final class GyroLoggingWire: @unchecked Sendable {
     public func observe(
         owner: String, recording: Bool, timestamp: Double,
         dateSeconds: Double, cameraLabel: String,
-        mountPreset: String = GyroMountPreset.unconfigured.rawValue
+        mountPreset: String = GyroMountPreset.unconfigured.rawValue,
+        calibrationJSON: String = ""
     ) -> String? {
         guard timestamp.isFinite, dateSeconds.isFinite,
             let mount = GyroMountPreset(rawValue: mountPreset)
         else { return nil }
+        let calibration =
+            calibrationJSON.isEmpty ? nil : GyroCalibrationWire.decode(calibrationJSON)
+        guard calibrationJSON.isEmpty || calibration != nil else { return nil }
         return update(owner: owner) {
             $0.observeRecording(
                 recording, at: timestamp,
                 date: Date(timeIntervalSince1970: dateSeconds), cameraLabel: cameraLabel,
-                mountPreset: mount)
+                mountPreset: mount, mountCalibration: calibration)
         }
     }
 

@@ -127,8 +127,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 
 - **Phone gyro logging for Gyroflow** (in progress, discussion #212): opt-in, camera-REC-driven
   motion logs on iOS and Android, with pre/post coverage, capture-health diagnostics, durable
-  recovery, native sharing, and saved phone-mount presets. Synchronization, lens selection,
-  and alignment for unsupported mounts stay in Gyroflow.
+  recovery, native sharing, saved phone-mount presets, and guided automatic mount calibration
+  with an independent mixed-pose check on iOS and Android. Synchronization and lens selection
+  stay in Gyroflow.
   See [the workflow and hardware validation requirements](gyro-logging.md).
 
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,

@@ -6,7 +6,7 @@ logging feature; stabilization quality still requires validation with the actual
 
 ## Capture
 
-1. Open Operator Setup → Controls → **Phone mount** and configure the phone's fixed position.
+1. Open Operator Setup → Controls → **Phone mount** and calibrate the fixed mount or select a preset.
    Enable **Log gyro with camera recordings**.
 2. Keep OpenZCine in the foreground and wait for **GYRO ARMED** on the monitor.
 3. Start and stop recording from the app, camera button, or connected remote. Camera-reported
@@ -32,11 +32,41 @@ Logs live outside the downloaded-media cache and are retained until explicitly d
 
 ## Phone mount
 
+### Automatic calibration
+
+Rigidly fix the phone to the camera before calibrating. With a directly connected camera's
+live view running and recording stopped, open **Automatic calibration** in Phone mount.
+Keep OpenZCine in the foreground and hold still for at least a second before each capture:
+
+1. Hold the camera approximately level and capture the first pose.
+2. Point the lens upward about 25–35° and capture the second pose.
+3. Keep the lens pointing upward and lean the camera sideways about 40–45°, then verify.
+
+Exact angles are unnecessary. The app compares the phone's gravity with the camera's measured
+roll and pitch. The first two poses determine the fixed rotation; the third independently checks
+it. Missing or stale camera data, movement, insufficiently different poses, or a failed final
+check prevent saving. Disconnecting, backgrounding, changing video source, or starting REC
+cancels an unfinished calibration. A cancelled replacement leaves the previously saved value.
+
+Calibration supports a tilted phone and determines its axes without using display orientation.
+Repeat it whenever the phone moves in its holder. Selecting a manual preset or resetting the
+calibration clears the active measured alignment. The saved alignment is copied into a take at
+REC and never changes that take afterward, including its postroll or recovery.
+
+Calibrated gyro samples are rotated once into camera axes before writing. Their GCSV header is
+`orientation,XYZ` with `orientation_status,calibrated`. Leave additional IMU rotation at zero in
+Gyroflow for these logs. Calibration does not synchronize the video or select a lens profile.
+The ZR's raw roll/pitch availability and physical signs were checked on hardware; each rig still
+needs the guided mixed-pose verification and a short stabilization test.
+
+### Manual presets
+
 Choose which way the screen faces and where the phone's USB-C edge points. Directions are
 viewed from behind an upright camera. These presets assume the phone screen is parallel to
 the camera's back, perpendicular to the lens axis, and the phone has portrait natural sensor
 axes, as on iPhone. The camera's movable rear screen does not determine this alignment.
-Android devices with another natural sensor frame retain the unconfigured option.
+Android devices with another natural sensor frame retain the unconfigured manual option;
+automatic calibration uses their raw sensor axes directly.
 
 The selection is saved and copied into each take when REC is observed. Changing the setting
 affects future takes; it never relabels an existing recording or its postroll. Turning the
@@ -56,7 +86,7 @@ apply the selected mapping once. The header marks the mount as operator-selected
 than claiming that it was measured or hardware-calibrated.
 
 **Unconfigured** is the default and also applies to older logs. For a tilted or otherwise
-unsupported holder position, leave the mount unconfigured and set its alignment in Gyroflow.
+unsupported holder position, use automatic calibration or set the alignment in Gyroflow.
 A short initial rig test should confirm the selected preset's direction and stabilization.
 The logger does not infer camera mounting from the phone's portrait/landscape display state.
 
