@@ -1273,7 +1273,7 @@ internal fun MonitorScreen(
         // clearance are common policy; this adapter supplies only the window's facts.
         val geometry = monitorOperatorFieldLayout(
             MonitorOperatorViewport(viewportWidth, viewportHeight, safeLeading, safeTrailing,
-                portraitPhoneSafeTop(safeTop, viewportWidth, viewportHeight), safeBottom, 1f,
+                safeTop, safeBottom, 1f,
                 safeLeading > 0f || safeTrailing > 0f),
             assists.shared, mounted, portraitAspect, portraitFeedAspectRatio, isVerticalFeed)
         val fieldLayout = checkNotNull(geometry.layout.field)
@@ -1399,7 +1399,7 @@ internal fun MonitorScreen(
         } else {
             val storage = sharedControlState.snapshot?.storage
             if (prefersMediaDuration) storage?.recordingTimeLabel ?: "-- Min"
-            else storage?.storageReadout?.label ?: StorageReadout.UNAVAILABLE
+            else storage?.storageReadout?.free ?: StorageReadout.UNAVAILABLE
         }
         val watchRelayState =
             remember(
@@ -1946,7 +1946,8 @@ internal fun MonitorScreen(
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
         val headerReadouts = listOfNotNull(
-            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
+            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name,
+                MONITOR_FORMAT_READOUT_TITLE,
                 if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else readoutRetention.resolution,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",
@@ -2461,7 +2462,7 @@ internal fun MonitorDataAvailability.monitorSections(
  * the clock. From 44 dp up the band keeps the gap it has on a punch-hole phone.
  */
 internal fun portraitPhoneSafeTop(safeTop: Float, width: Float, height: Float): Float =
-    if (height > width && width < 600f) maxOf(safeTop, 44f) else safeTop
+    com.opencapture.monitorui.MonitorLayoutPolicy.portraitHeaderSafeTop(width, height, safeTop)
 
 /** Localized DISP mode label for the monitor's accessibility description. */
 @StringRes

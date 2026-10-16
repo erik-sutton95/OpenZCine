@@ -3032,7 +3032,10 @@ final class NikonPictureLifetimeSession: CameraSession {
     var closes: [SessionCloseReason] = []
     var commands = 0
 
-    init() { snapshot = CameraSnapshot(session: id, connection: .ready, authority: .owner) }
+    init(storage: StorageStatus = .unknown) {
+        snapshot = CameraSnapshot(session: id, connection: .ready, authority: .owner)
+        snapshot.storage = storage
+    }
     func snapshots() async -> AsyncStream<CameraSnapshot> {
         let (stream, continuation) = AsyncStream<CameraSnapshot>.makeStream(
             bufferingPolicy: .bufferingNewest(1))
@@ -3063,6 +3066,59 @@ final class NikonPictureLifetimeSession: CameraSession {
         snapshot.authority = .readOnly
         snapshot.revision = snapshot.revision.next()
         for subscriber in subscribers { subscriber.yield(snapshot) }
+    }
+
+    func reportStorage(_ storage: StorageStatus) {
+        snapshot.storage = storage
+        snapshot.revision = snapshot.revision.next()
+        for subscriber in subscribers { subscriber.yield(snapshot) }
+    }
+}
+
+/// SIMULATED camera reports enter the production app through its common session binding.
+@MainActor
+final class NikonSharedStorageReadoutTests: XCTestCase {
+    func testLiveStorageUsesSharedBytesAndPreservesEstimatedTime() async throws {
+        let volume = StorageVolume(
+            id: "active", freeBytes: .init(480_000_000, origin: .cameraReported, at: nil),
+            totalBytes: .init(1_000_000_000, origin: .cameraReported, at: nil),
+            remainingRecordingTime: .init(.seconds(2_400), origin: .estimated, at: nil))
+        let storage = StorageStatus([volume], origin: .cameraReported, at: nil)
+        let model = NativeAppModel()
+        // An older formatted retention value must not replace the bound session's observations.
+        model.cameraState = model.cameraState.updating(media: "999 GB")
+        let session = NikonPictureLifetimeSession(storage: storage)
+        model.shell.control.bind(session)
+        defer { model.shell.control.unbind() }
+        try await received(storage, model: model)
+        model.prefersMediaDuration = false
+        XCTAssertEqual(model.liveMediaReadout, "480 MB")
+        model.prefersMediaDuration = true
+        XCTAssertEqual(model.liveMediaReadout, "~40 Min")
+
+        session.reportStorage(.unknown)
+        try await received(.unknown, model: model)
+        XCTAssertEqual(model.liveMediaReadout, "-- Min")
+        model.prefersMediaDuration = false
+        XCTAssertEqual(model.liveMediaReadout, StorageReadout.unavailable)
+    }
+
+    func testRelayStorageKeepsHostFormattedObservations() {
+        let model = NativeAppModel()
+        model.videoSource = .relay
+        model.cameraState = model.cameraState.updating(media: "HOST STORAGE")
+        XCTAssertEqual(model.liveMediaReadout, "HOST STORAGE")
+        model.prefersMediaDuration = true
+        XCTAssertEqual(model.liveMediaReadout, "HOST STORAGE")
+    }
+
+    private func received(_ storage: StorageStatus, model: NativeAppModel) async throws {
+        for _ in 0..<1_000 {
+            if model.shell.control.snapshot?.storage == storage { return }
+            await Task.yield()
+        }
+        XCTFail("The actual common session binding did not receive its storage report")
+        _ = try XCTUnwrap(model.shell.control.snapshot)
     }
 }
 

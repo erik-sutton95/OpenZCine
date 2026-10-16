@@ -105,7 +105,7 @@ struct ShellAdoptionTests {
         for panel in [NativeAppModel.ActivePanel.settings, .media] {
             let model = NativeAppModel()
             model.hopNative = .init(
-                currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _ in }, rejoin: { _, _ in })
+                currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _, _ in }, rejoin: { _, _ in })
             model.shell.present(camera())
             model.isMonitorPresented = true
             model.activePanel = panel
@@ -127,7 +127,7 @@ struct ShellAdoptionTests {
         }
         let model = NativeAppModel()
         model.hopNative = .init(
-            currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _ in }, rejoin: { _, _ in })
+            currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _, _ in }, rejoin: { _, _ in })
         model.shell.present(camera())
         model.isMonitorPresented = true
         model.activePanel = .settings

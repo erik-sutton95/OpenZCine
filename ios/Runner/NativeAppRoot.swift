@@ -699,8 +699,12 @@ final class NativeAppModel {
             transport: FirstPairTransportMethod,
             skipsPermissions: Bool
         ) -> [FirstPairWizardStep] {
-            var steps: [FirstPairWizardStep] = skipsPermissions ? [] : [.permissions]
-            steps.append(.chooseTransport)
+            // The path is chosen first, so a permission is asked only for a path that uses it:
+            // Local Network for the wireless paths, nothing for a cable (USB keeps its own
+            // control-access request, HDMI capture its own video-access request). Android's
+            // `PairingFlow` has the same order.
+            var steps: [FirstPairWizardStep] = [.chooseTransport]
+            if !skipsPermissions, !transport.isCableLink { steps.append(.permissions) }
             steps.append(.prepareCamera)
             // HDMI capture is a cable and a capture device: there is no network to set up.
             if transport != .hdmiCapture { steps.append(.connectNetwork) }
@@ -760,7 +764,7 @@ final class NativeAppModel {
         let password: String
     }
 
-    var firstPairWizardStep: FirstPairWizardStep = .permissions
+    var firstPairWizardStep: FirstPairWizardStep = .chooseTransport
     var firstPairTransportMethod: FirstPairTransportMethod = .cameraAccessPoint
 
     /// Forces the first-pair wizard even when saved cameras already exist — set when the operator
@@ -824,6 +828,11 @@ final class NativeAppModel {
             publishWatchState()
             guard oldValue != connection else { return }
             AppDiagnostics.shared.record(connection.diagnosticEvent)
+            if let evidence = LocalNetworkAccess.evidence(
+                connected: connection == .connected, transport: cameraSession?.transportKind)
+            {
+                LocalNetworkAccess.shared.note(evidence, source: "camera link connected")
+            }
         }
     }
     /// Phased lifecycle for the connection progress sheet.
@@ -2342,6 +2351,9 @@ final class NativeAppModel {
         self.assist = assist ?? .restore()
         self.scopePanels = scopePanels ?? NikonScopePanels()
         self.assist.looks.selection = assistConfiguration.selectedLUT
+        let stageStore = MultiviewStagePreferencesStore(
+            storage: .standard, key: "multiview.presentation")
+        multicam.presentation.attachPersistence(load: stageStore.load, save: stageStore.save)
     }
     /// Operator preferences (which assist tools are on, their order, chrome visibility) persist
     /// across sessions — loaded on launch, saved on every change. Camera exposure/record settings
@@ -2813,11 +2825,12 @@ final class NativeAppModel {
         return candidates.first
     }
 
-    /// The shared cameras page is home, the same as the other apps. The transport wizard opens
-    /// only when the operator chooses Pair a new camera. An empty list still discovers nearby
-    /// cameras; it does not cover the page with a first-run guide.
+    /// The transport wizard, as `AppShell`'s pre-page: when the operator chooses Pair a new
+    /// camera, and on first run. With nothing saved the shell routes to its pair page, so a fresh
+    /// install reaches the same wizard (Cable Link, Camera AP) as every later pairing, until the
+    /// operator chooses the camera list instead (a watcher-only device).
     var shouldShowFirstPairWizard: Bool {
-        isPairingNewCamera
+        isPairingNewCamera || (savedCameras.isEmpty && !showsCameraListWithoutSavedCameras)
     }
 
     /// Plain-language version of `connectionMessage` for startup screens.
@@ -2847,7 +2860,7 @@ final class NativeAppModel {
         LiveHDRDisplay.app.setEnabled(hdrDisplay)
         refreshSavedCameras()
         applyStartupDestination()
-        if shouldShowFirstPairWizard, firstPairWizardStep == .permissions {
+        if shouldShowFirstPairWizard, firstPairWizardStep == .chooseTransport {
             configureFirstPairWizardEntry()
         }
         Task { await refreshConnectedWiFiSSID() }
@@ -2941,25 +2954,33 @@ final class NativeAppModel {
         credentials: CameraWiFiPasswordSubmission,
         joinStrategy: WiFiJoinCoordinator.JoinStrategy
     ) async throws {
+        // Hotspot work still queued behind an earlier pending join runs only for this connection.
+        let generation = connectionGeneration
+        let isCurrent: CameraNetworkIsCurrent = { [weak self] in
+            self?.connectionGeneration == generation
+        }
         switch target {
         case .specificSSID(let ssid):
             try await WiFiJoinCoordinator.shared.joinCameraNetwork(
                 ssid: ssid,
                 password: credentials.password,
-                strategy: joinStrategy
+                strategy: joinStrategy,
+                isCurrent: isCurrent
             )
         case .ssidPrefix(let prefix):
             if let resolvedSSID = credentials.ssid, !resolvedSSID.isEmpty {
                 try await WiFiJoinCoordinator.shared.joinCameraNetwork(
                     ssid: resolvedSSID,
                     password: credentials.password,
-                    strategy: joinStrategy
+                    strategy: joinStrategy,
+                    isCurrent: isCurrent
                 )
             } else {
                 try await WiFiJoinCoordinator.shared.joinCameraNetwork(
                     ssidPrefix: prefix,
                     password: credentials.password,
-                    strategy: joinStrategy
+                    strategy: joinStrategy,
+                    isCurrent: isCurrent
                 )
             }
         }
@@ -3332,13 +3353,13 @@ final class NativeAppModel {
             skipsPermissions: firstPairWizardSkipsPermissions) != nil
     }
 
-    /// Seeds the wizard at permissions or the first post-permissions step.
+    /// Seeds the wizard at the transport choice; a wireless choice then visits permissions unless
+    /// Local Network access was already acknowledged.
     private func configureFirstPairWizardEntry() {
-        let skipPermissions = StartupPermissionsCoordinator.permissionsAlreadySatisfied(
+        firstPairWizardSkipsPermissions = StartupPermissionsCoordinator.permissionsAlreadySatisfied(
             alreadyPairedCameras: !savedCameras.isEmpty
         )
-        firstPairWizardSkipsPermissions = skipPermissions
-        firstPairWizardStep = skipPermissions ? .chooseTransport : .permissions
+        firstPairWizardStep = .chooseTransport
         // A device that only ever watches never pairs, so the wizard is the ONLY screen it sees —
         // and broadcasts must be findable from it, or a watcher is walled into a connection setup
         // it has no camera for. Browsing is idempotent and joining tears it down.
@@ -3439,6 +3460,7 @@ final class NativeAppModel {
 
     /// Cancels an in-flight connection attempt from the progress sheet.
     func cancelConnectionAttempt() {
+        cameras.consent.retire()
         guard isConnectionProgressPresented else { return }
         // Cancel is the operator giving up — disarm the paired-reconnect watcher too, or the
         // background discovery loop keeps re-launching connects they just cancelled.
@@ -3534,6 +3556,15 @@ final class NativeAppModel {
         activeSessionPath?.kind == .cameraAccessPoint
     }
 
+    /// Compatibility entry for the currently displayed consent, consumed by the shared owner.
+    func confirmTakeOver() {
+        if let request = cameras.consent.pending { cameras.consent.confirm(request.id) }
+    }
+
+    func cancelTakeOver() {
+        if let request = cameras.consent.pending { cameras.consent.cancel(request.id) }
+    }
+
     /// - Parameter setup: the saved setup the operator actually tapped, when there is one.
     ///   THE identity of a connect attempt. A record's `id` is `host|name|kind` precisely because
     ///   one body's access-point and router setups can share an address, so re-deriving the record
@@ -3541,24 +3572,6 @@ final class NativeAppModel {
     ///   order — and the whole path dispatch downstream (`performWiFiJoinIfNeeded`) then runs the
     ///   wrong path's machinery. Tapping the AP setup silently took the router's branch, which is
     ///   why it never offered the join. Passed down rather than stored so it cannot go stale.
-    /// The camera a take-over confirmation is currently asking about, if any.
-    ///
-    /// Connecting to a camera another device holds DROPS that device's session — the same
-    /// single-initiator mechanism the discovery shield exists to avoid. The row says whose it is;
-    /// this is what stops a tap on it from being the whole decision.
-    var pendingTakeOverCamera: DiscoveredCamera?
-
-    /// Proceeds with the connect the confirmation was asking about.
-    func confirmTakeOver() {
-        guard let camera = pendingTakeOverCamera else { return }
-        pendingTakeOverCamera = nil
-        connectToCamera(camera, takingOverConfirmed: true)
-    }
-
-    func cancelTakeOver() {
-        pendingTakeOverCamera = nil
-    }
-
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
         preservingMonitorSurface: Bool = false,
@@ -3572,8 +3585,26 @@ final class NativeAppModel {
         // The gate lives at the funnel every path already goes through, not on the row that
         // happens to show the holder — a second entry point to connecting must not be a second
         // way to drop someone else's session without asking.
+        cameras.consent.retire(source: "native-connect")
         if let discoveredCamera, discoveredCamera.isHeldByAnotherDevice, !takingOverConfirmed {
-            pendingTakeOverCamera = discoveredCamera
+            let generation = connectionGeneration
+            cameras.consent.present(
+                NikonTakeOverPrompt(
+                    camera: discoveredCamera.displayName, holder: discoveredCamera.heldByDeviceName,
+                    confirm: { [weak self] in
+                        self?.connectToCamera(
+                            discoveredCamera, preservingMonitorSurface: preservingMonitorSurface,
+                            viaCameraAccessPointJoin: viaCameraAccessPointJoin, setup: setup,
+                            takingOverConfirmed: true)
+                    }, cancel: {}),
+                source: "native-connect",
+                isCurrent: { [weak self] in
+                    guard let self, self.connectionGeneration == generation,
+                        !self.multicam.isPresented || self.multicam.lentMember != nil
+                    else { return false }
+                    return setup.map { saved in self.savedCameras.contains { $0.id == saved.id } }
+                        ?? true
+                })
             return
         }
         // An attempt carries only its OWN access-point evidence — except one dialled straight off
@@ -4176,6 +4207,7 @@ final class NativeAppModel {
 
     func beginMulticam() {
         guard !isStartupActionLocked, cameraSession == nil else { return }
+        cameras.consent.retire()
         multicam.connect = { [weak self] record in
             guard let self else { throw CancellationError() }
             return try await self.establishSession(
@@ -4349,6 +4381,13 @@ final class NativeAppModel {
         }
 
         @ObservationIgnored private var quickDemoDriver: NikonQuickDemoDriver?
+
+        /// Explicit SIMULATED graphical fixture, using the normal declared header projection.
+        func seedGraphicalReviewTimecode() {
+            guard isDemoSession else { return }
+            applyLiveViewHeaderTimecode(Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
+            prefersMediaDuration = false
+        }
 
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
         func seedQuickDemoCamera() {
@@ -5016,13 +5055,14 @@ final class NativeAppModel {
     /// Exercising ICC camera control makes the OS show its "Using Camera Access to Control
     /// Connected Cameras" disclosure on every launch — so USB browsing runs only where a
     /// cable is actually in play: a saved USB-C setup, or the pairing surface.
-    private var discoveryBrowsesUSB: Bool {
-        // An armed cable watch has to browse USB or it can never fulfill — and a camera being
-        // GIVEN its first USB-C setup has no USB record yet by definition, which is exactly what
-        // the two conditions before this one look for. "Connect When Plugged In" therefore sat on
-        // "Searching…" with the cable attached: the watch was armed and correct, and the device
-        // it was waiting for was never enumerated for it to see.
-        startupMode == .discovery || savedCameras.contains(where: \.isUSBTransport)
+    var discoveryBrowsesUSB: Bool {
+        // Browsing USB starts ImageCaptureCore, whose first start asks for camera control: iOS
+        // shows it as the Camera prompt. Only an operator choice on the cable path may raise it
+        // (A2-09): the wizard's Cable Link discovery, a saved USB-C setup, or an armed cable
+        // watch. That last one matters too: a camera being GIVEN its first USB-C setup has no USB
+        // record yet, and "Connect When Plugged In" otherwise waits for a device it never sees.
+        (shouldShowFirstPairWizard && discoveryTransportFilter == .usbC)
+            || savedCameras.contains(where: \.isUSBTransport)
             || pendingSetupIntent?.kind == .usbC
     }
 
@@ -5088,7 +5128,8 @@ final class NativeAppModel {
                 directedCandidates: infrastructureDirectedCandidates,
                 excludedHosts: hostsServedByVisibleBroadcasts(),
                 onCameraAccessPoint: cameraAccessPointEvidence == true,
-                localNetworkDenied: false,
+                // A known policy denial names the cause at once instead of a silent sweep.
+                localNetworkDenied: LocalNetworkAccess.shared.answer == .denied,
                 status: { [weak self] message in
                     self?.connectionMessage = StartupConnectionCopy.friendly(message)
                 }
@@ -5418,7 +5459,7 @@ final class NativeAppModel {
         connection = .disconnected
         // The session is gone, so the return is owed even when the hop ended meanwhile.
         guard current() else { return left }
-        hopNative.leaveNetwork(ssid)
+        hopNative.leaveNetwork(ssid, current)
         connectedWiFiSSID = nil
         return left
     }
@@ -6787,6 +6828,7 @@ final class NativeAppModel {
     func clearCameraSessionState(
         resetConnection: Bool, preserveMonitorSurface: Bool = false
     ) {
+        cameras.consent.retire(source: "native-connect")
         feedIncidentProducer?.end()
         feedIncidentProducer = nil
         // Invalidate any in-flight establishment attempt: it re-checks this generation before
@@ -12360,6 +12402,15 @@ final class NativeAppModel {
             : storage?.storageReadout?.label ?? StorageReadout.unavailable
     }
 
+    /// Operator monitor storage uses the same units as every shared live surface.
+    var liveMediaReadout: String {
+        if videoSource == .relay { return mediaReadout }
+        let storage = shell.control.snapshot?.storage
+        return prefersMediaDuration
+            ? storage?.recordingTimeLabel ?? "-- Min"
+            : storage?.storageReadout?.free ?? StorageReadout.unavailable
+    }
+
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
         movablePanelCenters[id] = center
         movablePanelPositions[id] = MovablePanelStoredCenter(center: center, in: bounds)
@@ -13405,16 +13456,27 @@ struct NativeRootContent: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if model.multicam.isPresented, model.shell.monitor == nil {
-            MulticamStage(
-                coordinator: model.multicam,
-                confirmsRecord: model.preferences.recordConfirmationEnabled,
-                pickerRows: model.multicamPickerRows,
-                openLiveView: model.openMulticamLiveView,
-                close: model.endMulticam)
+        if let review = DemoHarness.connectConsentReview() {
+            review
         } else {
-            LinkExperience()
-                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            ZStack {
+                if model.multicam.isPresented {
+                    MulticamStage(
+                        coordinator: model.multicam,
+                        confirmsRecord: model.preferences.recordConfirmationEnabled,
+                        pickerRows: model.multicamPickerRows,
+                        openLiveView: model.openMulticamLiveView,
+                        close: model.endMulticam
+                    )
+                    .opacity(model.shell.monitor == nil ? 1 : 0)
+                    .allowsHitTesting(model.shell.monitor == nil)
+                    .accessibilityHidden(model.shell.monitor != nil)
+                }
+                if !model.multicam.isPresented || model.shell.monitor != nil {
+                    LinkExperience()
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+            }
         }
     }
 }
@@ -13422,8 +13484,16 @@ struct NativeRootContent: View {
 struct NativeAppRoot: View {
     @State private var model = NativeAppModel()
     @State private var showsLaunchSplash = true
-    @State private var showsReliabilityPrompt = false
-    @Environment(\.scenePhase) private var scenePhase
+    @State private var startup: MonitorAppStartup
+
+    init(startup: MonitorAppStartup? = nil) {
+        _startup = State(
+            initialValue: startup
+                ?? MonitorAppStartup(
+                    reports: .init(
+                        reporting: ReliabilityDiagnostics.reporting,
+                        tick: { ReliabilityDiagnostics.problemReporting.tick() })))
+    }
 
     var body: some View {
         ZStack {
@@ -13452,17 +13522,6 @@ struct NativeAppRoot: View {
         .environment(model)
         .environment(model.delivery)
         .observeMonitorWindowGeometry()
-        .task {
-            try? await Task.sleep(for: LaunchSplashTiming.visibleDuration)
-            withAnimation(.easeOut(duration: LaunchSplashTiming.fadeOutDuration)) {
-                showsLaunchSplash = false
-            }
-            if ReliabilityDiagnostics.reporting.isAvailable
-                && !ReliabilityDiagnostics.consent.hasDecision
-            {
-                showsReliabilityPrompt = true
-            }
-        }
         // Root-level (not inside the LUT picker) so the cover survives the monitor collapsing
         // when the RED internet hop tears the camera session down mid-download.
         .fullScreenCover(isPresented: redDownloadPresented) {
@@ -13470,20 +13529,9 @@ struct NativeAppRoot: View {
                 .environment(model)
         }
         .sheet(isPresented: bugReportPresented) { ProblemReportView() }
-        .sheet(isPresented: $showsReliabilityPrompt) {
-            ReliabilityConsentPrompt { enabled in
-                ReliabilityDiagnostics.reporting.setConsent(enabled)
-                showsReliabilityPrompt = false
-            }
+        .monitorAppStartup(startup, splashVisible: $showsLaunchSplash) { choice in
+            ReliabilityConsentPrompt(onChoice: choice)
         }
-        // A saved problem report sends once the gate allows it (off camera Wi-Fi, foreground).
-        .task {
-            while !Task.isCancelled {
-                ReliabilityDiagnostics.problemReporting.tick()
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
-        .onChange(of: scenePhase) { _, _ in ReliabilityDiagnostics.problemReporting.tick() }
         .onChange(of: model.shell.cover) { old, new in
             model.noteShellCoverChange(from: old, to: new)
         }
@@ -13555,10 +13603,6 @@ struct NativeAppRoot: View {
             // Demo/screenshot staging (ZC_DEMO_* launch env) — a Debug-only no-op elsewhere.
             await DemoHarness.applyLaunchEnvironment(to: model)
         }
-        // At the root, not on the wizard: the pairing list and the saved-camera list both reach
-        // the same connect, and a confirmation that only exists on one screen turns a tap on the
-        // other into a tap that does nothing at all.
-        .takeOverConfirmation(model: model)
     }
     private var redDownloadPresented: Binding<Bool> {
         Binding(

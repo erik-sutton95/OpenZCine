@@ -56,7 +56,7 @@ class MonitorReadoutsTest {
         assertEquals("6K 16:9", readouts.resolution)
         assertEquals("R3D NE", readouts.codec)
         assertEquals("470 GB · 47%", readouts.media)
-        assertEquals("25.00", readouts.framesPerSecond)
+        assertEquals("25", readouts.framesPerSecond, "A5-09: the shared label never invents decimals")
         assertEquals(80, readouts.batteryPercent)
         assertEquals(false, readouts.externalPower)
     }
@@ -110,5 +110,11 @@ class MonitorReadoutsTest {
         // An unread battery is absent, never an empty red cell.
         assertNull(nikonCameraBatteryReading(null, externalPower = true))
         assertNull(nikonCameraBatteryReading(0, externalPower = null))
+    }
+
+    @Test
+    fun `the FORMAT readout says Format in movie and photo mode like iOS`() {
+        // Z-ANDROID-FORMAT-TITLE (Root ruling): iOS titles the readout "Format" in both modes.
+        assertEquals("Format", MONITOR_FORMAT_READOUT_TITLE)
     }
 }

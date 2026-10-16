@@ -273,7 +273,8 @@ struct NikonMonitorShell: View {
             model.pictureOnlyMonitor
             ? MonitorStatusPresentation(
                 recording: forwardedRecording,
-                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil)
+                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil,
+                timecodePlaceholder: Timecode.placeholder)
             : model.shell.control.statusPresentation()
         var format: [Readout] = []
         if model.chromeSectionMounts(.format) {
@@ -299,12 +300,12 @@ struct NikonMonitorShell: View {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: model.photoPillShowsStorage
-                    ? model.mediaReadout
+                    ? model.liveMediaReadout
                     : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() })
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
-                id: .storage, title: "Storage", value: model.mediaReadout,
+                id: .storage, title: "Storage", value: model.liveMediaReadout,
                 section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil

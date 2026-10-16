@@ -1104,7 +1104,7 @@ struct MediaPlayerView: View {
             progress: model.mediaDownloadProgress[clip.id],
             colorLabel: mapping.curve.rawValue,
             transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
-            metadata: rows, clockStyle: .roundedMinutesSeconds, bufferedThroughSeconds: buffered)
+            metadata: rows, bufferedThroughSeconds: buffered)
     }
     private func synchronizeNativeFacts() {
         guard let context, let player = context.media.playback,

@@ -167,7 +167,7 @@ class CommandMonitorTest {
         assertEquals("OK", presentation.health.temperature)
         assertTrue(presentation.health.temperatureOk)
         assertEquals("470 GB · 47%", presentation.health.storage)
-        assertEquals("25.00", presentation.frameRate)
+        assertEquals("25", presentation.frameRate, "A5-09: the shared label never invents decimals")
         assertEquals("NIKON ZR", presentation.health.camera)
         assertEquals(
             "Log3G10",

@@ -179,16 +179,38 @@ internal class VulkanLiveFeedBackend(
     private val appContext: Context,
 ) : LiveFeedGpuBackend {
     private val native = MonitorBitmapVulkanSession { Log.e(TAG, it) }
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // The shared Bitmap picture owner is main-confined: the native renderer/WSI
+    // lifetime serializes with the SurfaceView lifecycle on the main looper. Production
+    // Compose effects always run there, but under instrumentation the test harness
+    // resumes effect continuations on its own dispatcher, so callers hop over
+    // synchronously instead of tripping the owner's confinement check. The synchronous
+    // handoff also preserves the atomic present-path ordering (uniforms pushed before
+    // the caller's next Compose state write).
+    private fun <T : Any> onMain(block: () -> T): T {
+        if (android.os.Looper.myLooper() === android.os.Looper.getMainLooper()) return block()
+        val done = java.util.concurrent.CountDownLatch(1)
+        lateinit var result: T
+        mainHandler.post {
+            try { result = block() } finally { done.countDown() }
+        }
+        check(done.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+            "Main looper never drained for the Bitmap picture owner handoff"
+        }
+        return result
+    }
+
     override val kind: LiveFeedGpuBackend.Kind = LiveFeedGpuBackend.Kind.VULKAN
     override val renderFailed: Boolean get() = native.failed
-    override fun createView(context: Context): View = native.createView(context)
-    override fun attach(view: View) = native.attach(view)
-    override fun detach(view: View) = native.detach(view)
+    override fun createView(context: Context): View = onMain { native.createView(context) }
+    override fun attach(view: View) = onMain { native.attach(view) }
+    override fun detach(view: View) = onMain { native.detach(view) }
     override fun updatePlan(plan: FeedEffectsRenderPlan?, aspectFill: Boolean, mirrored: Boolean, mirroredVertical: Boolean) =
-        native.updatePlan(plan?.nativePlan, aspectFill, mirrored, mirroredVertical)
-    override fun submitFrame(frame: Bitmap) = native.submit(frame)
-    override fun clearFrame() = native.clearFrame()
-    override fun resume() = native.resume()
-    override fun pause() = native.pause()
-    override fun dispose() = native.close()
+        onMain { native.updatePlan(plan?.nativePlan, aspectFill, mirrored, mirroredVertical) }
+    override fun submitFrame(frame: Bitmap) = onMain { native.submit(frame) }
+    override fun clearFrame() = onMain { native.clearFrame() }
+    override fun resume() = onMain { native.resume() }
+    override fun pause() = onMain { native.pause() }
+    override fun dispose() = onMain { native.close() }
 }

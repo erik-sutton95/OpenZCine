@@ -35,6 +35,19 @@ import com.opencapture.opencine.nikon.SavedCameraTransport
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MulticamCoordinatorTest {
+    @Test
+    fun presentationStateSurvivesLeavingAndReenteringStage() = runTest {
+        val stage = stage()
+        stage.arrangement = com.opencapture.monitorui.MultiviewArrangement.GRID
+        stage.select(2)
+        stage.end()
+        stage.begin()
+        assertEquals(com.opencapture.monitorui.MultiviewArrangement.GRID, stage.arrangement)
+        assertEquals(2, stage.focusedSlot)
+        assertTrue(stage.members.isEmpty())
+        stage.end()
+    }
+
     /** A scripted body: reports its record state, refuses record when asked, logs commands. */
     private class Body(
         serial: String,

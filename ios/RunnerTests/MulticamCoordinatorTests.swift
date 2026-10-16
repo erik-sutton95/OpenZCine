@@ -1,5 +1,9 @@
+import MonitorUI
+import OpenCineAppKit
 import OpenCineCore
 import OpenCineMulticam
+import SwiftUI
+import UIKit
 import XCTest
 
 @testable import OpenZCineCore
@@ -9,6 +13,81 @@ import XCTest
 /// (`DemoMulticamLink`) behind the real pumps, plans, leases and member write queues.
 @MainActor
 final class MulticamCoordinatorTests: XCTestCase {
+    func testPresentationStateSurvivesLeavingAndReenteringStage() async throws {
+        let stage = coordinator()
+        stage.arrangement = .grid
+        stage.focusedSlot = 2
+        stage.end()
+        stage.begin()
+        XCTAssertEqual(stage.arrangement, .grid)
+        XCTAssertEqual(stage.focusedSlot, 2)
+        XCTAssertTrue(stage.members.isEmpty)
+        stage.end()
+        try await verifyActualStageMountSurvivesBorrowedMonitor()
+    }
+
+    /// SIMULATED public-contract session, actual NativeRootContent and shared native stage.
+    private func verifyActualStageMountSurvivesBorrowedMonitor() async throws {
+        let model = NativeAppModel()
+        model.multicam.begin()
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
+        let previous = scene.keyWindow
+        let host = UIHostingController(
+            rootView: NativeRootContent()
+                .environment(model).environment(model.delivery.lifetime))
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer {
+            model.shell.close()
+            model.multicam.end()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        func stageController(_ root: UIViewController) -> MultiviewStageController? {
+            if let stage = root as? MultiviewStageController { return stage }
+            return root.children.lazy.compactMap(stageController).first
+        }
+        func settle(_ predicate: @escaping @MainActor () -> Bool) async {
+            let expected = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    MainActor.assumeIsolated {
+                        host.view.layoutIfNeeded()
+                        return predicate()
+                    }
+                }, object: nil)
+            let result = await XCTWaiter.fulfillment(of: [expected], timeout: 5)
+            XCTAssertEqual(result, .completed)
+        }
+        await settle { stageController(host) != nil }
+        let original = try XCTUnwrap(stageController(host))
+        let session = NikonPictureLifetimeSession()
+        let camera = ConnectedCamera(
+            saved: SavedCamera(
+                id: "SIMULATED-multiview-round-trip",
+                integration: IntegrationID("org.opencapture.nikon-ptp"),
+                advertisedName: "SIMULATED camera", model: "SIMULATED"), session: session)
+        var returns = 0
+        model.shell.borrow(camera) { returns += 1 }
+        await settle { model.shell.hostsMounted == 1 }
+        XCTAssertTrue(
+            stageController(host) === original,
+            "The stage must stay mounted below borrowed Live View")
+        model.shell.close()
+        await settle { model.shell.hostsUnmounted == 1 && stageController(host) != nil }
+        XCTAssertTrue(
+            stageController(host) === original,
+            "Returning must retain the existing native stage owner")
+        XCTAssertEqual(returns, 1)
+        XCTAssertEqual(session.commands, 0)
+        XCTAssertTrue(session.closes.isEmpty)
+    }
+
     private var links: [String: DemoMulticamLink] = [:]
     /// What a body reports after connect when its saved record has no serial yet.
     private var reportedSerials: [String: String] = [:]

@@ -1,7 +1,9 @@
 import Foundation
 import OpenCineMedia
 
-public enum ScopeSampler {
+public typealias ScopeSampler = OpenCineMedia.ScopeSampler
+
+extension OpenCineMedia.ScopeSampler {
     public static func sample(
         rgba: [UInt8], width: Int, height: Int, bytesPerRow: Int, stride: Int = 3,
         includePoints: Bool = true

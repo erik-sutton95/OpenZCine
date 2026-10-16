@@ -2,11 +2,12 @@ package com.opencapture.openzcine.multicam
 
 import com.opencapture.opencine.multicam.RecordAll
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import com.opencapture.opencine.appkit.MultiviewStageState
+import com.opencapture.opencine.appkit.MultiviewStageLayout
 import com.opencapture.monitorui.MultiviewArrangement
 import com.opencapture.openzcine.monitorTimecodeLabel
 import com.opencapture.opencine.core.CameraCommandIntent
@@ -165,11 +166,15 @@ class MulticamCoordinator(
 ) {
     var presented by mutableStateOf(false)
         private set
-    var arrangement by mutableStateOf(MultiviewArrangement.CENTER_STAGE)
+    val presentation = MultiviewStageState(TILES)
+    var arrangement: MultiviewArrangement
+        get() = presentation.layout.arrangement
+        set(value) { presentation.layout = if (value == MultiviewArrangement.GRID) MultiviewStageLayout.GRID else MultiviewStageLayout.CENTER_STAGE }
 
     /** The selected tile; its member is the program camera. */
-    var focusedSlot by mutableIntStateOf(0)
-        private set
+    var focusedSlot: Int
+        get() = presentation.selected
+        private set(value) { presentation.selected = value }
     val members = mutableStateListOf<MulticamMember>()
     var toast by mutableStateOf<String?>(null)
     var groupBusy by mutableStateOf(false)
@@ -201,8 +206,6 @@ class MulticamCoordinator(
     fun begin() {
         end()
         presented = true
-        arrangement = MultiviewArrangement.CENTER_STAGE
-        focusedSlot = 0
     }
 
     /** Closes every member link. Never stops a recording. */
