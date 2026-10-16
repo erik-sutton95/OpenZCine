@@ -1,5 +1,9 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.cameracontrols.CaptureCodecColorSectionView
+import com.opencapture.opencine.cameracontrols.CaptureCodecColorTabs
+import com.opencapture.opencine.vocabulary.CaptureCodecColorChoices
+import com.opencapture.opencine.vocabulary.CaptureCodecColorSection
 import com.opencapture.opencine.nikon.WhiteBalanceTint
 import com.opencapture.opencine.nikon.FocusPickerPolicy
 import com.opencapture.opencine.nikon.ShutterPickerPolicy
@@ -50,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
@@ -591,7 +596,7 @@ internal fun monitorPickerKindForRequest(
 /**
  * Projects the WB capture-bar picker (iOS `CameraPicker.whiteBalance`):
  * **Kelvin** / **Preset** / **Tint** — not a combined Kelvin·Preset tab.
- * Tint swaps the drum for [WhiteBalanceTintPad].
+ * Tint swaps the drum for the shared tint pad.
  */
 internal fun wbPickerPresentation(
     wbTile: CommandTilePresentation?,
@@ -924,6 +929,26 @@ private fun isoPopup(title: String, subtitle: String, codec: String, live: Strin
     codec = codec, liveIso = live?.toIntOrNull(),
 )
 
+/** The common capture setting this picker edits; null for a Nikon-only picker. */
+internal val MonitorPickerKind.commonSettingKey: SettingKey?
+    get() = when (this) {
+        MonitorPickerKind.ISO -> SettingKey.ISO
+        MonitorPickerKind.SHUTTER -> SettingKey.SHUTTER
+        MonitorPickerKind.IRIS -> SettingKey.APERTURE
+        MonitorPickerKind.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
+        else -> null
+    }
+
+/** The picker a command-surface control opens, when it has one in the common set. */
+internal val CameraControl.commonPickerKind: MonitorPickerKind?
+    get() = when (this) {
+        CameraControl.ISO -> MonitorPickerKind.ISO
+        CameraControl.SHUTTER -> MonitorPickerKind.SHUTTER
+        CameraControl.IRIS -> MonitorPickerKind.IRIS
+        CameraControl.WHITE_BALANCE -> MonitorPickerKind.WHITE_BALANCE
+        else -> null
+    }
+
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */
 internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
     this == MonitorPickerKind.RESOLUTION ||
@@ -960,6 +985,13 @@ internal fun MonitorControlPickerPanel(
     mfScrubEnabled: Boolean = true,
     /** Flips the focus-scrub preference; null omits the FOCUS popup's toggle row. */
     onToggleMfScrub: (() -> Unit)? = null,
+    /** The camera's reported typed recording formats for the resolution sheet. */
+    recordingFormats: List<com.opencapture.opencine.nikon.NikonRecordingFormatPresentation> = emptyList(),
+    /**
+     * The colour half of the one codec and colour popup, drawn under the CODEC ladder: the tones
+     * the body offers for the active codec. Null or colourless leaves the codec ladder alone.
+     */
+    codecColor: CaptureCodecColorChoices? = null,
 ) {
     val writeEnabled = controlsEnabled && com.opencapture.opencine.appkit.LocalMonitorCaptureCommandEnabled.current
     if (picker.kind == MonitorPickerKind.QUALITY) {
@@ -983,6 +1015,7 @@ internal fun MonitorControlPickerPanel(
         unavailable = stringResource(R.string.camera_controls_unavailable),
         fromTop = slideFromTop,
         chromeless = true,
+        recordingFormats = recordingFormats,
         onWrite = onSelect,
         onClose = onDismiss,
         onHold = if (picker.kind == MonitorPickerKind.SHUTTER && writeEnabled) onShutterLongPress else null,
@@ -1000,9 +1033,30 @@ internal fun MonitorControlPickerPanel(
             if (picker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
                 MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
             }
+            if (picker.kind == MonitorPickerKind.CODEC && codecColor?.showsColor == true) {
+                CaptureCodecColorSectionView(CaptureCodecColorSection.COLOR) {
+                    CaptureCodecColorTabs(
+                        choices = codecColor.colors,
+                        selected = codecColor.selectedColor,
+                        enabled = writeEnabled && codecColor.colorEditable,
+                    ) { id ->
+                        val label = codecColor.colors.firstOrNull { it.id == id }?.label ?: return@CaptureCodecColorTabs
+                        onSelect(movieToneRequest(codecColor), label)
+                    }
+                }
+            }
         },
     )
 }
+
+/** The typed write for a tone pick: Swift validates it against the active codec's offered tones. */
+internal fun movieToneRequest(choices: CaptureCodecColorChoices): CommandControlRequest =
+    CommandControlRequest(
+        title = "Color",
+        control = CameraControl.MOVIE_TONE,
+        currentValue = choices.selectedColorChoice?.label.orEmpty(),
+        options = choices.colors.filter { it.isEditable }.map { it.label },
+    )
 
 /**
  * FOCUS popup toggle for the live-view focus-scrub strip (iOS `mfScrubToggleRow`): a bordered

@@ -23,7 +23,7 @@ import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.lut.fromPersisted
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -79,7 +79,7 @@ class NikonAssistsTest {
         state.shared.setMirrorAxes(horizontal = false, vertical = true)
         state.shared.toggle(MonitorAssistTool.MIRROR)
         val restored = restore()
-        val framing = restored.shared.framing(restored.shared::isVisible, LocalLevelStyle.HORIZON)
+        val framing = restored.shared.framing(restored.shared::isVisible, MonitorLevelStyle.HORIZON)
         assertFalse(framing.mirrorsHorizontally)
         assertTrue(framing.flipsVertically)
         assertFalse(restored.shared.isPlaybackVisible(MonitorAssistTool.MIRROR))
@@ -374,7 +374,7 @@ class NikonAssistsTest {
         state.togglePlayback(MonitorAssistTool.GRID)
         state.togglePlayback(MonitorAssistTool.DESQ)
 
-        val framing = state.framing(state::isPlaybackVisible, LocalLevelStyle.HORIZON)
+        val framing = state.framing(state::isPlaybackVisible, MonitorLevelStyle.HORIZON)
         assertFalse(framing.guidesVisible)
         assertTrue(framing.gridVisible)
         assertFalse(framing.centerCrosshairEnabled)
@@ -524,14 +524,14 @@ class NikonAssistsTest {
     fun `framing toolbar actions toggle presentation only and keep the chosen frames`() {
         val state = restore().shared
         state.toggle(MonitorAssistTool.GUIDES)
-        assertTrue(state.framing(state::isOn, LocalLevelStyle.HORIZON).drawsGuides)
+        assertTrue(state.framing(state::isOn, MonitorLevelStyle.HORIZON).drawsGuides)
         assertEquals(setOf(MonitorGuideAspect.CINEMA), state.selectedGuides)
 
         state.toggle(MonitorAssistTool.GRID)
-        assertTrue(state.framing(state::isOn, LocalLevelStyle.HORIZON).drawsGrid)
+        assertTrue(state.framing(state::isOn, MonitorLevelStyle.HORIZON).drawsGrid)
 
         state.toggle(MonitorAssistTool.GUIDES)
-        assertFalse(state.framing(state::isOn, LocalLevelStyle.HORIZON).drawsGuides)
+        assertFalse(state.framing(state::isOn, MonitorLevelStyle.HORIZON).drawsGuides)
         assertEquals(setOf(MonitorGuideAspect.CINEMA), state.selectedGuides)
         assertTrue(restore().shared.isOn(MonitorAssistTool.GRID))
     }
@@ -729,5 +729,19 @@ class NikonAssistsTest {
         assertEquals(MonitorCrushClipCompensation.ZERO, restored.crushClipCompensation)
         assertEquals(0.8, restored.histoScale)
         assertEquals(1.5, restored.lightsScale)
+    }
+
+    /** iOS twin: testNikonDeclaresItsOwnAssistsOnTheSharedList. */
+    @Test
+    fun `nikon declares its own assists on the shared list`() {
+        assertEquals(setOf(MonitorAssistTool.EV), nikonAssistCapabilities.photographyOnly)
+        assertEquals(listOf(MonitorLevelStyle.HORIZON, MonitorLevelStyle.GAUGE), nikonAssistCapabilities.levelStyles)
+        assertTrue(MonitorAssistTool.ND in nikonAssistCapabilities.unavailable)
+        val cinema = nikonLiveAssistChips(photography = false, imageEffects = true)
+        val stills = nikonLiveAssistChips(photography = true, imageEffects = true)
+        assertFalse(NikonAssistChip.Tool(MonitorAssistTool.EV) in cinema)
+        assertTrue(NikonAssistChip.Tool(MonitorAssistTool.EV) in stills)
+        assertTrue(NikonAssistChip.Tool(MonitorAssistTool.LEVEL) in cinema)
+        assertFalse(cinema.any { it == NikonAssistChip.Tool(MonitorAssistTool.ND) })
     }
 }

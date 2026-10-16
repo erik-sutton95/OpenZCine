@@ -122,7 +122,8 @@ class NikonOperatorSettingsComposeTest {
         val actions = object : SystemSettingsActions by NoExternalActions {
             override fun openSupport(): Boolean { called += "support"; return true }
         }
-        // Source, privacy and terms are web pages: capture the browser intents instead of opening them.
+        // Source is a web page: capture the browser intent instead of opening it. Privacy and terms
+        // are bundled pages (A2-27) and never leave the app.
         val opened = mutableListOf<String>()
         val browser = object : Instrumentation.ActivityMonitor() {
             override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? =
@@ -138,12 +139,11 @@ class NikonOperatorSettingsComposeTest {
             composeRule.onNodeWithTag("monitor.settings.tab.System").performScrollTo().performClick()
             // OpenCine's reliability reporting (D2): the row is now part of the System tab.
             composeRule.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
-            for (label in listOf("Open Source Code", "Open Privacy Policy", "Open Terms of Use", "Open Support")) {
+            for (label in listOf("Open Source Code", "Open Support")) {
                 composeRule.onNodeWithContentDescription(label).performScrollTo().performClick()
             }
             composeRule.runOnIdle {
-                assertEquals(listOf("https://github.com/erik-sutton95/OpenZCine", "https://openzcine.app/privacy/",
-                    "https://openzcine.app/terms/"), opened)
+                assertEquals(listOf("https://github.com/erik-sutton95/OpenZCine"), opened)
                 assertEquals(listOf("support"), called)
                 assertFalse(preferences.contains("cache.originals"))
             }
@@ -153,7 +153,7 @@ class NikonOperatorSettingsComposeTest {
         preferences.edit().clear().commit()
     }
 
-    @Test fun systemTabShipsLicensesNoticeAndDiagnosticOptionsOffline() {
+    @Test fun systemTabShipsTheLegalPagesAndDiagnosticOptionsOffline() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("z2-settings-legal", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
@@ -161,10 +161,13 @@ class NikonOperatorSettingsComposeTest {
         composeRule.onNodeWithText("Diagnostic options").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Share Diagnostics").assertDoesNotExist()
         for ((page, attribution) in listOf("licenses" to "Apache License, Version 2.0",
-            "notice" to "not affiliated with or endorsed by Nikon Corporation")) {
+            "notice" to "not affiliated with or endorsed by Nikon Corporation",
+            "privacy" to "OpenCapture is the data controller",
+            "terms" to "not affiliated with, endorsed by, or supported by Nikon")) {
             val document = hasAnyAncestor(hasTestTag("legal.document.$page"))
-            composeRule.onNodeWithContentDescription(if (page == "notice") "Open NOTICE" else "Open Licenses")
-                .performScrollTo().performClick()
+            val open = mapOf("licenses" to "Open Licenses", "notice" to "Open NOTICE",
+                "privacy" to "Open Privacy Policy", "terms" to "Open Terms of Use").getValue(page)
+            composeRule.onNodeWithContentDescription(open).performScrollTo().performClick()
             composeRule.onNodeWithTag("legal.document.$page").assertIsDisplayed()
             composeRule.onNode(hasText(attribution, substring = true) and document).assertExists()
             composeRule.onNode(hasContentDescription("Close") and document).performClick()

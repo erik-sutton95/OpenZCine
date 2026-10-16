@@ -38,7 +38,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.monitorui.settings.MonitorSettingsTab
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -55,6 +54,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -68,6 +69,8 @@ import com.opencapture.opencine.frameio.FrameioInternetHopState
 import com.opencapture.openzcine.frameio.FrameioRedirectCallback
 import com.opencapture.openzcine.frameio.frameioArtifactPreparer
 import com.opencapture.openzcine.frameio.frameioDeliveryController
+import com.opencapture.opencine.cameracontrols.MonitorLegalDocumentScreen
+import com.opencapture.opencine.cameracontrols.MonitorLegalPage
 import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliveryChrome
 import com.opencapture.opencine.cameracontrols.rememberMonitorDeliveryCoordinator
 import com.opencapture.openzcine.diagnostics.AndroidAppDiagnostics
@@ -135,12 +138,13 @@ import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import com.opencapture.openzcine.pairing.usbAutoReconnectSuppressionAfterUserAction
 import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.relay.monitorRelayNearbyOwner
-import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
+import com.opencapture.opencine.appkit.MonitorRemoteShutter
 import com.opencapture.openzcine.settings.LiveViewQualityBias
 import com.opencapture.openzcine.settings.LiveViewStreamPreset
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.OperatorSettingsScreen
 import com.opencapture.openzcine.settings.SetupStreamSettings
+import com.opencapture.openzcine.settings.ZLegalDocuments
 import com.opencapture.openzcine.transport.AndroidNsdBrowser
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
@@ -164,7 +168,7 @@ private fun FrameioInternetHopState.allowsMonitorSessionRecovery(): Boolean =
  * feed, NSD transport probe) bypass startup straight to the monitor.
  */
 class MainActivity : ComponentActivity() {
-    private lateinit var mediaRemoteShutter: AndroidMediaRemoteShutter
+    private lateinit var mediaRemoteShutter: MonitorRemoteShutter
     private val diagnostics: AndroidAppDiagnostics by lazy {
         AndroidAppDiagnostics.create(applicationContext)
     }
@@ -187,7 +191,15 @@ class MainActivity : ComponentActivity() {
         val localReview = MonitorReview.decode(intent)
         // Load the Swift core (and with it OpenCine's NikonNative) before any camera session.
         SwiftCore.isAvailable
-        mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
+        // A staged LIVE review reuses the debug demo feed (the typed fake session and its frame
+        // source), so the staged monitor shows the live chrome with no radio, camera or USB.
+        // A staged CHROME_EDIT review is the same staged monitor with its editor open.
+        val stagedIntent =
+            if (localReview?.screen == com.opencapture.monitorui.ReviewLaunch.Screen.LIVE ||
+                localReview?.screen == com.opencapture.monitorui.ReviewLaunch.Screen.CHROME_EDIT)
+                Intent(intent).putExtra(DemoHarness.EXTRA_DEMO_FEED, true)
+            else intent
+        mediaRemoteShutter = MonitorRemoteShutter(applicationContext, "OpenZCineMediaRemoteShutter")
         diagnostics.record(AndroidDiagnosticEvent.APP_LAUNCHED)
         AppDiagnostics.install(applicationContext)
         // A recreated activity's intent was already handed to the retained controller.
@@ -196,8 +208,8 @@ class MainActivity : ComponentActivity() {
         root =
             retainedMonitorRoot {
                 AppRoot(
-                    applicationContext, DemoHarness.demoLiveFeed(intent, applicationContext),
-                    DemoHarness.pairingScript(intent), diagnostics, DemoHarness.galleryFailureInjection(intent),
+                    applicationContext, DemoHarness.demoLiveFeed(stagedIntent, applicationContext),
+                    DemoHarness.pairingScript(stagedIntent), diagnostics, DemoHarness.galleryFailureInjection(stagedIntent),
                 )
             }
         val demo = root.demo
@@ -213,7 +225,7 @@ class MainActivity : ComponentActivity() {
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
             }
         // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
-        val debugChromeEdit = DemoHarness.chromeEditMode(intent)
+        val debugChromeEdit = DemoHarness.chromeEditMode(intent) ?: MonitorReview.chromeEdit(localReview)
         // Camera-monitor chrome owns the whole panel, like the iOS shell: the shared launch draws
         // edge to edge with forced-dark transparent bars (the transient overlay is never an opaque
         // white band) and the feed under the punch-hole (the cutout arrives as a safe-area inset
@@ -253,6 +265,30 @@ class MainActivity : ComponentActivity() {
                         )
                             ?.takeIf(String::isNotBlank) ?: android.os.Build.MODEL
                     }
+                // The broadcast passcode and the watcher passcodes (one per broadcaster name),
+                // sealed by the shared relay secrets (iOS keeps them in the Keychain). NOT
+                // install-scoped like the jpeg-only verdict below: a set's passcode does not
+                // change because this app was rebuilt. The plain-text copies of earlier builds
+                // move in once; each leaves only after its sealed copy read back.
+                val relaySecrets =
+                    remember {
+                        com.opencapture.opencine.relayruntime.WatcherRelaySecrets(
+                                applicationContext,
+                                com.opencapture.openzcine.relay.RelayWatchController.SECRETS_SERVICE,
+                            )
+                            .also {
+                                it.adoptLegacyRememberedPasscodes(
+                                    applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
+                                )
+                                it.adoptLegacyHostPasscode(
+                                    applicationContext.getSharedPreferences(
+                                        com.opencapture.openzcine.relay.RelayBroadcastController.LEGACY_PASSCODE_STORE,
+                                        MODE_PRIVATE,
+                                    ),
+                                    com.opencapture.openzcine.relay.RelayBroadcastController.LEGACY_PASSCODE_KEY,
+                                )
+                            }
+                    }
                 val relayBroadcastController =
                     remember {
                         val portPrefs =
@@ -266,6 +302,7 @@ class MainActivity : ComponentActivity() {
                             savePreferredPort = { port ->
                                 portPrefs.edit().putInt("listenerPort", port).apply()
                             },
+                            secrets = relaySecrets,
                         )
                     }
                 val relayBroadcastUi by relayBroadcastController.ui.collectAsState()
@@ -291,23 +328,6 @@ class MainActivity : ComponentActivity() {
                         com.opencapture.openzcine.relay.RelayWatchController.seedJpegOnly()
                     }
                 }
-                // Watcher passcodes, one per broadcaster name, sealed by the shared relay
-                // secrets (iOS keeps them in the Keychain). NOT install-scoped like the jpeg-only
-                // verdict above: a set's passcode does not change because this app was rebuilt.
-                // The plain-text file of earlier builds moves in once; each entry leaves it only
-                // after its sealed copy read back.
-                val relaySecrets =
-                    remember {
-                        com.opencapture.opencine.relayruntime.WatcherRelaySecrets(
-                                applicationContext,
-                                com.opencapture.openzcine.relay.RelayWatchController.SECRETS_SERVICE,
-                            )
-                            .also {
-                                it.adoptLegacyRememberedPasscodes(
-                                    applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
-                                )
-                            }
-                    }
                 LaunchedEffect(Unit) {
                     // Debug-only direct watch (adb reverse cross-platform verification).
                     DemoHarness.relayWatchEndpoint(intent)?.let { (host, port) ->
@@ -351,6 +371,8 @@ class MainActivity : ComponentActivity() {
                         AndroidSystemSettingsActions(this@MainActivity, diagnostics)
                     }
                 var showProblemReport by remember { mutableStateOf(false) }
+                // A2-27: privacy and terms are bundled pages, readable on the camera's network.
+                var legalPage by remember { mutableStateOf<MonitorLegalPage?>(null) }
                 // The transport wizard is an explicit choice: Pair a new camera on the cameras page, or
                 // the pair page's Nikon entry. An empty saved list stays on the shared pair page, the
                 // same home as the other apps.
@@ -511,11 +533,36 @@ class MainActivity : ComponentActivity() {
                 val shellState by shell.state.collectAsState()
                 var reviewBucket by remember { mutableStateOf<MediaLibraryCameraBucket?>(null) }
                 LaunchedEffect(localReview) {
-                    if (localReview != null) {
-                        MonitorReview.start(applicationContext, mediaCacheStore, mediaLibraryIndex, localReview)
-                        reviewBucket = MonitorReview.bucket(localReview)
-                        mediaCacheRevision += 1
-                        shell.open(ShellModel.Cover.MEDIA)
+                    if (localReview == null) return@LaunchedEffect
+                    // Typed, review-gated staging per screen (A7 increment 4): each staged screen
+                    // shows its own production composition over the seeded, idle state; no radio,
+                    // connection or command ever reaches a camera.
+                    when (localReview.screen) {
+                        com.opencapture.monitorui.ReviewLaunch.Screen.PAIR -> shell.beginPairing()
+                        com.opencapture.monitorui.ReviewLaunch.Screen.CAMERAS -> {
+                            savedCameraStore.replace(listOf(
+                                SavedCameraRecord(host = "simulated-studio.local", cameraName = "Studio camera",
+                                    transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                                    lastSeenAtEpochMillis = 1_000L, wifiSsid = "Studio-5G"),
+                                SavedCameraRecord(host = "simulated-travel.local", cameraName = "Travel camera",
+                                    transport = SavedCameraTransport.CAMERA_ACCESS_POINT,
+                                    lastSeenAtEpochMillis = 500L, wifiSsid = "Travel-5G"),
+                            ))
+                            camerasModel.reloadSaved()
+                        }
+                        com.opencapture.monitorui.ReviewLaunch.Screen.LIVE,
+                        com.opencapture.monitorui.ReviewLaunch.Screen.CHROME_EDIT ->
+                            // The demo feed's fake session; the shell presents it as the monitor.
+                            demo?.first?.let { monitorSession = it }
+                        com.opencapture.monitorui.ReviewLaunch.Screen.MEDIA,
+                        com.opencapture.monitorui.ReviewLaunch.Screen.PLAYBACK -> {
+                            MonitorReview.start(applicationContext, mediaCacheStore, mediaLibraryIndex, localReview)
+                            reviewBucket = MonitorReview.bucket(localReview)
+                            mediaCacheRevision += 1
+                            shell.open(ShellModel.Cover.MEDIA)
+                        }
+                        com.opencapture.monitorui.ReviewLaunch.Screen.SETTINGS -> shell.open(ShellModel.Cover.SETTINGS)
+                        else -> Unit
                     }
                 }
                 LaunchedEffect(savedCameras, monitorSession, shellState.cover, mediaCacheRevision) {
@@ -1124,7 +1171,6 @@ class MainActivity : ComponentActivity() {
                                         assists = assist,
                                         operatorSession = operatorSession,
                                         editsLiveView = true,
-                                        initialTab = operatorSession.settingsTab,
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
                                         frameioController = frameioController,
@@ -1141,11 +1187,10 @@ class MainActivity : ComponentActivity() {
                                                         ?: (active as? SwiftCoreCameraSession)
                                                             ?.liveFrames
                                                             as? LiveFrameSource
-                                                if (frames != null) {
-                                                    relayBroadcastController.watcherPasscode =
-                                                        operatorSettings
-                                                            .relayWatcherPasscode
-                                                            .value
+                                                // A passcode the store cannot read now never
+                                                // starts an unprotected broadcast.
+                                                if (frames != null &&
+                                                    relayBroadcastController.loadPasscode()) {
                                                     relayBroadcastController
                                                         .allowsControlRequests =
                                                         operatorSettings
@@ -1162,6 +1207,9 @@ class MainActivity : ComponentActivity() {
                                                     relayBroadcastEnabled =
                                                         relayBroadcastController.start(
                                                             session = active,
+                                                            common =
+                                                                multicam.lentMember(active)?.control
+                                                                    ?: shellSessions.acquire(active),
                                                             frames = frames,
                                                             cameraName =
                                                                 activeSavedCamera
@@ -1253,6 +1301,10 @@ class MainActivity : ComponentActivity() {
                             operatorSettings = operatorSettings,
                             lutLibrary = lutLibrary,
                             mediaDelivery = mediaDelivery,
+                            // `ReviewLaunch(screen: .playback)`: the staged gallery opens its first
+                            // clip once, as a tap would (the demo play path's same affordance).
+                            autoPlayFirstProxy = localReview?.screen ==
+                                com.opencapture.monitorui.ReviewLaunch.Screen.PLAYBACK,
                             onRatingDiagnostic = diagnostics::record,
                             onClose = { shell.dismissCover() },
                         )
@@ -1276,9 +1328,9 @@ class MainActivity : ComponentActivity() {
                             frameioController = frameioController,
                             accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                             savedCameras = camerasState.saved,
-                            // iOS's startup Settings lands on Link; a debug
-                            // intent can still force a specific tab.
-                            initialTab = debugInitialSettingsTab ?: MonitorSettingsTab.LINK,
+                            // The shared landing-tab rule; a typed review stages the tab it names,
+                            // and a debug intent can still force a tab.
+                            initialTab = localReview?.settingsTab ?: debugInitialSettingsTab,
                             systemSettingsActions = systemSettingsActions,
                             onReportProblem = { showProblemReport = true },
                             onCompletedMediaCacheCleared = {
@@ -1340,8 +1392,8 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onPrivacy = { systemSettingsActions.openPrivacy() },
-                            onTerms = { systemSettingsActions.openTerms() },
+                            onPrivacy = { legalPage = MonitorLegalPage.PRIVACY },
+                            onTerms = { legalPage = MonitorLegalPage.TERMS },
                         )
                     }
                     AppShell(
@@ -1367,8 +1419,8 @@ class MainActivity : ComponentActivity() {
                                             }
                                     }
                                 },
-                                privacy = { systemSettingsActions.openPrivacy() },
-                                terms = { systemSettingsActions.openTerms() },
+                                privacy = { legalPage = MonitorLegalPage.PRIVACY },
+                                terms = { legalPage = MonitorLegalPage.TERMS },
                                 // Pair a new camera opens the transport wizard; a nearby card
                                 // opens the shared pair page (the integration declares its tap).
                                 pair = {
@@ -1488,7 +1540,7 @@ class MainActivity : ComponentActivity() {
                             MonitorAutomaticReportsOffer(
                                 MonitorReportsOffer(
                                     AppDiagnostics.consent, AppDiagnostics.reporting, AppDiagnostics.host.product,
-                                    onPrivacy = { systemSettingsActions.openPrivacy() },
+                                    onPrivacy = { legalPage = MonitorLegalPage.PRIVACY },
                                 ),
                             )
                         }
@@ -1518,8 +1570,16 @@ class MainActivity : ComponentActivity() {
                         // The platform 48 dp minimum touch target, as on Nikon's settings pills.
                         actionMinimumTouchTarget = true,
                         onClose = { showProblemReport = false },
-                        onPrivacy = { systemSettingsActions.openPrivacy() },
+                        onPrivacy = { legalPage = MonitorLegalPage.PRIVACY },
                     )
+                }
+                legalPage?.let { page ->
+                    Dialog(
+                        onDismissRequest = { legalPage = null },
+                        properties = DialogProperties(usePlatformDefaultWidth = false),
+                    ) {
+                        MonitorLegalDocumentScreen(ZLegalDocuments, page) { legalPage = null }
+                    }
                 }
                 } // app-root Box
                 } // LocalOperatorHaptics

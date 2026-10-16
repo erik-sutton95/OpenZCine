@@ -1666,153 +1666,62 @@ final class RunnerTests: XCTestCase {
     }
 }
 
+// MARK: - Legal pages (A2-27)
+
 extension RunnerTests {
-    /// The anchor is the operator's own level, not mid-scale. Arming the shutter used to set every
-    /// phone to half volume — remote or not — and drag whatever they were listening to with it.
-    /// All the mechanism needs is a step of room each way, which nearly every real setting has.
-    func testTheVolumeAnchorLeavesAnOrdinaryLevelExactlyWhereItIs() {
-        // Anything with a step of headroom either side is its own anchor: nothing to hear.
-        for volume in stride(from: Float(0.0625), through: Float(0.9375), by: 0.0625) {
-            XCTAssertEqual(
-                BluetoothShutterMonitor.anchor(forCurrentVolume: volume), volume, accuracy: 0.0001,
-                "volume \(volume) should not be moved")
+    /// Renders the System tab and every legal page in the phone's landscape frame and keeps the
+    /// images in the result bundle: the screenshot pass for Z's offline legal pages. Each page
+    /// must show its bundled text, never the unavailable or a web page.
+    @MainActor
+    func testLegalPagesRenderOfflineInLandscape() async throws {
+        let model = NativeAppModel()
+        let tab = model.operatorSettingsTab
+        model.operatorSettingsTab = .system
+        defer { model.operatorSettingsTab = tab }
+        try await snapshot(AnyView(OperatorSettingsPanel().environment(model)), named: "z-settings-system")
+        for page in MonitorLegalPage.allCases {
+            guard case .text(let text) = MonitorLegalDocuments.z[page] else {
+                return XCTFail("\(page.title) is bundled text")
+            }
+            let label = try await snapshot(
+                AnyView(MonitorLegalDocumentScreen(documents: .z, page: page, onClose: {})),
+                named: "z-legal-\(page.rawValue)", identifier: "legal.document.\(page.rawValue)")
+            XCTAssertEqual(label, text, page.title)
         }
-        // Only the rails move, and only by the one step a press needs to be visible.
-        XCTAssertEqual(
-            BluetoothShutterMonitor.anchor(forCurrentVolume: 0), 0.0625, accuracy: 0.0001)
-        XCTAssertEqual(
-            BluetoothShutterMonitor.anchor(forCurrentVolume: 1), 0.9375, accuracy: 0.0001)
-        // Both rails keep room to MOVE, which is the whole reason the anchor exists: a press
-        // either way from the anchored value lands somewhere detectably different.
-        for rail in [Float(0), Float(1)] {
-            let anchored = BluetoothShutterMonitor.anchor(forCurrentVolume: rail)
-            XCTAssertGreaterThan(anchored, 0)
-            XCTAssertLessThan(anchored, 1)
-        }
-    }
-
-    /// The decision travels with whatever anchor the session took, not a hardcoded half.
-    func testTheTriggerDecisionFollowsTheOperatorsOwnAnchor() {
-        let t0: TimeInterval = 100
-        let anchor: Float = 0.25
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.25, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor),
-            "the anchor's own echo is never a press")
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.3125, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.1875, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
-        // 0.5 is just a volume now — at this anchor it is a press, not a resting place.
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
-    }
-
-    /// The Bluetooth-shutter volume decision: any move off the mid-scale anchor triggers (shutter
-    /// remotes send volume-up or volume-down depending on model), but not within the debounce
-    /// window after a trigger nor within the echo window after a programmatic re-anchor; the
-    /// anchor value itself (our own re-anchor landing) never triggers.
-    func testBluetoothShutterTriggerDecision() {
-        let t0: TimeInterval = 100
-        // Presses in BOTH directions, well clear of both windows → trigger.
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.4375, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
-        // The anchor echo (same value) never triggers.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
-        // Inside the debounce window after a trigger → suppressed; after it → fires again.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.3, lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625,
-                now: t0 + BluetoothShutterMonitor.debounceInterval + 0.01,
-                lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
-        // Right after a programmatic re-anchor, a rise is its echo → suppressed.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5))
-    }
-
-    /// KVO is the primary detector and the private notification is a rail fallback. On releases
-    /// that emit both for one press, the shared debounce must collapse them to one record toggle.
-    func testBluetoothShutterDeduplicatesObservationSources() {
-        let firstEventAt: TimeInterval = 200
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: firstEventAt, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5
-            ))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625,
-                now: firstEventAt + 0.01,
-                lastTriggerAt: firstEventAt,
-                lastAnchorAt: firstEventAt, anchor: 0.5))
-    }
-
-    func testBluetoothShutterReportsWhyVolumeEventsAreIgnored() {
-        let t0: TimeInterval = 300
-        XCTAssertEqual(
-            BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5),
-            .atAnchor)
-        XCTAssertEqual(
-            BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: t0, lastAnchorAt: 0, anchor: 0.5),
-            .debounced)
-        XCTAssertEqual(
-            BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5),
-            .selfInflicted)
-    }
-
-    func testBluetoothShutterRunsOnlyForEnabledActiveFrontLiveView() {
-        XCTAssertTrue(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: false, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: false, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: true))
-        // Settings / Media / Tool Library covering the monitor must disarm the rocker — a press
-        // inside a menu may not start recording.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: false,
-                applicationIsActive: true, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: false, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: false))
     }
 
     @MainActor
-    func testBluetoothShutterFindsNestedSystemVolumeSlider() {
-        let volumeView = UIView()
-        let container = UIView()
-        let slider = UISlider()
-        container.addSubview(slider)
-        volumeView.addSubview(container)
-
-        XCTAssertIdentical(BluetoothShutterMonitor.firstSlider(in: volumeView), slider)
+    @discardableResult
+    private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil) async throws -> String? {
+        let host = UIHostingController(rootView: view)
+        // Drawing needs a window in the app's scene; a detached window renders blank.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        var label: String?
+        for _ in 0..<80 {
+            host.view.layoutIfNeeded()
+            if let identifier {
+                label = HostedAccessibility.elements(in: host.view)
+                    .first { HostedAccessibility.identifier($0) == identifier }?.accessibilityLabel
+                if label != nil { break }
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return label
     }
 }
 
@@ -3169,6 +3078,17 @@ final class NikonSharedStorageReadoutTests: XCTestCase {
     }
 }
 
+@Suite("Nikon FORMAT readout")
+struct NikonRecordingFormatLabelTests {
+    @Test("The image-area tag leads the common recording label, as the body shows it")
+    func imageAreaTagLeads() {
+        #expect(nikonRecordingFormatLabel("6K · 25p", imageArea: "FX") == "[FX] 6K · 25p")
+        #expect(nikonRecordingFormatLabel("4K · 50p", imageArea: "DX") == "[DX] 4K · 50p")
+        #expect(nikonRecordingFormatLabel("4K · 50p", imageArea: nil) == "4K · 50p")
+        #expect(nikonRecordingFormatLabel(nil, imageArea: "FX") == nil)
+    }
+}
+
 /// SIMULATED descriptor reports enter through the actual app bootstrap producer.
 @MainActor
 @Suite("Common Nikon exposure provenance")
@@ -3260,16 +3180,16 @@ struct NikonSettingsScrollTests {
 
         let display = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 180) < 1 })
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
-        try await settle(in: host) { state.offsets["Display"] == 320 }
+        try await settle(in: host) { state.offsets[.display] == 320 }
         display.setContentOffset(CGPoint(x: 0, y: -50), animated: false)
         for _ in 0..<100 { await Task.yield() }
-        #expect(state.offsets["Display"] == 320)
+        #expect(state.offsets[.display] == 320)
 
         state.tab = .assist
         let assist = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 75) < 1 })
-        #expect(state.offsets["Display"] == 320)
+        #expect(state.offsets[.display] == 320)
         assist.setContentOffset(CGPoint(x: 0, y: 210), animated: false)
-        try await settle(in: host) { state.offsets["View Assist"] == 210 }
+        try await settle(in: host) { state.offsets[.assist] == 210 }
         state.tab = .display
         let restored = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 320) < 1 })
 
@@ -3291,7 +3211,7 @@ struct NikonSettingsScrollTests {
         // these offsets now that DISP 1 has no toolbar order list.
         model.beginChromeEditing(.clean)
         model.endChromeEditing()
-        model.operatorSettingsScrollOffsets = ["Display": 180]
+        model.operatorSession.settingsScrollOffsets = [.display: 180]
         let host = UIHostingController(
             rootView: AnyView(OperatorSettingsPanel().environment(model)))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
@@ -3305,24 +3225,24 @@ struct NikonSettingsScrollTests {
         #expect(model.operatorSettingsTab == .display)
         #expect(model.operatorSession.returnedMode == nil)
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
-        try await settle(in: host) { model.operatorSettingsScrollOffsets["Display"] == 320 }
+        try await settle(in: host) { model.operatorSession.settingsScrollOffsets[.display] == 320 }
         model.operatorSettingsTab = .controls
         try await settle(in: host) { settingsScroll(in: host.view) !== display }
-        #expect(model.operatorSettingsScrollOffsets["Display"] == 320)
+        #expect(model.operatorSession.settingsScrollOffsets[.display] == 320)
         model.operatorSettingsTab = .display
         let restored = try await scroll(in: host) { abs($0.contentOffset.y - 320) < 1 }
         host.rootView = AnyView(EmptyView())
         try await settle(in: host) { settingsScroll(in: host.view) == nil }
-        let offsets = model.operatorSettingsScrollOffsets
+        let offsets = model.operatorSession.settingsScrollOffsets
         restored.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
         for _ in 0..<100 { await Task.yield() }
-        #expect(model.operatorSettingsScrollOffsets == offsets)
+        #expect(model.operatorSession.settingsScrollOffsets == offsets)
     }
 
     @Test("A saved position beyond the current content restores inside the real viewport")
     func scrollClampsToCurrentContent() async throws {
         let state = NikonSettingsScrollFixture()
-        state.offsets["Display"] = 10_000
+        state.offsets[.display] = 10_000
         let page = MonitorSettingsPage(
             safeArea: EdgeInsets(), brand: "SIMULATED",
             selection: Binding(get: { state.tab }, set: { state.tab = $0 }),
@@ -3393,7 +3313,7 @@ struct NikonSettingsScrollTests {
 @Observable
 private final class NikonSettingsScrollFixture {
     var tab: MonitorSettingsTab = .display
-    var offsets: [String: CGFloat] = ["Display": 180, "View Assist": 75]
+    var offsets: [MonitorSettingsTab: CGFloat] = [.display: 180, .assist: 75]
 }
 
 @MainActor
@@ -4237,26 +4157,8 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
         var labels: [String] {
-            var seen = Set<ObjectIdentifier>()
-            var result: [String] = []
-            @MainActor func visit(_ object: NSObject) {
-                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-                if object.isAccessibilityElement, let label = object.accessibilityLabel {
-                    result.append(label)
-                }
-                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
-                let count = object.accessibilityElementCount()
-                if count > 0 && count < 512 {
-                    for index in 0..<count {
-                        if let child = object.accessibilityElement(at: index) as? NSObject {
-                            visit(child)
-                        }
-                    }
-                }
-                if let view = object as? UIView { for child in view.subviews { visit(child) } }
-            }
-            visit(window)
-            return result
+            HostedAccessibility.elements(in: window).filter(\.isAccessibilityElement)
+                .compactMap(\.accessibilityLabel)
         }
     }
 
@@ -4296,24 +4198,7 @@ extension SharedLUTPickerCompatibilityTests {
     }
 
     private static func legacyComparisonElements(_ root: NSObject) -> [NSObject] {
-        var seen = Set<ObjectIdentifier>()
-        var result: [NSObject] = []
-        func walk(_ object: NSObject) {
-            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-            if object.isAccessibilityElement { result.append(object) }
-            for child in object.accessibilityElements as? [NSObject] ?? [] { walk(child) }
-            let count = object.accessibilityElementCount()
-            if count > 0 && count < 512 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject {
-                        walk(child)
-                    }
-                }
-            }
-            if let view = object as? UIView { for child in view.subviews { walk(child) } }
-        }
-        walk(root)
-        return result
+        HostedAccessibility.elements(in: root).filter(\.isAccessibilityElement)
     }
 
     private func legacyComparisonSettle(_ host: Hosted, _ predicate: () -> Bool) async throws

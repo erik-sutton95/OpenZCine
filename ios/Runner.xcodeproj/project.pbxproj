@@ -44,6 +44,7 @@
 		331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */; };
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
 		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
+		CA9A0001C0DE000000000001 /* ControlCapabilityAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */; };
 		F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */; };
 		F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */; };
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
@@ -84,7 +85,6 @@
 		C0DE00000000000000000F03 /* NikonAssistInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F13 /* NikonAssistInspector.swift */; };
 		C0DE00000000000000000F04 /* NikonScopes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F14 /* NikonScopes.swift */; };
 		C0DE000000000000000000C6 /* DemoHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C7 /* DemoHarness.swift */; };
-		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
 		F2D000000000000000000008 /* OpenCineSentryApple in Frameworks */ = {isa = PBXBuildFile; productRef = F2D000000000000000000009 /* OpenCineSentryApple */; };
 		C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000000ED1A02 /* OpenCineMedia */; };
@@ -131,6 +131,7 @@
 		246209D388F78D5F4F398F58 /* ConformanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68B1BBAB041F9DA6BB02D7C /* ConformanceApp.swift */; };
 		83C7A1BB02DD54D4E3E0A4C7 /* OpenCineAppUITesting in Frameworks */ = {isa = PBXBuildFile; productRef = B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */; };
 		A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */ = {isa = PBXBuildFile; productRef = 63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */; };
+		B7F1A0C00000000000000001 /* OpenCineHostedTestSupport in Frameworks */ = {isa = PBXBuildFile; productRef = B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */; };
 		300E5F949AB41695CC76538F /* OpenCineWatch in Frameworks */ = {isa = PBXBuildFile; productRef = 178DF1758616937177B63BF7 /* OpenCineWatch */; };
 		E7EE7B3544C67B943E782CF8 /* NikonMediaDeliverySource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87DF525504BD912A28C21E4F /* NikonMediaDeliverySource.swift */; };
 		1E7BB623225B594944ABE027 /* NikonFrameioDeliveryPorts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8C047563B8391682432DAD /* NikonFrameioDeliveryPorts.swift */; };
@@ -221,6 +222,7 @@
 		331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStoreTests.swift; sourceTree = "<group>"; };
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
 		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
+		CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlCapabilityAdoptionTests.swift; sourceTree = "<group>"; };
 		F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSurfaceRegressionTests.swift; sourceTree = "<group>"; };
 		F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistEngineAdoptionTests.swift; sourceTree = "<group>"; };
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
@@ -273,7 +275,6 @@
 		C0DE000000000000000000C5 /* MonitorUnified.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorUnified.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F2 /* PhotographyChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotographyChrome.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C7 /* DemoHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoHarness.swift; sourceTree = "<group>"; };
-		C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothShutterMonitor.swift; sourceTree = "<group>"; };
 		C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaBrowser.swift; sourceTree = "<group>"; };
 		DIAG00000000000000000001 /* AppDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiagnostics.swift; sourceTree = "<group>"; };
 		E7F2A1B03D4C5E6F7890ABCD /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
@@ -360,7 +361,7 @@
 		823003F875DF0491C4710777 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
-			files = (A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */,);
+			files = (A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */, B7F1A0C00000000000000001 /* OpenCineHostedTestSupport in Frameworks */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		9A7E3B528B69AC98C5D4448A /* Frameworks */ = {
@@ -396,6 +397,7 @@
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
 				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
+				CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */,
 				F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */,
 				F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */,
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
@@ -485,7 +487,6 @@
 				C0DE00000000000000000029 /* MonitorExperience.swift */,
 				C0DE0000000000000000002B /* MonitorPanels.swift */,
 				LDDR0000000000000000001B /* LadderPicker.swift */,
-				C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */,
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
 				C0DE000000000000000000F8 /* SharedCameraControls.swift */,
@@ -559,7 +560,7 @@
 				331C8086294A63A400263BE5 /* PBXTargetDependency */,
 			);
 			name = RunnerTests;
-			packageProductDependencies = (63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */,);
+			packageProductDependencies = (63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */, B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */,);
 			productName = RunnerTests;
 			productReference = 331C8081294A63A400263BE5 /* RunnerTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -574,6 +575,7 @@
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				WTCH00000000000000000080 /* Embed Watch Content */,
 				F01000000000000000000001 /* Stamp source revision */,
+				A1E6A1000000000000000001 /* Stage legal files */,
 			);
 			buildRules = (
 			);
@@ -738,6 +740,21 @@
 			shellPath = /bin/sh;
 			shellScript = "bash \"${SRCROOT}/../../OpenCine/scripts/sentry/stamp-source-revision.sh\"\n";
 		};
+		A1E6A1000000000000000001 /* Stage legal files */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Stage legal files";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${SRCROOT}/../../OpenCine/scripts/stage-legal-resources.py\" --app \"${SRCROOT}/..\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -766,6 +783,7 @@
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
 				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
+				CA9A0001C0DE000000000001 /* ControlCapabilityAdoptionTests.swift in Sources */,
 				F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */,
 				F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */,
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
@@ -821,7 +839,6 @@
 				C0DE00000000000000000028 /* MonitorExperience.swift in Sources */,
 				C0DE0000000000000000002A /* MonitorPanels.swift in Sources */,
 				LDDR0000000000000000001A /* LadderPicker.swift in Sources */,
-				C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */,
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
 				C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */,
@@ -1484,6 +1501,7 @@
 		};
 		B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineAppUITesting; };
 		63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineHostedAccessibility; };
+		B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineHostedTestSupport; };
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 97C146E61CF9000F007C117D /* Project object */;

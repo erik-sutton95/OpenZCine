@@ -7,6 +7,7 @@ import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.NikonCapturePopupKind
 import com.opencapture.opencine.nikon.NikonCapturePopupState
 import com.opencapture.opencine.nikon.NikonLadderControl
+import com.opencapture.opencine.nikon.NikonRecordingFormatPresentation
 import com.opencapture.opencine.nikon.StillPickerLadders
 import com.opencapture.opencine.vocabulary.CaptureLock
 import com.opencapture.opencine.vocabulary.LadderWrite
@@ -199,8 +200,13 @@ class LadderPickerTest {
         assertNull(resolution.tabs.single().steps)
         assertNull(resolution.tabs.single().setting)
         // The recording format is the shared format picker, one choice per camera token.
-        assertEquals(listOf("4K 24p", "4K 30p"), ladderFormats(resolutionPicker)?.map { it.value })
-        assertNull(ladderFormats(picker(MonitorPickerKind.ISO, mode("ISO", CameraControl.ISO, "800", listOf("800")))))
+        // The camera's typed formats group the choices; an unreported token stays one ungrouped choice.
+        val formats = assertNotNull(ladderFormats(resolutionPicker,
+            listOf(NikonRecordingFormatPresentation("4K 24p", "FX", "4K", "24p"))))
+        assertEquals(listOf("4K 24p", "4K 30p"), formats.map { it.value })
+        assertEquals("24p", formats[0].frameRate?.id)
+        assertNull(formats[1].frameRate)
+        assertNull(ladderFormats(picker(MonitorPickerKind.ISO, mode("ISO", CameraControl.ISO, "800", listOf("800"))), emptyList()))
         val iris = videoLadderPresentation(picker(MonitorPickerKind.IRIS, irisMode()))
         assertEquals(SettingKey.APERTURE, iris.tabs.single().setting?.key)
         assertTrue(iris.tabs.single().setting?.offered.orEmpty().isNotEmpty())

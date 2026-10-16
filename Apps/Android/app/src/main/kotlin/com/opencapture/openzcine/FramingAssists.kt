@@ -28,7 +28,7 @@ import com.opencapture.monitorui.MonitorGuideAspect
 import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import kotlin.math.roundToInt
 import com.opencapture.opencine.runtime.nativeFeedContentRect
 
@@ -260,7 +260,7 @@ private fun localFramingAssistAccessibilitySummary(
         if (configuration.levelEnabled) {
             val style =
                 stringResource(
-                    if (configuration.levelStyle == LocalLevelStyle.HORIZON) {
+                    if (configuration.levelStyle == MonitorLevelStyle.HORIZON) {
                         R.string.level_horizon
                     } else {
                         R.string.level_gauge

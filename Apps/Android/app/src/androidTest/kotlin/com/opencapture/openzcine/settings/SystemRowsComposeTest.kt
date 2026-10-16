@@ -80,6 +80,9 @@ class SystemRowsComposeTest {
             assertEquals(1, report)
             assertEquals(1, actions.feature)
             assertEquals(1, actions.diagnostics)
+            // Privacy and terms are bundled pages (A2-27), not browser actions.
+            assertEquals(0, actions.privacy)
+            assertEquals(0, actions.terms)
         }
         // OpenCine's reporting rows: the automatic-reports row and the reporting privacy link.
         compose.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()
