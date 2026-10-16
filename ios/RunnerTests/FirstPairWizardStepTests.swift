@@ -491,4 +491,52 @@ struct FirstRunTests {
         model.discoveryTransportFilter = .usbC
         #expect(model.discoveryBrowsesUSB, "the cable path browses USB")
     }
+
+    /// A2-09 composed order on the integrated model: first run lands on the transport choice,
+    /// every wireless path asks for Local Network only after that choice, and USB camera control
+    /// waits for an operator choice on the cable path (Cable Link, a saved USB-C setup or an
+    /// armed USB-C watch).
+    @Test("First run: wizard, then transport, then permissions; USB only on the cable path")
+    func firstRunComposedOrder() {
+        let model = freshModel()
+        #expect(model.shouldShowFirstPairWizard, "nothing saved opens the transport wizard")
+        #expect(!model.discoveryBrowsesUSB, "no Camera prompt on launch")
+        for transport: NativeAppModel.FirstPairTransportMethod in [
+            .cameraAccessPoint, .phoneHotspot, .wiFiNetwork,
+        ] {
+            let steps = Array(
+                NativeAppModel.FirstPairWizardStep.sequence(
+                    transport: transport, skipsPermissions: false))
+            #expect(steps.first == .chooseTransport, "the transport choice comes first")
+            #expect(steps.firstIndex(of: .permissions) == 1, "permissions follow the choice")
+            model.isPairingNewCamera = true
+            model.firstPairTransportMethod = transport
+            #expect(!model.discoveryBrowsesUSB, "a wireless path never asks for USB control")
+        }
+        let cable = Array(
+            NativeAppModel.FirstPairWizardStep.sequence(transport: .usbC, skipsPermissions: false))
+        #expect(cable.first == .chooseTransport)
+        #expect(!cable.contains(.permissions), "Cable Link asks no Local Network permission")
+        model.firstPairTransportMethod = .usbC
+        model.discoveryTransportFilter = .usbC
+        #expect(model.discoveryBrowsesUSB, "Cable Link discovery browses USB")
+
+        let wireless = PTPIPSavedCameraRecord(
+            host: "192.168.1.30", displayName: "ZR_6002199", transport: "Wi-Fi", lastSeenAt: nil)
+        let cabled = PTPIPSavedCameraRecord(
+            host: "usb:demo-zr", displayName: "ZR_6002199", transport: "USB-C", lastSeenAt: nil)
+        let saved = NativeAppModel()
+        saved.isPairingNewCamera = false
+        saved.startupMode = .savedCameras
+        saved.discoveryTransportFilter = .wiFi
+        saved.savedCameras = [wireless]
+        #expect(!saved.discoveryBrowsesUSB, "a Wi-Fi-only camera list leaves USB alone")
+        saved.pendingSetupIntent = .init(anchor: wireless, kind: .cameraAccessPoint)
+        #expect(!saved.discoveryBrowsesUSB, "an armed wireless watch leaves USB alone")
+        saved.pendingSetupIntent = .init(anchor: wireless, kind: .usbC)
+        #expect(saved.discoveryBrowsesUSB, "an armed USB-C watch browses USB")
+        saved.pendingSetupIntent = nil
+        saved.savedCameras = [wireless, cabled]
+        #expect(saved.discoveryBrowsesUSB, "a saved USB-C setup browses USB")
+    }
 }
