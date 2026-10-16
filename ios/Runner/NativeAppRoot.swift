@@ -1501,7 +1501,8 @@ final class NativeAppModel {
                 },
                 mediaStatus: cameraState.mediaStatus,
                 isRecording: isRecording,
-                allowsControlRequests: preferences.relayAllowsControlRequests))
+                allowsControlRequests: preferences.relayAllowsControlRequests,
+                batteryReading: cameraBatteryReading, batteryExhausted: cameraBatteryExhausted))
     }
 
     /// Wire encoding for the focus result. Numeric on purpose — a new enum case must not shift
@@ -1629,6 +1630,8 @@ final class NativeAppModel {
         startRelayBrowsing(includePeerToPeer: false)
         disconnectCameraSession(resetConnection: false)
         cameraState = .blank
+        relayedBatteryReading = nil
+        relayedBatteryExhausted = nil
         resetCameraPropertyState()
         resetLinkHealthMeasurements()
         discoveredCameras = []
@@ -1815,6 +1818,8 @@ final class NativeAppModel {
         relayClient = nil
         relayVideoDecoder?.invalidate()
         relayVideoDecoder = nil
+        relayedBatteryReading = nil
+        relayedBatteryExhausted = nil
         relayClientState = .idle
         relayHoldsControl = false
         relayControlHolderName = nil
@@ -1826,6 +1831,8 @@ final class NativeAppModel {
     }
 
     private func applyRelayState(_ state: MonitorRelayState) {
+        relayedBatteryReading = state.batteryReading
+        relayedBatteryExhausted = state.batteryExhausted
         // Absent means an older host that predates the policy — allowed, the old behavior.
         relayAllowsControlRequests = state.allowsControlRequests ?? true
         cameraState = CameraDisplayState(
@@ -2029,9 +2036,33 @@ final class NativeAppModel {
     var cameraControlOptions: [PTPPropertyCode: [String]] = [:]
     /// Exposure choices actually returned by a descriptor, independent of legacy picker ladders.
     private(set) var advertisedExposureOptions: [PTPPropertyCode: [String]] = [:]
-    /// Whether the camera reports it's charging. No PTP power-source property is wired yet, so this
-    /// stays false on hardware; the indicator's charging glyph is ready for when one is identified.
-    /// The body's external-power report; `nil` until it says.
+    private var relayedBatteryReading: BatteryReading?
+    private var relayedBatteryExhausted: Bool?
+
+    /// The camera's typed power on this device: the session's, or the SIMULATED legacy report
+    /// converted at this composition boundary. A relay carries only its reading, so it has none.
+    private var cameraPower: PowerStatus? {
+        if videoSource == .relay { return nil }
+        if isDemoSession {
+            return CameraBatteryGauge.gauge(rawBatteryLevel: cameraState.cameraBatteryPercent)
+                .powerStatus
+        }
+        return shell.control.snapshot?.power
+    }
+
+    var cameraBatteryReading: BatteryReading? {
+        videoSource == .relay ? relayedBatteryReading : cameraPower?.batteryReading
+    }
+
+    var cameraPowerCharging: Bool? {
+        if videoSource != .relay, isDemoSession { return cameraBatteryCharging }
+        return cameraPower.flatMap { $0.charging.value ?? $0.externalPower.value }
+    }
+
+    var cameraBatteryExhausted: Bool? {
+        videoSource == .relay ? relayedBatteryExhausted : cameraPower?.exhausted.value
+    }
+
     var cameraBatteryCharging: Bool?
     private final class NativePictureReference<Value: AnyObject> {
         weak var value: Value?
@@ -11437,7 +11468,8 @@ final class NativeAppModel {
             feedAspectRatio: StillCapturePolicy.prefersPhotographyChrome(
                 selector: cameraPropertySnapshot.captureSelector)
                 ? cameraPropertySnapshot.photographyFeedAspect
-                : MonitorFeedLayout.aspectRatio)
+                : MonitorFeedLayout.aspectRatio,
+            batteryReading: cameraBatteryReading, batteryExhausted: cameraBatteryExhausted)
     }
 
     /// Publishes the current state to the watch relay (coalesced; no-ops when nothing changed).

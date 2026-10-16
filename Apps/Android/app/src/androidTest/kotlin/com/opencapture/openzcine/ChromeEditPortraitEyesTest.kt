@@ -55,6 +55,7 @@ class ChromeEditPortraitEyesTest {
             // A raw Nikon BatteryLevel, so the battery band and its eye are drawn.
             override val cameraProperties: StateFlow<CameraPropertySnapshot> =
                 MutableStateFlow(camera.cameraProperties.value.copy(batteryPercent = 58))
+            override val reportedCameraProperties: StateFlow<CameraPropertySnapshot> get() = cameraProperties
         }
         composeRule.setContent {
             val scope = rememberCoroutineScope()
