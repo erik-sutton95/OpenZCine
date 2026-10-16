@@ -9,6 +9,10 @@
     /// SIMULATED values exercise the actual shared native header, with no camera ownership.
     @MainActor
     final class MonitorPortraitHeaderNativeTests: XCTestCase {
+        /// The user's portrait rule for the shared format group: resolution and frame rate on top,
+        /// codec and color directly below it, each with its own target. The top edge shared with the
+        /// timecode and STBY/REC needs the production row fit, so the shared
+        /// `MonitorPortraitHeaderClearanceTests` prove it on the production header.
         func testPortraitFormatAndDetailHaveOneGroupedColumnWithSeparateControls() async throws {
             let layout = FieldMonitorLayout(width: 320, height: 956, safeArea: .init(top: 59))
             let fixture = try HeaderFixture(
@@ -17,14 +21,25 @@
             let nodes = try await fixture.nodes()
             let format = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Format" })
             let codec = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Codec" })
-            XCTAssertGreaterThanOrEqual(
-                codec.accessibilityFrame.minY, format.accessibilityFrame.maxY + 1.5,
-                "Portrait detail belongs beneath the large primary format, as one grouped readout")
             let paintedFormat = try fixture.controlFrame("format")
             let paintedCodec = try fixture.controlFrame("codec")
-            try fixture.attachFrameProof(
+            let ink = try fixture.attachFrameProof(
                 format: format.accessibilityFrame, codec: codec.accessibilityFrame,
                 paintedFormat: paintedFormat, paintedCodec: paintedCodec)
+            XCTAssertLessThanOrEqual(
+                ink.primary.minY - format.accessibilityFrame.minY, Self.directlyBelow,
+                "The primary glyphs sit at the top of their line, level with the row's top edge")
+            XCTAssertGreaterThanOrEqual(
+                ink.detail.minY, ink.primary.maxY,
+                "Codec glyphs belong beneath the large primary glyphs, as one grouped readout")
+            XCTAssertLessThanOrEqual(
+                ink.detail.minY - ink.primary.maxY, Self.directlyBelow,
+                "Codec sits directly under the primary, not a full target lower")
+            for target in [format, codec] {
+                XCTAssertGreaterThanOrEqual(
+                    target.accessibilityFrame.height, 44 - 0.5,
+                    "\(target.accessibilityLabel ?? "") keeps its own 44pt target")
+            }
             XCTAssertEqual(
                 paintedCodec.maxX, paintedFormat.maxX, accuracy: 0.5,
                 "Keep the original alignment threshold on actual native control geometry")
@@ -47,11 +62,11 @@
             let codec = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Codec" })
             let primary = try fixture.controlFrame("format")
             let detail = try fixture.controlFrame("codec")
-            try fixture.attachFrameProof(
+            let ink = try fixture.attachFrameProof(
                 format: format.accessibilityFrame, codec: codec.accessibilityFrame,
                 paintedFormat: primary, paintedCodec: detail)
             XCTAssertLessThan(
-                detail.minY, primary.maxY + 1.5,
+                ink.detail.minY, ink.primary.maxY,
                 "The old horizontal control must fail the vertical grouping oracle")
             XCTAssertGreaterThan(
                 abs(detail.maxX - primary.maxX), 0.5,
@@ -59,6 +74,10 @@
             XCTAssertEqual(format.accessibilityValue, "[FX] 6K · 25p")
             XCTAssertEqual(codec.accessibilityValue, "R3D NE")
         }
+
+        /// Largest gap, in points, between the primary glyphs and the codec glyphs that still
+        /// reads as directly below. The pre-stack column left a full 44pt target between them.
+        private static let directlyBelow: CGFloat = 8
 
         func testCompactPortraitStorageAndPerformanceRemainAdjacentBeforePower() async throws {
             for width in [CGFloat(320), 360, 440] {
@@ -131,7 +150,9 @@
                                     MonitorBoundedReadoutText(
                                         "[FX] 6K · 25p", maximumSize: 23, minimumSize: 16
                                     )
-                                    .frame(minHeight: 44, alignment: .bottomTrailing)
+                                    .frame(
+                                        minWidth: 44, maxHeight: .infinity,
+                                        alignment: .topTrailing)
                                 }.buttonStyle(.monitorTapTarget).accessibilityLabel("Format")
                                     .accessibilityValue("[FX] 6K · 25p")
                                     .anchorPreference(
@@ -145,7 +166,9 @@
                                     MonitorBoundedReadoutText(
                                         "R3D NE", maximumSize: 11, minimumSize: 11
                                     )
-                                    .frame(minHeight: 44, alignment: .topTrailing)
+                                    .frame(
+                                        minWidth: 44, maxHeight: .infinity,
+                                        alignment: .topTrailing)
                                 }.buttonStyle(.monitorTapTarget).accessibilityLabel("Codec")
                                     .accessibilityValue("R3D NE")
                                     .anchorPreference(
@@ -168,6 +191,7 @@
                             .accessibilityLabel("Power")
                             .offset(x: CGFloat(layout.telemetry.x), y: CGFloat(layout.telemetry.y))
                     }.frame(width: width, height: 956, alignment: .topLeading)
+                        .foregroundStyle(.white).background(Color.black)
                         .overlayPreferenceValue(HeaderControlAnchorsKey.self) { anchors in
                             GeometryReader { proxy in
                                 Color.clear.preference(
@@ -203,27 +227,39 @@
             XCTAssertGreaterThan(rect.height, 0)
             return UIAccessibility.convertToScreenCoordinates(rect, in: host.view)
         }
+        /// Attaches the geometry and the rendered window, and returns the painted glyph bounds of
+        /// the primary (the strip left of the codec, so a stacked codec never counts) and the codec.
         func attachFrameProof(
             format: CGRect, codec: CGRect, paintedFormat: CGRect, paintedCodec: CGRect
-        ) throws {
+        ) throws -> (primary: CGRect, detail: CGRect) {
             func values(_ rect: CGRect) -> [CGFloat] {
                 [rect.minX, rect.minY, rect.width, rect.height]
             }
+            let rendering = UIGraphicsImageRendererFormat()
+            rendering.scale = window.screen.scale
+            rendering.opaque = true
+            rendering.preferredRange = .standard
+            var complete = false
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: rendering).image { _ in
+                complete = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            XCTAssertTrue(complete, "The actual native window must render the control evidence")
+            let primaryStrip = CGRect(
+                x: paintedFormat.minX, y: paintedFormat.minY,
+                width: max(0, min(paintedFormat.maxX, paintedCodec.minX) - paintedFormat.minX),
+                height: paintedFormat.height)
+            let primaryInk = try Self.inkBounds(image, in: primaryStrip)
+            let detailInk = try Self.inkBounds(image, in: paintedCodec)
             let data = try JSONSerialization.data(
                 withJSONObject: [
                     "AXFormat": values(format), "AXCodec": values(codec),
                     "controlFormat": values(paintedFormat), "controlCodec": values(paintedCodec),
+                    "inkPrimary": values(primaryInk), "inkCodec": values(detailInk),
                     "screenScale": window.screen.scale, "alignmentThreshold": 0.5,
                 ], options: [.sortedKeys])
             let geometry = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
             geometry.name = "SIMULATED B5 native control and AX geometry"
             geometry.lifetime = .keepAlways
-            let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
-            var complete = false
-            let image = renderer.image { _ in
-                complete = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-            }
-            XCTAssertTrue(complete, "The actual native window must render the control evidence")
             let picture = XCTAttachment(image: image)
             picture.name = "SIMULATED B5 native grouping window"
             picture.lifetime = .keepAlways
@@ -232,6 +268,39 @@
                 activity.add(geometry)
                 activity.add(picture)
             }
+            return (primaryInk, detailInk)
+        }
+        /// Bounds, in points, of the white glyph pixels inside `rect` of an opaque black render.
+        private static func inkBounds(_ image: UIImage, in rect: CGRect) throws -> CGRect {
+            let cg = try XCTUnwrap(image.cgImage)
+            let data = try XCTUnwrap(cg.dataProvider?.data) as Data
+            let scale = image.scale
+            let left = max(0, Int(floor(rect.minX * scale)))
+            let right = min(cg.width, Int(ceil(rect.maxX * scale)))
+            let top = max(0, Int(floor(rect.minY * scale)))
+            let bottom = min(cg.height, Int(ceil(rect.maxY * scale)))
+            var minX = right
+            var minY = bottom
+            var maxX = left - 1
+            var maxY = top - 1
+            for y in top..<max(top, bottom) {
+                for x in left..<max(left, right) {
+                    let offset = y * cg.bytesPerRow + x * 4
+                    // White is channel-order independent; the black ground and shadows are excluded.
+                    if (0..<3).allSatisfy({ data[offset + $0] >= 160 }) {
+                        minX = min(minX, x)
+                        minY = min(minY, y)
+                        maxX = max(maxX, x)
+                        maxY = max(maxY, y)
+                    }
+                }
+            }
+            guard maxX >= minX, maxY >= minY else {
+                throw NSError(domain: "NativeHeaderFixture", code: 2)
+            }
+            return CGRect(
+                x: CGFloat(minX) / scale, y: CGFloat(minY) / scale,
+                width: CGFloat(maxX - minX + 1) / scale, height: CGFloat(maxY - minY + 1) / scale)
         }
         func nodes() async throws -> [NSObject] {
             for _ in 0..<200 {
