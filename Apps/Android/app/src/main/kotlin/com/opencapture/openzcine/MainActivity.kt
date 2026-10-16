@@ -1351,16 +1351,11 @@ class MainActivity : ComponentActivity() {
                             ShellActions(
                                 diagnostics = { systemSettingsActions.shareDiagnostics() },
                                 reportProblem = { showProblemReport = true },
-                                multiview = if (MulticamCoordinator.TILES > 1) multicam::begin else null,
+                                multiview = if (MulticamCoordinator.TILES > 1) {
+                                    { camerasModel.consent.retire(); multicam.begin() }
+                                } else null,
                                 integrationAction = { cameraID, action ->
                                     when (action) {
-                                        AppNikonConnectPort.TAKE_OVER -> {
-                                            val target = camerasState.failures[cameraID]?.target as? ConnectTarget.Saved
-                                            target?.camera?.routes?.firstOrNull { it.id == target.route }
-                                                ?.extras?.get(NikonSavedRecordsV0.Extra.HOST)
-                                                ?.let(nikonPort::allowTakeOver)
-                                            camerasModel.perform(RecoveryAction.Retry, cameraID)
-                                        }
                                         AppNikonConnectPort.DIAGNOSTICS ->
                                             if (!systemSettingsActions.shareDiagnostics()) {
                                                 Toast.makeText(

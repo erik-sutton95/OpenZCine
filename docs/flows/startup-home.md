@@ -177,11 +177,11 @@ flowchart TD
 ### HOME-08 — Preparing live view
 
 - **Status:** shipped
-- **Screen:** Brief inline `StartupPreparingLiveView` under the progress sheet ("Starting live
-  view…") when `connection == .connected` before the stream starts; progress sheet shows
-  `preparingLiveView` phase.
-- **Code:** `StartupDesign.swift` (`StartupPreparingLiveView`), `NativeAppModel.enterLiveView`,
-  `startLiveView`.
+- **Screen:** No separate page. A shared attempt keeps its card or pair-page progress until the
+  first picture; an app-owned connection (no shared attempt) shows the shared pair page in its
+  `preparingLiveView` phase. See [connect-presentation.md](../connect-presentation.md).
+- **Code:** `LinkExperience.prePageKind`, `NikonConnectScreen` / `NikonConnectFlow.phase`,
+  `NativeAppModel.enterLiveView`, `startLiveView`.
 - **Detail:** Skips the old full-screen "Camera ready" landing — drives straight into the monitor.
   `enterLiveView` sets `connection = .preparingLiveView` (home actions lock). First decoded frame
   sets `isMonitorPresented = true` and dismisses the sheet.
@@ -199,9 +199,9 @@ flowchart TD
 ### HOME-10 — Inline live-view failure
 
 - **Status:** shipped
-- **Screen:** `StartupPreparingLiveView` with error copy + **Back to cameras** outline button (always
-  visible — including when a session exists but live view never started).
-- **Code:** `StartupDesign.swift` (`StartupPreparingLiveView`), `startLiveView` `.neverStarted` /
+- **Screen:** The shared pair page with the error copy and its Back action (always available,
+  including when a session exists but live view never started; Back disconnects it).
+- **Code:** `NikonConnectFlow.flow` (`onBack`), `startLiveView` `.neverStarted` /
   stall-escalate paths.
 - **Detail:** After max stall/never-started retries, `isMonitorPresented` stays false and the
   operator can `disconnect()` back to the list. Background reconnect may also re-trigger
@@ -233,7 +233,7 @@ flowchart TD
 
 - **Status:** shipped
 - **Screen:** Returns to HOME-01 layout; monitor and session torn down.
-- **Code:** `NativeAppModel.disconnect()`, `StartupPreparingLiveView` Back button,
+- **Code:** `NativeAppModel.disconnect()`, the connect pair page's Back action,
   monitor disconnect affordances.
 - **Detail:** Clears session, resets connection to `.disconnected`, restarts discovery loop
   (`resetResults: false`) so row availability refreshes.

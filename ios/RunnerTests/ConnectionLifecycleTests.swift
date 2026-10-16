@@ -22,6 +22,24 @@ struct ConnectionLifecycleTests {
         return model
     }
 
+    @Test("Cancel retires an unanswered take-over before a late confirmation")
+    func cancelledTakeOverCannotStartConnection() {
+        let model = model()
+        defer { model.cancelConnectionAttempt() }
+        let held = DiscoveredCamera(
+            ip: Self.absentUSBHost, name: "SIMULATED held camera", source: .heldByAnotherDevice,
+            heldByDeviceName: "SIMULATED other phone")
+        model.connectToCamera(held)
+        #expect(!model.debugIsEstablishingConnection, "operator consent precedes admission")
+        let generation = model.debugConnectionGeneration
+        model.cancelConnectionAttempt()
+        model.confirmTakeOver()
+        #expect(
+            model.debugConnectionGeneration == generation,
+            "a retired consent cannot admit a connection")
+        #expect(!model.debugIsEstablishingConnection)
+    }
+
     /// Lets the establishment task run to completion. The absent-USB path throws on its first
     /// `await`, so a couple of yields is enough; polling keeps it robust without a fixed sleep.
     private func settle(_ model: NativeAppModel) async {

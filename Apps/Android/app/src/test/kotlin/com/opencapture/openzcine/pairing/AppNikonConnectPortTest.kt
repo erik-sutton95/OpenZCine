@@ -69,11 +69,10 @@ class AppNikonConnectPortTest {
 
         val failure = assertFailsWith<NikonConnectException> { port.connect(request) }.failure
         assertEquals(ConnectionFailure.Reason.HeldElsewhere, failure.reason)
-        assertEquals(AppNikonConnectPort.TAKE_OVER, (failure.actions.first() as RecoveryAction.Integration).id)
+        assertEquals(listOf(RecoveryAction.Retry), failure.actions)
         assertNull(paired, "nothing dials a held camera before the operator agrees")
 
-        port.allowTakeOver("192.168.1.30")
-        val connection = port.connect(request)
+        val connection = port.connect(request, takingOverConfirmed = true)
         assertEquals("192.168.1.30", connection.host)
         assertEquals(RouteKind.INFRASTRUCTURE_NETWORK, connection.kind)
         assertEquals("ZR_3001234", paired?.savedCamera?.cameraName)

@@ -44,7 +44,198 @@ final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshot
     override var expectedCameraPowerValue: String { "4 of 5 bars" }
     override var expectedCameraPercentText: String? { nil }
     override var reviewLaunchEnvironment: [String: String] {
-        ["ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live", "ZC_DEMO_GRAPHICAL_REVIEW": "1"]
+        [
+            "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live",
+            "ZC_DEMO_GRAPHICAL_REVIEW": "1",
+        ]
+    }
+}
+
+/// Exercises the actual app root, including its pre-page precedence, without a camera.
+@MainActor
+final class ConnectFunnelAdoptionTests: XCTestCase {
+    func testDirectAndIntegrationConsentUseOneSharedAlertAndCancel() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for entry in ["direct", "nearby"] {
+            let app = XCUIApplication()
+            app.launchEnvironment["ZC_DEMO_CAMERA_LIST"] = "1"
+            app.launchEnvironment["ZC_DEMO_CONNECT_CONSENT"] = entry
+            app.launch()
+            let alert = app.alerts["Take over this camera?"]
+            XCTAssertTrue(
+                alert.waitForExistence(timeout: 10),
+                "every consent entry must reach the same shared presenter: \(entry)")
+            XCTAssertTrue(
+                alert.staticTexts[
+                    "SIMULATED other phone is using this camera. Connecting will disconnect it."
+                ].exists)
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "SIMULATED-consent-\(entry)-landscape"
+            shot.lifetime = .keepAlways
+            add(shot)
+            alert.buttons["Cancel"].tap()
+            XCTAssertFalse(alert.waitForExistence(timeout: 2))
+            XCTAssertFalse(app.buttons["Take Over"].exists)
+            app.terminate()
+        }
+    }
+
+    func testTypedAddSetupChooserPreservesSetupActions() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        // The first saved camera already has its access-point setup: the host offers the rest.
+        let addSetup = app.buttons["cameras.addSetup"].firstMatch
+        XCTAssertTrue(waitUntilHittable(addSetup))
+        addSetup.tap()
+        let usb = app.buttons["addSetup.usbC"]
+        XCTAssertTrue(usb.waitForExistence(timeout: 5))
+        XCTAssertTrue(usb.isHittable)
+        XCTAssertTrue(app.buttons["addSetup.infrastructure"].isHittable)
+        XCTAssertTrue(app.buttons["addSetup.phoneHotspot"].exists)
+        XCTAssertFalse(app.buttons["addSetup.cameraAccessPoint"].exists)
+        XCTAssertEqual(usb.label, "Connect When Plugged In")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "SIMULATED-typed-add-setup-landscape"
+        shot.lifetime = .keepAlways
+        add(shot)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(addSetup.waitForExistence(timeout: 5))
+    }
+
+    func testAppOwnedFirstFrameProgressKeepsItsEscape() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        // With the progress sheet (first frame pending) and without it (live view never started).
+        for (mode, line) in [
+            ("standalone", "Starting live view"), ("neverStarted", "SIMULATED live view did not start"),
+        ] {
+            let app = XCUIApplication()
+            app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
+            app.launchEnvironment["ZC_DEMO_CONNECT_PREPARING"] = mode
+            app.launch()
+            let cancel = app.buttons["Cancel"].firstMatch
+            XCTAssertTrue(cancel.waitForExistence(timeout: 10), mode)
+            XCTAssertTrue(cancel.isHittable, mode)
+            // The established session keeps its useful progress line, not a bare page.
+            XCTAssertTrue(
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", line))
+                    .firstMatch.waitForExistence(timeout: 5), mode)
+            XCTAssertFalse(app.buttons["Back to cameras"].exists, "no separate preparing page")
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "SIMULATED-app-owned-first-frame-\(mode)-landscape"
+            shot.lifetime = .keepAlways
+            add(shot)
+            cancel.tap()
+            XCTAssertTrue(app.buttons["cameras.pair"].waitForExistence(timeout: 5), mode)
+            app.terminate()
+        }
+    }
+
+    func testTypedSetupPrecedenceAndStoredLegacyFallback() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for mode in ["both", "legacy"] {
+            let app = XCUIApplication()
+            app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
+            app.launchEnvironment["ZC_DEMO_CHOOSER_SLOT"] = mode
+            app.launch()
+            let addSetup = app.buttons["cameras.addSetup"].firstMatch
+            XCTAssertTrue(waitUntilHittable(addSetup))
+            addSetup.tap()
+            let expected = mode == "legacy" ? "Legacy chooser" : "Typed chooser"
+            let absent = mode == "legacy" ? "Typed chooser" : "Legacy chooser"
+            XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.staticTexts[absent].exists)
+            app.buttons["Cancel"].tap()
+            XCTAssertTrue(addSetup.waitForExistence(timeout: 5))
+            app.terminate()
+        }
+    }
+
+    /// The cameras page settles after the launch splash; a tap before then is not delivered.
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
+        return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
+    }
+
+    func testSharedProgressSurvivesPostHandshakePreparation() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
+        app.launchEnvironment["ZC_DEMO_CARD"] = "connecting"
+        app.launchEnvironment["ZC_DEMO_CONNECT_PREPARING"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let cancel = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Cancel connecting to")
+        ).firstMatch
+        XCTAssertTrue(
+            cancel.waitForExistence(timeout: 10),
+            "shared progress must retain its operator cancel after handshake")
+        XCTAssertFalse(
+            app.buttons["Back to cameras"].exists,
+            "a second preparing page must not replace shared progress")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "SIMULATED-shared-connect-preparing-landscape"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+}
+
+/// SIMULATED decisions over actual public AppKit screens with no integrations or transport.
+@MainActor
+final class StandaloneConsentPresentationTests: XCTestCase {
+    func testStandaloneCamerasScreenAnswersAndCancels() { exercise("cameras") }
+    func testStandalonePairScreenAnswersAndCancels() { exercise("pair") }
+    func testNestedSameOwnerHasExactlyOnePresenter() { exercise("nestedSame") }
+    func testNestedDifferentOwnerIsNotSuppressedAndParentSurvivesChildRemoval() {
+        exercise("nestedDifferent", checksParent: true)
+    }
+
+    private func exercise(_ mode: String, checksParent: Bool = false) {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_CAMERA_LIST"] = "1"
+        app.launchEnvironment["ZC_DEMO_CONSENT_SCREEN"] = mode
+        app.launch()
+        defer { app.terminate() }
+        let show = app.buttons["Show decision"]
+        XCTAssertTrue(show.waitForExistence(timeout: 10))
+        show.tap()
+        let alert = app.alerts["SIMULATED decision"]
+        guard alert.waitForExistence(timeout: 5) else {
+            XCTFail("actual shared screen must present its own consent: \(mode)")
+            return
+        }
+        XCTAssertEqual(app.alerts.count, 1)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "SIMULATED-consent-screen-\(mode)-landscape"
+        shot.lifetime = .keepAlways
+        add(shot)
+        alert.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Answers: 1, cancels: 0"].waitForExistence(timeout: 5))
+        XCTAssertFalse(alert.exists)
+        show.tap()
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(app.staticTexts["Answers: 1, cancels: 1"].waitForExistence(timeout: 5))
+        XCTAssertFalse(alert.exists)
+        if checksParent {
+            app.buttons["Hide child"].tap()
+            XCTAssertTrue(app.staticTexts["Child removed"].waitForExistence(timeout: 5))
+            app.buttons["Show parent decision"].tap()
+            XCTAssertTrue(alert.waitForExistence(timeout: 5))
+            alert.buttons["Continue"].tap()
+            XCTAssertTrue(app.staticTexts["Answers: 2, cancels: 1"].waitForExistence(timeout: 5))
+        }
     }
 }
 
