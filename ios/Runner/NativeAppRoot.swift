@@ -13506,8 +13506,16 @@ struct NativeRootContent: View {
 struct NativeAppRoot: View {
     @State private var model = NativeAppModel()
     @State private var showsLaunchSplash = true
-    @State private var showsReliabilityPrompt = false
-    @Environment(\.scenePhase) private var scenePhase
+    @State private var startup: MonitorAppStartup
+
+    init(startup: MonitorAppStartup? = nil) {
+        _startup = State(
+            initialValue: startup
+                ?? MonitorAppStartup(
+                    reports: .init(
+                        reporting: ReliabilityDiagnostics.reporting,
+                        tick: { ReliabilityDiagnostics.problemReporting.tick() })))
+    }
 
     var body: some View {
         ZStack {
@@ -13535,17 +13543,6 @@ struct NativeAppRoot: View {
         .environment(model)
         .environment(model.delivery)
         .observeMonitorWindowGeometry()
-        .task {
-            try? await Task.sleep(for: LaunchSplashTiming.visibleDuration)
-            withAnimation(.easeOut(duration: LaunchSplashTiming.fadeOutDuration)) {
-                showsLaunchSplash = false
-            }
-            if ReliabilityDiagnostics.reporting.isAvailable
-                && !ReliabilityDiagnostics.consent.hasDecision
-            {
-                showsReliabilityPrompt = true
-            }
-        }
         // Root-level (not inside the LUT picker) so the cover survives the monitor collapsing
         // when the RED internet hop tears the camera session down mid-download.
         .fullScreenCover(isPresented: redDownloadPresented) {
@@ -13553,20 +13550,9 @@ struct NativeAppRoot: View {
                 .environment(model)
         }
         .sheet(isPresented: bugReportPresented) { ProblemReportView() }
-        .sheet(isPresented: $showsReliabilityPrompt) {
-            ReliabilityConsentPrompt { enabled in
-                ReliabilityDiagnostics.reporting.setConsent(enabled)
-                showsReliabilityPrompt = false
-            }
+        .monitorAppStartup(startup, splashVisible: $showsLaunchSplash) { choice in
+            ReliabilityConsentPrompt(onChoice: choice)
         }
-        // A saved problem report sends once the gate allows it (off camera Wi-Fi, foreground).
-        .task {
-            while !Task.isCancelled {
-                ReliabilityDiagnostics.problemReporting.tick()
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
-        .onChange(of: scenePhase) { _, _ in ReliabilityDiagnostics.problemReporting.tick() }
         .onChange(of: model.shell.cover) { old, new in
             model.noteShellCoverChange(from: old, to: new)
         }
