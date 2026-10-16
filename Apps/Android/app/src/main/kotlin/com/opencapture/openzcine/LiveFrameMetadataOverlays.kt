@@ -1,45 +1,21 @@
 package com.opencapture.openzcine
 
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.PathMeasure
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.MonitorLevelDisplay
 import com.opencapture.monitorui.rememberMonitorDeviceTilt
@@ -48,12 +24,8 @@ import com.opencapture.monitorui.MonitorDeviceTilt
 import com.opencapture.monitorui.MonitorLevelOverlay
 import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.nikon.LiveCameraLevel
-import com.opencapture.opencine.nikon.LiveFocusBox
-import com.opencapture.opencine.nikon.LiveFocusInfo
-import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.openzcine.settings.LocalLevelStyle
-import kotlin.math.min
 import kotlin.math.roundToInt
 import com.opencapture.opencine.runtime.NativeFeedContentRect
 import com.opencapture.opencine.runtime.nativeFeedContentRect
@@ -136,56 +108,6 @@ internal fun liveOverlayFeedRect(
         width = scaledWidth,
         height = scaledHeight,
     )
-}
-
-/**
- * Maps one camera-coordinate AF box into [feed]'s actual visible image rect.
- *
- * [mirrored] folds the box across the feed the same way the shader folds the picture, so the
- * outline stays on the subject it belongs to when the mirror assist is on.
- */
-internal fun liveFocusBoxRect(
-    focus: LiveFocusInfo,
-    box: LiveFocusBox,
-    feed: LiveOverlayRect,
-    mirrored: Boolean = false,
-    mirroredVertical: Boolean = false,
-): LiveOverlayRect? {
-    if (
-        focus.coordinateWidth <= 0 ||
-            focus.coordinateHeight <= 0 ||
-            box.width <= 0 ||
-            box.height <= 0 ||
-            feed.width <= 0f ||
-            feed.height <= 0f
-    ) {
-        return null
-    }
-    val scaleX = feed.width / focus.coordinateWidth
-    val scaleY = feed.height / focus.coordinateHeight
-    val width = box.width * scaleX
-    val height = box.height * scaleY
-    val centerX = box.centerX * scaleX
-    return LiveOverlayRect(
-        left = feed.left + (if (mirrored) feed.width - centerX else centerX) - width / 2f,
-        top = feed.top + (if (mirroredVertical) feed.height - box.centerY * scaleY else box.centerY * scaleY) - height / 2f,
-        width = width,
-        height = height,
-    )
-}
-
-/** Clamps the lock badge's complete measured width to the visible feed intersection. */
-internal fun focusLockLabelLeft(
-    feed: LiveOverlayRect,
-    visibleBounds: LiveOverlayRect,
-    preferredLeft: Float,
-    labelWidth: Float,
-    inset: Float,
-): Float {
-    val visible = intersectLiveOverlayRects(feed, visibleBounds) ?: visibleBounds
-    val minimum = visible.left + inset
-    val maximum = maxOf(minimum, visible.right - inset - labelWidth)
-    return maxOf(minimum, preferredLeft).coerceAtMost(maximum)
 }
 
 /** Prefers a valid camera horizon and uses the phone's tilt only when the frame lacks one. */
@@ -321,137 +243,6 @@ internal fun LiveFrameMetadataOverlay(
 }
 
 @Composable
-private fun CameraFocusOverlay(
-    focus: LiveFocusInfo?,
-    feed: LiveOverlayRect,
-    locked: Boolean,
-    lockProgress: Float,
-    alpha: Float = 1f,
-    editModifier: Modifier? = null,
-    mirrored: Boolean = false,
-    mirroredVertical: Boolean = false,
-) {
-    if (focus == null || focus.boxes.isEmpty()) return
-    val description =
-        focus.accessibilityDescription() +
-            if (locked) " Focus point position locked in app." else ""
-    val primaryRect = liveFocusBoxRect(focus, focus.boxes.first(), feed, mirrored, mirroredVertical)
-    // The Edit view's outline and badge go on the primary AF box, not the whole feed — a dashed
-    // rectangle round the entire image would name nothing.
-    if (editModifier != null && primaryRect != null) {
-        with(LocalDensity.current) {
-            // Offset and size FIRST: `chromeEditable`'s `onGloballyPositioned` reports the bounds
-            // of its own node, and an offset applied inside it moves only the child — the badge
-            // landed at the overlay's origin instead of on the box.
-            Box(
-                Modifier
-                    .absoluteOffset(primaryRect.left.toDp(), primaryRect.top.toDp())
-                    .size(primaryRect.width.toDp(), primaryRect.height.toDp())
-                    .then(editModifier),
-            )
-        }
-    }
-    BoxWithConstraints(
-        Modifier.fillMaxSize()
-            .alpha(alpha)
-            .clearAndSetSemantics { contentDescription = description },
-    ) {
-        val density = LocalDensity.current
-        val visibleBounds =
-            with(density) {
-                LiveOverlayRect(0f, 0f, maxWidth.toPx(), maxHeight.toPx())
-            }
-        val visibleFeed = intersectLiveOverlayRects(feed, visibleBounds) ?: visibleBounds
-        var lockLabelSize by remember { mutableStateOf(IntSize.Zero) }
-        Canvas(Modifier.fillMaxSize()) {
-            focus.boxes.forEachIndexed { index, box ->
-                val rect = liveFocusBoxRect(focus, box, feed, mirrored, mirroredVertical) ?: return@forEachIndexed
-                val color = focusBoxColor(focus, index)
-                val radius = min(min(rect.width, rect.height) * 0.12f, 7.dp.toPx())
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(rect.left, rect.top),
-                    size = Size(rect.width, rect.height),
-                    cornerRadius = CornerRadius(radius, radius),
-                    style =
-                        Stroke(
-                            width = 1.5.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round,
-                        ),
-                )
-            }
-            if (!locked && lockProgress > 0.001f && primaryRect != null) {
-                val progress = lockProgress.coerceIn(0f, 1f)
-                val radius = min(min(primaryRect.width, primaryRect.height) * 0.12f, 7.dp.toPx())
-                drawIntoCanvas { canvas ->
-                    val outline =
-                        Path().apply {
-                            addRoundRect(
-                                primaryRect.left,
-                                primaryRect.top,
-                                primaryRect.right,
-                                primaryRect.bottom,
-                                radius,
-                                radius,
-                                Path.Direction.CW,
-                            )
-                        }
-                    val measure = PathMeasure(outline, false)
-                    val segment = Path()
-                    measure.getSegment(0f, measure.length * progress, segment, true)
-                    val paint =
-                        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                            color = LiveDesign.accent.toArgb()
-                            style = Paint.Style.STROKE
-                            strokeWidth = 2.5.dp.toPx()
-                            strokeCap = Paint.Cap.ROUND
-                            strokeJoin = Paint.Join.ROUND
-                        }
-                    canvas.nativeCanvas.drawPath(segment, paint)
-                }
-            }
-        }
-        if (locked && primaryRect != null) {
-            androidx.compose.material3.Text(
-                text = "AF POINT LOCKED",
-                style = chromeStyle(9.5f, FontWeight.Bold, mono = true),
-                color = LiveDesign.accent,
-                modifier =
-                    Modifier
-                        .widthIn(
-                            max =
-                                with(density) {
-                                    maxOf(0f, visibleFeed.width - 10.dp.toPx()).toDp()
-                                },
-                        )
-                        .onSizeChanged { lockLabelSize = it }
-                        .offset {
-                            val inset = 5.dp.roundToPx()
-                            IntOffset(
-                                x =
-                                    focusLockLabelLeft(
-                                        feed = feed,
-                                        visibleBounds = visibleBounds,
-                                        preferredLeft = primaryRect.left,
-                                        labelWidth = lockLabelSize.width.toFloat(),
-                                        inset = inset.toFloat(),
-                                    ).roundToInt(),
-                                y =
-                                    maxOf(
-                                        feed.top + inset,
-                                        primaryRect.top - 22.dp.toPx(),
-                                    ).roundToInt(),
-                            )
-                        }
-                        .background(LiveDesign.background.copy(alpha = 0.82f), ChromeShape)
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-            )
-        }
-    }
-}
-
-@Composable
 private fun CameraLevelOverlay(
     reading: LiveLevelReading?,
     style: LocalLevelStyle,
@@ -539,29 +330,3 @@ private fun metadataBadgeOffset(
 
 private fun cameraLevelIsValid(level: LiveCameraLevel): Boolean =
     level.rollDegrees.isFinite() && level.pitchDegrees.isFinite()
-
-private fun focusBoxColor(focus: LiveFocusInfo, index: Int): Color =
-    when {
-        index > 0 -> LiveDesign.good
-        focus.result == LiveFocusResult.FOCUSED || focus.trackingAFActive -> LiveDesign.good
-        else -> Color.White.copy(alpha = 0.72f)
-    }
-
-/** Accessible focus copy that distinguishes debug fixtures from camera metadata. */
-internal fun LiveFocusInfo.accessibilityDescription(): String {
-    val state =
-        when (result) {
-            LiveFocusResult.FOCUSED -> "focused"
-            LiveFocusResult.NOT_FOCUSED -> "not focused"
-            LiveFocusResult.UNKNOWN -> "focus state unknown"
-        }
-    val subject = if (subjectDetectionActive) "Subject detection active." else ""
-    val tracking = if (trackingAFActive) " Tracking active." else ""
-    val origin =
-        if (isDebugFixture) {
-            "Debug focus fixture, not camera focus data."
-        } else {
-            "Camera focus overlay."
-        }
-    return "$origin ${boxes.size} boxes. $state. $subject$tracking"
-}
