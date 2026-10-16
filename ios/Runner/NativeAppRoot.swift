@@ -157,14 +157,6 @@ func logConnection(_ message: String) {
     }
 #endif
 
-enum ScreenWakeController {
-    @MainActor
-    static func apply(keepAwake: Bool) {
-        guard UIApplication.shared.isIdleTimerDisabled != keepAwake else { return }
-        UIApplication.shared.isIdleTimerDisabled = keepAwake
-    }
-}
-
 extension ThermalTier {
     /// Maps the platform thermal state onto the portable core tier. An `@unknown` future state is
     /// treated as `.serious` — bias toward shedding load when the OS reports a heat category we don't
@@ -210,17 +202,68 @@ enum PreferencesStore {
     private static let preferencesKey = "operatorPreferences.v1"
     private static let assistConfigKey = "assistConfiguration.v1"
 
+    private static let commonKeys = MonitorOperatorPreferences.Keys(
+        keepScreenAwake: "OpenZCine.KeepScreenAwake", hdrDisplay: "OpenZCine.HDRDisplay",
+        recordConfirmation: "OpenZCine.RecordConfirmation", haptics: "OpenZCine.HapticsEnabled",
+        cacheOriginals: "OpenZCine.CacheFullResolution")
+
     static func loadPreferences() -> OperatorPreferences {
-        guard let data = UserDefaults.standard.data(forKey: preferencesKey),
-            var decoded = try? JSONDecoder().decode(OperatorPreferences.self, from: data)
-        else { return .defaults }
+        loadPreferences(storage: .standard)
+    }
+
+    static func loadPreferences(storage: UserDefaults) -> OperatorPreferences {
+        let data = storage.data(forKey: preferencesKey)
+        if let data, let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let legacyValues = [
+                (commonKeys.keepScreenAwake, legacyBool(raw["keepScreenAwake"])),
+                (commonKeys.recordConfirmation, legacyBool(raw["recordConfirmationEnabled"])
+                    ?? legacyBool(raw["recordHoldEnabled"])),
+                (commonKeys.haptics, legacyBool(raw["hapticsEnabled"]))]
+            for (key, value) in legacyValues where storage.object(forKey: key) == nil {
+                if let value { storage.set(value, forKey: key) }
+            }
+        }
+        var decoded = data.map { OperatorPreferencesDocument(data: $0).decoded() } ?? .defaults
+        let common = MonitorOperatorPreferences(storage: storage, keys: commonKeys)
+        decoded.keepScreenAwake = common.keepScreenAwake
+        decoded.recordConfirmationEnabled = common.recordConfirmation
+        decoded.hapticsEnabled = common.haptics
         decoded.reconcileDispOrder()
         return decoded
     }
 
     static func save(_ preferences: OperatorPreferences) {
-        guard let data = try? JSONEncoder().encode(preferences) else { return }
-        UserDefaults.standard.set(data, forKey: preferencesKey)
+        save(preferences, previous: loadPreferences(), storage: .standard)
+    }
+
+    static func save(_ preferences: OperatorPreferences, previous: OperatorPreferences, storage: UserDefaults) {
+        let common = MonitorOperatorPreferences(storage: storage, keys: commonKeys)
+        if preferences.keepScreenAwake != previous.keepScreenAwake {
+            common.keepScreenAwake = preferences.keepScreenAwake
+        }
+        if preferences.recordConfirmationEnabled != previous.recordConfirmationEnabled {
+            common.recordConfirmation = preferences.recordConfirmationEnabled
+        }
+        if preferences.hapticsEnabled != previous.hapticsEnabled {
+            common.haptics = preferences.hapticsEnabled
+        }
+        // These common choices now belong to their shared keys. Preserve their legacy bytes.
+        var legacy = preferences
+        legacy.keepScreenAwake = previous.keepScreenAwake
+        legacy.recordConfirmationEnabled = previous.recordConfirmationEnabled
+        legacy.hapticsEnabled = previous.hapticsEnabled
+        guard legacy != previous else { return }
+        guard let original = storage.data(forKey: preferencesKey)
+            ?? (try? JSONEncoder().encode(OperatorPreferences.defaults)),
+            let data = try? OperatorPreferencesDocument(data: original).updating(legacy, previous: previous)
+        else { return }
+        storage.set(data, forKey: preferencesKey)
+    }
+
+    private static func legacyBool(_ raw: Any?) -> Bool? {
+        guard let raw, let data = try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed])
+        else { return nil }
+        return try? JSONDecoder().decode(Bool.self, from: data)
     }
 
     /// The shared per-DISP chrome. A mode without a stored layout seeds once from the video side
@@ -2317,7 +2360,7 @@ final class NativeAppModel {
     /// are deliberately *not* persisted here; the connected camera is their source of truth.
     var preferences = PreferencesStore.loadPreferences() {
         didSet {
-            PreferencesStore.save(preferences)
+            PreferencesStore.save(preferences, previous: oldValue, storage: .standard)
             syncScreenWakePolicy()
             if oldValue.bluetoothShutterEnabled != preferences.bluetoothShutterEnabled {
                 updateBluetoothShutter()
@@ -4805,6 +4848,7 @@ final class NativeAppModel {
     /// Virtual-horizon low-pass update cap when the level assist is on (~10 Hz).
     private static let levelAngleMinInterval: CFAbsoluteTime = 1.0 / 10.0
 
+    @ObservationIgnored private let screenWakeOwner = MonitorScreenWakeOwner()
     @ObservationIgnored private var screenWakeSuppressedForBackground = false
     private var didPrepareStartup = false
     @ObservationIgnored private var cameraWiFiJoinTask: Task<Void, Never>?
@@ -7313,11 +7357,16 @@ final class NativeAppModel {
         }
     }
 
+    /// The root seeds its initial phase independently of the shell's deduplicated session callback.
+    func syncScreenWakePolicy(sceneActive: Bool) {
+        screenWakeSuppressedForBackground = !sceneActive
+        syncScreenWakePolicy()
+    }
+
     func syncScreenWakePolicy() {
-        let wantsAwake =
-            !screenWakeSuppressedForBackground && preferences.keepScreenAwake
-            && (isMonitorPresented || multicam.isPresented || isMediaPlaybackActive)
-        ScreenWakeController.apply(keepAwake: wantsAwake)
+        screenWakeOwner.update(
+            enabled: preferences.keepScreenAwake,
+            sceneActive: !screenWakeSuppressedForBackground)
     }
 
     /// Mirrors the current `ProcessInfo` thermal state onto `thermalTier`, updating only on a real

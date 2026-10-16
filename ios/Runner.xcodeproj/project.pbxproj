@@ -139,6 +139,8 @@
 		58A10494F13F8CBF79C58BB1 /* NikonMediaDeliveryCanonicalClaimTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B543D3ECA78C633E8728DF8 /* NikonMediaDeliveryCanonicalClaimTests.swift */; };
 		C063F3617B9CFA2482D67F96 /* NikonPlaybackCleanupBarrierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0834DC7644BF5D84885C8C4 /* NikonPlaybackCleanupBarrierTests.swift */; };
 		15F502000000000000000002 /* NikonMediaOpeningAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */; };
+		D15500000000000000000102 /* SettingsSharedOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15500000000000000000101 /* SettingsSharedOwnerTests.swift */; };
+		D15500000000000000000202 /* SettingsPreferenceMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -312,6 +314,8 @@
 		7B543D3ECA78C633E8728DF8 /* NikonMediaDeliveryCanonicalClaimTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonMediaDeliveryCanonicalClaimTests.swift"; sourceTree = "<group>"; };
 		F0834DC7644BF5D84885C8C4 /* NikonPlaybackCleanupBarrierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonPlaybackCleanupBarrierTests.swift; sourceTree = "<group>"; };
 		15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaOpeningAdmissionTests.swift; sourceTree = "<group>"; };
+		D15500000000000000000101 /* SettingsSharedOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSharedOwnerTests.swift; sourceTree = "<group>"; };
+		D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPreferenceMigrationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -365,6 +369,8 @@
 		331C8082294A63A400263BE5 /* RunnerTests */ = {
 			isa = PBXGroup;
 			children = (
+				D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */,
+				D15500000000000000000101 /* SettingsSharedOwnerTests.swift */,
 				15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */,
 				2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */,
 				F0834DC7644BF5D84885C8C4 /* NikonPlaybackCleanupBarrierTests.swift */,
@@ -730,6 +736,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D15500000000000000000202 /* SettingsPreferenceMigrationTests.swift in Sources */,
+				D15500000000000000000102 /* SettingsSharedOwnerTests.swift in Sources */,
 				15F502000000000000000002 /* NikonMediaOpeningAdmissionTests.swift in Sources */,
 				E43BB78DABFEC65A2C255590 /* MonitorPortraitHeaderClearanceTests.swift in Sources */,
 				C063F3617B9CFA2482D67F96 /* NikonPlaybackCleanupBarrierTests.swift in Sources */,

@@ -295,39 +295,39 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        statusBarVisible = try c.decode(Bool.self, forKey: .statusBarVisible)
-        sideRailsVisible = try c.decode(Bool.self, forKey: .sideRailsVisible)
-        assistToolbarVisible = try c.decode(Bool.self, forKey: .assistToolbarVisible)
-        cameraValuesVisible = try c.decode(Bool.self, forKey: .cameraValuesVisible)
+        statusBarVisible = (try? c.decode(Bool.self, forKey: .statusBarVisible)) ?? true
+        sideRailsVisible = (try? c.decode(Bool.self, forKey: .sideRailsVisible)) ?? true
+        assistToolbarVisible = (try? c.decode(Bool.self, forKey: .assistToolbarVisible)) ?? true
+        cameraValuesVisible = (try? c.decode(Bool.self, forKey: .cameraValuesVisible)) ?? true
         // Per-readout flags were added later: an older saved blob lacks them, so default to visible
         // instead of failing the decode (which would reset every preference).
-        recReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .recReadoutVisible) ?? true
-        codecReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .codecReadoutVisible) ?? true
-        mediaReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible) ?? true
-        fpsReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .fpsReadoutVisible) ?? true
+        recReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .recReadoutVisible)) ?? true
+        codecReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .codecReadoutVisible)) ?? true
+        mediaReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible)) ?? true
+        fpsReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .fpsReadoutVisible)) ?? true
         // Same story for the lock key and the battery cluster: added after these blobs were
         // written, so an absent key means "the operator never chose" — keep them visible.
-        lockButtonVisible = try c.decodeIfPresent(Bool.self, forKey: .lockButtonVisible) ?? true
+        lockButtonVisible = (try? c.decodeIfPresent(Bool.self, forKey: .lockButtonVisible)) ?? true
         batteryIndicatorsVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .batteryIndicatorsVisible) ?? true
+            (try? c.decodeIfPresent(Bool.self, forKey: .batteryIndicatorsVisible)) ?? true
         // Third pass. The two remaining status-bar cells and the AF box were never switchable, so
         // an absent key means "the operator never chose" — keep them visible.
         timecodeReadoutVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .timecodeReadoutVisible) ?? true
+            (try? c.decodeIfPresent(Bool.self, forKey: .timecodeReadoutVisible)) ?? true
         resolutionReadoutVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .resolutionReadoutVisible) ?? true
-        focusBoxVisible = try c.decodeIfPresent(Bool.self, forKey: .focusBoxVisible) ?? true
+            (try? c.decodeIfPresent(Bool.self, forKey: .resolutionReadoutVisible)) ?? true
+        focusBoxVisible = (try? c.decodeIfPresent(Bool.self, forKey: .focusBoxVisible)) ?? true
         // The four rail controls were one `sideRails` blob, so a stored blob's single value is the
         // operator's choice for all four — expand it rather than defaulting them on and putting a
         // hidden rail back on their monitor.
         railRecordVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railRecordVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railRecordVisible)) ?? sideRailsVisible
         railMediaVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railMediaVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railMediaVisible)) ?? sideRailsVisible
         railSettingsVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railSettingsVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railSettingsVisible)) ?? sideRailsVisible
         railDispVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railDispVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railDispVisible)) ?? sideRailsVisible
     }
 
     /// DISP 2's stock configuration: a bare image plus the operator's way around it. The status
@@ -580,20 +580,22 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        dispOrder = DispOrder.reconciled(
-            try container.decode([DispMode].self, forKey: .dispOrder))
+        let savedOrder = (try? container.decode([String].self, forKey: .dispOrder))?
+            .compactMap(DispMode.init(rawValue:)) ?? Self.defaults.dispOrder
+        dispOrder = DispOrder.reconciled(savedOrder)
         if !Self.isValidDisplayOrder(dispOrder) {
             dispOrder = Self.defaults.dispOrder
         }
-        enabledDispModes = Self.normalizedEnabledDispModes(
-            try container.decodeIfPresent(Set<DispMode>.self, forKey: .enabledDispModes)
-                ?? Set(DispMode.allCases))
-        displayChrome = try container.decode(DisplayChromeVisibility.self, forKey: .displayChrome)
-        if let confirmation = try container.decodeIfPresent(
+        let savedEnabled = (try? container.decode([String].self, forKey: .enabledDispModes))?
+            .compactMap(DispMode.init(rawValue:)) ?? DispMode.allCases
+        enabledDispModes = Self.normalizedEnabledDispModes(Set(savedEnabled))
+        displayChrome = (try? container.decode(DisplayChromeVisibility.self, forKey: .displayChrome))
+            ?? Self.defaults.displayChrome
+        if let confirmation = try? container.decode(
             Bool.self, forKey: .recordConfirmationEnabled)
         {
             recordConfirmationEnabled = confirmation
-        } else if let legacyHold = try container.decodeIfPresent(
+        } else if let legacyHold = try? container.decode(
             Bool.self, forKey: .recordHoldEnabled)
         {
             // Migrate the removed Record Hold toggle to Record Confirmation.
@@ -604,21 +606,23 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         // Predates some saved payloads. An absent key means the user never made a choice, so the
         // default-on applies; an explicitly saved false is a real opt-out and is preserved.
         bluetoothShutterEnabled =
-            try container.decodeIfPresent(Bool.self, forKey: .bluetoothShutterEnabled) ?? true
-        hapticsEnabled = try container.decode(Bool.self, forKey: .hapticsEnabled)
-        keepScreenAwake = try container.decodeIfPresent(Bool.self, forKey: .keepScreenAwake) ?? true
+            (try? container.decodeIfPresent(Bool.self, forKey: .bluetoothShutterEnabled)) ?? true
+        hapticsEnabled = (try? container.decode(Bool.self, forKey: .hapticsEnabled)) ?? true
+        keepScreenAwake = (try? container.decodeIfPresent(Bool.self, forKey: .keepScreenAwake)) ?? true
         // Predates this switch. Absent means the operator never chose, so the default-on that
         // shipped with vertical mode applies; an explicitly saved false is a real opt-out.
         autoRotateFeedEnabled =
-            try container.decodeIfPresent(Bool.self, forKey: .autoRotateFeedEnabled) ?? true
-        streamPreset = try container.decode(LiveViewStreamPreset.self, forKey: .streamPreset)
-        qualityBias = try container.decode(LiveViewQualityBias.self, forKey: .qualityBias)
+            (try? container.decodeIfPresent(Bool.self, forKey: .autoRotateFeedEnabled)) ?? true
+        streamPreset = (try? container.decode(LiveViewStreamPreset.self, forKey: .streamPreset))
+            ?? Self.defaults.streamPreset
+        qualityBias = (try? container.decode(LiveViewQualityBias.self, forKey: .qualityBias))
+            ?? Self.defaults.qualityBias
         portraitFeedAspect =
-            try container.decodeIfPresent(PortraitFeedAspect.self, forKey: .portraitFeedAspect)
+            (try? container.decodeIfPresent(PortraitFeedAspect.self, forKey: .portraitFeedAspect))
             ?? .fit16x9
         // Older saved payloads predate this preference — tolerate absence, default to empty.
         scopeActivationOrder =
-            try Self.decodeAssistToolArrayIfPresent(from: container, forKey: .scopeActivationOrder)
+            (try? Self.decodeAssistToolArrayIfPresent(from: container, forKey: .scopeActivationOrder))
             ?? []
         // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
         // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
@@ -631,30 +635,30 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         // old default". It only ever existed in unreleased builds, so the one safe reading is to
         // start clean from the new stock set; DISP 1 and DISP 3 are untouched.
         cleanChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .cleanChromeV2)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .cleanChromeV2))
             ?? .cleanDefaults
         commandChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .commandChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .commandChrome))
             ?? displayChrome
         // Chrome went per-capture-mode after these blobs were written. Everything the operator
         // configured carries into BOTH sides, so a DISP 1 they built for video looks identical the
         // moment the body switches to stills — until they deliberately diverge the two.
         photoDisplayChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoDisplayChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoDisplayChrome))
             ?? displayChrome
         photoCleanChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCleanChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCleanChrome))
             ?? cleanChrome
         photoCommandChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCommandChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCommandChrome))
             ?? commandChrome
         relayEncoderProfile =
-            try container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile)
+            (try? container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile))
             ?? .lowLatency
         relayWatcherPasscode =
-            try container.decodeIfPresent(String.self, forKey: .relayWatcherPasscode) ?? ""
+            (try? container.decodeIfPresent(String.self, forKey: .relayWatcherPasscode)) ?? ""
         relayAllowsControlRequests =
-            try container.decodeIfPresent(Bool.self, forKey: .relayAllowsControlRequests) ?? true
+            (try? container.decodeIfPresent(Bool.self, forKey: .relayAllowsControlRequests)) ?? true
     }
 
     public func encode(to encoder: any Encoder) throws {

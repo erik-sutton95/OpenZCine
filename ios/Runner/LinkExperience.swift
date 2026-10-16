@@ -54,6 +54,9 @@ struct LinkExperience: View {
             model.cameras.reloadSaved()
             model.nikonPort.found(model.discoveredCameras)
         }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            model.syncScreenWakePolicy(sceneActive: phase == .active)
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task {
