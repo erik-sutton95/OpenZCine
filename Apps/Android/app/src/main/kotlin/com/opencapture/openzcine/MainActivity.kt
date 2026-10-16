@@ -189,8 +189,10 @@ class MainActivity : ComponentActivity() {
         SwiftCore.isAvailable
         // A staged LIVE review reuses the debug demo feed (the typed fake session and its frame
         // source), so the staged monitor shows the live chrome with no radio, camera or USB.
+        // A staged CHROME_EDIT review is the same staged monitor with its editor open.
         val stagedIntent =
-            if (localReview?.screen == com.opencapture.monitorui.ReviewLaunch.Screen.LIVE)
+            if (localReview?.screen == com.opencapture.monitorui.ReviewLaunch.Screen.LIVE ||
+                localReview?.screen == com.opencapture.monitorui.ReviewLaunch.Screen.CHROME_EDIT)
                 Intent(intent).putExtra(DemoHarness.EXTRA_DEMO_FEED, true)
             else intent
         mediaRemoteShutter = AndroidMediaRemoteShutter(applicationContext)
@@ -219,7 +221,7 @@ class MainActivity : ComponentActivity() {
                 debugPortraitAspect?.let { settings.portraitFeedAspect = it }
             }
         // Screenshot affordance: open the Edit view straight away (zc.demo.chromeEdit).
-        val debugChromeEdit = DemoHarness.chromeEditMode(intent)
+        val debugChromeEdit = DemoHarness.chromeEditMode(intent) ?: MonitorReview.chromeEdit(localReview)
         // Camera-monitor chrome owns the whole panel, like the iOS shell: the shared launch draws
         // edge to edge with forced-dark transparent bars (the transient overlay is never an opaque
         // white band) and the feed under the punch-hole (the cutout arrives as a safe-area inset
@@ -540,7 +542,8 @@ class MainActivity : ComponentActivity() {
                             ))
                             camerasModel.reloadSaved()
                         }
-                        com.opencapture.monitorui.ReviewLaunch.Screen.LIVE ->
+                        com.opencapture.monitorui.ReviewLaunch.Screen.LIVE,
+                        com.opencapture.monitorui.ReviewLaunch.Screen.CHROME_EDIT ->
                             // The demo feed's fake session; the shell presents it as the monitor.
                             demo?.first?.let { monitorSession = it }
                         com.opencapture.monitorui.ReviewLaunch.Screen.MEDIA,
