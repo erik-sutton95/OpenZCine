@@ -73,10 +73,10 @@ extension SettingsSharedOwnerTests {
     }
 }
 
-/// A2-26: Z's Licenses and NOTICE pages are the repository files shipped in the app bundle;
-/// privacy and terms stay the web pages behind the settings internet hop.
+/// A2-26, A2-27: Z's Licenses and NOTICE pages are the repository files shipped in the app
+/// bundle; privacy and terms are Z's own text, readable without leaving the camera network.
 extension SettingsSharedOwnerTests {
-    @Test func legalPagesAreTheBundledRepositoryFilesAndTheWebPages() throws {
+    @Test func legalPagesAreBundledAndReadableOffline() throws {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         func text(_ path: String) throws -> String {
@@ -102,8 +102,42 @@ extension SettingsSharedOwnerTests {
                 == .text(
                     [try text("LICENSE"), try text("THIRD-PARTY-NOTICES.md"), platform]
                         .joined(separator: "\n\n")))
-        #expect(legal.privacy == .link(SupportLinkCatalog.privacy))
-        #expect(legal.terms == .link(SupportLinkCatalog.terms))
+        guard case .text(let privacy) = legal.privacy, case .text(let terms) = legal.terms else {
+            Issue.record("Privacy and terms are bundled text, not web pages: \(legal)")
+            return
+        }
+        #expect(privacy.hasPrefix("OpenZCine "))
+        #expect(privacy.contains("Sentry") && privacy.contains("Automatic error reports are optional"))
+        #expect(privacy.hasSuffix(SupportLinkCatalog.privacy.absoluteString))
+        #expect(terms.hasPrefix("OpenZCine is free software under the Apache License 2.0."))
+        #expect(terms.hasSuffix(SupportLinkCatalog.terms.absoluteString))
+        #expect(!(privacy + terms).contains("\u{2014}"), "Operator copy never uses the em dash")
+    }
+
+    /// A2-27: Reporting Privacy from the report sheet and the first-launch consent opens the
+    /// bundled page in the shared legal screen, never a web page that needs the internet.
+    @Test func reportingPrivacyIsTheBundledPageInTheSharedLegalScreen() async throws {
+        guard case .text(let privacy) = MonitorLegalDocuments.z.privacy else {
+            Issue.record("Privacy is bundled text")
+            return
+        }
+        let host = UIHostingController(rootView: ReliabilityDiagnostics.privacyPage(close: {}))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
+        window.rootViewController = host
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        var label: String?
+        for _ in 0..<200 where label == nil {
+            host.view.layoutIfNeeded()
+            label = HostedAccessibility.elements(in: host.view)
+                .first { HostedAccessibility.identifier($0) == "legal.document.privacy" }?
+                .accessibilityLabel
+            if label == nil { try await Task.sleep(for: .milliseconds(25)) }
+        }
+        #expect(label == privacy)
     }
 }
 

@@ -1666,153 +1666,62 @@ final class RunnerTests: XCTestCase {
     }
 }
 
+// MARK: - Legal pages (A2-27)
+
 extension RunnerTests {
-    /// The anchor is the operator's own level, not mid-scale. Arming the shutter used to set every
-    /// phone to half volume — remote or not — and drag whatever they were listening to with it.
-    /// All the mechanism needs is a step of room each way, which nearly every real setting has.
-    func testTheVolumeAnchorLeavesAnOrdinaryLevelExactlyWhereItIs() {
-        // Anything with a step of headroom either side is its own anchor: nothing to hear.
-        for volume in stride(from: Float(0.0625), through: Float(0.9375), by: 0.0625) {
-            XCTAssertEqual(
-                BluetoothShutterMonitor.anchor(forCurrentVolume: volume), volume, accuracy: 0.0001,
-                "volume \(volume) should not be moved")
+    /// Renders the System tab and every legal page in the phone's landscape frame and keeps the
+    /// images in the result bundle: the screenshot pass for Z's offline legal pages. Each page
+    /// must show its bundled text, never the unavailable or a web page.
+    @MainActor
+    func testLegalPagesRenderOfflineInLandscape() async throws {
+        let model = NativeAppModel()
+        let tab = model.operatorSettingsTab
+        model.operatorSettingsTab = .system
+        defer { model.operatorSettingsTab = tab }
+        try await snapshot(AnyView(OperatorSettingsPanel().environment(model)), named: "z-settings-system")
+        for page in MonitorLegalPage.allCases {
+            guard case .text(let text) = MonitorLegalDocuments.z[page] else {
+                return XCTFail("\(page.title) is bundled text")
+            }
+            let label = try await snapshot(
+                AnyView(MonitorLegalDocumentScreen(documents: .z, page: page, onClose: {})),
+                named: "z-legal-\(page.rawValue)", identifier: "legal.document.\(page.rawValue)")
+            XCTAssertEqual(label, text, page.title)
         }
-        // Only the rails move, and only by the one step a press needs to be visible.
-        XCTAssertEqual(
-            BluetoothShutterMonitor.anchor(forCurrentVolume: 0), 0.0625, accuracy: 0.0001)
-        XCTAssertEqual(
-            BluetoothShutterMonitor.anchor(forCurrentVolume: 1), 0.9375, accuracy: 0.0001)
-        // Both rails keep room to MOVE, which is the whole reason the anchor exists: a press
-        // either way from the anchored value lands somewhere detectably different.
-        for rail in [Float(0), Float(1)] {
-            let anchored = BluetoothShutterMonitor.anchor(forCurrentVolume: rail)
-            XCTAssertGreaterThan(anchored, 0)
-            XCTAssertLessThan(anchored, 1)
-        }
-    }
-
-    /// The decision travels with whatever anchor the session took, not a hardcoded half.
-    func testTheTriggerDecisionFollowsTheOperatorsOwnAnchor() {
-        let t0: TimeInterval = 100
-        let anchor: Float = 0.25
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.25, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor),
-            "the anchor's own echo is never a press")
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.3125, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.1875, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
-        // 0.5 is just a volume now — at this anchor it is a press, not a resting place.
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: anchor))
-    }
-
-    /// The Bluetooth-shutter volume decision: any move off the mid-scale anchor triggers (shutter
-    /// remotes send volume-up or volume-down depending on model), but not within the debounce
-    /// window after a trigger nor within the echo window after a programmatic re-anchor; the
-    /// anchor value itself (our own re-anchor landing) never triggers.
-    func testBluetoothShutterTriggerDecision() {
-        let t0: TimeInterval = 100
-        // Presses in BOTH directions, well clear of both windows → trigger.
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.4375, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
-        // The anchor echo (same value) never triggers.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5))
-        // Inside the debounce window after a trigger → suppressed; after it → fires again.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.3, lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625,
-                now: t0 + BluetoothShutterMonitor.debounceInterval + 0.01,
-                lastTriggerAt: t0, lastAnchorAt: t0, anchor: 0.5))
-        // Right after a programmatic re-anchor, a rise is its echo → suppressed.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5))
-    }
-
-    /// KVO is the primary detector and the private notification is a rail fallback. On releases
-    /// that emit both for one press, the shared debounce must collapse them to one record toggle.
-    func testBluetoothShutterDeduplicatesObservationSources() {
-        let firstEventAt: TimeInterval = 200
-        XCTAssertTrue(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625, now: firstEventAt, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5
-            ))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.isTrigger(
-                newVolume: 0.5625,
-                now: firstEventAt + 0.01,
-                lastTriggerAt: firstEventAt,
-                lastAnchorAt: firstEventAt, anchor: 0.5))
-    }
-
-    func testBluetoothShutterReportsWhyVolumeEventsAreIgnored() {
-        let t0: TimeInterval = 300
-        XCTAssertEqual(
-            BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5, now: t0, lastTriggerAt: 0, lastAnchorAt: 0, anchor: 0.5),
-            .atAnchor)
-        XCTAssertEqual(
-            BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: t0, lastAnchorAt: 0, anchor: 0.5),
-            .debounced)
-        XCTAssertEqual(
-            BluetoothShutterMonitor.triggerDecision(
-                newVolume: 0.5625, now: t0 + 0.1, lastTriggerAt: 0, lastAnchorAt: t0, anchor: 0.5),
-            .selfInflicted)
-    }
-
-    func testBluetoothShutterRunsOnlyForEnabledActiveFrontLiveView() {
-        XCTAssertTrue(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: false, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: false, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: true))
-        // Settings / Media / Tool Library covering the monitor must disarm the rocker — a press
-        // inside a menu may not start recording.
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: false,
-                applicationIsActive: true, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: false, audioSessionAvailable: true))
-        XCTAssertFalse(
-            BluetoothShutterMonitor.shouldRun(
-                enabled: true, monitorPresented: true, liveViewFront: true,
-                applicationIsActive: true, audioSessionAvailable: false))
     }
 
     @MainActor
-    func testBluetoothShutterFindsNestedSystemVolumeSlider() {
-        let volumeView = UIView()
-        let container = UIView()
-        let slider = UISlider()
-        container.addSubview(slider)
-        volumeView.addSubview(container)
-
-        XCTAssertIdentical(BluetoothShutterMonitor.firstSlider(in: volumeView), slider)
+    @discardableResult
+    private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil) async throws -> String? {
+        let host = UIHostingController(rootView: view)
+        // Drawing needs a window in the app's scene; a detached window renders blank.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        var label: String?
+        for _ in 0..<80 {
+            host.view.layoutIfNeeded()
+            if let identifier {
+                label = HostedAccessibility.elements(in: host.view)
+                    .first { HostedAccessibility.identifier($0) == identifier }?.accessibilityLabel
+                if label != nil { break }
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return label
     }
 }
 

@@ -304,14 +304,12 @@ internal fun OperatorSettingsScreen(
         { settings.hapticsEnabled.value = it }, settings.keepScreenAwake.value,
         { settings.keepScreenAwake.value = it },
         MonitorSettingsCopy.keepScreenAwake,
-        remoteShutter = settings.mediaRemoteShutterEnabled.value,
-        setRemoteShutter = { settings.mediaRemoteShutterEnabled.value = it },
-        remoteTitle = stringResource(R.string.settings_media_remote),
-        remoteCaption = stringResource(R.string.settings_media_remote_caption),
-        autoRotateFeed = settings.autoRotateFeedEnabled.value,
-        setAutoRotateFeed = { settings.autoRotateFeedEnabled.value = it },
-        rotationTitle = stringResource(R.string.settings_auto_rotate_feed),
-        rotationHelp = stringResource(R.string.help_controls_auto_rotate_feed))
+        shutter = MonitorSettingsRemoteShutter.mediaButtons(settings.mediaRemoteShutterEnabled.value) {
+            settings.mediaRemoteShutterEnabled.value = it
+        },
+        autoRotate = MonitorSettingsAutoRotate(settings.autoRotateFeedEnabled.value,
+            { settings.autoRotateFeedEnabled.value = it }, stringResource(R.string.settings_auto_rotate_feed),
+            stringResource(R.string.help_controls_auto_rotate_feed)))
     val account = frameioController?.let { controller ->
         accountSource(controller, retainedAccount, accountCurrent ?: { localAccountCurrent })
     }
