@@ -299,7 +299,7 @@ internal fun OperatorSettingsScreen(
         { settings.recordConfirmationEnabled.value = it }, settings.hapticsEnabled.value,
         { settings.hapticsEnabled.value = it }, settings.keepScreenAwake.value,
         { settings.keepScreenAwake.value = it },
-        "Keeps the live monitor or clip playback awake while the app is active.",
+        MonitorSettingsCopy.keepScreenAwake,
         remoteShutter = settings.mediaRemoteShutterEnabled.value,
         setRemoteShutter = { settings.mediaRemoteShutterEnabled.value = it },
         remoteTitle = stringResource(R.string.settings_media_remote),
@@ -324,9 +324,7 @@ internal fun OperatorSettingsScreen(
         diagnostics = MonitorSettingsDiagnosticsSource(
             save = { if (!systemSettingsActions.shareDiagnostics()) toastUnavailable(context) },
             incidents = AppDiagnostics.incidents),
-        legal = remember(context) {
-            zLegalDocuments(context.assets.open("NOTICE").bufferedReader().use { it.readText() }.trimEnd())
-        },
+        legal = ZLegalDocuments,
         information = MonitorSettingsInformationSource(stringResource(R.string.system_theme_charcoal), "PTP / PTP-IP",
             appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
             "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
@@ -393,7 +391,7 @@ private fun supportSource(actions: SystemSettingsActions, onReportProblem: () ->
     var automaticReports by remember { mutableStateOf(AppDiagnostics.reporting.isOptedIn) }
     val report by AppDiagnostics.manualReport.snapshot.collectAsState()
     return MonitorSettingsSupportSource(onReportProblem, automaticReports, AppDiagnostics.reporting.isAvailable,
-        stringResource(R.string.help_system_automatic_reports), stringResource(R.string.help_system_automatic_reports_unavailable),
+        MonitorSettingsCopy.automaticReports, stringResource(R.string.help_system_automatic_reports_unavailable),
         { automaticReports = it; AppDiagnostics.reporting.setConsent(it) },
         stringResource(R.string.system_report_problem), stringResource(R.string.help_system_report_problem),
         stringResource(R.string.action_report),

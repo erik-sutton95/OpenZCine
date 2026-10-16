@@ -313,7 +313,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     /** The monitor keeps the screen awake only while this operator policy permits it. */
     public fun shouldKeepScreenAwake(monitorPresented: Boolean): Boolean =
-        monitorPresented && keepScreenAwake.value
+        com.opencapture.opencine.appkit.MonitorScreenWakePolicy.keepAwake(keepScreenAwake.value, monitorPresented)
 
     /** Every persisted switch, for reset-to-defaults and key-collision checks. */
     public val all: List<Toggle> =

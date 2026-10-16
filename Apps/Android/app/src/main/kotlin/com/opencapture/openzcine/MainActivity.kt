@@ -620,7 +620,7 @@ class MainActivity : ComponentActivity() {
                     if (wirelessSessionLive) wifiLowLatencyLock.acquire()
                     onDispose { wifiLowLatencyLock.release() }
                 }
-                MonitorKeepScreenAwake(operatorSettings.shouldKeepScreenAwake(immersive))
+                MonitorKeepScreenAwake(operatorSettings.keepScreenAwake.value)
                 // Bind the HDMI capture device once its monitor session exists.
                 // CameraX pauses/resumes delivery with the activity lifecycle on
                 // its own; explicit close happens on monitor exit.

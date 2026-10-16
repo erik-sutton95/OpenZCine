@@ -708,3 +708,72 @@ import Testing
     #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .live))
     #expect(!MonitorChromePolicy.streamsHeaderOnly(in: .clean))
 }
+
+
+@Test func operatorPreferencesPreserveKnownChoicesBesideFutureEnums() throws {
+    var raw = try #require(JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
+    raw["hapticsEnabled"] = false
+    raw["keepScreenAwake"] = false
+    raw["recordConfirmationEnabled"] = false
+    raw["bluetoothShutterEnabled"] = false
+    raw["autoRotateFeedEnabled"] = false
+    raw["relayWatcherPasscode"] = "6203"
+    raw["relayAllowsControlRequests"] = false
+    raw["streamPreset"] = "future-stream-preset"
+    raw["qualityBias"] = "future-quality-bias"
+    raw["portraitFeedAspect"] = "future-portrait-aspect"
+    raw["relayEncoderProfile"] = "future-relay-profile"
+    raw["scopeActivationOrder"] = ["WAVE", "FUTURE", "PLAY", "MAG"]
+    var chrome = try #require(raw["displayChrome"] as? [String: Any])
+    chrome["statusBarVisible"] = false
+    chrome["futureStyle"] = ["color": "amber", "gain": 3]
+    raw["displayChrome"] = chrome
+    let data = try JSONSerialization.data(withJSONObject: raw)
+    let decoded = try JSONDecoder().decode(OperatorPreferences.self, from: data)
+    #expect(!decoded.hapticsEnabled)
+    #expect(!decoded.keepScreenAwake)
+    #expect(!decoded.recordConfirmationEnabled)
+    #expect(!decoded.bluetoothShutterEnabled)
+    #expect(!decoded.autoRotateFeedEnabled)
+    #expect(decoded.relayWatcherPasscode == "6203")
+    #expect(!decoded.relayAllowsControlRequests)
+    #expect(!decoded.displayChrome.statusBarVisible)
+    #expect(decoded.scopeActivationOrder.contains(.waveform))
+    #expect(decoded.scopeActivationOrder.contains(.instantReview))
+    #expect(!decoded.scopeActivationOrder.contains(.magnification))
+}
+
+
+@Test func operatorPreferencesKeepKnownDisplayModesBesideFutureModes() throws {
+    var raw = try #require(JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
+    var order = try #require(JSONSerialization.jsonObject(
+        with: JSONEncoder().encode([DispMode.clean, .live, .command])) as? [String])
+    order.insert("future-display-mode", at: 1)
+    raw["dispOrder"] = order
+    raw["enabledDispModes"] = order
+    raw["hapticsEnabled"] = false
+    let decoded = try JSONDecoder().decode(OperatorPreferences.self,
+        from: JSONSerialization.data(withJSONObject: raw))
+    #expect(decoded.dispOrder == [.clean, .live, .command])
+    #expect(decoded.enabledDispModes == Set([.clean, .live, .command]))
+    #expect(!decoded.hapticsEnabled)
+}
+
+@Test func operatorPreferencesKeepValidNestedChromeBesideMalformedMember() throws {
+    var raw = try #require(JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
+    var chrome = try #require(raw["displayChrome"] as? [String: Any])
+    chrome["statusBarVisible"] = "future-visibility"
+    chrome["cameraValuesVisible"] = false
+    chrome["railRecordVisible"] = false
+    raw["displayChrome"] = chrome
+    raw["hapticsEnabled"] = false
+    let decoded = try JSONDecoder().decode(OperatorPreferences.self,
+        from: JSONSerialization.data(withJSONObject: raw))
+    #expect(decoded.displayChrome.statusBarVisible)
+    #expect(!decoded.displayChrome.cameraValuesVisible)
+    #expect(!decoded.displayChrome.railRecordVisible)
+    #expect(!decoded.hapticsEnabled)
+}
