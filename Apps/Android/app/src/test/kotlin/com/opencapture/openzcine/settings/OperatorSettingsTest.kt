@@ -159,4 +159,47 @@ class OperatorSettingsTest {
         display.live = display.live.toggling(MonitorDisplaySection.STATUS_BAR)
         assertTrue(OperatorSettings(store).displayPreferences.live.isVisible(MonitorDisplaySection.STATUS_BAR))
     }
+
+    /** Product ruling 2026-10-16: Z's remote shutter moves onto the shared key; the choice carries over once. */
+    @Test
+    fun `a stored remote shutter choice moves to the shared key once and the retired key is removed`() {
+        store.edit().putBoolean("controls.mediaRemoteShutter.v1", false).commit()
+        val settings = OperatorSettings(store)
+        assertFalse(settings.mediaRemoteShutterEnabled.value)
+        assertFalse(settings.operatorPreferences.remoteShutter)
+        assertEquals(false, store.all["OpenZCine.RemoteShutter"])
+        assertFalse(store.contains("controls.mediaRemoteShutter.v1"))
+        val snapshot = store.all.toMap()
+        assertFalse(OperatorSettings(store).mediaRemoteShutterEnabled.value)
+        assertEquals(snapshot, store.all.toMap(), "a second launch changes nothing")
+    }
+
+    @Test
+    fun `without a stored remote shutter choice the shared default applies and nothing is written`() {
+        val settings = OperatorSettings(store)
+        assertTrue(settings.mediaRemoteShutterEnabled.value)
+        assertTrue(store.all.isEmpty())
+        settings.mediaRemoteShutterEnabled.toggle()
+        assertEquals(false, store.all["OpenZCine.RemoteShutter"])
+        assertFalse(store.contains("controls.mediaRemoteShutter.v1"))
+        assertFalse(OperatorSettings(store).mediaRemoteShutterEnabled.value)
+    }
+
+    @Test
+    fun `an already migrated choice wins over a stale retired key, which is removed`() {
+        store.edit().putBoolean("OpenZCine.RemoteShutter", false)
+            .putBoolean("controls.mediaRemoteShutter.v1", true).commit()
+        assertFalse(OperatorSettings(store).mediaRemoteShutterEnabled.value)
+        assertEquals(false, store.all["OpenZCine.RemoteShutter"])
+        assertFalse(store.contains("controls.mediaRemoteShutter.v1"))
+        assertFalse(OperatorSettings(store).mediaRemoteShutterEnabled.value)
+    }
+
+    @Test
+    fun `an unreadable retired remote shutter value is left alone and the default applies`() {
+        store.edit().putString("controls.mediaRemoteShutter.v1", "future").commit()
+        assertTrue(OperatorSettings(store).mediaRemoteShutterEnabled.value)
+        assertEquals("future", store.getString("controls.mediaRemoteShutter.v1", null))
+        assertFalse(store.contains("OpenZCine.RemoteShutter"))
+    }
 }

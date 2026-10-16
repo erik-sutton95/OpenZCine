@@ -91,7 +91,8 @@ class NikonOperatorSettingsComposeTest {
             assertFalse(preferences.getBoolean("controls.haptics", true))
             assertFalse(reloaded.mediaRemoteShutterEnabled.value)
             assertFalse(reloaded.autoRotateFeedEnabled.value)
-            assertFalse(preferences.getBoolean("controls.mediaRemoteShutter.v1", true))
+            assertFalse(preferences.getBoolean("OpenZCine.RemoteShutter", true))
+            assertFalse(preferences.contains("controls.mediaRemoteShutter.v1"))
             assertFalse(preferences.getBoolean("controls.autoRotateFeed", true))
             assertEquals("retained", preferences.getString("unrelated.operator.choice", null))
         }

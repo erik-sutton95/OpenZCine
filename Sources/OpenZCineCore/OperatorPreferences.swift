@@ -472,7 +472,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var recordConfirmationEnabled: Bool
     /// A Bluetooth HID shutter remote's volume press toggles recording while the live monitor is
     /// up. On by default; the off toggle exists because the mechanism takes over the hardware
-    /// volume buttons.
+    /// volume buttons. The app stores it under the shared remote shutter key
+    /// (`MonitorOperatorPreferences.remoteShutter`); a saved blob's field only seeds that key once.
     public var bluetoothShutterEnabled: Bool
     public var hapticsEnabled: Bool
     public var keepScreenAwake: Bool

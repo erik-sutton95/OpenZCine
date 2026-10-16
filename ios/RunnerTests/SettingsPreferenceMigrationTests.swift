@@ -10,6 +10,12 @@ import Testing
     private let awake = "OpenZCine.KeepScreenAwake"
     private let record = "OpenZCine.RecordConfirmation"
     private let haptics = "OpenZCine.HapticsEnabled"
+    private let remote = "OpenZCine.RemoteShutter"
+
+    private func legacyFields(_ storage: UserDefaults) throws -> [String: Any] {
+        let data = try #require(storage.data(forKey: legacy))
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
 
     private func withStorage(_ body: (UserDefaults) throws -> Void) throws {
         let suite = "SIMULATED.Z1.Preferences.\(UUID().uuidString)"
@@ -114,6 +120,67 @@ import Testing
             #expect(!PreferencesStore.loadPreferences(storage: storage).hapticsEnabled)
             #expect(storage.object(forKey: "OpenZCine.HDRDisplay") == nil)
             #expect(storage.object(forKey: "OpenZCine.CacheFullResolution") == nil)
+        }
+    }
+
+    /// Product ruling 2026-10-16: the remote shutter moves to the shared key once. The operator's
+    /// stored choice carries over and the retired blob field is removed after it was read.
+    @Test func storedRemoteShutterChoiceMovesToTheSharedKeyOnceAndLeavesTheBlob() throws {
+        try withStorage { storage in
+            storage.set(Data(#"{"bluetoothShutterEnabled":false,"hapticsEnabled":false,"future":[1,2,3]}"#.utf8), forKey: legacy)
+            let loaded = PreferencesStore.loadPreferences(storage: storage)
+            #expect(!loaded.bluetoothShutterEnabled)
+            #expect(storage.object(forKey: remote) as? Bool == false)
+            let fields = try legacyFields(storage)
+            #expect(fields["bluetoothShutterEnabled"] == nil)
+            #expect(fields["hapticsEnabled"] as? Bool == false)
+            #expect(fields["future"] as? [Int] == [1, 2, 3])
+            let snapshot = storage.dictionaryRepresentation() as NSDictionary
+            #expect(PreferencesStore.loadPreferences(storage: storage) == loaded)
+            #expect(snapshot.isEqual(to: storage.dictionaryRepresentation()), "A second launch changes nothing")
+        }
+    }
+
+    @Test func withoutAStoredRemoteShutterChoiceTheSharedDefaultAppliesAndNothingIsWritten() throws {
+        try withStorage { storage in
+            let data = Data(#"{"hapticsEnabled":false}"#.utf8)
+            storage.set(data, forKey: legacy)
+            let before = PreferencesStore.loadPreferences(storage: storage)
+            #expect(before.bluetoothShutterEnabled)
+            #expect(storage.object(forKey: remote) == nil)
+            #expect(storage.data(forKey: legacy) == data)
+            var next = before
+            next.bluetoothShutterEnabled = false
+            PreferencesStore.save(next, previous: before, storage: storage)
+            #expect(storage.object(forKey: remote) as? Bool == false)
+            #expect(storage.data(forKey: legacy) == data, "The shared key owns the choice now")
+            #expect(PreferencesStore.loadPreferences(storage: storage) == next)
+        }
+    }
+
+    @Test func anAlreadyMigratedChoiceWinsOverAStaleBlobFieldWhichIsRemoved() throws {
+        try withStorage { storage in
+            storage.set(Data(#"{"bluetoothShutterEnabled":true,"relayWatcherPasscode":"6203"}"#.utf8), forKey: legacy)
+            storage.set(false, forKey: remote)
+            let loaded = PreferencesStore.loadPreferences(storage: storage)
+            #expect(!loaded.bluetoothShutterEnabled)
+            #expect(storage.object(forKey: remote) as? Bool == false)
+            let fields = try legacyFields(storage)
+            #expect(fields["bluetoothShutterEnabled"] == nil)
+            #expect(fields["relayWatcherPasscode"] as? String == "6203")
+            #expect(!PreferencesStore.loadPreferences(storage: storage).bluetoothShutterEnabled)
+        }
+    }
+
+    @Test func nikonEditsOnAFreshInstallNeverWriteTheRetiredRemoteShutterField() throws {
+        try withStorage { storage in
+            let before = PreferencesStore.loadPreferences(storage: storage)
+            var next = before
+            next.relayWatcherPasscode = "6203"
+            PreferencesStore.save(next, previous: before, storage: storage)
+            #expect(try legacyFields(storage)["bluetoothShutterEnabled"] == nil)
+            #expect(storage.object(forKey: remote) == nil)
+            #expect(PreferencesStore.loadPreferences(storage: storage) == next)
         }
     }
 }

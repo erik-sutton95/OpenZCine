@@ -203,7 +203,10 @@ enum PreferencesStore {
     private static let commonKeys = MonitorOperatorPreferences.Keys(
         keepScreenAwake: "OpenZCine.KeepScreenAwake", hdrDisplay: "OpenZCine.HDRDisplay",
         recordConfirmation: "OpenZCine.RecordConfirmation", haptics: "OpenZCine.HapticsEnabled",
-        cacheOriginals: "OpenZCine.CacheFullResolution")
+        cacheOriginals: "OpenZCine.CacheFullResolution", remoteShutter: "OpenZCine.RemoteShutter")
+    /// The blob field the remote shutter choice lived in before the shared key (product ruling
+    /// 2026-10-16). It moves to ``commonKeys`` once and is then removed from the blob.
+    private static let retiredRemoteShutterField = "bluetoothShutterEnabled"
 
     static func loadPreferences() -> OperatorPreferences {
         loadPreferences(storage: .standard)
@@ -220,14 +223,41 @@ enum PreferencesStore {
             for (key, value) in legacyValues where storage.object(forKey: key) == nil {
                 if let value { storage.set(value, forKey: key) }
             }
+            migrateRetiredRemoteShutter(raw, storage: storage)
         }
         var decoded = data.map { OperatorPreferencesDocument(data: $0).decoded() } ?? .defaults
         let common = MonitorOperatorPreferences(storage: storage, keys: commonKeys)
         decoded.keepScreenAwake = common.keepScreenAwake
         decoded.recordConfirmationEnabled = common.recordConfirmation
         decoded.hapticsEnabled = common.haptics
+        decoded.bluetoothShutterEnabled = common.remoteShutter
         decoded.reconcileDispOrder()
         return decoded
+    }
+
+    /// Moves the stored remote shutter choice to the shared key once: a value already under the
+    /// shared key wins, so a second launch changes nothing. The blob field is removed only after
+    /// it was read as a Bool (or the shared key already holds the choice); every other field stays.
+    private static func migrateRetiredRemoteShutter(_ raw: [String: Any], storage: UserDefaults) {
+        guard let stored = raw[retiredRemoteShutterField], let key = commonKeys.remoteShutter else { return }
+        if storage.object(forKey: key) == nil {
+            guard let value = legacyBool(stored) else { return }
+            storage.set(value, forKey: key)
+        }
+        var remaining = raw
+        remaining.removeValue(forKey: retiredRemoteShutterField)
+        if let data = try? JSONSerialization.data(withJSONObject: remaining, options: [.sortedKeys]) {
+            storage.set(data, forKey: preferencesKey)
+        }
+    }
+
+    /// The blob never carries the remote shutter field again: the shared key owns the choice.
+    private static func withoutRetiredRemoteShutter(_ data: Data) -> Data {
+        guard var raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            raw.removeValue(forKey: retiredRemoteShutterField) != nil,
+            let stripped = try? JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys])
+        else { return data }
+        return stripped
     }
 
     static func save(_ preferences: OperatorPreferences) {
@@ -245,17 +275,21 @@ enum PreferencesStore {
         if preferences.hapticsEnabled != previous.hapticsEnabled {
             common.haptics = preferences.hapticsEnabled
         }
+        if preferences.bluetoothShutterEnabled != previous.bluetoothShutterEnabled {
+            common.remoteShutter = preferences.bluetoothShutterEnabled
+        }
         // These common choices now belong to their shared keys. Preserve their legacy bytes.
         var legacy = preferences
         legacy.keepScreenAwake = previous.keepScreenAwake
         legacy.recordConfirmationEnabled = previous.recordConfirmationEnabled
         legacy.hapticsEnabled = previous.hapticsEnabled
+        legacy.bluetoothShutterEnabled = previous.bluetoothShutterEnabled
         guard legacy != previous else { return }
         guard let original = storage.data(forKey: preferencesKey)
-            ?? (try? JSONEncoder().encode(OperatorPreferences.defaults)),
+            ?? (try? JSONEncoder().encode(OperatorPreferences.defaults)).map(withoutRetiredRemoteShutter),
             let data = try? OperatorPreferencesDocument(data: original).updating(legacy, previous: previous)
         else { return }
-        storage.set(data, forKey: preferencesKey)
+        storage.set(withoutRetiredRemoteShutter(data), forKey: preferencesKey)
     }
 
     private static func legacyBool(_ raw: Any?) -> Bool? {
