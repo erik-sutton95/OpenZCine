@@ -130,7 +130,9 @@ class GyroMountMainActivityTest {
 
     private fun saveScreenshot(name: String) {
         if (InstrumentationRegistry.getArguments().getString("gyroMountScreenshots") != "true") return
+        compose.mainClock.advanceTimeBy(500)
         compose.waitForIdle()
+        instrumentation.uiAutomation.waitForIdle(500, 5_000)
         val image = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         try {
             check(image.width > image.height) { "The mount flow must be verified in landscape." }

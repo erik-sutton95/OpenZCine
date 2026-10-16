@@ -13,7 +13,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import com.opencapture.openzcine.OpenZCineTheme
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,6 +25,16 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class GyroCalibrationComposeTest {
     @get:Rule val compose = createComposeRule()
+
+    @Before fun useLandscape() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        device.setOrientationLeft()
+        compose.waitUntil { device.displayWidth > device.displayHeight }
+    }
+
+    @After fun releaseRotation() {
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).unfreezeRotation()
+    }
 
     @Test fun threePoseWizardRequiresVerificationAndOffersRetryAndReset() {
         var state by mutableStateOf(GyroCaptureState())
@@ -70,8 +83,10 @@ class GyroCalibrationComposeTest {
 
     private fun saveScreenshot(name: String) {
         if (InstrumentationRegistry.getArguments().getString("gyroCalibrationScreenshots") != "true") return
+        compose.mainClock.advanceTimeBy(500)
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.waitForIdle(500, 5_000)
         val image = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         try {
             check(image.width > image.height) { "The calibration flow must be verified in landscape." }
