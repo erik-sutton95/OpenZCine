@@ -160,7 +160,9 @@ extension SettingsSharedOwnerTests {
         let processing = try #require(link.firstIndex(of: "Processing"), "\(link)")
         let cameras = try #require(link.firstIndex(of: "Your cameras"), "\(link)")
         #expect(processing < cameras, "\(link)")
-        #expect(link.firstIndex(of: "Feed Upscaler") == processing + 1, "\(link)")
+        // Two columns read row by row, so the Your cameras title can sit between the two.
+        #expect(
+            link[(processing + 1)...].first { $0 != "Your cameras" } == "Feed Upscaler", "\(link)")
         #expect(
             rows[.storage]?.contains("Full Resolution Caching") == false, "\(rows[.storage] ?? [])")
         #expect(rows[.storage]?.contains("Clear Cache") == true, "\(rows[.storage] ?? [])")
