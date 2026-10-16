@@ -70,6 +70,7 @@
 		C0DE0000000000000000002A /* MonitorPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002B /* MonitorPanels.swift */; };
 		LDDR0000000000000000001A /* LadderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = LDDR0000000000000000001B /* LadderPicker.swift */; };
 		DZ105000000000000000031A /* NikonCapturePopupParts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DZ105000000000000000031B /* NikonCapturePopupParts.swift */; };
+		DZ105000000000000000021A /* NikonFocusMarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DZ105000000000000000021B /* NikonFocusMarks.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
 		C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* SharedCameraControls.swift */; };
 		F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000002 /* ReliabilityDiagnostics.swift */; };
@@ -259,6 +260,7 @@
 		C0DE0000000000000000002B /* MonitorPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPanels.swift; sourceTree = "<group>"; };
 		LDDR0000000000000000001B /* LadderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LadderPicker.swift; sourceTree = "<group>"; };
 		DZ105000000000000000031B /* NikonCapturePopupParts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCapturePopupParts.swift; sourceTree = "<group>"; };
+		DZ105000000000000000021B /* NikonFocusMarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFocusMarks.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F8 /* SharedCameraControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCameraControls.swift; sourceTree = "<group>"; };
 		F2D000000000000000000002 /* ReliabilityDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityDiagnostics.swift; sourceTree = "<group>"; };
@@ -488,6 +490,7 @@
 				C0DE0000000000000000002B /* MonitorPanels.swift */,
 				LDDR0000000000000000001B /* LadderPicker.swift */,
 				DZ105000000000000000031B /* NikonCapturePopupParts.swift */,
+				DZ105000000000000000021B /* NikonFocusMarks.swift */,
 				C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */,
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
@@ -825,6 +828,7 @@
 				C0DE0000000000000000002A /* MonitorPanels.swift in Sources */,
 				LDDR0000000000000000001A /* LadderPicker.swift in Sources */,
 				DZ105000000000000000031A /* NikonCapturePopupParts.swift in Sources */,
+				DZ105000000000000000021A /* NikonFocusMarks.swift in Sources */,
 				C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */,
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
