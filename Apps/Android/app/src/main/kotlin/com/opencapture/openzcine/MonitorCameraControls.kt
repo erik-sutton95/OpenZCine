@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.sp
 import com.opencapture.monitorui.MonitorFieldLayout
 import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.CameraControl
+import com.opencapture.opencine.core.SettingKey
 import com.opencapture.openzcine.settings.PanelCloseButton
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import kotlin.math.max
@@ -982,6 +983,26 @@ internal fun monitorTopBarPickerFrame(
         anchor = anchorPill)
 }
 
+/** The common capture setting this picker edits; null for a Nikon-only picker. */
+internal val MonitorPickerKind.commonSettingKey: SettingKey?
+    get() = when (this) {
+        MonitorPickerKind.ISO -> SettingKey.ISO
+        MonitorPickerKind.SHUTTER -> SettingKey.SHUTTER
+        MonitorPickerKind.IRIS -> SettingKey.APERTURE
+        MonitorPickerKind.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
+        else -> null
+    }
+
+/** The picker a command-surface control opens, when it has one in the common set. */
+internal val CameraControl.commonPickerKind: MonitorPickerKind?
+    get() = when (this) {
+        CameraControl.ISO -> MonitorPickerKind.ISO
+        CameraControl.SHUTTER -> MonitorPickerKind.SHUTTER
+        CameraControl.IRIS -> MonitorPickerKind.IRIS
+        CameraControl.WHITE_BALANCE -> MonitorPickerKind.WHITE_BALANCE
+        else -> null
+    }
+
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */
 internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
     this == MonitorPickerKind.RESOLUTION ||
@@ -1030,6 +1051,7 @@ internal fun MonitorControlPickerPanel(
     onToggleMfScrub: (() -> Unit)? = null,
     /** Shared monitor popup supplies all panel chrome; this slot supplies controls only. */
     chromeless: Boolean = false,
+    recordingFormats: List<com.opencapture.opencine.nikon.NikonRecordingFormatPresentation> = emptyList(),
 ) {
     val writeEnabled = controlsEnabled && com.opencapture.opencine.appkit.LocalMonitorCaptureCommandEnabled.current
     @Composable fun PickerContent(currentPicker: MonitorPickerPresentation) {
@@ -1049,6 +1071,7 @@ internal fun MonitorControlPickerPanel(
         } else if (currentPicker.kind in ladderKinds) {
             VideoLadderBody(
                 picker = currentPicker,
+                recordingFormats = recordingFormats,
                 field = commonField,
                 control = commonControl,
                 controlsEnabled = writeEnabled,

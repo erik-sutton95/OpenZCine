@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E43BB78DABFEC65A2C255590 /* MonitorPortraitHeaderClearanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */; };
+		B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */; };
 		A25000555EDE55EDE0000004 /* NikonFeedIncidentProducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000555EDE55EDE0000003 /* NikonFeedIncidentProducerTests.swift */; };
 		A25000555EDE55EDE0000002 /* NikonFeedIncidentProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */; };
 		5CA01A5203C108E5E0C97A63 /* FrozenNikonRuntimeEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */; };
@@ -189,6 +191,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorPortraitHeaderClearanceTests.swift; path = "../../OpenCine/Tests/MonitorUITests/MonitorPortraitHeaderClearanceTests.swift"; sourceTree = SOURCE_ROOT; };
+		B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortraitHeaderNativeTests.swift; sourceTree = "<group>"; };
 		A25000555EDE55EDE0000003 /* NikonFeedIncidentProducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFeedIncidentProducerTests.swift; sourceTree = "<group>"; };
 		A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFeedIncidentProducer.swift; sourceTree = "<group>"; };
 		51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonRuntimeEffects.swift; sourceTree = "<group>"; };
@@ -366,6 +370,7 @@
 				D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */,
 				D15500000000000000000101 /* SettingsSharedOwnerTests.swift */,
 				15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */,
+				2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */,
 				F0834DC7644BF5D84885C8C4 /* NikonPlaybackCleanupBarrierTests.swift */,
 				7B543D3ECA78C633E8728DF8 /* NikonMediaDeliveryCanonicalClaimTests.swift */,
 				4A1ACA31D7D37EE4B9127FD7 /* NikonDeliveryRouteAdmissionTests.swift */,
@@ -376,6 +381,7 @@
 				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
 				C0DE00000000000000000F12 /* NikonAssistsTests.swift */,
 				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
+				B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
@@ -746,6 +752,7 @@
 				D15500000000000000000202 /* SettingsPreferenceMigrationTests.swift in Sources */,
 				D15500000000000000000102 /* SettingsSharedOwnerTests.swift in Sources */,
 				15F502000000000000000002 /* NikonMediaOpeningAdmissionTests.swift in Sources */,
+				E43BB78DABFEC65A2C255590 /* MonitorPortraitHeaderClearanceTests.swift in Sources */,
 				C063F3617B9CFA2482D67F96 /* NikonPlaybackCleanupBarrierTests.swift in Sources */,
 				58A10494F13F8CBF79C58BB1 /* NikonMediaDeliveryCanonicalClaimTests.swift in Sources */,
 				9B77A75D8950A56B591E2E92 /* NikonDeliveryRouteAdmissionTests.swift in Sources */,
@@ -756,6 +763,7 @@
 				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
 				C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */,
 				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
+				B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,

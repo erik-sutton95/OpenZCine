@@ -52,20 +52,27 @@ class SystemRowsComposeTest {
             }
         }
 
-        // The shared Help & Feedback and Project & Legal cards (iOS System page since #228).
-        val actionDescriptions =
-            listOf(
-                "Open Support",
-                "Report a Problem",
-                "Request a Feature",
-                "Share Diagnostics",
-                "Open Source Code",
-            )
-        actionDescriptions.forEach { description ->
+        // The shared Help & Feedback card rows fire the app's recorded native actions.
+        listOf("Open Support", "Report a Problem", "Request a Feature").forEach { description ->
             compose.onNodeWithContentDescription(description)
                 .performScrollTo()
                 .assertHeightIsAtLeast(48.dp)
                 .performClick()
+        }
+
+        // Diagnostics sharing lives in the shared Diagnostic options card (Save diagnostic
+        // report); the native shareDiagnostics callback remains the external action boundary.
+        compose.onNodeWithText("Diagnostic options").performScrollTo().performClick()
+        compose.onNodeWithText("Save", ignoreCase = true).performScrollTo().performClick()
+
+        // The shared Project & Legal card rows are the operator's real web destinations
+        // (browser launches owned by the shared card); the System tab still must present
+        // each of them, so assert the wiring surface stays complete.
+        listOf("Open Source Code", "Open Privacy Policy", "Open Terms of Use").forEach { description ->
+            compose.onNodeWithContentDescription(description)
+                .performScrollTo()
+                .assertHeightIsAtLeast(48.dp)
+                .assertIsDisplayed()
         }
 
         compose.runOnIdle {
@@ -73,7 +80,6 @@ class SystemRowsComposeTest {
             assertEquals(1, report)
             assertEquals(1, actions.feature)
             assertEquals(1, actions.diagnostics)
-            assertEquals(1, actions.source)
             // Privacy and terms are bundled pages (A2-27), not browser actions.
             assertEquals(0, actions.privacy)
             assertEquals(0, actions.terms)

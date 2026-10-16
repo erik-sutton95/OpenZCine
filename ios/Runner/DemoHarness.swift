@@ -288,6 +288,9 @@ enum DemoHarness {
                 environment: env, fallbackDirectoryPath: localDemoFallback)
             if env["ZC_DEMO_AUTOSTART"] == "1" {
                 model.startDemoSession()
+                if env["ZC_DEMO_GRAPHICAL_REVIEW"] == "1" {
+                    model.seedGraphicalReviewTimecode()
+                }
                 if env["ZC_DEMO_QUICK_SETTINGS"] == "1" {
                     model.seedQuickDemoCamera()
                 }
@@ -1257,6 +1260,11 @@ enum DemoHarness {
             guard let model else { return .init(connection: .disconnected(.requested)) }
             var facts = model.nikonControlFacts
             facts.recording = false
+            if model.isDemoSession,
+                ProcessInfo.processInfo.environment["ZC_DEMO_GRAPHICAL_REVIEW"] == "1"
+            {
+                facts.timecode = model.liveTimecode.running
+            }
             return facts
         }
         func queueSettingWrites(

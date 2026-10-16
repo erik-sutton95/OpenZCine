@@ -35,6 +35,19 @@ import com.opencapture.opencine.nikon.SavedCameraTransport
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MulticamCoordinatorTest {
+    @Test
+    fun presentationStateSurvivesLeavingAndReenteringStage() = runTest {
+        val stage = stage()
+        stage.arrangement = com.opencapture.monitorui.MultiviewArrangement.GRID
+        stage.select(2)
+        stage.end()
+        stage.begin()
+        assertEquals(com.opencapture.monitorui.MultiviewArrangement.GRID, stage.arrangement)
+        assertEquals(2, stage.focusedSlot)
+        assertTrue(stage.members.isEmpty())
+        stage.end()
+    }
+
     /** A scripted body: reports its record state, refuses record when asked, logs commands. */
     private class Body(
         serial: String,
@@ -219,10 +232,31 @@ class MulticamCoordinatorTest {
     fun tileShowsTheBodysBatteryBars() = runTest {
         val stage = stage()
         val member = MulticamMember(0, record("h0"))
-        member.properties = CameraPropertySnapshot(batteryPercent = 58)
+        val properties = MutableStateFlow(CameraPropertySnapshot())
+        val camera = object : CameraSession by FakeCameraSession(
+            CameraIdentity("SIMULATED", "SIMULATED", "SIMULATED"), startConnected = true,
+        ) {
+            override val cameraProperties = properties
+            override val reportedCameraProperties = properties
+        }
+        member.control = NikonOpenCineSession(camera, backgroundScope,
+            clock = { com.opencapture.opencine.core.MonotonicInstant(kotlin.time.Duration.ZERO) })
+        // Read the actual report before the background observer gets a coroutine turn.
+        properties.value = CameraPropertySnapshot(batteryPercent = 58)
+        member.properties = properties.value
         val reading = tile(member, stage)
         assertEquals(listOf(null, 3, 5), listOf(reading.battery, reading.batteryBars, reading.batteryBarCount))
-        member.properties = CameraPropertySnapshot()
+        assertFalse(reading.charging)
+        properties.value = CameraPropertySnapshot(batteryPercent = 58, externalPower = true)
+        member.properties = properties.value
+        assertTrue(tile(member, stage).charging, "external power reads as charging, as the live chrome does")
+        member.properties = CameraPropertySnapshot(batteryPercent = 100)
+        assertEquals(3, tile(member, stage).batteryBars, "the common report owns the gauge")
+        properties.value = CameraPropertySnapshot()
+        member.properties = properties.value
         assertNull(tile(member, stage).batteryBars, "no reading stays unknown")
+        member.properties = CameraPropertySnapshot(batteryPercent = 58)
+        member.control = null
+        assertNull(tile(member, stage).batteryBars, "an absent common owner does not fall back to legacy properties")
     }
 }

@@ -1,12 +1,9 @@
 import Foundation
 import OpenCineMedia
 
-public enum ScopeDisplayScale {
-    public static let legalBlackCode = OpenCineMedia.LegacyScopePolicy.legalBlackCode
-    public static let legalWhiteCode = OpenCineMedia.LegacyScopePolicy.legalWhiteCode
-    public static let crushLineLevel = OpenCineMedia.LegacyScopePolicy.crushLineLevel
-    public static let clipLineLevel = OpenCineMedia.LegacyScopePolicy.clipLineLevel
+public typealias ScopeDisplayScale = OpenCineMedia.LegacyScopePolicy
 
+extension OpenCineMedia.LegacyScopePolicy {
     public static func middleGrayCode(curve: ExposureToneCurve) -> Double {
         curve.middleGrayNativeCode
     }
@@ -22,10 +19,6 @@ public enum ScopeDisplayScale {
     public static func logBlackFloorCode(curve: ExposureToneCurve) -> Double {
         curve.encode(linearLight: 0) * 255
     }
-    public static func nativeCodeLevel(signalNative: Double) -> Double {
-        OpenCineMedia.LegacyScopePolicy.nativeCodeLevel(signalNative: signalNative)
-    }
-
     public static func waveformLevel(signalNative: Double, curve: ExposureToneCurve) -> Double {
         waveformLevel(signalNative: signalNative, mapping: ExposureSignalMapping(curve: curve))
     }

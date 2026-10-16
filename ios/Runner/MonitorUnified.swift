@@ -8,6 +8,12 @@ import OpenCineNikon
 import OpenZCineCore
 import SwiftUI
 
+/// The FORMAT readout: the common recording label behind the displayed movie token's image-area
+/// tag (`[FX] 6K · 25p`), as the body shows it. Kotlin twin: `nikonRecordingFormatLabel`.
+func nikonRecordingFormatLabel(_ label: String?, imageArea: String?) -> String? {
+    label.map { text in imageArea.map { "[\($0)] " + text } ?? text }
+}
+
 /// Source facts and bounded body operations for the complete common monitor owner.
 private enum NikonLiveReadoutKey: Hashable {
     case picker(CameraPicker)
@@ -254,8 +260,11 @@ struct NikonMonitorShell: View {
                 quickEnabled
                 ? picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
                 : nil
+            let common = !model.isPhotographyMode && !model.isDemoSession && model.videoSource != .relay
+                ? picker.nikonControlSetting.map { model.shell.control.captureValue($0.key, selection: .pending) } : nil
+            let label = common.map { $0.map(MonitorCapturePresentation.label) ?? "--" } ?? value.value
             return Readout(
-                id: .picker(picker), title: value.label, value: value.value, field: field,
+                id: .picker(picker), title: value.label, value: label, field: field,
                 quickEnabled: quickEnabled,
                 accessibilityIdentifier: picker.nikonControlSetting.map {
                     "monitor.capture." + $0.key.rawValue
@@ -268,12 +277,17 @@ struct NikonMonitorShell: View {
     }
     private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, Section> {
         let photo = model.isPhotographyMode
+        let recordingFormat = model.shell.control.snapshot.map(MonitorCapturePresentation.recordingFormat)
+        let recordingLabel = recordingFormat.flatMap(MonitorCapturePresentation.recordingLabel)
+        let imageArea = model.recordingFormatPresentations.first { $0.token == model.cameraState.resolutionFrameRate }?.imageArea
+        let formatLabel = nikonRecordingFormatLabel(recordingLabel, imageArea: imageArea)
         // The common session publishes the header timecode at frame precision (A5-04).
         let recording =
             model.pictureOnlyMonitor
             ? MonitorStatusPresentation(
                 recording: forwardedRecording,
-                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil)
+                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil,
+                timecodePlaceholder: Timecode.placeholder)
             : model.shell.control.statusPresentation()
         var format: [Readout] = []
         if model.chromeSectionMounts(.format) {
@@ -282,7 +296,7 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillSize : .resolution), title: "Format",
                     value: photo
                         ? model.stillSizeAreaDisplay ?? "--"
-                        : model.cameraState.resolutionFrameRate,
+                        : model.isDemoSession || model.videoSource == .relay ? model.cameraState.resolutionFrameRate : formatLabel ?? "--",
                     section: .format))
         }
         if model.chromeSectionMounts(.codec) {
@@ -291,7 +305,8 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillQuality : .codec), title: "Codec",
                     value: photo
                         ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--"
-                        : MonitorTextFormat.codecCompactLabel(model.cameraState.codec),
+                        : model.isDemoSession || model.videoSource == .relay ? MonitorTextFormat.codecCompactLabel(model.cameraState.codec)
+                            : recordingFormat?.codec.map(MonitorTextFormat.codecCompactLabel) ?? "--",
                     section: .codec))
         }
         let storage: Readout?
@@ -299,12 +314,12 @@ struct NikonMonitorShell: View {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: model.photoPillShowsStorage
-                    ? model.mediaReadout
+                    ? model.liveMediaReadout
                     : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() })
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
-                id: .storage, title: "Storage", value: model.mediaReadout,
+                id: .storage, title: "Storage", value: model.liveMediaReadout,
                 section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil
@@ -318,14 +333,11 @@ struct NikonMonitorShell: View {
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
     private var cameraBattery: MonitorOperatorPowerReading? {
-        let gauge = CameraBatteryGauge.gauge(
-            rawBatteryLevel: model.cameraState.cameraBatteryPercent)
-        guard gauge != .unknown else { return nil }
-        return .init(
-            id: "camera", title: "Camera battery", camera: true, bars: gauge.filledBars,
-            barCount: CameraBatteryGauge.barCount, warning: gauge.urgency != .nominal,
-            exhausted: gauge.pulses, charging: model.cameraBatteryCharging)
+        .camera(
+            model.cameraBatteryReading, exhausted: model.cameraBatteryExhausted,
+            charging: model.cameraPowerCharging)
     }
+
     private var panel: MonitorOperatorCameraPanel<NikonLiveReadoutKey>? {
         guard case .picker(let picker) = model.activePanel else { return nil }
         return .init(

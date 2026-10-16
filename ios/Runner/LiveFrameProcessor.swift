@@ -240,9 +240,8 @@ extension NativeAppModel {
                     read709: assist.falseColorRec709) : nil,
             peaking: visible.contains(.peaking)
                 ? PeakingSettings(
-                    color: Peaking.Color(rawValue: assist.peakingColor.rawValue) ?? .red,
-                    sensitivity: Peaking.Sensitivity(rawValue: assist.peakingSensitivity.rawValue)
-                        ?? .medium,
+                    color: assist.peakingColor,
+                    sensitivity: assist.peakingSensitivity,
                     // The photography feed is a display-referred preview, so its gradients run
                     // larger than the log video feed the gates were calibrated on. Shared core
                     // owns the squaring, so both shells resolve the same number.

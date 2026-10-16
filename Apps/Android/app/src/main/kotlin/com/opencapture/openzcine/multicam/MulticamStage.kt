@@ -5,12 +5,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
@@ -26,15 +22,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.MonitorMaterial
 import com.opencapture.monitorui.MonitorPalette
 import com.opencapture.monitorui.MonitorTypography
-import com.opencapture.monitorui.MultiviewPresentationLayout
-import com.opencapture.monitorui.MultiviewSafeArea
 import com.opencapture.monitorui.monitorMaterial
 import com.opencapture.opencine.appkit.MultiviewCameraAction
 import com.opencapture.opencine.appkit.MultiviewCameraPicker
@@ -42,11 +35,15 @@ import com.opencapture.opencine.appkit.MultiviewPickerRow
 import com.opencapture.opencine.appkit.MultiviewReadout
 import com.opencapture.opencine.appkit.MultiviewRecordContext
 import com.opencapture.opencine.appkit.MultiviewStage
+import com.opencapture.opencine.appkit.MultiviewStageSurface
+import com.opencapture.opencine.appkit.MultiviewStageStateProvider
+import com.opencapture.opencine.appkit.MultiviewNetworkRestore
 import com.opencapture.opencine.appkit.MultiviewStageActions
 import com.opencapture.opencine.appkit.MultiviewTally
 import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.appkit.MultiviewTile
 import com.opencapture.opencine.appkit.MultiviewTileStatus
+import com.opencapture.opencine.appkit.withPower
 import com.opencapture.opencine.appkit.MultiviewTool
 import com.opencapture.opencine.core.Availability
 import com.opencapture.opencine.core.ISOValue
@@ -54,8 +51,6 @@ import com.opencapture.opencine.core.MonitorEntryID
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.WhiteBalanceValue
-import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
-import com.opencapture.openzcine.nikonCameraBatteryReading
 import kotlinx.coroutines.delay
 import com.opencapture.opencine.nikon.SavedCameraRecord
 
@@ -77,24 +72,15 @@ fun MulticamStage(
 ) {
     var adding by remember { mutableStateOf<Int?>(null) }
     var leaving by remember { mutableStateOf(false) }
-    var fill by remember { mutableStateOf(false) }
-    val insets = WindowInsets.safeDrawing.asPaddingValues()
-    val direction = LocalLayoutDirection.current
-    BackHandler { leaving = true }
-    BoxWithConstraints(
+    val fill = coordinator.presentation.fill
+    BackHandler(enabled = coordinator.lent == null && com.opencapture.opencine.appkit.LocalMultiviewStageVisible.current) { leaving = true }
+    MultiviewStageSurface(coordinator.arrangement, coordinator.focusedSlot,
         // The stage covers Your cameras; it takes every touch that no control of its own takes.
         Modifier.fillMaxSize().background(MonitorPalette.backgroundDeep).pointerInput(Unit) { detectTapGestures {} }
             .testTag("multicam.stage"),
-    ) {
-        val layout =
-            MultiviewPresentationLayout.compute(
-                maxWidth.value, maxHeight.value,
-                MultiviewSafeArea(
-                    insets.calculateTopPadding().value, insets.calculateLeftPadding(direction).value,
-                    insets.calculateBottomPadding().value, insets.calculateRightPadding(direction).value,
-                ),
-                coordinator.arrangement, coordinator.focusedSlot,
-            )
+    ) { viewport ->
+        val layout = viewport.layout
+        MultiviewStageStateProvider(coordinator.presentation) {
         MultiviewStage(
             tiles = (0 until MulticamCoordinator.TILES).map { slot -> coordinator.memberAt(slot)?.let { tile(it, coordinator) } },
             layout = layout, arrangement = coordinator.arrangement, selected = coordinator.focusedSlot, fill = fill,
@@ -104,7 +90,7 @@ fun MulticamStage(
             actions = MultiviewStageActions(
                 select = coordinator::select,
                 arrange = { coordinator.arrangement = it },
-                setFill = { fill = it },
+                setFill = { coordinator.presentation.fill = it },
                 openLiveView = { slot -> coordinator.memberAt(slot)?.let { openLiveView(it.id) } },
                 add = { adding = it },
                 perform = { action, slot ->
@@ -135,6 +121,7 @@ fun MulticamStage(
                 Image(it, null, Modifier.fillMaxSize(), contentScale = if (fill) ContentScale.Crop else ContentScale.Fit)
             }
         }
+        }
         coordinator.toast?.let { text ->
             LaunchedEffect(text) {
                 delay(4_000)
@@ -144,7 +131,7 @@ fun MulticamStage(
                 text,
                 style = MonitorTypography.text(13f, FontWeight.Medium),
                 modifier =
-                    Modifier.align(Alignment.TopCenter).padding(top = insets.calculateTopPadding() + 24.dp)
+                    Modifier.align(Alignment.TopCenter).padding(top = viewport.safeArea.top.dp + 24.dp)
                         .widthIn(max = 420.dp).monitorMaterial(MonitorMaterial.Info, CircleShape)
                         .clickable { coordinator.toast = null }.padding(horizontal = 16.dp, vertical = 10.dp)
                         .testTag("multicam.toast"),
@@ -173,12 +160,12 @@ fun MulticamStage(
     if (leaving) {
         AlertDialog(
             onDismissRequest = { leaving = false },
-            text = { Text("Close multicam? Recording continues on every camera.") },
+            text = { Text(MultiviewNetworkRestore.NONE.closeQuestion) },
             confirmButton = {
                 TextButton(onClick = {
                     leaving = false
                     close()
-                }) { Text("Close multicam") }
+                }) { Text(MultiviewNetworkRestore.CLOSE_ACTION) }
             },
             dismissButton = { TextButton(onClick = { leaving = false }) { Text("Cancel") } },
         )
@@ -206,12 +193,11 @@ internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mul
             ),
         ) to state.reason
     }
+    // The session's snapshot: storage, and the body's five-step gauge (A5-01) as declared, never a percent.
+    val snapshot = member.control?.refresh()
     return MultiviewTile(
-        storage = member.control?.refresh()?.storage?.storageReadout?.free ?: MultiviewTally.UNAVAILABLE,
+        storage = snapshot?.storage?.storageReadout?.free ?: MultiviewTally.UNAVAILABLE,
         name = member.displayName, model = member.record.transport.displayName,
-        // The body's five-step gauge (A5-01): bars, never a percent it did not report.
-        batteryBars = nikonCameraBatteryReading(member.batteryPercent, null)?.bars,
-        batteryBarCount = NikonCameraBatteryGauge.BAR_COUNT,
         timecode = member.timecode,
         tally = MultiviewTally.text(rolling, waiting = coordinator.groupBusy),
         // Nikon reports no take length: the tile times it from the first recording frame.
@@ -230,7 +216,7 @@ internal fun tile(member: MulticamMember, coordinator: MulticamCoordinator): Mul
             MultiviewCameraAction(MulticamTileAction.REMOVE, "Remove camera", MultiviewCameraAction.Kind.DESTRUCTIVE),
         ),
         accessibilityValue = detail,
-    )
+    ).withPower(snapshot?.power)
 }
 
 /**

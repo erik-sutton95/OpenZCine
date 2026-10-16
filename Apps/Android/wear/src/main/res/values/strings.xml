@@ -14,7 +14,6 @@
     <string name="wear_stop_recording_description">Stop camera recording</string>
     <string name="wear_record_timeout">Phone did not confirm the record command.</string>
     <string name="wear_unavailable">—</string>
-    <string name="wear_timecode_unavailable">--:--:--:--</string>
     <string name="wear_storage_capacity">%1$d GB · %2$d%%</string>
     <string name="wear_battery_percent">%1$d%%</string>
 </resources>
