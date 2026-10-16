@@ -51,8 +51,8 @@ final class NikonPlaybackPictureHost: MonitorPlaybackFeedHost {
                 frame: frame,
                 options: { _ in
                     MonitorPresentationOptions(
-                        upscaler: FeedUpscaleSwitch.rendererReadsUpscaler,
-                        previewSuperResolutionInput: FeedUpscaleSwitch
+                        upscaler: FeedUpscaleSwitch.shared.upscaler,
+                        previewSuperResolutionInput: FeedUpscaleSwitch.shared
                             .presentsSuperResolutionInput)
                 }, logSubsystem: "OpenZCine"))
     }
