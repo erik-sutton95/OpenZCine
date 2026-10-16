@@ -51,6 +51,15 @@ final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshot
     }
 }
 
+/// The launch splash takes every touch until it fades, and a control beneath it reads as not
+/// hittable until then; a tap before that is not delivered.
+@MainActor
+private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+    let hittable = XCTNSPredicateExpectation(
+        predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
+    return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
+}
+
 /// Exercises the actual app root, including its pre-page precedence, without a camera.
 @MainActor
 final class ConnectFunnelAdoptionTests: XCTestCase {
@@ -120,7 +129,8 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
             app.launch()
             let cancel = app.buttons["Cancel"].firstMatch
             XCTAssertTrue(cancel.waitForExistence(timeout: 10), mode)
-            XCTAssertTrue(cancel.isHittable, mode)
+            // Hittable once the launch splash, which takes touches until it fades, is gone.
+            XCTAssertTrue(waitUntilHittable(cancel), mode)
             // The established session keeps its useful progress line, not a bare page.
             XCTAssertTrue(
                 app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", line))
@@ -157,12 +167,35 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         }
     }
 
-    /// The cameras page settles after the launch splash; a tap before then is not delivered.
-    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
-        let hittable = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
-        return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
+    /// The launch splash takes touches until it fades, so a control beneath it must not read as
+    /// hittable: an early tap was lost and the add-setup chooser never opened.
+    func testLaunchSplashKeepsTheCamerasPageUnhittableUntilItFades() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let splash = app.descendants(matching: .any)["monitor-launch-splash"]
+        let addSetup = app.buttons["cameras.addSetup"].firstMatch
+        XCTAssertTrue(splash.waitForExistence(timeout: 10), "the launch splash must be in the AX tree")
+        var coveredSamples = 0
+        let deadline = Date().addingTimeInterval(15)
+        while splash.exists, Date() < deadline {
+            let hittable = addSetup.exists && addSetup.isHittable
+            // Only a sample the splash bracketed on both sides counts.
+            if splash.exists {
+                coveredSamples += 1
+                XCTAssertFalse(hittable, "a control under the launch splash read as hittable")
+            }
+        }
+        XCTAssertGreaterThan(coveredSamples, 0)
+        XCTAssertFalse(splash.exists, "the launch splash must leave the AX tree once it fades")
+        XCTAssertTrue(waitUntilHittable(addSetup))
+        addSetup.tap()
+        XCTAssertTrue(app.buttons["addSetup.usbC"].waitForExistence(timeout: 5))
     }
+
 
     func testSharedProgressSurvivesPostHandshakePreparation() {
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -233,7 +266,7 @@ final class StandaloneConsentPresentationTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let show = app.buttons["Show decision"]
-        XCTAssertTrue(show.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntilHittable(show))
         show.tap()
         let alert = app.alerts["SIMULATED decision"]
         guard alert.waitForExistence(timeout: 5) else {

@@ -128,4 +128,10 @@ class MonitorReadoutsTest {
         assertNull(sessionBatteryReading(null, externalPower = true))
         assertNull(sessionBatteryReading(0, externalPower = null))
     }
+
+    @Test
+    fun `the FORMAT readout says Format in movie and photo mode like iOS`() {
+        // Z-ANDROID-FORMAT-TITLE (Root ruling): iOS titles the readout "Format" in both modes.
+        assertEquals("Format", MONITOR_FORMAT_READOUT_TITLE)
+    }
 }

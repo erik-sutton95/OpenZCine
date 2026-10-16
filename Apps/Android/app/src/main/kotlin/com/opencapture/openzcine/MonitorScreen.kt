@@ -1949,7 +1949,8 @@ internal fun MonitorScreen(
                 .firstOrNull { it.token == readoutRetention.resolution }?.imageArea,
         )
         val headerReadouts = listOfNotNull(
-            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
+            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name,
+                MONITOR_FORMAT_READOUT_TITLE,
                 if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else if (isDemoSession || relayedState != null) readoutRetention.resolution else formatLabel,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",
