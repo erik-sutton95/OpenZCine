@@ -455,6 +455,17 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertNil(empty.area)
         XCTAssertTrue(empty.subjects.isEmpty)
     }
+
+    /// The body's exposure indicator reaches the shared EV meter in photography.
+    func testTheCameraIndicatorFeedsTheSharedExposureMeter() {
+        let model = NativeAppModel()
+        model.applyDemoProperty(.exposureIndicateStatus, data: Data([UInt8(bitPattern: -9)]))
+        model.applyDemoProperty(.exposureIndicateLightup, data: Data([0]))
+        XCTAssertEqual(model.cameraPropertySnapshot.exposureMeter.stops, -1.5)
+        XCTAssertEqual(model.cameraPropertySnapshot.exposureMeter.label, "\u{2212}1.5")
+        model.applyDemoProperty(.exposureIndicateLightup, data: Data([1]))
+        XCTAssertNil(model.cameraPropertySnapshot.exposureMeter.stops)
+    }
 }
 
 @MainActor

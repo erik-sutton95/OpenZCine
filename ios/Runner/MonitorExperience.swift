@@ -316,7 +316,7 @@ struct LiveFeedModule: View {
                 }
             }
         }
-        .overlay { FeedAlignedAssists(clean: model.displayMode == .clean) }
+        .overlay { FeedAlignedAssists() }
     }
 
 }

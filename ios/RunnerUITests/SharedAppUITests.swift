@@ -15,18 +15,8 @@ final class PhysicalMigrationQualificationTests: OpenCineAppUITesting
 // staging. Motion records a capability skip: a Nikon body has no gimbal.
 final class CamerasPageFollowupTests: OpenCineAppUITesting.CamerasPageFollowupTests {}
 final class DesqueezeUIFlowTests: OpenCineAppUITesting.DesqueezeUIFlowTests {}
-/// Parity finding A1-32: Z draws its own photography-only EV needle, not the shared camera EV
-/// meter these cases check. They still run; their failure is expected until Z adopts the shared
-/// meter, and XCTest reports the first unexpected pass.
-final class EVMeterUIFlowTests: OpenCineAppUITesting.EVMeterUIFlowTests {
-    override func setUpWithError() throws {
-        try super.setUpWithError()
-        // The physical case skips before it meets the gap.
-        if !name.contains("Physical") {
-            XCTExpectFailure("A1-32: Z has its own EV meter, not the shared one")
-        }
-    }
-}
+/// Parity finding A1-32 closed: the body's exposure indicator feeds the shared camera EV meter.
+final class EVMeterUIFlowTests: OpenCineAppUITesting.EVMeterUIFlowTests {}
 final class MotionUIFlowTests: OpenCineAppUITesting.MotionUIFlowTests {}
 final class ShareUIFlowTests: OpenCineAppUITesting.ShareUIFlowTests {}
 
@@ -433,5 +423,42 @@ final class NikonLiveLUTWheelTouchTests: SharedAppUITestCase {
             app.buttons.matching(NSPredicate(format: "label == %@", "50 / 50 split")).count, 1)
         XCTAssertFalse(app.sliders["Exposure"].exists)
         capture("SIMULATED-XCUI-Nikon-Log3G10-render-after-wheel-drag")
+    }
+}
+
+/// SIMULATED: in photography the body's exposure indicator (+4/6 EV, staged by `ZC_DEMO_EV`) is
+/// drawn by the shared camera EV meter every app uses, in both orientations. No camera transport.
+final class NikonSharedEVMeterUITests: SharedAppUITestCase {
+    @MainActor
+    func testSIMULATEDCameraIndicatorDrawsTheSharedEVMeterInBothOrientations() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("SIMULATED meter staging requires a private simulator")
+        #endif
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment.merge(
+            [
+                "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_DISP": "live", "ZC_DEMO_GRAPHICAL_REVIEW": "1",
+                "ZC_DEMO_PHOTO": "1", "ZC_DEMO_EV": "4",
+            ]
+        ) { _, value in value }
+        app.launch()
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            let meter = app.descendants(matching: .any)["monitor.ev.meter"]
+            XCTAssertTrue(meter.waitForExistence(timeout: 20), "The shared EV meter must be shown")
+            let reading = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", "Camera exposure +0.7 EV"), object: meter)
+            XCTAssertEqual(XCTWaiter.wait(for: [reading], timeout: 10), .completed)
+            XCTAssertTrue(app.frame.contains(meter.frame), "The meter must be on screen")
+            let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            shot.name = "SIMULATED Z shared EV meter \(orientation == .portrait ? "portrait" : "landscape")"
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
     }
 }

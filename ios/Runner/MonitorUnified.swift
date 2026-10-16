@@ -416,8 +416,10 @@ struct NikonMonitorShell: View {
             picture: { Self.picture(model) },
             status: { status }, cameraBattery: { cameraBattery }, capture: { captureInputs },
             record: { record },
-            // The Nikon EV needle and level remain native instruments until F04 and A1-31.
-            exposure: nil, level: nil,
+            // The body's exposure indicator feeds the shared EV meter in photography, the only
+            // mode that offers it. The Nikon level remains a native instrument until A1-31.
+            exposure: model.isPhotographyMode ? { model.cameraPropertySnapshot.exposureMeter } : nil,
+            level: nil,
             audio: {
                 model.monitorAvailability.audioMeters
                     ? model.observedLiveAudioLevels.map { .init(levels: $0, caption: nil) } : nil
