@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import MetricKit
+import OpenCineAppKit
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -88,11 +89,6 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case connectionJoinPrefix = "connection.join.prefix"
 }
 
-struct DiagnosticBreadcrumb: Codable, Equatable, Sendable {
-    let timestamp: Date
-    let event: String
-}
-
 struct DiagnosticReportMetadata: Equatable, Sendable {
     let generatedAt: Date
     let appVersion: String
@@ -101,15 +97,17 @@ struct DiagnosticReportMetadata: Equatable, Sendable {
     let osName: String
     let osVersion: String
 
+    /// The phone as every app's diagnostics name it: OpenCine `DiagnosticsDevice` (A6-13).
     @MainActor static var current: DiagnosticReportMetadata {
         let info = Bundle.main.infoDictionary
+        let device = DiagnosticsDevice.current
         return DiagnosticReportMetadata(
             generatedAt: Date(),
             appVersion: info?["CFBundleShortVersionString"] as? String ?? "unknown",
             buildNumber: info?["CFBundleVersion"] as? String ?? "unknown",
-            deviceClass: UIDevice.current.model,
-            osName: UIDevice.current.systemName,
-            osVersion: UIDevice.current.systemVersion
+            deviceClass: device.hardwareClass,
+            osName: device.osName,
+            osVersion: device.osVersion
         )
     }
 }
@@ -128,98 +126,76 @@ enum DiagnosticReportError: LocalizedError {
     }
 }
 
-/// Bounded file-backed event and MetricKit payload store owned by the iOS shell.
+/// The closed event journal, the connect-attempt trace and the MetricKit payloads of the iOS
+/// shell. Events and the trace are OpenCine `DiagnosticJournal`s, the owner Pocket, Insta and Z
+/// Android use: recording never touches disk on the caller's thread, and each file stays bounded.
+/// MetricKit payloads stay this shell's own files.
 actor DiagnosticEventStore {
+    /// Events the report shows and the event journal keeps (Z Android keeps the same bound).
+    static let maximumEventCount = 500
+
     private let fileManager: FileManager
-    private let rootDirectory: URL
-    private let eventsURL: URL
-    private let connectTraceURL: URL
     private let payloadDirectory: URL
-    private let maximumEventBytes: Int
     private let maximumPayloadCount: Int
+    private let events: DiagnosticJournal
+    private let connectTrace: DiagnosticJournal
 
     init(
         rootDirectory: URL? = nil,
         fileManager: FileManager = .default,
-        maximumEventBytes: Int = 256 * 1_024,
         maximumPayloadCount: Int = 8
     ) {
-        self.fileManager = fileManager
-        let defaultRoot =
-            fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+        let root =
+            rootDirectory
+            ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("OpenZCine/Diagnostics", isDirectory: true)
             ?? fileManager.temporaryDirectory.appendingPathComponent(
                 "OpenZCine/Diagnostics", isDirectory: true)
-        self.rootDirectory = rootDirectory ?? defaultRoot
-        self.eventsURL = (rootDirectory ?? defaultRoot).appendingPathComponent("events.jsonl")
-        self.connectTraceURL = (rootDirectory ?? defaultRoot).appendingPathComponent(
-            "connect-trace.jsonl")
-        self.payloadDirectory = (rootDirectory ?? defaultRoot).appendingPathComponent(
-            "metrickit", isDirectory: true)
-        self.maximumEventBytes = max(1_024, maximumEventBytes)
+        self.fileManager = fileManager
+        self.payloadDirectory = root.appendingPathComponent("metrickit", isDirectory: true)
         self.maximumPayloadCount = max(1, maximumPayloadCount)
+        // The journals create their files on the first line; the folder must exist first.
+        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        Self.moveLegacyFiles(in: root, fileManager: fileManager)
+        let redact: @Sendable (String) -> String = {
+            PrivacyRedactor.redact($0, isSafeNetwork: { _ in false })
+        }
+        events = DiagnosticJournal(
+            subsystem: "com.opencapture.openzcine", category: "events",
+            file: root.appendingPathComponent("events.log"), cap: Self.maximumEventCount,
+            redact: redact)
+        connectTrace = DiagnosticJournal(
+            subsystem: "com.opencapture.openzcine", category: "connect-trace",
+            file: root.appendingPathComponent("connect-trace.log"),
+            cap: ConnectAttemptDiagnostic.maximumLineCount, redact: redact)
+    }
+
+    /// Appends one closed event; never waits on disk.
+    nonisolated func record(_ event: AppDiagnosticEvent) {
+        events.line(event.rawValue)
     }
 
     /// Appends one sanitized connect-attempt line. Stays on device until the operator
     /// exports a diagnostics report; never enters the anonymous activity log.
-    func recordConnectTrace(_ line: String, at timestamp: Date = Date()) {
+    nonisolated func recordConnectTrace(_ line: String) {
         guard let sanitized = ConnectAttemptDiagnostic.sanitizedSummary(line) else { return }
-        do {
-            try prepareDirectories()
-            let stamp = ISO8601DateFormatter().string(from: timestamp)
-            let data = Data("\(stamp)  \(sanitized)\n".utf8)
-            if !fileManager.fileExists(atPath: connectTraceURL.path) {
-                guard fileManager.createFile(atPath: connectTraceURL.path, contents: nil) else {
-                    return
-                }
-            }
-            let handle = try FileHandle(forWritingTo: connectTraceURL)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-            try handle.synchronize()
-            try compactConnectTraceIfNeeded()
-        } catch {
-            // Diagnostics must never interfere with camera control.
-        }
+        connectTrace.line(sanitized)
+    }
+
+    /// Journal lines, `<ISO 8601 stamp> <event>`, oldest first.
+    nonisolated func recentEvents() -> [String] {
+        events.recentLines()
     }
 
     nonisolated func recentConnectTrace() -> [String] {
-        guard let data = try? Data(contentsOf: connectTraceURL) else { return [] }
-        return String(decoding: data, as: UTF8.self)
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .suffix(ConnectAttemptDiagnostic.maximumLineCount)
-            .map(String.init)
-    }
-
-    func record(_ event: AppDiagnosticEvent, at timestamp: Date = Date()) {
-        do {
-            try prepareDirectories()
-            let breadcrumb = DiagnosticBreadcrumb(timestamp: timestamp, event: event.rawValue)
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            var data = try encoder.encode(breadcrumb)
-            data.append(0x0A)
-            if !fileManager.fileExists(atPath: eventsURL.path) {
-                guard fileManager.createFile(atPath: eventsURL.path, contents: nil) else {
-                    throw DiagnosticReportError.writeFailed
-                }
-            }
-            let handle = try FileHandle(forWritingTo: eventsURL)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-            try handle.synchronize()
-            try compactEventsIfNeeded()
-        } catch {
-            // Diagnostics must never interfere with camera control or app launch.
-        }
+        connectTrace.recentLines()
     }
 
     func storeMetricPayload(_ data: Data, kind: String, at timestamp: Date = Date()) {
         guard !data.isEmpty else { return }
         do {
-            try prepareDirectories()
+            try fileManager.createDirectory(
+                at: payloadDirectory, withIntermediateDirectories: true)
             let milliseconds = Int(timestamp.timeIntervalSince1970 * 1_000)
             let safeKind = kind == "metric" ? "metric" : "diagnostic"
             let url = payloadDirectory.appendingPathComponent(
@@ -228,15 +204,6 @@ actor DiagnosticEventStore {
             try trimMetricPayloads()
         } catch {
             // MetricKit delivery is opportunistic. Apple remains the authoritative crash source.
-        }
-    }
-
-    nonisolated func recentEvents() -> [DiagnosticBreadcrumb] {
-        guard let data = try? Data(contentsOf: eventsURL) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return data.split(separator: 0x0A).compactMap {
-            try? decoder.decode(DiagnosticBreadcrumb.self, from: Data($0))
         }
     }
 
@@ -254,7 +221,6 @@ actor DiagnosticEventStore {
     }
 
     func makeReport(metadata: DiagnosticReportMetadata) throws -> URL {
-        try prepareDirectories()
         let report = Self.renderReport(
             metadata: metadata,
             events: recentEvents(),
@@ -279,12 +245,11 @@ actor DiagnosticEventStore {
     /// privacy note, connect-attempt trace and MetricKit payloads as its sections.
     static func renderReport(
         metadata: DiagnosticReportMetadata,
-        events: [DiagnosticBreadcrumb],
+        events: [String],
         connectTrace: [String] = [],
         payloads: [(name: String, data: Data)]
     ) -> String {
         let formatter = ISO8601DateFormatter()
-        let environment = Self.environment(metadata)
         var extras: [(name: String, body: String)] = [
             (
                 "Before sharing",
@@ -316,8 +281,8 @@ actor DiagnosticEventStore {
             }
         }
         return DiagnosticReport.fullReport(
-            environment: environment,
-            journal: Self.journal(events),
+            environment: Self.environment(metadata),
+            journal: Array(events.suffix(maximumEventCount)),
             exceptions: [],
             extras: extras,
             isSafeNetwork: { _ in false })
@@ -325,21 +290,14 @@ actor DiagnosticEventStore {
 
     /// The technical details an operator can add to a problem report (reviewed in the form before
     /// sending): the shared manual report on this app's journal and connect-attempt trace. Reads
-    /// the files directly, so the form can build it at once.
+    /// the journals at once.
     nonisolated func manualReport(metadata: DiagnosticReportMetadata) -> String {
         DiagnosticReport.manualReport(
             environment: Self.environment(metadata),
-            journal: Self.journal(recentEvents()),
+            journal: Array(recentEvents().suffix(Self.maximumEventCount)),
             exceptions: [],
             extras: [Self.connectTraceSection(recentConnectTrace())],
             isSafeNetwork: { _ in false })
-    }
-
-    private static func journal(_ events: [DiagnosticBreadcrumb]) -> [String] {
-        let formatter = ISO8601DateFormatter()
-        return events.suffix(500).map {
-            "\(formatter.string(from: $0.timestamp))  \($0.event)"
-        }
     }
 
     private static func connectTraceSection(_ trace: [String]) -> (name: String, body: String) {
@@ -366,44 +324,55 @@ actor DiagnosticEventStore {
             vpnActive: nil)
     }
 
-    static func compactedEventData(_ data: Data, limit: Int) -> Data {
-        guard data.count > limit else { return data }
-        let target = max(1, limit / 2)
-        let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
-        var kept: [Data] = []
-        var byteCount = 0
-        for line in lines.reversed() {
-            let lineData = Data(line)
-            let nextCount = byteCount + lineData.count + 1
-            guard nextCount <= target || kept.isEmpty else { break }
-            kept.append(lineData)
-            byteCount = nextCount
+    /// One event as an earlier version stored it (`events.jsonl`).
+    private struct LegacyBreadcrumb: Decodable {
+        let timestamp: Date
+        let event: String
+    }
+
+    /// An earlier version kept events as JSON breadcrumbs (`events.jsonl`) and the trace with a
+    /// two-space stamp separator (`connect-trace.jsonl`). Moves both, once, onto the journal files
+    /// in the journal's `<stamp> <text>` format before the journals open them. Corrupt breadcrumbs
+    /// stay dropped, as they were on read; a failed write keeps the legacy file for the next launch.
+    private static func moveLegacyFiles(in root: URL, fileManager: FileManager) {
+        let legacyEvents = root.appendingPathComponent("events.jsonl")
+        if let data = try? Data(contentsOf: legacyEvents) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let stamper = ISO8601DateFormatter()
+            let lines = data.split(separator: 0x0A)
+                .compactMap { try? decoder.decode(LegacyBreadcrumb.self, from: Data($0)) }
+                .suffix(maximumEventCount)
+                .map { "\(stamper.string(from: $0.timestamp)) \($0.event)" }
+            if prepend(lines, to: root.appendingPathComponent("events.log")) {
+                try? fileManager.removeItem(at: legacyEvents)
+            }
         }
-        var compacted = Data()
-        for line in kept.reversed() {
-            compacted.append(line)
-            compacted.append(0x0A)
+        let legacyTrace = root.appendingPathComponent("connect-trace.jsonl")
+        if let text = try? String(contentsOf: legacyTrace, encoding: .utf8) {
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+                .suffix(ConnectAttemptDiagnostic.maximumLineCount)
+                .map { line -> String in
+                    guard let gap = line.range(of: "  ") else { return String(line) }
+                    return String(line[..<gap.lowerBound]) + " " + String(line[gap.upperBound...])
+                }
+            if prepend(lines, to: root.appendingPathComponent("connect-trace.log")) {
+                try? fileManager.removeItem(at: legacyTrace)
+            }
         }
-        return compacted
     }
 
-    private func prepareDirectories() throws {
-        try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: payloadDirectory, withIntermediateDirectories: true)
-    }
-
-    private func compactConnectTraceIfNeeded() throws {
-        let data = try Data(contentsOf: connectTraceURL)
-        guard data.count > maximumEventBytes else { return }
-        let compacted = Self.compactedEventData(data, limit: maximumEventBytes)
-        try compacted.write(to: connectTraceURL, options: .atomic)
-    }
-
-    private func compactEventsIfNeeded() throws {
-        let data = try Data(contentsOf: eventsURL)
-        guard data.count > maximumEventBytes else { return }
-        let compacted = Self.compactedEventData(data, limit: maximumEventBytes)
-        try compacted.write(to: eventsURL, options: .atomic)
+    /// Puts `lines` ahead of whatever the journal file already holds.
+    private static func prepend(_ lines: [String], to file: URL) -> Bool {
+        guard !lines.isEmpty else { return true }
+        var data = Data((lines.joined(separator: "\n") + "\n").utf8)
+        data.append((try? Data(contentsOf: file)) ?? Data())
+        do {
+            try data.write(to: file, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func trimMetricPayloads() throws {
@@ -445,12 +414,13 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
         record(.appLaunched)
     }
 
+    /// Recorded in call order: the journal queues every line behind the previous one.
     func record(_ event: AppDiagnosticEvent) {
-        Task { await store.record(event) }
+        store.record(event)
     }
 
     func recordConnectTrace(_ line: String) {
-        Task { await store.recordConnectTrace(line) }
+        store.recordConnectTrace(line)
     }
 
     /// Technical details for an operator's problem report.
@@ -466,7 +436,7 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
     @MainActor
     func makeReport() async throws -> URL {
         let url = try await store.makeReport(metadata: .current)
-        await store.record(.diagnosticsExported)
+        store.record(.diagnosticsExported)
         return url
     }
 

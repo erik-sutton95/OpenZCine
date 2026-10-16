@@ -104,14 +104,10 @@ struct ExternalBetaDiagnosticsTests {
     func renderedReport() {
         let report = DiagnosticEventStore.renderReport(
             metadata: metadata,
-            events: [
-                DiagnosticBreadcrumb(
-                    timestamp: Date(timeIntervalSince1970: 1_700_000_001),
-                    event: AppDiagnosticEvent.liveViewStarted.rawValue)
-            ],
+            events: ["2023-11-14T22:13:21Z \(AppDiagnosticEvent.liveViewStarted.rawValue)"],
             payloads: []
         )
-        #expect(report.contains("live-view.started"))
+        #expect(report.contains("2023-11-14T22:13:21Z live-view.started"))
         #expect(report.contains("Review this file before sharing it publicly."))
         #expect(report.contains("Wi-Fi details"))
         #expect(report.contains("Connect attempt trace"))
@@ -134,14 +130,24 @@ struct ExternalBetaDiagnosticsTests {
         #expect(report.contains("<email>"))
     }
 
-    @Test("Event compaction keeps the newest complete records")
-    func eventCompaction() {
-        let lines = (0..<40).map { "event-\($0)" }.joined(separator: "\n") + "\n"
-        let compacted = DiagnosticEventStore.compactedEventData(Data(lines.utf8), limit: 100)
-        let result = String(decoding: compacted, as: UTF8.self)
-        #expect(result.hasSuffix("event-39\n"))
-        #expect(!result.contains("event-0\n"))
-        #expect(compacted.count <= 50)
+    @Test("The event journal keeps the newest events within its bound (Z8)")
+    func eventJournalBound() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DiagnosticEventStore(rootDirectory: root)
+        for _ in 0..<(DiagnosticEventStore.maximumEventCount + 200) {
+            store.record(.liveViewStarted)
+        }
+        store.record(.liveViewFailed)
+        let events = store.recentEvents()
+        // The journal trims on its cadence, so the file holds the bound plus at most one cadence.
+        #expect(events.count <= DiagnosticEventStore.maximumEventCount + 128)
+        #expect(events.last?.hasSuffix(" live-view.failed") == true)
+        let report = DiagnosticEventStore.renderReport(
+            metadata: metadata, events: events, payloads: [])
+        let shown = report.components(separatedBy: "live-view.").count - 1
+        #expect(shown == DiagnosticEventStore.maximumEventCount)
     }
 
     @Test("File-backed store writes an exportable report")
@@ -150,8 +156,8 @@ struct ExternalBetaDiagnosticsTests {
             UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DiagnosticEventStore(rootDirectory: root)
-        await store.record(.connectionConnected, at: metadata.generatedAt)
-        await store.recordConnectTrace(
+        store.record(.connectionConnected)
+        store.recordConnectTrace(
             "event=connect.gate body=z6iii inferred=three ops=unknown fallback=none pairing=attempt"
         )
         let url = try await store.makeReport(metadata: metadata)
@@ -167,6 +173,57 @@ struct ExternalBetaDiagnosticsTests {
         #expect(details.contains("connection.connected"))
         #expect(details.contains("Connect attempt trace"))
         #expect(details.contains("body=z6iii"))
+    }
+
+    @Test("The report names the phone through the shared diagnostics device (Z8)")
+    @MainActor
+    func metadataUsesTheSharedDevice() {
+        let current = DiagnosticReportMetadata.current
+        let device = DiagnosticsDevice.current
+        #expect(current.deviceClass == device.hardwareClass)
+        #expect(current.osName == device.osName)
+        #expect(current.osVersion == device.osVersion)
+    }
+
+    @Test("Events and the connect trace of an earlier version move onto the shared journal (Z8)")
+    func legacyFilesMoveOntoTheSharedJournal() async throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        defer { try? manager.removeItem(at: root) }
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        // Exactly what the earlier store wrote: one JSON breadcrumb per line, and the trace's
+        // two-space stamp separator. A corrupt line was skipped on read and stays skipped.
+        let legacyEvents =
+            #"{"timestamp":"2023-11-14T22:13:21Z","event":"connection.connected"}"# + "\n"
+            + "not a breadcrumb\n"
+            + #"{"timestamp":"2023-11-14T22:13:22Z","event":"live-view.started"}"# + "\n"
+        try Data(legacyEvents.utf8).write(to: root.appendingPathComponent("events.jsonl"))
+        try Data("2023-11-14T22:13:20Z  event=connect.gate body=z6iii\n".utf8).write(
+            to: root.appendingPathComponent("connect-trace.jsonl"))
+
+        let store = DiagnosticEventStore(rootDirectory: root)
+        store.record(.liveViewFailed)
+        store.recordConnectTrace("event=connect.gate body=z8 ops=unknown")
+        let details = store.manualReport(metadata: metadata)
+
+        #expect(details.contains("2023-11-14T22:13:21Z connection.connected"))
+        #expect(details.contains("2023-11-14T22:13:22Z live-view.started"))
+        #expect(details.contains("live-view.failed"))
+        #expect(!details.contains("not a breadcrumb"))
+        #expect(details.contains("2023-11-14T22:13:20Z event=connect.gate body=z6iii"))
+        #expect(details.contains("body=z8"))
+        #expect(!manager.fileExists(atPath: root.appendingPathComponent("events.jsonl").path))
+        #expect(
+            !manager.fileExists(atPath: root.appendingPathComponent("connect-trace.jsonl").path))
+        // The journal file holds the moved lines first, then new ones, in the shared format.
+        let persisted = try String(
+            contentsOf: root.appendingPathComponent("events.log"), encoding: .utf8)
+        #expect(
+            persisted.hasPrefix(
+                "2023-11-14T22:13:21Z connection.connected\n2023-11-14T22:13:22Z live-view.started\n"
+            ))
+        #expect(persisted.hasSuffix(" live-view.failed\n"))
     }
 
     @Test("Reports use this app's names, support address, adapter, redaction and source identity")
