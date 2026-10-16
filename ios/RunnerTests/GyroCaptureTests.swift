@@ -1,11 +1,284 @@
 import Foundation
 import OpenZCineCore
+import SwiftUI
 import Testing
+import UIKit
 
 @testable import Runner
 
 @MainActor @Suite("Phone gyro capture")
 struct GyroCaptureTests {
+    @Test("The mixed-pose verification controls fit the real landscape test window")
+    func calibrationLandscapeUI() async throws {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        coordinator.configure(
+            eligible: true, cameraLabel: "Nikon test camera", recording: false,
+            calibrationSourceID: 1)
+        coordinator.beginMountCalibration()
+        for index in 0..<3 {
+            fixture.feedCalibrationPose(
+                index, into: coordinator, from: 10 + Double(index) * 2,
+                incorrectPhone: index == 2)
+            coordinator.captureMountCalibration()
+        }
+        #expect(coordinator.calibrationPoseCount == 2)
+        #expect(coordinator.calibrationMessage != nil)
+        let scene = try #require(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let originalOrientation = scene.interfaceOrientation
+        if !scene.interfaceOrientation.isLandscape {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+        }
+        for _ in 0..<100 {
+            if scene.interfaceOrientation.isLandscape,
+                scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
+            {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(scene.interfaceOrientation.isLandscape)
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: GyroMountView(coordinator: coordinator))
+        window.frame = scene.coordinateSpace.bounds
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            coordinator.cancelMountCalibration()
+            window.isHidden = true
+            window.rootViewController = nil
+            originalKeyWindow?.makeKeyAndVisible()
+            let mask: UIInterfaceOrientationMask =
+                switch originalOrientation {
+                case .portrait: .portrait
+                case .portraitUpsideDown: .portraitUpsideDown
+                case .landscapeLeft: .landscapeLeft
+                default: .landscapeRight
+                }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
+        }
+        let controls = ["Verify and save", "Start again", "Cancel"]
+        let errorMessage = try #require(coordinator.calibrationMessage)
+        let labels = controls + [errorMessage]
+        var elements: [NSObject] = []
+        for _ in 0..<100 {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            elements = calibrationUIElements(host.view)
+            if labels.allSatisfy({ label in
+                elements.contains {
+                    $0.accessibilityLabel == label && !$0.accessibilityFrame.isEmpty
+                }
+            }) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(window.bounds.width > window.bounds.height)
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let png = try #require(image.pngData())
+        Attachment.record(Array(png), named: "SIMULATED-gyro-mixed-pose-verification-landscape.png")
+        Attachment.record(
+            elements.map {
+                "\(type(of: $0)): \($0.accessibilityLabel ?? "") \($0.accessibilityFrame)"
+            }.joined(separator: "\n"), named: "SIMULATED-gyro-calibration-accessibility.txt")
+        let safeBounds = UIAccessibility.convertToScreenCoordinates(
+            window.bounds.inset(by: window.safeAreaInsets), in: window)
+        for label in labels {
+            let element = try #require(
+                elements.first { $0.accessibilityLabel == label },
+                Comment(rawValue: "Missing calibration element: \(label)"))
+            #expect(!element.accessibilityFrame.isEmpty)
+            #expect(safeBounds.contains(element.accessibilityFrame))
+            if controls.contains(label) {
+                #expect(element.accessibilityTraits.contains(.button))
+                #expect(!element.accessibilityTraits.contains(.notEnabled))
+            }
+        }
+    }
+
+    @Test("Calibration saves only after an independent third pose verifies")
+    func calibratedMountLifecycle() async throws {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        coordinator.configure(
+            eligible: true, cameraLabel: "Nikon test camera", recording: false,
+            calibrationSourceID: 1)
+        coordinator.beginMountCalibration()
+        #expect(coordinator.calibrationInProgress)
+        #expect(!coordinator.canCaptureMountCalibration)
+        for index in 0..<2 {
+            fixture.feedCalibrationPose(index, into: coordinator, from: 10 + Double(index) * 2)
+            coordinator.captureMountCalibration()
+            #expect(coordinator.calibrationPoseCount == index + 1)
+            #expect(coordinator.mountCalibration == nil)
+            #expect(
+                fixture.defaults.data(forKey: GyroCaptureCoordinator.calibrationPreferenceKey)
+                    == nil)
+        }
+        fixture.feedCalibrationPose(2, into: coordinator, from: 14, incorrectPhone: true)
+        coordinator.captureMountCalibration()
+        #expect(coordinator.calibrationPoseCount == 2)
+        #expect(coordinator.mountCalibration == nil)
+        #expect(coordinator.calibrationMessage != nil)
+        let validationMessage = coordinator.calibrationMessage
+        fixture.feedCalibrationPose(2, into: coordinator, from: 16)
+        #expect(coordinator.calibrationMessage == validationMessage)
+        coordinator.captureMountCalibration()
+        #expect(!coordinator.calibrationInProgress)
+        #expect(fixture.driver.gravityReceiver == nil)
+        #expect(coordinator.mountName == "Calibrated")
+        let saved = try #require(coordinator.mountCalibration)
+        #expect(saved.validationErrorDegrees < 0.001)
+        let reopened = fixture.coordinator()
+        await reopened.waitUntilLoaded()
+        #expect(reopened.mountCalibration == saved)
+        coordinator.mountPreset = .rearRight
+        #expect(coordinator.mountCalibration == nil)
+        #expect(
+            fixture.defaults.data(forKey: GyroCaptureCoordinator.calibrationPreferenceKey) == nil)
+    }
+
+    @Test("Calibration rejects stale readings and missing camera axes")
+    func calibrationFreshness() async {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        coordinator.configure(
+            eligible: true, cameraLabel: "Nikon test camera", recording: false,
+            calibrationSourceID: 1)
+        coordinator.beginMountCalibration()
+        fixture.feedCalibrationPose(0, into: coordinator, from: 10)
+        fixture.clock.time += 1
+        coordinator.captureMountCalibration()
+        #expect(coordinator.calibrationPoseCount == 0)
+        #expect(coordinator.calibrationMessage != nil)
+        coordinator.receiveCalibrationCamera(nil, at: fixture.clock.time, sourceID: 1)
+        #expect(!coordinator.canCaptureMountCalibration)
+        coordinator.captureMountCalibration()
+        #expect(coordinator.calibrationPoseCount == 0)
+        coordinator.cancelMountCalibration()
+    }
+
+    @Test("Cancellation retains a prior calibration; reset selects Unconfigured")
+    func calibrationCancelAndReset() async throws {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        try fixture.seedCalibration()
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        let saved = try #require(coordinator.mountCalibration)
+        coordinator.configure(
+            eligible: true, cameraLabel: "Nikon test camera", recording: false,
+            calibrationSourceID: 1)
+        coordinator.beginMountCalibration()
+        fixture.feedCalibrationPose(0, into: coordinator, from: 10)
+        coordinator.captureMountCalibration()
+        coordinator.cancelMountCalibration()
+        #expect(coordinator.mountCalibration == saved)
+        #expect(fixture.driver.gravityReceiver == nil)
+        coordinator.clearMountCalibration()
+        #expect(coordinator.mountCalibration == nil)
+        #expect(coordinator.mountPreset == .unconfigured)
+    }
+
+    @Test("Recording, source changes, backgrounding and disconnect invalidate calibration")
+    func calibrationInterruptions() async {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        #expect(!coordinator.canBeginMountCalibration)
+        for reason in [GyroLogTermination.backgrounded, .disconnected] {
+            coordinator.configure(
+                eligible: true, cameraLabel: "Nikon test camera", recording: false,
+                calibrationSourceID: 1)
+            coordinator.beginMountCalibration()
+            fixture.feedCalibrationPose(0, into: coordinator, from: 10)
+            coordinator.captureMountCalibration()
+            coordinator.stop(reason: reason)
+            #expect(!coordinator.calibrationInProgress)
+            #expect(coordinator.calibrationPoseCount == 0)
+            #expect(!coordinator.canBeginMountCalibration)
+            #expect(fixture.driver.gravityReceiver == nil)
+        }
+        coordinator.configure(
+            eligible: true, cameraLabel: "Nikon test camera", recording: false,
+            calibrationSourceID: 1)
+        coordinator.beginMountCalibration()
+        coordinator.configure(
+            eligible: true, cameraLabel: "Nikon test camera", recording: false,
+            calibrationSourceID: 2)
+        #expect(!coordinator.calibrationInProgress)
+        coordinator.beginMountCalibration()
+        coordinator.receiveCalibrationCamera(GyroVector3(x: -1, y: 0, z: 0), at: 10, sourceID: 1)
+        #expect(!coordinator.canCaptureMountCalibration)
+        coordinator.configure(
+            eligible: true, cameraLabel: "Nikon test camera", recording: true,
+            calibrationSourceID: 2)
+        #expect(!coordinator.calibrationInProgress)
+        #expect(!coordinator.canBeginMountCalibration)
+    }
+
+    @Test("Queued REC freezes calibration even if a manual mount is selected before processing")
+    func calibrationRecordingSnapshot() async throws {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        try fixture.seedCalibration()
+        let coordinator = fixture.coordinator()
+        await coordinator.waitUntilLoaded()
+        let saved = try #require(coordinator.mountCalibration)
+        coordinator.enabled = true
+        coordinator.configure(eligible: true, cameraLabel: "Nikon test camera", recording: false)
+        coordinator.observeRecording(true)
+        coordinator.mountPreset = .rearLeft
+        fixture.feed(from: 10, through: 10.1)
+        await coordinator.processPending()
+        let first = try #require(coordinator.logs.first)
+        #expect(first.descriptor.mountCalibration == saved)
+        #expect(first.descriptor.alignmentDetail == "Calibrated mount")
+        coordinator.observeRecording(false)
+        await coordinator.processPending()
+        fixture.clock.time = 10.2
+        coordinator.observeRecording(true)
+        await coordinator.processPending()
+        let next = try #require(coordinator.logs.first { $0.id != first.id })
+        #expect(next.descriptor.mountCalibration == nil)
+        #expect(next.descriptor.mount == .rearLeft)
+        #expect(coordinator.logs.first { $0.id == first.id }?.descriptor.mountCalibration == saved)
+        coordinator.enabled = false
+        await coordinator.processPending()
+    }
+
+    @Test("Calibration is frozen for REC received during asynchronous loading")
+    func calibrationRecordingBeforeLoad() async throws {
+        let fixture = GyroFixture()
+        defer { fixture.cleanup() }
+        try fixture.seedCalibration()
+        let coordinator = fixture.coordinator()
+        let saved = try #require(coordinator.mountCalibration)
+        coordinator.enabled = true
+        coordinator.configure(eligible: true, cameraLabel: "Nikon test camera", recording: true)
+        coordinator.clearMountCalibration()
+        await coordinator.waitUntilLoaded()
+        fixture.feed(from: 10, through: 10.1)
+        await coordinator.processPending()
+        #expect(coordinator.logs.first?.descriptor.mountCalibration == saved)
+        coordinator.enabled = false
+        await coordinator.processPending()
+    }
+
     @Test("Core Motion's gyro handler can run on a background sensor queue")
     func backgroundGyroCallback() async {
         let buffer = GyroSampleBuffer()
@@ -315,6 +588,26 @@ struct GyroCaptureTests {
         #expect(batch.failure == .bufferOverflow)
         #expect(buffer.drain().samples.isEmpty)
     }
+
+    private func calibrationUIElements(_ root: NSObject) -> [NSObject] {
+        var seen = Set<ObjectIdentifier>()
+        var elements: [NSObject] = []
+        func visit(_ object: NSObject) {
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            elements.append(object)
+            let count = object.accessibilityElementCount()
+            if count > 0 && count < 256 {
+                for index in 0..<count {
+                    if let child = object.accessibilityElement(at: index) as? NSObject {
+                        visit(child)
+                    }
+                }
+            }
+            if let view = object as? UIView { for child in view.subviews { visit(child) } }
+        }
+        visit(root)
+        return elements
+    }
 }
 
 @MainActor private final class GyroTestClock {
@@ -325,12 +618,19 @@ struct GyroCaptureTests {
     var buffer: GyroSampleBuffer?
     var starts = 0
     var unavailable = false
+    var gravityReceiver: ((GyroVector3, Double) -> Void)?
     func startGyro(into buffer: GyroSampleBuffer) throws {
         if unavailable { throw PhoneMotionError.unavailable }
         starts += 1
         self.buffer = buffer
     }
     func stopGyro() { buffer = nil }
+    func startGravity(_ receive: @escaping (GyroVector3, Double) -> Void) throws -> UUID {
+        if unavailable { throw PhoneMotionError.gravityUnavailable }
+        gravityReceiver = receive
+        return UUID()
+    }
+    func stopGravity(_ id: UUID) { gravityReceiver = nil }
 }
 
 @MainActor private struct GyroFixture {
@@ -355,6 +655,44 @@ struct GyroCaptureTests {
         }
         clock.time = end
     }
+    func feedCalibrationPose(
+        _ index: Int, into coordinator: GyroCaptureCoordinator, from base: Double,
+        incorrectPhone: Bool = false
+    ) {
+        let poses = Self.calibrationPoses
+        for sample in 0..<40 {
+            let time = base + Double(sample) / 30
+            coordinator.receiveCalibrationCamera(
+                poses[index],
+                at: base + Double(sample / 6) / 5, sourceID: 1)
+            driver.gravityReceiver?(
+                incorrectPhone ? GyroVector3(x: -0.5, y: 0.5, z: 0.7071067811865476) : poses[index],
+                time)
+            clock.time = time
+        }
+    }
+    func seedCalibration() throws {
+        var calibration = GyroMountCalibrationSession()
+        var saved: GyroMountCalibration?
+        for (index, pose) in Self.calibrationPoses.enumerated() {
+            let base = Double(index) * 2
+            for sample in 0..<40 {
+                calibration.add(
+                    phoneDown: pose, phoneTimestamp: base + Double(sample) / 30,
+                    cameraDown: pose, cameraTimestamp: base + Double(sample / 6) / 5)
+            }
+            saved = try calibration.capture(at: base + 39.0 / 30)
+        }
+        let value = try #require(saved)
+        defaults.set(
+            try JSONEncoder().encode(value),
+            forKey: GyroCaptureCoordinator.calibrationPreferenceKey)
+    }
+    private static let calibrationPoses = [
+        GyroVector3(x: -1, y: 0, z: 0),
+        GyroVector3(x: -0.8660254037844386, y: 0, z: 0.5),
+        GyroVector3(x: -0.6123724356957945, y: 0.6123724356957945, z: 0.5),
+    ]
     func cleanup() {
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: directory)

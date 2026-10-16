@@ -74,7 +74,7 @@ struct GyroLogsView: View {
                 format: .dateTime.month(.abbreviated).day().hour().minute().second()
             )
             .font(.subheadline).foregroundStyle(.secondary)
-            Text(entry.descriptor.mount.detail)
+            Text(entry.descriptor.alignmentDetail)
                 .font(.caption).foregroundStyle(.secondary)
             if let summary = entry.summary {
                 Text(
@@ -135,23 +135,11 @@ struct GyroMountView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Text(
-                        "Directions are viewed from behind the upright camera. Keep the phone screen parallel to the camera's back, perpendicular to the lens axis. An angled holder still needs IMU rotation in Gyroflow."
-                    )
-                    .font(.subheadline)
-                    Text(
-                        "Keep the phone fixed relative to the camera during each take. Changes apply to new takes."
-                    )
-                    .font(.subheadline)
-                    presetRow(.unconfigured)
-                }
-                ForEach(["Screen toward you", "Screen toward lens"], id: \.self) { group in
-                    Section(group) {
-                        ForEach(GyroMountPreset.allCases.filter { $0.group == group }) { preset in
-                            presetRow(preset)
-                        }
-                    }
+                if coordinator.calibrationInProgress {
+                    calibrationSteps
+                } else {
+                    automaticCalibration
+                    manualPresets
                 }
             }
             .navigationTitle("Phone mount")
@@ -161,6 +149,108 @@ struct GyroMountView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onDisappear { coordinator.cancelMountCalibration() }
+    }
+
+    private var automaticCalibration: some View {
+        Section("Automatic calibration") {
+            Text(
+                "Keep the phone firmly fixed to the camera. Capture three still poses to align angled mounts automatically."
+            )
+            .font(.subheadline)
+            if let calibration = coordinator.mountCalibration {
+                Label(
+                    String(
+                        format: "Verified calibration · check error %.1f°",
+                        calibration.validationErrorDegrees),
+                    systemImage: "checkmark.circle")
+                Button("Reset calibration", role: .destructive) {
+                    coordinator.clearMountCalibration()
+                }
+                .accessibilityIdentifier("gyro.calibration.reset")
+            } else {
+                Text("No saved calibration").foregroundStyle(.secondary)
+            }
+            Button("Calibrate phone mount") { coordinator.beginMountCalibration() }
+                .disabled(!coordinator.canBeginMountCalibration)
+                .accessibilityIdentifier("gyro.calibration.begin")
+            if !coordinator.canBeginMountCalibration {
+                Text("Connect a camera with live view and stop recording to calibrate.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            calibrationMessage
+        }
+    }
+
+    private var calibrationSteps: some View {
+        Section("Pose \(coordinator.calibrationPoseCount + 1) of 3") {
+            Text(calibrationInstruction).font(.headline)
+            Text(
+                "Keep the phone fixed to the camera. Hold both still for at least one second before capturing."
+            )
+            .font(.subheadline)
+            Text(
+                coordinator.calibrationPoseCount == 2
+                    ? "This independent mixed pose must verify the alignment before it is saved."
+                    : "Nothing is saved until the third pose verifies the alignment."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+            if !coordinator.canCaptureMountCalibration {
+                Text("Waiting for fresh camera roll and pitch readings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            calibrationMessage
+            HStack(spacing: 24) {
+                Button(coordinator.calibrationPoseCount == 2 ? "Verify and save" : "Capture pose") {
+                    coordinator.captureMountCalibration()
+                }
+                .disabled(!coordinator.canCaptureMountCalibration)
+                .accessibilityIdentifier("gyro.calibration.capture")
+                Button("Start again") { coordinator.beginMountCalibration() }
+                    .accessibilityIdentifier("gyro.calibration.restart")
+                Button("Cancel", role: .cancel) { coordinator.cancelMountCalibration() }
+                    .accessibilityIdentifier("gyro.calibration.cancel")
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private var calibrationInstruction: String {
+        switch coordinator.calibrationPoseCount {
+        case 0: "Hold the camera roughly level."
+        case 1: "Tilt the lens up 25–35° and keep the roll level."
+        default: "Keep the lens tilted up and roll 40–45°, with the camera's top leaning left."
+        }
+    }
+
+    @ViewBuilder private var calibrationMessage: some View {
+        if let message = coordinator.calibrationMessage {
+            Text(message).font(.subheadline).foregroundStyle(.orange)
+                .accessibilityIdentifier("gyro.calibration.message")
+        }
+    }
+
+    private var manualPresets: some View {
+        Group {
+            Section("Manual presets") {
+                Text(
+                    "Directions are viewed from behind the upright camera. Manual presets assume the phone screen is parallel to the camera's back, perpendicular to the lens axis. Use automatic calibration for angled mounts."
+                )
+                .font(.subheadline)
+                Text(
+                    "Keep the phone fixed relative to the camera during each take. Changes apply to new takes."
+                )
+                .font(.subheadline)
+                presetRow(.unconfigured)
+            }
+            ForEach(["Screen toward you", "Screen toward lens"], id: \.self) { group in
+                Section(group) {
+                    ForEach(GyroMountPreset.allCases.filter { $0.group == group }) { preset in
+                        presetRow(preset)
+                    }
+                }
+            }
+        }
     }
 
     private func presetRow(_ preset: GyroMountPreset) -> some View {
@@ -170,7 +260,7 @@ struct GyroMountView: View {
             HStack {
                 Text(preset.title).foregroundStyle(.primary)
                 Spacer()
-                if coordinator.mountPreset == preset {
+                if coordinator.mountCalibration == nil && coordinator.mountPreset == preset {
                     Image(systemName: "checkmark").foregroundStyle(.tint)
                 }
             }

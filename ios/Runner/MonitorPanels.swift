@@ -2389,7 +2389,7 @@ struct OperatorSettingsPanel: View {
                     get: { model.gyroCapture.enabled }, set: { model.setGyroCaptureEnabled($0) }),
                 status: model.gyroCapture.failure ?? model.gyroCapture.statusText,
                 openLogs: model.gyroCapture.openLogs,
-                mountName: model.gyroCapture.mountPreset.shortLabel,
+                mountName: model.gyroCapture.mountName,
                 configureMount: model.gyroCapture.openMount)
         )
     }
