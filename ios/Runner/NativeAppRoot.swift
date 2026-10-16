@@ -6,11 +6,10 @@ import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineCameraControls
-import OpenCineCameraVocabulary
 import OpenCineCore
 import OpenCineFrameIO
 import OpenCineMedia
-import OpenCineNikon
+import struct OpenCineCameraVocabulary.ControlCapabilities
 import OpenCineRelay
 import OpenCineRelayApple
 import OpenZCineCore
