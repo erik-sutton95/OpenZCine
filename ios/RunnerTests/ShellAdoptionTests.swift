@@ -36,8 +36,12 @@ struct ShellAdoptionTests {
         #expect(model.isStandaloneMediaLibraryPresented && model.mediaBrowserSource == .camera)
         model.dismissMediaLibrary()
         #expect(!model.isStandaloneMediaLibraryPresented && !model.isStandaloneSettingsPresented)
+        model.operatorSettingsTab = .display
+        model.operatorSession.settingsScrollOffsets[.display] = 180
         model.openStandaloneSettings()
-        #expect(model.isStandaloneSettingsPresented && model.operatorSettingsTab == .storage)
+        // A2-84: the shared landing rule, the operator's last tab and its scroll offset.
+        #expect(model.isStandaloneSettingsPresented && model.operatorSettingsTab == .display)
+        #expect(model.operatorSession.settingsScrollOffsets[.display] == 180)
         model.dismissMediaLibrary()
         #expect(!model.isStandaloneSettingsPresented)
     }

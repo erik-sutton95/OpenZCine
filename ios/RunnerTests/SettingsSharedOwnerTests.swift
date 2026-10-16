@@ -1,6 +1,8 @@
 import Foundation
 import MonitorPresentation
 import MonitorUI
+import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineHostedAccessibility
 import OpenZCineCore
 import SwiftUI
@@ -105,8 +107,8 @@ extension SettingsSharedOwnerTests {
     }
 }
 
-/// A2-35: Z composes the typed settings domains. It offers no HDR panel and no originals
-/// caching, so those rows are absent values, not rows hidden behind empty help strings.
+/// A2-35: Z composes the typed settings domains. It offers no originals caching, so that row is
+/// an absent value, not a row hidden behind an empty help string. A2-31: the HDR panel is present.
 extension SettingsSharedOwnerTests {
     @Test func settingsLeaveAbsentDomainsOutAndKeepTheSharedRows() async throws {
         let model = NativeAppModel()
@@ -114,7 +116,7 @@ extension SettingsSharedOwnerTests {
         model.preferences = OperatorPreferences.defaults
         defer { model.preferences = original }
         var rows: [MonitorSettingsTab: [String]] = [:]
-        for tab in [MonitorSettingsTab.controls, .display, .storage, .system] {
+        for tab in [MonitorSettingsTab.link, .controls, .display, .storage, .system] {
             model.operatorSettingsTab = tab
             let host = UIHostingController(
                 rootView: AnyView(OperatorSettingsPanel().environment(model)))
@@ -151,11 +153,92 @@ extension SettingsSharedOwnerTests {
         #expect(
             ["Record confirmation", "Haptics", "Keep screen awake", "Bluetooth Remote Shutter"]
                 .allSatisfy { rows[.controls]?.contains($0) == true }, "\(rows[.controls] ?? [])")
-        #expect(rows[.display]?.contains("HDR display") == false, "\(rows[.display] ?? [])")
+        #expect(rows[.display]?.contains("HDR display") == true, "\(rows[.display] ?? [])")
+        // A2-78: one Processing card, after the connection and before Your cameras, as in
+        // Pocket and Insta, with the shared Feed Upscaler first.
+        let link = rows[.link] ?? []
+        let processing = try #require(link.firstIndex(of: "Processing"), "\(link)")
+        let cameras = try #require(link.firstIndex(of: "Your cameras"), "\(link)")
+        #expect(processing < cameras, "\(link)")
+        // Two columns read row by row, so the Your cameras title can sit between the two.
+        #expect(
+            link[(processing + 1)...].first { $0 != "Your cameras" } == "Feed Upscaler", "\(link)")
         #expect(
             rows[.storage]?.contains("Full Resolution Caching") == false, "\(rows[.storage] ?? [])")
         #expect(rows[.storage]?.contains("Clear Cache") == true, "\(rows[.storage] ?? [])")
         #expect(
             rows[.system]?.contains("Automatic error reports") == true, "\(rows[.system] ?? [])")
+    }
+}
+
+/// A2-24: Report a problem opens the app root's report from every Settings host, standalone
+/// included, so one presenter owns each draft and it outlives the camera session. Settings
+/// presents no report sheet of its own.
+extension SettingsSharedOwnerTests {
+    @Test func settingsReportAlwaysOpensTheRootReport() async throws {
+        let model = NativeAppModel()
+        model.operatorSettingsTab = .system
+        model.isStandaloneSettingsPresented = true
+        defer {
+            model.isStandaloneSettingsPresented = false
+            model.isBugReportPresented = false
+        }
+        let host = UIHostingController(rootView: AnyView(OperatorSettingsPanel().environment(model)))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 2_000))
+        window.rootViewController = host
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        var open: NSObject?
+        for _ in 0..<200 {
+            host.view.layoutIfNeeded()
+            open = HostedAccessibility.elements(in: host.view).first {
+                HostedAccessibility.identifier($0) == "support.report.open"
+            }
+            if open != nil { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let report = try #require(open, "System shows Report a Problem")
+        #expect(report.accessibilityActivate())
+        #expect(model.isBugReportPresented, "The root report sheet is asked to present")
+        #expect(host.presentedViewController == nil, "Settings presents no report sheet of its own")
+    }
+}
+
+/// A2-31: Z's HDR display choice drives the shared HDR display owner the Metal feed, scopes and
+/// chrome read, on the common preference key; screen capture drops it to SDR.
+extension SettingsSharedOwnerTests {
+    /// A Settings browser link goes through the shared handoff on the app's one hop: off the
+    /// camera network it opens at once and holds nothing (Z adopts the shared owner).
+    @Test func settingsBrowserLinksUseTheSharedHandoff() async {
+        let model = NativeAppModel()
+        let handoff: MonitorBrowserInternetHandoff<NikonHopRoute> = model.browserHandoff
+        #expect(!model.isOnCameraAccessPoint)
+        let prepared = await handoff.prepare(
+            route: model.hopRoute(rehostActivePanel: false), admission: { true })
+        #expect(prepared != nil)
+        #expect(!handoff.isHolding)
+        #expect(handoff.becameActive() == nil)
+    }
+
+    @Test func hdrDisplayDrivesTheSharedOwnerAndDropsWhileCaptured() {
+        let saved = PreferencesStore.hdrDisplay
+        defer {
+            PreferencesStore.hdrDisplay = saved
+            LiveHDRDisplay.app.setScreenCaptured(false)
+            LiveHDRDisplay.app.setEnabled(saved)
+        }
+        let model = NativeAppModel()
+        model.hdrDisplay = true
+        #expect(PreferencesStore.hdrDisplay)
+        #expect(UserDefaults.standard.bool(forKey: "OpenZCine.HDRDisplay"))
+        #expect(LiveHDRDisplay.app.preferredEnabled && LiveHDRDisplay.app.isEnabled && model.hdrDisplayActive)
+        model.screenCaptured = true
+        #expect(!LiveHDRDisplay.app.isEnabled && !model.hdrDisplayActive)
+        model.screenCaptured = false
+        model.hdrDisplay = false
+        #expect(!LiveHDRDisplay.app.preferredEnabled && !PreferencesStore.hdrDisplay)
     }
 }

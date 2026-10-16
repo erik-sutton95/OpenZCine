@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.monitorui.MonitorAssistTool
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -112,10 +112,10 @@ class LiveAssistOptionsComposeTest {
         composeRule.onAllNodesWithText("Style").assertCountEquals(0)
         composeRule.onNodeWithText("Horizon").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Gauge").assertIsDisplayed().performClick()
-        composeRule.runOnIdle { assertEquals(LocalLevelStyle.GAUGE, settings.levelStyle) }
+        composeRule.runOnIdle { assertEquals(MonitorLevelStyle.GAUGE, settings.levelStyle) }
 
         assertEquals(true, restored().shared.isOn(MonitorAssistTool.LEVEL))
-        assertEquals(LocalLevelStyle.GAUGE, OperatorSettings(preferences).levelStyle)
+        assertEquals(MonitorLevelStyle.GAUGE, OperatorSettings(preferences).levelStyle)
         preferences.edit().clear().commit()
         stores.forEach { it.edit().clear().commit() }
     }

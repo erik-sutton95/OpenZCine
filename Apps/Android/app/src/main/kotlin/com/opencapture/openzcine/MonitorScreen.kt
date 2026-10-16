@@ -146,7 +146,7 @@ import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
 import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
 import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.appkit.MonitorDisplaySection
@@ -1897,8 +1897,8 @@ internal fun MonitorScreen(
             zebra = { com.opencapture.openzcine.settings.nikonAssistSection(MonitorAssistTool.ZEBRA,
                 assists.shared, exposureAssistCameraInput, haptics::selection)?.Menu() },
             reference = reference, referenceAvailable = reference != null,
-            level = { com.opencapture.monitorui.settings.MonitorSettingsChoices(LocalLevelStyle.entries,
-                operatorSettings.levelStyle, accentSelection = true, title = LocalLevelStyle::label) {
+            level = { com.opencapture.monitorui.settings.MonitorSettingsChoices(nikonAssistCapabilities.levelStyles,
+                operatorSettings.levelStyle, accentSelection = true, title = MonitorLevelStyle::title) {
                 haptics.selection(); operatorSettings.levelStyle = it } },
             instantReview = { NikonReviewOptions(assists) })
         val usageStore = remember(appContext) { com.opencapture.opencine.appkit.MonitorToolUsagePreferences(

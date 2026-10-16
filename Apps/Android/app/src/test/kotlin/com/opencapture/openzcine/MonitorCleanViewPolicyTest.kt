@@ -3,7 +3,7 @@ package com.opencapture.openzcine
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorGuideAspect
 import com.opencapture.opencine.appkit.MonitorAssistState
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -98,10 +98,10 @@ class MonitorCleanViewPolicyTest {
         val state = allOn()
         state.selectedGuides = setOf(MonitorGuideAspect.CINEMA)
         fun rendered(mode: MonitorDisplayMode) =
-            state.framing({ state.rendersLive(it, mode, photography = false) }, LocalLevelStyle.HORIZON)
+            state.framing({ state.rendersLive(it, mode, photography = false) }, MonitorLevelStyle.HORIZON)
 
         val live = rendered(MonitorDisplayMode.LIVE)
-        assertEquals(state.framing(state::isOn, LocalLevelStyle.HORIZON), live)
+        assertEquals(state.framing(state::isOn, MonitorLevelStyle.HORIZON), live)
         assertTrue(live.guidesVisible && live.gridVisible && live.centerCrosshairEnabled)
         assertTrue(live.levelEnabled && live.evMeterEnabled && live.desqueezeEnabled)
 

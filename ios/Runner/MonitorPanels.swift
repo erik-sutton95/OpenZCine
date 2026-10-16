@@ -2026,12 +2026,7 @@ struct OperatorSettingsPanel: View {
                 library: model.mediaLibrary,
                 selectedTab: Binding(
                     get: { model.operatorSettingsTab }, set: { model.operatorSettingsTab = $0 }),
-                scrollOffsets: Binding(
-                    get: { model.operatorSettingsScrollOffsets },
-                    set: { model.operatorSettingsScrollOffsets = $0 }),
-                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id,
-                initialReportPresented: model.isStandaloneSettingsPresented
-                    && DemoHarness.openBugReport)
+                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id)
         }
         .observeMonitorWindowGeometry()
         .onAppear {
@@ -2042,7 +2037,7 @@ struct OperatorSettingsPanel: View {
                 let value = browserDestination(destination)
             {
                 model.settingsSupport.request(value)
-            } else if DemoHarness.openBugReport && !model.isStandaloneSettingsPresented {
+            } else if DemoHarness.openBugReport {
                 model.isBugReportPresented = true
             }
         }
@@ -2104,7 +2099,11 @@ struct OperatorSettingsPanel: View {
                     rotationHelp:
                         "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
                 )),
-            display: .init(sections: [
+            display: .init(
+                hdr: .init(
+                    value: Binding(get: { model.hdrDisplay }, set: { model.hdrDisplay = $0 }),
+                    help: MonitorSettingsCopy.hdrPanel(cameraMode: "N-Log or HLG tone mode")),
+                sections: [
                 .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
                 .timecode, .format, .codec, .color, .storage, .fps, .railRecord, .railMedia, .railSettings,
                 .focusBox,
@@ -2150,7 +2149,13 @@ struct OperatorSettingsPanel: View {
             saved: model.savedCameras.map {
                 .init(id: $0.host, name: $0.displayName, detail: $0.host)
             },
-            savedHelp: "Cameras paired through the connection screen.", sourceGroups: sourceGroups,
+            savedHelp: "Cameras paired through the connection screen.",
+            processing: .init(
+                upscaler: Binding(
+                    get: { FeedUpscaleSwitch.shared.upscaler },
+                    set: { FeedUpscaleSwitch.shared.upscaler = $0 }),
+                feedback: settingsFeedback, rows: processingRows),
+            sourceGroups: sourceGroups,
             healthScore: model.linkHealth, healthCaption: linkHealthCaption)
     }
     private func choice(
@@ -2233,22 +2238,13 @@ struct OperatorSettingsPanel: View {
                         }
                     },
                 ]))
+        return groups
+    }
+
+    /// Z's own processing rows after the shared Feed Upscaler (A2-78): noise reduction and the
+    /// debug frame capture.
+    private var processingRows: [MonitorSettingsSourceProperty] {
         var processing: [MonitorSettingsSourceProperty] = []
-        if MonitorUpscaler.supportedOnThisDevice.count > 1 {
-            processing.append(
-                choice(
-                    id: "processing.upscaler", title: "Feed Upscaler",
-                    help:
-                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
-                    options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue),
-                    value: FeedUpscaleSwitch.shared.upscaler.rawValue,
-                    compact: true
-                ) {
-                    if let value = MonitorUpscaler(rawValue: $0) {
-                        FeedUpscaleSwitch.shared.upscaler = value
-                    }
-                })
-        }
         if LiveDenoiseSwitch.isSupportedOnThisDevice {
             if let reason = LiveDenoiseSwitch.decoderReportsUnavailable {
                 processing.append(
@@ -2279,10 +2275,7 @@ struct OperatorSettingsPanel: View {
                         "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end.",
                     value: .native(AnyView(LiveViewCaptureControl()))))
         #endif
-        if !processing.isEmpty {
-            groups.append(.init(id: "processing", title: "Processing", properties: processing))
-        }
-        return groups
+        return processing
     }
 
     private var sharingSource: MonitorSettingsSharingSource {
@@ -2371,10 +2364,12 @@ struct OperatorSettingsPanel: View {
             makeReport: { try await AppDiagnostics.shared.makeReport() },
             prepareBrowser: { [weak model] admission in
                 guard let model else { return nil }
-                return await model.prepareExternalInternetLinkHandoffCaptured(admission: {
-                    let admitted = admission()
-                    return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
-                })
+                return await model.browserHandoff.prepare(
+                    route: model.hopRoute(rehostActivePanel: false),
+                    admission: {
+                        let admitted = admission()
+                        return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
+                    })
             },
             open: { url in
                 await withCheckedContinuation { continuation in
@@ -2425,9 +2420,7 @@ struct OperatorSettingsPanel: View {
             reportTitle: "Report a Problem", reportActionTitle: "Report",
             diagnosticsHelp:
                 "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
-            reportAction: model.isStandaloneSettingsPresented
-                ? nil : { model.isBugReportPresented = true },
-            report: { AnyView(ProblemReportView().environment(model)) },
+            report: { model.isBugReportPresented = true },
             shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) },
             deleteStoredReports: { ReliabilityDiagnostics.incidents.deleteStoredIncidents {} },
             deleteReportsHelp:

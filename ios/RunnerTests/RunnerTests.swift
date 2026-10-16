@@ -3271,16 +3271,16 @@ struct NikonSettingsScrollTests {
 
         let display = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 180) < 1 })
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
-        try await settle(in: host) { state.offsets["Display"] == 320 }
+        try await settle(in: host) { state.offsets[.display] == 320 }
         display.setContentOffset(CGPoint(x: 0, y: -50), animated: false)
         for _ in 0..<100 { await Task.yield() }
-        #expect(state.offsets["Display"] == 320)
+        #expect(state.offsets[.display] == 320)
 
         state.tab = .assist
         let assist = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 75) < 1 })
-        #expect(state.offsets["Display"] == 320)
+        #expect(state.offsets[.display] == 320)
         assist.setContentOffset(CGPoint(x: 0, y: 210), animated: false)
-        try await settle(in: host) { state.offsets["View Assist"] == 210 }
+        try await settle(in: host) { state.offsets[.assist] == 210 }
         state.tab = .display
         let restored = try await scroll(in: host, satisfying: { abs($0.contentOffset.y - 320) < 1 })
 
@@ -3302,7 +3302,7 @@ struct NikonSettingsScrollTests {
         // these offsets now that DISP 1 has no toolbar order list.
         model.beginChromeEditing(.clean)
         model.endChromeEditing()
-        model.operatorSettingsScrollOffsets = ["Display": 180]
+        model.operatorSession.settingsScrollOffsets = [.display: 180]
         let host = UIHostingController(
             rootView: AnyView(OperatorSettingsPanel().environment(model)))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 402))
@@ -3316,24 +3316,24 @@ struct NikonSettingsScrollTests {
         #expect(model.operatorSettingsTab == .display)
         #expect(model.operatorSession.returnedMode == nil)
         display.setContentOffset(CGPoint(x: 0, y: 320), animated: false)
-        try await settle(in: host) { model.operatorSettingsScrollOffsets["Display"] == 320 }
+        try await settle(in: host) { model.operatorSession.settingsScrollOffsets[.display] == 320 }
         model.operatorSettingsTab = .controls
         try await settle(in: host) { settingsScroll(in: host.view) !== display }
-        #expect(model.operatorSettingsScrollOffsets["Display"] == 320)
+        #expect(model.operatorSession.settingsScrollOffsets[.display] == 320)
         model.operatorSettingsTab = .display
         let restored = try await scroll(in: host) { abs($0.contentOffset.y - 320) < 1 }
         host.rootView = AnyView(EmptyView())
         try await settle(in: host) { settingsScroll(in: host.view) == nil }
-        let offsets = model.operatorSettingsScrollOffsets
+        let offsets = model.operatorSession.settingsScrollOffsets
         restored.setContentOffset(CGPoint(x: 0, y: 450), animated: false)
         for _ in 0..<100 { await Task.yield() }
-        #expect(model.operatorSettingsScrollOffsets == offsets)
+        #expect(model.operatorSession.settingsScrollOffsets == offsets)
     }
 
     @Test("A saved position beyond the current content restores inside the real viewport")
     func scrollClampsToCurrentContent() async throws {
         let state = NikonSettingsScrollFixture()
-        state.offsets["Display"] = 10_000
+        state.offsets[.display] = 10_000
         let page = MonitorSettingsPage(
             safeArea: EdgeInsets(), brand: "SIMULATED",
             selection: Binding(get: { state.tab }, set: { state.tab = $0 }),
@@ -3404,7 +3404,7 @@ struct NikonSettingsScrollTests {
 @Observable
 private final class NikonSettingsScrollFixture {
     var tab: MonitorSettingsTab = .display
-    var offsets: [String: CGFloat] = ["Display": 180, "View Assist": 75]
+    var offsets: [MonitorSettingsTab: CGFloat] = [.display: 180, .assist: 75]
 }
 
 @MainActor
