@@ -9,6 +9,7 @@ import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
 import OpenCineMedia
+import struct OpenCineCameraVocabulary.ControlCapabilities
 import OpenCineRelay
 import OpenCineRelayApple
 import OpenZCineCore
@@ -2343,9 +2344,12 @@ final class NativeAppModel {
         case .color:
             // The movie tone of the active codec, when the body reports one (R3D NE: Log3G10).
             return available.cameraControls && !isPhotographyMode && codecColorChoices.showsColor
-        case .zoomChip, .gimbalStick:
-            // No Nikon source feeds a zoom chip or a gimbal stick.
-            return false
+        case .zoomChip:
+            // The Nikon integration's control model: zoom stays unknown (no source feeds a chip).
+            return controlCapabilities.zoom.isOffered
+        case .gimbalStick:
+            // No Z body has a motion service, so the model declares no gimbal.
+            return controlCapabilities.gimbal.isOffered
         }
     }
     /// Operator Setup rail tab; the shared display owner also keeps each tab's scroll offset
@@ -4910,6 +4914,12 @@ final class NativeAppModel {
     /// with `cameraSession` and closed with it. Those three commands run through it and only it.
     @ObservationIgnored private var monitorRuntime: NikonMonitorRuntime?
     private var controlSession: NikonCameraSession? { monitorRuntime?.session }
+    /// The Nikon integration's one control model of the connected body, else the shared
+    /// pre-connection rule over the Nikon static profile.
+    var controlCapabilities: ControlCapabilities {
+        controlSession?.controlCapabilities(codecColor: codecColorChoices)
+            ?? ControlCapabilities(beforeConnection: NikonCameraSession.captureProfile, codecColor: codecColorChoices)
+    }
     /// Recording as the CAMERA last reported it (live-view header or record events), apart from
     /// the optimistic `isRecording` the button shows. `nil` until the body says.
     @ObservationIgnored private var reportedRecording: Bool?

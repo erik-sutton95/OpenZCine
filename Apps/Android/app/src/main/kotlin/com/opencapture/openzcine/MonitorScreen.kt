@@ -116,6 +116,7 @@ import com.opencapture.monitorui.MonitorStatusPresentation
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.controlCapabilities
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
@@ -1237,7 +1238,7 @@ internal fun MonitorScreen(
         // Chrome the operator switched on still hides when nothing can fill it (iOS `sectionHasASource`).
         val codecColor = nikonCodecColorChoices(cameraProperties)
         val available = availability.monitorSections(cameraReportsTimecode, isPhotographyMode,
-            reportsColor = codecColor.showsColor)
+            reportsColor = codecColor.showsColor, controls = commonSession.controlCapabilities(codecColor))
         val mounted: (MonitorDisplaySection) -> Boolean = { it in available && operatorSession.mounts(it) }
         val statusBarVisible = mounted(MonitorDisplaySection.STATUS_BAR)
         val assistToolbarVisible = mounted(MonitorDisplaySection.TOOL_BAR)
@@ -2445,8 +2446,8 @@ internal fun toggleShutterLockOnCamera(
  * The sections something feeds now: the Kotlin twin of iOS `sectionHasASource`. Chrome the operator
  * switched on still hides when nothing can fill it: a readout with no source still looks like an
  * instrument, and the capture strip offers pickers that would write to a camera that cannot hear them.
- * The tool bar, lock, FPS chip and Settings work on any picture source; no Nikon source feeds a color
- * chip, a zoom chip or a gimbal stick.
+ * The tool bar, lock, FPS chip and Settings work on any picture source. The zoom chip and gimbal stick
+ * follow the Nikon integration's control model ([controls]), which offers neither on any Z body today.
  */
 internal fun MonitorDataAvailability.monitorSections(
     /** The live-view header's timecode status bit; bodies with no timecode hardware pin it to zero. */
@@ -2454,6 +2455,10 @@ internal fun MonitorDataAvailability.monitorSections(
     isPhotographyMode: Boolean,
     /** The active codec has a reported tone (or a fixed one): the colour readout has a source. */
     reportsColor: Boolean = false,
+    /** The connected body's one control model, else the shared pre-connection rule over the Nikon profile. */
+    controls: com.opencapture.opencine.vocabulary.ControlCapabilities =
+        com.opencapture.opencine.vocabulary.ControlCapabilities.beforeConnection(
+            com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE),
 ): Set<MonitorDisplaySection> =
     MonitorDisplaySection.entries.filter { section ->
         when (section) {
@@ -2473,7 +2478,8 @@ internal fun MonitorDataAvailability.monitorSections(
             -> true
             // The active codec's movie tone (R3D NE: Log3G10), the one codec and colour popup's other half.
             MonitorDisplaySection.COLOR -> cameraControls && !isPhotographyMode && reportsColor
-            MonitorDisplaySection.ZOOM_CHIP, MonitorDisplaySection.GIMBAL_STICK -> false
+            MonitorDisplaySection.ZOOM_CHIP -> controls.zoom.isOffered
+            MonitorDisplaySection.GIMBAL_STICK -> controls.gimbal.isOffered
         }
     }.toSet()
 
