@@ -3,6 +3,7 @@ import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
 import OpenCineAppKitApple
+import OpenCineCameraControls
 import OpenCineHostedAccessibility
 import OpenZCineCore
 import SwiftUI
@@ -109,6 +110,9 @@ extension SettingsSharedOwnerTests {
         #expect(privacy.hasPrefix("OpenZCine "))
         #expect(privacy.contains("Sentry") && privacy.contains("Automatic error reports are optional"))
         #expect(privacy.hasSuffix(SupportLinkCatalog.privacy.absoluteString))
+        // In-app privacy matches the website (2026-10-16).
+        #expect(privacy.contains(MonitorSettingsCopy.reliabilityReportsPrivacy))
+        #expect(privacy.contains("RED's IPP2 output presets page inside the app"))
         #expect(terms.hasPrefix("OpenZCine is free software under the Apache License 2.0."))
         #expect(terms.hasSuffix(SupportLinkCatalog.terms.absoluteString))
         #expect(!(privacy + terms).contains("\u{2014}"), "Operator copy never uses the em dash")
