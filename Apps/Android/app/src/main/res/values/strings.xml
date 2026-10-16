@@ -394,7 +394,6 @@
     <string name="record_action_start">Start recording</string>
     <string name="record_state_recording">Recording</string>
     <string name="record_state_standby">Standby</string>
-    <string name="monitor_fps">FPS</string>
     <string name="monitor_disp">DISP</string>
     <string name="battery_source_camera">Camera</string>
     <string name="battery_source_phone">Phone</string>

@@ -954,7 +954,7 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
 
 /**
  * DISP 3: the shared command dashboard over the Nikon projection. A tile is "applying" while
- * its [CameraControl] is the pending write; the health strip ends in the live FPS chip.
+ * its [CameraControl] is the pending write; the health strip ends in the shared link gauge.
  */
 @Composable
 internal fun CommandDashboard(
@@ -973,7 +973,10 @@ internal fun CommandDashboard(
         applying = { it.control == pendingControl },
         onOpenControl = onOpenControl,
         onMoveTile = onMoveTile,
-    ) { FpsChip(signalBars = signalBars, fps = liveFps) }
+    ) {
+        // The link gauge every app's status bar draws (tap toggles bars and fps).
+        com.opencapture.monitorui.MonitorTelemetry(signalBars, liveFps, emptyList(), horizontal = true, showsPower = false)
+    }
 }
 
 /**
