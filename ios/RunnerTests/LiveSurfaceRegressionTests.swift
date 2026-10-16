@@ -2,6 +2,7 @@ import Observation
 import OpenCineAppKit
 import OpenCineApple
 import OpenCineCore
+import OpenCineHostedAccessibility
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -67,30 +68,11 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         }
 
         private static func identifier(_ object: NSObject) -> String {
-            let getter = NSSelectorFromString("accessibilityIdentifier")
-            guard object.responds(to: getter) else { return "" }
-            return object.perform(getter)?.takeUnretainedValue() as? String ?? ""
+            HostedAccessibility.identifier(object) ?? ""
         }
 
         private func elements() -> [NSObject] {
-            var seen = Set<ObjectIdentifier>()
-            var result: [NSObject] = []
-            func visit(_ object: NSObject) {
-                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-                result.append(object)
-                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
-                let count = object.accessibilityElementCount()
-                if count > 0 && count < 512 {
-                    for index in 0..<count {
-                        if let child = object.accessibilityElement(at: index) as? NSObject {
-                            visit(child)
-                        }
-                    }
-                }
-                if let view = object as? UIView { for child in view.subviews { visit(child) } }
-            }
-            visit(host.view)
-            return result.filter { $0.isAccessibilityElement }
+            HostedAccessibility.elements(in: host.view).filter(\.isAccessibilityElement)
         }
     }
 

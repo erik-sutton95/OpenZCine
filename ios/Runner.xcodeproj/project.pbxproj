@@ -130,6 +130,7 @@
 		246209D388F78D5F4F398F58 /* ConformanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68B1BBAB041F9DA6BB02D7C /* ConformanceApp.swift */; };
 		83C7A1BB02DD54D4E3E0A4C7 /* OpenCineAppUITesting in Frameworks */ = {isa = PBXBuildFile; productRef = B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */; };
 		A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */ = {isa = PBXBuildFile; productRef = 63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */; };
+		B7F1A0C00000000000000001 /* OpenCineHostedTestSupport in Frameworks */ = {isa = PBXBuildFile; productRef = B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */; };
 		300E5F949AB41695CC76538F /* OpenCineWatch in Frameworks */ = {isa = PBXBuildFile; productRef = 178DF1758616937177B63BF7 /* OpenCineWatch */; };
 		E7EE7B3544C67B943E782CF8 /* NikonMediaDeliverySource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87DF525504BD912A28C21E4F /* NikonMediaDeliverySource.swift */; };
 		1E7BB623225B594944ABE027 /* NikonFrameioDeliveryPorts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8C047563B8391682432DAD /* NikonFrameioDeliveryPorts.swift */; };
@@ -358,7 +359,7 @@
 		823003F875DF0491C4710777 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
-			files = (A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */,);
+			files = (A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */, B7F1A0C00000000000000001 /* OpenCineHostedTestSupport in Frameworks */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		9A7E3B528B69AC98C5D4448A /* Frameworks */ = {
@@ -556,7 +557,7 @@
 				331C8086294A63A400263BE5 /* PBXTargetDependency */,
 			);
 			name = RunnerTests;
-			packageProductDependencies = (63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */,);
+			packageProductDependencies = (63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */, B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */,);
 			productName = RunnerTests;
 			productReference = 331C8081294A63A400263BE5 /* RunnerTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -1496,6 +1497,7 @@
 		};
 		B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineAppUITesting; };
 		63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineHostedAccessibility; };
+		B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineHostedTestSupport; };
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 97C146E61CF9000F007C117D /* Project object */;

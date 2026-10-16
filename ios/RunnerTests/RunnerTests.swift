@@ -4157,26 +4157,8 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
         var labels: [String] {
-            var seen = Set<ObjectIdentifier>()
-            var result: [String] = []
-            @MainActor func visit(_ object: NSObject) {
-                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-                if object.isAccessibilityElement, let label = object.accessibilityLabel {
-                    result.append(label)
-                }
-                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
-                let count = object.accessibilityElementCount()
-                if count > 0 && count < 512 {
-                    for index in 0..<count {
-                        if let child = object.accessibilityElement(at: index) as? NSObject {
-                            visit(child)
-                        }
-                    }
-                }
-                if let view = object as? UIView { for child in view.subviews { visit(child) } }
-            }
-            visit(window)
-            return result
+            HostedAccessibility.elements(in: window).filter(\.isAccessibilityElement)
+                .compactMap(\.accessibilityLabel)
         }
     }
 
@@ -4216,24 +4198,7 @@ extension SharedLUTPickerCompatibilityTests {
     }
 
     private static func legacyComparisonElements(_ root: NSObject) -> [NSObject] {
-        var seen = Set<ObjectIdentifier>()
-        var result: [NSObject] = []
-        func walk(_ object: NSObject) {
-            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-            if object.isAccessibilityElement { result.append(object) }
-            for child in object.accessibilityElements as? [NSObject] ?? [] { walk(child) }
-            let count = object.accessibilityElementCount()
-            if count > 0 && count < 512 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject {
-                        walk(child)
-                    }
-                }
-            }
-            if let view = object as? UIView { for child in view.subviews { walk(child) } }
-        }
-        walk(root)
-        return result
+        HostedAccessibility.elements(in: root).filter(\.isAccessibilityElement)
     }
 
     private func legacyComparisonSettle(_ host: Hosted, _ predicate: () -> Bool) async throws
