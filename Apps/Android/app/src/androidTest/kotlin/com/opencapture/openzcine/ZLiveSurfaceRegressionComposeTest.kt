@@ -207,6 +207,7 @@ class ZLiveSurfaceRegressionComposeTest {
     private class BatterySession(camera: FakeCameraSession, rawLevel: Int) : CameraSession by camera {
         override val cameraProperties: StateFlow<CameraPropertySnapshot> =
             MutableStateFlow(camera.cameraProperties.value.copy(batteryPercent = rawLevel))
+        override val reportedCameraProperties: StateFlow<CameraPropertySnapshot> get() = cameraProperties
     }
 
     /** Counts lens drives; every other call is the in-memory camera's. */

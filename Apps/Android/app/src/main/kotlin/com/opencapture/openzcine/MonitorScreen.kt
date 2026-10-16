@@ -89,7 +89,6 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
-import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.appkit.MonitorPhotoRelease
 import com.opencapture.opencine.appkit.MonitorPhotoTimer
 import com.opencapture.opencine.appkit.MonitorNativeWrites
@@ -98,7 +97,9 @@ import com.opencapture.opencine.appkit.MonitorBackdropActivation
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.appkit.statusPresentation
 import com.opencapture.opencine.appkit.MonitorCaptureField
+import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.appkit.captureField
+import com.opencapture.opencine.appkit.captureValue
 import com.opencapture.opencine.appkit.commit
 import com.opencapture.opencine.appkit.quickControl
 import com.opencapture.opencine.appkit.MonitorCaptureDrum
@@ -530,13 +531,8 @@ internal fun MonitorScreen(
     val quickCaptureOwner = remember(session) { NikonCaptureQuickOwner() }
     DisposableEffect(quickCaptureOwner) { onDispose { quickCaptureOwner.retire() } }
     LaunchedEffect(activeMonitorPickerKind, activeCommandControl?.control) {
-        val key = when {
-            activeMonitorPickerKind == MonitorPickerKind.ISO || activeCommandControl?.control == CameraControl.ISO -> SettingKey.ISO
-            activeMonitorPickerKind == MonitorPickerKind.WHITE_BALANCE || activeCommandControl?.control == CameraControl.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
-            activeMonitorPickerKind == MonitorPickerKind.SHUTTER || activeCommandControl?.control == CameraControl.SHUTTER -> SettingKey.SHUTTER
-            activeMonitorPickerKind == MonitorPickerKind.IRIS || activeCommandControl?.control == CameraControl.IRIS -> SettingKey.APERTURE
-            else -> null
-        }
+        val key = activeMonitorPickerKind?.commonSettingKey
+            ?: activeCommandControl?.control?.commonPickerKind?.commonSettingKey
         commonEditor = key?.let(commonControl::edit)
     }
     // The other side's panels/popups make no sense after a photo ↔ movie flip —
@@ -1239,7 +1235,9 @@ internal fun MonitorScreen(
         // hides the key. Vertical mode always lays out as fill (shared layout policy).
         val portraitAspect = operatorSettings.portraitFeedAspect.takeIf { !isPhotographyMode && !isCommand }
         // Chrome the operator switched on still hides when nothing can fill it (iOS `sectionHasASource`).
-        val available = availability.monitorSections(cameraReportsTimecode, isPhotographyMode)
+        val codecColor = nikonCodecColorChoices(cameraProperties)
+        val available = availability.monitorSections(cameraReportsTimecode, isPhotographyMode,
+            reportsColor = codecColor.showsColor)
         val mounted: (MonitorDisplaySection) -> Boolean = { it in available && operatorSession.mounts(it) }
         val statusBarVisible = mounted(MonitorDisplaySection.STATUS_BAR)
         val assistToolbarVisible = mounted(MonitorDisplaySection.TOOL_BAR)
@@ -1409,6 +1407,7 @@ internal fun MonitorScreen(
                 isMonitorFront,
                 lifecycleState,
                 monitorFrameSource,
+                sharedControlState.snapshot?.power,
             ) {
                 androidWatchRelayState(
                     sessionState = sessionState,
@@ -1417,6 +1416,7 @@ internal fun MonitorScreen(
                     monitorFront = isMonitorFront,
                     applicationResumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                     liveFeedActive = monitorFrameSource != null && isMonitorFront,
+                    power = sharedControlState.snapshot?.power ?: com.opencapture.opencine.core.PowerStatus.unknown,
                 )
             }
         LaunchedEffect(wearRelay, watchRelayState) {
@@ -1825,21 +1825,16 @@ internal fun MonitorScreen(
             commandControlFeedback = null
         }
         val nativeSettings = if (isPhotographyMode) photographySettings else captureSettings
-        fun fieldFor(kind: MonitorPickerKind): MonitorCaptureField? {
-            if (isPhotographyMode) return null
-            val key = when (kind) {
-                MonitorPickerKind.ISO -> SettingKey.ISO
-                MonitorPickerKind.SHUTTER -> SettingKey.SHUTTER
-                MonitorPickerKind.IRIS -> SettingKey.APERTURE
-                MonitorPickerKind.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
-                else -> return null
-            }
-            return commonControl.captureField(key)
-        }
+        fun fieldFor(kind: MonitorPickerKind): MonitorCaptureField? =
+            if (isPhotographyMode) null else kind.commonSettingKey?.let(commonControl::captureField)
         val readouts: List<MonitorOperatorLiveReadout<String, MonitorDisplaySection>> = nativeSettings.map { setting ->
             val field = fieldFor(setting.kind)
+            val key = setting.kind.commonSettingKey
+            val value = if (!isPhotographyMode && !isDemoSession && relayedState == null && key != null)
+                commonControl.captureValue(key, com.opencapture.opencine.appkit.MonitorCaptureSelection.PENDING)
+                    ?.let(MonitorCapturePresentation::label) ?: "--" else setting.value
             MonitorOperatorLiveReadout(setting.kind.name, field?.title ?: setting.label,
-                if (field != null) field.label else setting.value, field = field,
+                value, field = field,
                 quickEnabled = setting.kind != MonitorPickerKind.SHUTTER || isPhotographyMode ||
                     (effectiveShutterLocked == false && cameraProperties.shutterMode != null),
             )
@@ -1941,16 +1936,24 @@ internal fun MonitorScreen(
             picker.kind.isTopBarPicker(), if (picker.kind == MonitorPickerKind.QUALITY) 400f else 340f,
             if (picker.kind == MonitorPickerKind.QUALITY) 380f else 300f,
             chrome = if (picker.kind in ladderKinds) MonitorOperatorCameraPanelChrome.SHARED_SHEET else MonitorOperatorCameraPanelChrome.CONTENT,
-            title = picker.title, subtitle = picker.subtitle) }
+            // Codec and colour are one popup: the codec picker carries the active codec's tones.
+            title = if (picker.kind == MonitorPickerKind.CODEC && codecColor.showsColor) "CODEC · COLOR" else picker.title,
+            subtitle = picker.subtitle) }
             ?: activeCommandControl?.let { request -> MonitorOperatorCameraPanel("command:${request.control.name}",
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
+        val recordingFormat = sharedControlState.snapshot?.let(MonitorCapturePresentation::recordingFormat)
+        val formatLabel = nikonRecordingFormatLabel(
+            recordingFormat?.let(MonitorCapturePresentation::recordingLabel),
+            cameraProperties.controlCapabilities.recordingFormats
+                .firstOrNull { it.token == readoutRetention.resolution }?.imageArea,
+        )
         val headerReadouts = listOfNotNull(
             if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
-                if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else readoutRetention.resolution,
+                if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else if (isDemoSession || relayedState != null) readoutRetention.resolution else formatLabel,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",
-                if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else readoutRetention.codec,
+                if (isPhotographyMode) cameraProperties.stillQualityCompactLabel() else if (isDemoSession || relayedState != null) readoutRetention.codec else recordingFormat?.codec?.let(com.opencapture.opencine.nikon.MonitorTextFormat::codecCompactLabel),
                 MonitorDisplaySection.CODEC, action = { openSharedPicker(codecKind) }))
         val quickPickers = nativeSettings.mapNotNull { setting -> setting.picker?.let { setting.kind to it } }.toMap() +
             if (isPhotographyMode) photographyTopPickers else topPillPickers
@@ -1965,7 +1968,11 @@ internal fun MonitorScreen(
             quickPickers, cameraProperties, identity, session.reportedRecording.value, quickCommandsEnabled,
             quickCaptureOwner,
             columns = if (isPortrait && !fieldLayout.tablet) { if (isPhotographyMode) 5 else 3 } else readouts.size,
-            open = { id -> MonitorPickerKind.entries.firstOrNull { it.name == id }?.let(openSharedPicker) },
+            open = { id ->
+                // The colour readout opens the same codec and colour popup as the codec readout.
+                (if (id == COLOR_READOUT_ID) MonitorPickerKind.CODEC else MonitorPickerKind.entries.firstOrNull { it.name == id })
+                    ?.let(openSharedPicker)
+            },
             dismiss = { activeMonitorPickerKind = null; activeCommandControl = null; commandControlFeedback = null },
             commit = { key, captured, target ->
                 val admission = com.opencapture.opencine.nikon.CameraCommandAdmission(session) {
@@ -2005,10 +2012,19 @@ internal fun MonitorScreen(
                 !isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE),
                 !isPhotographyMode && mounted(MonitorDisplaySection.REC_READOUT), statusStorage, headerReadouts,
                 link.label, link.bars,
-                MonitorDisplaySection.FPS, recordingSection = MonitorDisplaySection.REC_READOUT,
+                MonitorDisplaySection.FPS,
+                color = if (isPhotographyMode || !mounted(MonitorDisplaySection.COLOR)) null else
+                    MonitorOperatorLiveReadout(COLOR_READOUT_ID, "Color", codecColor.selectedColorChoice?.label ?: "--",
+                        MonitorDisplaySection.COLOR, action = { openSharedPicker(MonitorPickerKind.CODEC) }),
+                recordingSection = MonitorDisplaySection.REC_READOUT,
                 timecodeSection = MonitorDisplaySection.TIMECODE),
             // A watcher's camera battery arrives over the relay as the host's raw level (cameraReadouts).
-            cameraBattery = nikonCameraBatteryReading(cameraReadouts.batteryPercent, cameraReadouts.externalPower),
+            cameraBattery = if (relayedState != null) {
+                com.opencapture.opencine.cameracontrols.cameraPowerReading(relayedState.batteryReading,
+                    relayedState.batteryExhausted)
+            } else sharedControlState.snapshot?.power?.let {
+                com.opencapture.opencine.cameracontrols.cameraPowerReading(it)
+            },
             capture = captureInputs,
             record = MonitorOperatorRecordSource(isPhotographyMode, operatorSettings.recordConfirmationEnabled.value,
                 busy = !recordControlEnabled, openMode = null, confirmingChanged = { recordConfirmationOpen = it }),
@@ -2261,6 +2277,7 @@ internal fun MonitorScreen(
                     CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
                     MonitorControlPickerPanel(
                         picker = picker,
+                        recordingFormats = cameraProperties.controlCapabilities.recordingFormats,
                         frame = pickerFrame,
                         commonControl = if (isPhotographyMode) null else commonControl,
                         commonField = fieldFor(picker.kind),
@@ -2301,6 +2318,7 @@ internal fun MonitorScreen(
                         mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
                         onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
                         chromeless = true,
+                        codecColor = if (isPhotographyMode) null else codecColor,
                     )
                     }
                 }
@@ -2433,6 +2451,8 @@ internal fun MonitorDataAvailability.monitorSections(
     /** The live-view header's timecode status bit; bodies with no timecode hardware pin it to zero. */
     cameraReportsTimecode: Boolean,
     isPhotographyMode: Boolean,
+    /** The active codec has a reported tone (or a fixed one): the colour readout has a source. */
+    reportsColor: Boolean = false,
 ): Set<MonitorDisplaySection> =
     MonitorDisplaySection.entries.filter { section ->
         when (section) {
@@ -2450,7 +2470,9 @@ internal fun MonitorDataAvailability.monitorSections(
             MonitorDisplaySection.STATUS_BAR, MonitorDisplaySection.TOOL_BAR, MonitorDisplaySection.LOCK_BUTTON,
             MonitorDisplaySection.FPS, MonitorDisplaySection.RAIL_SETTINGS,
             -> true
-            MonitorDisplaySection.COLOR, MonitorDisplaySection.ZOOM_CHIP, MonitorDisplaySection.GIMBAL_STICK -> false
+            // The active codec's movie tone (R3D NE: Log3G10), the one codec and colour popup's other half.
+            MonitorDisplaySection.COLOR -> cameraControls && !isPhotographyMode && reportsColor
+            MonitorDisplaySection.ZOOM_CHIP, MonitorDisplaySection.GIMBAL_STICK -> false
         }
     }.toSet()
 
@@ -2471,3 +2493,6 @@ private fun MonitorDisplayMode.labelResource(): Int =
         MonitorDisplayMode.CLEAN -> R.string.display_mode_clean
         MonitorDisplayMode.COMMAND -> R.string.display_mode_command
     }
+
+/** The colour readout's id; it opens the CODEC picker, which carries the colour section. */
+internal const val COLOR_READOUT_ID = "COLOR"

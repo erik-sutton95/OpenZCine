@@ -112,6 +112,9 @@ struct LadderPickerPanel: View {
             if picker == .focus {
                 FocusDialFooter()
             }
+            if picker == .codec {
+                NikonCodecColorFooter()
+            }
             if picker == .stillDrive, case .value(let mode) = tab.key, mode == 1 || mode == 2 {
                 TimerShotsFooter(mode: mode)
             }
@@ -138,7 +141,9 @@ struct LadderPickerPanel: View {
         let entries = modeEntries
         let singleAudio = picker == .audio && entries.count == 1
         return LadderSheetPresentation(
-            title: singleAudio ? entries[0].mode.title : picker.valueLabel,
+            title: singleAudio
+                ? entries[0].mode.title
+                : picker == .codec ? model.codecColorChoices.title : picker.valueLabel,
             subtitle: singleAudio
                 ? model.pickerModeValue(picker, mode: entries[0].index)
                 : model.pickerSubtitle(for: picker),
@@ -633,6 +638,28 @@ private struct FocusDialFooter: View {
         .overlay {
             RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
                 .stroke(LiveDesign.hairline, lineWidth: 1)
+        }
+    }
+}
+
+/// The colour half of the one codec and colour popup: the tones the body offers for the active
+/// codec, under the codec ladder. A codec with a fixed tone (R3D NE: Log3G10) shows it inert.
+private struct NikonCodecColorFooter: View {
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        let choices = model.codecColorChoices
+        if choices.showsColor {
+            CaptureCodecColorSectionView(.color) {
+                CaptureCodecColorTabs(
+                    choices: choices.colors, selected: choices.selectedColor,
+                    enabled: !model.isRecording && choices.colorEditable,
+                    select: { id in
+                        guard let label = choices.colors.first(where: { $0.id == id })?.label else { return }
+                        model.applyMovieTone(label)
+                    })
+            }
+            .padding(.top, 4)
         }
     }
 }

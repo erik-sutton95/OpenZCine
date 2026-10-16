@@ -367,6 +367,27 @@ final class MulticamCoordinatorTests: XCTestCase {
         XCTAssertFalse(links["usb:zr"]?.received.contains("shutdown") ?? true)
     }
 
+    /// A5-01: a member's tile draws the body's five-step gauge from its session's typed power,
+    /// never a percent it did not report. Twin of Android `tileShowsTheBodysBatteryBars`.
+    func testTileShowsTheBodysBatteryBars() async throws {
+        let stage = coordinator()
+        stage.add(record("usb:zr", serial: "S1"), reachable: true)
+        try await live(stage, count: 1)
+        let member = try XCTUnwrap(stage.members.first)
+        let view = MulticamStage(
+            coordinator: stage, confirmsRecord: false, pickerRows: { [] }, openLiveView: { _ in },
+            close: {})
+        try await waitUntil("the session reports the gauge") {
+            view.tile(member).batteryBars != nil
+        }
+        let tile = view.tile(member)
+        // The scripted body reports BatteryLevel 80: four of five bars, no percent.
+        XCTAssertNil(tile.battery)
+        XCTAssertEqual(tile.batteryBars, 4)
+        XCTAssertEqual(tile.batteryBarCount, 5)
+        XCTAssertFalse(tile.charging)
+    }
+
     func testRefusedPaths() {
         let stage = coordinator()
         XCTAssertEqual(

@@ -8,10 +8,26 @@ import OpenCineNikon
 import OpenZCineCore
 import SwiftUI
 
+import enum OpenCineCameraVocabulary.CaptureCodecColorReadout
+
+/// The FORMAT readout: the common recording label behind the displayed movie token's image-area
+/// tag (`[FX] 6K · 25p`), as the body shows it. Kotlin twin: `nikonRecordingFormatLabel`.
+func nikonRecordingFormatLabel(_ label: String?, imageArea: String?) -> String? {
+    label.map { text in imageArea.map { "[\($0)] " + text } ?? text }
+}
+
+extension CaptureCodecColorReadout {
+    /// Codec and colour are one popup on a Z body: both readouts open the codec picker, which
+    /// carries the active codec's tones.
+    var nikonPicker: CameraPicker { .codec }
+}
+
 /// Source facts and bounded body operations for the complete common monitor owner.
 private enum NikonLiveReadoutKey: Hashable {
     case picker(CameraPicker)
     case storage
+    /// The colour (movie tone) readout. It opens the same codec and colour popup as the codec.
+    case color
 }
 
 /// A native quick gesture retains exact advertised domains and source authority.
@@ -254,8 +270,11 @@ struct NikonMonitorShell: View {
                 quickEnabled
                 ? picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
                 : nil
+            let common = !model.isPhotographyMode && !model.isDemoSession && model.videoSource != .relay
+                ? picker.nikonControlSetting.map { model.shell.control.captureValue($0.key, selection: .pending) } : nil
+            let label = common.map { $0.map(MonitorCapturePresentation.label) ?? "--" } ?? value.value
             return Readout(
-                id: .picker(picker), title: value.label, value: value.value, field: field,
+                id: .picker(picker), title: value.label, value: label, field: field,
                 quickEnabled: quickEnabled,
                 accessibilityIdentifier: picker.nikonControlSetting.map {
                     "monitor.capture." + $0.key.rawValue
@@ -268,6 +287,10 @@ struct NikonMonitorShell: View {
     }
     private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, Section> {
         let photo = model.isPhotographyMode
+        let recordingFormat = model.shell.control.snapshot.map(MonitorCapturePresentation.recordingFormat)
+        let recordingLabel = recordingFormat.flatMap(MonitorCapturePresentation.recordingLabel)
+        let imageArea = model.recordingFormatPresentations.first { $0.token == model.cameraState.resolutionFrameRate }?.imageArea
+        let formatLabel = nikonRecordingFormatLabel(recordingLabel, imageArea: imageArea)
         // The common session publishes the header timecode at frame precision (A5-04).
         let recording =
             model.pictureOnlyMonitor
@@ -283,7 +306,7 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillSize : .resolution), title: "Format",
                     value: photo
                         ? model.stillSizeAreaDisplay ?? "--"
-                        : model.cameraState.resolutionFrameRate,
+                        : model.isDemoSession || model.videoSource == .relay ? model.cameraState.resolutionFrameRate : formatLabel ?? "--",
                     section: .format))
         }
         if model.chromeSectionMounts(.codec) {
@@ -292,7 +315,8 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillQuality : .codec), title: "Codec",
                     value: photo
                         ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--"
-                        : MonitorTextFormat.codecCompactLabel(model.cameraState.codec),
+                        : model.isDemoSession || model.videoSource == .relay ? MonitorTextFormat.codecCompactLabel(model.cameraState.codec)
+                            : recordingFormat?.codec.map(MonitorTextFormat.codecCompactLabel) ?? "--",
                     section: .codec))
         }
         let storage: Readout?
@@ -311,28 +335,33 @@ struct NikonMonitorShell: View {
             storage = nil
         }
         let fps = model.chromeSectionMounts(.fps)
+        // Codec and colour are one popup: the colour readout opens the codec picker.
+        let color: Readout? =
+            !photo && model.chromeSectionMounts(.color)
+            ? .init(
+                id: .color, title: "Color", value: model.movieToneReadout ?? "--", section: .color,
+                accessibilityIdentifier: "monitor.capture.color")
+            : nil
         return .init(
             recording: recording, showsTimecode: !photo && model.chromeSectionMounts(.timecode),
             showsRecording: !photo && model.chromeSectionMounts(.recReadout), storage: storage,
             format: format, fps: fps ? model.liveFPS : nil,
-            signalBars: fps ? model.liveSignalBars : nil, fpsSection: .fps)
+            signalBars: fps ? model.liveSignalBars : nil, fpsSection: .fps, color: color)
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
     private var cameraBattery: MonitorOperatorPowerReading? {
-        let gauge = CameraBatteryGauge.gauge(
-            rawBatteryLevel: model.cameraState.cameraBatteryPercent)
-        guard gauge != .unknown else { return nil }
-        return .init(
-            id: "camera", title: "Camera battery", camera: true, bars: gauge.filledBars,
-            barCount: CameraBatteryGauge.barCount, warning: gauge.urgency != .nominal,
-            exhausted: gauge.pulses, charging: model.cameraBatteryCharging)
+        .camera(
+            model.cameraBatteryReading, exhausted: model.cameraBatteryExhausted,
+            charging: model.cameraPowerCharging)
     }
+
     private var panel: MonitorOperatorCameraPanel<NikonLiveReadoutKey>? {
         guard case .picker(let picker) = model.activePanel else { return nil }
         return .init(
             key: .picker(picker), top: picker.isTopBar,
             chrome: picker.usesLadderSheet ? .sharedSheet : .content,
-            title: picker == .stabilization ? "VR / E-VR" : picker.valueLabel,
+            title: picker == .stabilization
+                ? "VR / E-VR" : picker == .codec ? model.codecColorChoices.title : picker.valueLabel,
             subtitle: model.pickerSubtitle(for: picker))
     }
     private var captureInputs:
@@ -340,13 +369,22 @@ struct NikonMonitorShell: View {
     {
         .init(
             readouts: readouts, panel: panel, haptics: model.preferences.hapticsEnabled,
-            open: { key in if case .picker(let picker) = key { model.showPicker(picker) } },
+            open: { key in
+                switch key {
+                case .picker(let picker): model.showPicker(picker)
+                case .color: model.showPicker(CaptureCodecColorReadout.color.nikonPicker)
+                case .storage: break
+                }
+            },
             dismiss: {
                 if model.activePanel?.coversFullScreen == false { model.dismissActivePanel() }
             },
             isTop: { key in
-                if case .picker(let picker) = key { return picker.isTopBar }
-                return false
+                switch key {
+                case .picker(let picker): picker.isTopBar
+                case .color: CaptureCodecColorReadout.color.nikonPicker.isTopBar
+                case .storage: false
+                }
             },
             nativeQuick: { key in
                 guard case .picker(let picker) = key else { return nil }

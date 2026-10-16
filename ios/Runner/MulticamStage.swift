@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
 import OpenCineMulticam
@@ -122,7 +123,7 @@ struct MulticamStage: View {
     }
 
     /// The member's values as the shared stage shows them; unknown stays unknown.
-    private func tile(_ member: MulticamMember) -> MultiviewTile {
+    func tile(_ member: MulticamMember) -> MultiviewTile {
         let rolling = member.isLive ? member.recording : nil
         let status: MultiviewTileStatus?
         let detail: String
@@ -143,14 +144,12 @@ struct MulticamStage: View {
                 ])
             detail = reason
         }
-        return MultiviewTile(
+        // The session's snapshot: storage, and the body's five-step gauge (A5-01) as declared,
+        // never a percent.
+        let snapshot = member.control?.session.refresh()
+        let tile = MultiviewTile(
             name: member.displayName, model: SavedCameraPathGroups.pathLabel(for: member.record),
-            // The body's five-step gauge (A5-01): bars, never a percent it did not report.
-            batteryBars: member.batteryPercent.map(CameraBatteryGauge.gauge(rawBatteryLevel:))
-                .flatMap { $0 == .unknown ? nil : $0.filledBars },
-            batteryBarCount: CameraBatteryGauge.barCount,
-            storage: member.control?.session.refresh().storage.storageReadout?.free
-                ?? MultiviewTally.unavailable,
+            storage: snapshot?.storage.storageReadout?.free ?? MultiviewTally.unavailable,
             timecode: member.timecode?.monitorLabel,
             tally: MultiviewTally.text(recording: rolling, waiting: coordinator.groupBusy),
             // Nikon reports no take length: the tile times it from the first recording frame.
@@ -170,6 +169,7 @@ struct MulticamStage: View {
                     MulticamTileAction.remove, "Remove camera", kind: .destructive),
             ],
             accessibilityValue: detail)
+        return tile.withPower(snapshot?.power)
     }
 
     private func perform(_ action: String, slot: Int) {

@@ -1,6 +1,10 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.cameracontrols.MonitorOperatorExposureReading
+import com.opencapture.opencine.cameracontrols.cameraPowerReading
+import com.opencapture.opencine.core.ObservationOrigin
+import com.opencapture.opencine.core.ObservedValue
+import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraStorageStatus
 import com.opencapture.opencine.nikon.LiveFrameTimecode
@@ -21,6 +25,15 @@ class MonitorReadoutsTest {
         assertEquals("+1.0", MonitorOperatorExposureReading(stops(6, null)).label)
         assertNull(stops(6, false), "an unlit indicator is unknown")
         assertNull(stops(null, true))
+    }
+
+    @Test
+    fun `the image area tag leads the common recording label, as the body shows it`() {
+        // Twin of the Swift NikonRecordingFormatLabelTests vectors.
+        assertEquals("[FX] 6K · 25p", nikonRecordingFormatLabel("6K · 25p", imageArea = "FX"))
+        assertEquals("[DX] 4K · 50p", nikonRecordingFormatLabel("4K · 50p", imageArea = "DX"))
+        assertEquals("4K · 50p", nikonRecordingFormatLabel("4K · 50p", imageArea = null))
+        assertNull(nikonRecordingFormatLabel(null, imageArea = "FX"))
     }
 
     @Test
@@ -89,9 +102,13 @@ class MonitorReadoutsTest {
 
     @Test
     fun `the camera battery is the body's five step gauge, never a percent`() {
+        // The session's typed power for a raw BatteryLevel, read by the shared live chrome.
+        fun sessionBatteryReading(rawLevel: Int?, externalPower: Boolean?) = cameraPowerReading(
+            NikonCameraBatteryGauge.gauge(rawLevel ?: 0).powerStatus.copy(externalPower =
+                externalPower?.let { ObservedValue(it, ObservationOrigin.CAMERA_REPORTED, null) } ?: ObservedValue.unknown))
         // A5-01, #303: BatteryLevel only carries 1/20/40/60/80/100, so "60%" claimed a precision
         // the body never sent (it reads 60 for anything from 40 to 59 percent).
-        val sixty = requireNotNull(nikonCameraBatteryReading(60, externalPower = true))
+        val sixty = requireNotNull(sessionBatteryReading(60, externalPower = true))
         assertNull(sixty.percent)
         assertEquals(3, sixty.bars)
         assertEquals(5, sixty.barCount)
@@ -100,15 +117,15 @@ class MonitorReadoutsTest {
         assertFalse(sixty.warning)
         assertFalse(sixty.exhausted)
         // An off-step value rounds up to the step it sits under; two bars warns.
-        val low = requireNotNull(nikonCameraBatteryReading(39, externalPower = null))
+        val low = requireNotNull(sessionBatteryReading(39, externalPower = null))
         assertEquals(2, low.bars)
         assertTrue(low.warning)
         // The blinking shutter-disabled step pulses.
-        val critical = requireNotNull(nikonCameraBatteryReading(1, externalPower = false))
+        val critical = requireNotNull(sessionBatteryReading(1, externalPower = false))
         assertEquals(1, critical.bars)
         assertTrue(critical.exhausted)
         // An unread battery is absent, never an empty red cell.
-        assertNull(nikonCameraBatteryReading(null, externalPower = true))
-        assertNull(nikonCameraBatteryReading(0, externalPower = null))
+        assertNull(sessionBatteryReading(null, externalPower = true))
+        assertNull(sessionBatteryReading(0, externalPower = null))
     }
 }

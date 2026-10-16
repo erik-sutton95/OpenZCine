@@ -926,6 +926,7 @@ internal fun cameraPropertyConfirmsSelection(
         CameraControl.STILL_RAW_COMPRESSION -> snapshot.rawCompression == label
         CameraControl.STILL_USER_MODE_PROGRAM -> snapshot.userModeProgram == label
         CameraControl.STILL_PICTURE_CONTROL -> snapshot.pictureControl == label
+        CameraControl.MOVIE_TONE -> snapshot.movieTone == label
     }
 
 /* Every label below is accepted by `PTPCameraPropertyWrite` in the shared Swift core. */
