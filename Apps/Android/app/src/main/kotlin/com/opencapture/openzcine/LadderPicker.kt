@@ -26,6 +26,7 @@ internal fun VideoLadderBody(
     footer: @Composable (LadderTab<NikonLadderControl>) -> Unit,
     modifier: Modifier = Modifier,
     chromeless: Boolean = false,
+    /** The camera's reported typed recording formats; the resolution sheet never parses tokens. */
     recordingFormats: List<NikonRecordingFormatPresentation> = emptyList(),
 ) {
     LadderSheet(

@@ -122,27 +122,20 @@ internal fun requestForLadderWrite(
 }
 
 /**
- * A recording-format picker's choices for the shared format picker; null for every other picker.
- * The body's reported formats group each token; a token it does not describe stays unclassified.
+ * A recording-format picker's choices for the shared format picker, grouped by the camera's
+ * reported typed formats (an unreported token stays one ungrouped choice); null for every other
+ * picker. Tokens are never parsed.
  */
 internal fun ladderFormats(
     picker: MonitorPickerPresentation,
-    recordingFormats: List<NikonRecordingFormatPresentation> = emptyList(),
-): List<CaptureFormatChoice<String>>? =
-    if (picker.kind == MonitorPickerKind.RESOLUTION) {
-        picker.modes.firstOrNull()?.request?.options?.map { token ->
-            nikonFormatChoice(recordingFormats.firstOrNull { it.token == token }
-                ?: NikonRecordingFormatPresentation(token, null, null, null))
-        }
-    } else {
-        null
+    recordingFormats: List<NikonRecordingFormatPresentation>,
+): List<CaptureFormatChoice<String>>? {
+    if (picker.kind != MonitorPickerKind.RESOLUTION) return null
+    return picker.modes.firstOrNull()?.request?.options?.map { token ->
+        val format = recordingFormats.firstOrNull { it.token == token }
+        CaptureFormatChoice(value = token, title = token,
+            imageArea = format?.imageArea?.let { CaptureFormatGroup(it, it) },
+            resolution = format?.resolution?.let { CaptureFormatGroup(it, it) },
+            frameRate = format?.frameRate?.let { CaptureFormatGroup(it, it) })
     }
-
-/** One Nikon recording format as the shared format picker's area / size / rate choice. */
-internal fun nikonFormatChoice(format: NikonRecordingFormatPresentation): CaptureFormatChoice<String> {
-    val token = format.token
-    return CaptureFormatChoice(value = token, title = token,
-        imageArea = format.imageArea?.let { CaptureFormatGroup(it, it) },
-        resolution = format.resolution?.let { CaptureFormatGroup(it, it) },
-        frameRate = format.frameRate?.let { CaptureFormatGroup(it, it) })
 }

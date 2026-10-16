@@ -54,7 +54,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.opencapture.opencine.nikon.CameraControl
-import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.opencine.nikon.IsoPickerPolicy
@@ -597,7 +596,7 @@ internal fun monitorPickerKindForRequest(
 /**
  * Projects the WB capture-bar picker (iOS `CameraPicker.whiteBalance`):
  * **Kelvin** / **Preset** / **Tint** — not a combined Kelvin·Preset tab.
- * Tint swaps the drum for [WhiteBalanceTintPad].
+ * Tint swaps the drum for the shared tint pad.
  */
 internal fun wbPickerPresentation(
     wbTile: CommandTilePresentation?,
@@ -986,6 +985,7 @@ internal fun MonitorControlPickerPanel(
     mfScrubEnabled: Boolean = true,
     /** Flips the focus-scrub preference; null omits the FOCUS popup's toggle row. */
     onToggleMfScrub: (() -> Unit)? = null,
+    /** The camera's reported typed recording formats for the resolution sheet. */
     recordingFormats: List<com.opencapture.opencine.nikon.NikonRecordingFormatPresentation> = emptyList(),
     /**
      * The colour half of the one codec and colour popup, drawn under the CODEC ladder: the tones
@@ -1009,13 +1009,13 @@ internal fun MonitorControlPickerPanel(
     }
     VideoLadderBody(
         picker = picker,
-        recordingFormats = recordingFormats,
         control = commonControl,
         controlsEnabled = writeEnabled,
         error = feedback?.takeIf { it.isError }?.message,
         unavailable = stringResource(R.string.camera_controls_unavailable),
         fromTop = slideFromTop,
         chromeless = true,
+        recordingFormats = recordingFormats,
         onWrite = onSelect,
         onClose = onDismiss,
         onHold = if (picker.kind == MonitorPickerKind.SHUTTER && writeEnabled) onShutterLongPress else null,
@@ -1048,6 +1048,15 @@ internal fun MonitorControlPickerPanel(
         },
     )
 }
+
+/** The typed write for a tone pick: Swift validates it against the active codec's offered tones. */
+internal fun movieToneRequest(choices: CaptureCodecColorChoices): CommandControlRequest =
+    CommandControlRequest(
+        title = "Color",
+        control = CameraControl.MOVIE_TONE,
+        currentValue = choices.selectedColorChoice?.label.orEmpty(),
+        options = choices.colors.filter { it.isEditable }.map { it.label },
+    )
 
 /**
  * FOCUS popup toggle for the live-view focus-scrub strip (iOS `mfScrubToggleRow`): a bordered
@@ -1226,27 +1235,3 @@ internal fun MFDriveStrip(
         }
     }
 }
-
-/**
- * The Z body's codec and colour popup values from the Swift-decided snapshot: the tones offered
- * for the active codec (R3D NE: Log3G10, shown and fixed) and the one it records. Codec rows stay
- * on the CODEC ladder, so only the colour half is listed here.
- */
-internal fun nikonCodecColorChoices(snapshot: CameraPropertySnapshot): CaptureCodecColorChoices {
-    val capabilities = snapshot.controlCapabilities
-    return CaptureCodecColorChoices(
-        colors = capabilities.movieTones.map {
-            com.opencapture.opencine.vocabulary.CaptureCodecColorChoice(it, it, capabilities.movieToneEditable)
-        },
-        selectedColor = snapshot.movieTone,
-    )
-}
-
-/** The typed write for a tone pick: Swift validates it against the active codec's offered tones. */
-internal fun movieToneRequest(choices: CaptureCodecColorChoices): CommandControlRequest =
-    CommandControlRequest(
-        title = "Color",
-        control = CameraControl.MOVIE_TONE,
-        currentValue = choices.selectedColorChoice?.label.orEmpty(),
-        options = choices.colors.filter { it.isEditable }.map { it.label },
-    )

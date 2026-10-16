@@ -62,6 +62,10 @@ class LiveAssistOptionsComposeTest {
         composeRule.onNodeWithText("Horizon").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Gauge").assertIsDisplayed().performClick()
         composeRule.runOnIdle { assertEquals(MonitorLevelStyle.GAUGE, settings.levelStyle) }
+        // The pick is persisted: a fresh read of the same store sees the shared style.
+        val stored = ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences("ope88-live-level-toolbar", Context.MODE_PRIVATE)
+        assertEquals(MonitorLevelStyle.GAUGE, OperatorSettings(stored).levelStyle)
     }
 
     private fun settings(name: String): OperatorSettings {

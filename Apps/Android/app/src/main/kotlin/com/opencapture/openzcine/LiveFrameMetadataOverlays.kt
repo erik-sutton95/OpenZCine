@@ -26,7 +26,6 @@ import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
 import com.opencapture.monitorui.MonitorLevelStyle
-import kotlin.math.min
 import kotlin.math.roundToInt
 import com.opencapture.opencine.runtime.NativeFeedContentRect
 import com.opencapture.opencine.runtime.nativeFeedContentRect

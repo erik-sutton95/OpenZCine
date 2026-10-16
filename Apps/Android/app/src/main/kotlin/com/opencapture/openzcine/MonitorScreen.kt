@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.codecColorChoices
 import com.opencapture.opencine.media.recordingTimeLabel
 import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.media.StorageReadout
@@ -1237,7 +1238,7 @@ internal fun MonitorScreen(
         // hides the key. Vertical mode always lays out as fill (shared layout policy).
         val portraitAspect = operatorSettings.portraitFeedAspect.takeIf { !isPhotographyMode && !isCommand }
         // Chrome the operator switched on still hides when nothing can fill it (iOS `sectionHasASource`).
-        val codecColor = nikonCodecColorChoices(cameraProperties)
+        val codecColor = cameraProperties.codecColorChoices()
         val available = availability.monitorSections(cameraReportsTimecode, isPhotographyMode,
             reportsColor = codecColor.showsColor, controls = commonSession.controlCapabilities(codecColor))
         val mounted: (MonitorDisplaySection) -> Boolean = { it in available && operatorSession.mounts(it) }
