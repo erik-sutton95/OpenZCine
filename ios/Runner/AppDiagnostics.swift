@@ -2,6 +2,7 @@ import Foundation
 import ImageIO
 import MetricKit
 import OpenCineAppKit
+import OpenCineCore
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -87,6 +88,24 @@ enum AppDiagnosticEvent: String, Codable, Sendable {
     case connectionGateUnknownOps = "connection.gate.unknown-ops"
     /// Camera AP path had no stored or derived SSID, so join used the Nikon prefix.
     case connectionJoinPrefix = "connection.join.prefix"
+
+    // What the app's one Local Network observer learned (TN3179): its probe started, or an
+    // explicit answer (a completed camera link, the probe's own beacon, or a policy denial).
+    case localNetworkRequested = "local-network.requested"
+    case localNetworkAllowed = "local-network.allowed"
+    case localNetworkDenied = "local-network.denied"
+}
+
+extension AppDiagnosticEvent {
+    /// The closed event for what the app's Local Network observer learned; unknown records nothing.
+    init?(localNetwork state: CameraNetworkPermissionState) {
+        switch state {
+        case .unknown: return nil
+        case .requested: self = .localNetworkRequested
+        case .allowed: self = .localNetworkAllowed
+        case .denied: self = .localNetworkDenied
+        }
+    }
 }
 
 struct DiagnosticReportMetadata: Equatable, Sendable {
@@ -96,6 +115,8 @@ struct DiagnosticReportMetadata: Equatable, Sendable {
     let deviceClass: String
     let osName: String
     let osVersion: String
+    /// Local Network permission as the app last learned it (`LocalNetworkAccess`).
+    var localNetwork = CameraNetworkPermissionState.unknown.rawValue
 
     /// The phone as every app's diagnostics name it: OpenCine `DiagnosticsDevice` (A6-13).
     @MainActor static var current: DiagnosticReportMetadata {
@@ -107,7 +128,8 @@ struct DiagnosticReportMetadata: Equatable, Sendable {
             buildNumber: info?["CFBundleVersion"] as? String ?? "unknown",
             deviceClass: device.hardwareClass,
             osName: device.osName,
-            osVersion: device.osVersion
+            osVersion: device.osVersion,
+            localNetwork: LocalNetworkAccess.shared.reported.rawValue
         )
     }
 }
@@ -321,7 +343,8 @@ actor DiagnosticEventStore {
             phase: "unknown",
             // ponytail: unknown, not off: no local-VPN probe here yet. Pocket and Insta's
             // `LocalVPNProbe` is the one to share when the Nikon report needs it.
-            vpnActive: nil)
+            vpnActive: nil,
+            localNetwork: metadata.localNetwork)
     }
 
     /// One event as an earlier version stored it (`events.jsonl`).

@@ -2,6 +2,7 @@ import Foundation
 import MonitorUI
 import OpenCineApple
 import OpenCineCore
+import OpenZCineCore
 import SwiftUI
 import UIKit
 
@@ -34,71 +35,168 @@ enum StartupPermissionKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// What we can tell the operator about a permission. Local Network has no authorization API
-/// (TN3179, FB8711182), so its state comes from the shared probe: self-discovering our own
-/// published Bonjour service means `.granted`, an explicit policy denial means `.denied`, and
-/// `.requested` while neither signal has arrived (prompt still up, or probe in flight).
-enum StartupPermissionState: Equatable {
-    case notDetermined
-    case requested
-    case granted
-    case denied
+/// The app's one Local Network observer (TN3179), as Pocket and Insta keep theirs: the permission
+/// belongs to the app, not to a wizard step or a camera session. It holds OpenCine's
+/// `LocalNetworkPrivacy` (probe lifetime and evidence rule), records each new answer as a closed
+/// diagnostic event, remembers a grant across launches, and takes evidence from a camera link
+/// that completed over the network. The first-pair wizard step drives its probe.
+@MainActor @Observable
+final class LocalNetworkAccess {
+    static let shared = LocalNetworkAccess()
 
-    init(_ state: CameraNetworkPermissionState) {
-        switch state {
-        case .unknown: self = .notDetermined
-        case .requested: self = .requested
-        case .allowed: self = .granted
-        case .denied: self = .denied
+    /// The existing probe: a `NetServiceBrowser` browse for the camera's PTP service fires the
+    /// prompt (an `NWBrowser` alone didn't on device), and self-discovering our own beacon type
+    /// grants. The type must stay listed in Info.plist `NSBonjourServices`.
+    static let probe = LocalNetworkPrivacy.Probe(
+        browseType: "_ozcprobe._tcp", resultsGrant: true,
+        beacon: .init(name: "OpenZCine", port: 61735), promptTrigger: "_ptp._tcp.")
+
+    private static let acknowledgedKey = "StartupPermissions.localNetworkAcknowledged"
+
+    /// The latest evidence; `requested` while a probe has no answer yet.
+    private(set) var state: CameraNetworkPermissionState = .unknown
+    /// The last explicit answer. A re-probe's `requested` never hides it.
+    private(set) var answer: CameraNetworkPermissionState?
+    /// A grant seen in this or an earlier launch: a remembered answer, not fresh OS evidence.
+    private(set) var acknowledged: Bool
+
+    /// What diagnostics report: the last answer, else the current evidence.
+    var reported: CameraNetworkPermissionState { answer ?? state }
+
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let record: (AppDiagnosticEvent) -> Void
+    @ObservationIgnored private lazy var privacy = LocalNetworkPrivacy { [weak self] state, _ in
+        self?.receive(state)
+    }
+    @ObservationIgnored private var reprobe: Task<Void, Never>?
+    /// The wizard step shows the permission: a denial keeps re-probing while it does.
+    @ObservationIgnored private var probing = false
+
+    init(
+        defaults: UserDefaults = .standard,
+        record: @escaping (AppDiagnosticEvent) -> Void = { AppDiagnostics.shared.record($0) }
+    ) {
+        self.defaults = defaults
+        self.record = record
+        acknowledged = defaults.bool(forKey: Self.acknowledgedKey)
+    }
+
+    /// Starts (or restarts) the probe for the wizard step; the shared observer stops the previous
+    /// one first.
+    func startProbing() {
+        probing = true
+        reprobe?.cancel()
+        privacy.start(Self.probe)
+    }
+
+    /// Ends the probe, its beacon and any pending re-probe when the step goes away.
+    func stopProbing() {
+        probing = false
+        reprobe?.cancel()
+        reprobe = nil
+        privacy.stop()
+    }
+
+    /// Evidence from a camera operation whose own guard already rejected retired attempts.
+    func note(_ evidence: CameraNetworkPermissionEvidence, source: String) {
+        privacy.note(evidence, source: source)
+    }
+
+    /// A camera link that completed over the network proves access; USB proves nothing.
+    nonisolated static func evidence(
+        connected: Bool, transport: CameraTransportKind?
+    ) -> CameraNetworkPermissionEvidence? {
+        connected && transport == .ptpIP ? .operationSucceeded : nil
+    }
+
+    private func receive(_ next: CameraNetworkPermissionState) {
+        let before = reported
+        state = next
+        switch next {
+        case .allowed:
+            answer = .allowed
+            reprobe?.cancel()
+            privacy.stop()
+            if !acknowledged {
+                acknowledged = true
+                defaults.set(true, forKey: Self.acknowledgedKey)
+            }
+        case .denied:
+            answer = .denied
+            scheduleReprobe()
+        case .unknown, .requested:
+            break
+        }
+        // One event per new answer: a re-probe of a denial is not news.
+        if reported != before, let event = AppDiagnosticEvent(localNetwork: reported) {
+            record(event)
+        }
+    }
+
+    /// Re-probes a denied Local Network permission every couple of seconds while the step shows.
+    /// TN3179 only promises grant auto-retry for `NWConnection`; a parked `NWBrowser` that saw a
+    /// (possibly stale) PolicyDenied is not guaranteed to recover on its own, so a Settings grant
+    /// could otherwise go unnoticed until the operator left and re-entered the step. Denied probes
+    /// are free (the OS blocks the multicast locally); the loop ends with the step or on grant.
+    private func scheduleReprobe() {
+        guard probing else { return }
+        reprobe?.cancel()
+        reprobe = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, let self, self.probing, self.answer == .denied else { return }
+            self.privacy.start(Self.probe)
         }
     }
 }
 
-/// Reads and requests the first-pair permission, exposing live status to the wizard step. A
-/// request fires the real system prompt; a permission already denied deep-links to Settings (iOS
-/// won't re-prompt once decided).
+/// The first-pair step's view of the app's Local Network owner. A request fires the real system
+/// prompt; a permission already denied deep-links to Settings (iOS won't re-prompt once decided).
 @MainActor @Observable
 final class StartupPermissionsCoordinator {
-    private(set) var localNetwork: StartupPermissionState = .notDetermined
+    @ObservationIgnored private let access: LocalNetworkAccess
+    @ObservationIgnored private let defaults: UserDefaults
+    /// The row was tapped (or a probe resumed) and no answer has arrived yet.
+    private var requested = false
 
-    /// The one Local Network observer of this wizard step. Its probe is stopped explicitly on
-    /// replacement and when the step ends, so no browse or beacon outlives it.
-    @ObservationIgnored private lazy var localNetworkPrivacy = LocalNetworkPrivacy {
-        [weak self] state, _ in
-        self?.receive(StartupPermissionState(state))
+    init(access: LocalNetworkAccess = .shared, defaults: UserDefaults = .standard) {
+        self.access = access
+        self.defaults = defaults
     }
 
-    /// The existing probe: a `NetServiceBrowser` browse for the camera's PTP service fires the
-    /// prompt (an `NWBrowser` alone didn't on device), and self-discovering our own beacon type
-    /// grants. Denial keeps the browse alive, because Network framework retries a waiting browse
-    /// after a Settings grant. The type must stay listed in Info.plist `NSBonjourServices`.
-    static let localNetworkProbe = LocalNetworkPrivacy.Probe(
-        browseType: "_ozcprobe._tcp", resultsGrant: true,
-        beacon: .init(name: "OpenZCine", port: 61735), promptTrigger: "_ptp._tcp.")
+    /// What the row shows: a remembered grant, else the owner's last answer, else whether the
+    /// prompt was asked for. Local Network has no authorization API (TN3179, FB8711182): an
+    /// unanswered probe is `requested`, never `denied`.
+    var localNetwork: CameraNetworkPermissionState {
+        Self.shownState(
+            acknowledged: access.acknowledged, answer: access.answer, requested: requested)
+    }
 
     /// Pairing can't proceed over Wi‑Fi without Local Network access, and merely having fired
     /// the prompt is not enough: the operator can answer "Don't Allow".
-    var allRequiredGranted: Bool { localNetwork == .granted }
+    var allRequiredGranted: Bool { localNetwork == .allowed }
 
-    private static let localNetworkAcknowledgedKey = "StartupPermissions.localNetworkAcknowledged"
+    nonisolated static func shownState(
+        acknowledged: Bool, answer: CameraNetworkPermissionState?, requested: Bool
+    ) -> CameraNetworkPermissionState {
+        if acknowledged { return .allowed }
+        if let answer { return answer }
+        return requested ? .requested : .unknown
+    }
+
     /// Set on the first Local Network row tap. iOS kills the app when the Settings toggle changes,
-    /// resetting the coordinator to `.notDetermined`; this flag tells `refresh()` a probe is a
-    /// continuation (not an ambush) so the row updates without another tap after relaunch.
+    /// resetting the step; this flag tells `refresh()` a probe is a continuation (not an ambush)
+    /// so the row updates without another tap after relaunch.
     private static let localNetworkRequestedOnceKey = "StartupPermissions.localNetworkRequestedOnce"
 
-    @ObservationIgnored private var localNetworkReprobe: Task<Void, Never>?
-
-    /// Whether the wizard can skip the permissions step: Local Network was acknowledged in a prior
-    /// session (a remembered answer, not fresh OS evidence), or the operator has paired before.
-    static func permissionsAlreadySatisfied(alreadyPairedCameras: Bool) -> Bool {
-        UserDefaults.standard.bool(forKey: localNetworkAcknowledgedKey) || alreadyPairedCameras
+    /// Whether the wizard can skip the permissions step: Local Network was acknowledged (in this
+    /// or a prior session), or the operator has paired before.
+    static func permissionsAlreadySatisfied(
+        alreadyPairedCameras: Bool, access: LocalNetworkAccess = .shared
+    ) -> Bool {
+        access.acknowledged || alreadyPairedCameras
     }
 
-    private static func persistLocalNetworkAcknowledged() {
-        UserDefaults.standard.set(true, forKey: localNetworkAcknowledgedKey)
-    }
-
-    func state(for kind: StartupPermissionKind) -> StartupPermissionState {
+    func state(for kind: StartupPermissionKind) -> CameraNetworkPermissionState {
         switch kind {
         case .localNetwork: localNetwork
         }
@@ -109,17 +207,17 @@ final class StartupPermissionsCoordinator {
     /// since iOS never re-prompts a determined permission. That picks up both the prompt's answer
     /// (the alert flips scenePhase) and a Settings toggle.
     func refresh() {
-        if UserDefaults.standard.bool(forKey: Self.localNetworkAcknowledgedKey) {
-            localNetwork = .granted
-        } else if localNetwork == .requested || localNetwork == .denied {
-            startLocalNetworkProbe()
-        } else if localNetwork == .notDetermined,
-            UserDefaults.standard.bool(forKey: Self.localNetworkRequestedOnceKey)
-        {
+        switch localNetwork {
+        case .allowed:
+            return
+        case .requested, .denied:
+            access.startProbing()
+        case .unknown:
             // Row was already tapped once: iOS killed and relaunched the app on the Settings
             // toggle flip, so resume probing instead of waiting for a second tap.
-            localNetwork = .requested
-            startLocalNetworkProbe()
+            guard defaults.bool(forKey: Self.localNetworkRequestedOnceKey) else { return }
+            requested = true
+            access.startProbing()
         }
     }
 
@@ -131,54 +229,20 @@ final class StartupPermissionsCoordinator {
 
     /// Ends the probe, its beacon and any pending re-probe when the step goes away.
     func stop() {
-        localNetworkReprobe?.cancel()
-        localNetworkReprobe = nil
-        localNetworkPrivacy.stop()
+        access.stopProbing()
     }
 
     private func requestLocalNetwork() {
         switch localNetwork {
-        case .granted:
+        case .allowed:
             return
         case .denied:
             // iOS never re-prompts a denied permission; Settings is the only way back.
             Self.openSettings()
-        case .notDetermined, .requested:
-            localNetwork = .requested
-            UserDefaults.standard.set(true, forKey: Self.localNetworkRequestedOnceKey)
-            startLocalNetworkProbe()
-        }
-    }
-
-    /// Starts a fresh probe; the shared observer stops the previous one first.
-    private func startLocalNetworkProbe() {
-        localNetworkReprobe?.cancel()
-        localNetworkPrivacy.start(Self.localNetworkProbe)
-    }
-
-    private func receive(_ result: StartupPermissionState) {
-        // An unanswered probe stays at whatever this step already shows.
-        guard result == .granted || result == .denied else { return }
-        localNetwork = result
-        if result == .granted {
-            Self.persistLocalNetworkAcknowledged()
-            localNetworkReprobe?.cancel()
-        } else {
-            scheduleLocalNetworkReprobe()
-        }
-    }
-
-    /// Re-probes a denied Local Network permission every couple of seconds. TN3179 only promises
-    /// grant auto-retry for `NWConnection`; a parked `NWBrowser` that saw a (possibly stale)
-    /// PolicyDenied is not guaranteed to recover on its own, so a Settings grant could otherwise
-    /// go unnoticed until the operator left and re-entered the step. Denied probes are free (the
-    /// OS blocks the multicast locally); the loop ends with the step or on grant.
-    private func scheduleLocalNetworkReprobe() {
-        localNetworkReprobe?.cancel()
-        localNetworkReprobe = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, let self, self.localNetwork == .denied else { return }
-            self.startLocalNetworkProbe()
+        case .unknown, .requested:
+            requested = true
+            defaults.set(true, forKey: Self.localNetworkRequestedOnceKey)
+            access.startProbing()
         }
     }
 
@@ -261,7 +325,7 @@ struct StartupWizardPermissionsStep: View {
 
 private struct StartupPermissionRow: View {
     let kind: StartupPermissionKind
-    let state: StartupPermissionState
+    let state: CameraNetworkPermissionState
     let style: WizardCompactStyle
     let onTap: () -> Void
 
@@ -306,7 +370,7 @@ private struct StartupPermissionRow: View {
 
     @ViewBuilder private var statusControl: some View {
         switch state {
-        case .granted:
+        case .allowed:
             pill(
                 text: "Allowed", systemImage: "checkmark",
                 fill: MonitorTheme.linkHealthColor(.stable).opacity(0.16),
@@ -321,7 +385,7 @@ private struct StartupPermissionRow: View {
             pill(
                 text: "Requested", systemImage: nil, fill: MonitorTheme.raised.opacity(0.6),
                 stroke: Color.white.opacity(0.12), textColor: MonitorTheme.muted)
-        case .notDetermined:
+        case .unknown:
             pill(
                 text: "Allow", systemImage: nil, fill: MonitorTheme.accent,
                 stroke: .clear, textColor: MonitorTheme.onAccent)

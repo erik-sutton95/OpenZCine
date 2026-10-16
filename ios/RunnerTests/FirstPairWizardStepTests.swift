@@ -1,3 +1,4 @@
+import Foundation
 import MonitorPresentation
 import OpenCineApple
 import OpenCineCore
@@ -37,11 +38,75 @@ struct FirstPairWizardStepTests {
     @Test("SIMULATED: pairing asks no phone camera permission; only Local Network is required")
     func firstPairPermissionIsLocalNetworkOnly() {
         #expect(StartupPermissionKind.allCases == [.localNetwork])
-        // Shared probe evidence maps onto the step's states; an unanswered probe is never denial.
-        #expect(StartupPermissionState(.unknown) == .notDetermined)
-        #expect(StartupPermissionState(.requested) == .requested)
-        #expect(StartupPermissionState(.allowed) == .granted)
-        #expect(StartupPermissionState(.denied) == .denied)
+        // The step shows the shared evidence states; an unanswered probe is never denial.
+        func shown(_ acknowledged: Bool, _ answer: CameraNetworkPermissionState?, _ asked: Bool)
+            -> CameraNetworkPermissionState
+        {
+            StartupPermissionsCoordinator.shownState(
+                acknowledged: acknowledged, answer: answer, requested: asked)
+        }
+        #expect(shown(false, nil, false) == .unknown)
+        #expect(shown(false, nil, true) == .requested)
+        #expect(shown(false, .denied, true) == .denied)
+        #expect(shown(false, .allowed, false) == .allowed)
+        #expect(shown(true, nil, false) == .allowed)
+    }
+
+    @Test("SIMULATED: the wizard step reads the app's one Local Network owner (Z8)")
+    @MainActor
+    func wizardReadsTheAppLocalNetworkOwner() throws {
+        let suite = "w3.local-network.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var events: [AppDiagnosticEvent] = []
+        let access = LocalNetworkAccess(defaults: defaults, record: { events.append($0) })
+        let wizard = StartupPermissionsCoordinator(access: access, defaults: defaults)
+        #expect(wizard.localNetwork == .unknown)
+        #expect(access.reported == .unknown)
+        #expect(
+            !StartupPermissionsCoordinator.permissionsAlreadySatisfied(
+                alreadyPairedCameras: false, access: access))
+
+        // A camera link that completed over Wi-Fi proves access for the whole app: the step,
+        // the diagnostics report and the next launch's wizard all see it.
+        access.note(.operationSucceeded, source: "camera link connected")
+        #expect(wizard.localNetwork == .allowed)
+        #expect(wizard.allRequiredGranted)
+        #expect(access.reported == .allowed)
+        #expect(events == [.localNetworkAllowed])
+        let nextLaunch = LocalNetworkAccess(defaults: defaults, record: { _ in })
+        #expect(nextLaunch.acknowledged)
+        #expect(
+            StartupPermissionsCoordinator.permissionsAlreadySatisfied(
+                alreadyPairedCameras: false, access: nextLaunch))
+    }
+
+    @Test("SIMULATED: a policy denial is the app's answer until a grant replaces it")
+    @MainActor
+    func denialIsTheAppAnswer() throws {
+        let suite = "w3.local-network.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var events: [AppDiagnosticEvent] = []
+        let access = LocalNetworkAccess(defaults: defaults, record: { events.append($0) })
+        let wizard = StartupPermissionsCoordinator(access: access, defaults: defaults)
+        access.note(.policyDenied, source: "camera link denied")
+        access.note(.waiting, source: "camera link waiting")
+        #expect(wizard.localNetwork == .denied)
+        #expect(access.answer == .denied)
+        #expect(!access.acknowledged)
+        access.note(.operationSucceeded, source: "camera link connected")
+        #expect(wizard.localNetwork == .allowed)
+        #expect(events == [.localNetworkDenied, .localNetworkAllowed])
+    }
+
+    @Test("SIMULATED: only a camera link completed over the network proves Local Network access")
+    func connectionEvidence() {
+        #expect(
+            LocalNetworkAccess.evidence(connected: true, transport: .ptpIP) == .operationSucceeded)
+        #expect(LocalNetworkAccess.evidence(connected: true, transport: .usb) == nil)
+        #expect(LocalNetworkAccess.evidence(connected: false, transport: .ptpIP) == nil)
+        #expect(LocalNetworkAccess.evidence(connected: true, transport: nil) == nil)
     }
 
     @Test("Camera Access Point uses four steps when permissions are shown")

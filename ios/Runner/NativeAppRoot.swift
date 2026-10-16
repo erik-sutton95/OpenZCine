@@ -830,6 +830,11 @@ final class NativeAppModel {
             publishWatchState()
             guard oldValue != connection else { return }
             AppDiagnostics.shared.record(connection.diagnosticEvent)
+            if let evidence = LocalNetworkAccess.evidence(
+                connected: connection == .connected, transport: cameraSession?.transportKind)
+            {
+                LocalNetworkAccess.shared.note(evidence, source: "camera link connected")
+            }
         }
     }
     /// Phased lifecycle for the connection progress sheet.
@@ -5121,7 +5126,8 @@ final class NativeAppModel {
                 directedCandidates: infrastructureDirectedCandidates,
                 excludedHosts: hostsServedByVisibleBroadcasts(),
                 onCameraAccessPoint: cameraAccessPointEvidence == true,
-                localNetworkDenied: false,
+                // A known policy denial names the cause at once instead of a silent sweep.
+                localNetworkDenied: LocalNetworkAccess.shared.answer == .denied,
                 status: { [weak self] message in
                     self?.connectionMessage = StartupConnectionCopy.friendly(message)
                 }

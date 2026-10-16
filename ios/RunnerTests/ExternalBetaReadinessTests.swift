@@ -114,6 +114,7 @@ struct ExternalBetaDiagnosticsTests {
         #expect(report.contains("No MetricKit payloads"))
         // No VPN probe on this app yet: the report must not claim the tunnel is off.
         #expect(report.contains("vpn: unknown"))
+        #expect(report.contains("localNetwork: unknown"))
     }
 
     @Test("The report passes through the shared privacy redactor")
@@ -148,6 +149,18 @@ struct ExternalBetaDiagnosticsTests {
             metadata: metadata, events: events, payloads: [])
         let shown = report.components(separatedBy: "live-view.").count - 1
         #expect(shown == DiagnosticEventStore.maximumEventCount)
+    }
+
+    @Test("Local Network evidence is a closed event and a report field")
+    func localNetworkDiagnostics() {
+        #expect(AppDiagnosticEvent(localNetwork: .unknown) == nil)
+        #expect(AppDiagnosticEvent(localNetwork: .requested)?.rawValue == "local-network.requested")
+        #expect(AppDiagnosticEvent(localNetwork: .allowed)?.rawValue == "local-network.allowed")
+        #expect(AppDiagnosticEvent(localNetwork: .denied)?.rawValue == "local-network.denied")
+        var denied = metadata
+        denied.localNetwork = "denied"
+        let report = DiagnosticEventStore.renderReport(metadata: denied, events: [], payloads: [])
+        #expect(report.contains("localNetwork: denied"))
     }
 
     @Test("File-backed store writes an exportable report")
