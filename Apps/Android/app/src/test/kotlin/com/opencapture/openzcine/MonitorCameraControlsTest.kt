@@ -28,6 +28,15 @@ class MonitorCameraControlsTest {
     private val strings = PhoneStringResolver { resource, _ -> resource.toString() }
 
     @Test
+    fun `size codec and quality pickers drop from the top deck, capture pickers rise from the strip`() {
+        assertTrue(MonitorPickerKind.RESOLUTION.isTopBarPicker())
+        assertTrue(MonitorPickerKind.CODEC.isTopBarPicker())
+        assertTrue(MonitorPickerKind.SIZE.isTopBarPicker())
+        assertTrue(MonitorPickerKind.QUALITY.isTopBarPicker())
+        assertFalse(MonitorPickerKind.ISO.isTopBarPicker())
+    }
+
+    @Test
     fun `live capture settings reuse typed command requests`() {
         val dashboard = dashboard(cameraSnapshot())
 
@@ -330,100 +339,6 @@ class MonitorCameraControlsTest {
     }
 
     @Test
-    fun `portrait fill picker clears the shared capture strip and system rail`() {
-        val viewport = MonitorRect(0f, 0f, 400f, 800f)
-        val zones = portraitZones(values = MonitorRect(0f, 610f, 400f, 64f))
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = true,
-            )
-
-        assertEquals(12f, frame.x)
-        assertEquals(376f, frame.width)
-        assertTrue(frame.y >= zones.status.y + zones.status.height + 8f)
-        assertTrue(frame.y + frame.height <= zones.values.y - 10f)
-        assertTrue(frame.y + frame.height < zones.system.y)
-    }
-
-    @Test
-    fun `landscape picker leaves both system rails exposed`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 393f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-            )
-
-        // iOS trailing-aligns to the capture bar (not feed ± 8). Side rails stay
-        // outside the capture strip / feed band by zone-map construction.
-        val strip = zones.values
-        assertEquals(strip.x, frame.x, 0.01f)
-        assertEquals(strip.x + strip.width, frame.x + frame.width, 0.01f)
-        assertTrue(frame.x >= viewport.x)
-        assertTrue(frame.x + frame.width <= viewport.x + viewport.width)
-    }
-
-    @Test
-    fun `landscape picker is tall enough for the WB tint pad cluster`() {
-        // SM-A12-class short landscape (~853×384 dp). Tint needs header +
-        // 180dp pad cluster (28+8+108+8+28) + mode tabs + GlassPanel padding.
-        val viewport = MonitorRect(0f, 0f, 853f, 384f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 320f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 384f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-            )
-
-        // 16+16 padding + ~28 header + 14 gap + 180 pad + 14 gap + ~36 tabs ≈ 304.
-        assertTrue(
-            frame.height >= 300f,
-            "picker height ${frame.height} must fit tint pad (≥ 300dp)",
-        )
-        assertTrue(frame.y + frame.height <= zones.values.y - 10f)
-    }
-
-    @Test
-    fun `landscape measured capture bar trailing-aligns the picker`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 393f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-        // Content-hugging glass is narrower and trailing inside the zone slot.
-        val measured = MonitorRect(520f, 332f, 260f, 44f)
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-                measuredCaptureBar = measured,
-            )
-
-        assertEquals(measured.width, frame.width, 0.01f)
-        assertEquals(measured.x + measured.width, frame.x + frame.width, 0.01f)
-        assertEquals(measured.y - 10f, frame.y + frame.height, 0.01f)
-    }
-
-    @Test
     fun `the codec picker carries the advertised bit depths and the body's current one`() {
         val depths =
             listOf(
@@ -550,91 +465,6 @@ class MonitorCameraControlsTest {
         assertEquals(listOf("Low Base", "High Base"), iso.picker?.modes?.map { it.label })
         assertEquals(false, iso.picker?.drumInteractionLocked)
         assertEquals(null, iso.picker?.drumLockBanner)
-    }
-
-    @Test
-    fun `top bar res codec frame drops below the info bar at 340dp`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 393f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-        val frame = monitorTopBarPickerFrame(viewport, zones, isCommandCenter = false)
-        assertEquals(340f, frame.width)
-        assertTrue(frame.y >= zones.status.y + zones.status.height + 8f - 0.1f)
-        assertTrue(frame.x >= viewport.x + 8f)
-        assertTrue(frame.x + frame.width <= viewport.x + viewport.width - 8f)
-        assertTrue(MonitorPickerKind.RESOLUTION.isTopBarPicker())
-        assertTrue(MonitorPickerKind.CODEC.isTopBarPicker())
-        assertTrue(!MonitorPickerKind.ISO.isTopBarPicker())
-    }
-
-    @Test
-    fun `top popdown centres under its own pill and quality gets the dual-drum room`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-        val pill = MonitorRect(600f, 14f, 90f, 30f)
-
-        val frame =
-            monitorTopBarPickerFrame(
-                viewport,
-                zones,
-                isCommandCenter = false,
-                kind = MonitorPickerKind.SIZE,
-                anchorPill = pill,
-            )
-        // Centred on the tapped pill (iOS cell.midX), dropped just below it.
-        assertEquals(pill.x + pill.width / 2f, frame.x + frame.width / 2f, 0.01f)
-        assertEquals(pill.y + pill.height + 8f, frame.y, 0.01f)
-
-        // The quality pair: 400 wide and the full space under the anchor, so
-        // the NEF chips and star toggle are never folded under a fixed cap.
-        val quality =
-            monitorTopBarPickerFrame(
-                viewport,
-                zones,
-                isCommandCenter = false,
-                kind = MonitorPickerKind.QUALITY,
-                anchorPill = pill,
-            )
-        assertEquals(400f, quality.width)
-        assertEquals(
-            viewport.height - quality.y - 8f,
-            quality.height,
-            0.01f,
-        )
-        assertTrue(quality.height > 300f)
-    }
-
-    @Test
-    fun `landscape picker centres over a wide capture bar at the 420 cap`() {
-        val viewport = MonitorRect(0f, 0f, 900f, 400f)
-        val zones =
-            portraitZones(values = MonitorRect(200f, 330f, 640f, 48f)).copy(
-                status = MonitorRect(80f, 8f, 740f, 46f),
-            )
-        val measured = MonitorRect(220f, 334f, 600f, 44f)
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-                measuredCaptureBar = measured,
-            )
-
-        // iOS bottomPickerBody: width = min(bar, 420), centred on bar.midX.
-        assertEquals(420f, frame.width)
-        assertEquals(
-            measured.x + measured.width / 2f,
-            frame.x + frame.width / 2f,
-            0.01f,
-        )
-        assertEquals(measured.y - 10f, frame.y + frame.height, 0.01f)
     }
 
     @Test

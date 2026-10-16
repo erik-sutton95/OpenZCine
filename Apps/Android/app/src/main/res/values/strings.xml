@@ -290,23 +290,15 @@
     <string name="camera_mode_lock">Lock</string>
     <string name="camera_mode_kelvin_preset">Kelvin / preset</string>
     <string name="camera_mode_tint">Tint</string>
-    <string name="camera_wb_tint_description">White balance tint</string>
-    <string name="camera_wb_tint_value">%1$s</string>
     <string name="camera_wb_tint_steps_help">Steps of 0.5 (A–B) and 0.25 (G–M),\nlike the camera body.</string>
     <string name="camera_wb_tint_double_tap_help">Double-tap the pad to reset.</string>
-    <string name="camera_wb_tint_shift_blue">Shift toward Blue</string>
-    <string name="camera_wb_tint_shift_green">Shift toward Green</string>
-    <string name="camera_wb_tint_shift_magenta">Shift toward Magenta</string>
-    <string name="camera_wb_tint_shift_amber">Shift toward Amber</string>
     <string name="camera_state_applying">. Applying change.</string>
     <string name="camera_state_other_change">. Another camera change is in progress.</string>
     <string name="camera_state_read_only">Read-only on this camera.</string>
     <string name="camera_state_locked">. Camera controls are locked.</string>
-    <string name="camera_picker_description">%1$s camera control picker. %2$s.</string>
     <string name="action_close">Close</string>
     <string name="camera_controls_unavailable">Controls are unavailable until the camera is connected and unlocked.</string>
     <string name="camera_option_description">%1$s %2$s</string>
-    <string name="camera_picker_options_description">%1$s options wheel</string>
     <string name="camera_option_selected_suffix">, currently selected</string>
     <string name="camera_applying_change">Applying change…</string>
 

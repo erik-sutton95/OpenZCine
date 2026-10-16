@@ -2256,16 +2256,14 @@ internal fun MonitorScreen(
                 )
             }
             },
-            cameraPanel = { key, pickerFrame, isTopDropDown, _ ->
+            cameraPanel = { key, _, isTopDropDown, _ ->
                 activeMonitorPicker?.takeIf { it.kind.name == key }?.let { picker ->
                     CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
                     MonitorControlPickerPanel(
                         picker = picker,
-                        frame = pickerFrame,
                         commonControl = if (isPhotographyMode) null else commonControl,
                         commonField = fieldFor(picker.kind),
                         controlsEnabled = commandControlsEnabled,
-                        pendingControl = pendingCommandControl,
                         feedback = commandControlFeedback,
                         onSelect =
                             if (isPhotographyMode) {
@@ -2300,7 +2298,6 @@ internal fun MonitorScreen(
                                 CameraControl.STILL_RAW_COMPRESSION),
                         mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
                         onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
-                        chromeless = true,
                     )
                     }
                 }
