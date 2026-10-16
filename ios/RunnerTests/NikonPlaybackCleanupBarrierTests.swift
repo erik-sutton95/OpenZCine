@@ -76,8 +76,9 @@ import XCTest
         let gate = NikonBarrierGate()
         let native = NikonPlaybackNativePort(captureBeforePrepare: { { await gate.wait() } })
         var installed: [String] = []
-        native.afterItemInstallation = {
-            installed.append(($0.asset as? AVURLAsset)?.url.lastPathComponent ?? "")
+        native.onItemChanged = {
+            guard let item = $0 else { return }
+            installed.append((item.asset as? AVURLAsset)?.url.lastPathComponent ?? "")
         }
         let identity = UUID()
         let first = MonitorPlaybackItemToken(owner: UUID(), revision: 0)

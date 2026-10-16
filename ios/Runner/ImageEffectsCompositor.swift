@@ -293,18 +293,3 @@ enum ImageEffectsCompositor {
         "false:\(settings.scale.rawValue):\(settings.curve.rawValue):\(settings.mapping.clipNative):\(settings.read709)"
     }
 }
-
-extension NativeAppModel {
-    /// Resolves the operator's current assist settings into a sendable payload for playback
-    /// `AVVideoComposition`.
-    func resolvedPlaybackEffects() -> ImageEffectsCompositor.ResolvedEffects {
-        ImageEffectsCompositor.resolve(playbackImageEffects) { selection in
-            switch selection {
-            case .builtIn(let look): return look.cube()
-            case .stored(let category, let fileName):
-                return lutFileStore.cube(category: category, fileName: fileName)?
-                    .preparedForRenderer()
-            }
-        }
-    }
-}

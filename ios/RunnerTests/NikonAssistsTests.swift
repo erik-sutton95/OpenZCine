@@ -1,5 +1,6 @@
 import MonitorPresentation
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineMedia
 import XCTest
 
@@ -150,19 +151,24 @@ final class NikonAssistsTests: XCTestCase {
                         model.playbackExposureSignalMapping)
                 }
             }
-            // Verify the actual AVVideoComposition payload, not only the input projection.
+            // Verify what the shared playback engine draws, not only the input projection.
             model.assist.falseColorScale = .stops
             model.assist.falseColorRec709 = true
-            let expected = FalseColorMap.cube(
-                scale: .video,
-                mapping: ExposureSignalMapping(curve: .redLog3G10), read709: true)
-            let resolved = model.resolvedPlaybackEffects()
-            XCTAssertEqual(resolved.baseCubeDimension, expected.size)
-            XCTAssertEqual(
-                resolved.baseCubeData,
-                expected.rgbaComponents.withUnsafeBytes { Data($0) })
-            XCTAssertEqual(try XCTUnwrap(resolved.zebra).curve, .redLog3G10)
-            XCTAssertEqual(try XCTUnwrap(resolved.peaking).gateScale, 1)
+            let mapping = model.playbackExposureSignalMapping
+            let projected = model.nikonPlaybackEffects(model.assist.playbackEffects)
+            XCTAssertEqual(projected.transfer, .log3G10)
+            XCTAssertEqual(projected.resolvedClipByte, mapping.clipByte)
+            XCTAssertTrue(projected.falseColor && projected.zebra && projected.peaking)
+            XCTAssertEqual(projected.nativeImagePlan.peakingGateScale, 1)
+            func paint(_ lookCurves: [MonitorTransfer: [Double]]) -> CubeLUT {
+                MonitorFalseColorMapper(lookCurves: lookCurves).overlayPaintCube(
+                    scale: projected.falseColorScale.liveScale, transfer: projected.transfer,
+                    rec709: true, clipByte: projected.resolvedClipByte)
+            }
+            XCTAssertNotNil(MonitorAssistConfiguration.nikonPlayback.lookCurves[projected.transfer])
+            XCTAssertNotEqual(
+                paint(MonitorAssistConfiguration.nikonPlayback.lookCurves), paint([:]),
+                "the Rec.709 read draws through the Nikon look on the shared engine")
         }
     }
 

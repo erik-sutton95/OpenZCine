@@ -328,17 +328,28 @@ extension NativeAppModel {
         policy.trafficLights = full || visible.contains(.trafficLights)
         policy.trafficThreshold = assist.crushClipCompensation.pixelFractionThreshold
         if policy.vectorscope, let armed = armedScopeLUT(visibleTools: visible) {
-            let packed = armedScopeLUTMemo.withLock { memo -> PackedScopeLUT in
-                if let memo, memo.key == armed.key { return memo }
-                let rgba = armed.cube.rgbaComponents.withUnsafeBytes { Data($0) }
-                let next: PackedScopeLUT = (armed.key, armed.cube.size, rgba)
-                memo = next
-                return next
-            }
+            let packed = Self.packed(armed)
             policy.image.lutDimension = packed.size
             policy.image.lutRGBA = packed.rgba
         }
         return policy
+    }
+
+    /// One packed copy of an armed cube for the scope policy, or (`forRenderer`) of the cube a
+    /// GPU picture renderer can consume, for the shared playback picture.
+    static func packed(_ armed: (key: String, cube: CubeLUT), forRenderer: Bool = false)
+        -> (size: Int, rgba: Data)
+    {
+        let store = forRenderer ? armedRendererLUTMemo : armedScopeLUTMemo
+        let packed = store.withLock { memo -> PackedScopeLUT in
+            if let memo, memo.key == armed.key { return memo }
+            let cube = forRenderer ? armed.cube.preparedForRenderer() : armed.cube
+            let rgba = cube.rgbaComponents.withUnsafeBytes { Data($0) }
+            let next: PackedScopeLUT = (armed.key, cube.size, rgba)
+            memo = next
+            return next
+        }
+        return (packed.size, packed.rgba)
     }
 
     /// The operator's LUT when the LUT tool is on, so VECTOR reads the graded monitor picture,
@@ -406,6 +417,7 @@ enum NikonScopeLook {
 /// One packed copy of the armed LUT for the scope policy, which is rebuilt per frame.
 private typealias PackedScopeLUT = (key: String, size: Int, rgba: Data)
 private let armedScopeLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialState: nil)
+private let armedRendererLUTMemo = OSAllocatedUnfairLock<PackedScopeLUT?>(initialState: nil)
 
 /// Source cube and calibration facts; shared native runtime owns the complete image graph and memo.
 final class LiveFrameProcessor {

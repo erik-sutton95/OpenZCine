@@ -1,254 +1,180 @@
 import AVFoundation
+import MetalKit
+import MonitorPresentation
+import MonitorUI
 import OSLog
 import Observation
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
+import OpenCineCameraControls
 import OpenCineMedia
 import OpenZCineCore
+import SwiftUI
 
 private let playbackAudioLogger = Logger(subsystem: "OpenZCine", category: "media-playback-audio")
+private let playbackFeedLogger = Logger(subsystem: "OpenZCine", category: "media-playback-feed")
 
-/// The Nikon facts the shared scope derivation reads for a clip: its transfer and clip, the
-/// operator's lamp threshold and the VECTOR look. One derivation for live and playback.
-struct NikonPlaybackScopeConfiguration: Equatable, Sendable {
-    let transfer: MonitorTransfer
-    let clipByte: Int
-    let trafficThreshold: Double
-    let vectorscope: Bool
-    let look: CubeLUT?
+/// Nikon values for the shared playback engine. The picture, scopes, audio meter, backdrop and
+/// inspector are the shared ones; Nikon supplies its calibration (the clip mapping and looks).
+extension MonitorAssistConfiguration {
+    /// The live scope looks plus the Nikon profile's read-through-display curves, which false
+    /// colour's Rec.709 read uses on the shared playback feed.
+    static let nikonPlayback = MonitorAssistConfiguration(
+        lookCurves: NikonMonitorColorProfile.rec709LookCurves,
+        defaultScopeLook: { NikonScopeLook.display(for: $0) }, logSubsystem: "OpenZCine")
+}
 
-    init(
-        mapping: ExposureSignalMapping, compensation: MonitorCrushClipCompensation,
-        vectorscope: Bool, look: CubeLUT?
-    ) {
-        transfer = mapping.curve.monitorTransfer
-        clipByte = mapping.clipByte
-        trafficThreshold = compensation.pixelFractionThreshold
-        self.vectorscope = vectorscope
-        self.look = look
-    }
-
-    func bundle(samples: ScopeSamples, previous: ScopeAssistBundle) -> ScopeAssistBundle {
-        OpenCineMedia.ScopeSampler.bundle(
-            samples: samples, transfer: transfer, clipByte: clipByte, includePoints: true,
-            includeVectorPoints: vectorscope, look: look, trafficThreshold: trafficThreshold,
-            previous: previous)
+/// The shared playback feed with Nikon's clip calibration: the recording mapping declares the
+/// clip that zebra, false colour and the scopes read.
+final class NikonPlaybackFeedSession: MonitorPlaybackFeedSession, @unchecked Sendable {
+    @MainActor init(model: NativeAppModel? = nil) {
+        super.init(
+            configuration: .nikonPlayback, hdrDisplay: { false },
+            journal: { line in playbackFeedLogger.debug("\(line, privacy: .public)") },
+            declaredClip: { [weak model] transfer in
+                guard let mapping = model?.playbackExposureSignalMapping,
+                    mapping.curve.monitorTransfer == transfer
+                else { return nil }
+                return mapping.clipByte
+            })
     }
 }
 
-/// Attaches Nikon's AVVideoComposition and audio tap to the one retained native item.
-/// The shared scope session owns the read/derive loop; this adapter supplies calibrated values
-/// and samples from the compositor source, before the display look and false color.
-@MainActor @Observable final class NikonPlaybackAssistAdapter: MonitorPlaybackAssistService {
-    private(set) var audioLevels: MonitorAudioMeterLevels?
-    let scopes = MonitorPlaybackScopeSession<NikonPlaybackScopeConfiguration>(
-        cadence: .milliseconds(84)
-    ) {
-        samples, configuration, previous in
-        await Task.detached(priority: .utility) {
-            configuration.bundle(samples: samples, previous: previous)
-        }.value
+/// The native playback picture: the shared feed host over the shared picture host, presenting
+/// with the operator's feed upscaler.
+final class NikonPlaybackPictureHost: MonitorPlaybackFeedHost {
+    init(frame: CGRect = .zero) {
+        super.init(
+            frame: frame,
+            picture: MonitorPictureHost(
+                frame: frame,
+                options: { _ in
+                    MonitorPresentationOptions(
+                        upscaler: FeedUpscaleSwitch.rendererReadsUpscaler,
+                        previewSuperResolutionInput: FeedUpscaleSwitch
+                            .presentsSuperResolutionInput)
+                }, logSubsystem: "OpenZCine"))
     }
-    @ObservationIgnored private weak var model: NativeAppModel?
-    @ObservationIgnored private let native: NikonPlaybackNativePort
-    @ObservationIgnored private let audio: MonitorPlaybackAudioSession.Lease
-    @ObservationIgnored private let box = MediaLUT.PlaybackEffectsBox()
-    @ObservationIgnored private let meter = MonitorPlaybackAudioMeterRuntime { status in
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// The scope display of Nikon's playback scopes and inspector. Nikon has no HDR panel mode yet,
+/// so the scopes draw SDR like the live ones.
+@MainActor func nikonScopeDisplay(_ view: MTKView) -> MonitorScopeDisplayOptions { .sdr }
+
+/// Playback audio session failures, as the app logs them.
+enum NikonPlaybackAudio {
+    static let tapFailure: @Sendable (Int32) -> Void = { status in
         playbackAudioLogger.error("MTAudioProcessingTapCreate failed: \(status)")
     }
-    @ObservationIgnored private weak var installed: AVPlayerItem?
-    @ObservationIgnored private var token: MonitorPlaybackItemToken?
-    @ObservationIgnored private var admission: (@MainActor () -> Bool)?
-    @ObservationIgnored private var revision = UUID()
-    @ObservationIgnored private var request = UUID()
-    @ObservationIgnored private var scopesVisible = false
-    @ObservationIgnored private var audioVisible = false
-    @ObservationIgnored private var polling = false
-    @ObservationIgnored private var activated = false
-    @ObservationIgnored private var closed = false
+    static let audioFailure: @Sendable (String) -> Void = { message in
+        playbackAudioLogger.error(
+            "Playback audio session failed: \(message, privacy: .public)")
+    }
+}
 
-    /// Before the first derivation the empty bundle still names the clip's transfer and clip.
-    var scopeBundle: ScopeAssistBundle {
-        var value = scopes.bundle
-        if value.revision == 0, let model {
-            let mapping = model.playbackExposureSignalMapping
-            value.transfer = mapping.curve.monitorTransfer
-            value.clipByte = mapping.clipByte
+extension NativeAppModel {
+    /// Nikon's calibration of the shared playback effects: the clip's transfer and clip from
+    /// the recording mapping, and the operator's armed look as the cube (Nikon's looks resolve
+    /// their cubes in the app, so the shared state carries none). `forceLook` arms the selected
+    /// look for an inspector preview while the LUT tool is off on the picture.
+    func nikonPlaybackEffects(_ effects: MonitorFrameEffects, forceLook: Bool = false)
+        -> MonitorFrameEffects
+    {
+        var value = effects
+        let mapping = playbackExposureSignalMapping
+        value.transfer = mapping.curve.monitorTransfer
+        value.clipByte = mapping.clipByte
+        value.referenceClipByte = mapping.clipByte
+        var tools = assist.playbackTools
+        if forceLook { tools.insert(.lut) }
+        if let armed = armedScopeLUT(visibleTools: tools) {
+            let packed = Self.packed(armed, forRenderer: true)
+            value.lutDimension = packed.size
+            value.lutRGBA = packed.rgba
+        } else {
+            value.lutDimension = 0
+            value.lutRGBA = Data()
+            value.splitComparison = false
         }
         return value
     }
 
-    convenience init(model: NativeAppModel, native: NikonPlaybackNativePort) {
-        self.init(model: model, native: native, audioSession: model.playbackAudioSession)
+    /// The armed look's identity, so a re-imported cube with the same name refreshes previews.
+    var nikonPlaybackLookIdentity: AnyHashable? {
+        armedScopeLUT(visibleTools: assist.playbackTools.union([.lut])).map { AnyHashable($0.key) }
     }
+}
 
-    init(
-        model: NativeAppModel, native: NikonPlaybackNativePort,
-        audioSession: MonitorPlaybackAudioSession
-    ) {
+/// The app state Nikon's playback page reads: the shared assists and delivery, and the page's
+/// own playback bus, backdrop and inspector renderer.
+@MainActor final class NikonPlaybackHost: MonitorMediaHost {
+    private let model: NativeAppModel
+    let delivery: MonitorDeliveryCoordinator
+    let frameSamples = LiveFrameSampleBus()
+    let playbackBackdrop = OpenCineAppKitApple.MonitorVideoBackdropRenderer(
+        lookCurves: NikonMonitorColorProfile.rec709LookCurves)
+    let inspectorRenderer = MonitorInspectorImageRenderer(
+        lookCurves: NikonMonitorColorProfile.rec709LookCurves)
+
+    init(model: NativeAppModel, delivery: MonitorDeliveryCoordinator) {
         self.model = model
-        self.native = native
-        audio = audioSession.makeLease(
-            onFailure: { failure in
-                switch failure {
-                case .activation(let message):
-                    playbackAudioLogger.error(
-                        "Failed to activate playback audio session: \(message, privacy: .public)")
-                case .deactivation(let message):
-                    playbackAudioLogger.error(
-                        "Failed to deactivate playback audio session: \(message, privacy: .public)")
+        self.delivery = delivery
+    }
+
+    var assist: NikonAssistState { model.assist }
+    var assistToolUsage: MonitorToolUsage {
+        get { model.assistToolUsage }
+        set { model.assistToolUsage = newValue }
+    }
+    var monitorSamples: LiveFrameSampleBus { frameSamples }
+}
+
+extension MonitorMediaPageValues where Palette == LiveDesign {
+    /// Nikon's media page values.
+    @MainActor static func nikon(_ model: NativeAppModel) -> Self {
+        .init(
+            stores: model.scopePanels.playbackStores, looks: .signal, palette: LiveDesign.self,
+            haptics: .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }
+            ),
+            cacheOriginal: { false }, configureDisplay: nikonScopeDisplay,
+            remoteDisplayName: "Frame.io", makePictureHost: { NikonPlaybackPictureHost() })
+    }
+}
+
+/// The playback inspector's preview: the shared preview over the page's playback bus, with
+/// Nikon's calibration and the selected look.
+struct NikonPlaybackInspectorPreview: View {
+    let tool: MonitorAssistSelection
+    let host: NikonPlaybackHost
+    @Environment(NativeAppModel.self) private var model
+
+    var body: some View {
+        MonitorLookInspectorPreview(
+            tool: tool, assist: model.assist, stores: model.scopePanels.playbackStores,
+            haptics: .init(isEnabled: { [weak model] in model?.preferences.hapticsEnabled == true }
+            ),
+            source: MonitorInspectorImageSource(
+                renderer: host.inspectorRenderer, samples: host.frameSamples),
+            readCustomName: { [weak model] in
+                guard case .stored(_, let name)? = model?.assistConfiguration.selectedLUT else {
+                    return nil
                 }
+                return name
             },
-            onReleased: { [weak model] in
-                model?.setMediaPlaybackOwnsAudioSession(false)
-            })
-        native.beforeItemRetirement = { [weak self] in self?.retireNativeItem() }
-        native.afterItemInstallation = { [weak self] item in self?.install(item) }
-    }
-
-    func activate() {
-        guard !closed, !activated else { return }
-        activated = true
-        audio.activate { [weak model] in
-            model?.setMediaPlaybackOwnsAudioSession(true)
-        }
-    }
-
-    func synchronize(
-        item: MonitorPlaybackItemToken, effects: MonitorFrameEffects,
-        audioVisible: Bool, outputMuted: Bool, ifCurrent: @escaping @MainActor () -> Bool
-    ) {
-        guard !closed else { return }
-        request = UUID()
-        let invocation = request
-        let before = revision
-        guard ifCurrent(), !closed, request == invocation, revision == before else { return }
-        if token != item { revision = UUID() }
-        let captured = revision
-        token = item
-        admission = ifCurrent
-        self.audioVisible = audioVisible
-        scopesVisible = effects.needsScopes
-        activate()
-        guard current(item, revision: captured, request: invocation) else { return }
-        if let nativeItem = native.player.currentItem, installed !== nativeItem {
-            install(nativeItem)
-        }
-        guard current(item, revision: captured, request: invocation), let model else { return }
-        let resolved = model.resolvedPlaybackEffects()
-        guard current(item, revision: captured, request: invocation) else { return }
-        let changed = box.set(effects: resolved)
-        if changed, native.player.rate == 0, let nativeItem = installed,
-            native.player.currentItem === nativeItem, nativeItem.videoComposition != nil
-        {
-            nativeItem.videoComposition = box.makeVideoComposition(for: nativeItem.asset)
-        }
-        guard current(item, revision: captured, request: invocation) else { return }
-        synchronizeSamples(item: item, revision: captured)
-    }
-
-    private func install(_ item: AVPlayerItem) {
-        guard !closed, let token, native.player.currentItem === item,
-            current(token, revision: revision), let model
-        else { return }
-        let captured = revision
-        if installed !== item {
-            meter.stopPolling()
-            polling = false
-            meter.detach(from: installed)
-            audioLevels = nil
-            guard current(token, revision: captured), native.player.currentItem === item else {
-                return
-            }
-            installed = item
-            if DemoHarness.mediaLUT { model.setAssist(.lut, visible: true) }
-            guard current(token, revision: captured), native.player.currentItem === item else {
-                return
-            }
-            _ = box.set(effects: model.resolvedPlaybackEffects())
-            guard current(token, revision: captured), native.player.currentItem === item else {
-                return
-            }
-            item.videoComposition = box.makeVideoComposition(for: item.asset)
-            meter.attach(to: item)
-        }
-        synchronizeSamples(item: token, revision: captured)
-    }
-
-    private func synchronizeSamples(item: MonitorPlaybackItemToken, revision captured: UUID) {
-        guard current(item, revision: captured), let model else { return }
-        let mapping = model.playbackExposureSignalMapping
-        let tools = model.assist.playbackTools
-        let configuration = NikonPlaybackScopeConfiguration(
-            mapping: mapping, compensation: model.assist.crushClipCompensation,
-            vectorscope: tools.contains(.vectorscope),
-            look: tools.contains(.vectorscope)
-                ? model.armedScopeLUT(visibleTools: tools)?.cube
-                    ?? NikonScopeLook.display(for: mapping.curve.monitorTransfer) : nil)
-        guard current(item, revision: captured) else { return }
-        box.setScopesActive(scopesVisible, transfer: configuration.transfer)
-        scopes.synchronize(
-            item: item, enabled: scopesVisible, configuration: configuration,
-            read: { [weak self] in
-                guard let self, self.current(item, revision: captured),
-                    let installed = self.installed, self.native.player.currentItem === installed
-                else { return nil }
-                let snapshot = self.box.readScopeSnapshot()
-                return .init(revision: snapshot.revision, samples: snapshot.samples)
-            }, ifCurrent: { [weak self] in self?.current(item, revision: captured) == true })
-        guard current(item, revision: captured) else { return }
-        // The tap reads the source audio independently of output mute and conform playback.
-        if audioVisible && !polling {
-            polling = true
-            meter.startPolling { [weak self] levels in
-                guard let self, self.polling, self.current(item, revision: captured) else { return }
-                self.audioLevels = levels
-            }
-        } else if !audioVisible {
-            polling = false
-            meter.stopPolling()
-            audioLevels = nil
-        }
-    }
-
-    private func current(
-        _ item: MonitorPlaybackItemToken, revision captured: UUID, request expected: UUID? = nil
-    ) -> Bool {
-        guard !closed, revision == captured, token == item, native.token == item,
-            expected == nil || request == expected, let admission
-        else { return false }
-        let admitted = admission()
-        return admitted && !closed && revision == captured && token == item && native.token == item
-            && (expected == nil || request == expected)
-    }
-
-    private func retireNativeItem() {
-        let previous = token
-        revision = UUID()
-        request = UUID()
-        token = nil
-        admission = nil
-        box.invalidateScopeComposition()
-        box.setScopesActive(false)
-        if let previous { scopes.retire(item: previous) }
-        polling = false
-        meter.stopPolling()
-        meter.detach(from: installed)
-        installed = nil
-        audioLevels = nil
-    }
-
-    func close() {
-        guard !closed else { return }
-        closed = true
-        retireNativeItem()
-        scopes.close()
-        meter.close()
-        native.beforeItemRetirement = nil
-        native.afterItemInstallation = nil
-        if activated {
-            audio.close()
-        }
+            prepareEffects: { [weak model] frame in
+                guard let model else { return .init() }
+                let mapping = model.playbackExposureSignalMapping
+                let effects = model.assist.inspectorImageEffects(
+                    tool: tool, transfer: frame.transfer,
+                    clipByte: mapping.curve.monitorTransfer == frame.transfer
+                        ? mapping.clipByte
+                        : frame.exposureCeiling.clipByte(transfer: frame.transfer))
+                return model.nikonPlaybackEffects(effects, forceLook: tool == .lut)
+            }, readBundle: { host.frameSamples.displayBundle },
+            configureDisplay: nikonScopeDisplay,
+            readLookIdentity: { [weak model] in model?.nikonPlaybackLookIdentity })
     }
 }
 
