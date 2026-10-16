@@ -186,7 +186,7 @@ struct GyroMountView: View {
         Section("Pose \(coordinator.calibrationPoseCount + 1) of 3") {
             Text(calibrationInstruction).font(.headline)
             Text(
-                "Keep the phone fixed to the camera. Hold both still for at least one second before capturing."
+                "Keep the phone fixed to the camera. Hold both still for at least two seconds before capturing."
             )
             .font(.subheadline)
             Text(
@@ -219,7 +219,7 @@ struct GyroMountView: View {
         switch coordinator.calibrationPoseCount {
         case 0: "Hold the camera roughly level."
         case 1: "Tilt the lens up 25–35° and keep the roll level."
-        default: "Keep the lens tilted up and roll 40–45°, with the camera's top leaning left."
+        default: "Point the lens up 35–45° and lean the camera's top 40–45° left or right."
         }
     }
 

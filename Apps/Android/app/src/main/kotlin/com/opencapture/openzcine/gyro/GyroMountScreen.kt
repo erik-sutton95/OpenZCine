@@ -46,9 +46,9 @@ internal fun GyroMountScreen(state: GyroCaptureState, onSelect: (String) -> Unit
                     MonitorSettingsRowCard {
                         Text("Step ${state.calibration.poseCount + 1} of 3", color = MonitorPalette.text)
                         Text(when (state.calibration.poseCount) {
-                            0 -> "Hold the camera level and keep the phone firmly mounted. Hold still, then capture."
-                            1 -> "Tilt the lens up 25–35° and keep the camera's roll level. Hold still, then capture."
-                            else -> "Keep the lens tilted up and roll the camera 40–45° with its top leaning left. Hold still, then verify."
+                            0 -> "Hold the camera level and keep the phone firmly mounted. Hold still for two seconds, then capture."
+                            1 -> "Tilt the lens up 25–35° and keep the camera's roll level. Hold still for two seconds, then capture."
+                            else -> "Point the lens up 35–45° and lean the camera's top 40–45° left or right. Hold still for two seconds, then verify."
                         }, color = MonitorPalette.muted)
                         state.calibration.error?.let { Text(it, color = MonitorPalette.accent) }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

@@ -72,7 +72,12 @@ class GyroLoggingJNITest {
                         .put("x", vector[0]).put("y", vector[1]).put("z", vector[2]))
                         .put("phoneTimestamp", base + index / 30.0)
                         .put("rollDegrees", if (pose == 2) 45.0 else 0.0)
-                        .put("pitchDegrees", if (pose == 0) 0.0 else 30.0)
+                        .put("pitchDegrees", when (pose) {
+                            0 -> 0.0
+                            // Projected pitch of the mixed camera gravity (-sqrt(3/8), sqrt(3/8), 0.5).
+                            2 -> 39.23152048359226
+                            else -> 30.0
+                        })
                         .put("cameraTimestamp", base + (index / 6) / 5.0).toString())
                 }
                 calibration.capture(base + 1.3)

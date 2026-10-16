@@ -36,15 +36,16 @@ Logs live outside the downloaded-media cache and are retained until explicitly d
 
 Rigidly fix the phone to the camera before calibrating. With a directly connected camera's
 live view running and recording stopped, open **Automatic calibration** in Phone mount.
-Keep OpenZCine in the foreground and hold still for at least a second before each capture:
+Keep OpenZCine in the foreground and hold still for at least two seconds before each capture:
 
 1. Hold the camera approximately level and capture the first pose.
-2. Point the lens upward about 25–35° and capture the second pose.
-3. Keep the lens pointing upward and lean the camera sideways about 40–45°, then verify.
+2. Point the lens upward about 25–35°, keeping the camera's roll level, and capture the second pose.
+3. Point the lens up about 35–45° and lean the camera's top 40–45° left or right, then verify.
 
 Exact angles are unnecessary. The app compares the phone's gravity with the camera's measured
-roll and pitch. The first two poses determine the fixed rotation; the third independently checks
-it. Missing or stale camera data, movement, insufficiently different poses, or a failed final
+roll and pitch as independent projected inclinations. The first two poses determine the fixed
+rotation; the third independently checks it. Missing or stale camera data, movement,
+insufficiently different poses, or a failed final
 check prevent saving. Disconnecting, backgrounding, changing video source, or starting REC
 cancels an unfinished calibration. A cancelled replacement leaves the previously saved value.
 

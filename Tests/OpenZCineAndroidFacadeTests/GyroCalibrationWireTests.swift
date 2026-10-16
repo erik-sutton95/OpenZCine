@@ -10,16 +10,19 @@ struct GyroCalibrationWireTests {
         let owner = wire.create()
         defer { wire.close(owner: owner) }
         var calibration: [String: Any]?
-        for (step, angles) in [(0.0, 0.0), (0.0, 30.0), (45.0, 30.0)].enumerated() {
+        let cameraDown = [
+            GyroVector3(x: -1, y: 0, z: 0),
+            GyroVector3(x: -sqrt(3.0) / 2, y: 0, z: 0.5),
+            GyroVector3(x: -sqrt(3.0 / 8), y: sqrt(3.0 / 8), z: 0.5),
+        ]
+        for (step, gravity) in cameraDown.enumerated() {
             let base = 1 + Double(step) * 3
-            let gravity = try #require(
-                GyroCameraGravity.down(rollDegrees: angles.0, pitchDegrees: angles.1))
             for index in 0...24 {
                 let observation: [String: Any] = [
                     "phoneDown": ["x": -gravity.y, "y": gravity.x, "z": gravity.z],
                     "phoneTimestamp": base + Double(index) * 0.05,
-                    "rollDegrees": angles.0,
-                    "pitchDegrees": angles.1,
+                    "rollDegrees": atan2(gravity.y, -gravity.x) * 180 / .pi,
+                    "pitchDegrees": atan2(gravity.z, -gravity.x) * 180 / .pi,
                     "cameraTimestamp": base + Double(index / 2) * 0.1,
                 ]
                 let data = try JSONSerialization.data(withJSONObject: observation)
