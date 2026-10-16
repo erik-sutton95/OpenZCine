@@ -10,7 +10,8 @@ import kotlin.test.assertEquals
 /**
  * The custom LUT library is OpenCine's `MonitorLutLibrary` and its import gate the shared
  * `CubeLUT.validatedImport` (A4-27); this app keeps only the RED source adapter. The RED download
- * pages draw their actions with monitor-ui components, not app-drawn buttons (A4-45).
+ * is the shared LUT pack flow (`MonitorLutPackDownloadScreen`, `MonitorLutArchive`) with RED's page,
+ * hosts, scripts and words; the app draws no download page, web view or zip reader of its own.
  */
 class LutOwnersRuleTest {
     private val sources = Path.of(requireNotNull(System.getProperty("openzcine.repositoryRoot")))
@@ -28,10 +29,11 @@ class LutOwnersRuleTest {
     }
 
     @Test
-    fun redDownloadPagesUseMonitorActions() {
+    fun redDownloadIsTheSharedPackFlow() {
         val screen = sources.resolve("com/opencapture/openzcine/lut/RedLutDownloadScreen.kt").readText()
-        for (token in listOf("TextButton(", ".clickable(")) {
-            assertEquals(false, token in screen, "RedLutDownloadScreen draws its own $token")
+        assertEquals(true, "MonitorLutPackDownloadScreen(" in screen, "RED download must open the shared pack flow")
+        for (token in listOf("WebView(", "RandomAccessFile", "Inflater", "TextButton(", ".clickable(")) {
+            assertEquals(emptyList(), sourcesContaining(token).filter { it.startsWith("Red") }, token)
         }
     }
 }
