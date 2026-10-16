@@ -687,8 +687,6 @@
     <string name="settings_record_confirmation">Record Confirmation</string>
     <string name="settings_haptics">Haptics</string>
     <string name="settings_keep_awake">Keep Screen Awake</string>
-    <string name="settings_media_remote">Bluetooth Remote Shutter</string>
-    <string name="settings_media_remote_caption">A paired Bluetooth shutter remote\'s button press starts or stops recording while the live view is up front. Android cannot reliably distinguish Bluetooth from phone hardware keys, so Volume Up/Down and Play/Pause also toggle recording. Record Confirmation is skipped for remote presses.</string>
     <string name="settings_enable_media_remote">Enable Media Remote</string>
     <string name="settings_media_remote_detail">Volume Up/Down and Play/Pause toggle recording; Record/Play start and Pause/Stop stop. Confirmation is skipped.</string>
     <string name="settings_move_earlier">Move %1$s earlier</string>
@@ -831,7 +829,6 @@
     <string name="help_storage_cache">Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.</string>
     <string name="help_storage_clear_cache">Removes completed cached clip files, thumbnails, and camera indexes for every camera. Transfers still running are kept so they can resume. Favorites survive; the gallery reloads from the camera when connected.</string>
     <string name="help_system_report_problem">Tell us what happened. Technical details stay off unless you include them. You can attach up to three photos. Sending does not turn on automatic reports.</string>
-    <string name="help_system_automatic_reports">Optional: send crash, hang, live-feed reports and session health counts to OpenCapture through Sentry. Off by default. Turn off anytime without losing app features. Uploads wait until you leave camera Wi-Fi. Automatic reports exclude all images. No footage or GPS location. Sentry receives the connection IP; stored event IP and derived geography are removed. See Reporting Privacy below.</string>
     <string name="help_system_automatic_reports_unavailable">This build cannot send automatic reports. You can still share reports stored on this phone.</string>
     <string name="media_refresh">REFRESH</string>
     <string name="media_refresh_cd">Refresh camera media</string>

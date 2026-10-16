@@ -1,9 +1,9 @@
 import Foundation
+import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
 import OpenCineMedia
 import OpenCineSentryApple
-import SafariServices
 import SwiftUI
 import UIKit
 
@@ -82,6 +82,14 @@ final class AppReliabilityURLProtocol: ReliabilityReportingURLProtocol, @uncheck
     override class var forwarder: ReliabilityReportingForwarder { ReliabilityDiagnostics.forwarder }
 }
 
+extension ReliabilityDiagnostics {
+    /// Reporting Privacy from the report sheet and the first-launch consent: the bundled privacy
+    /// page in the shared legal screen, readable while the phone is on the camera's network.
+    @MainActor static func privacyPage(close: @escaping () -> Void) -> MonitorLegalDocumentScreen {
+        MonitorLegalDocumentScreen(documents: .z, page: .privacy, onClose: close)
+    }
+}
+
 /// The shared report form on this app's reporting, support address, accent and privacy page.
 struct ProblemReportView: View {
     var body: some View {
@@ -90,7 +98,7 @@ struct ProblemReportView: View {
             isAvailable: ReliabilityDiagnostics.reporting.isAvailable,
             supportEmail: ReliabilityDiagnostics.supportEmail, accent: MonitorTheme.accent,
             technicalDetails: { AppDiagnostics.shared.manualReport() },
-            privacy: { close in PrivacyPolicyPage(close: close) })
+            privacy: { close in ReliabilityDiagnostics.privacyPage(close: close) })
     }
 }
 
@@ -102,27 +110,6 @@ struct ReliabilityConsentPrompt: View {
         ReliabilityConsentSheet(
             productName: "OpenZCine", accent: MonitorTheme.accent,
             onAccent: MonitorTheme.onAccent, onChoice: onChoice,
-            privacy: { close in PrivacyPolicyPage(close: close) })
-    }
-}
-
-/// The published privacy policy in an in-app Safari sheet (this app keeps no bundled copy).
-private struct PrivacyPolicyPage: UIViewControllerRepresentable {
-    let close: () -> Void
-
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-        let page = SFSafariViewController(url: SupportLinkCatalog.privacy)
-        page.delegate = context.coordinator
-        return page
-    }
-
-    func updateUIViewController(_ page: SFSafariViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(close: close) }
-
-    @MainActor final class Coordinator: NSObject, @preconcurrency SFSafariViewControllerDelegate {
-        let close: () -> Void
-        init(close: @escaping () -> Void) { self.close = close }
-        func safariViewControllerDidFinish(_ controller: SFSafariViewController) { close() }
+            privacy: { close in ReliabilityDiagnostics.privacyPage(close: close) })
     }
 }

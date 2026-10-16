@@ -2,6 +2,7 @@ import Observation
 import OpenCineAppKit
 import OpenCineApple
 import OpenCineCore
+import OpenCineHostedAccessibility
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -67,30 +68,11 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         }
 
         private static func identifier(_ object: NSObject) -> String {
-            let getter = NSSelectorFromString("accessibilityIdentifier")
-            guard object.responds(to: getter) else { return "" }
-            return object.perform(getter)?.takeUnretainedValue() as? String ?? ""
+            HostedAccessibility.identifier(object) ?? ""
         }
 
         private func elements() -> [NSObject] {
-            var seen = Set<ObjectIdentifier>()
-            var result: [NSObject] = []
-            func visit(_ object: NSObject) {
-                guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-                result.append(object)
-                for child in object.accessibilityElements as? [NSObject] ?? [] { visit(child) }
-                let count = object.accessibilityElementCount()
-                if count > 0 && count < 512 {
-                    for index in 0..<count {
-                        if let child = object.accessibilityElement(at: index) as? NSObject {
-                            visit(child)
-                        }
-                    }
-                }
-                if let view = object as? UIView { for child in view.subviews { visit(child) } }
-            }
-            visit(host.view)
-            return result.filter { $0.isAccessibilityElement }
+            HostedAccessibility.elements(in: host.view).filter(\.isAccessibilityElement)
         }
     }
 
@@ -114,11 +96,18 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             model.preferences = OperatorPreferences.defaults
             switch source {
             case "hdmi":
+                // The state `startHDMIMonitorSession` leaves once a capture card streams, staged
+                // without a UVC device (the simulator has none) and so without its wait for one.
                 model.isMonitorPresented = true
+                model.connection = .connected
                 model.videoSource = .hdmiCapture
+                model.hdmiCaptureState = .streaming(
+                    deviceName: "SIMULATED capture", format: "1920×1080 @30")
             case "relay":
+                // The state `joinRelay` leaves, without a broadcast to join.
                 model.videoSource = .relay
                 model.isMonitorPresented = true
+                model.connection = .connected
             default:
                 model.startDemoSession()
             }
@@ -147,6 +136,10 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             XCTAssertTrue(
                 backToLive,
                 "\(source): closing Settings must return to the monitor: \(hosted.identifiers)")
+            // A connected monitor starts no camera discovery when the root appears: no sweep of
+            // the machine's real network runs behind it and takes the monitor down.
+            XCTAssertEqual(
+                model.connection, .connected, "\(source): no discovery may run behind the monitor")
         }
     }
 

@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
 import com.opencapture.monitorui.MonitorGuideAspect
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.opencine.appkit.MonitorDisplayChrome
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.appkit.MonitorDisplayPreferences
@@ -12,23 +13,6 @@ import com.opencapture.opencine.appkit.MonitorDisplaySection
 import com.opencapture.opencine.cameracontrols.PortraitFeedAspect
 import com.opencapture.opencine.appkit.MonitorOperatorPreferences
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
-
-/** Presentation style for the local camera-level assist, matching iOS. */
-public enum class LocalLevelStyle(
-    /** Operator-facing style label. */
-    public val label: String,
-) {
-    /** A horizon line that rolls with the camera. */
-    HORIZON("Horizon"),
-    /** A two-axis bubble gauge for roll and pitch. */
-    GAUGE("Gauge"),
-    ;
-
-    internal companion object {
-        fun fromStoredName(value: String?): LocalLevelStyle? =
-            entries.firstOrNull { it.name == value }
-    }
-}
 
 
 /**
@@ -51,7 +35,7 @@ public data class LocalFramingAssistConfiguration(
     /** Whether the local camera-level overlay is visible. */
     public val levelEnabled: Boolean = false,
     /** Operator-selected presentation for the camera-level overlay. */
-    public val levelStyle: LocalLevelStyle = LocalLevelStyle.HORIZON,
+    public val levelStyle: MonitorLevelStyle = MonitorLevelStyle.HORIZON,
     /** Whether the camera-fed EV meter overlay is visible. */
     public val evMeterEnabled: Boolean = false,
     /** Whether the local de-squeeze presentation is applied. */
@@ -206,9 +190,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
      */
     public val autoRotateFeedEnabled: Toggle = Toggle("controls.autoRotateFeed", default = true)
 
-    // Sharing (the monitor relay) — iOS `relayWatcherPasscode` / `relayAllowsControlRequests`.
-    // The share switch itself is runtime state, exactly like iOS's `isRelayBroadcasting`.
-    public val relayWatcherPasscode: Text = Text("sharing.watcherPasscode", default = "")
+    // Sharing (the monitor relay) — iOS `relayAllowsControlRequests`. The share switch itself is
+    // runtime state, exactly like iOS's `isRelayBroadcasting`; the watcher passcode is a secret
+    // the broadcast controller keeps in the relay secrets (`RelayBroadcastController.savePasscode`).
     public val relayAllowsControlRequests: Toggle =
         Toggle("sharing.allowsControlRequests", default = true)
     /**
@@ -304,7 +288,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         }
 
     /** Selected camera-level presentation; persisted immediately on change. */
-    public var levelStyle: LocalLevelStyle
+    public var levelStyle: MonitorLevelStyle
         get() = levelStyleState.value
         set(new) {
             levelStyleState.value = new
@@ -326,9 +310,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
             mfDriveScrubEnabled,
         )
 
-    private fun loadLevelStyle(): LocalLevelStyle =
-        LocalLevelStyle.fromStoredName(preferences.getString(LEVEL_STYLE_KEY, null))
-            ?: LocalLevelStyle.HORIZON
+    private fun loadLevelStyle(): MonitorLevelStyle =
+        MonitorLevelStyle.fromStoredName(preferences.getString(LEVEL_STYLE_KEY, null))
+            ?: MonitorLevelStyle.HORIZON
 
     /** Defaults mirror `OperatorPreferences.defaults` in the shared core — keep them in step. */
     private fun loadStreamPreset(): LiveViewStreamPreset =

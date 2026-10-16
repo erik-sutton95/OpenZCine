@@ -289,6 +289,15 @@ internal fun MediaBrowseScreen(
     var closeRequested by remember { mutableStateOf(false) }
     var autoPlayHandled by remember { mutableStateOf(false) }
     var autoPlay by remember { mutableStateOf<MonitorMediaGalleryOpen<NikonLibraryClip>?>(null) }
+    /** Opens the first playable proxy once, as a tap would, when [autoPlayFirstProxy] asks for it. */
+    fun stageAutoPlay(actual: MonitorMediaLibraryModel<NikonLibraryClip>, records: List<MonitorMediaRecord<NikonLibraryClip>>) {
+        if (!autoPlayFirstProxy || autoPlayHandled) return
+        autoPlayHandled = true
+        val first = records.firstOrNull { it.payload.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY } ?: return
+        autoPlay = MonitorMediaGalleryOpen(first,
+            records.filter { it.facts.playbackEligible != false &&
+                (it.facts.presentationKind ?: it.asset.kind) == first.asset.kind }, actual.actionToken)
+    }
     var deliverySelection by remember(cameraID) { mutableStateOf<List<NikonLibraryClip>>(emptyList()) }
     var deliveryAdmission by remember(cameraID) { mutableStateOf<MonitorMediaLibraryActionToken?>(null) }
     var deliveryPopup by remember { mutableStateOf<NikonDeliverySelection?>(null) }
@@ -368,6 +377,8 @@ internal fun MediaBrowseScreen(
             if (!actual.state.value.browsing) actual.begin()
             offlineClipOwners = localRows.associate { it.clip.offlineObjectKey() to it.bucket }
             state = BrowseState.Loaded(localRows.map { it.clip })
+            // The offline library opens its first clip too (a staged `ReviewLaunch(screen: .playback)`).
+            stageAutoPlay(actual, actual.state.value.records)
         } else if (connectedSource == null) {
             state = BrowseState.Failed(if (!effectiveCameraConnected) "Reconnect the camera to list media."
                 else "Camera core is not bundled in this build.")
@@ -387,15 +398,7 @@ internal fun MediaBrowseScreen(
                 state = if (snapshot.fetching && snapshot.catalogPageCount == 0) BrowseState.Loading
                     else if (snapshot.note != null && !snapshot.fetching) incompleteCameraBrowseState(clips)
                     else BrowseState.Loaded(clips, isLoadingMore = snapshot.fetching)
-                if (autoPlayFirstProxy && !autoPlayHandled && !snapshot.fetching) {
-                    autoPlayHandled = true
-                    val first = snapshot.records.firstOrNull {
-                        it.payload.clip.contentKind == NikonMediaContentKind.PLAYABLE_PROXY
-                    }
-                    if (first != null) autoPlay = MonitorMediaGalleryOpen(first,
-                        snapshot.records.filter { it.facts.playbackEligible != false &&
-                            (it.facts.presentationKind ?: it.asset.kind) == first.asset.kind }, actual.actionToken)
-                }
+                if (!snapshot.fetching) stageAutoPlay(actual, snapshot.records)
             }
         }
     }
@@ -442,7 +445,6 @@ internal fun MediaBrowseScreen(
     val burstByRepresentative = remember(burstSeries) { burstSeries.associateBy { it.representativeID } }
     fun burstMembers(representative: NikonMediaClipRecord): List<NikonMediaClipRecord> =
         projection.members(representative, ::clipKey)
-    val selectedClips = deliverySelection.map { it.clip }
     val selectedLut = assists.lut
     val selectedLutLabel =
         when (selectedLut) {
@@ -515,7 +517,9 @@ internal fun MediaBrowseScreen(
     fun presentNativeDelivery() {
         val actual = library ?: return
         val token = deliveryAdmission ?: return
-        if (shareInProgress || selectedClips.isEmpty() || !actual.isCurrent(token)) return
+        // The share callback sets the selection and presents in one step: read the state, not the
+        // value this composition captured, which still holds the previous (empty) selection then.
+        if (shareInProgress || deliverySelection.isEmpty() || !actual.isCurrent(token)) return
         val records = deliverySelection.mapNotNull { selected -> actual.state.value.records.firstOrNull {
             it.payload.bucket == selected.bucket && sameNikonActionContent(it.payload.clip, selected.clip)
         } }

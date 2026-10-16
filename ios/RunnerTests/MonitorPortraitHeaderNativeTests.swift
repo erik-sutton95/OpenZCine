@@ -1,6 +1,7 @@
 #if os(iOS)
     import MonitorPresentation
     import MonitorUI
+    import OpenCineHostedAccessibility
     import SwiftUI
     import UIKit
     import XCTest
@@ -236,7 +237,7 @@
             for _ in 0..<200 {
                 host.view.setNeedsLayout()
                 host.view.layoutIfNeeded()
-                let nodes = Self.elements(host.view)
+                let nodes = HostedAccessibility.leaves(in: host.view)
                 let hasLabels = ["Storage remaining", "Performance", "Power"].allSatisfy { label in
                     nodes.contains {
                         $0.accessibilityLabel == label && $0.accessibilityFrame.height > 0
@@ -251,7 +252,7 @@
                 if hasLabels && hasFrames {
                     // UIKit attachment and the display transaction must finish before a painted-frame proof.
                     try await Task.sleep(for: .milliseconds(60))
-                    return Self.elements(host.view)
+                    return HostedAccessibility.leaves(in: host.view)
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -267,15 +268,6 @@
             proof.lifetime = .keepAlways
             XCTContext.runActivity(named: "Native fixture readiness failure") { $0.add(proof) }
             throw NSError(domain: "NativeHeaderFixture", code: 1)
-        }
-        private static func elements(_ object: NSObject) -> [NSObject] {
-            if object.accessibilityElementsHidden { return [] }
-            if let view = object as? UIView, view.isHidden || view.alpha < 0.01 { return [] }
-            if object.isAccessibilityElement { return [object] }
-            if let children = object.accessibilityElements as? [NSObject], !children.isEmpty {
-                return children.flatMap(elements)
-            }
-            return ((object as? UIView)?.subviews ?? []).flatMap(elements)
         }
     }
     private struct HeaderControlAnchorsKey: PreferenceKey {
@@ -346,7 +338,7 @@
             }
             for _ in 0..<100 {
                 host.view.layoutIfNeeded()
-                if scaleNodes(host.view).filter({
+                if HostedAccessibility.leaves(in: host.view).filter({
                     $0.accessibilityLabel?.hasPrefix("Scale ") == true
                 }).count == samples.count {
                     break
@@ -354,7 +346,7 @@
                 try await Task.sleep(for: .milliseconds(20))
             }
             try await Task.sleep(for: .milliseconds(60))
-            let nodes = scaleNodes(host.view)
+            let nodes = HostedAccessibility.leaves(in: host.view)
             for index in samples.indices {
                 let node = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Scale \(index)" })
                 XCTAssertEqual(node.accessibilityValue, samples[index].0)
@@ -414,15 +406,6 @@
                 $0.add(picture)
                 $0.add(metrics)
             }
-        }
-        private func scaleNodes(_ object: NSObject) -> [NSObject] {
-            if object.accessibilityElementsHidden { return [] }
-            if let view = object as? UIView, view.isHidden || view.alpha < 0.01 { return [] }
-            if object.isAccessibilityElement { return [object] }
-            if let children = object.accessibilityElements as? [NSObject], !children.isEmpty {
-                return children.flatMap(scaleNodes)
-            }
-            return ((object as? UIView)?.subviews ?? []).flatMap(scaleNodes)
         }
     }
 

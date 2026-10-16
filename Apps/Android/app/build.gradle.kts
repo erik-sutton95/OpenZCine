@@ -26,9 +26,10 @@ val samplesDirectory = repositoryRoot.resolve("samples")
 // generated assets root without android.sourceset.disallowProvider overrides.
 val stagedDemoAssetsDirectory =
     layout.buildDirectory.get().asFile.resolve("generated/demoAssets")
-// The repository NOTICE, staged into the app's assets so Settings shows it offline.
-val stagedLegalAssetsDirectory =
-    layout.buildDirectory.get().asFile.resolve("generated/legalAssets")
+// The repository's LICENSE, THIRD-PARTY-NOTICES.md and NOTICE, staged as Java resources so the
+// in-app Licenses and NOTICE pages are those files, never a hand-written summary.
+val stagedLegalResourcesDirectory =
+    layout.buildDirectory.get().asFile.resolve("generated/legalResources")
 
 // Frame.io uses an Adobe IMS public PKCE client. These values are not a client
 // secret, but each Android redirect registration is deployment-specific, so a
@@ -166,7 +167,7 @@ android {
         // Debug-only: generated assets under build/generated/demoAssets/demo/
         // (copied from repo-root samples/ when present).
         getByName("debug").assets.srcDir(stagedDemoAssetsDirectory)
-        getByName("main").assets.srcDir(stagedLegalAssetsDirectory)
+        getByName("main").resources.srcDir(stagedLegalResourcesDirectory)
     }
 }
 
@@ -203,13 +204,14 @@ val stageDebugDemoSamples =
  * Gradle-owned output. `src/main/jniLibs` is deliberately not an input: a
  * clean clone must never package an ignored or stale local .so set.
  */
-/** Stages the repository NOTICE into the app assets, so the shipped attribution is the repository's. */
-val stageLegalAssets =
-    tasks.register<Copy>("stageLegalAssets") {
+/** Stages the repository legal files into the app resources, so the shipped pages are those files. */
+val stageLegalResources =
+    tasks.register<Copy>("stageLegalResources") {
         group = "build"
-        description = "Stage the repository NOTICE into the app assets."
-        from(repositoryRoot.resolve("NOTICE"))
-        into(stagedLegalAssetsDirectory)
+        description = "Stage the repository legal files into the app resources."
+        from(repositoryRoot.resolve("LICENSE"), repositoryRoot.resolve("THIRD-PARTY-NOTICES.md"),
+            repositoryRoot.resolve("NOTICE"))
+        into(stagedLegalResourcesDirectory.resolve("openzcine/legal"))
     }
 
 val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
@@ -261,7 +263,7 @@ tasks.named("preBuild").configure {
     // Stage local demo clips before any debug asset/lint task reads the
     // generated assets directory (implicit-dependency hygiene).
     dependsOn(stageDebugDemoSamples)
-    dependsOn(stageLegalAssets)
+    dependsOn(stageLegalResources)
 }
 
 // Brand resource tests compare Android derivatives with the canonical iOS

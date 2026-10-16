@@ -354,9 +354,11 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     the old-build/new-build installation cycle in item 25 with a setup renamed on the old
     build, then with its name cleared there. Both edits survive repeated new-build launches;
     other routes, camera names, pairing identity and Wi-Fi keys stay intact.
-29. SHELL-02 legal links (iOS and Android): Privacy and Terms open the existing policy pages
-    from Cameras and Pair, including first-run pairing and pairing a nearby camera. Returning
-    to the app leaves the selected pairing step intact.
+29. SHELL-02 legal links (iOS and Android): Privacy and Terms open the bundled pages in the
+    shared legal screen (A2-27) from Cameras and Pair, including first-run pairing and pairing a
+    nearby camera, and from Settings, Report a Problem and the first-launch reports prompt.
+    They read while the phone is on the camera's Wi-Fi, with no browser and no network change.
+    Closing the page leaves the selected pairing step intact.
 
 ### Multiview qualification checks (SHELL-01, untested on physical devices)
 

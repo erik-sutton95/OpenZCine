@@ -9,6 +9,7 @@ import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
 import OpenCineMedia
+import struct OpenCineCameraVocabulary.ControlCapabilities
 import OpenCineRelay
 import OpenCineRelayApple
 import OpenZCineCore
@@ -203,6 +204,12 @@ extension MonitorDisplayChrome {
 enum PreferencesStore {
     private static let preferencesKey = "operatorPreferences.v1"
     private static let assistConfigKey = "assistConfiguration.v1"
+
+    /// The shared HDR display choice (A2-31), on the common key Pocket and Insta use too.
+    static var hdrDisplay: Bool {
+        get { MonitorOperatorPreferences(storage: .standard, keys: commonKeys).hdrDisplay }
+        set { MonitorOperatorPreferences(storage: .standard, keys: commonKeys).hdrDisplay = newValue }
+    }
 
     private static let commonKeys = MonitorOperatorPreferences.Keys(
         keepScreenAwake: "OpenZCine.KeepScreenAwake", hdrDisplay: "OpenZCine.HDRDisplay",
@@ -477,14 +484,6 @@ extension CustomLUTStore {
 
     func remove(_ lut: StoredCustomLUT, from category: LUTCategory) throws {
         try storedCategory(category).remove(lut)
-    }
-}
-
-enum ExternalInternetLinkReturnPolicy {
-    /// Rejoin only after an active browser handoff actually backgrounded the app. Presentation
-    /// transitions alone can produce active-state churn while the destination is still opening.
-    static func shouldReconnect(handoffActive: Bool, sawBackground: Bool) -> Bool {
-        handoffActive && sawBackground
     }
 }
 
@@ -834,6 +833,11 @@ final class NativeAppModel {
             publishWatchState()
             guard oldValue != connection else { return }
             AppDiagnostics.shared.record(connection.diagnosticEvent)
+            if let evidence = LocalNetworkAccess.evidence(
+                connected: connection == .connected, transport: cameraSession?.transportKind)
+            {
+                LocalNetworkAccess.shared.note(evidence, source: "camera link connected")
+            }
         }
     }
     /// Phased lifecycle for the connection progress sheet.
@@ -1012,6 +1016,19 @@ final class NativeAppModel {
     }
     /// Root-owned presentation state for the problem report sheet.
     var isBugReportPresented = false
+    /// HDR display, the phone's outdoor panel boost (A2-31): the shared `LiveHDRDisplay.app`
+    /// drives the Metal feed, scopes and chrome from it. Off by default.
+    var hdrDisplay: Bool = PreferencesStore.hdrDisplay {
+        didSet {
+            PreferencesStore.hdrDisplay = hdrDisplay
+            LiveHDRDisplay.app.setEnabled(hdrDisplay)
+        }
+    }
+    /// Screen recording, AirPlay or mirroring: the HDR present drops to SDR.
+    var screenCaptured = false {
+        didSet { LiveHDRDisplay.app.setScreenCaptured(screenCaptured) }
+    }
+    var hdrDisplayActive: Bool { hdrDisplay && !screenCaptured }
     /// The app's one internet hop (A2-16): the shared owner over the Nikon Wi‑Fi joiner.
     @ObservationIgnored lazy var internetHop = MonitorInternetHop<NikonHopRoute>(
         port: .init(
@@ -1027,15 +1044,9 @@ final class NativeAppModel {
     /// True while the phone has left the camera's Wi‑Fi so the RED LUT download can reach the
     /// internet. Drives the download screen's "Switching networks…" state.
     var internetHopActive: Bool { internetHop.isActive }
-    /// True only while a browser link is intentionally using an internet hop. On return to the
-    /// foreground, the app rejoins the camera AP through the normal saved-profile pipeline.
-    private(set) var externalInternetLinkHandoffActive = false
-    /// Set only after an accepted external-browser handoff actually backgrounds OpenZCine. This
-    /// prevents transient activation changes during presentation from prompting an immediate
-    /// camera-AP rejoin over the page the person just opened.
-    @ObservationIgnored private var externalInternetLinkSawBackground = false
-    @ObservationIgnored private var externalInternetLinkToken:
-        MonitorInternetHop<NikonHopRoute>.Token?
+    /// Settings browser links (support, GitHub, privacy) hold the hop until the person returns
+    /// from the browser: the shared handoff every app uses (A2-22).
+    @ObservationIgnored lazy var browserHandoff = MonitorBrowserInternetHandoff(hop: internetHop)
     /// The selected destination shown while iOS leaves the camera AP and settles on an
     /// internet-capable route. Root ownership keeps this visible after the monitor and Settings
     /// panel collapse with the camera session.
@@ -1056,9 +1067,6 @@ final class NativeAppModel {
     /// moving it; the camera remains the source of truth, this just suppresses our ChangeAfArea
     /// sends. Session-only.
     var focusPointLocked = false
-    /// Whether the live view is punched in. Transient by design: a session that restored itself
-    /// already magnified would read as a broken feed.
-    var magnificationActive = DemoHarness.magnificationActive
     /// Where the monitor's picture comes from.
     ///
     /// Deliberately independent of the control link: a camera reached over Wi-Fi keeps every
@@ -2336,18 +2344,20 @@ final class NativeAppModel {
         case .color:
             // The movie tone of the active codec, when the body reports one (R3D NE: Log3G10).
             return available.cameraControls && !isPhotographyMode && codecColorChoices.showsColor
-        case .zoomChip, .gimbalStick:
-            // No Nikon source feeds a zoom chip or a gimbal stick.
-            return false
+        case .zoomChip:
+            // The Nikon integration's control model: zoom stays unknown (no source feeds a chip).
+            return controlCapabilities.zoom.isOffered
+        case .gimbalStick:
+            // No Z body has a motion service, so the model declares no gimbal.
+            return controlCapabilities.gimbal.isOffered
         }
     }
-    /// Operator Setup rail tab and per-tab scroll offsets — session-only; survive dismissing the
-    /// panel back to live view without resetting to Link / top-of-page.
+    /// Operator Setup rail tab; the shared display owner also keeps each tab's scroll offset
+    /// (A2-84), so both survive dismissing the panel back to live view.
     var operatorSettingsTab: MonitorSettingsTab {
         get { operatorSession.settingsTab }
         set { operatorSession.settingsTab = newValue }
     }
-    var operatorSettingsScrollOffsets: [String: CGFloat] = [:]
     /// One accepted operation survives the intentional settings rehost during an internet hop.
     @ObservationIgnored let settingsAccount = MonitorSettingsAccountModel()
     @ObservationIgnored let settingsSupport = MonitorSettingsSupportModel()
@@ -2377,7 +2387,7 @@ final class NativeAppModel {
     @ObservationIgnored let watchRelay = WatchRelay()
     @ObservationIgnored private var watchRelayActivated = false
     /// Bluetooth HID shutter remote → record toggle (volume-press mechanism, opt-in preference).
-    @ObservationIgnored private let bluetoothShutter = BluetoothShutterMonitor()
+    @ObservationIgnored private let bluetoothShutter = MonitorRemoteShutter(subsystem: "OpenZCine")
     /// The camera's virtual-horizon roll/pitch (signed degrees) from the live-view header, driving the
     /// level overlay. Nil until the body reports a level — the overlay falls back to CoreMotion then.
     var cameraLevelRoll: Double?
@@ -2903,6 +2913,7 @@ final class NativeAppModel {
         guard !didPrepareStartup else { return }
         didPrepareStartup = true
         moveLegacyRelayPasscodes()
+        LiveHDRDisplay.app.setEnabled(hdrDisplay)
         refreshSavedCameras()
         applyStartupDestination()
         if shouldShowFirstPairWizard, firstPairWizardStep == .chooseTransport {
@@ -4903,6 +4914,12 @@ final class NativeAppModel {
     /// with `cameraSession` and closed with it. Those three commands run through it and only it.
     @ObservationIgnored private var monitorRuntime: NikonMonitorRuntime?
     private var controlSession: NikonCameraSession? { monitorRuntime?.session }
+    /// The Nikon integration's one control model of the connected body, else the shared
+    /// pre-connection rule over the Nikon static profile.
+    var controlCapabilities: ControlCapabilities {
+        controlSession?.controlCapabilities(codecColor: codecColorChoices)
+            ?? ControlCapabilities(beforeConnection: NikonCameraSession.captureProfile, codecColor: codecColorChoices)
+    }
     /// Recording as the CAMERA last reported it (live-view header or record events), apart from
     /// the optimistic `isRecording` the button shows. `nil` until the body says.
     @ObservationIgnored private var reportedRecording: Bool?
@@ -5182,7 +5199,8 @@ final class NativeAppModel {
                 directedCandidates: infrastructureDirectedCandidates,
                 excludedHosts: hostsServedByVisibleBroadcasts(),
                 onCameraAccessPoint: cameraAccessPointEvidence == true,
-                localNetworkDenied: false,
+                // A known policy denial names the cause at once instead of a silent sweep.
+                localNetworkDenied: LocalNetworkAccess.shared.answer == .denied,
                 status: { [weak self] message in
                     self?.connectionMessage = StartupConnectionCopy.friendly(message)
                 }
@@ -5557,49 +5575,6 @@ final class NativeAppModel {
         )
     }
 
-    /// Leaves the camera AP only when needed and waits for a validated internet route before an
-    /// external support, GitHub, or privacy link is opened.
-    func prepareExternalInternetLinkHandoff() async -> Bool {
-        await prepareExternalInternetLinkHandoffCaptured(admission: { true }) != nil
-    }
-
-    /// The common settings action retains its own route through native preparation and browser IO.
-    func prepareExternalInternetLinkHandoffCaptured(
-        admission: @escaping @MainActor () -> Bool
-    ) async -> MonitorSettingsBrowserHandoff? {
-        guard admission() else { return nil }
-        guard isOnCameraAccessPoint else {
-            return .init(isCurrent: admission, complete: { _ in })
-        }
-        guard
-            let token = internetHop.begin(hopRoute(rehostActivePanel: false), admission: admission)
-        else { return nil }
-        guard await internetHop.waitForInternet(token), internetHop.owns(token), admission()
-        else {
-            await internetHop.end(token)?.value
-            return nil
-        }
-        externalInternetLinkToken = token
-        externalInternetLinkSawBackground = false
-        externalInternetLinkHandoffActive = true
-        return .init(
-            isCurrent: { [weak self] in
-                guard let self, self.internetHop.owns(token) else { return false }
-                return admission() && self.internetHop.owns(token)
-            },
-            complete: { [weak self] accepted in
-                guard let self else { return }
-                if !accepted {
-                    if self.externalInternetLinkToken == token {
-                        self.externalInternetLinkToken = nil
-                        self.externalInternetLinkSawBackground = false
-                        self.externalInternetLinkHandoffActive = false
-                    }
-                    await self.internetHop.end(token)?.value
-                }
-            })
-    }
-
     /// Shows root-owned progress while an external destination waits for an internet route.
     func beginInternetDestinationPreparation(_ title: String) {
         internetDestinationPreparationTitle = title
@@ -5610,39 +5585,6 @@ final class NativeAppModel {
     func finishInternetDestinationPreparation(_ title: String) {
         guard internetDestinationPreparationTitle == title else { return }
         internetDestinationPreparationTitle = nil
-    }
-
-    /// Completes a rejected browser handoff immediately so the camera is not left disconnected.
-    func completeExternalInternetLinkHandoff(browserAccepted: Bool) {
-        guard !browserAccepted else { return }
-        guard externalInternetLinkHandoffActive else { return }
-        let captured = externalInternetLinkToken
-        externalInternetLinkToken = nil
-        externalInternetLinkSawBackground = false
-        externalInternetLinkHandoffActive = false
-        if let captured { internetHop.end(captured) }
-    }
-
-    /// Records that an accepted external page really took OpenZCine into the background. A mere
-    /// inactive/active transition is not enough evidence that the person finished with the page.
-    func noteExternalInternetLinkHandoffEnteredBackground() {
-        guard externalInternetLinkHandoffActive else { return }
-        externalInternetLinkSawBackground = true
-    }
-
-    /// Rejoins the camera after the person returns from the external browser.
-    func resumeExternalInternetLinkHandoffIfNeeded() {
-        guard
-            ExternalInternetLinkReturnPolicy.shouldReconnect(
-                handoffActive: externalInternetLinkHandoffActive,
-                sawBackground: externalInternetLinkSawBackground
-            )
-        else { return }
-        let captured = externalInternetLinkToken
-        externalInternetLinkToken = nil
-        externalInternetLinkSawBackground = false
-        externalInternetLinkHandoffActive = false
-        if let captured { internetHop.end(captured) }
     }
 
     /// Re-applies the camera AP config (throttled) while waiting for a just-paired camera to return,
@@ -11328,37 +11270,18 @@ final class NativeAppModel {
 
     // MARK: Bluetooth shutter remote
 
-    /// Whether the remote-shutter mechanism should be live right now: opted in, live monitor up
-    /// AND front (no full-screen panel like Operator Setup, Media, or the Tool Library covering
-    /// it), app active, and the clip player not owning the audio session. Inside menus the
-    /// monitor disarms entirely so the volume keys go back to controlling volume.
-    private var bluetoothShutterShouldRun: Bool {
-        BluetoothShutterMonitor.shouldRun(
-            enabled: preferences.bluetoothShutterEnabled,
-            monitorPresented: isMonitorPresented,
-            liveViewFront: !activePanelHidesLiveFeed && !isStandaloneMediaLibraryPresented,
-            applicationIsActive: UIApplication.shared.applicationState == .active,
-            audioSessionAvailable: !mediaPlaybackOwnsAudioSession)
-    }
-
-    /// Starts or stops the remote-shutter monitor to match the current state. Idempotent — safe to
-    /// call from every seam that changes an input (preference toggle, monitor present/dismiss,
-    /// foreground return). Volume observation is the SOLE path: it catches generic Bluetooth HID
-    /// remotes and the phone's own volume buttons without an `AVCaptureSession` (which would cost
-    /// a permission prompt, the camera-in-use indicator, and thermal/RF load throughout live view).
+    /// Starts or stops the shared remote shutter (A2-32) to match the current state: opted in,
+    /// live monitor up AND front (no full-screen panel like Operator Setup, Media, or the Tool
+    /// Library covering it), app active, and the clip player not owning the audio session. Inside
+    /// menus it disarms entirely so the volume keys go back to controlling volume. Idempotent:
+    /// safe to call from every seam that changes an input (preference toggle, monitor
+    /// present/dismiss, foreground return).
     func updateBluetoothShutter() {
-        let shouldRun = bluetoothShutterShouldRun
-        bluetoothShutterLogger.info(
-            "BT-SHUTTER reconcile enabled=\(self.preferences.bluetoothShutterEnabled, privacy: .public) monitor=\(self.isMonitorPresented, privacy: .public) shouldRun=\(shouldRun, privacy: .public) kvoActive=\(self.bluetoothShutter.isActive, privacy: .public)"
-        )
-        guard shouldRun else {
-            bluetoothShutter.stop()
-            return
-        }
         bluetoothShutter.onTrigger = { [weak self] in self?.remoteShutterToggleRecord() }
-        let volumeActive = bluetoothShutter.start()
-        bluetoothShutterLogger.info(
-            "BT-SHUTTER volume monitor armed=\(volumeActive, privacy: .public)")
+        bluetoothShutter.update(
+            enabled: preferences.bluetoothShutterEnabled, monitorPresented: isMonitorPresented,
+            liveViewFront: !activePanelHidesLiveFeed && !isStandaloneMediaLibraryPresented,
+            audioSessionAvailable: !mediaPlaybackOwnsAudioSession)
     }
 
     /// Coordinates the full-screen clip player's claim on the process-wide audio session with the
@@ -11375,13 +11298,13 @@ final class NativeAppModel {
     /// already debounced the press.
     func remoteShutterToggleRecord() {
         guard admitsRecordPress else {
-            bluetoothShutterLogger.info("BT-SHUTTER record refused by the monitor's admission")
+            bluetoothShutter.log.info("BT-SHUTTER record refused by the monitor's admission")
             return
         }
         let wasRecording = isRecording
         let hasSession = cameraSession != nil || isDemoSession
         executeRecord(start: !wasRecording)
-        bluetoothShutterLogger.info(
+        bluetoothShutter.log.info(
             "BT-SHUTTER record callback session=\(hasSession, privacy: .public) monitor=\(self.isMonitorPresented, privacy: .public) before=\(wasRecording, privacy: .public) after=\(self.isRecording, privacy: .public) queued=\(self.pendingRecordToggle, privacy: .public)"
         )
         publishWatchState()
@@ -12414,10 +12337,9 @@ final class NativeAppModel {
         activePanel = nil
     }
 
-    /// Opens Operator Setup from the startup home, landing on the Storage tab (integrations +
-    /// cache are what's actionable without a camera).
+    /// Opens Operator Setup from the startup home on the operator's last tab and scroll offset,
+    /// the shared landing-tab rule (A2-84).
     func openStandaloneSettings() {
-        operatorSettingsTab = .storage
         isStandaloneSettingsPresented = true
     }
 
@@ -12595,12 +12517,6 @@ final class NativeAppModel {
         guard !interfaceLocked else { return }
         assist.set(tool, visible: visible, context: context)
         if context == .liveView { preferences.recordScopeActivation(tool, on: visible) }
-        // Switching the tool off cannot leave the feed punched in: the button goes with the tool,
-        // so an armed transform would have no visible control explaining it. This is the only
-        // place the tool can be turned off.
-        if tool == .magnification, !visible {
-            magnificationActive = false
-        }
         if tool == .instantReview, visible {
             // Arm the post-capture diff with the card's current handles right away.
             seedInstantReviewBaseline()
@@ -13629,32 +13545,6 @@ struct PickerMode: Equatable, Sendable {
     var base: String = ""
 }
 
-extension MonitorAssistTool {
-    var title: String {
-        switch self {
-        case .lut: "LUT"
-        case .peaking: "Peaking"
-        case .falseColor: "False Color"
-        case .zebra: "Zebra"
-        case .waveform: "Waveform"
-        case .parade: "RGB Parade"
-        case .histogram: "Histogram"
-        case .vectorscope: "Vectorscope"
-        case .trafficLights: "Traffic Lights"
-        case .audioMeters: "Audio Levels"
-        case .guides: "Guides"
-        case .grid: "Grid"
-        case .crosshair: "Crosshair"
-        case .level: "Horizon"
-        case .evMeter: "EV Meter"
-        case .desqueeze: "Desqueeze"
-        case .mirror: "Mirror"
-        case .magnification: "Magnify"
-        case .instantReview: "Instant Playback"
-        }
-    }
-}
-
 /// The root's live tree: the multicam stage, or the shell with its monitor, pages and covers.
 /// Every monitor is the shell's, so this is its one mount (A1-01).
 struct NativeRootContent: View {
@@ -13724,6 +13614,7 @@ struct NativeAppRoot: View {
         }
         // The one share sheet, above every cover (A2-52).
         .monitorDeliverySharePresenter(model.delivery.lifetime)
+        .monitorHDRDisplay(.app, active: model.hdrDisplayActive, screenCaptured: Bindable(model).screenCaptured)
         .environment(model)
         .environment(model.delivery)
         .observeMonitorWindowGeometry()
@@ -13744,6 +13635,7 @@ struct NativeAppRoot: View {
         .background(MonitorTheme.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
+        .monitorBrowserHandoffReturn(model.browserHandoff)
         .task {
             // Activate the Apple Watch companion relay once on launch. No-ops when no watch is
             // paired/reachable or WatchConnectivity is unsupported.
@@ -13756,7 +13648,6 @@ struct NativeAppRoot: View {
             for await _ in NotificationCenter.default.notifications(
                 named: UIApplication.didEnterBackgroundNotification)
             {
-                model.noteExternalInternetLinkHandoffEnteredBackground()
                 model.shell.setSceneActive(false)
             }
         }
@@ -13776,7 +13667,6 @@ struct NativeAppRoot: View {
                 named: UIApplication.didBecomeActiveNotification)
             {
                 model.updateBluetoothShutter()
-                model.resumeExternalInternetLinkHandoffIfNeeded()
             }
         }
         .task {
@@ -14543,4 +14433,9 @@ extension NativeAppModel {
             : "Queued Color \(label)."
         drainPendingWritesIfIdle()
     }
+}
+
+extension LiveHDRDisplay {
+    /// The app's one HDR display owner (A2-31), as in Pocket and Insta.
+    static let app = LiveHDRDisplay()
 }
