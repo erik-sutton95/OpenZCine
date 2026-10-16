@@ -1,6 +1,7 @@
 import Foundation
 import OpenCineCore
 import OpenCineRelay
+import OpenCineRelayApple
 import OpenZCineCore
 import Testing
 
@@ -271,4 +272,72 @@ struct RelayRecordControlTests {
         _ label: String, for setting: NikonControlSetting, operation: OperationID?
     ) -> Int { 0 }
     func queueRecord(start: Bool, operation: OperationID) { records.append(start) }
+}
+
+/// Relay passcodes leave UserDefaults for the Keychain (A2-34), and nothing saved is lost on the
+/// way: an old copy goes only after the Keychain holds a value that read back.
+@Suite("Relay passcodes in the Keychain", .serialized)
+struct RelayPasscodeKeychainTests {
+    @Test func rememberedWatcherPasscodesMoveOncePerBroadcaster() throws {
+        let suite = "relay-passcodes-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let keychain = WatcherRelayKeychain(service: "com.opencapture.openzcine.tests.\(suite)")
+        defer {
+            keychain.storeRememberedPasscode("", forHost: "Set A")
+            keychain.storeRememberedPasscode("", forHost: "Set B")
+        }
+        defaults.set(["Set A": "1234", "Set B": " 5678 "], forKey: RelayLegacyWatcherPasscodes.key)
+
+        RelayLegacyWatcherPasscodes.move(into: keychain, from: defaults)
+
+        #expect(defaults.object(forKey: RelayLegacyWatcherPasscodes.key) == nil)
+        #expect(keychain.rememberedPasscodeLookup(forHost: "Set A") == .stored("1234"))
+        #expect(keychain.rememberedPasscodeLookup(forHost: "Set B") == .stored("5678"))
+        #expect(RelayLegacyWatcherPasscodes.unmoved(forHost: "Set A", in: defaults) == nil)
+    }
+
+    @Test func aStoredWatcherPasscodeWinsAndUnreadableEntriesStay() throws {
+        let suite = "relay-passcodes-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let keychain = WatcherRelayKeychain(service: "com.opencapture.openzcine.tests.\(suite)")
+        defer { keychain.storeRememberedPasscode("", forHost: "Set A") }
+        #expect(keychain.storeRememberedPasscode("1111", forHost: "Set A"))
+        defaults.set(["Set A": "2222", "Set C": 42], forKey: RelayLegacyWatcherPasscodes.key)
+
+        RelayLegacyWatcherPasscodes.move(into: keychain, from: defaults)
+
+        #expect(keychain.rememberedPasscodeLookup(forHost: "Set A") == .stored("1111"))
+        let left = try #require(defaults.dictionary(forKey: RelayLegacyWatcherPasscodes.key))
+        #expect(left.keys.sorted() == ["Set C"])
+    }
+
+    @MainActor
+    @Test func theBroadcastPasscodeMovesOutOfThePreferences() throws {
+        let keychain = WatcherRelayKeychain.app
+        let saved = keychain.hostPasscodeLookup()
+        let model = NativeAppModel()
+        let savedPreference = model.preferences.relayWatcherPasscode
+        defer {
+            if case .stored(let code) = saved { keychain.storeHostPasscode(code) } else {
+                keychain.storeHostPasscode("")
+            }
+            model.preferences.relayWatcherPasscode = savedPreference
+        }
+        #expect(keychain.storeHostPasscode(""))
+        model.preferences.relayWatcherPasscode = "4821"
+
+        model.moveLegacyRelayPasscodes()
+
+        #expect(keychain.hostPasscodeLookup() == .stored("4821"))
+        #expect(model.preferences.relayWatcherPasscode.isEmpty)
+        #expect(model.relayHostPasscode == "4821")
+        let stored = try #require(UserDefaults.standard.data(forKey: "operatorPreferences.v1"))
+        #expect(String(decoding: stored, as: UTF8.self).contains("4821") == false)
+
+        model.setRelayWatcherPasscode("")
+        #expect(keychain.hostPasscodeLookup() == .absent)
+        #expect(model.relayHostPasscode == "")
+    }
 }

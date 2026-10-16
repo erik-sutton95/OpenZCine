@@ -2272,7 +2272,7 @@ struct OperatorSettingsPanel: View {
             sharing: Binding(
                 get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
             passcode: Binding(
-                get: { relayPasscodeDraft ?? model.preferences.relayWatcherPasscode },
+                get: { relayPasscodeDraft ?? model.relayHostPasscode ?? "" },
                 set: { relayPasscodeDraft = String($0.filter(\.isNumber).prefix(4)) }),
             controlRequests: Binding(
                 get: { model.preferences.relayAllowsControlRequests },

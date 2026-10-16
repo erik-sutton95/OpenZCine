@@ -1,3 +1,4 @@
+import OpenCineRelay
 import OpenCineWatch
 import OpenZCineCore
 import SwiftUI
@@ -48,8 +49,8 @@ struct WatchMonitorView: View {
     }
 
     private var placeholder: String? {
-        if !controller.isReachable { return "Open OpenZCine on iPhone" }
-        if controller.state?.connection == .noCamera { return "No camera connected" }
+        if !controller.isReachable { return WatchRelayCopy.openOnIPhone(appName: "OpenZCine") }
+        if controller.state?.connection == .noCamera { return WatchRelayCopy.noCamera }
         if controller.state?.feedLive == false { return "Feed paused (Command mode)" }
         return nil
     }

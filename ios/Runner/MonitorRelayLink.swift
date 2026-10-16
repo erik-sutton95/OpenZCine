@@ -43,6 +43,36 @@ extension RelayAppleClient where Codec == DeployedMonitorRelayCodec {
         return minted
     }
 }
+/// OpenZCine's relay secrets (A2-34). The service name is stored data: never change it.
+extension WatcherRelayKeychain {
+    static let app = WatcherRelayKeychain(service: "com.opencapture.openzcine.watcher-relay")
+}
+
+/// Watcher passcodes OpenZCine once remembered per broadcaster in UserDefaults. Each moves into
+/// the Keychain once; its old copy goes only after the Keychain holds a value that read back, and
+/// one that could not move stays for the next try.
+enum RelayLegacyWatcherPasscodes {
+    static let key = "relayWatcherPasscodes"
+
+    static func move(into keychain: WatcherRelayKeychain, from defaults: UserDefaults) {
+        guard let legacy = defaults.dictionary(forKey: key) else { return }
+        let remaining = legacy.filter { host, raw in
+            guard let code = raw as? String else { return true }
+            let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !keychain.adoptLegacyRememberedPasscode(trimmed, forHost: host).releasesLegacyCopy
+        }
+        if remaining.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else if remaining.count != legacy.count {
+            defaults.set(remaining, forKey: key)
+        }
+    }
+
+    /// A remembered passcode that has not moved yet.
+    static func unmoved(forHost host: String, in defaults: UserDefaults) -> String? {
+        defaults.dictionary(forKey: key)?[host] as? String
+    }
+}
 extension RelayAppleBrowser {
     convenience init() {
         self.init(
