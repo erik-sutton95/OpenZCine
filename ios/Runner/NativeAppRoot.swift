@@ -23,6 +23,8 @@ import enum MonitorPresentation.MonitorThumbnailSize
 import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
 import class OpenCineCameraVocabulary.CustomLUTStore
 import class OpenCineCameraVocabulary.LUTPreferences
+import struct OpenCineCameraVocabulary.CaptureCodecColorChoice
+import struct OpenCineCameraVocabulary.CaptureCodecColorChoices
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -1959,6 +1961,9 @@ final class NativeAppModel {
     }
     /// Codecs the camera advertises (`MovFileType` descriptor) — the only codec values we'll write.
     var cameraFileTypeModes: [PTPCameraFileTypeMode] = []
+    /// Movie tones each per-codec tone property offers, from the body's own descriptors
+    /// (`NikonMovieToneCapability`). Empty on a body without per-codec tone properties.
+    var cameraMovieTones: [PTPPropertyCode: [NikonMovieTone]] = [:]
     /// The advertised codecs as picker rows: one per family, carrying the bit depths the body
     /// offers for it so the CODEC drum can flank the row with a depth choice (#276 follow-up).
     var codecFamilies: [PTPCameraCodecFamily] {
@@ -2271,8 +2276,11 @@ final class NativeAppModel {
             return available.focusBoxes
         case .statusBar, .toolBar, .lockButton, .fps, .railSettings:
             return true
-        case .color, .zoomChip, .gimbalStick:
-            // No Nikon source feeds a color-mode chip, a zoom chip or a gimbal stick.
+        case .color:
+            // The movie tone of the active codec, when the body reports one (R3D NE: Log3G10).
+            return available.cameraControls && !isPhotographyMode && codecColorChoices.showsColor
+        case .zoomChip, .gimbalStick:
+            // No Nikon source feeds a zoom chip or a gimbal stick.
             return false
         }
     }
@@ -6958,6 +6966,7 @@ final class NativeAppModel {
         // live-view restart and must preserve these across a stall recovery.
         cameraScreenModes = []
         cameraFileTypeModes = []
+        cameraMovieTones = [:]
         cameraControlOptions = [:]
         lockedControls = []
         if resetConnection {
@@ -8648,6 +8657,7 @@ final class NativeAppModel {
                     ? .fNumber : .movieFNumber)
         case .screenModes(let values): cameraScreenModes = values
         case .fileTypes(let values): cameraFileTypeModes = values
+        case .movieTones(let property, let tones): cameraMovieTones[property] = tones
         case .options(let property, let values):
             cacheAdvertisedControlOptions(values, property: property)
         case .photographyReady: seedInstantReviewBaseline()
@@ -8892,7 +8902,9 @@ final class NativeAppModel {
             case 0: await refreshLensApertures(session: session)
             case 1: await refreshStillShutterOptions(session: session)
             case 2: await refreshScreenModes(session: session)
-            case 3: await refreshFileTypeModes(session: session)
+            case 3:
+                await refreshFileTypeModes(session: session)
+                await refreshMovieToneOptions(session: session)
             default: await refreshControlOptions(session: session)
             }
             descriptorRefreshCursor += 1
@@ -9210,6 +9222,18 @@ final class NativeAppModel {
         } catch {
             // Descriptor not supported or transiently unavailable — keep the last known list.
         }
+    }
+
+    /// Re-reads the tone descriptor of the active codec only, one read per pass. Each codec family
+    /// keeps its own tone property, so a codec change can bring a property not read yet.
+    private func refreshMovieToneOptions(session: NativeCameraSession) async {
+        guard let raw = activeCodecMode?.raw,
+            let property = NikonMovieToneCapability.toneProperty(forFileType: raw),
+            session.supportsProperty(property),
+            let values = try? await session.describeCameraPropertyEnum(property, valueByteCount: 1)
+        else { return }
+        let tones = NikonMovieToneCapability.tones(fromEnum: values)
+        if !tones.isEmpty { cameraMovieTones[property] = tones }
     }
 
     /// Reads storage capacity/free space and caches the result. Unverified against real hardware;
@@ -14339,5 +14363,51 @@ extension NativeAppModel {
             cameraRecording: reportedRecording,
             cameraISO: reportedPropertySnapshot.iso.map { Int($0) },
             cameraISOIsAuto: reportedPropertySnapshot.isoAuto)
+    }
+}
+
+// MARK: - Codec and colour popup
+
+extension NativeAppModel {
+    /// The one codec and colour popup: the advertised codecs and the tones the body offers for
+    /// the active codec (R3D NE: Log3G10, shown and fixed). Both header readouts open it.
+    var codecColorChoices: CaptureCodecColorChoices {
+        let raw = activeCodecMode?.raw
+        let offered =
+            raw.flatMap(NikonMovieToneCapability.toneProperty(forFileType:)).flatMap {
+                cameraMovieTones[$0]
+            } ?? []
+        return NikonMovieToneCapability.codecColorChoices(
+            codecs: cameraFileTypeModes, fileType: raw, offered: offered,
+            current: raw.flatMap(cameraPropertySnapshot.movieTone(forFileType:)))
+    }
+
+    /// The header colour readout: the active codec's tone, nil while unknown.
+    var movieToneReadout: String? { codecColorChoices.selectedColorChoice?.label }
+
+    /// Selects an offered tone for the active codec through the safe-point write queue.
+    func applyMovieTone(_ label: String) {
+        let choices = codecColorChoices
+        guard admitsCameraCommand(nil), videoSource != .relay, !relayControlSurrendered,
+            !isRecording,
+            choices.colors.contains(where: { $0.label == label && $0.isEditable }),
+            let tone = NikonMovieTone(rawValue: label), let raw = activeCodecMode?.raw,
+            let write = NikonMovieToneCapability.write(tone, forFileType: raw)
+        else { return }
+        if isDemoSession {
+            cameraPropertySnapshot = cameraPropertySnapshot.applying(
+                property: write.property, data: write.data)
+            publishCameraDisplayState()
+            return
+        }
+        enqueueCameraWrite(PendingCameraWrite(picker: .codec, value: label, write: write))
+        cameraPropertySnapshot = cameraPropertySnapshot.applying(
+            property: write.property, data: write.data)
+        publishCameraDisplayState()
+        connectionMessage =
+            isMonitorPresented
+            ? "Queued Color \(label) for the next live-view safe point."
+            : "Queued Color \(label)."
+        drainPendingWritesIfIdle()
     }
 }

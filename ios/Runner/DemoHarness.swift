@@ -325,6 +325,9 @@ enum DemoHarness {
                     model.applyDemoProperty(
                         .movieFileType,
                         data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data)
+                    // SIMULATED tone descriptor: H.265 offers SDR, HLG and N-Log; on N-Log.
+                    model.cameraMovieTones[.movieH265ToneMode] = [.sdr, .hlg, .nLog]
+                    model.applyDemoProperty(.movieH265ToneMode, data: Data([1]))
                 }
                 if let raw = env["ZC_DEMO_PICKER"], let picker = CameraPicker(rawValue: raw) {
                     // ZC_DEMO_PICKER_MODE opens the picker on a specific mode tab (e.g. WB Tint).

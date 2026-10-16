@@ -2070,7 +2070,7 @@ struct OperatorSettingsPanel: View {
                 "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
             availableDisplay: [
                 .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
-                .timecode, .format, .codec, .storage, .fps, .railRecord, .railMedia, .railSettings,
+                .timecode, .format, .codec, .color, .storage, .fps, .railRecord, .railMedia, .railSettings,
                 .focusBox,
             ],
             assist: model.assist, stores: model.scopePanels.operatorStores,
