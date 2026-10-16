@@ -21,7 +21,7 @@ class MediaRemoteShutterTest {
         session.connect()
 
         assertTrue(
-            routeMonitorRemoteShutterCommand(
+            routeMediaRemoteShutterCommand(
                 session = session,
                 command = MonitorRemoteShutterCommand.TOGGLE,
                 isRecording = false,
@@ -30,7 +30,7 @@ class MediaRemoteShutterTest {
         )
         assertEquals(CameraRecordingState.RECORDING, session.recordingState.value)
         assertFalse(
-            routeMonitorRemoteShutterCommand(
+            routeMediaRemoteShutterCommand(
                 session = session,
                 command = MonitorRemoteShutterCommand.START,
                 isRecording = true,
@@ -38,7 +38,7 @@ class MediaRemoteShutterTest {
             ),
         )
         assertTrue(
-            routeMonitorRemoteShutterCommand(
+            routeMediaRemoteShutterCommand(
                 session = session,
                 command = MonitorRemoteShutterCommand.STOP,
                 isRecording = true,
@@ -47,7 +47,7 @@ class MediaRemoteShutterTest {
         )
         assertEquals(CameraRecordingState.STANDBY, session.recordingState.value)
         assertFalse(
-            routeMonitorRemoteShutterCommand(
+            routeMediaRemoteShutterCommand(
                 session = session,
                 command = MonitorRemoteShutterCommand.TOGGLE,
                 isRecording = false,
