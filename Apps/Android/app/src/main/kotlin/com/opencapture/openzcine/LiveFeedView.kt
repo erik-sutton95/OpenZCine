@@ -1,8 +1,6 @@
 package com.opencapture.openzcine
 
-import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
 import com.opencapture.opencine.runtime.MonitorBitmapPreviewBaker
 import com.opencapture.opencine.runtime.MonitorFrameDecodeWorker
@@ -16,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
@@ -31,8 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -49,23 +44,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.opencapture.monitorui.MonitorFalseColorReference
 import com.opencapture.monitorui.MonitorMaterial
 import com.opencapture.monitorui.monitorMaterial
-import com.opencapture.opencine.cameracontrols.FalseColorReference as CommonFalseColorReference
-import com.opencapture.monitorui.MonitorFalseColorReferenceMarker
-import com.opencapture.monitorui.MonitorFalseColorReferenceSegment
-import com.opencapture.monitorui.MonitorFalseColorReferenceValues
-import com.opencapture.monitorui.MonitorRect
-import com.opencapture.monitorui.MonitorScopePanelSize
-import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.opencapture.opencine.runtime.nativeFeedContentRect
@@ -93,10 +79,6 @@ private val feedBlitPaint: android.graphics.Paint by lazy {
     }
 }
 
-private const val FALSE_COLOR_REFERENCE_WIDTH = 264f
-private const val FALSE_COLOR_REFERENCE_HEIGHT = 52f
-private const val FALSE_COLOR_REFERENCE_GAP = 10f
-private const val FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE = 14f + LiveDesign.CONTROL_HEIGHT_DP
 
 /**
  * Presentation data paired with the bitmap that the feed actually accepted
@@ -211,28 +193,6 @@ private data class FocusGestureGeometrySignature(
     val coordinateWidth: Int,
     val coordinateHeight: Int,
 )
-
-@Immutable
-internal data class FalseColorReferencePresentation(
-    val scale: FeedFalseColorScale,
-    val reference: FeedFalseColorReference,
-    val read709: Boolean = false,
-)
-
-/** Render-success state consumed by the unscaled sibling reference overlay. */
-@Stable
-public class LiveFeedEffectsPresentationState {
-    internal var falseColorReference: FalseColorReferencePresentation? by mutableStateOf(null)
-        private set
-
-    internal fun present(scale: FeedFalseColorScale, reference: FeedFalseColorReference, read709: Boolean = false) {
-        falseColorReference = FalseColorReferencePresentation(scale, reference, read709)
-    }
-
-    internal fun clear() {
-        falseColorReference = null
-    }
-}
 
 /**
  * The live-view JPEG decode cap, for the shared ring decoder
@@ -664,173 +624,4 @@ internal fun LiveFeedColorModeNotice(
             color = LiveDesign.accent,
         )
     }
-}
-
-/**
- * The false-colour key on the shared movable panel and ruler. The Swift-calibrated bands, stop
- * markers and curve name arrive as the shared reference values; [stored] and [onStore] keep its
- * centre (live: the shared assist state; playback: its own preference file). Unscaled sibling of
- * [LiveFeedView], outside the feed's de-squeeze layer.
- */
-@Composable
-internal fun FalseColorReferenceOverlay(
-    effectsState: LiveFeedEffectsPresentationState,
-    feed: MonitorRect,
-    panelLayout: MonitorAnalysisPanelLayout,
-    stored: MonitorScopeStoredCenter?,
-    onStore: (MonitorScopeStoredCenter) -> Unit,
-    bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
-    defaultHorizontalFraction: Float = 0f,
-    hapticsEnabled: Boolean = true,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
-) {
-    val presentation = effectsState.falseColorReference ?: return
-    if (presentation.reference.segments.isEmpty()) return
-    val default =
-        remember(feed, panelLayout, bottomChromeClearance, defaultHorizontalFraction) {
-            controlSafeFalseColorReferenceDefaultFrame(
-                feed = feed,
-                layout = panelLayout,
-                bottomChromeClearance = bottomChromeClearance,
-                horizontalFraction = defaultHorizontalFraction,
-            )
-        }
-    val description = stringResource(R.string.false_color_reference_description)
-    val values = presentation.referenceValues(falseColorReferenceCopy(presentation.scale))
-    MovableMonitorPanel(
-        identity = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE.storageKey,
-        base = MonitorScopePanelSize.falseColorReference,
-        panelLayout = panelLayout,
-        stored = stored,
-        onStore = onStore,
-        hapticsEnabled = hapticsEnabled,
-        panelID = MonitorAnalysisPanelID.FALSE_COLOR_REFERENCE,
-        onPanelFrameChanged = onPanelFrameChanged,
-        defaultFrame = default,
-        // The shared ruler draws its own plate.
-        fillPlate = false,
-    ) { modifier ->
-        MonitorFalseColorReference(values, modifier.semantics { contentDescription = description })
-    }
-}
-
-
-/** Preserves the established viewport-relative anchor, then applies control clearance exactly once. */
-internal fun controlSafeFalseColorReferenceDefaultFrame(
-    feed: MonitorRect,
-    layout: MonitorAnalysisPanelLayout,
-    bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
-    horizontalFraction: Float = 0f,
-): MonitorRect =
-    clampScopeFrame(
-        falseColorReferenceDefaultFrame(
-            feed = feed,
-            viewport = layout.viewport,
-            bottomChromeClearance = bottomChromeClearance,
-            horizontalFraction = horizontalFraction,
-        ),
-        layout.safeBounds,
-    )
-
-/** iOS `feedOutsideCenter(.bottomLeading)` translated into the Android zone map. */
-internal fun falseColorReferenceDefaultFrame(
-    feed: MonitorRect,
-    viewport: MonitorRect,
-    bottomChromeClearance: Float = FALSE_COLOR_REFERENCE_BOTTOM_CLEARANCE,
-    horizontalFraction: Float = 0f,
-): MonitorRect {
-    val feedBottom = feed.y + feed.height
-    val outsideTop = feedBottom + FALSE_COLOR_REFERENCE_GAP
-    val viewportBottom = viewport.y + viewport.height
-    val top =
-        if (outsideTop + FALSE_COLOR_REFERENCE_HEIGHT <= viewportBottom) {
-            outsideTop
-        } else {
-            min(
-                feedBottom,
-                viewportBottom - bottomChromeClearance.coerceAtLeast(0f),
-            ) - FALSE_COLOR_REFERENCE_GAP - FALSE_COLOR_REFERENCE_HEIGHT
-        }
-    return clampScopeFrame(
-        MonitorRect(
-            x =
-                feed.x +
-                    maxOf(0f, feed.width - min(FALSE_COLOR_REFERENCE_WIDTH, feed.width)) *
-                    horizontalFraction.coerceIn(0f, 1f),
-            y = top,
-            width = min(FALSE_COLOR_REFERENCE_WIDTH, feed.width),
-            height = FALSE_COLOR_REFERENCE_HEIGHT,
-        ),
-        viewport,
-    )
-}
-
-/** The ruler's localized words: scale name and axis labels per scale. */
-internal data class FalseColorReferenceCopy(
-    val scale: String,
-    val stopLabels: List<String>,
-    val ireLabels: List<String>,
-    val limitsLabels: List<String>,
-)
-
-@Composable
-internal fun falseColorReferenceCopy(scale: FeedFalseColorScale): FalseColorReferenceCopy =
-    FalseColorReferenceCopy(
-        scale = scale.label,
-        stopLabels =
-            listOf(
-                stringResource(R.string.false_color_axis_min),
-                "−2",
-                "−1",
-                stringResource(R.string.false_color_axis_middle_gray),
-                "+1",
-                stringResource(R.string.false_color_axis_plus_two),
-                "Clip",
-            ),
-        ireLabels =
-            listOf(
-                stringResource(R.string.false_color_axis_clip_shadows),
-                stringResource(R.string.false_color_axis_middle_gray),
-                stringResource(R.string.false_color_axis_skin_high),
-                stringResource(R.string.false_color_axis_highlights_clip),
-            ),
-        limitsLabels =
-            listOf(
-                stringResource(R.string.false_color_axis_crushed),
-                stringResource(R.string.false_color_axis_midtones),
-                stringResource(R.string.false_color_axis_clipped),
-            ),
-    )
-
-/** The Swift reference as the shared ruler's values: bands, stop markers (STOPS) or axis words. */
-internal fun FalseColorReferencePresentation.referenceValues(
-    copy: FalseColorReferenceCopy,
-): MonitorFalseColorReferenceValues {
-    val curve = reference.curveLabel(read709)
-    return MonitorFalseColorReferenceValues(
-        subtitle = "${copy.scale} · $curve",
-        segments =
-            reference.segments.mapIndexed { index, segment ->
-                MonitorFalseColorReferenceSegment(
-                    index,
-                    segment.lowerFraction.toDouble(),
-                    segment.upperFraction.toDouble(),
-                    segment.color[0].toDouble(),
-                    segment.color[1].toDouble(),
-                    segment.color[2].toDouble(),
-                )
-            },
-        markers =
-            if (scale == FeedFalseColorScale.STOPS) {
-                // The shared ruler starts each label 10 dp before its stop and clips at the panel, so the
-                // Min and Max ends (0 and 1) are held 16 dp inside it, where the old ruler aligned them.
-                val edge = 16.0 / MonitorScopePanelSize.falseColorReference.width
-                reference.stopMarkerLabels.zip(reference.stopMarkerFractions.toList()).mapIndexed { index, (label, at) ->
-                    MonitorFalseColorReferenceMarker(index, label, at.toDouble().coerceIn(edge, 1.0 - edge))
-                }
-            } else {
-                emptyList()
-            },
-        axisLabels = CommonFalseColorReference.axisLabels(scale.sharedScale),
-    )
 }

@@ -432,19 +432,6 @@ class NikonAssistsTest {
         assertFalse(NikonAssistChip.Tool(MonitorAssistTool.EV) in video)
     }
 
-    @Test
-    fun `live inspector closes when its tool or lifecycle is no longer interactive`() {
-        val tools = listOf(MonitorAssistTool.PEAK, MonitorAssistTool.EV)
-        assertTrue(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(null, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.EV, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.AUDIO, tools + MonitorAssistTool.AUDIO, true, false, true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.WAVE, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = false, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = true, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = false, resumed = false))
-    }
-
     /** Restores from a fresh set of stores holding only [operatorValues] (an old install). */
     private fun migrate(vararg operatorValues: Pair<String, Any>): MonitorAssistState {
         val legacy = TestSharedPreferences()

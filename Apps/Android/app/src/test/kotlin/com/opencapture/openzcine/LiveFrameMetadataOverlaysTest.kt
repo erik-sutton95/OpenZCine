@@ -17,24 +17,32 @@ import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class LiveFrameMetadataOverlaysTest {
     @Test
-    fun `focus lock label clamps its full width at both visible feed edges`() {
-        val feed = LiveOverlayRect(left = -100f, top = 0f, width = 600f, height = 300f)
-        val viewport = LiveOverlayRect(left = 0f, top = 0f, width = 400f, height = 300f)
-
-        assertEquals(
-            5f,
-            focusLockLabelLeft(feed, viewport, preferredLeft = -40f, labelWidth = 96f, inset = 5f),
-        )
-        val rightEdge =
-            focusLockLabelLeft(
-                feed,
-                viewport,
-                preferredLeft = 380f,
-                labelWidth = 96f,
-                inset = 5f,
+    fun `nikon AF boxes normalize to the shared focus layer with the result as its colour`() {
+        val focus =
+            LiveFocusInfo(
+                coordinateWidth = 1_920,
+                coordinateHeight = 1_080,
+                result = LiveFocusResult.NOT_FOCUSED,
+                subjectDetectionActive = false,
+                trackingAFActive = false,
+                selectedBoxIndex = null,
+                boxes = listOf(
+                    LiveFocusBox(centerX = 960, centerY = 540, width = 192, height = 108),
+                    LiveFocusBox(centerX = 480, centerY = 270, width = 96, height = 54),
+                ),
             )
-        assertEquals(299f, rightEdge)
-        assertTrue(rightEdge + 96f <= viewport.right)
+
+        val areas = assertNotNull(nikonFocusAreas(focus))
+
+        val primary = assertNotNull(areas.primary)
+        assertEquals(0.45, primary.x, absoluteTolerance = 0.0001)
+        assertEquals(0.45, primary.y, absoluteTolerance = 0.0001)
+        assertEquals(0.1, primary.width, absoluteTolerance = 0.0001)
+        assertEquals(0.225, areas.others.single().x, absoluteTolerance = 0.0001)
+        assertEquals(false, areas.confirmed)
+        assertTrue(assertNotNull(nikonFocusAreas(focus.copy(trackingAFActive = true))).confirmed)
+        assertTrue(assertNotNull(nikonFocusAreas(focus.copy(result = LiveFocusResult.FOCUSED))).confirmed)
+        assertEquals(null, nikonFocusAreas(focus.copy(coordinateWidth = 0)))
     }
 
     @Test

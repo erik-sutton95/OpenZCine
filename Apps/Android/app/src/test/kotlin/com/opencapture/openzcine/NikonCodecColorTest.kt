@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlCapabilities
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.codecColorChoices
 import com.opencapture.opencine.nikon.withOptimisticControlValue
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -20,7 +21,7 @@ class NikonCodecColorTest {
 
     @Test
     fun theOfferedTonesOfTheActiveCodecAreTheColourSection() {
-        val choices = nikonCodecColorChoices(snapshot(listOf("SDR", "HLG", "N-Log"), true, "N-Log"))
+        val choices = snapshot(listOf("SDR", "HLG", "N-Log"), true, "N-Log").codecColorChoices()
         assertTrue(choices.showsColor)
         assertEquals(listOf("SDR", "HLG", "N-Log"), choices.colors.map { it.label })
         assertEquals("N-Log", choices.selectedColorChoice?.label)
@@ -33,7 +34,7 @@ class NikonCodecColorTest {
 
     @Test
     fun aFixedToneIsShownAndOffersNoWrite() {
-        val choices = nikonCodecColorChoices(snapshot(listOf("Log3G10"), false, "Log3G10"))
+        val choices = snapshot(listOf("Log3G10"), false, "Log3G10").codecColorChoices()
         assertTrue(choices.showsColor)
         assertFalse(choices.colorEditable)
         assertEquals(emptyList(), movieToneRequest(choices).options)
@@ -43,7 +44,7 @@ class NikonCodecColorTest {
 
     @Test
     fun aCodecWithoutToneHidesTheColourReadout() {
-        val choices = nikonCodecColorChoices(snapshot(emptyList(), false, null))
+        val choices = snapshot(emptyList(), false, null).codecColorChoices()
         assertFalse(choices.showsColor)
         val sections = com.opencapture.openzcine.core.MonitorDataAvailability.OWNING.monitorSections(
             cameraReportsTimecode = true, isPhotographyMode = false, reportsColor = choices.showsColor)

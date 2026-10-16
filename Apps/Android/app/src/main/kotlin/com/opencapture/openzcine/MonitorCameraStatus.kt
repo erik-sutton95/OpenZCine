@@ -1,19 +1,8 @@
 package com.opencapture.openzcine
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
+import com.opencapture.opencine.cameracontrols.MonitorOperatorPictureNotice
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.frameio.FrameioInternetHopState
 
@@ -111,13 +100,11 @@ internal fun monitorCameraStatusAccessibility(status: MonitorCameraStatus): Stri
     }
 
 /**
- * Center-of-feed placeholder: title, optional detail, optional spinner for hop / connect.
+ * The picture well's words when there is no live feed (no camera, connecting, or a RED / Frame.io
+ * internet hop), shown on the shared waiting plate: title, optional detail, spinner while in progress.
  */
 @Composable
-internal fun MonitorFeedCameraStatus(
-    status: MonitorCameraStatus,
-    modifier: Modifier = Modifier,
-) {
+internal fun monitorCameraStatusNotice(status: MonitorCameraStatus): MonitorOperatorPictureNotice {
     val title =
         when (status) {
             is MonitorCameraStatus.Connected -> status.name
@@ -153,31 +140,5 @@ internal fun MonitorFeedCameraStatus(
                 status.message.ifBlank { stringResource(R.string.camera_hop_failed_fallback) }
         }
 
-    Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        if (status.showsProgress()) {
-            CircularProgressIndicator(
-                color = LiveDesign.accent,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(28.dp),
-            )
-        }
-        Text(
-            text = title,
-            style = chromeStyle(15f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-            textAlign = TextAlign.Center,
-        )
-        if (detail != null) {
-            Text(
-                text = detail,
-                style = chromeStyle(12f, FontWeight.Normal),
-                color = LiveDesign.muted,
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
+    return MonitorOperatorPictureNotice(title, detail, status.showsProgress())
 }

@@ -6,59 +6,23 @@ import com.opencapture.opencine.media.ScopeTapPolicy
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Log
-import android.view.HapticFeedbackConstants
 import android.view.TextureView
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.unit.dp
-import com.opencapture.monitorui.MonitorHistogramScopePlot
-import com.opencapture.monitorui.MonitorMaterial
-import com.opencapture.monitorui.MonitorMovableScopePanel
-import com.opencapture.monitorui.MonitorParadeScopePlot
-import com.opencapture.monitorui.MonitorScopePanelSize
-import com.opencapture.monitorui.MonitorScopePoint
-import com.opencapture.monitorui.MonitorScopeRect
-import com.opencapture.monitorui.MonitorScopeSize
-import com.opencapture.monitorui.MonitorScopeStoredCenter
-import com.opencapture.monitorui.MonitorTrafficLightsGeometry
-import com.opencapture.monitorui.MonitorTrafficLightsMeter
-import com.opencapture.monitorui.MonitorVectorscopeScopePlot
-import com.opencapture.monitorui.MonitorWaveformScopePlot
-import com.opencapture.monitorui.monitorMaterial
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.MonitorTransfer
 import com.opencapture.opencine.media.ScopeAssistBundle
-import com.opencapture.opencine.media.ScopeChannelLight
 import com.opencapture.opencine.media.ScopeClipSnapshot
-import com.opencapture.opencine.media.ScopeHistogramDisplay
 import com.opencapture.opencine.media.ScopeLevelAxis
 import com.opencapture.opencine.media.ScopeSampler
 import com.opencapture.opencine.media.ScopeSamples
-import com.opencapture.opencine.media.ScopeTrafficLightsReading
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.opencine.runtime.ScopeSampleBus
@@ -71,16 +35,13 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val TAG = "ZCScope"
 
 private const val NANOS_PER_SECOND = 1_000_000_000.0
 
@@ -146,18 +107,6 @@ enum class ScopeKind(val token: String) {
     }
 }
 
-@Composable
-private fun scopeTitle(kind: ScopeKind): String =
-    stringResource(
-        when (kind) {
-            ScopeKind.WAVEFORM -> R.string.scope_title_waveform
-            ScopeKind.PARADE -> R.string.scope_title_parade
-            ScopeKind.HISTOGRAM -> R.string.scope_title_histogram
-            ScopeKind.VECTORSCOPE -> R.string.scope_title_vectorscope
-            ScopeKind.TRAFFIC_LIGHTS -> R.string.scope_title_traffic_lights
-        },
-    )
-
 /** Which Swift payloads the shared monitor sampler must retain for visible scopes. */
 data class ScopeSamplingDemand(
     val traces: Boolean,
@@ -197,29 +146,9 @@ private val AndroidThermalTier.scopeMultiplier: Double
         AndroidThermalTier.CRITICAL -> 4
     })
 
-/**
- * Normalizes a persisted scope history without inventing recency for a
- * pre-migration selection. Keeping an empty order is how portrait uses the
- * iOS canonical-prefix fallback for legacy data.
- */
-fun normalizeScopeOrder(order: List<ScopeKind>, selected: Set<ScopeKind>): List<ScopeKind> {
-    val seen = mutableSetOf<ScopeKind>()
-    return order.filter { it in selected && seen.add(it) }
-}
-
 /** First two eligible selections, without changing the active set or floating-scope order. */
 fun portraitDisplayedScopes(selected: Set<ScopeKind>): List<ScopeKind> =
     ScopeKind.canonical.filter(selected::contains).take(2)
-
-/** Current persisted scale for one scope kind. */
-internal fun MonitorAssistState.scaleFor(kind: ScopeKind): Float =
-    when (kind) {
-        ScopeKind.WAVEFORM -> waveScale
-        ScopeKind.PARADE -> paradeScale
-        ScopeKind.HISTOGRAM -> histoScale
-        ScopeKind.VECTORSCOPE -> vectorScale
-        ScopeKind.TRAFFIC_LIGHTS -> lightsScale
-    }.toFloat()
 
 /** Keeps a floating panel wholly inside the physical viewport's safe drawing bounds. */
 fun clampScopeFrame(frame: MonitorRect, bounds: MonitorRect): MonitorRect {
@@ -377,48 +306,6 @@ internal fun rememberNikonLiveScopeBundles(
     return remember(bus) { bus.publications.map { it.bundle } }
 }
 
-@Composable
-internal fun ScopePanels(
-    selectedScopes: Set<ScopeKind>,
-    portraitScopes: List<ScopeKind>,
-    assist: MonitorAssistState,
-    cameraInput: ExposureAssistCameraInput,
-    lutSelection: FeedLutSelection?,
-    lutLibrary: AndroidLutLibrary?,
-    thermalTier: AndroidThermalTier,
-    source: LiveFrameSource,
-    isPortrait: Boolean,
-    portraitFloating: Boolean = false,
-    scopeZone: MonitorRect?,
-    panelLayout: MonitorAnalysisPanelLayout?,
-    hapticsEnabled: Boolean,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
-) {
-    val displayed = displayedScopeKinds(selectedScopes, portraitScopes, isPortrait, portraitFloating)
-    val flow = rememberNikonLiveScopeBundles(selectedScopes, portraitScopes, assist, cameraInput, lutSelection,
-        lutLibrary, thermalTier, source, isPortrait, portraitFloating, scopeZone) ?: return
-    val bundle = flow.collectAsState(initial = ScopeAssistBundle.EMPTY).value
-    val axis = bundle.levelAxis ?: return
-
-    if (isPortrait && !portraitFloating) {
-        PortraitScopePanels(
-            displayed,
-            requireNotNull(scopeZone),
-            axis,
-            bundle,
-            assist,
-        )
-    } else {
-        FloatingScopePanels(
-            displayed,
-            requireNotNull(panelLayout),
-            assist,
-            hapticsEnabled = hapticsEnabled,
-            onPanelFrameChanged = onPanelFrameChanged,
-        ) { kind, modifier -> ScopePanel(kind, axis, bundle, assist, modifier) }
-    }
-}
-
 /** Native source calibration borrowed by the complete shared playback scope session. */
 internal data class NikonPlaybackScopeConfiguration(
     private val inputs: ScopeTickInputs,
@@ -457,257 +344,6 @@ internal fun displayedScopeKinds(
     } else {
         ScopeKind.canonical.filter(selectedScopes::contains)
     }
-
-/** Renders the portrait subset into the shared stack zone from the core layout map. */
-@Composable
-private fun PortraitScopePanels(
-    displayed: List<ScopeKind>,
-    zone: MonitorRect,
-    axis: ScopeLevelAxis,
-    bundle: ScopeAssistBundle,
-    assist: MonitorAssistState,
-) {
-    val spacing = 8f
-    val panelHeight = max(0f, (zone.height - spacing * (displayed.size - 1)) / displayed.size)
-    Box(Modifier.zone(zone)) {
-        displayed.forEachIndexed { index, kind ->
-            ScopePanel(
-                kind = kind,
-                axis = axis,
-                bundle = bundle,
-                assist = assist,
-                // iOS portrait fit gives each enabled scope an equal full-width
-                // share and deliberately ignores landscape footprint scale.
-                modifier =
-                    Modifier.zone(
-                        MonitorRect(
-                            x = 12f,
-                            y = index * (panelHeight + spacing),
-                            width = max(0f, zone.width - 24f),
-                            height = panelHeight,
-                        ),
-                    ),
-            )
-        }
-    }
-}
-
-/**
- * The shared Pocket / Insta movable scope panels over the shared assist state: direct drag,
- * corner resize, hold for the tool's options, and a centre saved per orientation. An unplaced
- * panel starts at the canvas centre, as on Pocket. Each panel reports its frame (monitor-zone dp)
- * so the focus-reset button can climb above it.
- */
-@Composable
-internal fun FloatingScopePanels(
-    displayed: List<ScopeKind>,
-    panelLayout: MonitorAnalysisPanelLayout,
-    assist: MonitorAssistState,
-    hapticsEnabled: Boolean = true,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
-    content: @Composable (ScopeKind, Modifier) -> Unit,
-) {
-    val portrait = panelLayout.viewport.height > panelLayout.viewport.width
-    displayed.forEach { kind ->
-        key(kind) {
-            val tool = kind.assistTool
-            val description = stringResource(R.string.scope_panel_description, scopeTitle(kind))
-            MovableMonitorPanel(
-                identity = kind.token,
-                base = kind.panelBase,
-                panelLayout = panelLayout,
-                stored = assist.centerFor(tool, portrait),
-                onStore = { assist.storeCenter(tool, it, portrait) },
-                hapticsEnabled = hapticsEnabled,
-                panelID = kind.monitorAnalysisPanelID(),
-                onPanelFrameChanged = onPanelFrameChanged,
-                scale = assist.scaleFor(kind).toDouble(),
-                onScale = { assist.setScale(tool, it) },
-                onOpenOptions = { assist.configureTool = tool },
-                // The scope plates draw their own material, as in the portrait stack.
-                fillPlate = false,
-            ) { modifier -> content(kind, modifier.semantics { contentDescription = description }) }
-        }
-    }
-}
-
-/**
- * One movable monitor panel on the shared [MonitorMovableScopePanel], in monitor-zone dp: drag
- * within [panelLayout]'s safe bounds, the centre stored normalized to its viewport. It reports its
- * frame so the focus-reset button can climb above it. An unplaced panel starts at [defaultFrame]'s
- * centre, or the viewport centre.
- */
-@Composable
-internal fun MovableMonitorPanel(
-    identity: String,
-    base: MonitorScopeSize,
-    panelLayout: MonitorAnalysisPanelLayout,
-    stored: MonitorScopeStoredCenter?,
-    onStore: (MonitorScopeStoredCenter) -> Unit,
-    hapticsEnabled: Boolean,
-    panelID: MonitorAnalysisPanelID? = null,
-    onPanelFrameChanged: (MonitorAnalysisPanelID, MonitorRect?) -> Unit = { _, _ -> },
-    defaultFrame: MonitorRect? = null,
-    scale: Double = 1.0,
-    onScale: ((Double) -> Unit)? = null,
-    onOpenOptions: (() -> Unit)? = null,
-    fillPlate: Boolean = true,
-    content: @Composable (Modifier) -> Unit,
-) {
-    val density = LocalDensity.current.density
-    val view = LocalView.current
-    val canvas = panelLayout.viewport.scopeRect(density)
-    val bounds = panelLayout.safeBounds.scopeRect(density)
-    val report by rememberUpdatedState(onPanelFrameChanged)
-    var origin by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    if (panelID != null) DisposableEffect(panelID) { onDispose { report(panelID, null) } }
-    Box(Modifier.fillMaxSize().onGloballyPositioned { origin = it }) {
-        MonitorMovableScopePanel(
-            identity = identity,
-            base = base,
-            scale = scale,
-            stored = stored,
-            canvas = canvas,
-            placementBounds = bounds,
-            defaultCenter =
-                defaultFrame?.let { MonitorScopePoint((it.x + it.width / 2f) * density, (it.y + it.height / 2f) * density) }
-                    ?: MonitorScopePoint(canvas.midX, canvas.midY),
-            enabled = true,
-            onStore = onStore,
-            onScale = onScale,
-            onOpenOptions = onOpenOptions?.let { open -> { _ -> open() } },
-            onConfirm = {
-                if (hapticsEnabled) view.performOperatorHaptic(HapticFeedbackConstants.LONG_PRESS)
-            },
-            fillPlate = fillPlate,
-        ) { size ->
-            content(
-                Modifier
-                    .size(size.width.dp, size.height.dp)
-                    .onGloballyPositioned { coordinates ->
-                        val id = panelID ?: return@onGloballyPositioned
-                        val root = origin ?: return@onGloballyPositioned
-                        val at = root.localPositionOf(coordinates, Offset.Zero)
-                        report(
-                            id,
-                            MonitorRect(
-                                at.x / density, at.y / density,
-                                coordinates.size.width / density,
-                                coordinates.size.height / density,
-                            ),
-                        )
-                    },
-            )
-        }
-    }
-}
-
-/** The shared panel footprint for one scope. */
-private val ScopeKind.panelBase: MonitorScopeSize
-    get() =
-        when (this) {
-            ScopeKind.WAVEFORM -> MonitorScopePanelSize.waveform
-            ScopeKind.PARADE -> MonitorScopePanelSize.parade
-            ScopeKind.HISTOGRAM -> MonitorScopePanelSize.histogram
-            ScopeKind.VECTORSCOPE -> MonitorScopePanelSize.vectorscope
-            ScopeKind.TRAFFIC_LIGHTS -> MonitorScopePanelSize.trafficLights
-        }
-
-private fun MonitorRect.scopeRect(density: Float): MonitorScopeRect =
-    MonitorScopeRect(x * density, y * density, width * density, height * density)
-
-/** One panel view of the shared bundle; it never samples or collects frames itself. */
-@Composable
-private fun ScopePanel(
-    kind: ScopeKind,
-    axis: ScopeLevelAxis,
-    bundle: ScopeAssistBundle,
-    assist: MonitorAssistState,
-    modifier: Modifier = Modifier,
-) {
-    if (kind == ScopeKind.TRAFFIC_LIGHTS) {
-        TrafficLightsPanel(bundle.traffic, modifier)
-        return
-    }
-    Box(modifier.monitorMaterial(MonitorMaterial.Scope, ChromeShape)) {
-        when (kind) {
-            ScopeKind.WAVEFORM ->
-                MonitorWaveformScopePlot(
-                    bundle, axis, assist.waveMode, waveformParadeIntensity(assist.waveBrightness),
-                    assist.waveGuides,
-                )
-            ScopeKind.PARADE ->
-                MonitorParadeScopePlot(
-                    bundle, axis, assist.paradeMode, waveformParadeIntensity(assist.paradeBrightness),
-                    assist.paradeGuides,
-                )
-            ScopeKind.HISTOGRAM ->
-                MonitorHistogramScopePlot(
-                    bundle.histogramDisplay, bundle.traffic, assist.histoTrafficLights)
-            ScopeKind.VECTORSCOPE ->
-                MonitorVectorscopeScopePlot(
-                    bundle, assist.vectorZoom, assist.vectorBrightness,
-                )
-            ScopeKind.TRAFFIC_LIGHTS -> Unit
-        }
-    }
-}
-
-/** The shared RGB goal-post meter with the camera's spoken per-channel state. */
-@Composable
-private fun TrafficLightsPanel(reading: ScopeTrafficLightsReading, modifier: Modifier = Modifier) {
-    val resources = LocalResources.current
-    val strings = remember(resources) { resources.phoneStringResolver() }
-    val title = stringResource(R.string.scope_traffic_lights)
-    val state = trafficLightsStateDescription(reading, strings)
-    Box(
-        modifier
-            .monitorMaterial(MonitorMaterial.Scope, ChromeShape)
-            .semantics {
-                contentDescription = title
-                stateDescription = state
-            },
-    ) {
-        MonitorTrafficLightsMeter(reading)
-    }
-}
-
-private fun trafficLightsStateDescription(
-    reading: ScopeTrafficLightsReading,
-    strings: PhoneStringResolver,
-): String {
-    fun channel(name: String, value: ScopeChannelLight): String {
-        val direction =
-            when (MonitorTrafficLightsGeometry.channelDisplay(value.level).side) {
-                MonitorTrafficLightsGeometry.BarSide.NEUTRAL ->
-                    strings.resolve(R.string.scope_direction_balanced)
-                MonitorTrafficLightsGeometry.BarSide.OVER -> strings.resolve(R.string.scope_direction_over)
-                MonitorTrafficLightsGeometry.BarSide.UNDER -> strings.resolve(R.string.scope_direction_under)
-            }
-        val flags =
-            listOfNotNull(
-                strings.resolve(R.string.scope_flag_clip).takeIf { value.clip },
-                strings.resolve(R.string.scope_flag_crush).takeIf { value.crush },
-            )
-        return if (flags.isEmpty()) {
-            strings.resolve(R.string.scope_channel_state, name, direction)
-        } else {
-            val flagCopy =
-                if (flags.size == 2) {
-                    strings.resolve(R.string.scope_flags_both, flags[0], flags[1])
-                } else {
-                    flags.single()
-                }
-            strings.resolve(R.string.scope_channel_state_flags, name, direction, flagCopy)
-        }
-    }
-    return strings.resolve(
-        R.string.scope_state_description,
-        channel(strings.resolve(R.string.scope_channel_red), reading.red),
-        channel(strings.resolve(R.string.scope_channel_green), reading.green),
-        channel(strings.resolve(R.string.scope_channel_blue), reading.blue),
-    )
-}
 
 /**
  * Absolute-schedule live sampler: never gates by source-frame cadence, so it

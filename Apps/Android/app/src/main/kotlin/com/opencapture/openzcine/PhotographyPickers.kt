@@ -2,6 +2,8 @@ package com.opencapture.openzcine
 
 import com.opencapture.opencine.cameracontrols.CaptureDrumWheel
 import com.opencapture.opencine.nikon.StillPickerLadders
+import com.opencapture.opencine.nikon.NikonCapturePopupKind
+import com.opencapture.opencine.nikon.NikonCapturePopupState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
@@ -42,30 +44,6 @@ import com.opencapture.monitorui.monitorMaterial
  * precedence at the presentation layer.
  */
 internal object StillPickerPolicy {
-    /**
-     * The DRIVE drum's options: the body's advertised SET, in RELEASE order, minus the two
-     * positions this drum does not own.
-     *
-     * Advertised beats invented — a body is never offered a mode it lacks (#274) — but advertised
-     * ORDER is not the body's menu order. The ZR enumerates by raw value, and the raws interleave:
-     * Single `0x0001`, Continuous H `0x0002`, Continuous L `0x8010`, Self-timer `0x8011`,
-     * Continuous H+ `0x8019`. So the drum read Single · CH · CL · CH+, which is neither the
-     * camera's wheel nor any Z body's. [StillPickerLadders.DRIVE_OPTIONS] is that release order,
-     * so the advertised set is kept and this ordering applied over it.
-     *
-     * Anything advertised that this build does not know is kept after the modes it can order,
-     * rather than dropped — a newer body's position stays reachable even when its place is a guess.
-     *
-     * Twin of the shared core's `StillDriveMode.driveDrumOptions`; both are tested against the same
-     * table so the wheel cannot read one order on iPhone and another here.
-     */
-    fun driveDrumOptions(advertised: List<String>): List<String> {
-        val offered = advertised.filterNot { it == SELF_TIMER_LABEL || it == "Quick" }
-        if (offered.isEmpty()) return emptyList()
-        val known = StillPickerLadders.DRIVE_OPTIONS.filter(offered::contains)
-        return known + offered.filterNot(StillPickerLadders.DRIVE_OPTIONS::contains)
-    }
-
     /** Drive modes that keep firing while the shutter stays pressed. */
     val CONTINUOUS_DRIVES: Set<String> =
         setOf("Continuous H", "Continuous L", "Continuous H+", "C15", "C30", "C60", "C120")
@@ -301,13 +279,11 @@ internal fun photographyCaptureSettings(
             modes = listOf(isoMode(auto = true), isoMode(auto = false)),
             // Camera truth: the body's Auto-ISO readback picks the open tab.
             initialModeIndex = if (properties.isoAuto == true) 0 else 1,
-            drumLockBanner =
-                if (allowsManualISO) {
-                    "Auto ISO is on — the camera sets sensitivity. " +
-                        "Switch to Manual to choose a value."
-                } else {
-                    "Manual ISO needs a P/S/A/M program. The camera is setting sensitivity."
-                },
+            popup = NikonCapturePopupState(
+                kind = NikonCapturePopupKind.STILL_ISO, title = "ISO", subtitle = "Sensitivity", modes = emptyList(),
+                circuitIndex = if (properties.isoAuto == true) 0 else 1, photography = true,
+                liveIso = properties.iso?.toInt(), stillAllowsManualIso = allowsManualISO,
+            ),
         )
 
     // SHUTTER — the body's stills speed enum with the iOS ladder fallback;
@@ -349,7 +325,7 @@ internal fun photographyCaptureSettings(
     // The body's own release-mode order (Z6III: Single, CL, CH, CH+, …), minus the two positions
     // the app owns: Quick is dial-only and Self-timer belongs to the Built-in Timer tab.
     val driveOptions =
-        StillPickerPolicy.driveDrumOptions(
+        StillPickerLadders.driveDrumOptions(
                 advertised(CameraControl.STILL_DRIVE, StillPickerLadders.DRIVE_OPTIONS))
             .ifEmpty { StillPickerLadders.DRIVE_OPTIONS }
     val drivePicker =

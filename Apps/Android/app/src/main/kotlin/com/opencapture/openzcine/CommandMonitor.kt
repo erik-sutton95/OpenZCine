@@ -14,8 +14,8 @@ import com.opencapture.monitorui.monitorCommandTileOrder
 import com.opencapture.monitorui.moveMonitorCommandTile
 import com.opencapture.opencine.appkit.MonitorCommandTileOrderPreferences
 import com.opencapture.opencine.cameracontrols.LadderSheet
-import com.opencapture.opencine.cameracontrols.LadderSheetPresentation
-import com.opencapture.opencine.cameracontrols.LadderTab
+import com.opencapture.opencine.vocabulary.LadderSheetPresentation
+import com.opencapture.opencine.vocabulary.LadderTab
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.MonitorTextFormat
 import com.opencapture.opencine.vocabulary.CaptureLadder
@@ -955,7 +955,7 @@ internal val IOS_CODEC_PICKER_FALLBACKS =
 
 /**
  * DISP 3: the shared command dashboard over the Nikon projection. A tile is "applying" while
- * its [CameraControl] is the pending write; the health strip ends in the live FPS chip.
+ * its [CameraControl] is the pending write; the health strip ends in the shared link gauge.
  */
 @Composable
 internal fun CommandDashboard(
@@ -974,7 +974,10 @@ internal fun CommandDashboard(
         applying = { it.control == pendingControl },
         onOpenControl = onOpenControl,
         onMoveTile = onMoveTile,
-    ) { FpsChip(signalBars = signalBars, fps = liveFps) }
+    ) {
+        // The link gauge every app's status bar draws (tap toggles bars and fps).
+        com.opencapture.monitorui.MonitorTelemetry(signalBars, liveFps, emptyList(), horizontal = true, showsPower = false)
+    }
 }
 
 /**

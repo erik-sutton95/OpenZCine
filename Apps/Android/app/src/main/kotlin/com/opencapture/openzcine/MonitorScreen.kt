@@ -1,5 +1,6 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.codecColorChoices
 import com.opencapture.opencine.media.recordingTimeLabel
 import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.media.StorageReadout
@@ -322,6 +323,7 @@ internal fun MonitorScreen(
             resolveMonitorCameraStatus(sessionState, internetHopState)
         }
     val monitorAccessibilityState = monitorCameraStatusAccessibility(cameraFeedStatus)
+    val cameraFeedNotice = monitorCameraStatusNotice(cameraFeedStatus)
     val cameraProperties by session.cameraProperties.collectAsState()
     // Real press-tracked still release over the session (single, bulb/time,
     // and hold-to-burst with the remote-mode bracket). [verify-on-HW]
@@ -1236,7 +1238,7 @@ internal fun MonitorScreen(
         // hides the key. Vertical mode always lays out as fill (shared layout policy).
         val portraitAspect = operatorSettings.portraitFeedAspect.takeIf { !isPhotographyMode && !isCommand }
         // Chrome the operator switched on still hides when nothing can fill it (iOS `sectionHasASource`).
-        val codecColor = nikonCodecColorChoices(cameraProperties)
+        val codecColor = cameraProperties.codecColorChoices()
         val available = availability.monitorSections(cameraReportsTimecode, isPhotographyMode,
             reportsColor = codecColor.showsColor, controls = commonSession.controlCapabilities(codecColor))
         val mounted: (MonitorDisplaySection) -> Boolean = { it in available && operatorSession.mounts(it) }
@@ -1847,7 +1849,7 @@ internal fun MonitorScreen(
             thermalTier, source, isPortrait, isPortraitFill, scopeZone) } ?: emptyScopes
         val floating = MonitorAnalysisPanelLayout(physicalViewport, geometry.scopePlacement)
         val reference = liveFeedEffectsPresentation.falseColorReference?.let { value ->
-            value.referenceValues(falseColorReferenceCopy(value.scale)).takeIf { it.segments.isNotEmpty() }
+            value.referenceValues().takeIf { it.segments.isNotEmpty() }
         }
         val placement = MonitorAssistPanelPlacement(
             read = { tool, portrait -> if (tool == MonitorAssistTool.AUDIO) assists.shared.audioCenterFor(portrait)
@@ -2009,7 +2011,10 @@ internal fun MonitorScreen(
                 waiting = pictureFrameSource != null && !hasPresentedFrame && !isDemoSession &&
                     sessionState is CameraSessionState.Connected,
                 vertical = isVerticalFeed, flipped = renderedFraming.mirrorsHorizontally,
-                recovering = (recoveryStateOverride ?: sessionRecoveryState) != SessionRecoveryUi.Idle),
+                recovering = (recoveryStateOverride ?: sessionRecoveryState) != SessionRecoveryUi.Idle,
+                // Hop-aware status: after a RED / Frame.io internet hop the session is Disconnected
+                // while Wi-Fi rejoins, so the plate says so instead of a bare "No camera".
+                notice = if (pictureFrameSource == null) cameraFeedNotice else null),
             status = MonitorOperatorLiveStatus({ commonControl.statusPresentation() },
                 !isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE),
                 !isPhotographyMode && mounted(MonitorDisplaySection.REC_READOUT), statusStorage, headerReadouts,
@@ -2236,12 +2241,8 @@ internal fun MonitorScreen(
                         preferComposablePresentation = displayedFeedRotation != LiveFeedRotation.LANDSCAPE,
                     )
                     // Nothing draws over the picture here: the waiting plate is the surface's, and the
-                    // picture carries no texture (A3-04).
-                } else {
-                    // Hop-aware status: after RED/Frame.io internet hop the session is
-                    // Disconnected while Wi‑Fi rejoins — never leave the operator on a bare
-                    // "No camera" while we are actively searching / rejoining.
-                    MonitorFeedCameraStatus(status = cameraFeedStatus)
+                    // picture carries no texture (A3-04). Without a feed the plate carries the
+                    // camera status (MonitorOperatorLivePicture.notice).
                 }
                 LocalFramingAssistOverlay(
                     configuration = renderedFraming,
@@ -2274,17 +2275,14 @@ internal fun MonitorScreen(
                 )
             }
             },
-            cameraPanel = { key, pickerFrame, isTopDropDown, _ ->
+            cameraPanel = { key, _, isTopDropDown, _ ->
                 activeMonitorPicker?.takeIf { it.kind.name == key }?.let { picker ->
                     CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
                     MonitorControlPickerPanel(
                         picker = picker,
                         recordingFormats = cameraProperties.controlCapabilities.recordingFormats,
-                        frame = pickerFrame,
                         commonControl = if (isPhotographyMode) null else commonControl,
-                        commonField = fieldFor(picker.kind),
                         controlsEnabled = commandControlsEnabled,
-                        pendingControl = pendingCommandControl,
                         feedback = commandControlFeedback,
                         onSelect =
                             if (isPhotographyMode) {
@@ -2319,7 +2317,6 @@ internal fun MonitorScreen(
                                 CameraControl.STILL_RAW_COMPRESSION),
                         mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
                         onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
-                        chromeless = true,
                         codecColor = if (isPhotographyMode) null else codecColor,
                     )
                     }
