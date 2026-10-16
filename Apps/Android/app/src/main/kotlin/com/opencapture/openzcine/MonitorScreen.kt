@@ -1947,7 +1947,7 @@ internal fun MonitorScreen(
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
         val headerReadouts = listOfNotNull(
             if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name,
-                monitorFormatReadoutTitle(isPhotographyMode),
+                MONITOR_FORMAT_READOUT_TITLE,
                 if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else readoutRetention.resolution,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",

@@ -113,9 +113,8 @@ class MonitorReadoutsTest {
     }
 
     @Test
-    fun `the FORMAT readout says Format for the recording format like iOS`() {
-        // Z-ANDROID-FORMAT-TITLE: iOS titles the movie format readout "Format"; stills name the image size.
-        assertEquals("Format", monitorFormatReadoutTitle(isPhotographyMode = false))
-        assertEquals("Image size", monitorFormatReadoutTitle(isPhotographyMode = true))
+    fun `the FORMAT readout says Format in movie and photo mode like iOS`() {
+        // Z-ANDROID-FORMAT-TITLE (Root ruling): iOS titles the readout "Format" in both modes.
+        assertEquals("Format", MONITOR_FORMAT_READOUT_TITLE)
     }
 }
