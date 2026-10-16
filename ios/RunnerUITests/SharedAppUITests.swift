@@ -51,6 +51,15 @@ final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshot
     }
 }
 
+/// The launch splash takes every touch until it fades, and a control beneath it reads as not
+/// hittable until then; a tap before that is not delivered.
+@MainActor
+private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+    let hittable = XCTNSPredicateExpectation(
+        predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
+    return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
+}
+
 /// Exercises the actual app root, including its pre-page precedence, without a camera.
 @MainActor
 final class ConnectFunnelAdoptionTests: XCTestCase {
@@ -187,12 +196,6 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         XCTAssertTrue(app.buttons["addSetup.usbC"].waitForExistence(timeout: 5))
     }
 
-    /// The cameras page settles after the launch splash; a tap before then is not delivered.
-    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
-        let hittable = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
-        return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
-    }
 
     func testSharedProgressSurvivesPostHandshakePreparation() {
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -263,7 +266,7 @@ final class StandaloneConsentPresentationTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let show = app.buttons["Show decision"]
-        XCTAssertTrue(show.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntilHittable(show))
         show.tap()
         let alert = app.alerts["SIMULATED decision"]
         guard alert.waitForExistence(timeout: 5) else {
