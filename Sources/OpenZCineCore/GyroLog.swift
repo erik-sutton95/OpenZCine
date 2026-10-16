@@ -60,14 +60,23 @@ public struct GyroLogDescriptor: Codable, Equatable, Sendable, Identifiable {
     public let isPartial: Bool
     /// Selected rigid mount at REC start; absent in logs written before mount presets existed.
     public let mountPreset: GyroMountPreset?
+    /// Verified raw-phone-to-camera rotation frozen at REC start; absent in older/manual logs.
+    public let mountCalibration: GyroMountCalibration?
     /// Effective alignment, preserving the unconfigured behavior of older logs.
     public var mount: GyroMountPreset { mountPreset ?? .unconfigured }
+    /// Calibrated rows are already in camera axes; manual rows retain their original remap.
+    public var orientation: String { mountCalibration == nil ? mount.orientation : "XYZ" }
+    /// Alignment used by this take, independent of the current app preference.
+    public var alignmentDetail: String {
+        mountCalibration == nil ? mount.detail : "Calibrated mount"
+    }
 
     /// Creates persisted metadata for a take, including its unique export filename.
     public init(
         id: UUID = UUID(), cameraLabel: String, startDate: Date,
         approximateStartOffset: Double, isPartial: Bool,
-        mountPreset: GyroMountPreset = .unconfigured
+        mountPreset: GyroMountPreset = .unconfigured,
+        mountCalibration: GyroMountCalibration? = nil
     ) {
         self.id = id
         self.cameraLabel = cameraLabel
@@ -75,6 +84,7 @@ public struct GyroLogDescriptor: Codable, Equatable, Sendable, Identifiable {
         self.approximateStartOffset = approximateStartOffset
         self.isPartial = isPartial
         self.mountPreset = mountPreset
+        self.mountCalibration = mountCalibration
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)

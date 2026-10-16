@@ -62,7 +62,8 @@ public struct GyroTakeSession: Sendable {
     /// A fixed two-second-before-start origin admits sensor batches delivered after this event.
     public mutating func observeRecording(
         _ recording: Bool, at timestamp: Double, date: Date, cameraLabel: String,
-        mountPreset: GyroMountPreset = .unconfigured
+        mountPreset: GyroMountPreset = .unconfigured,
+        mountCalibration: GyroMountCalibration? = nil
     ) -> [GyroLogUpdate] {
         guard !isFinished, timestamp.isFinite, timestamp >= 0 else { return [] }
         if armedAt == nil { armedAt = timestamp }
@@ -80,7 +81,7 @@ public struct GyroTakeSession: Sendable {
         let descriptor = GyroLogDescriptor(
             cameraLabel: cameraLabel, startDate: date,
             approximateStartOffset: timestamp - origin, isPartial: wasUnknown,
-            mountPreset: mountPreset)
+            mountPreset: mountPreset, mountCalibration: mountCalibration)
         var take = Take(descriptor: descriptor, origin: origin)
         updates.append(.opened(descriptor))
         updates.append(
@@ -176,7 +177,8 @@ public struct GyroTakeSession: Sendable {
                 else { continue }
                 let micros = ((sample.timestamp - origin) * 1_000_000).rounded()
                 guard lastMicroseconds.map({ micros > $0 }) ?? true,
-                    let row = try? GyroGCSVEncoder.row(sample, origin: origin)
+                    let row = try? GyroGCSVEncoder.row(
+                        sample, origin: origin, mountCalibration: descriptor.mountCalibration)
                 else {
                     statistics.rejected += 1
                     continue

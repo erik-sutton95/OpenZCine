@@ -18,17 +18,21 @@ public enum GyroGCSVError: Error, LocalizedError, Equatable, Sendable {
 
 /// Portable GCSV 1.3 bytes; storage and camera synchronization remain outside this encoder.
 public enum GyroGCSVEncoder {
-    /// Emits raw device axes and the take's selected mount alignment for Gyroflow to apply.
+    /// Emits camera axes for calibrated takes, or the take's selected raw-device remap.
     public static func header(descriptor: GyroLogDescriptor) -> Data {
         let camera = descriptor.cameraLabel.replacingOccurrences(of: ",", with: " ")
             .replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+        let status =
+            descriptor.mountCalibration == nil
+            ? (descriptor.mount == .unconfigured ? "unverified" : "operator_selected")
+            : "calibrated"
         return Data(
             """
             GYROFLOW IMU LOG
             version,1.3
             id,OpenZCine
-            orientation,\(descriptor.mount.orientation)
-            orientation_status,\(descriptor.mount == .unconfigured ? "unverified" : "operator_selected")
+            orientation,\(descriptor.orientation)
+            orientation_status,\(status)
             mount_preset,\(descriptor.mount.rawValue)
             camera,\(camera)
             session_uuid,\(descriptor.id.uuidString)
@@ -40,8 +44,11 @@ public enum GyroGCSVEncoder {
             """.utf8)
     }
 
-    /// Encodes one sample relative to a fixed sensor-clock origin, using a locale-independent dot.
-    public static func row(_ sample: GyroSample, origin: Double) throws -> Data {
+    /// Encodes a sample relative to a fixed sensor-clock origin, applying a frozen calibration once.
+    public static func row(
+        _ sample: GyroSample, origin: Double, mountCalibration: GyroMountCalibration? = nil
+    ) throws -> Data {
+        let sample = mountCalibration?.applying(to: sample) ?? sample
         let microseconds = ((sample.timestamp - origin) * 1_000_000).rounded()
         guard sample.isFinite, origin.isFinite, microseconds.isFinite,
             microseconds >= 0, microseconds < Double(Int64.max)
@@ -95,7 +102,7 @@ public struct GyroGCSVRecovery: Sendable {
 
     /// Summarizes complete validated rows. An unterminated final line is deliberately excluded.
     public func finish(descriptor: GyroLogDescriptor) throws -> GyroLogSummary {
-        guard headerComplete, orientation == descriptor.mount.orientation else {
+        guard headerComplete, orientation == descriptor.orientation else {
             throw GyroGCSVError.invalidHeader
         }
         return statistics.summary(descriptor, reason: .recovered)
