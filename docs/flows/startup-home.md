@@ -63,8 +63,11 @@ flowchart TD
   steps in the rail, the current step in the pane.
 - **Code:** `LinkExperience.swift` (`shouldShowFirstPairWizard`), `StartupDesign.swift`, OpenCine
   `PairScreen` + `IntegrationPairingFlow`.
-- **Detail:** `shouldShowFirstPairWizard` is true when `savedCameras.isEmpty` **or**
-  `isPairingNewCamera`. Routes to [camera-ap-join.md](./camera-ap-join.md) — not expanded here.
+- **Detail:** `shouldShowFirstPairWizard` is true when `isPairingNewCamera`, **or** when
+  `savedCameras.isEmpty` and the operator has not chosen the camera list (the wizard's "Open the
+  camera list" row, for a watcher-only device). A fresh install therefore opens the same wizard as
+  Pair a new camera, as `AppShell`'s pre-page over its pair route. Routes to
+  [camera-ap-join.md](./camera-ap-join.md), not expanded here.
 - 📝 Notes:
 
 ### HOME-01 — Your cameras home
@@ -106,6 +109,9 @@ flowchart TD
   saved row via host/name match. Updates `connectionMessage` for recovery copy when hotspot-related.
   Does **not** auto-connect Wi‑Fi saved cameras — operator must tap Connect (USB is the exception,
   HOME-05).
+  USB is browsed only after an operator choice on the cable path (the wizard's Cable Link, a saved
+  USB-C setup, an armed USB-C watch): starting ImageCaptureCore asks for camera control, which iOS
+  shows as the Camera prompt (`discoveryBrowsesUSB`, A2-09).
 - 📝 Notes:
 
 ### HOME-04 — Connect saved camera

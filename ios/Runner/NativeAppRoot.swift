@@ -2827,11 +2827,12 @@ final class NativeAppModel {
         return candidates.first
     }
 
-    /// The shared cameras page is home, the same as the other apps. The transport wizard opens
-    /// only when the operator chooses Pair a new camera. An empty list still discovers nearby
-    /// cameras; it does not cover the page with a first-run guide.
+    /// The transport wizard, as `AppShell`'s pre-page: when the operator chooses Pair a new
+    /// camera, and on first run. With nothing saved the shell routes to its pair page, so a fresh
+    /// install reaches the same wizard (Cable Link, Camera AP) as every later pairing, until the
+    /// operator chooses the camera list instead (a watcher-only device).
     var shouldShowFirstPairWizard: Bool {
-        isPairingNewCamera
+        isPairingNewCamera || (savedCameras.isEmpty && !showsCameraListWithoutSavedCameras)
     }
 
     /// Plain-language version of `connectionMessage` for startup screens.
@@ -5057,13 +5058,14 @@ final class NativeAppModel {
     /// Exercising ICC camera control makes the OS show its "Using Camera Access to Control
     /// Connected Cameras" disclosure on every launch — so USB browsing runs only where a
     /// cable is actually in play: a saved USB-C setup, or the pairing surface.
-    private var discoveryBrowsesUSB: Bool {
-        // An armed cable watch has to browse USB or it can never fulfill — and a camera being
-        // GIVEN its first USB-C setup has no USB record yet by definition, which is exactly what
-        // the two conditions before this one look for. "Connect When Plugged In" therefore sat on
-        // "Searching…" with the cable attached: the watch was armed and correct, and the device
-        // it was waiting for was never enumerated for it to see.
-        startupMode == .discovery || savedCameras.contains(where: \.isUSBTransport)
+    var discoveryBrowsesUSB: Bool {
+        // Browsing USB starts ImageCaptureCore, whose first start asks for camera control: iOS
+        // shows it as the Camera prompt. Only an operator choice on the cable path may raise it
+        // (A2-09): the wizard's Cable Link discovery, a saved USB-C setup, or an armed cable
+        // watch. That last one matters too: a camera being GIVEN its first USB-C setup has no USB
+        // record yet, and "Connect When Plugged In" otherwise waits for a device it never sees.
+        (shouldShowFirstPairWizard && discoveryTransportFilter == .usbC)
+            || savedCameras.contains(where: \.isUSBTransport)
             || pendingSetupIntent?.kind == .usbC
     }
 
