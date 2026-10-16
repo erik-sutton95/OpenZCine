@@ -264,6 +264,18 @@ final class StandaloneConsentPresentationTests: XCTestCase {
     }
 }
 
+/// SIMULATED: the codec and colour readouts open one popup listing the codec ladder and the
+/// staged H.265 tones (SDR, HLG, N-Log), in both orientations.
+final class CodecColorPopupUITests: OpenCineAppUITesting.CodecColorPopupUITests {
+    override var hasCodecReadout: Bool { true }
+    override var reviewLaunchEnvironment: [String: String] {
+        [
+            "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live",
+            "ZC_DEMO_GRAPHICAL_REVIEW": "1", "ZC_DEMO_CODEC_DESCRIPTOR": "1",
+        ]
+    }
+}
+
 /// SIMULATED pixels through the actual app/provider/inspector; no camera transport or hardware claim.
 final class NikonLiveLUTWheelTouchTests: SharedAppUITestCase {
     @MainActor

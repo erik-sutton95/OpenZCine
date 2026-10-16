@@ -3169,6 +3169,17 @@ final class NikonSharedStorageReadoutTests: XCTestCase {
     }
 }
 
+@Suite("Nikon FORMAT readout")
+struct NikonRecordingFormatLabelTests {
+    @Test("The image-area tag leads the common recording label, as the body shows it")
+    func imageAreaTagLeads() {
+        #expect(nikonRecordingFormatLabel("6K · 25p", imageArea: "FX") == "[FX] 6K · 25p")
+        #expect(nikonRecordingFormatLabel("4K · 50p", imageArea: "DX") == "[DX] 4K · 50p")
+        #expect(nikonRecordingFormatLabel("4K · 50p", imageArea: nil) == "4K · 50p")
+        #expect(nikonRecordingFormatLabel(nil, imageArea: "FX") == nil)
+    }
+}
+
 /// SIMULATED descriptor reports enter through the actual app bootstrap producer.
 @MainActor
 @Suite("Common Nikon exposure provenance")
