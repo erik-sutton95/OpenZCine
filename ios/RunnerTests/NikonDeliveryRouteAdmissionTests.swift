@@ -1,5 +1,7 @@
 import Foundation
 import OpenCineAppKit
+import SwiftUI
+import UIKit
 import XCTest
 
 @testable import Runner
@@ -148,6 +150,55 @@ import XCTest
         XCTAssertTrue(model.internetHop.owns(successor))
         await model.internetHop.end(successor)?.value
         XCTAssertEqual(fake.joins, ["SIMULATED-A", "SIMULATED-B"])
+    }
+
+    /// A2-59: dismissing the RED download screen ends only a hop that screen began. Another
+    /// owner's hop (here one started before the screen appeared) keeps running and is never
+    /// rejoined by the screen's disappearance.
+    func testRedDownloadScreenDisappearingLeavesAnotherOwnersHopRunning() async throws {
+        let fake = NikonHopFake()
+        fake.answers = [{ "SIMULATED-A" }]
+        let model = hop(fake)
+        let other = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 1 }
+
+        var appeared = false
+        var disappeared = false
+        let host = UIHostingController(
+            rootView: RedDownloadView { _ in 0 }
+                .environment(model)
+                .onAppear { appeared = true }
+                .onDisappear { disappeared = true })
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive },
+            "Presenting the RED screen requires the app's foreground scene")
+        let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        await pump { appeared }
+
+        window.isHidden = true
+        window.rootViewController = nil
+        previousKeyWindow?.makeKeyAndVisible()
+        await pump { disappeared }
+        for _ in 0..<20 { await Task.yield() }
+
+        XCTAssertTrue(model.internetHop.owns(other), "The screen ended a hop it did not begin")
+        XCTAssertTrue(model.internetHopActive)
+        XCTAssertTrue(fake.joins.isEmpty, "The screen rejoined the camera for another owner")
+        await model.internetHop.end(other)?.value
+        XCTAssertEqual(fake.joins, ["SIMULATED-A"])
+    }
+
+    /// Spins the main run loop until SwiftUI has delivered a lifecycle callback.
+    private func pump(_ predicate: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(5)
+        while !predicate(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(predicate(), "SwiftUI lifecycle callback did not arrive")
     }
 
     private func settle(_ predicate: () -> Bool) async {

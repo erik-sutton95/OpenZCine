@@ -774,7 +774,7 @@ enum DemoHarness {
                 }
             }
             if superResolutionStage == "input" {
-                FeedUpscaleSwitch.presentsSuperResolutionInput = true
+                FeedUpscaleSwitch.shared.presentsSuperResolutionInput = true
             }
             if let strength = liveDenoiseStrength {
                 LiveDenoiseSwitch.shared.strength = strength
