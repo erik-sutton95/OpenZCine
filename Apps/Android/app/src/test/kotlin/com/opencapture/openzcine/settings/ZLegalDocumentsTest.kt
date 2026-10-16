@@ -2,6 +2,7 @@ package com.opencapture.openzcine.settings
 
 import com.opencapture.opencine.cameracontrols.MonitorLegalDocument
 import com.opencapture.opencine.cameracontrols.MonitorPlatformLegalNotices
+import com.opencapture.opencine.cameracontrols.MonitorSettingsCopy
 import com.opencapture.openzcine.diagnostics.AndroidSupportLinks
 import java.io.File
 import kotlin.test.Test
@@ -29,6 +30,10 @@ class ZLegalDocumentsTest {
         assertTrue(privacy.startsWith("OpenZCine "))
         assertTrue(privacy.contains("Sentry") && privacy.contains("Automatic error reports are optional"))
         assertTrue(privacy.endsWith(AndroidSupportLinks.PRIVACY))
+        // In-app privacy matches the website (2026-10-16): the shared reliability paragraph with the
+        // install identifier, and the optional RED looks Android offers.
+        assertTrue(privacy.contains(MonitorSettingsCopy.reliabilityReportsPrivacy))
+        assertTrue(privacy.contains("RED looks are optional") && privacy.contains("IPP2"))
         assertTrue(terms.startsWith("OpenZCine is free software under the Apache License 2.0."))
         assertTrue(terms.endsWith(AndroidSupportLinks.TERMS))
         assertFalse((privacy + terms).contains('\u2014'), "Operator copy never uses the em dash")

@@ -3,6 +3,7 @@ package com.opencapture.openzcine.settings
 import com.opencapture.opencine.cameracontrols.MonitorLegalDocument
 import com.opencapture.opencine.cameracontrols.MonitorLegalDocuments
 import com.opencapture.opencine.cameracontrols.MonitorPlatformLegalNotices
+import com.opencapture.opencine.cameracontrols.MonitorSettingsCopy
 
 private val PRIVACY_BODY =
     """
@@ -10,9 +11,7 @@ OpenZCine talks to your Nikon Z camera over Wi-Fi or USB-C. The app has no accou
 
 OpenCapture is the data controller. Privacy or deletion requests: support@opencapture.org.
 
-Optional reliability reports
-With your consent, configured builds send crash, hang and feed diagnostics, app/OS/device versions and session health counts through Sentry. Automatic reports exclude all images. No footage, screenshots, raw camera packets or GPS location are included. Sentry receives the connection IP; stored event IP and derived geography are removed. Event storage uses Germany. Some provider processing may occur internationally.
-Turn reporting off in System at any time without losing app features. This clears pending SDK uploads, but does not delete reports already received. Contact us privately to request deletion. The website policy explains retention, transfers and your rights.
+${MonitorSettingsCopy.reliabilityReportsPrivacy}
 
 Reporting a problem yourself
 Report a Problem sends your description and any optional reply email to OpenCapture through Sentry when you tap Send report. Technical details are included only if you choose them and can be reviewed first. You can choose up to three photos or screenshots and review or remove them before sending. Selected images are resized and re-encoded without original filenames or location metadata. Only share images you have permission to send; no images are attached automatically. This one-off submission does not enable automatic reports. Unsent reports stay privately on this phone, expire after 7 days (removed when the app next runs), wait until you leave camera Wi-Fi, and can be removed before delivery. Do not include passwords or other sensitive information in your message. You can decline the first-launch prompt and enable automatic reports later in System.
@@ -20,7 +19,7 @@ Report a Problem sends your description and any optional reply email to OpenCapt
 What stays on this phone
 • Saved cameras, pairing profiles and the reconnect identity. Camera Wi-Fi passwords are sealed with an Android Keystore key on this phone only.
 • Operator preferences such as Keep Screen Awake and the selected look.
-• Imported .cube files you choose to open.
+• Imported .cube files you choose to open and RED looks you download.
 • Saved feed incident and session reports, until you delete them in System.
 
 What never leaves the phone
@@ -29,6 +28,7 @@ What never leaves the phone
 Third parties
 • Google may process permission prompts and OS diagnostics under its own policies. Play betas may send crash reports to the developer under Google terms.
 • Frame.io is optional. If this build is configured and you sign in, clips you pick upload from this phone to Adobe. The token stays in on-device storage.
+• RED looks are optional. If you choose Download from RED, the app shows RED's IPP2 output presets page inside the app and downloads the file you pick from RED's servers. That visit and download are governed by RED's own privacy policy.
 • Saving a clip or using the share sheet is something you start. Android or the app you pick then handles that file.
 • The source is at github.com/erik-sutton95/OpenZCine.
 
