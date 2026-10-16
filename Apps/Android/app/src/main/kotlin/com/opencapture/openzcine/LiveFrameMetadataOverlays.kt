@@ -25,7 +25,8 @@ import com.opencapture.monitorui.MonitorLevelOverlay
 import com.opencapture.monitorui.MonitorScopeRect
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
+import kotlin.math.min
 import kotlin.math.roundToInt
 import com.opencapture.opencine.runtime.NativeFeedContentRect
 import com.opencapture.opencine.runtime.nativeFeedContentRect
@@ -138,16 +139,16 @@ internal fun resolveLiveLevel(
 /** Accessible provenance copy that never lets debug fixtures masquerade as camera telemetry. */
 internal fun liveLevelAccessibilityDescription(
     reading: LiveLevelReading,
-    style: LocalLevelStyle,
+    style: MonitorLevelStyle,
 ): String =
     if (reading.source == LiveLevelSource.CAMERA) {
         if (reading.isDebugFixture) {
-            "Debug fixture level, not camera metadata, ${style.label.lowercase()}"
+            "Debug fixture level, not camera metadata, ${style.title.lowercase()}"
         } else {
-            "Camera virtual horizon, ${style.label.lowercase()}"
+            "Camera virtual horizon, ${style.title.lowercase()}"
         }
     } else {
-        "${reading.deviceTiltProvenance?.accessibilityLabel ?: "device tilt"} fallback, ${style.label.lowercase()}"
+        "${reading.deviceTiltProvenance?.accessibilityLabel ?: "device tilt"} fallback, ${style.title.lowercase()}"
     }
 
 /**
@@ -245,7 +246,7 @@ internal fun LiveFrameMetadataOverlay(
 @Composable
 private fun CameraLevelOverlay(
     reading: LiveLevelReading?,
-    style: LocalLevelStyle,
+    style: MonitorLevelStyle,
     feed: LiveOverlayRect,
     visibleBounds: LiveOverlayRect,
     isPortrait: Boolean,
@@ -259,9 +260,9 @@ private fun CameraLevelOverlay(
         when (style) {
             // The shared overlay: a horizon through the picture's centre, or the two-axis gauge with
             // roll along the bottom and pitch on the trailing side.
-            LocalLevelStyle.HORIZON, LocalLevelStyle.GAUGE ->
+            MonitorLevelStyle.HORIZON, MonitorLevelStyle.GAUGE ->
                 MonitorLevelOverlay(
-                    display = if (style == LocalLevelStyle.HORIZON) MonitorLevelDisplay.Horizon(reading.rollDegrees)
+                    display = if (style == MonitorLevelStyle.HORIZON) MonitorLevelDisplay.Horizon(reading.rollDegrees)
                         else MonitorLevelDisplay.Gauges(reading.rollDegrees, reading.pitchDegrees),
                     feedDp =
                         MonitorScopeRect(

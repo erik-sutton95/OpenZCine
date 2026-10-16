@@ -27,6 +27,7 @@ final class ShareRoundTrip: OpenCineAppUITesting.ShareRoundTrip {}
 final class ConfirmationCancel: OpenCineAppUITesting.ConfirmationCancel {}
 final class ChromeEditReturn: OpenCineAppUITesting.ChromeEditReturn {}
 final class AccessibilityTraversal: OpenCineAppUITesting.AccessibilityTraversal {}
+final class ScreenMatrix: OpenCineAppUITesting.ScreenMatrix {}
 final class ConformanceCoverageTests: OpenCineAppUITesting.ConformanceCoverageTests {}
 /// SIMULATED launch configuration only; layout and pixel assertions stay in OpenCine.
 final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshotLayoutTests {
@@ -39,6 +40,15 @@ final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshot
             "ZC_DEMO_GRAPHICAL_REVIEW": "1",
         ]
     }
+}
+
+/// The launch splash takes every touch until it fades, and a control beneath it reads as not
+/// hittable until then; a tap before that is not delivered.
+@MainActor
+private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+    let hittable = XCTNSPredicateExpectation(
+        predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
+    return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
 }
 
 /// Exercises the actual app root, including its pre-page precedence, without a camera.
@@ -110,7 +120,8 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
             app.launch()
             let cancel = app.buttons["Cancel"].firstMatch
             XCTAssertTrue(cancel.waitForExistence(timeout: 10), mode)
-            XCTAssertTrue(cancel.isHittable, mode)
+            // Hittable once the launch splash, which takes touches until it fades, is gone.
+            XCTAssertTrue(waitUntilHittable(cancel), mode)
             // The established session keeps its useful progress line, not a bare page.
             XCTAssertTrue(
                 app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", line))
@@ -147,12 +158,35 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         }
     }
 
-    /// The cameras page settles after the launch splash; a tap before then is not delivered.
-    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
-        let hittable = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
-        return XCTWaiter().wait(for: [hittable], timeout: timeout) == .completed
+    /// The launch splash takes touches until it fades, so a control beneath it must not read as
+    /// hittable: an early tap was lost and the add-setup chooser never opened.
+    func testLaunchSplashKeepsTheCamerasPageUnhittableUntilItFades() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let splash = app.descendants(matching: .any)["monitor-launch-splash"]
+        let addSetup = app.buttons["cameras.addSetup"].firstMatch
+        XCTAssertTrue(splash.waitForExistence(timeout: 10), "the launch splash must be in the AX tree")
+        var coveredSamples = 0
+        let deadline = Date().addingTimeInterval(15)
+        while splash.exists, Date() < deadline {
+            let hittable = addSetup.exists && addSetup.isHittable
+            // Only a sample the splash bracketed on both sides counts.
+            if splash.exists {
+                coveredSamples += 1
+                XCTAssertFalse(hittable, "a control under the launch splash read as hittable")
+            }
+        }
+        XCTAssertGreaterThan(coveredSamples, 0)
+        XCTAssertFalse(splash.exists, "the launch splash must leave the AX tree once it fades")
+        XCTAssertTrue(waitUntilHittable(addSetup))
+        addSetup.tap()
+        XCTAssertTrue(app.buttons["addSetup.usbC"].waitForExistence(timeout: 5))
     }
+
 
     func testSharedProgressSurvivesPostHandshakePreparation() {
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -223,7 +257,7 @@ final class StandaloneConsentPresentationTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let show = app.buttons["Show decision"]
-        XCTAssertTrue(show.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntilHittable(show))
         show.tap()
         let alert = app.alerts["SIMULATED decision"]
         guard alert.waitForExistence(timeout: 5) else {
@@ -459,6 +493,62 @@ final class NikonSharedEVMeterUITests: SharedAppUITestCase {
             shot.name = "SIMULATED Z shared EV meter \(orientation == .portrait ? "portrait" : "landscape")"
             shot.lifetime = .keepAlways
             add(shot)
+        }
+    }
+}
+
+/// Z Settings through the shared settings owner, which no Z UI test covered before: every tab in
+/// portrait and landscape, the HDR display row (A2-31) and the problem report over the app root
+/// with Settings still under it (A2-24).
+final class SettingsUIFlowTests: SharedAppUITestCase {
+    override func setUp() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    override func tearDown() {
+        app?.terminate()
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    func testEveryTabInBothOrientationsWithHDRDisplayAndTheRootReport() {
+        launch(ReviewLaunch(screen: .settings))
+        let tabs = app.scrollViews["monitor.settings.tabs"]
+        XCTAssertTrue(tabs.waitForExistence(timeout: 30))
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            rotate(orientation)
+            let side = orientation == .portrait ? "portrait" : "landscape"
+            for tab in MonitorSettingsTab.allCases {
+                let button = app.buttons["monitor.settings.tab.\(tab.rawValue)"]
+                XCTAssertTrue(button.waitForExistence(timeout: 5), "\(tab.rawValue) tab")
+                reveal(button, in: tabs, portrait: orientation == .portrait)
+                button.tap()
+                XCTAssertTrue(button.isSelected)
+                if tab == .display {
+                    XCTAssertTrue(app.staticTexts["HDR display"].firstMatch.waitForExistence(timeout: 5))
+                }
+                let slug = tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-")
+                capture("z-settings-\(slug)-\(side)")
+            }
+            let report = app.buttons["support.report.open"]
+            XCTAssertTrue(report.waitForExistence(timeout: 5))
+            for _ in 0..<4 where !report.isHittable { app.swipeUp() }
+            report.tap()
+            XCTAssertTrue(app.textViews["What happened?"].waitForExistence(timeout: 5))
+            capture("z-settings-report-\(side)")
+            app.buttons["Close"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["monitor.settings.tab.System"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.textViews["What happened?"].exists)
+        }
+    }
+
+    private func reveal(_ tab: XCUIElement, in rail: XCUIElement, portrait: Bool) {
+        for _ in 0..<6 where !tab.isHittable {
+            if portrait {
+                if tab.frame.minX < rail.frame.minX { rail.swipeRight() } else { rail.swipeLeft() }
+            } else {
+                if tab.frame.minY < rail.frame.minY { rail.swipeDown() } else { rail.swipeUp() }
+            }
         }
     }
 }

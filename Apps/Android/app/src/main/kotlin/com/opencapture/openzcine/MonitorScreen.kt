@@ -116,6 +116,7 @@ import com.opencapture.monitorui.MonitorStatusPresentation
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.controlCapabilities
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.openzcine.bridge.SwiftLiveViewPolicyInput
@@ -142,11 +143,11 @@ import com.opencapture.opencine.nikon.LiveFrameSource
 import com.opencapture.openzcine.core.MonitorDataAvailability
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.openzcine.lut.AndroidLutLibrary
-import com.opencapture.openzcine.remote.AndroidMediaRemoteShutter
-import com.opencapture.openzcine.remote.MediaRemoteShutterCommand
+import com.opencapture.opencine.appkit.MonitorRemoteShutter
+import com.opencapture.opencine.appkit.MonitorRemoteShutterCommand
+import com.opencapture.opencine.appkit.monitorRemoteShutterShouldArm
 import com.opencapture.openzcine.remote.routeMediaRemoteShutterCommand
-import com.opencapture.openzcine.remote.shouldArmMediaRemoteShutter
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.appkit.MonitorDisplaySection
@@ -266,7 +267,7 @@ internal fun MonitorScreen(
     frameioController: com.opencapture.opencine.frameio.FrameioDeliveryController? = null,
     liveViewEnabled: Boolean = true,
     liveBackdrop: NikonLiveBackdrop? = null,
-    mediaRemoteShutter: AndroidMediaRemoteShutter? = null,
+    mediaRemoteShutter: MonitorRemoteShutter? = null,
     isMonitorFront: Boolean = true,
     sessionRecoveryEnabled: Boolean = true,
     linkHealth: AndroidLinkHealthMonitor? = null,
@@ -1045,7 +1046,7 @@ internal fun MonitorScreen(
         }
     }
     val mediaRemoteShutterShouldArm =
-        shouldArmMediaRemoteShutter(
+        monitorRemoteShutterShouldArm(
             enabled = operatorSettings.mediaRemoteShutterEnabled.value,
             monitorIsFront = isMonitorFront,
             cameraConnected = sessionState is CameraSessionState.Connected,
@@ -1055,7 +1056,7 @@ internal fun MonitorScreen(
             cameraControlPending = pendingCommandControl != null,
         )
     val latestRemoteShutterAction =
-        rememberUpdatedState<(MediaRemoteShutterCommand) -> Unit>(
+        rememberUpdatedState<(MonitorRemoteShutterCommand) -> Unit>(
             newValue = remoteShutterAction@{ command ->
                 if (!mediaRemoteShutterShouldArm) return@remoteShutterAction
                 recordScope.launch {
@@ -1238,7 +1239,7 @@ internal fun MonitorScreen(
         // Chrome the operator switched on still hides when nothing can fill it (iOS `sectionHasASource`).
         val codecColor = nikonCodecColorChoices(cameraProperties)
         val available = availability.monitorSections(cameraReportsTimecode, isPhotographyMode,
-            reportsColor = codecColor.showsColor)
+            reportsColor = codecColor.showsColor, controls = commonSession.controlCapabilities(codecColor))
         val mounted: (MonitorDisplaySection) -> Boolean = { it in available && operatorSession.mounts(it) }
         val statusBarVisible = mounted(MonitorDisplaySection.STATUS_BAR)
         val assistToolbarVisible = mounted(MonitorDisplaySection.TOOL_BAR)
@@ -1898,8 +1899,8 @@ internal fun MonitorScreen(
             zebra = { com.opencapture.openzcine.settings.nikonAssistSection(MonitorAssistTool.ZEBRA,
                 assists.shared, exposureAssistCameraInput, haptics::selection)?.Menu() },
             reference = reference, referenceAvailable = reference != null,
-            level = { com.opencapture.monitorui.settings.MonitorSettingsChoices(LocalLevelStyle.entries,
-                operatorSettings.levelStyle, accentSelection = true, title = LocalLevelStyle::label) {
+            level = { com.opencapture.monitorui.settings.MonitorSettingsChoices(nikonAssistCapabilities.levelStyles,
+                operatorSettings.levelStyle, accentSelection = true, title = MonitorLevelStyle::title) {
                 haptics.selection(); operatorSettings.levelStyle = it } },
             instantReview = { NikonReviewOptions(assists) })
         val usageStore = remember(appContext) { com.opencapture.opencine.appkit.MonitorToolUsagePreferences(
@@ -1950,7 +1951,8 @@ internal fun MonitorScreen(
                 .firstOrNull { it.token == readoutRetention.resolution }?.imageArea,
         )
         val headerReadouts = listOfNotNull(
-            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
+            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name,
+                MONITOR_FORMAT_READOUT_TITLE,
                 if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else if (isDemoSession || relayedState != null) readoutRetention.resolution else formatLabel,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",
@@ -2440,8 +2442,8 @@ internal fun toggleShutterLockOnCamera(
  * The sections something feeds now: the Kotlin twin of iOS `sectionHasASource`. Chrome the operator
  * switched on still hides when nothing can fill it: a readout with no source still looks like an
  * instrument, and the capture strip offers pickers that would write to a camera that cannot hear them.
- * The tool bar, lock, FPS chip and Settings work on any picture source; no Nikon source feeds a color
- * chip, a zoom chip or a gimbal stick.
+ * The tool bar, lock, FPS chip and Settings work on any picture source. The zoom chip and gimbal stick
+ * follow the Nikon integration's control model ([controls]), which offers neither on any Z body today.
  */
 internal fun MonitorDataAvailability.monitorSections(
     /** The live-view header's timecode status bit; bodies with no timecode hardware pin it to zero. */
@@ -2449,6 +2451,10 @@ internal fun MonitorDataAvailability.monitorSections(
     isPhotographyMode: Boolean,
     /** The active codec has a reported tone (or a fixed one): the colour readout has a source. */
     reportsColor: Boolean = false,
+    /** The connected body's one control model, else the shared pre-connection rule over the Nikon profile. */
+    controls: com.opencapture.opencine.vocabulary.ControlCapabilities =
+        com.opencapture.opencine.vocabulary.ControlCapabilities.beforeConnection(
+            com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE),
 ): Set<MonitorDisplaySection> =
     MonitorDisplaySection.entries.filter { section ->
         when (section) {
@@ -2468,7 +2474,8 @@ internal fun MonitorDataAvailability.monitorSections(
             -> true
             // The active codec's movie tone (R3D NE: Log3G10), the one codec and colour popup's other half.
             MonitorDisplaySection.COLOR -> cameraControls && !isPhotographyMode && reportsColor
-            MonitorDisplaySection.ZOOM_CHIP, MonitorDisplaySection.GIMBAL_STICK -> false
+            MonitorDisplaySection.ZOOM_CHIP -> controls.zoom.isOffered
+            MonitorDisplaySection.GIMBAL_STICK -> controls.gimbal.isOffered
         }
     }.toSet()
 

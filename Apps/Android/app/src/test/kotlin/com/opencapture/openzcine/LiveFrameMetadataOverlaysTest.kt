@@ -8,7 +8,7 @@ import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusBox
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -209,7 +209,7 @@ class LiveFrameMetadataOverlaysTest {
                         source = LiveLevelSource.CAMERA,
                         isDebugFixture = true,
                     ),
-                style = LocalLevelStyle.HORIZON,
+                style = MonitorLevelStyle.HORIZON,
             )
 
         assertEquals("Debug fixture level, not camera metadata, horizon", description)

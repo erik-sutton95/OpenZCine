@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.settings
 
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.opencine.appkit.MonitorDisplayChrome
 import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.opencine.appkit.MonitorDisplaySection
@@ -23,7 +24,7 @@ class OperatorSettingsTest {
         assertTrue(settings.autoRotateFeedEnabled.value)
         // The focus dial is opt-in on a fresh install, in video and photo mode alike.
         assertFalse(settings.mfDriveScrubEnabled.value)
-        assertEquals(LocalLevelStyle.HORIZON, settings.levelStyle)
+        assertEquals(MonitorLevelStyle.HORIZON, settings.levelStyle)
         assertEquals(LiveViewStreamPreset.QUALITY, settings.streamPreset)
         assertEquals(LiveViewQualityBias.BALANCED, settings.qualityBias)
         assertEquals(PortraitFeedAspect.FIT_16X9, settings.portraitFeedAspect)
@@ -110,11 +111,11 @@ class OperatorSettingsTest {
 
     @Test
     fun `level style persists and malformed values fall back to the horizon`() {
-        OperatorSettings(store).levelStyle = LocalLevelStyle.GAUGE
-        assertEquals(LocalLevelStyle.GAUGE, OperatorSettings(store).levelStyle)
+        OperatorSettings(store).levelStyle = MonitorLevelStyle.GAUGE
+        assertEquals(MonitorLevelStyle.GAUGE, OperatorSettings(store).levelStyle)
 
         store.edit().putString("assist.local.levelStyle.v1", "NOT_A_LEVEL_STYLE").apply()
-        assertEquals(LocalLevelStyle.HORIZON, OperatorSettings(store).levelStyle)
+        assertEquals(MonitorLevelStyle.HORIZON, OperatorSettings(store).levelStyle)
     }
 
     @Test

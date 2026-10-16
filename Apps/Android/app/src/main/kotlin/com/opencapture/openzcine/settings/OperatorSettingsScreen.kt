@@ -149,7 +149,11 @@ internal fun OperatorSettingsScreen(
     systemSettingsActions: SystemSettingsActions,
     onReportProblem: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
-    initialTab: MonitorSettingsTab = MonitorSettingsTab.LINK,
+    /**
+     * A debug launch's or a test's opening tab. Otherwise Settings opens on the operator's last tab,
+     * with each tab's scroll offset, from [operatorSession] (the shared landing-tab rule, A2-84).
+     */
+    initialTab: MonitorSettingsTab? = null,
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
     relaySharingEnabled: Boolean = false,
     onRelayShareToggle: ((Boolean) -> Unit)? = null,
@@ -300,14 +304,12 @@ internal fun OperatorSettingsScreen(
         { settings.hapticsEnabled.value = it }, settings.keepScreenAwake.value,
         { settings.keepScreenAwake.value = it },
         MonitorSettingsCopy.keepScreenAwake,
-        remoteShutter = settings.mediaRemoteShutterEnabled.value,
-        setRemoteShutter = { settings.mediaRemoteShutterEnabled.value = it },
-        remoteTitle = stringResource(R.string.settings_media_remote),
-        remoteCaption = stringResource(R.string.settings_media_remote_caption),
-        autoRotateFeed = settings.autoRotateFeedEnabled.value,
-        setAutoRotateFeed = { settings.autoRotateFeedEnabled.value = it },
-        rotationTitle = stringResource(R.string.settings_auto_rotate_feed),
-        rotationHelp = stringResource(R.string.help_controls_auto_rotate_feed))
+        shutter = MonitorSettingsRemoteShutter.mediaButtons(settings.mediaRemoteShutterEnabled.value) {
+            settings.mediaRemoteShutterEnabled.value = it
+        },
+        autoRotate = MonitorSettingsAutoRotate(settings.autoRotateFeedEnabled.value,
+            { settings.autoRotateFeedEnabled.value = it }, stringResource(R.string.settings_auto_rotate_feed),
+            stringResource(R.string.help_controls_auto_rotate_feed)))
     val account = frameioController?.let { controller ->
         accountSource(controller, retainedAccount, accountCurrent ?: { localAccountCurrent })
     }
@@ -324,16 +326,16 @@ internal fun OperatorSettingsScreen(
         diagnostics = MonitorSettingsDiagnosticsSource(
             save = { if (!systemSettingsActions.shareDiagnostics()) toastUnavailable(context) },
             incidents = AppDiagnostics.incidents),
-        legal = remember(context) {
-            zLegalDocuments(context.assets.open("NOTICE").bufferedReader().use { it.readText() }.trimEnd())
-        },
+        legal = ZLegalDocuments,
         information = MonitorSettingsInformationSource(stringResource(R.string.system_theme_charcoal), "PTP / PTP-IP",
             appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
             "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
             "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
             "Current OpenZCine build from the native project metadata."),
     )
-    MonitorOperatorSettingsScreen(configuration, assistSections, display, initialTab, cacheOwner)
+    // Seeds the session once per requested landing tab, before the first frame draws.
+    remember(operatorSession, initialTab) { initialTab?.also { operatorSession.settingsTab = it } }
+    MonitorOperatorSettingsScreen(configuration, assistSections, display, operatorSession, cacheOwner)
 }
 
 /** Actual broadcast service observations and admitted native actions. */
@@ -363,9 +365,8 @@ private fun sharingSource(session: CameraSession?, sharing: com.opencapture.open
                 }
             }, segmented = true),
         passcodeTitle = stringResource(R.string.sharing_watcher_passcode), passcodeHelp = stringResource(R.string.help_sharing_passcode),
-        passcode = settings.relayWatcherPasscode.value, setPasscode = {
-            settings.relayWatcherPasscode.value = it; sharing?.watcherPasscode = it
-        }, controlRequestsTitle = stringResource(R.string.sharing_control_requests),
+        passcode = sharing?.savedPasscode.orEmpty(), setPasscode = { sharing?.savePasscode(it) },
+        controlRequestsTitle = stringResource(R.string.sharing_control_requests),
         controlRequestsHelp = stringResource(R.string.help_sharing_control_requests),
         controlRequests = settings.relayAllowsControlRequests.value, setControlRequests = {
             settings.relayAllowsControlRequests.value = it; sharing?.allowsControlRequests = it
@@ -393,7 +394,7 @@ private fun supportSource(actions: SystemSettingsActions, onReportProblem: () ->
     var automaticReports by remember { mutableStateOf(AppDiagnostics.reporting.isOptedIn) }
     val report by AppDiagnostics.manualReport.snapshot.collectAsState()
     return MonitorSettingsSupportSource(onReportProblem, automaticReports, AppDiagnostics.reporting.isAvailable,
-        stringResource(R.string.help_system_automatic_reports), stringResource(R.string.help_system_automatic_reports_unavailable),
+        MonitorSettingsCopy.automaticReports, stringResource(R.string.help_system_automatic_reports_unavailable),
         { automaticReports = it; AppDiagnostics.reporting.setConsent(it) },
         stringResource(R.string.system_report_problem), stringResource(R.string.help_system_report_problem),
         stringResource(R.string.action_report),

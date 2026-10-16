@@ -55,7 +55,7 @@ class NikonCaptureQuickComposeTest {
     @Test fun formatDragUsesTheAdvertisedPackWithoutOpeningTheFullSheet() {
         val session = QuickCamera()
         mount(session)
-        drag("Image size", beforeRelease = {
+        drag("Format", beforeRelease = {
             assertTrue(session.writes.isEmpty())
             composeRule.onNodeWithTag("monitor.capture.close").assertDoesNotExist()
         })
@@ -74,7 +74,7 @@ class NikonCaptureQuickComposeTest {
         assertTrue(session.writes.isEmpty())
         session.cameraProperties.value = session.cameraProperties.value.copy(shutterLocked = false)
         composeRule.mainClock.advanceTimeByFrame()
-        drag("Image size", beforeRelease = {
+        drag("Format", beforeRelease = {
             val properties = session.cameraProperties.value
             session.cameraProperties.value = properties.copy(controlCapabilities = properties.controlCapabilities.copy(
                 resolutionFrameRates = listOf("4K · 24p")))
@@ -87,7 +87,7 @@ class NikonCaptureQuickComposeTest {
         val session = QuickCamera()
         val surrendered = mutableStateOf(false)
         mount(session) { surrendered.value }
-        drag("Image size", beforeRelease = {
+        drag("Format", beforeRelease = {
             surrendered.value = true
             composeRule.mainClock.advanceTimeByFrame()
         })
@@ -98,7 +98,7 @@ class NikonCaptureQuickComposeTest {
         val session = QuickCamera()
         session.writeGate = CompletableDeferred()
         mount(session)
-        drag("Image size", beforeRelease = {})
+        drag("Format", beforeRelease = {})
         composeRule.waitUntil(5_000) { session.queued }
         val properties = session.cameraProperties.value
         session.cameraProperties.value = properties.copy(codec = "H.265 10-bit", codecSelection = "H.265 10-bit")
@@ -116,7 +116,7 @@ class NikonCaptureQuickComposeTest {
             controlCapabilities = properties.controlCapabilities.copy(resolutionFrameRates = emptyList()))
         mount(session)
         drag("SHUTTER", beforeRelease = { assertTrue(session.writes.isEmpty()) })
-        drag("Image size", beforeRelease = { assertTrue(session.writes.isEmpty()) })
+        drag("Format", beforeRelease = { assertTrue(session.writes.isEmpty()) })
         assertTrue(session.writes.isEmpty())
     }
 

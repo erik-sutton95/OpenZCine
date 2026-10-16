@@ -14,7 +14,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.FakeCameraSession
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import com.opencapture.openzcine.settings.OperatorSettings
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -61,7 +61,7 @@ class LiveAssistOptionsComposeTest {
         // #228 dropped the "Style" header for iOS parity: the panel is the Horizon/Gauge choice.
         composeRule.onNodeWithText("Horizon").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Gauge").assertIsDisplayed().performClick()
-        composeRule.runOnIdle { assertEquals(LocalLevelStyle.GAUGE, settings.levelStyle) }
+        composeRule.runOnIdle { assertEquals(MonitorLevelStyle.GAUGE, settings.levelStyle) }
     }
 
     private fun settings(name: String): OperatorSettings {

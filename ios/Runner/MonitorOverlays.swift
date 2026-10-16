@@ -224,17 +224,13 @@ struct FeedLevelView: View {
         let bottomChrome =
             model.monitorIsPortrait && model.preferences.portraitFeedAspect == .fill
             ? CGFloat(MonitorPortraitLayout.captureBarHeight) : 0
-        Group {
-            if style == .gauge {
-                MonitorLevelOverlay(
-                    display: .gauges(rollDeg: roll, tiltDeg: pitch), feed: feed,
-                    viewport: Self.gaugeViewport(visibleBounds, bottomChrome: bottomChrome),
-                    portrait: model.monitorIsPortrait)
-            } else {
-                LevelHorizonView(roll: roll)
-                    .position(x: feed.midX, y: feed.midY)
-            }
-        }
+        // Both styles are the shared level owner's; Nikon declares them both.
+        MonitorLevelOverlay(
+            display: style == .gauge
+                ? .gauges(rollDeg: roll, tiltDeg: pitch) : .horizon(rollDeg: roll),
+            feed: feed,
+            viewport: Self.gaugeViewport(visibleBounds, bottomChrome: bottomChrome),
+            portrait: model.monitorIsPortrait)
         // Only run device motion while it's actually the source — stop it once the camera supplies a
         // level so the monitor's own tilt can't leak into the readout.
         .onAppear { if usesDeviceFallback { device.start() } }
@@ -305,24 +301,6 @@ final class DeviceLevel {
         if manager.isDeviceMotionActive { manager.stopDeviceMotionUpdates() }
     }
 }
-
-/// Rolling horizon: two accent wings around a centre ring, rotating with roll; green when level.
-struct LevelHorizonView: View {
-    let roll: Double
-
-    var body: some View {
-        let level = abs(roll) < 0.8
-        let color = level ? LiveDesign.good : LiveDesign.accent
-        HStack(spacing: 10) {
-            Capsule().fill(color).frame(width: 64, height: 2)
-            Circle().stroke(color, lineWidth: 1.6).frame(width: 10, height: 10)
-            Capsule().fill(color).frame(width: 64, height: 2)
-        }
-        .rotationEffect(.degrees(roll))
-        .animation(.easeOut(duration: 0.18), value: level)
-    }
-}
-
 
 /// The camera-aware false-colour key (the Nikon typed extension: zones placed on this camera's
 /// curve and clip), drawn by the shared `MonitorFalseColorReference`.

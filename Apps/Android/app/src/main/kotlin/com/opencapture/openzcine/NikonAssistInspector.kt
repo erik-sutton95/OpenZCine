@@ -39,8 +39,8 @@ internal sealed interface NikonAssistChip {
 internal fun nikonLiveAssistChips(photography: Boolean, imageEffects: Boolean): List<NikonAssistChip> {
     val tools =
         MonitorAssistTool.settingsCases.filter {
-            it != MonitorAssistTool.ND && (imageEffects || !it.isImageEffect) &&
-                if (photography) it.appliesToPhotography else !it.isPhotographyOnly
+            nikonAssistCapabilities.offers(it, photography) && (imageEffects || !it.isImageEffect) &&
+                (!photography || it.appliesToPhotography)
         }.map(NikonAssistChip::Tool)
     return if (photography) listOf(NikonAssistChip.InstantReview) + tools else tools
 }
@@ -48,7 +48,7 @@ internal fun nikonLiveAssistChips(photography: Boolean, imageEffects: Boolean): 
 /** The shared playback set (no camera level or EV needle); this camera has no ND source. */
 internal fun nikonPlaybackAssistTools(imageEffects: Boolean): List<MonitorAssistTool> =
     MonitorAssistTool.playbackToolbarCases.filter {
-        it != MonitorAssistTool.ND && (imageEffects || !it.isImageEffect)
+        it !in nikonAssistCapabilities.unavailable && (imageEffects || !it.isImageEffect)
     }
 
 /** The camera level has a style; camera meters carry no operator-tunable options. */

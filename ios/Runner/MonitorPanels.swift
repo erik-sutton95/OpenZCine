@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineCameraControls
 import OpenCineMedia
@@ -1274,6 +1275,70 @@ extension MonitorSettingsTab {
     }
 }
 
+/// Z's legal set (A2-27): privacy and terms are this app's own text, readable on the camera's
+/// network and ending with the full web page's address (Android twin: `ZLegalDocuments`).
+/// Licenses and NOTICE are the repository's LICENSE, THIRD-PARTY-NOTICES.md and NOTICE, copied
+/// into the bundle's Legal folder at build time (OpenCine `scripts/stage-legal-resources.py`),
+/// with the platform's third-party notices. A build missing one shows the unavailable page.
+extension MonitorLegalDocuments {
+    static let z = MonitorLegalDocuments(
+        wordmark: "OpenZCine", privacy: .text(zPrivacy), terms: .text(zTerms),
+        licenses: bundledText([
+            resource("LICENSE", extension: "txt", subdirectory: "Legal", in: .main),
+            resource("THIRD-PARTY-NOTICES", extension: "txt", subdirectory: "Legal", in: .main),
+            MonitorPlatformLegalNotices.text,
+        ]),
+        notice: bundledText([
+            resource("NOTICE", extension: "txt", subdirectory: "Legal", in: .main)
+        ])
+    )
+
+    private static let zPrivacy = """
+        OpenZCine talks to your Nikon Z camera over Wi-Fi or USB-C. The app has no account. Automatic error reports are optional and off by default.
+
+        OpenCapture is the data controller. Privacy or deletion requests: support@opencapture.org.
+
+        Optional reliability reports
+        With your consent, configured builds send crash, hang and feed diagnostics, app/OS/device versions and session health counts through Sentry. Automatic reports exclude all images. No footage, screenshots, raw camera packets or GPS location are included. Sentry receives the connection IP; stored event IP and derived geography are removed. Event storage uses Germany. Some provider processing may occur internationally.
+        Turn reporting off in System at any time without losing app features. This clears pending SDK uploads, but does not delete reports already received. Contact us privately to request deletion. The website policy explains retention, transfers and your rights.
+
+        Reporting a problem yourself
+        Report a Problem sends your description and any optional reply email to OpenCapture through Sentry when you tap Send report. Technical details are included only if you choose them and can be reviewed first. You can choose up to three photos or screenshots and review or remove them before sending. Selected images are resized and re-encoded without original filenames or location metadata. Only share images you have permission to send; no images are attached automatically. This one-off submission does not enable automatic reports. Unsent reports stay privately on this phone, expire after 7 days (removed when the app next runs), wait until you leave camera Wi-Fi, and can be removed before delivery. Do not include passwords or other sensitive information in your message. You can decline the first-launch prompt and enable automatic reports later in System.
+
+        What stays on this phone
+        • Saved cameras, pairing profiles and the reconnect identity. Camera Wi-Fi passwords are stored in the iOS Keychain on this phone only.
+        • Operator preferences such as Keep Screen Awake and the selected look.
+        • Imported .cube files you choose to open and RED looks you download.
+        • Saved feed incident and session reports, until you delete them in System.
+
+        What never leaves the phone
+        • Live view, camera settings and pairing traffic stay on the local link. We do not operate a cloud.
+
+        Third parties
+        • Apple may process permission prompts and OS diagnostics under its own policies. TestFlight betas may send crash reports to the developer under Apple terms.
+        • Frame.io is optional. If this build is configured and you sign in, clips you pick upload from this phone to Adobe. The token stays in the on-device Keychain.
+        • RED looks are optional. Downloading them opens RED's website, which RED's own privacy policy governs.
+        • Saving a clip or using the share sheet is something you start. Apple or the app you pick then handles that file.
+        • The source is at github.com/erik-sutton95/OpenZCine.
+
+        The full privacy policy is https://openzcine.app/privacy/
+        """
+
+    private static let zTerms = """
+        OpenZCine is free software under the Apache License 2.0. You may use, modify, and share it under that license. The App Store build is also subject to Apple's standard Licensed Application End User License Agreement.
+
+        This is an unofficial camera monitor and remote control. It is not affiliated with, endorsed by, or supported by Nikon. "Nikon" and "Nikon Z" are trademarks of Nikon Corporation, used only to identify the cameras the app can talk to. RED, Adobe and Frame.io belong to their owners and are named only to identify optional features.
+
+        OpenZCine remotely controls physical camera equipment. Wireless links drop, settings writes can be rejected, and the display can lag the camera's real state. Always verify the recording state, exposure and media on the camera itself. Use on productions is at your own risk.
+
+        The software is provided on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND. See LICENSE in the repository.
+
+        By using the app you agree to follow the Code of Conduct when participating in the project.
+
+        The full terms are https://openzcine.app/terms/
+        """
+}
+
 /// The internet-backed destination selected from Operator Setup.
 ///
 /// Keeping the selection as a value lets the camera-AP confirmation survive the tap and route to
@@ -1308,7 +1373,7 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
     }
 
     var confirmationMessage: String {
-        "To open \(title), OpenZCine will disconnect from the camera's Wi-Fi and switch to cellular or another internet-connected Wi-Fi network. You can reconnect to the camera after you finish."
+        MonitorSettingsCopy.browserConfirmation(title: title, app: "OpenZCine")
     }
 
     static func demoValue(_ rawValue: String?) -> SettingsInternetDestination? {
@@ -1355,12 +1420,7 @@ struct OperatorSettingsPanel: View {
                 library: model.mediaLibrary,
                 selectedTab: Binding(
                     get: { model.operatorSettingsTab }, set: { model.operatorSettingsTab = $0 }),
-                scrollOffsets: Binding(
-                    get: { model.operatorSettingsScrollOffsets },
-                    set: { model.operatorSettingsScrollOffsets = $0 }),
-                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id,
-                initialReportPresented: model.isStandaloneSettingsPresented
-                    && DemoHarness.openBugReport)
+                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id)
         }
         .observeMonitorWindowGeometry()
         .onAppear {
@@ -1371,7 +1431,7 @@ struct OperatorSettingsPanel: View {
                 let value = browserDestination(destination)
             {
                 model.settingsSupport.request(value)
-            } else if DemoHarness.openBugReport && !model.isStandaloneSettingsPresented {
+            } else if DemoHarness.openBugReport {
                 model.isBugReportPresented = true
             }
         }
@@ -1382,7 +1442,7 @@ struct OperatorSettingsPanel: View {
     > {
         let menus = NikonAssistMenuAdapter(model: model, compact: true)
         return .init(
-            borrowedSafeArea: insets,
+            safeArea: insets,
             phase: isConnected
                 ? "\(model.cameraState.cameraName) · \(transportLabel)" : model.linkHealthDetail,
             isLive: isConnected, sharingSubtitle: "Broadcast this feed and manage its watchers.",
@@ -1396,59 +1456,63 @@ struct OperatorSettingsPanel: View {
                 model.settingsSupport.retire()
                 model.disconnect()
             }, feedback: settingsFeedback, link: linkSource, sharing: sharingSource,
-            account: accountSource, cache: model.captureOperatorMediaCacheSource(),
-            support: supportSource,
+            assist: .init(
+                state: model.assist, stores: model.scopePanels.operatorStores,
+                falseColorLooks: .signal, palette: LiveDesign.self,
+                haptics: .init(isEnabled: { [weak model] in
+                    model?.preferences.hapticsEnabled == true
+                }),
+                transfer: model.exposureSignalMapping.curve.monitorTransfer,
+                clipByte: model.exposureSignalMapping.clipByte,
+                signalOptions: .init(
+                    falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                    reference: menus.falseColorReference,
+                    resetFalseColor: { model.assist.resetOptions(.falseColor) },
+                    resetZebra: {
+                        model.assist.resetOptions(.zebra)
+                        model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
+                    }),
+                exposureHelp:
+                    "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
+                lookLabel: lookLabel,
+                lookCatalog: { AnyView(NikonLUTPicker(embedded: false).environment(model)) }),
+            controls: .init(
+                recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
+                haptics: .init(
+                    value: preferenceBinding(\.hapticsEnabled),
+                    help: "Short confirmation pulses for critical switches and setting changes."),
+                keepAwake: .init(
+                    value: preferenceBinding(\.keepScreenAwake),
+                    help: MonitorSettingsCopy.keepScreenAwake),
+                input: .init(
+                    remoteShutter: .volumeButtons(enabled: preferenceBinding(\.bluetoothShutterEnabled)),
+                    autoRotate: .init(
+                        enabled: preferenceBinding(\.autoRotateFeedEnabled),
+                        help:
+                            "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
+                    ))),
+            display: .init(
+                hdr: .init(
+                    value: Binding(get: { model.hdrDisplay }, set: { model.hdrDisplay = $0 }),
+                    help: MonitorSettingsCopy.hdrPanel(cameraMode: "N-Log or HLG tone mode")),
+                sections: [
+                .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
+                .timecode, .format, .codec, .color, .storage, .fps, .railRecord, .railMedia, .railSettings,
+                .focusBox,
+            ]),
+            cache: .init(
+                source: model.captureOperatorMediaCacheSource(),
+                clearHelp:
+                    "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
+            ),
+            account: accountSource, support: supportSource,
             information: .init(
                 theme: "Charcoal", protocolName: "PTP / PTP-IP", version: MonitorSettingsAppInformation.version(),
                 themeHelp:
                     "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
                 protocolHelp:
                     "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
-                versionHelp: "Current OpenZCine build from the native project metadata."),
-            recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
-            haptics: preferenceBinding(\.hapticsEnabled),
-            keepAwake: preferenceBinding(\.keepScreenAwake),
-            hapticsHelp: "Short confirmation pulses for critical switches and setting changes.",
-            keepAwakeHelp:
-                MonitorSettingsCopy.keepScreenAwake,
-            hdrHelp: "", cacheHelp: "",
-            clearHelp:
-                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card.",
-            exposureHelp:
-                "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
-            availableDisplay: [
-                .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
-                .timecode, .format, .codec, .color, .storage, .fps, .railRecord, .railMedia, .railSettings,
-                .focusBox,
-            ],
-            assist: model.assist, stores: model.scopePanels.operatorStores,
-            falseColorLooks: .signal,
-            palette: LiveDesign.self,
-            operatorHaptics: .init(isEnabled: { [weak model] in
-                model?.preferences.hapticsEnabled == true
-            }),
-            transfer: model.exposureSignalMapping.curve.monitorTransfer,
-            clipByte: model.exposureSignalMapping.clipByte,
-            lookLabel: lookLabel,
-            lookCatalog: { AnyView(NikonLUTPicker(embedded: false).environment(model)) },
-            input: .init(
-                remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
-                remoteTitle: "Bluetooth Remote Shutter",
-                remoteHelp:
-                    "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
-                autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
-                rotationHelp:
-                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
-            ),
-            signalOptions: .init(
-                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
-                reference: menus.falseColorReference,
-                resetFalseColor: { model.assist.resetOptions(.falseColor) },
-                resetZebra: {
-                    model.assist.resetOptions(.zebra)
-                    model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
-                })
-        )
+                versionHelp: MonitorSettingsCopy.versionHelp(app: "OpenZCine")))
     }
 
     private func settingsFeedback() {
@@ -1477,7 +1541,13 @@ struct OperatorSettingsPanel: View {
             saved: model.savedCameras.map {
                 .init(id: $0.host, name: $0.displayName, detail: $0.host)
             },
-            savedHelp: "Cameras paired through the connection screen.", sourceGroups: sourceGroups,
+            savedHelp: "Cameras paired through the connection screen.",
+            processing: .init(
+                upscaler: Binding(
+                    get: { FeedUpscaleSwitch.shared.upscaler },
+                    set: { FeedUpscaleSwitch.shared.upscaler = $0 }),
+                feedback: settingsFeedback, rows: processingRows),
+            sourceGroups: sourceGroups,
             healthScore: model.linkHealth, healthCaption: linkHealthCaption)
     }
     private func choice(
@@ -1560,22 +1630,13 @@ struct OperatorSettingsPanel: View {
                         }
                     },
                 ]))
+        return groups
+    }
+
+    /// Z's own processing rows after the shared Feed Upscaler (A2-78): noise reduction and the
+    /// debug frame capture.
+    private var processingRows: [MonitorSettingsSourceProperty] {
         var processing: [MonitorSettingsSourceProperty] = []
-        if MonitorUpscaler.supportedOnThisDevice.count > 1 {
-            processing.append(
-                choice(
-                    id: "processing.upscaler", title: "Feed Upscaler",
-                    help:
-                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
-                    options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue),
-                    value: FeedUpscaleSwitch.shared.upscaler.rawValue,
-                    compact: true
-                ) {
-                    if let value = MonitorUpscaler(rawValue: $0) {
-                        FeedUpscaleSwitch.shared.upscaler = value
-                    }
-                })
-        }
         if LiveDenoiseSwitch.isSupportedOnThisDevice {
             if let reason = LiveDenoiseSwitch.decoderReportsUnavailable {
                 processing.append(
@@ -1606,10 +1667,7 @@ struct OperatorSettingsPanel: View {
                         "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end.",
                     value: .native(AnyView(LiveViewCaptureControl()))))
         #endif
-        if !processing.isEmpty {
-            groups.append(.init(id: "processing", title: "Processing", properties: processing))
-        }
-        return groups
+        return processing
     }
 
     private var sharingSource: MonitorSettingsSharingSource {
@@ -1621,7 +1679,7 @@ struct OperatorSettingsPanel: View {
                 get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
             passcode: Binding(
                 get: { relayPasscodeDraft ?? model.relayHostPasscode ?? "" },
-                set: { relayPasscodeDraft = String($0.filter(\.isNumber).prefix(4)) }),
+                set: { relayPasscodeDraft = $0 }),
             controlRequests: Binding(
                 get: { model.preferences.relayAllowsControlRequests },
                 set: { model.setRelayAllowsControlRequests($0) }),
@@ -1637,7 +1695,7 @@ struct OperatorSettingsPanel: View {
                 sharing:
                     "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device; this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi: its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
                 passcode:
-                    "Four digits watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
+                    "A passcode of at least four characters watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
                 controlRequests:
                     "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.",
                 priority:
@@ -1645,39 +1703,23 @@ struct OperatorSettingsPanel: View {
             ),
             browseHelp: "Find another device's broadcast in the camera list.",
             browse: model.showSavedCameras,
-            passcodeChanged: {
-                if $0.count == 4 || $0.isEmpty { model.setRelayWatcherPasscode($0) }
-            },
+            passcodeChanged: { model.setRelayWatcherPasscode($0) },
             watchers: model.captureOperatorSettingsWatchers(), unavailableTitle: "Watching",
             unavailableValue: model.cameraState.cameraName)
     }
 
     private var accountActions: MonitorSettingsAccountActions {
         let account = model.frameioAccount.capture()
-        return .init(
+        return .overInternetHop(
             identity: account.identity,
             isCurrent: { [weak model] in model != nil && account.isCurrent },
-            requiresInternetConsent: model.isOnCameraAccessPoint,
             connect: { [weak model] in
                 guard let model else { throw CancellationError() }
                 try await model.connectFrameio(captured: account)
             },
             disconnect: { [weak model] in if account.isCurrent { model?.disconnectFrameio() } },
-            beginInternet: { [weak model] admission in
-                guard let model,
-                    let token = model.internetHop.begin(model.hopRoute(), admission: admission)
-                else { return nil }
-                return .init(
-                    isCurrent: { [weak model] in
-                        model?.internetHop.owns(token) == true && account.isCurrent
-                    },
-                    wait: { [weak model] in await model?.internetHop.waitForInternet(token) == true
-                    },
-                    restore: { [weak model] in await model?.internetHop.end(token)?.value })
-            },
-            internetFailure:
-                "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi."
-        )
+            hop: model.internetHop, route: { [weak model] in model?.hopRoute() },
+            internetFailure: MonitorSettingsCopy.accountInternetFailure)
     }
     private var accountSource: MonitorSettingsAccountSource {
         .init(
@@ -1689,10 +1731,9 @@ struct OperatorSettingsPanel: View {
                 if model.isFrameioConnected { return .signedIn }
                 if !model.isFrameioConfigured { return .notConfigured }
                 return model.settingsAccount.busy ? .connecting : .signedOut
-            }, consentTitle: "Leave camera Wi‑Fi to sign in?",
-            consentMessage:
-                "We'll hop to home Wi‑Fi or cellular so you can sign in to Frame.io, then reconnect to the camera automatically.",
-            consentAction: "Sign in")
+            }, consentTitle: MonitorSettingsCopy.accountConsentTitle,
+            consentMessage: MonitorSettingsCopy.accountConsentMessage(service: "Frame.io"),
+            consentAction: MonitorSettingsCopy.accountConsentAction)
     }
 
     private func browserDestination(_ source: SettingsInternetDestination)
@@ -1713,10 +1754,12 @@ struct OperatorSettingsPanel: View {
             makeReport: { try await AppDiagnostics.shared.makeReport() },
             prepareBrowser: { [weak model] admission in
                 guard let model else { return nil }
-                return await model.prepareExternalInternetLinkHandoffCaptured(admission: {
-                    let admitted = admission()
-                    return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
-                })
+                return await model.browserHandoff.prepare(
+                    route: model.hopRoute(rehostActivePanel: false),
+                    admission: {
+                        let admitted = admission()
+                        return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
+                    })
             },
             open: { url in
                 await withCheckedContinuation { continuation in
@@ -1732,8 +1775,7 @@ struct OperatorSettingsPanel: View {
                     model?.finishInternetDestinationPreparation(captured)
                 }
             },
-            internetFailure:
-                "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+            internetFailure: MonitorSettingsCopy.browserInternetFailure(app: "OpenZCine")
         )
     }
     private var supportSource: MonitorSettingsSupportSource {
@@ -1744,7 +1786,7 @@ struct OperatorSettingsPanel: View {
                     reliabilityOptIn = $0
                     ReliabilityDiagnostics.reporting.setConsent($0)
                 }), available: ReliabilityDiagnostics.reporting.isAvailable,
-            automaticHelp: Self.reliabilityReportsHelp,
+            automaticHelp: MonitorSettingsCopy.automaticReports,
             unavailableHelp: Self.reliabilityUnavailableHelp,
             sourceHelp: "View the OpenZCine project and contribute on GitHub.",
             termsHelp: "Read the OpenZCine terms of use.",
@@ -1768,12 +1810,12 @@ struct OperatorSettingsPanel: View {
             reportTitle: "Report a Problem", reportActionTitle: "Report",
             diagnosticsHelp:
                 "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
-            reportAction: model.isStandaloneSettingsPresented
-                ? nil : { model.isBugReportPresented = true },
-            report: { AnyView(ProblemReportView().environment(model)) },
+            report: { model.isBugReportPresented = true },
             shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) },
             deleteStoredReports: { ReliabilityDiagnostics.incidents.deleteStoredIncidents {} },
-            deleteReportsHelp: "Removes the feed incident and session reports stored on this phone.")
+            deleteReportsHelp:
+                "Removes the feed incident and session reports stored on this phone.",
+            legal: .z)
     }
     private var lookLabel: String {
         switch model.assistConfiguration.selectedLUT {
@@ -1781,8 +1823,6 @@ struct OperatorSettingsPanel: View {
         case .stored(_, let name): return (name as NSString).deletingPathExtension
         }
     }
-    static let reliabilityReportsHelp =
-        "Optional: send crash and error reports to OpenCapture through Sentry. Off by default. Turn off anytime without losing app features. Uploads wait until you leave camera Wi-Fi. No footage or GPS location. Sentry receives the connection IP; stored event IP and derived geography are removed. See Reporting Privacy below."
     static let reliabilityUnavailableHelp =
         "This build cannot send automatic reports. You can still share diagnostics stored on this phone."
 

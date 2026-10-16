@@ -19,13 +19,17 @@ extension NativeAppModel {
     var liveAssistPaletteTools: [MonitorAssistTool] {
         let photography = StillCapturePolicy.prefersPhotographyChrome(
             selector: cameraPropertySnapshot.captureSelector)
-        return MonitorAssistTool.activeCases.filter { photography || !$0.isPhotographyOnly }
+        return MonitorAssistTool.activeCases.filter {
+            MonitorAssistCapabilities.nikon.offers($0.selection, photography: photography)
+        }
     }
 
     /// Playback drops the camera-fed tools: the horizon and the EV needle need a camera, and PLAY
     /// reviews a capture.
     var playbackAssistPaletteTools: [MonitorAssistTool] {
-        MonitorAssistTool.activeCases.filter { $0 != .level && !$0.isPhotographyOnly }
+        MonitorAssistTool.activeCases.filter {
+            $0 != .level && !MonitorAssistCapabilities.nikon.isPhotographyOnly($0.selection)
+        }
     }
 }
 
@@ -58,10 +62,12 @@ struct NikonAssistOptions: View {
                 onToggle: { model.assist.toggleGrid($0) })
         case .level:
             SegmentedButtons(
-                items: AssistConfiguration.Level.Style.allCases.map(\.rawValue),
-                selected: model.assistConfiguration.level.style.rawValue
+                items: MonitorAssistCapabilities.nikon.levelStyles.map(\.title),
+                selected: model.assistConfiguration.level.style.title
             ) { value in
-                if let style = AssistConfiguration.Level.Style(rawValue: value) {
+                if let style = MonitorAssistCapabilities.nikon.levelStyles.first(where: {
+                    $0.title == value
+                }) {
                     model.assistConfiguration.level.style = style
                 }
             }
