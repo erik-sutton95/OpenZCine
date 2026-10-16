@@ -375,22 +375,8 @@ public enum FalseColorMap {
 /// The source's calibration and monitoring looks supplied to the shared signal lattice.
 /// Persisted compatibility helpers above retain their original scene-linear projection.
 public enum NikonMonitorSignal {
-    public static let lookCurves: [MonitorTransfer: [Double]] = {
-        let looks: [(ExposureToneCurve, MonitorLUT)] = [
-            (.redLog3G10, .log3G10Rec709), (.nikonNLog, .nLogRec709),
-        ]
-        return Dictionary(
-            uniqueKeysWithValues: looks.map { curve, look in
-                let cube = look.cube()
-                let samples = (0...255).map { index in
-                    let code = Float(index) / 255
-                    let rgb = cube.map(red: code, green: code, blue: code)
-                    return 0.2126 * Double(rgb.red) + 0.7152 * Double(rgb.green) + 0.0722
-                        * Double(rgb.blue)
-                }
-                return (curve.monitorTransfer, samples)
-            })
-    }()
+    public static let lookCurves: [MonitorTransfer: [Double]] =
+        NikonMonitorColorProfile.rec709LookCurves
 
     /// Only camera-source values enter here; the lattice owns all bands, reading and painting.
     public static func lattice(

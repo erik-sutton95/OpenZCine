@@ -45,6 +45,14 @@ public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Iden
     /// the trilinear interpolation stretches the shadows.
     public func cube(size: Int = 33) -> CubeLUT {
         precondition(size >= 2, "A 3D LUT needs at least a 2×2×2 grid.")
+        switch self {
+        case .log3G10Rec709:
+            return CubeLUT(size: size, rgb: NikonMonitorColorProfile.log3G10Rec709.rgb(size: size))
+        case .nLogRec709:
+            return CubeLUT(size: size, rgb: NikonMonitorColorProfile.nLogRec709.rgb(size: size))
+        case .monochrome, .r3dNEMonitor:
+            break
+        }
         var rgb = [Float]()
         rgb.reserveCapacity(size * size * size * 3)
         let denominator = Float(size - 1)
@@ -70,16 +78,14 @@ public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Iden
     private func map(_ r: Float, _ g: Float, _ b: Float) -> (Float, Float, Float) {
         switch self {
         case .log3G10Rec709:
-            return Self.logToRec709(
-                r, g, b, decode: Self.log3G10ToLinear, matrix: Self.redWideGamutToRec709)
+            return NikonMonitorColorProfile.log3G10Rec709.map(red: r, green: g, blue: b)
         case .nLogRec709:
-            return Self.logToRec709(r, g, b, decode: Self.nLogToLinear, matrix: Self.nGamutToRec709)
+            return NikonMonitorColorProfile.nLogRec709.map(red: r, green: g, blue: b)
         case .monochrome:
-            let y = Self.luma(r, g, b)
-            return (y, y, y)
+            return BuiltInLook.mono.map(red: r, green: g, blue: b)
         case .r3dNEMonitor:
-            // Sampling the embedded table here (rather than special-casing `cube(size:)`) keeps one
-            // generation path for every look. At the table's own 33³ grid the lattice coordinates
+            // Sampling the embedded table retains the contributed look's resampling path.
+            // At the table's own 33³ grid the lattice coordinates
             // are exact integers, so the trilinear weights collapse to 1 and `cube()` reproduces
             // the contributor's samples verbatim; any other size resamples from them.
             let mapped = Self.contributedTableCube.map(red: r, green: g, blue: b)
@@ -87,63 +93,6 @@ public enum MonitorLUT: String, CaseIterable, Codable, Equatable, Sendable, Iden
         }
     }
 
-    private static func luma(_ r: Float, _ g: Float, _ b: Float) -> Float {
-        0.2126 * r + 0.7152 * g + 0.0722 * b
-    }
-
-    // MARK: - Log → Rec.709 conversion math
-    //
-    // Generated from published transfer functions and gamut matrices — no proprietary assets:
-    //   • Nikon "N-Log Specification Document" v1.0.0 — the N-Log curve; N-Gamut ≡ BT.2020.
-    //   • RED "REDWideGamutRGB and Log3G10" white paper, Rev B — Log3G10 curve + RWG→Rec.709 matrix.
-    //   • ITU-R BT.1886 — the display EOTF (its inverse is the encode below).
-
-    /// Nikon N-Log (normalized 10-bit code value) → scene-linear reflectance (0.18 == middle grey).
-    private static func nLogToLinear(_ codeValue: Float) -> Float {
-        Float(NLog.decode(Double(codeValue)))
-    }
-
-    /// RED Log3G10 (encoded) → scene-linear (0.18 == middle grey); v2/v3 form with the linear toe.
-    private static func log3G10ToLinear(_ encoded: Float) -> Float {
-        Float(Log3G10.decode(Double(encoded)))
-    }
-
-    /// N-Gamut (≡ BT.2020, D65) → Rec.709 linear RGB, row-major 3×3.
-    private static let nGamutToRec709: [Float] = [
-        1.660491, -0.587641, -0.072850,
-        -0.124550, 1.132900, -0.008349,
-        -0.018151, -0.100579, 1.118730,
-    ]
-
-    /// REDWideGamutRGB → Rec.709 linear RGB, row-major 3×3 (published directly by RED).
-    private static let redWideGamutToRec709: [Float] = [
-        1.981880, -0.900388, -0.081540,
-        -0.178143, 1.500467, -0.322325,
-        -0.101811, -0.535343, 1.637304,
-    ]
-
-    /// The shared monitor pipeline: decode the log signal, rotate to Rec.709 primaries with the 3×3
-    /// gamut matrix (in scene-linear), apply the anchored filmic tone map per channel, then encode
-    /// with BT.1886 and clamp to the display range.
-    private static func logToRec709(
-        _ r: Float, _ g: Float, _ b: Float,
-        decode: (Float) -> Float, matrix m: [Float]
-    ) -> (Float, Float, Float) {
-        let lr = decode(r)
-        let lg = decode(g)
-        let lb = decode(b)
-        let outR = max(0, m[0] * lr + m[1] * lg + m[2] * lb)
-        let outG = max(0, m[3] * lr + m[4] * lg + m[5] * lb)
-        let outB = max(0, m[6] * lr + m[7] * lg + m[8] * lb)
-        // Per-format white point from the decode function's own scene white — no blind literal.
-        let tone = MonitorDisplayToneMap(sceneWhite: Double(decode(1.0)))
-        return (encode(tone, outR), encode(tone, outG), encode(tone, outB))
-    }
-
-    /// Tone-map one scene-linear channel and BT.1886-encode it to a display code value.
-    private static func encode(_ tone: MonitorDisplayToneMap, _ sceneLinear: Float) -> Float {
-        Float(tone.displayCode(sceneLinear: Double(sceneLinear)))
-    }
 }
 
 /// What the operator has selected to apply when the LUT tool is on: a generated built-in look or a
