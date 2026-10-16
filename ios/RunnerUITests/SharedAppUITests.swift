@@ -276,6 +276,23 @@ final class CodecColorPopupUITests: OpenCineAppUITesting.CodecColorPopupUITests 
     }
 }
 
+/// SIMULATED: ISO, shutter, white balance and focus open the shared drawer and mode strip, in
+/// both orientations, as on every app. Z names white balance by its common setting key.
+final class CapturePopupUITests: OpenCineAppUITesting.CapturePopupUITests {
+    override var reviewLaunchEnvironment: [String: String] {
+        [
+            "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live",
+            "ZC_DEMO_GRAPHICAL_REVIEW": "1",
+        ]
+    }
+    override var readouts: [(popup: String, identifier: String)] {
+        [
+            ("iso", "monitor.capture.iso"), ("shutter", "monitor.capture.shutter"),
+            ("wb", "monitor.capture.whiteBalance"), ("focus", "monitor.capture.focus"),
+        ]
+    }
+}
+
 /// SIMULATED pixels through the actual app/provider/inspector; no camera transport or hardware claim.
 final class NikonLiveLUTWheelTouchTests: SharedAppUITestCase {
     @MainActor

@@ -1,43 +1,16 @@
 import MonitorUI
-import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineCameraVocabulary
 import OpenCineNikon
 import SwiftUI
 
-/// Writes a ladder tab reports. The value key is the tab index; circuit switches are separate
-/// so selecting a tab can change the circuit without pretending the drum value is that write.
-enum LadderControl: Hashable, Sendable {
-    case value(Int)
-    case baseISO
-    case autoISO
-    case shutterMode
-    case tint
-}
-
-extension CameraPicker {
-    /// Pickers that draw on `LadderSheet`. Quality stays on its own panel: two wheels compose one
-    /// label, and the NEF chips write a different control. Each audio command tile is one tab.
-    var usesLadderSheet: Bool {
-        switch self {
-        case .iso, .shutter, .iris, .whiteBalance, .focus, .resolution, .codec,
-            .stillMode, .stillDrive, .stillMeter, .stillSize, .stillPicture, .audio:
-            true
-        default:
-            false
-        }
-    }
-}
-
-/// Host for one capture picker on `LadderSheet`. Seeds descriptor lists on appear, follows a
-/// camera circuit change by rebuilding, and routes each write through the existing model helpers.
+/// Thin Z adapter: reads the session into `NikonCapturePopupState`, draws the shared ladder
+/// sheet it presents, and routes each write through the model.
 struct LadderPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
     let picker: CameraPicker
-    var chromeless = false
 
     @State private var lensApertures: [String] = []
-    @State private var screenModes: [String] = []
     @State private var codecRows: [PTPCameraCodecFamily] = []
     @State private var generation = 0
     @State private var adoptedCircuit: Int?
@@ -46,395 +19,131 @@ struct LadderPickerPanel: View {
     @State private var audioTab: Int?
 
     var body: some View {
-        Group {
-            if picker == .resolution {
-                formatPicker.onAppear(perform: seed)
-            } else {
-                ladder
-            }
+        if picker == .resolution {
+            NikonFormatPicker(title: picker.valueLabel, subtitle: model.pickerSubtitle(for: picker))
+                .onAppear(perform: seed)
+        } else {
+            ladder
         }
-    }
-
-    private var formatPicker: some View {
-        let source = model.operatorLiveIdentity
-        let inventory = model.recordingFormatPresentations
-        let choices = inventory.map { format in
-            CaptureFormatChoice(
-                value: format.token, title: format.token,
-                imageArea: format.imageArea.map { CaptureFormatGroup(id: $0, title: $0) },
-                resolution: CaptureFormatGroup(id: format.resolution, title: format.resolution),
-                frameRate: CaptureFormatGroup(id: format.frameRate, title: format.frameRate))
-        }
-        let content = CaptureFormatPicker(
-            choices: choices, current: model.cameraValue(for: .resolution),
-            enabled: !inventory.isEmpty, haptics: model.preferences.hapticsEnabled,
-            sourceIdentity: AnyHashable(source),
-            isCurrent: { model.operatorLiveIdentity == source },
-            onSelect: { choice in
-                guard model.operatorLiveIdentity == source,
-                    model.recordingFormatPresentations == inventory,
-                    inventory.contains(where: { $0.token == choice.value })
-                else { return }
-                model.applyPicker(.resolution, mode: 0, value: choice.value)
-            })
-        return Group {
-            if chromeless {
-                content
-            } else {
-                MonitorCapturePanel(
-                    title: presentation.title, subtitle: presentation.subtitle,
-                    edge: picker.isTopBar ? .top : .bottom, close: { model.dismissActivePanel() }
-                ) { content }
-            }
-        }
-        .monitorCapturePanelHeader(title: presentation.title, subtitle: presentation.subtitle)
-        .accessibilityIdentifier("ladder_sheet")
     }
 
     private var ladder: some View {
         LadderSheet(
-            presentation: presentation,
-            enabled: true,
-            onWrite: { perform($0) },
-            onClose: { model.dismissActivePanel() },
-            control: model.shell.control,
-            fromTop: picker.isTopBar,
-            chromeless: chromeless,
-            onHold: picker == .shutter ? { holdShutter() } : nil,
-            tintLabel: { tint in
+            presentation: state.presentation, enabled: true, onWrite: { perform($0) },
+            control: model.shell.control, onHold: picker == .shutter ? { holdShutter() } : nil,
+            tintLabel: {
                 WhiteBalanceTint.label(
-                    amberBlueCell: tint.amberBlue ?? 0, greenMagentaCell: tint.greenMagenta)
+                    amberBlueCell: $0.amberBlue ?? 0, greenMagentaCell: $0.greenMagenta)
             },
             tintHelp: picker == .whiteBalance
                 ? "Steps of 0.5 (A-B) and 0.25 (G-M), like the camera body. Double-tap the pad to reset."
                 : nil
         ) { tab in
-            if picker == .focus {
-                FocusDialFooter()
-            }
-            if picker == .codec {
-                NikonCodecColorFooter()
-            }
-            if picker == .stillDrive, case .value(let mode) = tab.key, mode == 1 || mode == 2 {
-                TimerShotsFooter(mode: mode)
-            }
+            NikonLadderFooter(picker: picker, tab: tab.key)
         }
         .environment(\.ladderOperatorHaptics, model.preferences.hapticsEnabled)
         .id(generation)
         .onAppear(perform: seed)
         .onChange(of: model.isoPickerModeIndex) { _, mode in
-            guard picker == .iso, model.showsDualBaseISOPicker else { return }
-            adopt(mode)
+            if picker == .iso, model.showsDualBaseISOPicker { adopt(mode) }
         }
         .onChange(of: model.shutterPickerModeIndex) { _, mode in
-            guard picker == .shutter else { return }
-            adopt(mode)
+            if picker == .shutter { adopt(mode) }
+        }
+        .onChange(of: model.stillISOPickerModeIndex) { _, mode in
+            if picker == .stillISO { adopt(mode) }
         }
         .onChange(of: model.isISOValueCameraOwned) { _, owned in
-            guard picker == .iso, model.showsAutoISOPicker, !owned, !model.isISORecordingLocked
-            else { return }
-            generation += 1
+            if picker == .iso, model.showsAutoISOPicker, !owned, !model.isISORecordingLocked {
+                generation += 1
+            }
         }
     }
 
-    private var presentation: LadderSheetPresentation<LadderControl> {
-        let entries = modeEntries
-        let singleAudio = picker == .audio && entries.count == 1
-        return LadderSheetPresentation(
-            title: singleAudio
-                ? entries[0].mode.title
-                : picker == .codec ? model.codecColorChoices.title : picker.valueLabel,
-            subtitle: singleAudio
-                ? model.pickerModeValue(picker, mode: entries[0].index)
-                : model.pickerSubtitle(for: picker),
-            tabs: entries.map { tab($0.mode, index: $0.index) },
-            initialTab: singleAudio ? 0 : initialTab,
-            lock: sheetLock,
-            lockBanner: banner)
-    }
-
-    private var modes: [PickerMode] {
+    /// The session as values. One command tile is one audio tab, keyed by its real mode index.
+    private var state: NikonCapturePopupState {
         let listed = model.pickerModes(for: picker)
-        if !listed.isEmpty { return listed }
-        return [PickerMode(title: picker.valueLabel, options: picker.options)]
-    }
-
-    /// One command tile is one tab. The key stays the real audio mode, not the array offset.
-    private var modeEntries: [(index: Int, mode: PickerMode)] {
-        if picker == .audio, let only = heldAudioTab, modes.indices.contains(only) {
-            return [(only, modes[only])]
+        let modes =
+            listed.isEmpty
+            ? [PickerMode(title: picker.valueLabel, options: picker.options)] : listed
+        var entries = Array(modes.enumerated())
+        let held = picker == .audio ? audioTab ?? model.pickerInitialMode : nil
+        if let held, modes.indices.contains(held) {
+            entries = [(offset: held, element: modes[held])]
         }
-        return modes.enumerated().map { ($0.offset, $0.element) }
-    }
-
-    private var heldAudioTab: Int? {
-        guard picker == .audio else { return nil }
-        return audioTab ?? model.pickerInitialMode
-    }
-
-    private var initialTab: Int {
-        let raw: Int
-        switch picker {
-        case .iso:
-            raw = model.isoPickerModeIndex
-        case .shutter:
-            raw = model.shutterPickerModeIndex
-        case .whiteBalance:
-            let mode = model.cameraPropertySnapshot.wbMode
-            raw = (mode == nil || mode == "Color temp") ? 0 : 1
-        default:
-            if let seeded = model.pickerInitialMode {
-                raw = seeded
-            } else {
-                let live = model.cameraValue(for: picker)
-                raw = modes.firstIndex { $0.options.contains(live) } ?? 0
+        let single = picker == .audio && entries.count == 1
+        var state = NikonCapturePopupState(
+            kind: picker.capturePopupKind,
+            title: single
+                ? entries[0].element.title
+                : picker == .codec ? model.codecColorChoices.title : picker.valueLabel,
+            subtitle: single
+                ? model.pickerModeValue(picker, mode: entries[0].offset)
+                : model.pickerSubtitle(for: picker),
+            modes: entries.map { index, mode in
+                NikonLadderMode(
+                    index: index, title: mode.title, detail: mode.detail,
+                    options: mode.options.isEmpty ? picker.options : mode.options, base: mode.base,
+                    current: model.pickerModeValue(picker, mode: index),
+                    disabled: model.pickerModeDisabled(picker, mode: index),
+                    advertised: advertisedProperty(index: index).flatMap {
+                        model.cameraControlOptions[$0]
+                    })
+            })
+        state.cameraValue = model.cameraValue(for: picker)
+        state.seededTab = single ? 0 : model.pickerInitialMode
+        state.circuitIndex =
+            switch picker {
+            case .iso: model.isoPickerModeIndex
+            case .shutter: model.shutterPickerModeIndex
+            case .stillISO: model.stillISOPickerModeIndex
+            default: nil
             }
+        state.codec = model.cameraState.codec
+        state.photography = model.isPhotographyMode
+        state.whiteBalanceMode = model.cameraPropertySnapshot.wbMode
+        state.liveISO = model.cameraPropertySnapshot.iso.flatMap { $0 > 0 ? Int($0) : nil }
+        state.dualBaseISO = model.showsDualBaseISOPicker
+        state.autoISO = model.showsAutoISOPicker
+        state.isoCameraOwned = model.isISOValueCameraOwned
+        state.isoRecordingLocked = model.isISORecordingLocked
+        state.allowsManualISO = model.allowsManualISO
+        state.stillAllowsManualISO = model.stillAllowsManualISO
+        state.shutterLockedOnCamera = model.lockedControls.contains(.shutter)
+        state.tintCells = (model.whiteBalanceTintAB, model.whiteBalanceTintGM)
+        state.tintAvailable = model.whiteBalanceTintAvailable
+        state.lensApertures = lensApertures
+        state.codecRows = codecRows
+        state.activeCodecDepth = model.activeCodecMode?.bitDepth
+        if !model.isDemoSession, model.videoSource != .relay {
+            state.typed = picker.nikonControlSetting
         }
-        return min(max(raw, 0), max(modes.count - 1, 0))
+        return state
     }
 
-    /// Recording and a camera shutter lock freeze the whole sheet. Auto ISO locks each drum
-    /// instead, so the operator can still leave Auto.
-    private var sheetLock: CaptureLock? {
-        if picker == .shutter, model.lockedControls.contains(.shutter) { return .cameraControl }
-        if picker == .iso, model.isISORecordingLocked { return .recording }
-        return nil
-    }
-
-    private var banner: String? {
-        switch sheetLock {
-        case .cameraControl:
-            return "Shutter locked on camera. Hold anywhere to unlock."
-        case .recording:
-            return "ISO is locked while recording in R3D NE"
-        default:
-            break
-        }
-        guard picker == .iso, model.showsAutoISOPicker, model.isISOValueCameraOwned else {
-            return nil
-        }
-        if model.allowsManualISO {
-            return
-                "Auto ISO is on. The camera sets sensitivity. Switch to Auto Off to choose a value."
-        }
-        return "Manual ISO needs exposure mode M. The camera is setting sensitivity."
-    }
-
-    private func tab(_ mode: PickerMode, index: Int) -> LadderTab<LadderControl> {
-        let options = modeOptions(mode, index: index)
-        let lock = tabLock(mode)
-        let (activate, apply) = activation(mode, index: index)
-        let current = model.pickerModeValue(picker, mode: index)
-        let kelvin = picker == .whiteBalance && mode.title == "Kelvin"
-        let core = coreField(mode, options: options, lock: lock)
-        let grown: (@Sendable (String) -> [String])? = kelvin ? Self.kelvinValues : nil
-        let steps = stepProvider(mode)
-        return LadderTab(
-            label: mode.title,
-            key: .value(index),
-            ladder: CaptureLadder(
-                current: current.isEmpty ? nil : current,
-                values: core.options,
-                marked: marked(mode, index: index),
-                lock: lock),
-            detail: mode.detail,
-            activate: activate,
-            applyOnActivate: apply,
-            disabled: model.pickerModeDisabled(picker, mode: index),
-            field: core.field,
-            tint: tint(mode),
-            values: grown,
-            steps: steps)
-    }
-
-    private func tabLock(_ mode: PickerMode) -> CaptureLock? {
-        if picker == .whiteBalance, mode.title == "Tint", !model.whiteBalanceTintAvailable {
-            return .auto
-        }
-        if picker == .iso, model.showsAutoISOPicker, model.isISOValueCameraOwned,
-            !model.isISORecordingLocked
-        {
-            return .auto
-        }
-        return nil
-    }
-
-    private func activation(
-        _ mode: PickerMode, index: Int
-    ) -> (LadderWrite<LadderControl>?, Bool) {
-        switch picker {
-        case .iso where model.showsDualBaseISOPicker:
-            return (LadderWrite(key: .baseISO, value: index == 1 ? "High" : "Low"), true)
-        case .iso where model.showsAutoISOPicker:
-            let autoOn = index == 0
-            return (LadderWrite(key: .autoISO, value: autoOn ? "On" : "Off"), !autoOn)
-        case .shutter:
-            return (LadderWrite(key: .shutterMode, value: index == 1 ? "Speed" : "Angle"), false)
-        case .focus, .stillMode, .stillDrive, .stillSize, .audio:
-            return (nil, false)
-        case .whiteBalance where mode.title == "Tint":
-            return (nil, false)
-        default:
-            return (nil, true)
-        }
-    }
-
-    private func modeOptions(_ mode: PickerMode, index: Int) -> [String] {
-        switch picker {
-        case .iso:
-            let live =
-                model.showsAutoISOPicker && model.isISOValueCameraOwned
-                ? liveISO : nil
-            return ISOPickerPolicy.options(
-                codec: model.cameraState.codec, modeIndex: index, includingLiveISO: live)
-        case .iris:
-            return lensApertures.isEmpty ? fallback(mode) : lensApertures
-        case .resolution:
-            return screenModes.isEmpty ? fallback(mode) : screenModes
-        case .codec:
-            let labels = codecRows.map(\.label)
-            return labels.isEmpty ? fallback(mode) : labels
-        case .whiteBalance where mode.title == "Kelvin":
-            return WhiteBalanceKelvinPolicy.kelvinOptions
-        case .whiteBalance where mode.title == "Tint":
-            return []
-        case .stillDrive where index == 0:
-            if let camera = model.cameraControlOptions[.stillCaptureMode], !camera.isEmpty {
-                return StillDriveMode.driveDrumOptions(advertised: camera)
-            }
-            return fallback(mode)
-        default:
-            if let property = advertisedProperty(index: index),
-                let camera = model.cameraControlOptions[property], !camera.isEmpty
-            {
-                if property == .movieWhiteBalance {
-                    return PTPCameraPropertyDecoders.whiteBalanceOptions(
-                        advertised: camera, codec: model.cameraState.codec)
-                }
-                return camera
-            }
-            let resolved = fallback(mode)
-            if picker == .whiteBalance, !model.isPhotographyMode, mode.title == "Preset" {
-                return PTPCameraPropertyDecoders.whiteBalanceOptions(
-                    advertised: resolved, codec: model.cameraState.codec)
-            }
-            return resolved
-        }
-    }
-
-    private func fallback(_ mode: PickerMode) -> [String] {
-        mode.options.isEmpty ? picker.options : mode.options
-    }
-
+    /// The camera enum behind a tab; the photography white balance popup reads the stills
+    /// presets, and the drive tab reads the release modes.
     private func advertisedProperty(index: Int) -> PTPPropertyCode? {
-        switch picker {
-        case .focus:
-            switch index {
-            case 0: return .movieFocusMode
-            case 1: return .movieFocusMeteringMode
-            case 2: return .movieAFSubjectDetection
-            default: return nil
-            }
-        case .shutter:
-            return index == 0 ? .movieShutterAngle : .movieShutterSpeed
-        case .whiteBalance:
-            guard index == 1 else { return nil }
-            return model.isPhotographyMode ? .whiteBalance : .movieWhiteBalance
-        case .stillMode:
-            return index == 0 ? .exposureProgramMode : .userMode
-        case .stillSize:
-            return index == 1 ? .imageSize : nil
-        case .stillMeter:
-            return .exposureMeteringMode
-        case .stillPicture:
-            return .activePicCtrlItem
-        case .audio:
-            switch index {
-            case 1: return .audioInputSelection
-            case 2: return .movWindNoiseReduction
-            case 3: return .movieAttenuator
-            case 4: return .movie32BitFloatAudioRecording
-            default: return nil
-            }
-        default:
-            return nil
-        }
-    }
-
-    private func marked(_ mode: PickerMode, index: Int) -> Set<String> {
-        if picker == .iso {
-            return ISOPickerPolicy.markedValues(codec: model.cameraState.codec, modeIndex: index)
-        }
-        return mode.base.isEmpty ? [] : [mode.base]
-    }
-
-    /// Core drum when the setting is typed. The sheet filters drum choices by label, and
-    /// `MonitorCaptureField` has no public copy, so the offered labels are the choice labels.
-    private func coreField(
-        _ mode: PickerMode, options: [String], lock: CaptureLock?
-    ) -> (field: MonitorCaptureField?, options: [String]) {
-        if lock != nil { return (nil, options) }
-        if picker == .whiteBalance, mode.title == "Kelvin" || mode.title == "Tint" {
-            return (nil, options)
-        }
-        guard let setting = picker.nikonControlSetting,
-            !model.isDemoSession, model.videoSource != .relay,
-            let field = model.shell.control.captureField(setting.key)
-        else { return (nil, options) }
-        let offered = Set(options.compactMap { NikonCameraSession.setting(setting, label: $0) })
-        let labels = field.choices.filter { offered.contains($0.value) }.map(\.label)
-        return (field, labels.isEmpty ? options : labels)
-    }
-
-    private func tint(_ mode: PickerMode) -> CaptureTint? {
-        guard picker == .whiteBalance, mode.title == "Tint" else { return nil }
-        return CaptureTint(
-            greenMagenta: model.whiteBalanceTintGM,
-            amberBlue: model.whiteBalanceTintAB,
-            range: WhiteBalanceTint.cellRange)
-    }
-
-    private func stepProvider(
-        _ mode: PickerMode
-    ) -> (@Sendable (String) -> (LadderStep, LadderStep)?)? {
-        if picker == .codec {
-            return Self.codecStepProvider(rows: codecRows, depth: model.activeCodecMode?.bitDepth)
-        }
-        if picker == .whiteBalance, mode.title == "Kelvin" {
-            return Self.kelvinSteps
-        }
-        return nil
-    }
-
-    private var liveISO: String? {
-        guard let iso = model.cameraPropertySnapshot.iso, iso > 0 else { return nil }
-        return String(iso)
+        if picker == .stillDrive, index == 0 { return .stillCaptureMode }
+        let property = picker.optionProperty(forMode: index)
+        if property == .movieWhiteBalance, model.isPhotographyMode { return .whiteBalance }
+        return property
     }
 
     private func seed() {
-        if picker == .iris { lensApertures = model.irisApertures }
-        if picker == .resolution { screenModes = model.resolutionOptions }
+        if picker == .iris || picker == .stillIris { lensApertures = model.irisApertures }
         if picker == .codec { codecRows = model.codecFamilies }
         if picker == .whiteBalance { model.refreshWhiteBalanceTintFromCamera() }
-        if adoptedCircuit == nil { adoptedCircuit = circuitIndex }
-        if picker == .audio, audioTab == nil {
-            audioTab = model.pickerInitialMode
+        if adoptedCircuit == nil, picker != .iso || model.showsDualBaseISOPicker {
+            adoptedCircuit = state.circuitIndex
         }
+        if picker == .audio, audioTab == nil { audioTab = model.pickerInitialMode }
         // Keep the audio seed until it is stored. Clearing it first would rebuild as five tabs.
         let audioSeedPending = picker == .audio && audioTab == nil
-        if picker != .iso, picker != .shutter, picker != .whiteBalance, !audioSeedPending {
+        if ![CameraPicker.iso, .stillISO, .shutter, .whiteBalance].contains(picker),
+            !audioSeedPending
+        {
             model.pickerInitialMode = nil
-        }
-    }
-
-    private var circuitIndex: Int? {
-        switch picker {
-        case .iso where model.showsDualBaseISOPicker:
-            return model.isoPickerModeIndex
-        case .shutter:
-            return model.shutterPickerModeIndex
-        default:
-            return nil
         }
     }
 
@@ -444,18 +153,22 @@ struct LadderPickerPanel: View {
         generation += 1
     }
 
-    private func perform(_ write: LadderWrite<LadderControl>) {
+    private func perform(_ write: LadderWrite<NikonLadderControl>) {
+        let on = write.value == "On"
         switch write.key {
         case .baseISO:
             adoptedCircuit = write.value == "High" ? 1 : 0
             model.switchBaseISO(highBase: write.value == "High")
         case .autoISO:
-            model.switchAutoISO(enabled: write.value == "On")
+            model.switchAutoISO(enabled: on)
+        case .stillAutoISO:
+            adoptedCircuit = on ? 0 : 1
+            model.switchStillAutoISO(enabled: on)
         case .shutterMode:
             adoptedCircuit = write.value == "Speed" ? 1 : 0
             model.switchShutterMode(speedMode: write.value == "Speed")
         case .tint:
-            guard let cells = Self.cells(fromTintLabel: write.value) else { return }
+            guard let cells = WhiteBalanceTint.cells(label: write.value) else { return }
             model.whiteBalanceTintAB = cells.amberBlue
             model.whiteBalanceTintGM = cells.greenMagenta
             model.commitWhiteBalanceTint()
@@ -477,189 +190,6 @@ struct LadderPickerPanel: View {
             model.unlockShutterControlOnCamera()
         } else {
             model.lockShutterControlOnCamera()
-        }
-    }
-
-    private nonisolated static func kelvinValues(_ landed: String) -> [String] {
-        WhiteBalanceKelvinPolicy.options(including: landed)
-    }
-
-    private nonisolated static func codecStepProvider(
-        rows: [PTPCameraCodecFamily], depth: Int?
-    ) -> @Sendable (String) -> (LadderStep, LadderStep)? {
-        { selected in codecSteps(rows: rows, selected: selected, activeDepth: depth) }
-    }
-
-    private nonisolated static func kelvinSteps(_ selected: String) -> (LadderStep, LadderStep)? {
-        (
-            kelvinStep(
-                selected, delta: -WhiteBalanceKelvinPolicy.fineStepKelvin,
-                label: "\u{2212}10", description: "Decrease Kelvin by 10"),
-            kelvinStep(
-                selected, delta: WhiteBalanceKelvinPolicy.fineStepKelvin,
-                label: "+10", description: "Increase Kelvin by 10")
-        )
-    }
-
-    private nonisolated static func kelvinStep(
-        _ selected: String, delta: Int, label: String, description: String
-    ) -> LadderStep {
-        let value =
-            WhiteBalanceKelvinPolicy.canFineAdjust(from: selected, delta: delta)
-            ? WhiteBalanceKelvinPolicy.fineAdjust(from: selected, delta: delta) : nil
-        return LadderStep(
-            label: label, value: value, description: description, lands: true)
-    }
-
-    private nonisolated static func codecSteps(
-        rows: [PTPCameraCodecFamily], selected: String, activeDepth: Int?
-    ) -> (LadderStep, LadderStep)? {
-        guard let row = rows.first(where: { $0.label == selected }),
-            row.offersBitDepthChoice, let low = row.depths.first, let high = row.depths.last
-        else { return nil }
-        return (
-            LadderStep(
-                label: low.bitDepthLabel, value: low.label,
-                description: "Record \(row.label) at \(low.bitDepth) bit",
-                selected: activeDepth == low.bitDepth, lands: false),
-            LadderStep(
-                label: high.bitDepthLabel, value: high.label,
-                description: "Record \(row.label) at \(high.bitDepth) bit",
-                selected: activeDepth == high.bitDepth, lands: false)
-        )
-    }
-
-    /// The pad reports the operator label. Map it back onto grid cells for the existing tint write.
-    nonisolated static func cells(fromTintLabel label: String) -> (
-        amberBlue: Int, greenMagenta: Int
-    )? {
-        if label == "Neutral" { return (0, 0) }
-        var amberBlue = 0
-        var greenMagenta = 0
-        var saw = false
-        for part in label.split(separator: "\u{00B7}") {
-            let token = part.trimmingCharacters(in: .whitespaces)
-            guard let prefix = token.first else { return nil }
-            guard let units = Double(token.dropFirst()) else { return nil }
-            switch prefix {
-            case "A":
-                amberBlue = cellCount(units, perCell: WhiteBalanceTint.amberBlueUnitsPerCell)
-            case "B":
-                amberBlue = -cellCount(units, perCell: WhiteBalanceTint.amberBlueUnitsPerCell)
-            case "G":
-                greenMagenta = cellCount(units, perCell: WhiteBalanceTint.greenMagentaUnitsPerCell)
-            case "M":
-                greenMagenta = -cellCount(
-                    units, perCell: WhiteBalanceTint.greenMagentaUnitsPerCell)
-            default:
-                return nil
-            }
-            saw = true
-        }
-        return saw ? (amberBlue, greenMagenta) : nil
-    }
-
-    private nonisolated static func cellCount(_ units: Double, perCell: Double) -> Int {
-        Int((units / perCell).rounded())
-    }
-}
-
-/// Shot count shared by the drive picker's two timer tabs.
-private struct TimerShotsFooter: View {
-    @Environment(NativeAppModel.self) private var model
-    let mode: Int
-
-    var body: some View {
-        let disabled = model.pickerModeDisabled(.stillDrive, mode: mode)
-        HStack(spacing: 12) {
-            Text("Shots")
-                .font(.system(size: 12, weight: .semibold))
-                .kerning(1)
-                .textCase(.uppercase)
-                .foregroundStyle(LiveDesign.muted)
-            Spacer(minLength: 8)
-            step("minus", enabled: model.photoTimerShotCount > 1) {
-                model.adjustPhotoTimerShots(by: -1)
-            }
-            Text("\(model.photoTimerShotCount)")
-                .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .frame(minWidth: 28)
-                .contentTransition(.numericText())
-            step("plus", enabled: model.photoTimerShotCount < 9) {
-                model.adjustPhotoTimerShots(by: 1)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            LiveDesign.background.opacity(0.28),
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        }
-        .opacity(disabled ? 0.35 : 1)
-        .disabled(disabled)
-    }
-
-    private func step(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
-                .frame(width: 32, height: 32)
-                .liquidGlass(in: Circle())
-        }
-        .buttonStyle(.monitorTapTarget)
-        .disabled(!enabled)
-    }
-}
-
-/// The focus picker's scrub toggle, kept as the sheet footer.
-private struct FocusDialFooter: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        Toggle(isOn: $model.mfDriveScrubEnabled) {
-            Text("Focus dial")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-        }
-        .toggleStyle(SwitchToggleStyle(tint: LiveDesign.accent))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            LiveDesign.background.opacity(0.28),
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        }
-    }
-}
-
-/// The colour half of the one codec and colour popup: the tones the body offers for the active
-/// codec, under the codec ladder. A codec with a fixed tone (R3D NE: Log3G10) shows it inert.
-private struct NikonCodecColorFooter: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        let choices = model.codecColorChoices
-        if choices.showsColor {
-            CaptureCodecColorSectionView(.color) {
-                CaptureCodecColorTabs(
-                    choices: choices.colors, selected: choices.selectedColor,
-                    enabled: !model.isRecording && choices.colorEditable,
-                    select: { id in
-                        guard let label = choices.colors.first(where: { $0.id == id })?.label else { return }
-                        model.applyMovieTone(label)
-                    })
-            }
-            .padding(.top, 4)
         }
     }
 }

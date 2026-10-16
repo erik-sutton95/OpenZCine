@@ -419,6 +419,15 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             context.fill(CGRect(origin: .zero, size: size))
         }
     }
+
+    // MARK: Shared capture popups
+
+    /// Every camera picker except the two independent-switch panels draws on the shared ladder
+    /// sheet, movie and photo alike, so no Nikon-only drum panel remains.
+    func testEveryValuePickerDrawsTheSharedLadderSheet() {
+        XCTAssertEqual(
+            Set(CameraPicker.allCases.filter { !$0.usesLadderSheet }), [.stillQuality, .stabilization])
+    }
 }
 
 @MainActor

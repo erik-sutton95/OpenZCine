@@ -276,9 +276,8 @@ struct NikonMonitorShell: View {
             return Readout(
                 id: .picker(picker), title: value.label, value: label, field: field,
                 quickEnabled: quickEnabled,
-                accessibilityIdentifier: picker.nikonControlSetting.map {
-                    "monitor.capture." + $0.key.rawValue
-                } ?? "")
+                accessibilityIdentifier: "monitor.capture."
+                    + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue))
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
@@ -563,10 +562,8 @@ private struct NikonCameraSettingExtension: View {
             QualityPickerPanel(embedded: true)
         } else if picker == .stabilization {
             StabilizationPickerPanel()
-        } else if picker.usesLadderSheet {
-            LadderPickerPanel(picker: picker, chromeless: true)
         } else {
-            PickerPanel(picker: picker, embedded: true)
+            LadderPickerPanel(picker: picker)
         }
     }
 }
