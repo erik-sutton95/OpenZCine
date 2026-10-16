@@ -21,6 +21,7 @@ import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
 import enum MonitorPresentation.MonitorSettingsTab
 import enum MonitorPresentation.MonitorThumbnailSize
+import enum MonitorPresentation.MonitorWatcherPasscodeRule
 import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
 import class OpenCineCameraVocabulary.CustomLUTStore
 import class OpenCineCameraVocabulary.LUTPreferences
@@ -1697,8 +1698,7 @@ final class NativeAppModel {
 
     /// Stores the entered code and rejoins with it.
     func submitRelayPasscode(_ code: String) {
-        guard let target = relayJoinTarget else { return }
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let target = relayJoinTarget, let trimmed = MonitorWatcherPasscodeRule.answer(code) else { return }
         let saved = WatcherRelayKeychain.app.storeRememberedPasscode(trimmed, forHost: target.name)
         relaySubmittedPasscodes[target.name] = saved ? nil : trimmed
         relayJoinNeedsPasscode = false
@@ -12548,9 +12548,10 @@ final class NativeAppModel {
     }
 
     /// Applies live to NEW joins; devices already watching keep their access until they leave.
-    /// A code the Keychain did not keep changes nothing: the previous code stays in force.
+    /// A code the Keychain did not keep changes nothing: the previous code stays in force, as it
+    /// does for a code too short for the shared watcher passcode rule.
     func setRelayWatcherPasscode(_ code: String) {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed = MonitorWatcherPasscodeRule.entry(code).passcode else { return }
         moveLegacyRelayPasscodes()
         guard relayHostPasscode != trimmed else { return }
         guard WatcherRelayKeychain.app.storeHostPasscode(trimmed) else {

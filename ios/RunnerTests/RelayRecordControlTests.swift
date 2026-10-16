@@ -340,4 +340,31 @@ struct RelayPasscodeKeychainTests {
         #expect(keychain.hostPasscodeLookup() == .absent)
         #expect(model.relayHostPasscode == "")
     }
+
+    /// The shared watcher passcode rule: any text of four or more characters, trimmed. A saved
+    /// four-digit code stays in force; a shorter entry changes nothing.
+    @MainActor
+    @Test func theBroadcastPasscodeFollowsTheSharedRule() throws {
+        let keychain = WatcherRelayKeychain.app
+        let saved = keychain.hostPasscodeLookup()
+        let model = NativeAppModel()
+        let savedPreference = model.preferences.relayWatcherPasscode
+        defer {
+            if case .stored(let code) = saved { keychain.storeHostPasscode(code) } else {
+                keychain.storeHostPasscode("")
+            }
+            model.preferences.relayWatcherPasscode = savedPreference
+        }
+        model.preferences.relayWatcherPasscode = ""
+        #expect(keychain.storeHostPasscode("4821"))
+        #expect(model.relayHostPasscode == "4821")
+
+        model.setRelayWatcherPasscode("ab")
+        #expect(keychain.hostPasscodeLookup() == .stored("4821"))
+        model.setRelayWatcherPasscode("  set pass\n")
+        #expect(keychain.hostPasscodeLookup() == .stored("set pass"))
+        #expect(model.relayHostPasscode == "set pass")
+        model.setRelayWatcherPasscode("0000")
+        #expect(model.relayHostPasscode == "0000")
+    }
 }

@@ -915,33 +915,42 @@ struct BroadcasterControlKey: View {
     }
 }
 
-/// The broadcast asked for a passcode: four digits, joined on completion. Lives on the empty
-/// feed where the refusal reason is already showing.
+/// The broadcast asked for a passcode: the shared watcher rule, the same secure field and Join as
+/// the other apps' watchers. Any non-empty answer is sent, trimmed; the host decides. Lives on the
+/// empty feed where the refusal reason is already showing.
 private struct RelayJoinPasscodeEntry: View {
     @Environment(NativeAppModel.self) private var model
     @State private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField("0000", text: $draft)
-            .keyboardType(.numberPad)
-            .textContentType(.oneTimeCode)
-            .multilineTextAlignment(.center)
-            .font(.system(size: 22, weight: .semibold, design: .monospaced))
-            .foregroundStyle(LiveDesign.text.opacity(0.9))
-            .frame(width: 132)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 10).fill(LiveDesign.text.opacity(0.12)))
-            .focused($focused)
-            .onAppear { focused = true }
-            .onChange(of: draft) { _, next in
-                let digits = String(next.filter(\.isNumber).prefix(4))
-                if digits != next { draft = digits }
-                if digits.count == 4 {
-                    model.submitRelayPasscode(digits)
-                    draft = ""
-                }
-            }
+        HStack(spacing: 8) {
+            SecureField("Passcode", text: $draft)
+                .submitLabel(.join)
+                .onSubmit(join)
+                .multilineTextAlignment(.center)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(LiveDesign.text.opacity(0.9))
+                .frame(width: 150)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10).fill(LiveDesign.text.opacity(0.12)))
+                .focused($focused)
+                .onAppear { focused = true }
+            Button("Join", action: join)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(LiveDesign.text.opacity(0.8))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
+                .buttonStyle(.plain)
+                .disabled(MonitorWatcherPasscodeRule.answer(draft) == nil)
+        }
+    }
+
+    private func join() {
+        guard let code = MonitorWatcherPasscodeRule.answer(draft) else { return }
+        model.submitRelayPasscode(code)
+        draft = ""
     }
 }
 
