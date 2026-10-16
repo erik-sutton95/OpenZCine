@@ -1,6 +1,5 @@
 package com.opencapture.openzcine
 
-import android.content.Context
 import com.opencapture.opencine.cameracontrols.LUTPicker
 import com.opencapture.opencine.cameracontrols.LUTSplitComparisonBar
 import com.opencapture.opencine.cameracontrols.LutPickerEntry
@@ -10,8 +9,6 @@ import com.opencapture.opencine.cameracontrols.LutPickerLayout
 import com.opencapture.opencine.cameracontrols.LutPickerFilter
 import com.opencapture.opencine.cameracontrols.LutPickerEmpty
 import com.opencapture.opencine.cameracontrols.LutPickerAction
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -19,33 +16,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import com.opencapture.monitorui.MonitorAssistHelp
-import com.opencapture.monitorui.MonitorAssistPalette
 import com.opencapture.monitorui.MonitorAssistTool
-import com.opencapture.monitorui.MonitorAssistToolGlyph
-import com.opencapture.monitorui.MonitorDesqueezeMenu
-import com.opencapture.monitorui.MonitorGridMenu
-import com.opencapture.monitorui.MonitorGuidesMenu
-import com.opencapture.monitorui.MonitorMirrorMenu
-import com.opencapture.monitorui.MonitorIcon
-import com.opencapture.monitorui.MonitorOptionGroup
-import com.opencapture.monitorui.settings.MonitorSettingsChoices
-import com.opencapture.opencine.appkit.MonitorToolUsagePreferences
-import com.opencapture.opencine.cameracontrols.MirrorAssist
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.reconciledLutSelectionAfterDeletion
-import com.opencapture.openzcine.settings.LocalLevelStyle
-import com.opencapture.openzcine.settings.OperatorSettings
-import com.opencapture.openzcine.settings.nikonAssistSection
 import kotlinx.coroutines.launch
-import com.opencapture.opencine.appkit.LocalOperatorHaptics
 
 /** A palette chip: a shared assist, or PLAY (photography's instant review, this camera's own). */
 internal sealed interface NikonAssistChip {
@@ -76,15 +51,6 @@ internal fun nikonPlaybackAssistTools(imageEffects: Boolean): List<MonitorAssist
         it != MonitorAssistTool.ND && (imageEffects || !it.isImageEffect)
     }
 
-/** Whether an open live inspector still belongs to the visible, unlocked, resumed live monitor. */
-internal fun retainLiveAssistOptions(
-    tool: MonitorAssistTool?,
-    tools: List<MonitorAssistTool>,
-    liveMode: Boolean,
-    locked: Boolean,
-    resumed: Boolean,
-): Boolean = tool != null && tool.nikonHasOptions && tool in tools && liveMode && !locked && resumed
-
 /** The camera level has a style; camera meters carry no operator-tunable options. */
 internal val MonitorAssistTool.nikonHasOptions: Boolean
     get() = this !in setOf(MonitorAssistTool.EV, MonitorAssistTool.AUDIO, MonitorAssistTool.ND)
@@ -96,173 +62,6 @@ internal val nikonUsageSeed =
         "GUIDES" to 2, "GRID" to 2, "HISTO" to 2, "VECTOR" to 1, "PARADE" to 1, "LIGHTS" to 1,
         "CROSS" to 1, "MIRROR" to 1, "AUDIO" to 1,
     )
-
-/** The shared assist palette over the shared state; long press opens the shared inspector. */
-@Composable
-internal fun NikonAssistPalette(
-    chips: List<NikonAssistChip>,
-    assists: NikonAssists,
-    playback: Boolean,
-    portrait: Boolean,
-    locked: Boolean,
-    modifier: Modifier = Modifier,
-    requestExpand: Boolean = false,
-    onExpansionHandled: () -> Unit = {},
-) {
-    val context = LocalContext.current
-    val haptics = LocalOperatorHaptics.current
-    val usageStore =
-        remember(context) {
-            MonitorToolUsagePreferences(
-                context.getSharedPreferences("assist", Context.MODE_PRIVATE), "assistToolUsage.v1",
-            )
-        }
-    var usage by remember(usageStore) { mutableStateOf(usageStore.value) }
-    val shared = assists.shared
-    MonitorAssistPalette(
-        tools = chips, portrait = portrait, locked = locked,
-        isOn = { chip ->
-            when (chip) {
-                is NikonAssistChip.Tool ->
-                    if (playback) shared.isPlaybackVisible(chip.tool) else shared.isOn(chip.tool)
-                NikonAssistChip.InstantReview -> assists.instantReview
-            }
-        },
-        title = { chip -> (chip as? NikonAssistChip.Tool)?.tool?.title ?: "Instant Playback" },
-        label = { chip -> (chip as? NikonAssistChip.Tool)?.tool?.chipLabel ?: "PLAY" },
-        hasOptions = { chip -> chip is NikonAssistChip.Tool && chip.tool.nikonHasOptions },
-        onToggle = { chip ->
-            haptics.selection()
-            when (chip) {
-                is NikonAssistChip.Tool ->
-                    if (playback) shared.togglePlayback(chip.tool) else shared.toggle(chip.tool)
-                NikonAssistChip.InstantReview -> assists.instantReview = !assists.instantReview
-            }
-        },
-        onOptions = { chip ->
-            if (chip is NikonAssistChip.Tool) {
-                haptics.longPress()
-                shared.configureTool = chip.tool
-            }
-        },
-        glyph = { chip, tint, glyphModifier ->
-            when (chip) {
-                is NikonAssistChip.Tool -> MonitorAssistToolGlyph(chip.tool, tint, glyphModifier, evFontSize = 17f)
-                NikonAssistChip.InstantReview -> MonitorIcon(MonitorIcon.IMAGE, null, glyphModifier, tint)
-            }
-        },
-        chevron = { expanded, vertical ->
-            val icon =
-                if (vertical) {
-                    if (expanded) MonitorIcon.CHEVRON_DOWN else MonitorIcon.CHEVRON_UP
-                } else {
-                    if (expanded) MonitorIcon.CHEVRON_LEFT else MonitorIcon.CHEVRON_RIGHT
-                }
-            MonitorIcon(icon, null, Modifier.size(14.dp), LiveDesign.muted)
-        },
-        modifier = modifier, requestExpand = requestExpand, onExpansionHandled = onExpansionHandled,
-        usageSeed = nikonUsageSeed, idOf = { it.id }, usage = usage,
-        onUsageChange = { next -> usage = next; usageStore.value = next },
-    )
-}
-
-/**
- * The shared assist inspector: its frame and tab strip, the shared settings card for each tool,
- * and this camera's typed extensions (its LUT catalog and the camera level style).
- */
-@Composable
-internal fun NikonAssistInspector(
-    tool: MonitorAssistTool,
-    tools: List<MonitorAssistTool>,
-    assists: NikonAssists,
-    settings: OperatorSettings,
-    cameraInput: ExposureAssistCameraInput,
-    lutLibrary: AndroidLutLibrary?,
-    viewportWidth: Float,
-    viewportHeight: Float,
-    safeLeading: Float = 0f,
-    safeTop: Float = 0f,
-    safeBottom: Float = 0f,
-    safeTrailing: Float = 0f,
-    onOpenRedDownload: () -> Unit = {},
-    onRequestLutImport: (() -> Unit)? = null,
-    onDismiss: () -> Unit,
-) {
-    val haptics = LocalOperatorHaptics.current
-    fun descriptor(item: MonitorAssistTool) = com.opencapture.monitorui.MonitorInspectorTool(
-        value = item, title = item.title, label = item.chipLabel)
-    com.opencapture.monitorui.MonitorToolInspector(selection = descriptor(tool), tools = tools.map(::descriptor),
-        viewportWidth = viewportWidth, viewportHeight = viewportHeight,
-        safeLeading = safeLeading, safeTop = safeTop, safeBottom = safeBottom, safeTrailing = safeTrailing,
-        trailing = true, scrollContents = tool != MonitorAssistTool.LUT,
-        onSelect = { haptics.selection(); assists.shared.configureTool = it }, onDismiss = onDismiss,
-        glyph = { item, tint, modifier -> MonitorAssistToolGlyph(item, tint, modifier) }) { _ ->
-        AssistOptions(tool, assists, settings, cameraInput, lutLibrary, onOpenRedDownload, onRequestLutImport)
-    }
-}
-
-/** One tool's options: the shared card, or this camera's own LUT catalog and level style. */
-@Composable
-private fun AssistOptions(
-    tool: MonitorAssistTool,
-    assists: NikonAssists,
-    settings: OperatorSettings,
-    cameraInput: ExposureAssistCameraInput,
-    lutLibrary: AndroidLutLibrary?,
-    onOpenRedDownload: () -> Unit,
-    onRequestLutImport: (() -> Unit)?,
-) {
-    val state = assists.shared
-    val haptics = LocalOperatorHaptics.current
-    when (tool) {
-        MonitorAssistTool.LUT -> NikonLutOptions(assists, lutLibrary, onOpenRedDownload, onRequestLutImport)
-        MonitorAssistTool.WAVE, MonitorAssistTool.PARADE ->
-            nikonAssistSection(tool, state, cameraInput, haptics::selection)?.Menu()
-        else -> MonitorOptionGroup {
-            when (tool) {
-                MonitorAssistTool.LEVEL ->
-                    MonitorSettingsChoices(LocalLevelStyle.entries, settings.levelStyle, accentSelection = true,
-                        title = LocalLevelStyle::label) { haptics.selection(); settings.levelStyle = it }
-                MonitorAssistTool.GUIDES ->
-                    MonitorGuidesMenu(state.guideFamily, state.selectedGuides, state.guideMask,
-                        { haptics.selection(); state.updateGuideFamily(it) },
-                        { haptics.selection(); state.toggleGuide(it) },
-                        { haptics.selection(); state.updateGuideMask(it) })
-                MonitorAssistTool.GRID ->
-                    MonitorGridMenu(state.gridThirds, { state.setGridOption(thirds = it) }, state.gridPhi,
-                        { state.setGridOption(phi = it) }, state.gridDiagonal, { state.setGridOption(diagonal = it) })
-                MonitorAssistTool.DESQ ->
-                    MonitorDesqueezeMenu(state.desqueezePreset, state.desqueezeCustom, state.desqueezeCustomFactor,
-                        state.desqueezeDirection,
-                        "Monitor only: the recording and the camera stay untouched. Horizontal widens a " +
-                            "horizontally squeezed picture; vertical narrows it.",
-                        onSelect = { if (it == null) state.selectCustomDesqueeze() else state.selectDesqueezePreset(it) },
-                        onFactor = state::updateDesqueezeFactor, onDirection = state::updateDesqueezeDirection)
-                MonitorAssistTool.MIRROR ->
-                    MonitorMirrorMenu(state.mirrorHorizontal, { haptics.selection(); state.setMirrorAxes(horizontal = it) },
-                        state.mirrorVertical, { haptics.selection(); state.setMirrorAxes(vertical = it) },
-                        MirrorAssist.EXPLANATION, MirrorAssist.HORIZONTAL_HELP, MirrorAssist.VERTICAL_HELP)
-                MonitorAssistTool.CROSS -> MonitorAssistHelp("Tap the toolbar button to show or hide the centre crosshair.")
-                else -> {
-                    val section = nikonAssistSection(tool, state, cameraInput, haptics::selection)
-                    if (section != null) section.Menu()
-                    else MonitorAssistHelp(stringResource(R.string.settings_image_processing_unavailable))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun OptionLabel(title: String) {
-    Text(title, style = chromeStyle(11.5f, FontWeight.SemiBold), color = LiveDesign.text, maxLines = 1)
-}
-
-@Composable
-private fun OptionCopy(message: String) {
-    Text(message, style = chromeStyle(11f, FontWeight.Normal), color = LiveDesign.muted, maxLines = 3,
-        overflow = TextOverflow.Ellipsis)
-}
 
 /** Output-space filter supplied as a value to the shared catalogue. */
 private enum class RedOutputSpaceFilter(val label: String, val needle: String?) {
