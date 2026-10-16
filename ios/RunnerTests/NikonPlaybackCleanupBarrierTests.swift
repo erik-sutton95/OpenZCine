@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import OpenCineAppKit
 import OpenCineAppKitApple
+import OpenCineHostedTestSupport
 import OpenCineMedia
 import XCTest
 
@@ -13,12 +14,13 @@ import XCTest
     private let exports = MonitorDeliveryExportStore(
         root: FileManager.default.temporaryDirectory.appendingPathComponent(
             "SIMULATED-barrier-exports-\(UUID().uuidString)", isDirectory: true))
-    private func settle(_ condition: () -> Bool) async {
-        for _ in 0..<1000 {
-            if condition() { return }
-            await Task.yield()
-        }
-        XCTFail("Captured cleanup did not reach its manual boundary")
+    /// Waits for the actual state. Readiness comes from AVFoundation loading off the main
+    /// actor, so a fixed number of `Task.yield()` rounds measured machine load, not the barrier.
+    private func settle(
+        _ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line
+    ) async {
+        let reached = await HostedCondition.wait(until: condition)
+        XCTAssertTrue(reached, "Captured cleanup did not reach its manual boundary", file: file, line: line)
     }
     private func caching(_ caching: Bool) -> MonitorDeliveryBatchProgress {
         .init(
@@ -42,24 +44,35 @@ import XCTest
         }
         await settle { gate.pending == 1 }
         report?(caching(true))
-        var barrierEntries = 0
+        let barrier = NikonBarrierOrder()
         let context = try XCTUnwrap(
             NikonOperatorPlaybackContext(
                 model: fixture.model,
                 initial: fixture.opening,
                 cameraTransferReleased: {
-                    barrierEntries += 1
+                    barrier.entries += 1
                     await coordinator.cameraTransferReleased()
+                    barrier.released = true
                 }))
         XCTAssertTrue(
             context.media.open(
                 fixture.first, playlist: fixture.opening.playlist,
                 admitted: fixture.opening.admission))
-        await settle { barrierEntries == 1 }
-        try await Task.sleep(for: .milliseconds(150))
-        XCTAssertNil(context.native?.player.currentItem, "No item while the camera transfers")
+        await settle { barrier.entries == 1 }
+        // The order itself is the oracle: any item the player gets while the delivery still
+        // caches is recorded when it is installed, however slow or fast the machine is.
+        let native = try XCTUnwrap(context.native)
+        let installation = native.player.observe(\.currentItem, options: [.initial, .new]) { player, _ in
+            let installed = player.currentItem != nil
+            MainActor.assumeIsolated { barrier.noteInstallation(installed) }
+        }
+        defer { installation.invalidate() }
+        XCTAssertNil(native.player.currentItem, "No item while the camera transfers")
+        XCTAssertFalse(barrier.released, "The barrier holds while the delivery caches")
         report?(caching(false))
         await settle { context.media.playback?.ready == true }
+        XCTAssertTrue(barrier.released)
+        XCTAssertFalse(barrier.installedWhileHeld, "No item while the camera transfers")
         let asset = try XCTUnwrap(context.native?.player.currentItem?.asset as? AVURLAsset)
         XCTAssertEqual(asset.url.lastPathComponent, "FIRST.MOV")
         XCTAssertTrue(coordinator.isActive, "Playback never cancels the delivery")
@@ -300,6 +313,16 @@ import XCTest
         XCTAssertTrue(completed)
         XCTAssertTrue(returned)
         XCTAssertNil(context.captureCloseCleanup())
+    }
+}
+
+/// Records whether the player received an item before the camera-transfer barrier released.
+@MainActor private final class NikonBarrierOrder {
+    var entries = 0
+    var released = false
+    private(set) var installedWhileHeld = false
+    func noteInstallation(_ installed: Bool) {
+        if installed && !released { installedWhileHeld = true }
     }
 }
 
