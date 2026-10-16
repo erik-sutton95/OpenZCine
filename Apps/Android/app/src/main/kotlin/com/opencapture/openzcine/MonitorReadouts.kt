@@ -50,6 +50,13 @@ internal fun monitorCameraReadouts(snapshot: CameraPropertySnapshot): MonitorCam
         externalPower = snapshot.externalPower,
     )
 
+/**
+ * Title of the FORMAT readout: "Format" for the movie recording format, as iOS titles it; a still
+ * names its image size.
+ */
+internal fun monitorFormatReadoutTitle(isPhotographyMode: Boolean): String =
+    if (isPhotographyMode) "Image size" else "Format"
+
 /** Trims camera text and rejects blank wire values before they reach any monitor surface. */
 internal fun String?.monitorValueOrNull(): String? =
     this?.trim()?.takeIf(String::isNotBlank)

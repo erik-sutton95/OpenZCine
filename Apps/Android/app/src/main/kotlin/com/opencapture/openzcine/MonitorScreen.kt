@@ -1946,7 +1946,8 @@ internal fun MonitorScreen(
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
         val headerReadouts = listOfNotNull(
-            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name, "Image size",
+            if (!mounted(MonitorDisplaySection.FORMAT)) null else MonitorOperatorLiveReadout(resolutionKind.name,
+                monitorFormatReadoutTitle(isPhotographyMode),
                 if (isPhotographyMode) cameraProperties.stillSizeAreaLabel() else readoutRetention.resolution,
                 MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
             if (!mounted(MonitorDisplaySection.CODEC)) null else MonitorOperatorLiveReadout(codecKind.name, "Codec",

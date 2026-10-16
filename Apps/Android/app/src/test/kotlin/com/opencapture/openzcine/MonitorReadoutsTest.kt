@@ -111,4 +111,11 @@ class MonitorReadoutsTest {
         assertNull(nikonCameraBatteryReading(null, externalPower = true))
         assertNull(nikonCameraBatteryReading(0, externalPower = null))
     }
+
+    @Test
+    fun `the FORMAT readout says Format for the recording format like iOS`() {
+        // Z-ANDROID-FORMAT-TITLE: iOS titles the movie format readout "Format"; stills name the image size.
+        assertEquals("Format", monitorFormatReadoutTitle(isPhotographyMode = false))
+        assertEquals("Image size", monitorFormatReadoutTitle(isPhotographyMode = true))
+    }
 }
