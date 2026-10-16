@@ -30,47 +30,6 @@ enum OperatorSettingsHaptics {
     }
 }
 
-struct FPSChip: View {
-    let fps: String
-    /// Live link quality (0–4 bars) from `NativeAppModel.liveSignalBars` — transport health, not
-    /// radio RSSI (which iOS apps can't read without special entitlements).
-    let signalBars: Int
-
-    private var signalTint: Color {
-        switch signalBars {
-        case 3...: LiveDesign.good
-        case 2: LiveDesign.accent
-        case 1: LiveDesign.rec
-        default: LiveDesign.faint
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "cellularbars", variableValue: Double(signalBars) / 4.0)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(signalTint)
-            Text("FPS")
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .foregroundStyle(LiveDesign.faint)
-                .lineLimit(1)
-            // `frameRate.formatted` is two decimals (e.g. "25.00") — without a hard
-            // single-line policy the monospaced value wraps under deck squeeze as
-            // "25.0" / "0". Never allow multi-line in the top bar.
-            Text(fps)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .fixedSize(horizontal: true, vertical: false)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(.horizontal, 11)
-        .padding(.vertical, 7)
-        .glassCapsule()
-    }
-}
-
 struct SegmentedButtons: View {
     let items: [String]
     let selected: String
