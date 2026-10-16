@@ -230,7 +230,6 @@
     <string name="assist_view">VIEW</string>
 
     <!-- Camera audio meters. -->
-    <string name="audio_levels_title">Audio Levels</string>
     <string name="audio_meter_label">AUDIO</string>
     <string name="audio_no_data">NO\nDATA</string>
     <string name="audio_sensitivity_label">SENS</string>
