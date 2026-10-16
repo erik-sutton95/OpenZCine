@@ -15,23 +15,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorPlaybackInteractionOptions
-import com.opencapture.monitorui.MonitorScopeStoredCenter
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.cameracontrols.*
 import com.opencapture.opencine.media.*
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
-import com.opencapture.opencine.nikon.NikonNative
 import com.opencapture.openzcine.ExposureAssistCameraInput
 import com.opencapture.openzcine.LiveDesign
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.NikonLutOptions
-import com.opencapture.openzcine.StoredPanelCenter
-import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
 import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliveryHost
@@ -41,11 +36,8 @@ import com.opencapture.openzcine.nikonPlaybackAssistTools
 import com.opencapture.openzcine.settings.OperatorSettings
 import com.opencapture.openzcine.settings.SettingsPalette
 import com.opencapture.openzcine.settings.nikonAssistSection
-import kotlin.math.max
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /** Nikon source/native leaves around the complete common player and its borrowed gallery. */
 @Composable
@@ -121,26 +113,8 @@ internal fun MediaPlaybackScreen(
     }
     val playerContext = remember(actualLibrary, initial.id, connectionOwner, cacheStore) {
         NikonOperatorPlaybackContext(actualLibrary, initial, scope, capture.source, capture.record,
-            transferFactory = { record, ifCurrent ->
-                val clip = record.payload.clip
-                val delegate = SwiftCoreMediaObjectTransferBridge(connectionOwner)
-                val bridge = AdmittedPlaybackTransferBridge(delegate, ifCurrent)
-                MediaTransferCoordinator(prepareTransfer = {
-                    if (!ifCurrent()) MediaTransferPreparation.Cancelled else withContext(Dispatchers.IO) {
-                        if (!ifCurrent()) MediaTransferPreparation.Cancelled else {
-                            val result = prepareMediaObjectTransfer(cacheStore, record.payload.bucket, clip,
-                                "clip", bridge, cameraTransferAvailable,
-                                onResolvedSize = { bytes -> if (ifCurrent()) onResolvedObjectSize(clip, bytes) })
-                            if (ifCurrent()) result else MediaTransferPreparation.Cancelled
-                        }
-                    }
-                }, stopTransfer = {
-                    // Entered cleanup always addresses the captured native connection owner.
-                    if (cameraTransferAvailable && connectionOwner != null) withContext(Dispatchers.IO) {
-                        NikonNative.sessionStopMediaTransfer(connectionOwner)
-                    }
-                })
-            }, captureDeliveryCleanup = {
+            transferFactory = nikonPlaybackTransfers(cacheStore, connectionOwner, cameraTransferAvailable,
+                onResolvedObjectSize), captureDeliveryCleanup = {
                 // One PTP data channel: a delivery still caching from the camera yields to playback.
                 val outgoing = coordinator.capturedRun.takeIf { coordinator.holdsCameraTransfer }
                 suspend { outgoing?.cancelAndJoin() }
@@ -174,40 +148,10 @@ internal fun MediaPlaybackScreen(
         zebra = { nikonAssistSection(MonitorAssistTool.ZEBRA, assists.shared,
             exposureAssistCameraInput, {})?.Menu() },
         reference = picture?.reference, referenceAvailable = picture?.reference != null)
-    val operations = MonitorOperatorPlaybackOperations<NikonLibraryClip, Unit>(
-        captureDeletion = { record ->
-            val outgoing = playerContext.media.state.value.playback
-            val outgoingNative = playerContext.native
-            // Deleting from the camera needs its channel; only a run caching from it yields.
-            val run = coordinator.capturedRun.takeIf { coordinator.holdsCameraTransfer }
-            if (captureDeletion == null || outgoing == null || outgoingNative == null ||
-                !currentTransfer.value || cover || !capture.record(record).isCurrent() ||
-                !playerContext.media.isCurrent(outgoing.state.value.token) ||
-                outgoing.state.value.active?.asset?.id != record.asset.id) null else {
-                val token = outgoing.state.value.token
-                captureDeletion(record) {
-                    if (playerContext.media.state.value.playback !== outgoing || playerContext.native !== outgoingNative ||
-                        !playerContext.media.isCurrent(token)) false else {
-                        outgoing.close()
-                        run?.cancelAndJoin()
-                        outgoingNative.finishEnteredTransfer()
-                        val retired = outgoing.state.value
-                        playerContext.media.state.value.playback === outgoing && playerContext.native === outgoingNative &&
-                            retired.closed && retired.token == token.copy(revision = token.revision + 1)
-                    }
-                }
-            }
-        },
-        favorite = { record -> if (capture.record(record).isCurrent()) onToggleFavorite(record.payload.clip) },
-        access = { record ->
-            val preparedRecord = prepared?.takeIf { it.record.asset.id == record.asset.id }
-            val completed = (preparedRecord?.preparation as? MediaTransferPreparation.Ready)?.entry
-            val ready = completed?.let { playbackShareState(it.state, it.downloadedBytes, it.expectedLength) == PlaybackShareState.READY } == true
-            MonitorMediaGalleryAccess(share = capture.record(record).isCurrent() &&
-                canDeliverMedia(if (ready) 1 else 0, 1, currentTransfer.value),
-                delete = captureDeletion != null && currentTransfer.value && !cover && capture.record(record).isCurrent())
-        }, rating = playbackRating(cameraTransferAvailable, connectionOwner, onRatingMirrored,
-            onCaptureRatingCompletion, onRatingDiagnostic))
+    val operations = nikonPlaybackOperations(playerContext, coordinator, capture, captureDeletion,
+        transferAvailable = { currentTransfer.value }, cover = cover, prepared = { prepared },
+        onToggleFavorite = onToggleFavorite, rating = playbackRating(cameraTransferAvailable, connectionOwner,
+            onRatingMirrored, onCaptureRatingCompletion, onRatingDiagnostic))
     var closing by remember(playerContext) { mutableStateOf(false) }
     fun close() {
         if (closing) return
@@ -253,107 +197,6 @@ internal fun MediaPlaybackScreen(
     }
 }
 
-private class NikonPlaybackSourceCapture(val source: () -> Boolean,
-    val record: (MonitorMediaRecord<NikonLibraryClip>) -> MonitorPlaybackAdmission)
-
-/** Gates each bounded SDK primitive, without introducing a transfer/cache owner. */
-private class AdmittedPlaybackTransferBridge(
-    private val delegate: MediaObjectTransferBridge,
-    private val ifCurrent: () -> Boolean,
-) : MediaObjectTransferBridge {
-    override val isAvailable: Boolean get() = delegate.isAvailable && ifCurrent()
-    override fun resolveMediaSize(handle: Int, reportedSize: Long): Long {
-        if (!ifCurrent()) throw MonitorPlaybackException(MonitorPlaybackFailure.RETIRED)
-        return delegate.resolveMediaSize(handle, reportedSize)
-    }
-    override fun startMediaTransfer(handle: Int, reportedSize: Long, resumeOffset: Long,
-        listener: NikonNative.MediaTransferListener) {
-        if (!ifCurrent()) throw MonitorPlaybackException(MonitorPlaybackFailure.RETIRED)
-        delegate.startMediaTransfer(handle, reportedSize, resumeOffset, listener)
-    }
-    override fun stopMediaTransfer() = delegate.stopMediaTransfer()
-}
-
-private fun playbackPanelPlacement(context: Context, assists: NikonAssists): MonitorAssistPanelPlacement {
-    val reference = StoredPanelCenter(context, "playbackFalseColorReferencePlacement", "fcref")
-    val audio = StoredPanelCenter(context, "playbackAudioMeterPlacement", "audio")
-    return playbackPanelPlacement(reference, audio, assists.shared)
-}
-
-internal fun playbackPanelPlacement(reference: StoredPanelCenter, audio: StoredPanelCenter,
-    assist: MonitorAssistState): MonitorAssistPanelPlacement {
-    return MonitorAssistPanelPlacement(read = { tool, portrait -> when (tool) {
-        MonitorAssistTool.FALSE -> reference.load()
-        MonitorAssistTool.AUDIO -> audio.load()
-        else -> assist.centerFor(tool, portrait)
-    } }, write = { tool, center, portrait -> when (tool) {
-        MonitorAssistTool.FALSE -> reference.save(center)
-        MonitorAssistTool.AUDIO -> audio.save(center)
-        else -> assist.storeCenter(tool, center, portrait)
-    } }, falseColorDefaultHorizontalFraction = 0.72f,
-        portraitAudioTrailingGapDp = 70f, landscapeAudioTrailingGapDp = 10f, usesAnalysisViewport = true,
-        referenceBelowFeedGapDp = 10f, audioBottomGapDp = 10f, movementInsetDp = 0f)
-}
-
-private fun playbackRating(available: Boolean, connectionOwner: Long?,
-    mirror: (NikonMediaClipRecord, Int) -> Unit,
-    capture: ((NikonMediaClipRecord) -> NikonMediaRatingCompletion)?,
-    diagnostic: (AndroidDiagnosticEvent) -> Unit): MonitorMediaPlaybackRatingService<NikonLibraryClip> =
-    MonitorMediaPlaybackRatingService(levels = (1..5).toList(), noticeMilliseconds = 4_000,
-        read = { request ->
-            val clip = request.record.payload.clip
-            val completion = capture?.invoke(clip)
-            if (!available || !SwiftCore.isAvailable || connectionOwner == null || !request.isCurrent) null
-            else {
-                val value = withContext(Dispatchers.IO) {
-                    if (!request.isCurrent) -1 else NikonNative.sessionObjectRating(connectionOwner, clip.handle.toInt())
-                }
-                if (value < 0 || !request.isCurrent || completion?.isCurrent == false) null
-                else if (completion != null && !completion.mirror(value)) null
-                else { if (completion == null) mirror(clip, value); value }
-            }
-        }, commit = { target, request ->
-            val clip = request.record.payload.clip
-            val completion = capture?.invoke(clip)
-            if (!available || !SwiftCore.isAvailable || connectionOwner == null || !request.isCurrent || completion?.isCurrent == false)
-                MonitorMediaPictureRatingResult.Unavailable
-            else {
-                diagnostic(AndroidDiagnosticEvent.RATING_WRITE_ATTEMPTED)
-                val result = withContext(Dispatchers.IO) {
-                    if (!request.isCurrent) -1 else NikonNative.sessionSetObjectRating(connectionOwner, clip.handle.toInt(), target)
-                }
-                if (!request.isCurrent || completion?.isCurrent == false) MonitorMediaPictureRatingResult.Unavailable
-                else when (val outcome = ratingWriteResult(result)) {
-                    is RatingWriteResult.Confirmed -> {
-                        if (completion != null && !completion.mirror(outcome.stars)) MonitorMediaPictureRatingResult.Unavailable
-                        else {
-                            if (completion == null) mirror(clip, outcome.stars)
-                            diagnostic(AndroidDiagnosticEvent.RATING_WRITE_CONFIRMED)
-                            MonitorMediaPictureRatingResult.Confirmed(outcome.stars)
-                        }
-                    }
-                    is RatingWriteResult.Refused -> {
-                        diagnostic(if (outcome.code == 0x2013) AndroidDiagnosticEvent.RATING_WRITE_REFUSED_ACCESS_DENIED
-                            else AndroidDiagnosticEvent.RATING_WRITE_REFUSED)
-                        MonitorMediaPictureRatingResult.Refused(ratingRefusalMessage(outcome.code))
-                    }
-                }
-            }
-        })
-
-@Composable
-private fun PlaybackFailure(message: String) {
-    Box(Modifier.fillMaxSize().padding(horizontal = 28.dp), contentAlignment = Alignment.Center) {
-        Text(
-            message,
-            style = chromeStyle(13f, FontWeight.Medium),
-            color = LiveDesign.muted,
-            maxLines = 4,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
 @Composable
 private fun PlaybackLoading(message: String) {
     Column(
@@ -369,9 +212,4 @@ private fun PlaybackLoading(message: String) {
             color = LiveDesign.muted,
         )
     }
-}
-
-internal fun formatPlaybackTime(milliseconds: Long): String {
-    val seconds = max(0L, milliseconds) / 1_000L
-    return "%d:%02d".format(seconds / 60L, seconds % 60L)
 }

@@ -21,6 +21,7 @@ class CameraRatingWriteRuleTest {
             paths.filter { it.name.endsWith(".kt") && "sessionSetObjectRating(" in it.readText() }
                 .map(Path::name).sorted().toList()
         }
-        assertEquals(listOf("MediaPlaybackScreen.kt", "MediaStillViewer.kt"), writers)
+        // The player's rating service lives with its other playback services.
+        assertEquals(listOf("MediaStillViewer.kt", "NikonPlaybackServices.kt"), writers)
     }
 }
