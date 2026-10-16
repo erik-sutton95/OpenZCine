@@ -831,7 +831,6 @@
     <string name="help_storage_cache">Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.</string>
     <string name="help_storage_clear_cache">Removes completed cached clip files, thumbnails, and camera indexes for every camera. Transfers still running are kept so they can resume. Favorites survive; the gallery reloads from the camera when connected.</string>
     <string name="help_system_report_problem">Tell us what happened. Technical details stay off unless you include them. You can attach up to three photos. Sending does not turn on automatic reports.</string>
-    <string name="help_system_automatic_reports">Optional: send crash, hang, live-feed reports and session health counts to OpenCapture through Sentry. Off by default. Turn off anytime without losing app features. Uploads wait until you leave camera Wi-Fi. Automatic reports exclude all images. No footage or GPS location. Sentry receives the connection IP; stored event IP and derived geography are removed. See Reporting Privacy below.</string>
     <string name="help_system_automatic_reports_unavailable">This build cannot send automatic reports. You can still share reports stored on this phone.</string>
     <string name="media_refresh">REFRESH</string>
     <string name="media_refresh_cd">Refresh camera media</string>
