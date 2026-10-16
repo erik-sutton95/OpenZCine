@@ -365,9 +365,8 @@ private fun sharingSource(session: CameraSession?, sharing: com.opencapture.open
                 }
             }, segmented = true),
         passcodeTitle = stringResource(R.string.sharing_watcher_passcode), passcodeHelp = stringResource(R.string.help_sharing_passcode),
-        passcode = settings.relayWatcherPasscode.value, setPasscode = {
-            settings.relayWatcherPasscode.value = it; sharing?.watcherPasscode = it
-        }, controlRequestsTitle = stringResource(R.string.sharing_control_requests),
+        passcode = sharing?.savedPasscode.orEmpty(), setPasscode = { sharing?.savePasscode(it) },
+        controlRequestsTitle = stringResource(R.string.sharing_control_requests),
         controlRequestsHelp = stringResource(R.string.help_sharing_control_requests),
         controlRequests = settings.relayAllowsControlRequests.value, setControlRequests = {
             settings.relayAllowsControlRequests.value = it; sharing?.allowsControlRequests = it

@@ -2331,7 +2331,7 @@ struct OperatorSettingsPanel: View {
                 get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
             passcode: Binding(
                 get: { relayPasscodeDraft ?? model.relayHostPasscode ?? "" },
-                set: { relayPasscodeDraft = String($0.filter(\.isNumber).prefix(4)) }),
+                set: { relayPasscodeDraft = $0 }),
             controlRequests: Binding(
                 get: { model.preferences.relayAllowsControlRequests },
                 set: { model.setRelayAllowsControlRequests($0) }),
@@ -2347,7 +2347,7 @@ struct OperatorSettingsPanel: View {
                 sharing:
                     "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device; this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi: its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
                 passcode:
-                    "Four digits watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
+                    "A passcode of at least four characters watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
                 controlRequests:
                     "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.",
                 priority:
@@ -2355,9 +2355,7 @@ struct OperatorSettingsPanel: View {
             ),
             browseHelp: "Find another device's broadcast in the camera list.",
             browse: model.showSavedCameras,
-            passcodeChanged: {
-                if $0.count == 4 || $0.isEmpty { model.setRelayWatcherPasscode($0) }
-            },
+            passcodeChanged: { model.setRelayWatcherPasscode($0) },
             watchers: model.captureOperatorSettingsWatchers(), unavailableTitle: "Watching",
             unavailableValue: model.cameraState.cameraName)
     }

@@ -190,9 +190,9 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
      */
     public val autoRotateFeedEnabled: Toggle = Toggle("controls.autoRotateFeed", default = true)
 
-    // Sharing (the monitor relay) — iOS `relayWatcherPasscode` / `relayAllowsControlRequests`.
-    // The share switch itself is runtime state, exactly like iOS's `isRelayBroadcasting`.
-    public val relayWatcherPasscode: Text = Text("sharing.watcherPasscode", default = "")
+    // Sharing (the monitor relay) — iOS `relayAllowsControlRequests`. The share switch itself is
+    // runtime state, exactly like iOS's `isRelayBroadcasting`; the watcher passcode is a secret
+    // the broadcast controller keeps in the relay secrets (`RelayBroadcastController.savePasscode`).
     public val relayAllowsControlRequests: Toggle =
         Toggle("sharing.allowsControlRequests", default = true)
     /**

@@ -257,6 +257,30 @@ class MainActivity : ComponentActivity() {
                         )
                             ?.takeIf(String::isNotBlank) ?: android.os.Build.MODEL
                     }
+                // The broadcast passcode and the watcher passcodes (one per broadcaster name),
+                // sealed by the shared relay secrets (iOS keeps them in the Keychain). NOT
+                // install-scoped like the jpeg-only verdict below: a set's passcode does not
+                // change because this app was rebuilt. The plain-text copies of earlier builds
+                // move in once; each leaves only after its sealed copy read back.
+                val relaySecrets =
+                    remember {
+                        com.opencapture.opencine.relayruntime.WatcherRelaySecrets(
+                                applicationContext,
+                                com.opencapture.openzcine.relay.RelayWatchController.SECRETS_SERVICE,
+                            )
+                            .also {
+                                it.adoptLegacyRememberedPasscodes(
+                                    applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
+                                )
+                                it.adoptLegacyHostPasscode(
+                                    applicationContext.getSharedPreferences(
+                                        com.opencapture.openzcine.relay.RelayBroadcastController.LEGACY_PASSCODE_STORE,
+                                        MODE_PRIVATE,
+                                    ),
+                                    com.opencapture.openzcine.relay.RelayBroadcastController.LEGACY_PASSCODE_KEY,
+                                )
+                            }
+                    }
                 val relayBroadcastController =
                     remember {
                         val portPrefs =
@@ -270,6 +294,7 @@ class MainActivity : ComponentActivity() {
                             savePreferredPort = { port ->
                                 portPrefs.edit().putInt("listenerPort", port).apply()
                             },
+                            secrets = relaySecrets,
                         )
                     }
                 val relayBroadcastUi by relayBroadcastController.ui.collectAsState()
@@ -295,23 +320,6 @@ class MainActivity : ComponentActivity() {
                         com.opencapture.openzcine.relay.RelayWatchController.seedJpegOnly()
                     }
                 }
-                // Watcher passcodes, one per broadcaster name, sealed by the shared relay
-                // secrets (iOS keeps them in the Keychain). NOT install-scoped like the jpeg-only
-                // verdict above: a set's passcode does not change because this app was rebuilt.
-                // The plain-text file of earlier builds moves in once; each entry leaves it only
-                // after its sealed copy read back.
-                val relaySecrets =
-                    remember {
-                        com.opencapture.opencine.relayruntime.WatcherRelaySecrets(
-                                applicationContext,
-                                com.opencapture.openzcine.relay.RelayWatchController.SECRETS_SERVICE,
-                            )
-                            .also {
-                                it.adoptLegacyRememberedPasscodes(
-                                    applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
-                                )
-                            }
-                    }
                 LaunchedEffect(Unit) {
                     // Debug-only direct watch (adb reverse cross-platform verification).
                     DemoHarness.relayWatchEndpoint(intent)?.let { (host, port) ->
@@ -1146,11 +1154,10 @@ class MainActivity : ComponentActivity() {
                                                         ?: (active as? SwiftCoreCameraSession)
                                                             ?.liveFrames
                                                             as? LiveFrameSource
-                                                if (frames != null) {
-                                                    relayBroadcastController.watcherPasscode =
-                                                        operatorSettings
-                                                            .relayWatcherPasscode
-                                                            .value
+                                                // A passcode the store cannot read now never
+                                                // starts an unprotected broadcast.
+                                                if (frames != null &&
+                                                    relayBroadcastController.loadPasscode()) {
                                                     relayBroadcastController
                                                         .allowsControlRequests =
                                                         operatorSettings
