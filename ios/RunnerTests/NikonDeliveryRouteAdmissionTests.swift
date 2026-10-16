@@ -17,13 +17,17 @@ import XCTest
 @MainActor private final class NikonHopFake {
     var answers: [@MainActor () async -> String?] = []
     var leaves: [String] = []
+    var leaveValidity: [@MainActor () -> Bool] = []
     var joins: [String] = []
     var joinGate: NikonRouteGate<Void>?
 
     func install(on model: NativeAppModel) {
         model.hopNative = .init(
             currentSSID: { [self] in await answers.removeFirst()() },
-            leaveNetwork: { [self] in leaves.append($0) },
+            leaveNetwork: { [self] ssid, current in
+                leaves.append(ssid)
+                leaveValidity.append(current)
+            },
             rejoin: { [self] _, ssid in
                 if let joinGate { await joinGate.wait() }
                 joins.append(ssid)
@@ -54,6 +58,20 @@ import XCTest
         XCTAssertFalse(model.internetHopActive)
         XCTAssertNil(model.internetHop.end(token))
         XCTAssertEqual(fake.joins, ["SIMULATED-A"])
+    }
+
+    /// The leave carries the hop's own validity to the hotspot owner: queued behind a pending
+    /// camera join, a stale hop's removal is dropped instead of reaching the OS.
+    func testStaleHopLeaveCannotReachTheOS() async throws {
+        let fake = NikonHopFake()
+        fake.answers = [{ "SIMULATED-A" }]
+        let model = hop(fake)
+        let token = try XCTUnwrap(model.internetHop.begin(model.hopRoute()))
+        await settle { fake.leaves.count == 1 }
+        let current = try XCTUnwrap(fake.leaveValidity.first)
+        XCTAssertTrue(current(), "The running hop's leave is admitted")
+        await model.internetHop.end(token)?.value
+        XCTAssertFalse(current(), "A leave still queued when the hop ended never reaches the OS")
     }
 
     func testASecondHopIsRefusedWhileOneRuns() async throws {

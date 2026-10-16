@@ -1,5 +1,7 @@
 import Foundation
 import NetworkExtension
+import OpenCineApple
+import OpenCineCore
 import OpenZCineCore
 import os
 
@@ -44,17 +46,39 @@ final class WiFiJoinCoordinator {
         case hotspotConfigurationOnly
     }
 
+    /// This coordinator's one camera hotspot owner, retained across joins: a retry, re-apply or
+    /// removal never reaches the OS while an earlier apply is still pending there, and work
+    /// queued for a retired join never runs.
+    private let cameraHotspot = CameraHotspotSystem(cancellation: .retireCaller)
+    /// Operator joins in flight. A best-effort re-apply stands aside for them.
+    private var activeJoins = 0
+
     private init() {}
 
     /// Applies the best available join path and waits until the phone is on the camera subnet.
+    /// `isCurrent` is the caller's connection validity, checked before queued hotspot work runs.
     func joinCameraNetwork(
         ssid rawSSID: String,
         password: String?,
-        strategy: JoinStrategy = .automatic
+        strategy: JoinStrategy = .automatic,
+        isCurrent: @escaping CameraNetworkIsCurrent = { true }
     ) async throws {
         let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ssid.isEmpty else { throw JoinError.invalidSSID }
+        activeJoins += 1
+        defer { activeJoins -= 1 }
+        try await cameraHotspot.host.withAttempt(isCurrent) { [self] operations in
+            try await joinCameraNetwork(
+                ssid: ssid, password: password, strategy: strategy, operations: operations)
+        }
+    }
 
+    private func joinCameraNetwork(
+        ssid: String,
+        password: String?,
+        strategy: JoinStrategy,
+        operations: CameraHotspotOperations
+    ) async throws {
         if await isConnected(toSSID: ssid),
             CameraWiFiJoinPolicy.isOnCameraAccessPoint(
                 localAddresses: NativeNetworkInterfaceSnapshot.localIPv4Addresses(),
@@ -83,7 +107,9 @@ final class WiFiJoinCoordinator {
         }
 
         let preJoinAddresses = Set(NativeNetworkInterfaceSnapshot.localIPv4Addresses())
-        try await joinViaHotspotConfiguration(ssid: ssid, password: password)
+        try await apply(
+            .init(selection: .ssid(ssid), security: Self.security(password), joinOnce: false),
+            context: "ssid=\(ssid)", with: operations)
         try await waitForCameraNetwork(
             expectedSSID: ssid,
             preJoinAddresses: preJoinAddresses,
@@ -95,11 +121,25 @@ final class WiFiJoinCoordinator {
     func joinCameraNetwork(
         ssidPrefix rawPrefix: String,
         password: String?,
-        strategy: JoinStrategy = .automatic
+        strategy: JoinStrategy = .automatic,
+        isCurrent: @escaping CameraNetworkIsCurrent = { true }
     ) async throws {
         let prefix = rawPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prefix.isEmpty else { throw JoinError.invalidSSID }
+        activeJoins += 1
+        defer { activeJoins -= 1 }
+        try await cameraHotspot.host.withAttempt(isCurrent) { [self] operations in
+            try await joinCameraNetwork(
+                ssidPrefix: prefix, password: password, strategy: strategy, operations: operations)
+        }
+    }
 
+    private func joinCameraNetwork(
+        ssidPrefix prefix: String,
+        password: String?,
+        strategy: JoinStrategy,
+        operations: CameraHotspotOperations
+    ) async throws {
         if CameraWiFiJoinPolicy.isOnCameraAccessPoint(
             localAddresses: NativeNetworkInterfaceSnapshot.localIPv4Addresses(),
             connectedSSID: await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
@@ -126,7 +166,9 @@ final class WiFiJoinCoordinator {
         }
 
         let preJoinAddresses = Set(NativeNetworkInterfaceSnapshot.localIPv4Addresses())
-        try await joinViaHotspotConfiguration(ssidPrefix: prefix, password: password)
+        try await apply(
+            .init(selection: .prefix(prefix), security: Self.security(password), joinOnce: false),
+            context: "ssidPrefix=\(prefix)", with: operations)
         try await waitForCameraSubnet(preJoinAddresses: preJoinAddresses, timeout: 45)
     }
 
@@ -134,10 +176,13 @@ final class WiFiJoinCoordinator {
     /// preferred network or cellular — the RED LUT "internet hop". The keychain password survives,
     /// so a later ``reapplyCameraNetwork(ssid:)`` restores the link (iOS may re-ask to join once,
     /// since removing the configuration forgets the operator's prior approval).
-    func leaveCameraNetwork(ssid rawSSID: String) {
+    /// Queued behind a still pending apply, the removal runs only while `isCurrent` holds.
+    func leaveCameraNetwork(
+        ssid rawSSID: String, isCurrent: @escaping CameraNetworkIsCurrent = { true }
+    ) {
         let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ssid.isEmpty else { return }
-        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
+        cameraHotspot.host.remove(ssid, isCurrent)
         Self.hotspotLogger.info(
             "NEHotspotConfiguration removed ssid=\(ssid, privacy: .private(mask: .hash)) for internet hop"
         )
@@ -180,18 +225,11 @@ final class WiFiJoinCoordinator {
         reapplyInFlightSince = Date()
 
         let password = CameraWiFiCredentialStore.password(forSSID: ssid)
-        let configuration: NEHotspotConfiguration
-        if let password, !password.isEmpty {
-            configuration = NEHotspotConfiguration(ssid: ssid, passphrase: password, isWEP: false)
-        } else {
-            configuration = NEHotspotConfiguration(ssid: ssid)
-        }
-        configuration.joinOnce = false
 
         // Remove the installed configuration FIRST, or this whole function is a no-op.
         //
         // Applying a configuration for an SSID that already has one is not a rejoin request as
-        // far as iOS is concerned — it is already configured, so the apply resolves without
+        // far as iOS is concerned: it is already configured, so the apply resolves without
         // re-associating, and iOS certainly will not walk away from a working home network with
         // internet on its own account. The operator sees no prompt and stays exactly where they
         // are. Field report: confirm on the camera, camera restarts its access point, phone falls
@@ -200,110 +238,81 @@ final class WiFiJoinCoordinator {
         // Removing first makes the next apply a genuine join, which is what draws the system
         // alert and actually moves the phone. Safe here because the caller only reaches this
         // branch having established, by SSID *or* by dialling the access point, that we are not
-        // on the camera's network — so there is no live association to tear down.
-        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
+        // on the camera's network, so there is no live association to tear down.
         Self.hotspotLogger.info(
             "reapply join ssid=\(ssid, privacy: .private(mask: .hash)) hasPassword=\(password?.isEmpty == false)"
         )
-        // One hop to the main actor for the whole result: this closure is nonisolated, and two
-        // separate `Task { @MainActor }` bodies would each send `self` across, which Swift 6
-        // rejects as a race with the other.
-        NEHotspotConfigurationManager.shared.apply(configuration) { @Sendable [weak self] error in
-            Task { @MainActor in
-                self?.reapplyInFlightSince = nil
-                guard let error else { return }
-                // An operator Cancel on the system alert is a decision, not a transient failure:
-                // latch it so the chase stops instead of re-prompting on the next tick.
-                if (error as NSError).code == NEHotspotConfigurationError.userDenied.rawValue {
-                    self?.declinedReapplySSIDs.insert(ssid)
-                    Self.hotspotLogger.info(
-                        "reapply declined by operator ssid=\(ssid, privacy: .private(mask: .hash)) — chase disarmed"
-                    )
-                    return
-                }
-                // A best-effort reapply races the camera's pairing-triggered AP restart. iOS answers
-                // `.alreadyAssociated` when the phone is already back on the network and `.internal`
-                // (code 8) when the config can't be applied right now — also on the simulator, which
-                // has no Wi‑Fi radio. Neither is actionable, so keep them out of the error stream.
-                if Self.isBenignReapplyError(error) {
-                    Self.hotspotLogger.info(
-                        "NEHotspotConfiguration reapply ssid=\(ssid, privacy: .private(mask: .hash)) deferred to discovery (\(error.localizedDescription, privacy: .private(mask: .hash)))"
-                    )
-                } else {
-                    Self.logHotspotError(error, context: "reapply ssid=\(ssid)")
-                }
+        do {
+            // An operator join that started meanwhile owns the native work; this stands aside.
+            guard activeJoins == 0 else {
+                reapplyInFlightSince = nil
+                return
+            }
+            let configuration = CameraHotspotConfiguration(
+                selection: .ssid(ssid), security: Self.security(password), joinOnce: false)
+            try await cameraHotspot.host.withAttempt(
+                { true },
+                { operations in
+                    operations.remove(ssid)
+                    try await operations.apply(configuration)
+                })
+            reapplyInFlightSince = nil
+        } catch is CancellationError {
+            // A newer join retired this one; its native apply may still be pending, so the
+            // in-flight mark stays (the 30 s self-heal still applies).
+        } catch {
+            reapplyInFlightSince = nil
+            // An operator Cancel on the system alert is a decision, not a transient failure:
+            // latch it so the chase stops instead of re-prompting on the next tick.
+            if (error as NSError).code == NEHotspotConfigurationError.userDenied.rawValue {
+                declinedReapplySSIDs.insert(ssid)
+                Self.hotspotLogger.info(
+                    "reapply declined by operator ssid=\(ssid, privacy: .private(mask: .hash)), chase disarmed"
+                )
+                return
+            }
+            // A best-effort reapply races the camera's pairing-triggered AP restart. iOS answers
+            // `.alreadyAssociated` when the phone is already back on the network and `.internal`
+            // (code 8) when the config can't be applied right now, also on the simulator, which
+            // has no Wi-Fi radio. Neither is actionable, so keep them out of the error stream.
+            if Self.isBenignReapplyError(error) {
+                Self.hotspotLogger.info(
+                    "NEHotspotConfiguration reapply ssid=\(ssid, privacy: .private(mask: .hash)) deferred to discovery (\(error.localizedDescription, privacy: .private(mask: .hash)))"
+                )
+            } else {
+                Self.logHotspotError(error, context: "reapply ssid=\(ssid)")
             }
         }
     }
 
     // MARK: - NEHotspotConfiguration fallback (iOS 17 and ASK failure)
 
-    private func joinViaHotspotConfiguration(ssid: String, password: String?) async throws {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            let configuration: NEHotspotConfiguration
-            if let password, !password.isEmpty {
-                configuration = NEHotspotConfiguration(
-                    ssid: ssid,
-                    passphrase: password,
-                    isWEP: false
-                )
-            } else {
-                configuration = NEHotspotConfiguration(ssid: ssid)
-            }
-            configuration.joinOnce = false
-
-            NEHotspotConfigurationManager.shared.apply(configuration) { error in
-                if let error {
-                    if Self.isBenignHotspotError(error) {
-                        continuation.resume()
-                    } else {
-                        Self.logHotspotError(error, context: "ssid=\(ssid)")
-                        continuation.resume(throwing: Self.mapHotspotError(error))
-                    }
-                } else {
-                    continuation.resume()
-                }
-            }
+    /// One persistent (`joinOnce = false`) apply through the scoped owner; "already associated"
+    /// is success.
+    private func apply(
+        _ configuration: CameraHotspotConfiguration, context: String,
+        with operations: CameraHotspotOperations
+    ) async throws {
+        do {
+            try await operations.apply(configuration)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if Self.isBenignHotspotError(error) { return }
+            Self.logHotspotError(error, context: context)
+            throw Self.mapHotspotError(error)
         }
     }
 
-    private func joinViaHotspotConfiguration(ssidPrefix: String, password: String?) async throws {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            let configuration: NEHotspotConfiguration
-            if let password, !password.isEmpty {
-                configuration = NEHotspotConfiguration(
-                    ssidPrefix: ssidPrefix,
-                    passphrase: password,
-                    isWEP: false
-                )
-            } else {
-                configuration = NEHotspotConfiguration(ssidPrefix: ssidPrefix)
-            }
-            configuration.joinOnce = false
-
-            NEHotspotConfigurationManager.shared.apply(configuration) { error in
-                if let error {
-                    if Self.isBenignHotspotError(error) {
-                        continuation.resume()
-                    } else {
-                        Self.logHotspotError(error, context: "ssidPrefix=\(ssidPrefix)")
-                        continuation.resume(throwing: Self.mapHotspotError(error))
-                    }
-                } else {
-                    continuation.resume()
-                }
-            }
-        }
+    private nonisolated static func security(_ password: String?)
+        -> CameraHotspotConfiguration.Security
+    {
+        if let password, !password.isEmpty { return .personal(passphrase: password) }
+        return .open
     }
 
     private func isConnected(toSSID ssid: String) async -> Bool {
-        await withCheckedContinuation { continuation in
-            NEHotspotNetwork.fetchCurrent { network in
-                continuation.resume(returning: network?.ssid == ssid)
-            }
-        }
+        await cameraHotspot.host.currentSSID() == ssid
     }
 
     private func waitForCameraSubnet(
@@ -312,7 +321,8 @@ final class WiFiJoinCoordinator {
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if Task.isCancelled { return }
+            // A cancelled join is cancelled, never "on the network".
+            try Task.checkCancellation()
             let addresses = NativeNetworkInterfaceSnapshot.localIPv4Addresses()
             let connectedSSID = await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
             if CameraWiFiJoinPolicy.isOnCameraAccessPoint(
@@ -336,7 +346,8 @@ final class WiFiJoinCoordinator {
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if Task.isCancelled { return }
+            // A cancelled join is cancelled, never "on the network".
+            try Task.checkCancellation()
             let addresses = NativeNetworkInterfaceSnapshot.localIPv4Addresses()
             // One Wi‑Fi info read per poll: reuse the SSID for both the camera-AP check and the
             // exact-match check. A second `NEHotspotNetwork.fetchCurrent` here just doubles the
