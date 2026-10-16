@@ -256,7 +256,8 @@ class MainActivity : ComponentActivity() {
                     enabled = gyroState.enabled, setEnabled = gyroCapture::setEnabled,
                     status = gyroState.status, available = gyroState.available || gyroState.enabled,
                     openLogs = { gyroLogsPresented = true },
-                    mountName = gyroState.mountOptions.firstOrNull { it.id == gyroState.mountPreset }?.shortLabel,
+                    mountName = if (gyroState.mountCalibration != null) "Calibrated"
+                        else gyroState.mountOptions.firstOrNull { it.id == gyroState.mountPreset }?.shortLabel,
                     configureMount = if (gyroState.mountOptions.isNotEmpty()) ({ gyroMountPresented = true }) else null,
                 )
                 // The HDMI capture feed beside a capture-only session. Non-null
@@ -1087,6 +1088,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 null
                             }
+                        LaunchedEffect(uvcSource) { gyroCapture.setCalibrationSourceAvailable(uvcSource == null) }
                         DisposableEffect(active, returnToMulticam != null) {
                             val eligible = active.takeIf {
                                 it is SwiftCoreCameraSession && returnToMulticam == null && demo == null
@@ -1111,7 +1113,8 @@ class MainActivity : ComponentActivity() {
                                 // while Operator Setup is on top; otherwise
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
-                                liveViewEnabled = overlay == null && !gyroLogsPresented && !gyroMountPresented,
+                                liveViewEnabled = gyroState.calibration.active ||
+                                    overlay == null && !gyroLogsPresented && !gyroMountPresented,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
                                 isMonitorFront = overlay == null && !gyroLogsPresented && !gyroMountPresented,
@@ -1696,7 +1699,9 @@ class MainActivity : ComponentActivity() {
                 }
                 if (gyroMountPresented) {
                     GyroMountScreen(gyroState, onSelect = gyroCapture::setMountPreset,
-                        onClose = { gyroMountPresented = false })
+                        onClose = { gyroCapture.stopCalibration(); gyroMountPresented = false },
+                        onCalibrate = gyroCapture::beginCalibration, onCapture = gyroCapture::captureCalibration,
+                        onCancelCalibration = gyroCapture::stopCalibration, onResetCalibration = gyroCapture::resetCalibration)
                 }
                 } // app-root Box
                 } // LocalOperatorHaptics

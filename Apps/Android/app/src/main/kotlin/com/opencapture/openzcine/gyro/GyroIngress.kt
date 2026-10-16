@@ -1,8 +1,12 @@
 package com.opencapture.openzcine.gyro
 
+/** One immutable choice copied at REC ingress before asynchronous file work. */
+internal data class GyroMountSelection(val preset: String = "unconfigured", val calibrationJSON: String = "")
+
 /** A camera observation stamped before it enters the serial file writer. */
 internal data class RecordingObservation(val recording: Boolean?, val timestamp: Double,
-    val date: Double, val interrupted: Boolean = false, val mountPreset: String = "unconfigured")
+    val date: Double, val interrupted: Boolean = false, val mountPreset: String = "unconfigured",
+    val calibrationJSON: String = "")
 
 /** Interleaves one bounded platform batch without applying any take policy. */
 internal fun replayGyroIngress(samples: List<AndroidGyroSample>, observations: List<RecordingObservation>,

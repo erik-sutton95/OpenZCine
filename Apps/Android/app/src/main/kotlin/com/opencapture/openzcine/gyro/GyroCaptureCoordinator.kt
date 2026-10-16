@@ -13,9 +13,16 @@ import android.view.Display
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionEvent
 import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.LiveCameraLevel
+import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
+import com.opencapture.opencine.nikon.metadataOnly
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.DeviceTiltVector
+import com.opencapture.openzcine.lowPassDeviceTilt
 import com.opencapture.openzcine.prefersPhotographyChrome
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -26,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class GyroCaptureState(
     val enabled: Boolean = false,
@@ -38,10 +46,13 @@ internal data class GyroCaptureState(
     val mountPreset: String = "unconfigured",
     val mountOptions: List<GyroMountOption> = emptyList(),
     val mountCatalog: Map<String, GyroMountOption> = emptyMap(),
+    val mountCalibration: String? = null,
+    val calibration: GyroCalibrationState = GyroCalibrationState(),
 )
 
 /** App-owned sensor/file adapter; all take boundaries and health rules are Swift-owned. */
-internal class GyroCaptureCoordinator(context: Context, private val native: GyroNative = SwiftGyroNative) {
+internal class GyroCaptureCoordinator(context: Context, private val native: GyroNative = SwiftGyroNative,
+    private val calibrationNative: GyroCalibrationNative = SwiftGyroCalibrationNative) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     private val preferences = context.getSharedPreferences("gyro-logging", Context.MODE_PRIVATE)
     private val sensorManager = context.getSystemService(SensorManager::class.java)
@@ -70,7 +81,14 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
     private var listener: SensorEventListener? = null
     private var bindingGeneration = 0L
     private var armedTimestamp: Double? = null
-    @Volatile private var selectedMountPreset = "unconfigured"
+    @Volatile private var selectedMount = GyroMountSelection()
+    private val calibration = GyroCalibrationSession(calibrationNative)
+    private var calibrationGeneration = 0L
+    private var calibrationFrames: Job? = null
+    private var calibrationThread: HandlerThread? = null
+    private var calibrationListener: SensorEventListener? = null
+    private var calibrationCamera: Pair<LiveCameraLevel, Double>? = null
+    private var calibrationSourceAvailable = true
 
     init {
         scope.launch {
@@ -84,10 +102,13 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
                     catalog to options
                 }.onSuccess { (catalog, options) ->
                     val saved = preferences.getString("mountPreset", "unconfigured")
-                    selectedMountPreset = options.firstOrNull { it.id == saved }?.id ?: "unconfigured"
+                    val savedCalibration = preferences.getString("mountCalibration", null)
+                        ?.takeIf(calibrationNative::validate)
+                    selectedMount = GyroMountSelection(options.firstOrNull { it.id == saved }?.id ?: "unconfigured",
+                        savedCalibration.orEmpty())
                     mutableState.value = mutableState.value.copy(mountOptions = options,
                         mountCatalog = catalog.associateBy { it.id },
-                        mountPreset = selectedMountPreset)
+                        mountPreset = selectedMount.preset, mountCalibration = savedCalibration)
                 }.onFailure {
                     mutableState.value = mutableState.value.copy(available = false)
                     fail(it.message ?: "Could not read gyro mount presets.")
@@ -110,15 +131,30 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
 
     fun setMountPreset(id: String) {
         require(mutableState.value.mountOptions.any { it.id == id }) { "Unknown gyro mount preset." }
-        preferences.edit().putString("mountPreset", id).apply()
-        selectedMountPreset = id
-        scope.launch { mutableState.value = mutableState.value.copy(mountPreset = id) }
+        preferences.edit().putString("mountPreset", id).remove("mountCalibration").apply()
+        selectedMount = GyroMountSelection(id)
+        scope.launch {
+            cancelCalibration()
+            mutableState.value = mutableState.value.copy(mountPreset = id, mountCalibration = null)
+        }
     }
 
-    fun setForeground(active: Boolean) { scope.launch { foreground = active; safely { reconcile("backgrounded") } } }
+    fun resetCalibration() = setMountPreset("unconfigured")
+
+    fun setCalibrationSourceAvailable(available: Boolean) { scope.launch {
+        if (calibrationSourceAvailable != available) cancelCalibration()
+        calibrationSourceAvailable = available
+    } }
+
+    fun setForeground(active: Boolean) { scope.launch {
+        foreground = active
+        if (!active) cancelCalibration()
+        safely { reconcile("backgrounded") }
+    } }
 
     fun bind(next: CameraSession?) { scope.launch {
         if (session === next) return@launch
+        cancelCalibration()
         safely { stop("disconnected") }
         observations?.cancel(); events?.cancel(); connection?.cancel(); cameraMode?.cancel()
         session = next
@@ -128,19 +164,26 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
         connection = scope.launch { next.state.collect { value ->
             if (session !== next) return@collect
             cameraLabel = (value as? CameraSessionState.Connected)?.identity?.name ?: "Camera"
+            if (value !is CameraSessionState.Connected) cancelCalibration()
             safely { reconcile("disconnected") }
         } }
-        cameraMode = scope.launch { next.cameraProperties.collect { safely { reconcile("interrupted") } } }
+        cameraMode = scope.launch { next.cameraProperties.collect {
+            if (calibration.state.active && !calibrationEligible()) cancelCalibration()
+            safely { reconcile("interrupted") }
+        } }
         // These collectors never do file IO. Sensor readings and timestamped REC observations
         // enter the same bounded queue before the serial writer can block on storage.
         observations = scope.launch(Dispatchers.Default) { next.reportedRecording.collect { recording ->
+            val mount = selectedMount
             enqueue(RecordingObservation(recording, now(), System.currentTimeMillis() / 1_000.0,
-                mountPreset = selectedMountPreset), binding)
+                mountPreset = mount.preset, calibrationJSON = mount.calibrationJSON), binding)
+            if (recording != false) scope.launch { if (binding == bindingGeneration) cancelCalibration() }
         } }
         events = scope.launch(Dispatchers.Default) { next.events.collect { event ->
             if (event is CameraSessionEvent.RecordingInterrupted) {
+                val mount = selectedMount
                 enqueue(RecordingObservation(false, now(), System.currentTimeMillis() / 1_000.0, true,
-                    selectedMountPreset), binding)
+                    mount.preset, mount.calibrationJSON), binding)
             }
         } }
         safely { reconcile("disconnected") }
@@ -152,8 +195,122 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
     } }
 
     fun close() { scope.launch {
+        cancelCalibration()
         try { safely { stop("backgrounded"); store.close() } } finally { scope.cancel() }
     } }
+
+    fun beginCalibration() { scope.launch {
+        cancelCalibration()
+        if (!calibrationEligible()) {
+            mutableState.value = mutableState.value.copy(calibration = GyroCalibrationState(
+                error = "Connect the camera's live view and stop recording before calibrating."))
+            return@launch
+        }
+        val gravity = sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        val tiltSensor = gravity ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        if (tiltSensor == null) {
+            mutableState.value = mutableState.value.copy(calibration = GyroCalibrationState(
+                error = "Phone gravity is unavailable on this device."))
+            return@launch
+        }
+        try {
+            calibration.start()
+            val generation = ++calibrationGeneration
+            val source = (session as SwiftCoreCameraSession).liveFrames as SwiftCoreLiveFrameSource
+            calibrationFrames = scope.launch {
+                try {
+                    source.currentStreamFrames.metadataOnly().collect { frame ->
+                        if (generation != calibrationGeneration) return@collect
+                        val level = frame.level?.takeIf { !it.isDebugFixture && it.hasPitch }
+                        calibrationCamera = level?.let { it to cameraCalibrationTimestamp(frame.timestampNanos,
+                            SystemClock.elapsedRealtimeNanos(), System.nanoTime()) }
+                    }
+                } catch (error: CancellationException) { throw error }
+                catch (error: Exception) { failCalibration(error) }
+            }
+            val thread = HandlerThread("OpenZCineCalibration").also { it.start() }
+            calibrationThread = thread
+            val listener = calibrationSensorListener(generation, gravity == null)
+            calibrationListener = listener
+            check(sensorManager?.registerListener(listener, tiltSensor, 50_000, Handler(thread.looper)) == true)
+                { "Could not start phone gravity." }
+            publishCalibration()
+        } catch (error: Exception) { failCalibration(error) }
+    } }
+
+    fun captureCalibration() { scope.launch {
+        if (!calibrationEligible()) { cancelCalibration(); return@launch }
+        try { calibration.capture(now()); publishCalibration() }
+        catch (error: Exception) { failCalibration(error) }
+    } }
+
+    fun stopCalibration() { scope.launch { cancelCalibration() } }
+
+    private fun calibrationEligible(): Boolean = foreground && calibrationSourceAvailable &&
+        session is SwiftCoreCameraSession && session?.state?.value is CameraSessionState.Connected &&
+        session?.reportedRecording?.value == false &&
+        session?.cameraProperties?.value?.let { !prefersPhotographyChrome(it) } == true
+
+    private fun calibrationSensorListener(generation: Long, accelerometer: Boolean): SensorEventListener =
+        object : SensorEventListener {
+            private var filtered: DeviceTiltVector? = null
+            private val deliveryPending = AtomicBoolean()
+            override fun onSensorChanged(event: SensorEvent) {
+                if (event.values.size < 3) return
+                // Android reports support acceleration (+Z face up); the core accepts physical down.
+                val down = if (accelerometer) lowPassDeviceTilt(filtered,
+                    -event.values[0], -event.values[1], -event.values[2])?.also { filtered = it } ?: return
+                    else DeviceTiltVector(-event.values[0], -event.values[1], -event.values[2])
+                if (!down.x.isFinite() || !down.y.isFinite() || !down.z.isFinite()) return
+                val timestamp = event.timestamp / 1_000_000_000.0
+                // File IO shares the serial scope. Never accumulate sensor jobs behind a slow write.
+                if (!deliveryPending.compareAndSet(false, true)) return
+                scope.launch {
+                    try {
+                        if (generation != calibrationGeneration || !calibration.state.active) return@launch
+                        val camera = calibrationCamera ?: return@launch
+                        val observation = JSONObject().put("phoneDown", JSONObject()
+                            .put("x", down.x.toDouble()).put("y", down.y.toDouble()).put("z", down.z.toDouble()))
+                            .put("phoneTimestamp", timestamp).put("rollDegrees", camera.first.rollDegrees)
+                            .put("pitchDegrees", camera.first.pitchDegrees).put("cameraTimestamp", camera.second)
+                        calibration.add(observation.toString()); publishCalibration()
+                    }
+                    catch (error: Exception) { failCalibration(error) }
+                    finally { deliveryPending.set(false) }
+                }
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+
+    private fun publishCalibration() {
+        calibration.state.calibration?.let { value ->
+            preferences.edit().putString("mountCalibration", value).apply()
+            selectedMount = selectedMount.copy(calibrationJSON = value)
+            mutableState.value = mutableState.value.copy(mountCalibration = value)
+        }
+        mutableState.value = mutableState.value.copy(calibration = calibration.state)
+        if (!calibration.state.active) stopCalibrationResources()
+    }
+
+    private fun stopCalibrationResources() {
+        ++calibrationGeneration
+        calibrationFrames?.cancel(); calibrationFrames = null
+        calibrationListener?.let { sensorManager?.unregisterListener(it) }; calibrationListener = null
+        calibrationThread?.quitSafely(); calibrationThread = null
+        calibrationCamera = null
+    }
+
+    private fun cancelCalibration() {
+        stopCalibrationResources()
+        calibration.cancel()
+        mutableState.value = mutableState.value.copy(calibration = calibration.state)
+    }
+
+    private fun failCalibration(error: Exception) {
+        stopCalibrationResources()
+        calibration.cancel(error.message ?: "Could not calibrate the phone mount.")
+        mutableState.value = mutableState.value.copy(calibration = calibration.state)
+    }
 
     private fun reconcile(reason: String) {
         val eligible = mutableState.value.enabled && foreground &&
@@ -195,8 +352,9 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
 
     private fun observe(recording: Boolean) {
         val active = owner ?: return
+        val mount = selectedMount
         try { lastReported = recording; apply(native.observe(active, recording, now(),
-            System.currentTimeMillis() / 1_000.0, cameraLabel, selectedMountPreset)) }
+            System.currentTimeMillis() / 1_000.0, cameraLabel, mount.preset, mount.calibrationJSON)) }
         catch (error: Exception) { failCapture(error) }
     }
 
@@ -251,7 +409,7 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
             observation.recording?.let { recording ->
                 lastReported = recording
                 apply(native.observe(owner ?: return@replayGyroIngress, recording, observation.timestamp,
-                    observation.date, cameraLabel, observation.mountPreset))
+                    observation.date, cameraLabel, observation.mountPreset, observation.calibrationJSON))
             }
             lastReported = observation.recording
         }

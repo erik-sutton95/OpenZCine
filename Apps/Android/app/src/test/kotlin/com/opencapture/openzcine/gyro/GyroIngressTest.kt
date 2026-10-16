@@ -34,4 +34,17 @@ class GyroIngressTest {
         assertEquals(listOf("rearDown", "rearLeft", "rearLeft"), received.map { it.mountPreset })
         assertEquals(listOf(10.0, 11.0, 12.0), received.map { it.timestamp })
     }
+
+    @Test fun `queued takes freeze the calibration and manual preset as one choice`() {
+        var selected = GyroMountSelection("rearDown", "{\"verified\":1}")
+        val first = RecordingObservation(true, 10.0, 0.0, mountPreset = selected.preset,
+            calibrationJSON = selected.calibrationJSON)
+        selected = GyroMountSelection("frontUp")
+        val next = RecordingObservation(true, 12.0, 0.0, mountPreset = selected.preset,
+            calibrationJSON = selected.calibrationJSON)
+        val received = mutableListOf<RecordingObservation>()
+        replayGyroIngress(emptyList(), listOf(next, first), ingest = {}, observe = received::add)
+        assertEquals(listOf("rearDown", "frontUp"), received.map { it.mountPreset })
+        assertEquals(listOf("{\"verified\":1}", ""), received.map { it.calibrationJSON })
+    }
 }

@@ -51,6 +51,12 @@ class GyroMountOptionTest {
         assertEquals(unconfigured.detail, unknown.mountDetail(state.mountCatalog))
     }
 
+    @Test fun `calibrated historical logs retain their identity independently of the current mount`() {
+        val entry = GyroLogEntry(JSONObject().put("id", "calibrated").put("mountPreset", "rearLeft")
+            .put("mountCalibration", JSONObject().put("opaqueCoreValue", 1)), null, File("calibrated.gcsv"))
+        assertEquals("Calibrated phone mount", entry.mountDetail(emptyMap()))
+    }
+
     private fun option(id: String, orientation: String): JSONObject = JSONObject().put("id", id)
         .put("title", "Test mount").put("shortLabel", "Test").put("detail", "Test mount detail")
         .put("orientation", orientation)

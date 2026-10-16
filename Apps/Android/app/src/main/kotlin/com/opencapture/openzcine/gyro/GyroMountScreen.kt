@@ -29,7 +29,9 @@ import com.opencapture.monitorui.settings.MonitorSettingsRowCard
 
 /** Saves the phone's physical mount for future takes; screen rotation has no effect. */
 @Composable
-internal fun GyroMountScreen(state: GyroCaptureState, onSelect: (String) -> Unit, onClose: () -> Unit) {
+internal fun GyroMountScreen(state: GyroCaptureState, onSelect: (String) -> Unit, onClose: () -> Unit,
+    onCalibrate: (() -> Unit)? = null, onCapture: (() -> Unit)? = null,
+    onCancelCalibration: (() -> Unit)? = null, onResetCalibration: (() -> Unit)? = null) {
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().background(MonitorPalette.background)
         .windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp).testTag("gyro-mount"),
@@ -39,24 +41,60 @@ internal fun GyroMountScreen(state: GyroCaptureState, onSelect: (String) -> Unit
             MonitorSettingsActionPill("Close", onClick = onClose)
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item {
-                Text(if (state.mountOptions.size == 1) "Configure the phone-to-camera alignment in Gyroflow for this mount."
-                    else "Directions are viewed from behind an upright camera. Keep the phone screen parallel to the camera's back, perpendicular to the lens axis. For an angled holder, leave the mount unconfigured and set rotation in Gyroflow.",
-                    color = MonitorPalette.muted)
-            }
-            for ((group, options) in state.mountOptions.groupBy { it.group }) {
-                if (group != null) item { Text(group, color = MonitorPalette.text) }
-                items(options, key = { it.id }) { option ->
+            if (state.calibration.active) {
+                item {
                     MonitorSettingsRowCard {
-                        Row(Modifier.fillMaxWidth().selectable(selected = option.id == state.mountPreset,
-                            role = Role.RadioButton, onClick = { onSelect(option.id) })
-                            .testTag("gyro-mount-${option.id}"), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = option.id == state.mountPreset, onClick = null,
-                                colors = RadioButtonDefaults.colors(selectedColor = MonitorPalette.accent,
-                                    unselectedColor = MonitorPalette.muted))
-                            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-                                Text(option.title, color = MonitorPalette.text)
-                                Text(option.detail, color = MonitorPalette.muted)
+                        Text("Step ${state.calibration.poseCount + 1} of 3", color = MonitorPalette.text)
+                        Text(when (state.calibration.poseCount) {
+                            0 -> "Hold the camera level and keep the phone firmly mounted. Hold still, then capture."
+                            1 -> "Tilt the lens up 25–35° and keep the camera's roll level. Hold still, then capture."
+                            else -> "Keep the lens tilted up and roll the camera 40–45° with its top leaning left. Hold still, then verify."
+                        }, color = MonitorPalette.muted)
+                        state.calibration.error?.let { Text(it, color = MonitorPalette.accent) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            onCapture?.let { MonitorSettingsActionPill(
+                                if (state.calibration.poseCount == 2) "Verify" else "Capture", onClick = it) }
+                            onCalibrate?.let { MonitorSettingsActionPill("Restart", onClick = it) }
+                            onCancelCalibration?.let { MonitorSettingsActionPill("Cancel", onClick = it) }
+                        }
+                    }
+                }
+            } else {
+                if (onCalibrate != null) item {
+                    MonitorSettingsRowCard {
+                        Text(if (state.mountCalibration != null) "Calibrated phone mount" else "Automatic calibration",
+                            color = MonitorPalette.text)
+                        Text("Keep the phone firmly mounted. Capture three still camera positions to align it automatically.",
+                            color = MonitorPalette.muted)
+                        state.calibration.error?.let { Text(it, color = MonitorPalette.accent) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            MonitorSettingsActionPill("Calibrate", onClick = onCalibrate)
+                            if (state.mountCalibration != null) onResetCalibration?.let {
+                                MonitorSettingsActionPill("Reset", onClick = it)
+                            }
+                        }
+                    }
+                }
+                item {
+                    Text(if (state.mountOptions.size == 1) "Calibrate the mount or set the phone-to-camera alignment in Gyroflow."
+                        else "Manual presets: directions are viewed from behind an upright camera. Keep the phone screen parallel to the camera's back, perpendicular to the lens axis. For an angled holder, calibrate the mount.",
+                        color = MonitorPalette.muted)
+                }
+                for ((group, options) in state.mountOptions.groupBy { it.group }) {
+                    if (group != null) item { Text(group, color = MonitorPalette.text) }
+                    items(options, key = { it.id }) { option ->
+                        MonitorSettingsRowCard {
+                            val selected = state.mountCalibration == null && option.id == state.mountPreset
+                            Row(Modifier.fillMaxWidth().selectable(selected = selected,
+                                role = Role.RadioButton, onClick = { onSelect(option.id) })
+                                .testTag("gyro-mount-${option.id}"), verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = selected, onClick = null,
+                                    colors = RadioButtonDefaults.colors(selectedColor = MonitorPalette.accent,
+                                        unselectedColor = MonitorPalette.muted))
+                                Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                                    Text(option.title, color = MonitorPalette.text)
+                                    Text(option.detail, color = MonitorPalette.muted)
+                                }
                             }
                         }
                     }

@@ -10,7 +10,7 @@ internal interface GyroNative {
     fun create(): String
     fun ingest(owner: String, bytes: ByteArray): String?
     fun observe(owner: String, recording: Boolean, timestamp: Double, dateSeconds: Double,
-        cameraLabel: String, mountPreset: String = "unconfigured"): String?
+        cameraLabel: String, mountPreset: String = "unconfigured", calibrationJSON: String = ""): String?
     fun poll(owner: String, timestamp: Double): String?
     fun finish(owner: String, reason: String, timestamp: Double): String?
     fun close(owner: String)
@@ -24,8 +24,8 @@ internal object SwiftGyroNative : GyroNative {
     override fun create(): String = SwiftCore.gyroCreate()
     override fun ingest(owner: String, bytes: ByteArray): String? = SwiftCore.gyroIngest(owner, bytes)
     override fun observe(owner: String, recording: Boolean, timestamp: Double, dateSeconds: Double,
-        cameraLabel: String, mountPreset: String): String? =
-        SwiftCore.gyroObserve(owner, recording, timestamp, dateSeconds, cameraLabel, mountPreset)
+        cameraLabel: String, mountPreset: String, calibrationJSON: String): String? =
+        SwiftCore.gyroObserve(owner, recording, timestamp, dateSeconds, cameraLabel, mountPreset, calibrationJSON)
     override fun poll(owner: String, timestamp: Double): String? = SwiftCore.gyroPoll(owner, timestamp)
     override fun finish(owner: String, reason: String, timestamp: Double): String? = SwiftCore.gyroFinish(owner, reason, timestamp)
     override fun close(owner: String) = SwiftCore.gyroClose(owner)

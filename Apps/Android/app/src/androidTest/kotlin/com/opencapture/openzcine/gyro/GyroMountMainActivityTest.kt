@@ -44,8 +44,10 @@ class GyroMountMainActivityTest {
     @Test fun controlsConfigureMountAndRetainSelectionAfterActivityRecreation() {
         val preferences = context.getSharedPreferences("gyro-logging", Context.MODE_PRIVATE)
         val saved = preferences.getString("mountPreset", null)
+        val savedCalibration = preferences.getString("mountCalibration", null)
         val enabled = preferences.getBoolean("enabled", false)
-        preferences.edit().putString("mountPreset", "unconfigured").putBoolean("enabled", false).commit()
+        preferences.edit().putString("mountPreset", "unconfigured").remove("mountCalibration")
+            .putBoolean("enabled", false).commit()
         try {
             ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)
                 .putExtra("zc.demo.settings", "controls")).use { scenario ->
@@ -87,7 +89,8 @@ class GyroMountMainActivityTest {
                 saveScreenshot("configured")
             }
         } finally {
-            preferences.edit().putString("mountPreset", saved).putBoolean("enabled", enabled).commit()
+            preferences.edit().putString("mountPreset", saved).putString("mountCalibration", savedCalibration)
+                .putBoolean("enabled", enabled).commit()
         }
     }
 
