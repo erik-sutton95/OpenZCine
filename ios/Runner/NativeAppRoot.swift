@@ -251,13 +251,15 @@ enum PreferencesStore {
     /// it was read as a Bool; unreadable values and every other field stay.
     private static func migrateRetiredRemoteShutter(_ raw: [String: Any], storage: UserDefaults) {
         guard let stored = raw[retiredRemoteShutterField], let value = legacyBool(stored),
-            let key = commonKeys.remoteShutter else { return }
+            let key = commonKeys.remoteShutter
+        else { return }
         if storage.object(forKey: key) == nil {
             storage.set(value, forKey: key)
         }
         var remaining = raw
         remaining.removeValue(forKey: retiredRemoteShutterField)
-        if let data = try? JSONSerialization.data(withJSONObject: remaining, options: [.sortedKeys]) {
+        if let data = try? JSONSerialization.data(withJSONObject: remaining, options: [.sortedKeys])
+        {
             storage.set(data, forKey: preferencesKey)
         }
     }
@@ -298,7 +300,8 @@ enum PreferencesStore {
         legacy.bluetoothShutterEnabled = previous.bluetoothShutterEnabled
         guard legacy != previous else { return }
         guard let original = storage.data(forKey: preferencesKey)
-            ?? (try? JSONEncoder().encode(OperatorPreferences.defaults)).map(withoutRetiredRemoteShutter),
+            ?? (try? JSONEncoder().encode(OperatorPreferences.defaults)).map(
+                    withoutRetiredRemoteShutter),
             let data = try? OperatorPreferencesDocument(data: original).updating(legacy, previous: previous)
         else { return }
         storage.set(withoutRetiredRemoteShutter(data), forKey: preferencesKey)
