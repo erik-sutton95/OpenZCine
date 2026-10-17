@@ -1,17 +1,16 @@
 New and changed
 
-- A new shared OpenCine interface for the monitor, camera list, settings and media player, with compact View Assist captions and a new app icon.
-- Live View and Multicam show timecode frames when the camera supplies them; cameras without frame timecode keep the seconds display.
-- Format keeps image area, resolution and compatible frame rates grouped, with codec as a separate control.
+- Record the phone's gyro alongside Nikon camera takes and export motion logs for stabilization in Gyroflow.
+- Calibrate a firmly mounted phone, including tilted holders, or choose a mount preset. Saved alignment applies to future takes.
+- Review, share and delete saved takes in Gyro logs.
 
 Fixes
 
-- Media clip taps stay usable after a camera source changes or reconnects. Completed cached clips also open while offline.
-- On iPhone and iPad, playback waits for missing clip data and resumes when it arrives. Pause keeps it stopped; an interrupted transfer reports an error.
-- Large camera clips use their full file size and keep partial downloads for retry. A camera without large-file support reports an error instead of repeating clip data.
+- Interrupted gyro takes preserve available motion data for recovery after a disconnect, backgrounding or app restart.
 
 What to test
 
-- Reconnect, open Media and try short, long and partially downloaded clips in portrait and both landscape directions.
-- On a clip that is still downloading, watch playback wait for more data, then press Pause. It should restart only when you press Play.
-- Check timecode against the camera display, including frame zero. Try a clip over 4 GB if available and report any transfer error.
+- Fix the phone firmly to the camera. In Phone mount, capture the three calibration poses, holding still before each capture.
+- Enable gyro logging, wait for GYRO ARMED, then start and stop a camera recording. Check that a saved gyro log appears.
+- Background the app or reconnect during a take. Check the interrupted log when you return.
+- With camera and lens stabilization off, export a short fixed-focal-length take and a ten-minute take. Choose the lens profile and sync in Gyroflow; check the beginning, middle and end.

@@ -1,5 +1,4 @@
-- New OpenCine monitor, camera and media interface, with a new icon.
-- Live View and Multicam show frame timecode when the camera supplies it.
-- Cached clips open offline. Playback controls follow playing and buffering state; Pause stays available while waiting.
-- Large clips use their full file size. Unsupported large-file transfers report an error instead of repeating data.
-- Format keeps image area, resolution and frame rate grouped; codec stays separate.
+- Record phone gyro alongside camera takes and export logs for Gyroflow.
+- Calibrate a firmly mounted phone, including tilted holders, or choose a mount preset.
+- Interrupted logs retain available motion data. Share or delete saved logs in Gyro logs.
+- Keep the app open while logging. Choose the lens profile and synchronize in Gyroflow.
