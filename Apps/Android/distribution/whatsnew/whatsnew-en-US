@@ -1,5 +1,5 @@
 - Exposure, shutter angle, storage and link readouts follow camera reports. Missing measurements are marked unavailable.
-- Recording duration follows confirmed camera recording state.
-- Live View and Multicam share consistent clock presentation.
+- Recording duration follows confirmed state; Live View and Multicam share consistent clocks.
 - Return from Media and reconnect to check picture continuity.
 - Android release checks now verify essential ML Kit components before shipping.
+- Fixed a crash when camera live preview starts or reconnects.
