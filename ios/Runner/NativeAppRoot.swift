@@ -11554,11 +11554,6 @@ final class NativeAppModel {
         assist.desqueeze(visible: renderedLiveAssistTools.contains(.desqueeze))
     }
 
-    /// The de-squeeze playback and stills present.
-    var playbackDesqueeze: NikonDesqueeze {
-        assist.desqueeze(visible: assist.playbackTools.contains(.desqueeze))
-    }
-
     /// The ≤2 scopes the portrait-fit stacked zone shows, already filtered by DISP mode and the
     /// photography toolset. Eligibility is resolved before choosing the canonical first two.
     var renderedFitScopes: [MonitorAssistTool] {
