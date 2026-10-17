@@ -7,17 +7,23 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.opencine.cameracontrols.MonitorLutImportResult
+import com.opencapture.opencine.cameracontrols.MonitorLutLibrary
+import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.multicam.MulticamLookRenderer
 import com.opencapture.openzcine.multicam.MulticamPicture
 import com.opencapture.openzcine.multicam.NativeMulticamLookRenderer
 import com.opencapture.openzcine.multicam.multicamLookRendererFactory
 import java.util.Collections
+import java.io.File
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -25,6 +31,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.math.abs
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -106,6 +113,48 @@ class MulticamPictureLookTest {
             picture.attach(scope, { renderer }, FeedLutSelection.BuiltIn(FeedLut.MONO))
         }
         return picture
+    }
+
+    /** Real shared import, Swift validation, retained tile owner and native AGSL pixels. */
+    @Test fun sameNameImportRefreshesMultiviewPixelsWithoutChangingTheSelectedLook() = runBlocking {
+        val root = File(instrumentation.targetContext.cacheDir, "lut-refresh-" + UUID.randomUUID())
+        val library = MonitorLutLibrary(mapOf(StoredLutCategory.CUSTOM to root),
+            pack = { SwiftCore.packImportedLut(it) })
+        fun cube(rgb: String) = ("LUT_3D_SIZE 2\n" + (rgb + "\n").repeat(8)).toByteArray()
+        val published = Published()
+        val picture = picture(published, NativeMulticamLookRenderer(library))
+        try {
+            val first = assertIs<MonitorLutImportResult.Imported>(
+                library.importCube(StoredLutCategory.CUSTOM, cube("1 0 0"), "Operator Look.cube")).entry
+            val selection = FeedLutSelection.Stored(first.selection)
+            val frame = solid(Color.rgb(80, 80, 80))
+            main { picture.select(selection); picture.showLut(true); picture.accept(frame) }
+            waitFor("first stored look reaches the tile") { published.frames.size == 1 }
+            assertTrue(Color.red(pixel(published.last())) > 230)
+            assertTrue(Color.blue(pixel(published.last())) < 20)
+
+            val replacement = assertIs<MonitorLutImportResult.Imported>(
+                library.importCube(StoredLutCategory.CUSTOM, cube("0 0 1"), "Operator Look.cube")).entry
+            assertEquals(first.selection, replacement.selection)
+            main { picture.accept(frame) }
+            waitFor("same-name replacement reaches the retained tile") { published.frames.size == 2 }
+            val replaced = pixel(published.last())
+            assertTrue(Color.blue(replaced) > 230, "Replacement cube produces blue: ${channels(replaced)}")
+            assertTrue(Color.red(replaced) < 20, "Replacement cube produces blue: ${channels(replaced)}")
+            main { assertEquals(selection, picture.selection); assertTrue(picture.lutEnabled) }
+            assertEquals(listOf(first.selection), library.entries.value.map { it.selection })
+
+            assertIs<MonitorLutImportResult.Rejected>(
+                library.importCube(StoredLutCategory.CUSTOM, "not a cube".toByteArray(), "Operator Look.cube"))
+            main { picture.accept(frame) }
+            waitFor("rejected replacement preserves the valid tile look") { published.frames.size == 3 }
+            assertTrue(Color.blue(pixel(published.last())) > 230)
+            assertTrue(Color.red(pixel(published.last())) < 20)
+            assertEquals(cube("0 0 1").toList(), File(root, "Operator Look.cube").readBytes().toList())
+        } finally {
+            main { picture.retire() }
+            root.deleteRecursively()
+        }
     }
 
     @Test fun eachMemberRendersOnlyItsOwnLookAndToggleRebakesTheLatestPicture() {
