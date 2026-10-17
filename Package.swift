@@ -30,6 +30,7 @@ let package = Package(
         .target(
             name: "OpenZCineCore",
             dependencies: [
+                .product(name: "OpenCineCore", package: "OpenCine"),
                 .product(name: "OpenCineMedia", package: "OpenCine"),
                 .product(name: "OpenCineNikon", package: "OpenCine"),
                 // Deployed relay codecs compose the neutral framing and lifetime policies.

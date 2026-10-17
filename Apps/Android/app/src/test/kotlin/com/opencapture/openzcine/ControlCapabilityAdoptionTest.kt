@@ -1,6 +1,7 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.appkit.MonitorDisplaySection
+import com.opencapture.opencine.cameracontrols.displaySections
 import com.opencapture.opencine.core.CapabilitySnapshot
 import com.opencapture.opencine.core.SupportStatus
 import com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE
@@ -11,9 +12,18 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertNull
 
 /** The zoom chip and gimbal stick follow the Nikon control model (iOS `ControlCapabilityAdoptionTests`). */
 class ControlCapabilityAdoptionTest {
+    @Test fun beforeConnectionTheStaticProfileKeepsUnknownValues() {
+        val controls = ControlCapabilities.beforeConnection(NIKON_CAPTURE_PROFILE)
+        assertNull(controls.codecColor.offer)
+        assertTrue(MonitorDisplaySection.COLOR in controls.displaySections)
+        assertFalse(MonitorDisplaySection.ZOOM_CHIP in controls.displaySections)
+        assertFalse(MonitorDisplaySection.GIMBAL_STICK in controls.displaySections)
+    }
+
     @Test
     fun noZBodyOffersAZoomChipOrGimbalStick() {
         val controls = ControlCapabilities.derive(CapabilitySnapshot(), NIKON_CAPTURE_PROFILE)

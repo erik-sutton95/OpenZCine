@@ -1,3 +1,4 @@
+import OpenCineCameraControls
 import OpenCineCameraVocabulary
 import OpenCineCore
 import Testing
@@ -17,6 +18,8 @@ struct ControlCapabilityAdoptionTests {
         #expect(controls.headTracking.support == .unsupported)
         #expect(controls.zoom.support == .unknown)
         #expect(controls.focus.isOffered)
+        #expect(controls.codecColor.offer == nil, "before connection, values remain unknown")
+        #expect(controls.displaySections.contains(.color), "known static color support")
         #expect(!model.chromeSectionMounts(.zoomChip))
         #expect(!model.chromeSectionMounts(.gimbalStick))
     }

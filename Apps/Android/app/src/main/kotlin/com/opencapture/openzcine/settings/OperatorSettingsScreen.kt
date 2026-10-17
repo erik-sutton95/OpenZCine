@@ -93,6 +93,11 @@ import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE
+import com.opencapture.opencine.vocabulary.ControlCapabilities
+import com.opencapture.opencine.core.CapabilitySnapshot
+import com.opencapture.opencine.nikon.codecColorChoices
 import com.opencapture.opencine.frameio.FrameioConnectionState
 import com.opencapture.opencine.frameio.FrameioDeliveryController
 import com.opencapture.opencine.frameio.FrameioNetworkState
@@ -135,6 +140,7 @@ internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolea
 @Composable
 internal fun OperatorSettingsScreen(
     session: CameraSession?,
+    controlSession: NikonOpenCineSession?,
     assists: NikonAssists,
     /** The display owner the Display rows edit. */
     operatorSession: MonitorOperatorSessionModel,
@@ -166,6 +172,9 @@ internal fun OperatorSettingsScreen(
     onClose: () -> Unit,
 ) {
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
+    val capabilities = if (controlSession == null) null else controlSession.snapshots.collectAsState().value.capabilities
+    val cameraControls = ControlCapabilities.derive(capabilities ?: CapabilitySnapshot(), NIKON_CAPTURE_PROFILE,
+        codecColor = cameraProperties?.codecColorChoices())
     val cameraInput =
         remember(
             cameraProperties?.codec,
@@ -243,7 +252,7 @@ internal fun OperatorSettingsScreen(
     )
     // One layout per DISP mode over the shared owner; Edit view opens on the live monitor and Done
     // returns here, to Display.
-    val display = MonitorOperatorDisplaySource(operatorSession, NIKON_DISPLAY_SECTIONS,
+    val display = MonitorOperatorDisplaySource(operatorSession, cameraControls.displaySections,
         if (editsLiveView) ({ mode -> retainedAccount.retire(); operatorSession.beginEditing(mode) }) else null)
     val unavailable = stringResource(R.string.settings_image_processing_unavailable)
     val assistSections = listOf(MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA, MonitorAssistTool.WAVE,

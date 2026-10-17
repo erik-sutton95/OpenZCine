@@ -40,6 +40,7 @@ class SystemRowsComposeTest {
             OpenZCineTheme {
                 OperatorSettingsScreen(
                     session = null,
+                    controlSession = null,
                     assists = assists,
                     operatorSession = rememberTestOperatorSession(assists, settings),
                     settings = settings,

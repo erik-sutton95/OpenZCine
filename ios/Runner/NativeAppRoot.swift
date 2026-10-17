@@ -4980,7 +4980,7 @@ final class NativeAppModel {
     /// pre-connection rule over the Nikon static profile.
     var controlCapabilities: ControlCapabilities {
         controlSession?.controlCapabilities(codecColor: codecColorChoices)
-            ?? ControlCapabilities(beforeConnection: NikonCameraSession.captureProfile, codecColor: codecColorChoices)
+            ?? ControlCapabilities(beforeConnection: NikonCameraSession.captureProfile)
     }
     /// Recording as the CAMERA last reported it (live-view header or record events), apart from
     /// the optimistic `isRecording` the button shows. `nil` until the body says.
