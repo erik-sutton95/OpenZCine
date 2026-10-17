@@ -15,6 +15,7 @@ import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CodecBitDepthOption
 import com.opencapture.opencine.core.SettingKey
+import com.opencapture.opencine.vocabulary.LadderWrite
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -27,6 +28,34 @@ import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class MonitorCameraControlsTest {
     private val strings = PhoneStringResolver { resource, _ -> resource.toString() }
+
+    @Test
+    fun `white balance drawer keeps canonical copy and maps display tabs to camera modes`() {
+        val picker = assertNotNull(monitorCaptureSettings(dashboard(cameraSnapshot()), strings)
+            .first { it.kind == MonitorPickerKind.WHITE_BALANCE }.picker)
+        val sheet = videoLadderPresentation(picker)
+        assertEquals("WHITE BALANCE", sheet.title)
+        assertEquals("Kelvin · auto · tint", sheet.subtitle)
+        assertEquals(listOf("Mode", "Kelvin", "Tint"), sheet.tabs.map { it.label })
+        assertEquals(1, sheet.initialTab) // The body reports Kelvin, camera mode 0.
+        val (request, value) = assertNotNull(requestForLadderWrite(picker,
+            LadderWrite(sheet.tabs[0].key, "Sunny")))
+        assertEquals(CameraControl.WHITE_BALANCE to "Sunny", request.control to value)
+        assertEquals("Preset", picker.modes[1].label)
+    }
+
+    @Test
+    fun `shutter drawer keeps canonical copy and angle opens after speed`() {
+        val picker = assertNotNull(monitorCaptureSettings(dashboard(cameraSnapshot()), strings)
+            .first { it.kind == MonitorPickerKind.SHUTTER }.picker)
+        val sheet = videoLadderPresentation(picker)
+        assertEquals("Angle · speed", sheet.subtitle)
+        assertEquals(listOf("Speed", "Angle"), sheet.tabs.map { it.label })
+        assertEquals(1, sheet.initialTab) // The body reports Angle, camera mode 0.
+        val (request, value) = assertNotNull(requestForLadderWrite(picker, assertNotNull(sheet.tabs[0].activate)))
+        assertEquals(CameraControl.SHUTTER_MODE to "Speed", request.control to value)
+        assertEquals(listOf("Angle", "Speed"), picker.modes.map { it.label })
+    }
 
     @Test
     fun `size codec and quality pickers drop from the top deck, capture pickers rise from the strip`() {

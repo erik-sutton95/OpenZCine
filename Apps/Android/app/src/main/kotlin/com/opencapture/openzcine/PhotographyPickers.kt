@@ -521,7 +521,9 @@ internal fun photographyCaptureSettings(
             "WB",
             stillWhiteBalanceValue(properties),
             "5560K",
-            wbPicker,
+            wbPicker?.let { picker ->
+                picker.copy(popup = nikonCapturePopup(picker).copy(photography = true))
+            },
         ),
         tile(MonitorPickerKind.METER, "METER", properties.meteringMode, "Matrix", meterPicker),
         tile(
