@@ -356,7 +356,7 @@ struct StartupFirstPairWizardView: View {
             onDone: { model.showSavedCameras() },
             onDiagnostics: { model.shareDiagnostics() },
             onReportProblem: { model.isBugReportPresented = true },
-            onWatchFeed: { model.showSavedCameras() },
+            onWatchFeed: { model.openWatcherBrowse() },
             pairingFlow: model.showsAppConnectProgress
                 ? NikonConnectFlow(model: model).flow(
                     steps: railSteps, current: railSteps.count - 1)

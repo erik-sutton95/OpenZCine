@@ -1,5 +1,6 @@
 import MonitorUI
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineCameraControls
 import OpenZCineCore
 import SwiftUI
@@ -78,5 +79,45 @@ extension LiveDesign: LiveChromePalette {
 
     static func chromeColor(red: CGFloat, green: CGFloat, blue: CGFloat) -> Color {
         MonitorTheme.edrSRGB(red: red, green: green, blue: blue, gain: MonitorTheme.hdrGain)
+    }
+}
+
+/// The same browse view used by the other shells, over this app's deployed relay owner.
+typealias WatcherBrowseView = WatcherBrowse<NativeAppModel>
+
+extension NativeAppModel: WatcherBrowseHost {
+    var watcherJoinStatus: WatcherJoinStatus {
+        if relayJoinNeedsPasscode { return .needsPasscode }
+        switch relayClientState {
+        case .connecting, .waiting: return .connecting
+        case .connected: return .live
+        case .failed(let reason): return .failed(reason)
+        case .idle: return relayFailureReason.map(WatcherJoinStatus.failed) ?? .idle
+        }
+    }
+
+    var watcherPasscodeError: String? { relayJoinNeedsPasscode ? relayFailureReason : nil }
+
+    var watcherFeeds: [WatcherFeedRow] {
+        visibleRelayBroadcasts.map {
+            WatcherFeedRow(id: $0.id, name: $0.name, cameraName: nil)
+        }
+    }
+
+    func startWatcherBrowse() {
+        if watcherBrowseError != nil { stopRelayBrowsing() }
+        startRelayBrowsing(includePeerToPeer: videoSource != .relay)
+    }
+
+    func joinWatcherFeed(id: String) {
+        guard let feed = visibleRelayBroadcasts.first(where: { $0.id == id }) else { return }
+        joinRelay(feed)
+    }
+
+    func retryWatcherPasscode(_ code: String) { submitRelayPasscode(code) }
+
+    func stopWatching() {
+        showsWatcherBrowse = false
+        if videoSource == .relay { leaveRelay() }
     }
 }

@@ -23,6 +23,246 @@ import ZIPFoundation
 
 final class RunnerTests: XCTestCase {
 
+    /// SIMULATED actual camera-page relay row must enter the shared browse surface before dialing.
+    @MainActor
+    func testActualRelayNearbyEntryOpensSharedBrowseBeforeJoining() async throws {
+        let model = NativeAppModel()
+        model.showsCameraListWithoutSavedCameras = true
+        model.shell.showCameras()
+        model.prepareStartup()
+        model.enterBackground()
+        let feed = MonitorRelayDiscovery(
+            id: "SIMULATED-browse-id", name: "SIMULATED shared feed",
+            endpoint: .hostPort(host: "127.0.0.1", port: 65500))
+        model.discoveredRelayHosts = [feed]
+        _ = HostedAccessibility.enableRuntime()
+        let host = UIHostingController(rootView: LinkExperience().environment(model))
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first {
+                $0.activationState == .foregroundActive
+            })
+        let original = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            model.leaveRelay()
+            model.enterBackground()
+            window.isHidden = true
+            window.rootViewController = nil
+            original?.makeKeyAndVisible()
+        }
+        let watch = try await nativeFilterElement("Watch SIMULATED shared feed", host: host)
+        XCTAssertTrue(watch.accessibilityActivate())
+        for _ in 0..<200 {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            await Task.yield()
+            if HostedAccessibility.elements(in: host.view).contains(where: {
+                $0.accessibilityLabel == "Find shared feeds"
+            }) {
+                break
+            }
+        }
+        let labels = Set(
+            HostedAccessibility.elements(in: host.view).compactMap(\.accessibilityLabel))
+        XCTAssertTrue(
+            labels.contains("Watch a feed"), "The actual entry must mount the common browse view")
+        XCTAssertTrue(
+            labels.contains("Find shared feeds"),
+            "The actual shared discovery action must be available")
+        XCTAssertEqual(
+            model.relayClientState, .idle, "Choosing a browse entry must not dial the feed yet")
+        XCTAssertFalse(model.isMonitorPresented, "The browse choice precedes the relay monitor")
+    }
+
+    /// SIMULATED reports pass through the real deployed listing facade and shared host values.
+    @MainActor
+    func testWatcherBrowsePreservesDiscoveryIdentityAndUnknownCameraName() {
+        let model = NativeAppModel()
+        defer { model.enterBackground() }
+        model.discoveredRelayHosts = [
+            MonitorRelayDiscovery(
+                id: "SIMULATED-first", name: "SIMULATED first",
+                endpoint: .hostPort(host: "127.0.0.1", port: 65501)),
+            MonitorRelayDiscovery(
+                id: "SIMULATED-second", name: "SIMULATED second",
+                endpoint: .hostPort(host: "127.0.0.1", port: 65502)),
+            MonitorRelayDiscovery(
+                id: "SIMULATED-beacon", name: "SIMULATED beacon",
+                endpoint: .hostPort(host: "127.0.0.1", port: 65503), isWatchable: false),
+            MonitorRelayDiscovery(
+                id: "SIMULATED-self", name: UIDevice.current.name,
+                endpoint: .hostPort(host: "127.0.0.1", port: 65504)),
+        ]
+        XCTAssertEqual(
+            model.watcherFeeds.map(\.id), ["SIMULATED-first", "SIMULATED-second", "SIMULATED-self"])
+        XCTAssertTrue(model.watcherFeeds.allSatisfy { $0.cameraName == nil })
+        model.joinWatcherFeed(id: "SIMULATED-retired")
+        XCTAssertEqual(model.relayClientState, .idle)
+        XCTAssertFalse(model.isMonitorPresented)
+    }
+
+    /// SIMULATED actual shared controls render the real app's current unavailable/lock facts.
+    @MainActor
+    func testWatcherBrowseRendersEmptyUnavailableConnectingFailureAndLockedStates() async throws {
+        let model = NativeAppModel()
+        model.showsCameraListWithoutSavedCameras = true
+        model.shell.showCameras()
+        model.prepareStartup()
+        model.enterBackground()
+        model.openWatcherBrowse()
+        try await withWatcherEntry(model) { host, window in
+            for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
+                window.frame.size = size
+                host.view.frame.size = size
+                model.watcherBrowseError = nil
+                model.relayClientState = .idle
+                model.relayJoinNeedsPasscode = false
+                let empty =
+                    "No shared feeds on this network. Check that sharing is on and both devices can reach each other. Allow Local Network if asked."
+                try await watcherLabel(empty, host: host)
+                model.watcherBrowseError = "SIMULATED Local Network unavailable"
+                try await watcherLabel("SIMULATED Local Network unavailable", host: host)
+                model.watcherBrowseError = nil
+                model.relayClientState = .connecting
+                try await watcherLabel("Joining…", host: host)
+                model.relayClientState = .failed("SIMULATED connection refused")
+                try await watcherLabel("SIMULATED connection refused", host: host)
+                model.relayJoinNeedsPasscode = true
+                model.relayFailureReason = "SIMULATED wrong passcode"
+                try await watcherLabel("This feed needs a passcode.", host: host)
+                try await watcherLabel("SIMULATED wrong passcode", host: host)
+                let image = UIGraphicsImageRenderer(size: size).image { _ in
+                    host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name =
+                    "SIMULATED shared watcher locked \(Int(size.width))x\(Int(size.height))"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            let close = try await nativeFilterElement("Close", host: host)
+            XCTAssertTrue(close.accessibilityActivate())
+            XCTAssertFalse(model.showsWatcherBrowse)
+            XCTAssertFalse(model.isMonitorPresented)
+        }
+    }
+
+    /// The first-pair wizard stays owned by Nikon while the common browse page comes and goes.
+    @MainActor
+    func testWatcherBrowseClosePreservesFirstPairAndRefusesCameraConnectingEntry() async throws {
+        let model = NativeAppModel()
+        model.startFirstPairWizard()
+        model.prepareStartup()
+        model.enterBackground()
+        let step = model.firstPairWizardStep
+        model.openWatcherBrowse()
+        XCTAssertTrue(model.showsWatcherBrowse)
+        try await withWatcherEntry(model) { host, _ in
+            let close = try await nativeFilterElement("Close", host: host)
+            XCTAssertTrue(close.accessibilityActivate())
+            XCTAssertFalse(model.showsWatcherBrowse)
+            XCTAssertTrue(model.shouldShowFirstPairWizard)
+            XCTAssertEqual(model.firstPairWizardStep, step)
+            model.connection = .preparingLiveView
+            model.openWatcherBrowse()
+            XCTAssertFalse(model.showsWatcherBrowse, "The Nikon connecting funnel keeps admission")
+        }
+    }
+
+    /// SIMULATED local deployed host exercises the same real join, code retry and cancel actions.
+    @MainActor
+    func testWatcherBrowseJoinsLockedDeployedHostAndReusesSubmittedPasscode() async throws {
+        let server = MonitorRelayHost()
+        let name = "SIMULATED-browse-" + UUID().uuidString
+        server.watcherPasscode = "saved code"
+        server.start(hostName: name, cameraName: nil, includePeerToPeer: false)
+        let model = NativeAppModel()
+        defer {
+            model.leaveRelay()
+            model.enterBackground()
+            server.stop()
+        }
+        try await watcherCondition("Local deployed listener") { server.boundPort != nil }
+        let port = try XCTUnwrap(server.boundPort)
+        let discovery = MonitorRelayDiscovery(
+            id: name,
+            name: name,
+            endpoint: .hostPort(
+                host: "127.0.0.1", port: try XCTUnwrap(NWEndpoint.Port(rawValue: port))))
+        model.discoveredRelayHosts = [discovery]
+        model.openWatcherBrowse()
+        model.joinWatcherFeed(id: discovery.id)
+        XCTAssertTrue(model.showsWatcherBrowse)
+        XCTAssertFalse(model.isMonitorPresented)
+        try await watcherCondition("Actual deployed passcode refusal") {
+            model.watcherJoinStatus == .needsPasscode
+        }
+        model.retryWatcherPasscode("  saved code  ")
+        try await watcherCondition("Actual deployed accepted join") {
+            model.watcherJoinStatus == .live
+        }
+        XCTAssertFalse(model.showsWatcherBrowse)
+        XCTAssertTrue(model.isMonitorPresented)
+        model.stopWatching()
+        XCTAssertEqual(model.relayClientState, .idle)
+        XCTAssertFalse(model.isMonitorPresented)
+        XCTAssertFalse(model.showsWatcherBrowse)
+        model.discoveredRelayHosts = [discovery]
+        model.openWatcherBrowse()
+        model.joinWatcherFeed(id: discovery.id)
+        try await watcherCondition("Remembered answer on the same real owner") {
+            model.watcherJoinStatus == .live
+        }
+        model.stopWatching()
+        XCTAssertFalse(model.isMonitorPresented)
+    }
+
+    @MainActor
+    private func withWatcherEntry(
+        _ model: NativeAppModel,
+        body: (UIViewController, UIWindow) async throws -> Void
+    ) async throws {
+        _ = HostedAccessibility.enableRuntime()
+        let host = UIHostingController(rootView: LinkExperience().environment(model))
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
+        let original = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            model.stopWatching()
+            model.enterBackground()
+            window.isHidden = true
+            window.rootViewController = nil
+            original?.makeKeyAndVisible()
+        }
+        try await body(host, window)
+    }
+
+    @MainActor
+    private func watcherLabel(_ label: String, host: UIViewController) async throws {
+        try await watcherCondition(label) {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            return HostedAccessibility.elements(in: host.view).contains {
+                $0.accessibilityLabel == label
+            }
+        }
+    }
+
+    @MainActor
+    private func watcherCondition(_ message: String, predicate: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !predicate(), ContinuousClock.now < deadline { await Task.yield() }
+        XCTAssertTrue(predicate(), message)
+    }
+
     @MainActor
     func testDefaultSharedMediaFilterFormKeepsNativeCalendarColourAndClear() async throws {
         let state = NativeDefaultFilterFixture()

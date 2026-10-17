@@ -1309,6 +1309,8 @@ final class NativeAppModel {
         // on networks that eat the multicast advertisement.
         updateRelayPresence()
     }
+    var showsWatcherBrowse = false
+    var watcherBrowseError: String?
     var relayClientState: MonitorRelayClient.State = .idle
     /// The broadcast refused this device for want of a passcode; the waiting overlay asks.
     /// While true, the rejoin watchdog stands down — an auto-rejoin without the code is
@@ -1598,6 +1600,11 @@ final class NativeAppModel {
             guard let self, let browser, self.relayBrowser === browser else { return }
             self.relayNearby.acceptListingEvent(results)
         }
+        browser.onError = { [weak self, weak browser] error in
+            guard let self, let browser, self.relayBrowser === browser else { return }
+            self.watcherBrowseError = error
+        }
+        watcherBrowseError = nil
         relayBrowser = browser
         browser.start(includePeerToPeer: includePeerToPeer)
     }
@@ -1606,6 +1613,16 @@ final class NativeAppModel {
         relayBrowser?.stop()
         relayBrowser = nil
         discoveredRelayHosts = []
+        watcherBrowseError = nil
+    }
+
+    /// The shared browse screen precedes joining and leaves Nikon preparation in place beneath it.
+    func openWatcherBrowse() {
+        guard !isMonitorPresented, cameras.attempts.isEmpty, !isEstablishingConnection,
+            !showsAppConnectProgress, connection != .preparingLiveView
+        else { return }
+        showsWatcherBrowse = true
+        startWatcherBrowse()
     }
 
     /// Joins a broadcasting device. The viewer has no camera session of its own — by design, since
@@ -1619,6 +1636,7 @@ final class NativeAppModel {
             isWatcherOnCameraAPNoticePresented = true
             return
         }
+        let wasWatching = videoSource == .relay && isMonitorPresented
         // A second join must not leave the first client running: its callbacks keep writing the
         // shared viewer state, so a stale 15 s timeout would stamp FAIL over a healthy new stream.
         relayClient?.stop()
@@ -1630,6 +1648,8 @@ final class NativeAppModel {
         setRelayBroadcasting(false)
         relayJoinTarget = discovery
         relayFailureReason = nil
+        relayJoinNeedsPasscode = false
+        showsWatcherBrowse = !wasWatching
         stopDiscoveryLoop()
         // …which also stopped relay browsing (camera list semantics). A viewer session needs it
         // back: the watchdog can only rejoin a broadcast it can still see. Infrastructure-only —
@@ -1646,15 +1666,15 @@ final class NativeAppModel {
         connectedIdentity = nil
         liveFrameImage = nil
         videoSource = .relay
-        isMonitorPresented = true
+        isMonitorPresented = wasWatching
         connection = .connected
         connectionMessage = "Joining \(discovery.name)…"
         liveFPS = "LINK"
         operatorSession.declare(modes: displayModes)
 
         let client = MonitorRelayClient()
-        client.onStateChanged = { [weak self] state in
-            guard let self else { return }
+        client.onStateChanged = { [weak self, weak client] state in
+            guard let self, let client, self.relayClient === client else { return }
             self.relayClientState = state
             // `connectionMessage` is invisible on the monitor, so the FPS chip carries the link
             // state — the same idiom the camera loop uses (RECOV/LINK). Without this, a route
@@ -1668,6 +1688,9 @@ final class NativeAppModel {
                 self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
                 self.relayFailureReason = reason
             case .connected(let hostName, let cameraName):
+                self.showsWatcherBrowse = false
+                self.shell.dismissCover()
+                self.isMonitorPresented = true
                 self.connectionMessage =
                     cameraName.map { "Watching \(hostName) — \($0)." }
                     ?? "Watching \(hostName)."
@@ -1707,8 +1730,8 @@ final class NativeAppModel {
             guard let self, let client, self.relayClient === client else { return }
             self.applyRelayFrame(metadata: metadata, image: image, client: client)
         }
-        client.onJoinDenied = { [weak self] denial in
-            guard let self else { return }
+        client.onJoinDenied = { [weak self, weak client] denial in
+            guard let self, let client, self.relayClient === client else { return }
             // Denied while WATCHING is the broadcaster ending the session deliberately —
             // exit to the camera list. Only a pre-join refusal is a join failure.
             if case .connected = self.relayClientState, !denial.passcodeRequired {
@@ -1818,6 +1841,9 @@ final class NativeAppModel {
     }
 
     func leaveRelay() {
+        showsWatcherBrowse = false
+        relayJoinNeedsPasscode = false
+        relayPasscodeWasAttempted = false
         relayWatchdogTask?.cancel()
         relayWatchdogTask = nil
         relayJoinTarget = nil
