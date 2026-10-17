@@ -1,8 +1,9 @@
-import OpenZCineCore
+import MonitorUI
 import OpenCineAppKit
 import OpenCineAppKitApple
-import UniformTypeIdentifiers
+import OpenZCineCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Phone-motion takes remain separate from the camera's media catalog.
 struct GyroLogsView: View {
@@ -48,11 +49,13 @@ struct GyroLogsView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
             .sheet(item: $sharing) { item in
-                MonitorActivityShareSheet(items: [MonitorDeliveryShareItem(fileURL: item.url, contentType: .data)])
-                    .onDisappear {
-                        try? FileManager.default.removeItem(at: item.url.deletingLastPathComponent())
-                        sharing = nil
-                    }
+                MonitorActivityShareSheet(items: [
+                    MonitorDeliveryShareItem(fileURL: item.url, contentType: .data)
+                ])
+                .onDisappear {
+                    try? FileManager.default.removeItem(at: item.url.deletingLastPathComponent())
+                    sharing = nil
+                }
             }
             .confirmationDialog(
                 "Delete gyro log?",
@@ -106,12 +109,14 @@ struct GyroLogsView: View {
                     }
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
+                        .minTapTarget()
                 }
                 .disabled(entry.active || entry.summary == nil)
                 Button(role: .destructive) {
                     deleting = entry
                 } label: {
                     Label("Delete", systemImage: "trash")
+                        .minTapTarget()
                 }.disabled(entry.active)
             }
             .buttonStyle(.borderless)
@@ -205,15 +210,26 @@ struct GyroMountView: View {
             }
             calibrationMessage
             HStack(spacing: 24) {
-                Button(coordinator.calibrationPoseCount == 2 ? "Verify and save" : "Capture pose") {
+                Button {
                     coordinator.captureMountCalibration()
+                } label: {
+                    Text(coordinator.calibrationPoseCount == 2 ? "Verify and save" : "Capture pose")
+                        .minTapTarget()
                 }
                 .disabled(!coordinator.canCaptureMountCalibration)
                 .accessibilityIdentifier("gyro.calibration.capture")
-                Button("Start again") { coordinator.beginMountCalibration() }
-                    .accessibilityIdentifier("gyro.calibration.restart")
-                Button("Cancel", role: .cancel) { coordinator.cancelMountCalibration() }
-                    .accessibilityIdentifier("gyro.calibration.cancel")
+                Button {
+                    coordinator.beginMountCalibration()
+                } label: {
+                    Text("Start again").minTapTarget()
+                }
+                .accessibilityIdentifier("gyro.calibration.restart")
+                Button(role: .cancel) {
+                    coordinator.cancelMountCalibration()
+                } label: {
+                    Text("Cancel").minTapTarget()
+                }
+                .accessibilityIdentifier("gyro.calibration.cancel")
             }
             .buttonStyle(.borderless)
         }
@@ -300,7 +316,9 @@ struct GyroMonitorStatus: View {
                 )
                 .padding(.horizontal, 10).padding(.vertical, 7)
                 .background(.black.opacity(0.65), in: Capsule())
-            }.accessibilityIdentifier("monitor.gyroStatus")
+            }
+            .buttonStyle(.monitorTapTarget)
+            .accessibilityIdentifier("monitor.gyroStatus")
         }
     }
 }
