@@ -2463,6 +2463,8 @@ final class NativeAppModel {
     ) {
         self.lutFileStore = lutFileStore
         self.mediaClipStore = mediaClipStore
+        mediaCacheDirectory = .init(
+            root: mediaClipStore.root, fileManager: mediaClipStore.fileManager)
         self.assist = assist ?? .restore()
         self.scopePanels = scopePanels ?? NikonScopePanels()
         self.assist.looks.selection = assistConfiguration.selectedLUT
@@ -2513,6 +2515,7 @@ final class NativeAppModel {
     var redLUTs: [StoredCustomLUT] = []
     /// On-disk cache + index for camera clips (Media page), and the current library list.
     let mediaClipStore: MediaClipStore
+    @ObservationIgnored private let mediaCacheDirectory: MonitorMediaCacheDirectory
     private var unopenedMediaRows: [MediaClip] = []
     private(set) var mediaLibrary: MonitorMediaLibraryModel<MediaClip>?
     @ObservationIgnored private var mediaLibraryCodec: NikonMediaLibraryCodec?
@@ -4755,7 +4758,7 @@ final class NativeAppModel {
         mediaLibraryBytes = bytes
         mediaLibraryBucket = bucket
         let cache = MonitorMediaCache(
-            directory: .init(root: mediaClipStore.root), codec: codec,
+            directory: mediaCacheDirectory, codec: codec,
             eligibility: .minimumFraction(numerator: 1, denominator: 1),
             catalogAddress: mediaClipStore.directory(for: bucket).lastPathComponent + "/index.json",
             preservedMetadata: [], catalogStore: bytes)
@@ -14011,18 +14014,11 @@ extension NativeAppModel {
         }
     }
 
-    /// Total cached clip bytes across every camera bucket on disk (Settings → Storage readout).
-    /// It counts exactly what `clearAllMediaCaches` clears, so never the on-device library.
-    func totalMediaCacheByteCount() -> UInt64 {
-        clearableMediaCacheBucketIDs().reduce(0) { total, bucket in
-            total + mediaClipStore.cachedByteCount(cameraID: bucket)
-        }
-    }
-
-    /// Camera buckets are cache: the camera re-enumerates them. The `local` bucket is the
-    /// operator's own offline media and is never counted or cleared as cache.
-    private func clearableMediaCacheBucketIDs() -> [String] {
-        mediaClipStore.allBucketIDs().filter { $0 != MediaClipStore.localBucketID }
+    /// Legacy indexed-and-browsable clip bytes across camera buckets, excluding local media.
+    /// Indexed masters can remain after Clear drops their index; preserve that existing readout.
+    func totalMediaCacheByteCount() async throws -> UInt64 {
+        let addresses = try await mediaClipStore.cameraCacheReadAddresses()
+        return try await mediaCacheDirectory.selectedByteCount(addresses)
     }
 
     /// The common settings owner counts and clears this canonical all-camera cache only.
@@ -14034,7 +14030,7 @@ extension NativeAppModel {
             .init(
                 identity: .init(namespace: root.path, source: nil), revision: revision,
                 isCurrent: { [weak self] in self?.mediaClipStore.root == root },
-                count: { [weak self] in self?.totalMediaCacheByteCount() ?? 0 },
+                count: { [weak self] in (try? await self?.totalMediaCacheByteCount()) ?? 0 },
                 clear: { [weak self] in
                     guard let self, self.mediaClipStore.root == root,
                         self.mediaActionStoreGeneration == revision
@@ -14042,6 +14038,10 @@ extension NativeAppModel {
                         throw CancellationError()
                     }
                     try self.clearAllMediaCaches()
+                },
+                readObserved: { [weak self] in
+                    guard let self else { return nil }
+                    return try await self.totalMediaCacheByteCount()
                 }))
     }
 
@@ -14090,27 +14090,35 @@ extension NativeAppModel {
     /// ghosts in the gallery (#296). The on-device `local` library is left intact.
     /// - Throws: `MediaClipCacheClearError` for files that stayed on disk, after every bucket
     ///   was tried and the gallery refreshed.
-    func clearAllMediaCaches() throws(MediaClipCacheClearError) {
+    func clearAllMediaCaches() throws {
+        try Task.checkCancellation()
         mediaActionStoreGeneration &+= 1
         cancelClipStream()
         mediaProducer?.service.cancelCatalog()
         mediaLibrary?.close()
         mediaLibraryBytes?.retire()
         mediaDownloadProgress.removeAll()
-        var cleared = MediaClipCacheClearError(removedBytes: 0, remainingFiles: [])
-        for bucket in clearableMediaCacheBucketIDs() {
-            do {
-                cleared.removedBytes += try mediaClipStore.clearCache(
-                    cameraID: bucket, preservingIndex: false)
-            } catch {
-                cleared.removedBytes += error.removedBytes
-                cleared.remainingFiles += error.remainingFiles
+        defer {
+            refreshMediaClips()
+            if mediaBrowserSource == .camera, cameraSession != nil {
+                scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
             }
         }
-        refreshMediaClips()
-        if mediaBrowserSource == .camera, cameraSession != nil {
-            scheduleFetchClipsFromCamera(identityProbeBudget: Int.max)
+        var readFailure: (any Error)?
+        var cleared = MediaClipCacheClearError(removedBytes: 0, remainingFiles: [])
+        for bucket in try mediaClipStore.cacheBucketIDs() {
+            try Task.checkCancellation()
+            do {
+                cleared.removedBytes += try mediaClipStore.clearCache(
+                    cameraID: bucket, preservingIndex: false, directory: mediaCacheDirectory)
+            } catch let failure as MediaClipCacheClearError {
+                cleared.removedBytes += failure.removedBytes
+                cleared.remainingFiles += failure.remainingFiles
+            } catch is CancellationError { throw CancellationError() } catch {
+                if readFailure == nil { readFailure = error }
+            }
         }
+        if let readFailure { throw readFailure }
         if !cleared.remainingFiles.isEmpty { throw cleared }
     }
 

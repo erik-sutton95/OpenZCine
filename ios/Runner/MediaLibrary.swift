@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineAppKit
 import OpenCineMedia
 import OpenZCineCore
 import os
@@ -257,11 +258,15 @@ struct MediaClipCacheClearError: LocalizedError, Equatable {
 /// `Documents/media/{cameraID}/`; a sibling `index.json` holds metadata not derivable from the
 /// files (favorites, camera handles, upload/export status). Clip bytes are streamed to a
 /// `FileHandle` during download — never buffered whole.
-struct MediaClipStore {
+// Immutable paths and FileManager access cross into the shared filesystem worker. No delegate or
+// FileManager configuration changes after construction; catalog mutation stays with its native owner.
+struct MediaClipStore: @unchecked Sendable {
     /// Root of the per-camera bucket directories, `<documents>/media`.
     let root: URL
+    let fileManager: FileManager
 
-    init(root: URL? = nil) {
+    init(root: URL? = nil, fileManager: FileManager = .default) {
+        self.fileManager = fileManager
         if let root {
             self.root = root
         } else {
@@ -406,12 +411,21 @@ struct MediaClipStore {
     /// container — e.g. a simulator sample — shows up); index entries are kept even when not yet
     /// downloaded (camera clips awaiting fetch). Sorted by filename.
     func list(cameraID: String) -> [MediaClip] {
+        let indexed = loadIndex(cameraID: cameraID)
+        let names =
+            (try? FileManager.default.contentsOfDirectory(atPath: directory(for: cameraID).path))
+            ?? []
+        return reconciledClips(cameraID: cameraID, indexed: indexed, diskNames: names)
+    }
+
+    private func reconciledClips(cameraID: String, indexed: [MediaClip], diskNames: [String])
+        -> [MediaClip]
+    {
         var byName: [String: MediaClip] = [:]
-        for clip in loadIndex(cameraID: cameraID) { byName[clip.filename] = clip }
+        for clip in indexed { byName[clip.filename] = clip }
 
         let dir = directory(for: cameraID)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        for name in names where Self.isBrowsableMediaFile(name) && byName[name] == nil {
+        for name in diskNames where Self.isBrowsableMediaFile(name) && byName[name] == nil {
             let size = fileSize(at: dir.appendingPathComponent(name))
             byName[name] = MediaClip(
                 cameraID: cameraID, filename: name, handle: nil, storageID: nil,
@@ -484,49 +498,111 @@ struct MediaClipStore {
     /// - Returns: Bytes removed from disk (partial caches count at their written size).
     /// - Throws: `MediaClipCacheClearError` naming every file that stayed on disk, after all of
     ///   them were tried. Its byte count covers only what was actually removed.
-    @discardableResult
+    @MainActor @discardableResult
     func clearCache(
-        cameraID: String, preservingIndex: Bool = true
-    ) throws(MediaClipCacheClearError) -> UInt64 {
-        let dir = directory(for: cameraID)
-        let fm = FileManager.default
-        var removedBytes: UInt64 = 0
-        var remainingFiles: [String] = []
-        func remove(_ url: URL, named name: String) {
-            let size = fileSize(at: url)
-            do {
-                try fm.removeItem(at: url)
-                removedBytes += size
-            } catch let error as CocoaError where error.code == .fileNoSuchFile {
-                // Already gone: nothing was removed and nothing remains.
-            } catch {
-                remainingFiles.append(name)
-            }
-        }
-
-        let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
-        for name in names.sorted() where Self.isBrowsableMediaFile(name) {
-            remove(dir.appendingPathComponent(name), named: name)
-        }
-
-        let thumbsDir = dir.appendingPathComponent("thumbs", isDirectory: true)
-        let thumbNames = (try? fm.contentsOfDirectory(atPath: thumbsDir.path)) ?? []
-        for name in thumbNames.sorted() {
-            remove(thumbsDir.appendingPathComponent(name), named: "thumbs/" + name)
-        }
-
-        if !preservingIndex {
-            remove(indexURL(cameraID: cameraID), named: "index.json")
-        }
-
+        cameraID: String, preservingIndex: Bool = true,
+        directory: MonitorMediaCacheDirectory? = nil
+    ) throws -> UInt64 {
+        try Task.checkCancellation()
+        let addresses = try cacheFileAddresses(
+            cameraID: cameraID, includingMetadata: true,
+            preservingIndex: preservingIndex)
+        let cache = directory ?? MonitorMediaCacheDirectory(root: root, fileManager: fileManager)
+        let result = try cache.removeFiles(addresses)
         mediaLibraryLogger.info(
-            "cleared media cache for \(cameraID, privacy: .private(mask: .hash)) (\(removedBytes, privacy: .public) bytes removed, \(remainingFiles.count, privacy: .public) files remain, index \(preservingIndex ? "kept" : "cleared", privacy: .public))"
+            "cleared media cache for \(cameraID, privacy: .private(mask: .hash)) (\(result.removedBytes, privacy: .public) bytes removed, \(result.remainingFiles.count, privacy: .public) files remain, index \(preservingIndex ? "kept" : "cleared", privacy: .public))"
         )
-        guard remainingFiles.isEmpty else {
+        guard result.remainingFiles.isEmpty else {
+            let prefix = Self.safeBucketID(cameraID) + "/"
             throw MediaClipCacheClearError(
-                removedBytes: removedBytes, remainingFiles: remainingFiles)
+                removedBytes: result.removedBytes,
+                remainingFiles: result.remainingFiles.map { String($0.dropFirst(prefix.count)) })
         }
-        return removedBytes
+        return result.removedBytes
+    }
+
+    /// Only real camera buckets are cache. Local recordings and symbolic links are never selected.
+    func cacheBucketIDs() throws -> [String] {
+        let names: [String]
+        do {
+            let type =
+                try fileManager.attributesOfItem(atPath: root.path)[.type] as? FileAttributeType
+            guard type == .typeDirectory else { throw MonitorMediaCacheError.invalidAddress }
+            names = try fileManager.contentsOfDirectory(atPath: root.path)
+        } catch let error as CocoaError
+            where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+        { return [] }
+        return try names.sorted().filter { name in
+            try Task.checkCancellation()
+            guard name != Self.localBucketID, !name.hasPrefix("."), Self.safeBucketID(name) == name
+            else { return false }
+            do {
+                return try fileManager.attributesOfItem(
+                    atPath: root.appendingPathComponent(name).path)[.type]
+                    as? FileAttributeType == .typeDirectory
+            } catch let error as CocoaError
+                where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+            { return false }
+        }
+    }
+
+    /// Select the legacy clip readout, or the exact clip/thumbnail/index set Clear owns.
+    private func cacheFileAddresses(
+        cameraID: String, includingMetadata: Bool,
+        preservingIndex: Bool = true
+    ) throws -> [String] {
+        let bucket = Self.safeBucketID(cameraID)
+        let dir = directory(for: cameraID)
+        let names: [String]
+        do { names = try fileManager.contentsOfDirectory(atPath: dir.path) } catch let error
+            as CocoaError
+            where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+        { return [] }
+        if !includingMetadata {
+            // Preserve the existing indexed-plus-disk readout, including indexed masters that
+            // Clear has never owned. An index removal still makes those non-browsable files
+            // absent from the legacy readout; this adoption does not expand deletion.
+            let indexed = try observedIndex(cameraID: cameraID)
+            return reconciledClips(cameraID: cameraID, indexed: indexed, diskNames: names)
+                .compactMap { clip in
+                    guard let filename = MediaClipFilename.safeCameraBasename(clip.filename) else {
+                        return nil
+                    }
+                    return Self.safeBucketID(clip.cameraID) + "/" + filename
+                }.sorted()
+        }
+        var selected = names.filter(Self.isBrowsableMediaFile).map { bucket + "/" + $0 }
+        if includingMetadata {
+            let thumbs = dir.appendingPathComponent("thumbs", isDirectory: true)
+            do {
+                let names = try fileManager.contentsOfDirectory(atPath: thumbs.path)
+                selected += names.map { bucket + "/thumbs/" + $0 }
+            } catch let error as CocoaError
+                where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+            {}
+            if !preservingIndex { selected.append(bucket + "/index.json") }
+        }
+        return selected.sorted()
+    }
+
+    /// Enumeration and the shared file-stat read run off the main actor; caller cancellation owns both.
+    func cameraCacheReadAddresses() async throws -> [String] {
+        try Task.checkCancellation()
+        let worker = Task.detached(priority: .utility) {
+            var addresses: [String] = []
+            for bucket in try cacheBucketIDs() {
+                try Task.checkCancellation()
+                addresses += try cacheFileAddresses(cameraID: bucket, includingMetadata: false)
+            }
+            return addresses
+        }
+        return try await withTaskCancellationHandler {
+            let addresses = try await worker.value
+            try Task.checkCancellation()
+            return addresses
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     // MARK: - Index persistence
@@ -646,6 +722,23 @@ struct MediaClipStore {
             let clips = try? JSONDecoder().decode([MediaClip].self, from: data)
         else { return [] }
         return clips.filter { MediaClipFilename.safeCameraBasename($0.filename) != nil }
+    }
+
+    /// Settings observes the same catalog as listing, but an unreadable or malformed index is unknown.
+    /// A missing index alone permits the existing browsable-disk fallback.
+    private func observedIndex(cameraID: String) throws -> [MediaClip] {
+        let location = indexURL(cameraID: cameraID)
+        do {
+            guard
+                try fileManager.attributesOfItem(atPath: location.path)[.type] as? FileAttributeType
+                    == .typeRegular
+            else {
+                throw MonitorMediaCacheError.invalidAddress
+            }
+            return try Self.decodeCatalogBytes(Data(contentsOf: location))
+        } catch let error as CocoaError
+            where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+        { return [] }
     }
 
     private func saveIndex(_ clips: [MediaClip], cameraID: String) {
