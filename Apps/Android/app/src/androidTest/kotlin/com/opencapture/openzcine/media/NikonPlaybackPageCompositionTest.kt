@@ -95,7 +95,7 @@ class NikonPlaybackPageCompositionTest {
                 picture = { geometry = it; Box(Modifier.fillMaxSize().testTag("SIMULATED picture")) },
                 feedAssists = {}, canvasAssists = {}, tools = {}, assistInspector = {})
         }
-        compose.onNodeWithContentDescription("Playback picture controls").performTouchInput {
+        compose.onNodeWithTag(MonitorPlaybackTags.PICTURE).performTouchInput {
             down(0, center - Offset(40f, 0f)); down(1, center + Offset(40f, 0f))
             advanceEventTime(16)
             updatePointerTo(0, center - Offset(41f, 0f)); updatePointerTo(1, center + Offset(41f, 0f)); move()
@@ -104,7 +104,7 @@ class NikonPlaybackPageCompositionTest {
             up(0); up(1)
         }
         compose.runOnIdle { assertTrue(requireNotNull(geometry).zoom.scale > 1f) }
-        compose.onNodeWithContentDescription("Playback picture controls").performTouchInput { doubleClick() }
+        compose.onNodeWithTag(MonitorPlaybackTags.PICTURE).performTouchInput { doubleClick() }
         compose.runOnIdle { assertEquals(MonitorPlaybackZoom(), requireNotNull(geometry).zoom) }
     }
 
@@ -117,7 +117,7 @@ class NikonPlaybackPageCompositionTest {
                 picture = { geometry = it; Box(Modifier.fillMaxSize()) },
                 feedAssists = {}, canvasAssists = {}, tools = {}, assistInspector = {})
         }
-        compose.onNodeWithContentDescription("Playback picture controls").performTouchInput {
+        compose.onNodeWithTag(MonitorPlaybackTags.PICTURE).performTouchInput {
             down(0, center - Offset(40f, 0f)); down(1, center + Offset(40f, 0f))
             advanceEventTime(16)
             updatePointerTo(0, center - Offset(41f, 0f)); updatePointerTo(1, center + Offset(41f, 0f)); move()
@@ -133,19 +133,19 @@ class NikonPlaybackPageCompositionTest {
             maxX = current.canvasWidth * (current.zoom.scale * 1.5f - 1f) / 2f
             travel = maxX * 4f + 50f
         }
-        compose.onNodeWithContentDescription("Playback picture controls").performTouchInput {
+        compose.onNodeWithTag(MonitorPlaybackTags.PICTURE).performTouchInput {
             down(center); moveTo(center + Offset(travel, 0f))
         }
         compose.runOnIdle {
             assertEquals(maxX, requireNotNull(geometry).zoom.offsetX, .1f)
         }
-        compose.onNodeWithContentDescription("Playback picture controls").performTouchInput {
+        compose.onNodeWithTag(MonitorPlaybackTags.PICTURE).performTouchInput {
             moveTo(center + Offset(travel - 50f, 0f))
         }
         compose.runOnIdle {
             assertEquals(maxX - 50f, requireNotNull(geometry).zoom.offsetX, .1f)
         }
-        compose.onNodeWithContentDescription("Playback picture controls").performTouchInput {
+        compose.onNodeWithTag(MonitorPlaybackTags.PICTURE).performTouchInput {
             moveTo(center); up()
         }
         compose.runOnIdle {
