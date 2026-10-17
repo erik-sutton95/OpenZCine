@@ -141,6 +141,7 @@
 		15F502000000000000000002 /* NikonMediaOpeningAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */; };
 		D15500000000000000000102 /* SettingsSharedOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15500000000000000000101 /* SettingsSharedOwnerTests.swift */; };
 		D15500000000000000000202 /* SettingsPreferenceMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */; };
+		C0AD00000000000000000102 /* CommandDashboardAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AD00000000000000000101 /* CommandDashboardAdoptionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -316,6 +317,7 @@
 		15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaOpeningAdmissionTests.swift; sourceTree = "<group>"; };
 		D15500000000000000000101 /* SettingsSharedOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSharedOwnerTests.swift; sourceTree = "<group>"; };
 		D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPreferenceMigrationTests.swift; sourceTree = "<group>"; };
+		C0AD00000000000000000101 /* CommandDashboardAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandDashboardAdoptionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -370,6 +372,7 @@
 			isa = PBXGroup;
 			children = (
 				D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */,
+				C0AD00000000000000000101 /* CommandDashboardAdoptionTests.swift */,
 				D15500000000000000000101 /* SettingsSharedOwnerTests.swift */,
 				15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */,
 				2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */,
@@ -753,6 +756,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D15500000000000000000202 /* SettingsPreferenceMigrationTests.swift in Sources */,
+				C0AD00000000000000000102 /* CommandDashboardAdoptionTests.swift in Sources */,
 				D15500000000000000000102 /* SettingsSharedOwnerTests.swift in Sources */,
 				15F502000000000000000002 /* NikonMediaOpeningAdmissionTests.swift in Sources */,
 				E43BB78DABFEC65A2C255590 /* MonitorPortraitHeaderClearanceTests.swift in Sources */,

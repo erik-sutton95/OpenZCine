@@ -495,3 +495,178 @@ final class SettingsUIFlowTests: SharedAppUITestCase {
         }
     }
 }
+
+/// DISP 3 through the shared command dashboard: a long-press drag reorders the primary grid and
+/// the new order is what the next launch shows.
+final class CommandGridReorderUITests: SharedAppUITestCase {
+    private let environment = ["ZC_DEMO_DISP": "command"]
+
+    override func tearDown() {
+        app?.terminate()
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    @MainActor
+    func testDragReordersATileAndTheOrderSurvivesRelaunch() throws {
+        continueAfterFailure = false
+        open()
+        let before = try order()
+        XCTAssertGreaterThanOrEqual(before.count, 4, "The video grid shows its tiles")
+        capture("z-command-grid-before-drag")
+        drag(before[0], onto: before[2])
+        var moved = before
+        moved.insert(moved.remove(at: 0), at: 2)
+        XCTAssertTrue(waitFor(moved), "The held tile lands in the slot it was dropped on")
+        capture("z-command-grid-after-drag")
+
+        app.terminate()
+        open()
+        XCTAssertTrue(waitFor(moved), "The next launch keeps the operator's order")
+        capture("z-command-grid-after-relaunch")
+
+        // Leave the order as the run found it.
+        drag(before[0], onto: moved[0])
+        XCTAssertTrue(waitFor(before), "Dragging back restores the original order")
+    }
+
+    /// The side column and the portrait stack live in scrollers, which only an app host vends.
+    @MainActor
+    func testSideColumnCellsAndThePortraitStackAreReachable() throws {
+        continueAfterFailure = false
+        open()
+        let side = app.descendants(matching: .any)["monitor.command.side"]
+        XCTAssertTrue(side.waitForExistence(timeout: 10), "The side column is one labelled container")
+        XCTAssertEqual(
+            side.label,
+            "Image, Focus, Audio, and Monitor controls. Swipe up to reveal more command controls.")
+        XCTAssertTrue(app.buttons["Area"].waitForExistence(timeout: 5), "Side cells are buttons")
+        XCTAssertTrue(label("Temp").firstMatch.exists, "Landscape shows the health strip")
+
+        rotate(.portrait, settling: tiles.firstMatch)
+        XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: 10), "Portrait stacks the grid")
+        XCTAssertTrue(app.buttons["Area"].waitForExistence(timeout: 5), "and the sections below it")
+        XCTAssertEqual(label("Temp").count, 0, "Portrait has no health strip")
+        capture("z-command-dashboard-portrait-stack")
+    }
+
+    @MainActor
+    func testPortraitViewportShowsWholePrimaryTilesAndScrollsToTheLastSection() throws {
+        continueAfterFailure = false
+        open()
+        rotate(.portrait, settling: tiles.firstMatch)
+        let scroller = app.scrollViews.containing(.any, identifier: "monitor.command.tile.iso").firstMatch
+        XCTAssertTrue(scroller.waitForExistence(timeout: 10))
+        XCTAssertGreaterThanOrEqual(
+            scroller.frame.height, 246,
+            "The portrait viewport must show the three 76-point primary rows and their two 9-point gaps")
+        XCTAssertFalse(
+            app.buttons["monitor.system.focusReset"].exists,
+            "Picture-only recenter controls must not cover the command dashboard")
+        for identifier in try order() {
+            let tile = tiles.matching(identifier: identifier).firstMatch
+            XCTAssertTrue(
+                contained(tile, in: scroller),
+                "The whole primary tile \(identifier) \(tile.frame) must fit inside \(scroller.frame)")
+        }
+        scroller.swipeUp()
+        let last = app.buttons["Grid"]
+        XCTAssertTrue(contained(last, in: scroller), "Scrolling reaches the complete final read-only cell")
+        capture("z-command-dashboard-portrait-scrolled-end")
+    }
+
+    @MainActor
+    func testLandscapeSideColumnShowsItsOverflowCueUntilTheEnd() {
+        continueAfterFailure = false
+        open()
+        let side = app.descendants(matching: .any)["monitor.command.side"]
+        let more = app.descendants(matching: .any)["monitor.command.more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "The overflowing side column must show its scroll cue")
+        XCTAssertEqual(more.label, "More command controls below. Swipe up to reveal them.")
+        side.swipeUp()
+        XCTAssertTrue(contained(app.buttons["Grid"], in: side), "Scrolling reaches the final read-only cell")
+        XCTAssertTrue(more.waitForNonExistence(timeout: 10), "The cue clears at the actual content bottom")
+        capture("z-command-dashboard-landscape-scrolled-end")
+    }
+
+    @MainActor private func contained(_ element: XCUIElement, in viewport: XCUIElement) -> Bool {
+        let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            MainActor.assumeIsolated {
+                element.exists && !element.frame.isEmpty
+                    // Native accessibility edges can round by one display point.
+                    && viewport.frame.insetBy(dx: -1, dy: -1).contains(element.frame)
+            }
+        }, object: nil)
+        return XCTWaiter().wait(for: [visible], timeout: 10) == .completed
+    }
+
+    @MainActor private func label(_ text: String) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", text))
+    }
+
+    @MainActor private func open() {
+        launch(ReviewLaunch(screen: .live), environment: environment)
+        rotate(.landscapeLeft, settling: tiles.firstMatch)
+        XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: 30), "DISP 3 shows the command grid")
+        XCTAssertTrue(waitUntilHittable(tiles.firstMatch, timeout: 15))
+    }
+
+    @MainActor private var tiles: XCUIElementQuery {
+        app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH 'monitor.command.tile.'"))
+    }
+
+    /// Tile identifiers in reading order: top row first, left to right.
+    @MainActor private func order() throws -> [String] {
+        let root = try app.snapshot()
+        var found: [String: CGRect] = [:]
+        func collect(_ element: XCUIElementSnapshot) {
+            if element.identifier.hasPrefix("monitor.command.tile."), found[element.identifier] == nil {
+                found[element.identifier] = element.frame
+            }
+            element.children.forEach(collect)
+        }
+        collect(root)
+        return found.sorted {
+            let (first, second) = ($0.value, $1.value)
+            return first.midY.rounded() != second.midY.rounded()
+                ? first.midY < second.midY : first.midX < second.midX
+        }.map(\.key)
+    }
+
+    @MainActor private func waitFor(_ expected: [String]) -> Bool {
+        let arranged = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+            MainActor.assumeIsolated { (try? order()) == expected }
+        }, object: nil)
+        return XCTWaiter().wait(for: [arranged], timeout: 10) == .completed
+    }
+
+    @MainActor private func drag(_ identifier: String, onto target: String) {
+        let center = CGVector(dx: 0.5, dy: 0.5)
+        let source = tiles.matching(identifier: identifier).firstMatch
+        let destination = tiles.matching(identifier: target).firstMatch
+        XCTAssertTrue(waitUntilHittable(source))
+        source.coordinate(withNormalizedOffset: center).press(
+            forDuration: 0.8, thenDragTo: destination.coordinate(withNormalizedOffset: center),
+            withVelocity: .slow, thenHoldForDuration: 0.4)
+    }
+}
+
+/// DISP 3 in landscape and portrait, attached to the result bundle for visual review.
+final class CommandGridScreenshotUITests: SharedAppUITestCase {
+    override func tearDown() {
+        app?.terminate()
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    @MainActor
+    func testCommandDashboardInBothOrientations() {
+        launch(ReviewLaunch(screen: .live), environment: ["ZC_DEMO_DISP": "command"])
+        let tile = app.descendants(matching: .any)["monitor.command.tile.iso"]
+        XCTAssertTrue(tile.waitForExistence(timeout: 30), "The dashboard must mount before capture")
+        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+            rotate(orientation, settling: tile)
+            XCTAssertTrue(waitUntilHittable(tile), "The mounted dashboard must clear the launch splash")
+            capture("z-command-dashboard-\(orientation == .portrait ? "portrait" : "landscape")")
+        }
+    }
+}

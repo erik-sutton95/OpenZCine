@@ -11,166 +11,107 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// The command-monitor primary grid (DISP 3): eight ride-along controls the operator can reorder by
-/// long-press-dragging a tile. Tiles are absolutely positioned so a dragged tile follows the finger
-/// while the others animate to their new slots; the order persists via `model.commandGridOrder`.
-struct CommandPrimaryGrid: View {
-    @Environment(NativeAppModel.self) private var model
-    let availableHeight: CGFloat
+/// What a command dashboard tile opens: a Nikon picker on one of its segmented tabs.
+struct NikonCommandRequest: Hashable {
+    let picker: CameraPicker
+    var mode = 0
+}
 
-    @State private var draggingKind: CommandTileKind?
-    @State private var dragLocation: CGPoint = .zero
+typealias NikonCommandTile = MonitorCommandTile<CommandTileKind, NikonCommandRequest>
 
-    /// Column count. Landscape (DISP-3) and portrait v2 both pass the default 3.
-    var columns: Int = 3
-    private let spacing: CGFloat = 9
-    private static let space = "commandGrid"
-
-    /// Spring used for both the live shuffle and the drop — smooth with a touch of life.
-    private let shuffle = Animation.spring(response: 0.3, dampingFraction: 0.72)
-
-    /// One resolved grid tile. Video tiles carry their `CommandTileKind` (long-press reorder);
-    /// photography tiles mirror the landscape stills strip tile-for-tile in fixed order.
-    private struct GridTileSpec: Identifiable {
-        let id: String
-        let title: String
-        let value: String
-        let picker: CameraPicker?
-        let kind: CommandTileKind?
+/// The DISP 3 order on the visible grid. The shared dashboard reports a drop as a slot of the
+/// tiles it shows; a tile this body hides (the dual-base Mode tile) keeps its place in the stored
+/// order instead of shifting every slot after it.
+enum NikonCommandGridOrder {
+    static func moving(
+        _ kind: CommandTileKind, to index: Int, in order: [CommandTileKind],
+        hidden: Set<CommandTileKind>
+    ) -> [CommandTileKind] {
+        let full = monitorCommandTileOrder(order, all: CommandTileKind.allCases)
+        let visible = full.filter { !hidden.contains($0) }
+        var moved = moveMonitorCommandTile(visible, kind, targetIndex: index, all: visible)
+            .makeIterator()
+        return full.map { hidden.contains($0) ? $0 : moved.next() ?? $0 }
     }
+}
 
-    private var tiles: [GridTileSpec] {
-        if model.isPhotographyMode {
-            return model.cameraPropertySnapshot.photographyCaptureValues.map { entry in
-                GridTileSpec(
-                    id: entry.label,
-                    title: stillsTitle(entry.label),
-                    value: entry.value,
-                    picker: CameraPicker.forValueLabel(entry.label, photography: true),
-                    kind: nil)
+/// The Nikon values of the shared command dashboard (DISP 3): tile kinds, titles, live values
+/// and the pickers they open. Layout, reorder and accessibility belong to `MonitorCommandDashboard`.
+extension NativeAppModel {
+    /// Video tiles follow the operator's order; photography tiles mirror the landscape stills
+    /// strip tile for tile in its fixed order, so they carry no kind.
+    var commandDashboardTiles: [NikonCommandTile] {
+        if isPhotographyMode {
+            return cameraPropertySnapshot.photographyCaptureValues.map { entry in
+                NikonCommandTile(
+                    title: Self.commandStillsTitle(entry.label), value: entry.value,
+                    request: CameraPicker.forValueLabel(entry.label, photography: true).map {
+                        NikonCommandRequest(picker: $0)
+                    })
             }
         }
-        return model.visibleCommandGridOrder.map { kind in
-            GridTileSpec(
-                id: kind.rawValue, title: title(kind), value: value(kind),
-                picker: picker(kind), kind: kind)
+        return visibleCommandGridOrder.map { kind in
+            NikonCommandTile(
+                kind: kind, title: Self.commandTitle(kind), value: commandValue(kind),
+                request: NikonCommandRequest(picker: Self.commandPicker(kind)))
         }
     }
 
-    var body: some View {
-        GeometryReader { proxy in
-            let tiles = self.tiles
-            let rows = max(1, Int((Double(tiles.count) / Double(columns)).rounded(.up)))
-            // Fill the height on phones, but never stretch a tile past a readable card —
-            // the leftover breathing room reads better than title-and-value islands adrift
-            // in an empty slab (the iPad complaint).
-            let rowHeight = min(
-                150,
-                max(44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows)))
-            let tileWidth = (proxy.size.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
-                    let isDragging = tile.kind != nil && draggingKind == tile.kind
-                    CommandTile(title: tile.title, value: tile.value, height: rowHeight)
-                        .frame(width: tileWidth)
-                        .scaleEffect(isDragging ? 1.06 : 1)
-                        .shadow(color: .black.opacity(isDragging ? 0.5 : 0), radius: 16, y: 8)
-                        .zIndex(isDragging ? 1 : 0)
-                        // The dragged tile tracks the finger (set outside the shuffle animation, so it's
-                        // instant); the rest read their slot from `index` and spring there.
-                        .position(
-                            isDragging
-                                ? dragLocation
-                                : center(index: index, tileWidth: tileWidth, rowHeight: rowHeight)
-                        )
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-            .contentShape(Rectangle())
-            .coordinateSpace(.named(Self.space))
-            // Quick tap opens the tile's picker; a 0.3s long-press picks it up to reorder. The tap
-            // MUST be a `.simultaneousGesture` — `.onTapGesture` / `.exclusively(before:)` are
-            // subordinate to `.gesture(reorderGesture)`, whose long-press+drag swallows the touch
-            // (the popups-don't-open bug). The drag stays on the *stable* container so it survives
-            // every shuffle; `draggingKind` guards a stray tap mid-reorder.
-            .simultaneousGesture(
-                SpatialTapGesture(coordinateSpace: .named(Self.space))
-                    .onEnded { value in
-                        guard draggingKind == nil else { return }
-                        let current = self.tiles
-                        let s = slot(
-                            at: value.location, tileWidth: tileWidth, rowHeight: rowHeight,
-                            count: current.count)
-                        guard s < current.count, let picker = current[s].picker else { return }
-                        model.showPicker(picker)
-                    }
+    var commandDashboardSections: [MonitorCommandSection<CommandTileKind, NikonCommandRequest>] {
+        func focus(_ title: String, _ value: String, _ mode: Int) -> NikonCommandTile {
+            NikonCommandTile(
+                title: title, value: value, request: NikonCommandRequest(picker: .focus, mode: mode)
             )
-            .gesture(reorderGesture(tileWidth: tileWidth, rowHeight: rowHeight, count: tiles.count))
         }
-    }
-
-    /// Grid title for a photography strip label (mirrors the video tiles' casing).
-    private func stillsTitle(_ label: String) -> String {
-        switch label {
-        case "MODE": "Mode"
-        case "ISO": "ISO"
-        case "SHUTTER": "Shutter"
-        case "IRIS": "Iris"
-        case "DRIVE": "Drive"
-        case "FOCUS": "Focus"
-        case "WB": "White Bal"
-        case "METER": "Meter"
-        case "PROFILE": "Profile"
-        default: label
+        func audio(_ title: String, _ value: String, _ mode: Int, amber: Bool = false)
+            -> NikonCommandTile
+        {
+            NikonCommandTile(
+                title: title, value: value,
+                request: NikonCommandRequest(picker: .audio, mode: mode),
+                amber: amber)
         }
+        return [
+            MonitorCommandSection(
+                title: "Image",
+                cells: [
+                    NikonCommandTile(title: "Tone", value: commandToneLabel),
+                    NikonCommandTile(title: "Picture Profile", value: "\u{2014}", muted: true),
+                ]),
+            MonitorCommandSection(
+                title: "Focus",
+                cells: [
+                    focus("Mode", shownCameraValue("FOCUS") ?? "\u{2014}", 0),
+                    focus("Area", focusArea, 1),
+                    focus("Subject", focusSubject, 2),
+                ]),
+            MonitorCommandSection(
+                title: "Audio",
+                cells: [
+                    audio(
+                        "Sens", commandMicrophoneSensLabel, 0,
+                        amber: commandMicrophoneUsesManualLevel),
+                    audio("32-bit Float", commandAudio32BitFloatLabel, 4),
+                    audio("Input", commandMicrophoneInputLabel, 1),
+                    audio("Wind", commandWindFilterLabel, 2),
+                    audio("Atten", commandInputAttenuatorLabel, 3, amber: commandInputAttenuatorOn),
+                ]),
+            // Grid reads the camera's framing-grid setting (GridDisplay 0xD16C), not the app's
+            // overlay toggle. Assist, DISP and Guides have no camera connection point, so none.
+            MonitorCommandSection(
+                title: "Monitor", cells: [NikonCommandTile(title: "Grid", value: commandGridLabel)]),
+        ]
     }
 
-    private func center(index: Int, tileWidth: CGFloat, rowHeight: CGFloat) -> CGPoint {
-        CGPoint(
-            x: CGFloat(index % columns) * (tileWidth + spacing) + tileWidth / 2,
-            y: CGFloat(index / columns) * (rowHeight + spacing) + rowHeight / 2)
+    var commandDashboardHealth: MonitorCommandHealth {
+        let temperature = cameraState.temperature
+        return MonitorCommandHealth(
+            temperature: temperature, temperatureOk: temperature.hasPrefix("OK"),
+            storage: liveMediaReadout,
+            camera: cameraState.cameraName, lens: cameraState.lens)
     }
 
-    private func slot(at point: CGPoint, tileWidth: CGFloat, rowHeight: CGFloat, count: Int) -> Int
-    {
-        let col = min(max(Int(point.x / (tileWidth + spacing)), 0), columns - 1)
-        let row = max(Int(point.y / (rowHeight + spacing)), 0)
-        return min(max(row * columns + col, 0), count - 1)
-    }
-
-    /// Long-press the grid to pick up the tile under the finger, then drag to reorder; the others
-    /// spring to their new slots. A quick tap instead falls through to the tile's picker button.
-    private func reorderGesture(tileWidth: CGFloat, rowHeight: CGFloat, count: Int) -> some Gesture
-    {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
-            .onChanged { value in
-                // Photography tiles ride the stills strip's fixed order — no reorder.
-                guard !model.isPhotographyMode else { return }
-                guard case .second(true, let drag?) = value else { return }
-                if draggingKind == nil {
-                    let order = model.visibleCommandGridOrder
-                    let start = slot(
-                        at: drag.startLocation, tileWidth: tileWidth, rowHeight: rowHeight,
-                        count: count)
-                    guard start < order.count else { return }
-                    draggingKind = order[start]
-                    dragLocation = drag.startLocation
-                }
-                guard let kind = draggingKind else { return }
-                dragLocation = drag.location
-                let target = slot(
-                    at: drag.location, tileWidth: tileWidth, rowHeight: rowHeight, count: count)
-                if model.commandGridOrder.firstIndex(of: kind) != target {
-                    withAnimation(shuffle) { model.moveCommandTile(kind, to: target) }
-                }
-            }
-            .onEnded { _ in
-                withAnimation(shuffle) { draggingKind = nil }
-            }
-    }
-
-    private func title(_ kind: CommandTileKind) -> String {
+    private static func commandTitle(_ kind: CommandTileKind) -> String {
         switch kind {
         case .mode: "Mode"
         case .iso: "ISO"
@@ -183,7 +124,7 @@ struct CommandPrimaryGrid: View {
         }
     }
 
-    private func picker(_ kind: CommandTileKind) -> CameraPicker? {
+    private static func commandPicker(_ kind: CommandTileKind) -> CameraPicker {
         switch kind {
         case .mode: .mode
         case .iso: .iso
@@ -196,351 +137,32 @@ struct CommandPrimaryGrid: View {
         }
     }
 
-    private func value(_ kind: CommandTileKind) -> String {
+    private func commandValue(_ kind: CommandTileKind) -> String {
         switch kind {
-        case .mode: model.commandExposureMode
-        case .iso: cameraValue("ISO", fallback: "—")
-        case .shutter: cameraValue("SHUTTER", fallback: "—")
-        case .iris: cameraValue("IRIS", fallback: "—")
-        case .whiteBalance: cameraValue("WB", fallback: "—")
-        case .resolutionFramerate: model.cameraState.resolutionFrameRate
-        case .codec: model.cameraState.codec
-        case .ibis: model.commandStabilizationLabel
+        case .mode: commandExposureMode
+        case .iso: shownCameraValue("ISO") ?? "\u{2014}"
+        case .shutter: shownCameraValue("SHUTTER") ?? "\u{2014}"
+        case .iris: shownCameraValue("IRIS") ?? "\u{2014}"
+        case .whiteBalance: shownCameraValue("WB") ?? "\u{2014}"
+        case .resolutionFramerate: cameraState.resolutionFrameRate
+        case .codec: cameraState.codec
+        case .ibis: commandStabilizationLabel
         }
     }
 
-    private func cameraValue(_ label: String, fallback: String) -> String {
-        model.shownCameraValue(label) ?? fallback
-    }
-}
-
-struct CommandHealthStrip: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        HStack(spacing: 10) {
-            CommandStatusBlock(label: "Temp", value: tempValue)
-            CommandStatusBlock(label: "Storage", value: Text(model.liveMediaReadout))
-            CommandStatusBlock(label: "Camera", value: Text(model.cameraState.cameraName))
-            CommandStatusBlock(label: "Lens", value: Text(model.cameraState.lens))
-            Spacer(minLength: 4)
-            // Hold the FPS chip at its natural size; the wider status blocks scale down first.
-            FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
-                .fixedSize()
-                .layoutPriority(1)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(
-            LiveDesign.surface,
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-    }
-
-    /// Temperature readout with a green "OK" prefix when the body reports healthy, mirroring `.cc-ok`.
-    private var tempValue: Text {
-        let raw = model.cameraState.temperature
-        guard let range = raw.range(of: "OK") else { return Text(raw) }
-        return Text("OK").foregroundStyle(LiveDesign.good) + Text(String(raw[range.upperBound...]))
-    }
-}
-
-struct CommandStatusBlock: View {
-    let label: String
-    let value: Text
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.system(size: 8.5, weight: .bold, design: .default))
-                .foregroundStyle(LiveDesign.faint)
-                .textCase(.uppercase)
-            value
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.55)
-        }
-        .frame(minWidth: 52, maxWidth: 148, alignment: .leading)
-    }
-}
-
-struct CommandSideColumn: View {
-    @Environment(NativeAppModel.self) private var model
-    /// True once the column is scrolled to (or fits within) the bottom, so the fade and the "More"
-    /// hint clear instead of covering the last row.
-    @State private var atBottom = false
-
-    var body: some View {
-        GeometryReader { outer in
-            scroller(viewportHeight: outer.size.height)
-        }
-    }
-
-    private func scroller(viewportHeight: CGFloat) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 4) {
-                CommandSection(title: "Image") {
-                    CmdRow {
-                        CommandSmallTile(title: "Tone", value: model.commandToneLabel)
-                        CommandSmallTile(title: "Picture Profile", value: "—", muted: true)
-                    }
-                }
-
-                CommandSection(title: "Focus") {
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Mode",
-                            value: cameraValue("FOCUS", fallback: "—"),
-                            picker: .focus,
-                            pickerMode: 0)
-                        CommandSmallTile(
-                            title: "Area",
-                            value: model.focusArea,
-                            picker: .focus,
-                            pickerMode: 1)
-                    }
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Subject",
-                            value: model.focusSubject,
-                            picker: .focus,
-                            pickerMode: 2)
-                    }
-                }
-
-                CommandSection(title: "Audio") {
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Sens",
-                            value: model.commandMicrophoneSensLabel,
-                            picker: .audio,
-                            pickerMode: 0,
-                            amber: model.commandMicrophoneUsesManualLevel)
-                        CommandSmallTile(
-                            title: "32-bit Float",
-                            value: model.commandAudio32BitFloatLabel,
-                            picker: .audio,
-                            pickerMode: 4)
-                    }
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Input",
-                            value: model.commandMicrophoneInputLabel,
-                            picker: .audio,
-                            pickerMode: 1)
-                        CommandSmallTile(
-                            title: "Wind",
-                            value: model.commandWindFilterLabel,
-                            picker: .audio,
-                            pickerMode: 2)
-                    }
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Atten",
-                            value: model.commandInputAttenuatorLabel,
-                            picker: .audio,
-                            pickerMode: 3,
-                            amber: model.commandInputAttenuatorOn)
-                    }
-                }
-
-                CommandSection(title: "Monitor") {
-                    CmdRow {
-                        // Grid reads the camera's framing-grid setting (GridDisplay 0xD16C), not the
-                        // app's local overlay toggle. Assist / DISP / Guides tiles were removed —
-                        // they reflect app-only state with no camera connection point.
-                        CommandSmallTile(title: "Grid", value: model.commandGridLabel)
-                    }
-                }
-            }
-            .padding(.bottom, 20)
-            .background(
-                // Reports the content's bottom edge in the scroll viewport's space; when it reaches
-                // the viewport bottom, we're scrolled to the end (or it all fits).
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: SideColumnBottomKey.self,
-                        value: geo.frame(in: .named("cmdSideScroll")).maxY)
-                }
-            )
-        }
-        .coordinateSpace(.named("cmdSideScroll"))
-        .onPreferenceChange(SideColumnBottomKey.self) { maxY in
-            atBottom = maxY <= viewportHeight + 2
-        }
-        .mask {
-            if atBottom {
-                Rectangle()
-            } else {
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.9),
-                        .init(color: .clear, location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-        }
-        .overlay(alignment: .bottom) {
-            // Non-interactive "more below" scroll hint (prototype `.cmd-more`); clears at the end.
-            if !atBottom {
-                Text("MORE ⌄")
-                    .font(.system(size: 9, weight: .semibold, design: .default))
-                    .foregroundStyle(LiveDesign.muted)
-                    .textCase(.uppercase)
-                    .tracking(0.8)
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 2)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: atBottom)
-    }
-
-    private func cameraValue(_ label: String, fallback: String) -> String {
-        model.shownCameraValue(label) ?? fallback
-    }
-}
-
-/// Carries the command side column's content-bottom Y (in the scroll viewport's space) up so the
-/// view can tell when it's scrolled to the end.
-private struct SideColumnBottomKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// Presentational only — `CommandPrimaryGrid` owns the tap (open picker) and the long-press-drag
-/// (reorder) on one container gesture, so a reorder never also fires a tap.
-struct CommandTile: View {
-    let title: String
-    let value: String
-    var height: CGFloat = 76
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .default))
-                .foregroundStyle(LiveDesign.faint)
-                .textCase(.uppercase)
-                .lineLimit(1)
-                .minimumScaleFactor(0.64)
-            Spacer(minLength: 0)
-            Text(value)
-                // Tall (tablet) tiles carry the value at dashboard scale; phone tiles keep
-                // today's 24pt exactly.
-                .font(
-                    .system(size: height > 120 ? 34 : 24, weight: .medium, design: .monospaced)
-                )
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.46)
-        }
-        // Pad first, then clamp to `height`, so the tile is exactly `height` tall (padding outside
-        // the frame was adding ~20pt per tile, overflowing the grid).
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
-        .background(
-            LiveDesign.surface, in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        }
-    }
-}
-
-struct CommandSmallTile: View {
-    @Environment(NativeAppModel.self) private var model
-    let title: String
-    let value: String
-    var picker: CameraPicker?
-    /// Segmented mode tab to open when `picker` is presented (e.g. FOCUS Area = 1).
-    var pickerMode: Int = 0
-    /// Accent-tinted value (the prototype's `.cmd-stile.amber`) — used for the audio readouts.
-    var amber: Bool = false
-    /// Dimmed value (the prototype's `.cmd-stile.muted`) — used for the placeholder picture profile.
-    var muted: Bool = false
-
-    private var valueColor: Color {
-        if amber { return LiveDesign.accent }
-        if muted { return LiveDesign.faint }
-        return LiveDesign.text
-    }
-
-    var body: some View {
-        Button {
-            if let picker {
-                model.showPicker(picker, mode: pickerMode)
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 9, weight: .bold, design: .default))
-                    .foregroundStyle(LiveDesign.muted)
-                    .textCase(.uppercase)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.66)
-                Text(value)
-                    .font(.system(size: 15, weight: .medium, design: .monospaced))
-                    .foregroundStyle(valueColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-            }
-            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                LiveDesign.surface, in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                    .stroke(LiveDesign.hairline, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.monitorTapTarget)
-        .disabled(picker == nil)
-    }
-}
-
-struct CommandSection<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 9.5, weight: .bold, design: .default))
-                .foregroundStyle(LiveDesign.faint)
-                .textCase(.uppercase)
-                .padding(.leading, 2)
-
-            // Rows of paired tiles; a row holding a single tile spans the full width (the
-            // prototype's `.span2`), since each tile claims the available width equally.
-            VStack(spacing: 5) {
-                content
-            }
-        }
-    }
-}
-
-/// One row of the command side column — one tile fills the width, two split it evenly.
-struct CmdRow<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        HStack(spacing: 6) {
-            content
+    /// Grid title for a photography strip label (the video tiles' casing).
+    private static func commandStillsTitle(_ label: String) -> String {
+        switch label {
+        case "MODE": "Mode"
+        case "ISO": "ISO"
+        case "SHUTTER": "Shutter"
+        case "IRIS": "Iris"
+        case "DRIVE": "Drive"
+        case "FOCUS": "Focus"
+        case "WB": "White Bal"
+        case "METER": "Meter"
+        case "PROFILE": "Profile"
+        default: label
         }
     }
 }

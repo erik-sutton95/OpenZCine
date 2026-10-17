@@ -707,8 +707,8 @@ internal fun MonitorScreen(
     }
     /**
      * A DISP 3 tile — grid or side column — opens the SAME tabbed picker the capture strip does
-     * whenever one already owns its control (iOS `CommandPrimaryGrid` and `CommandSmallTile` both
-     * call `model.showPicker`). Command mode mounts no capture strip, so sending every tile to the
+     * whenever one already owns its control (on iOS every shared dashboard tile and side cell
+     * calls `model.showPicker`). Command mode mounts no capture strip, so sending every tile to the
      * one-list drum is exactly how shutter Angle↔Speed, the ISO base/Auto tabs with their ★ native
      * markers, the WB tint pad and the FOCUS Mode/Area/Subject bar went missing there. Controls the
      * strip has no cell for (audio, tone, grid) still take the drum.
