@@ -400,18 +400,17 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
         replayGyroIngress(samples, observations, ::ingest) { observation ->
             val active = owner ?: return@replayGyroIngress
             if (observation.interrupted || observation.recording == null && lastReported != null) {
-                apply(native.finish(active, "interrupted", observation.timestamp))
+                apply(native.finish(active, "interrupted"))
                 native.close(active)
                 owner = native.create()
                 apply(native.poll(owner ?: return@replayGyroIngress, observation.timestamp))
                 lastReported = null
             }
+            lastReported = observation.recording
             observation.recording?.let { recording ->
-                lastReported = recording
                 apply(native.observe(owner ?: return@replayGyroIngress, recording, observation.timestamp,
                     observation.date, cameraLabel, observation.mountPreset, observation.calibrationJSON))
             }
-            lastReported = observation.recording
         }
     }
 
@@ -426,11 +425,8 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
         var changed = false
         for (index in 0 until updates.length()) {
             val update = updates.getJSONObject(index)
-            if (update.getString("kind") == "opened") changed = true
-            if (update.getString("kind") == "finished") {
-                changed = true
-                if (update.getJSONObject("summary").getString("termination") == "sensorStalled") stalled = true
-            }
+            val kind = update.getString("kind")
+            if (kind == "opened" || kind == "finished") changed = true
         }
         val logging = reply.getBoolean("active")
         val warning = reply.getBoolean("gapWarning")
@@ -457,7 +453,7 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
         try {
             val overflow = synchronized(pending) { overflowed }
             if (!overflow) drain()
-            owner?.let { apply(native.finish(it, if (overflow) "bufferOverflow" else reason, now())) }
+            owner?.let { apply(native.finish(it, if (overflow) "bufferOverflow" else reason)) }
         }
         finally {
             owner?.let(native::close); owner = null; store.close()

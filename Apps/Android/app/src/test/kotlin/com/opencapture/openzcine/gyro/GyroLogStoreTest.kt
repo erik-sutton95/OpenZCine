@@ -183,7 +183,7 @@ class GyroLogStoreTest {
         override fun observe(owner: String, recording: Boolean, timestamp: Double, dateSeconds: Double,
             cameraLabel: String, mountPreset: String, calibrationJSON: String): String? = error("Not used")
         override fun poll(owner: String, timestamp: Double): String? = error("Not used")
-        override fun finish(owner: String, reason: String, timestamp: Double): String? = error("Not used")
+        override fun finish(owner: String, reason: String): String? = error("Not used")
         override fun close(owner: String) = Unit
     }
 }

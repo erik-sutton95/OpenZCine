@@ -209,16 +209,20 @@ struct GyroMountCalibrationTests {
     }
 
     @Test func invalidOrReplayedReadingsClearOnlyTheCurrentWindow() throws {
-        for failure in 0..<5 {
+        for failure in 0..<6 {
             var session = GyroMountCalibrationSession()
             feed(&session, first, base: 0)
             _ = try session.capture(at: 1.3)
             feed(&session, second, base: 2)
-            session.add(
-                phoneDown: failure == 0 ? GyroVector3(x: .nan, y: 0, z: 0) : second,
-                phoneTimestamp: failure == 4 ? 3.8 : (failure == 1 ? 3.3 : 3.4),
-                cameraDown: failure == 3 ? third : second,
-                cameraTimestamp: failure == 2 ? 3 : 3.2)
+            if failure == 5 {
+                session.invalidateReadings()
+            } else {
+                session.add(
+                    phoneDown: failure == 0 ? GyroVector3(x: .nan, y: 0, z: 0) : second,
+                    phoneTimestamp: failure == 4 ? 3.8 : (failure == 1 ? 3.3 : 3.4),
+                    cameraDown: failure == 3 ? third : second,
+                    cameraTimestamp: failure == 2 ? 3 : 3.2)
+            }
             #expect(
                 throws: failure == 4 ? GyroMountCalibrationError.staleReadings : .invalidReadings
             ) {

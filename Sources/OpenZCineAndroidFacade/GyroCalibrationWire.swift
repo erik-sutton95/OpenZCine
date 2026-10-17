@@ -27,7 +27,7 @@ public final class GyroCalibrationWire: @unchecked Sendable {
                 let cameraDown = GyroCameraGravity.down(
                     rollDegrees: observation.rollDegrees, pitchDegrees: observation.pitchDegrees)
             else {
-                session.reset()
+                session.invalidateReadings()
                 sessions[owner] = session
                 return reply(session, error: "Camera level readings are unavailable.")
             }

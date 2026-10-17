@@ -80,11 +80,11 @@ public final class GyroLoggingWire: @unchecked Sendable {
     }
 
     /// Finalizes available samples honestly without changing camera recording.
-    public func finish(owner: String, reason: String, timestamp: Double) -> String? {
-        guard let reason = GyroLogTermination(rawValue: reason), timestamp.isFinite else {
+    public func finish(owner: String, reason: String) -> String? {
+        guard let reason = GyroLogTermination(rawValue: reason) else {
             return nil
         }
-        return update(owner: owner) { $0.finish(reason: reason, at: timestamp) }
+        return update(owner: owner) { $0.finish(reason: reason) }
     }
 
     /// Retires an owner after its platform has processed finalization updates.

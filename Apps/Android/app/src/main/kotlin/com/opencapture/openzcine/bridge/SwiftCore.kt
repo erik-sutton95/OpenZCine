@@ -38,7 +38,7 @@ object SwiftCore {
     /** Advances shared postroll and sensor-health checks. */
     external fun gyroPoll(owner: String, timestamp: Double): String?
     /** Finalizes available motion with an explicit reason, without camera commands. */
-    external fun gyroFinish(owner: String, reason: String, timestamp: Double): String?
+    external fun gyroFinish(owner: String, reason: String): String?
     /** Releases an already-finalized capture owner. */
     external fun gyroClose(owner: String)
     /** Creates a streaming shared-core partial-file validator. */

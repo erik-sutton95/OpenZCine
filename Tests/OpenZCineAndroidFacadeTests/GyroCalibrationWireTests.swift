@@ -5,7 +5,10 @@ import Testing
 @testable import OpenZCineAndroidFacade
 
 struct GyroCalibrationWireTests {
-    @Test func pairedObservationsProduceOneValidatedOpaqueCalibration() throws {
+    @Test(arguments: [false, true])
+    func pairedObservationsProduceOneValidatedOpaqueCalibration(invalidReadingBetweenPoses: Bool)
+        throws
+    {
         let wire = GyroCalibrationWire()
         let owner = wire.create()
         defer { wire.close(owner: owner) }
@@ -17,6 +20,19 @@ struct GyroCalibrationWireTests {
         ]
         for (step, gravity) in cameraDown.enumerated() {
             let base = 1 + Double(step) * 3
+            if step == 1, invalidReadingBetweenPoses {
+                let rejected = try object(
+                    wire.add(
+                        owner: owner,
+                        observationJSON:
+                            #"{"phoneDown":{"x":0,"y":-1,"z":0},"phoneTimestamp":3,"rollDegrees":90,"pitchDegrees":90,"cameraTimestamp":3}"#
+                    ))
+                #expect(rejected["poseCount"] as? Int == 1)
+                #expect(rejected["error"] != nil)
+                let unavailable = try object(wire.capture(owner: owner, timestamp: 3.01))
+                #expect(unavailable["poseCount"] as? Int == 1)
+                #expect(unavailable["error"] != nil)
+            }
             for index in 0...24 {
                 let observation: [String: Any] = [
                     "phoneDown": ["x": -gravity.y, "y": gravity.x, "z": gravity.z],

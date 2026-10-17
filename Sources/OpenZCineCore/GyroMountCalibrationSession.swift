@@ -1,9 +1,7 @@
-import Foundation
-
 /// Three still captures over phone-clock timestamps; platform adapters supply physical-down vectors.
 public struct GyroMountCalibrationSession: Sendable {
     /// Number of accepted poses, including the independent final verification pose.
-    public private(set) var poseCount: Int = 0
+    public var poseCount: Int { poses.count }
     private var poses: [GyroCalibrationPose] = []
     private var phone: [Reading] = []
     private var camera: [Reading] = []
@@ -59,9 +57,14 @@ public struct GyroMountCalibrationSession: Sendable {
             result = nil
         }
         poses.append(pose)
-        poseCount += 1
         clearWindow()
         return result
+    }
+
+    /// Rejects an unavailable adapter reading while preserving previously accepted poses.
+    public mutating func invalidateReadings() {
+        clearWindow()
+        inputFailure = .invalidReadings
     }
 
     /// Discards all poses and readings before calibrating again.

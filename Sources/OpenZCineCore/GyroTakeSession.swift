@@ -20,8 +20,6 @@ public struct GyroTakeSession: Sendable {
     public private(set) var isFinished = false
     /// Why capture ended, including failures while armed that produce no file updates.
     public private(set) var termination: GyroLogTermination?
-    /// Whether any take is recording or collecting its postroll.
-    public var hasOpenTake: Bool { !takes.isEmpty }
     /// Whether any take is recording or collecting its postroll, for platform status wires.
     public var hasActiveTakes: Bool { !takes.isEmpty }
     /// Whether any open take contains a sensor interval longer than 50 milliseconds.
@@ -42,7 +40,7 @@ public struct GyroTakeSession: Sendable {
     public mutating func ingest(_ samples: [GyroSample]) -> [GyroLogUpdate] {
         guard !isFinished else { return [] }
         guard samples.count <= Self.maximumBufferedSamples else {
-            return finish(reason: .bufferOverflow, at: latestSampleTimestamp ?? 0)
+            return finish(reason: .bufferOverflow)
         }
         let accepted = acceptSamples(samples)
         var updates: [GyroLogUpdate] = []
@@ -99,13 +97,13 @@ public struct GyroTakeSession: Sendable {
         if armedAt == nil { armedAt = timestamp }
         let reference = latestSampleTimestamp ?? armedAt ?? timestamp
         if timestamp - reference >= Self.stallTimeout {
-            return finish(reason: .sensorStalled, at: timestamp)
+            return finish(reason: .sensorStalled)
         }
         return completePostroll(at: timestamp)
     }
 
     /// Finalizes every open take without changing camera recording and clears the armed prebuffer.
-    public mutating func finish(reason: GyroLogTermination, at _: Double) -> [GyroLogUpdate] {
+    public mutating func finish(reason: GyroLogTermination) -> [GyroLogUpdate] {
         guard !isFinished else { return [] }
         isFinished = true
         termination = reason

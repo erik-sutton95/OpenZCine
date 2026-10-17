@@ -62,11 +62,11 @@
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_gyroFinish")
     public func gyroFinishJNI(
         _ env: UnsafeMutablePointer<JNIEnv?>, _: jobject?, owner: jstring?,
-        reason: jstring?, timestamp: jdouble
+        reason: jstring?
     ) -> jstring? {
         guard let owner = swiftString(env, owner), let reason = swiftString(env, reason),
             let reply = GyroLoggingWire.shared.finish(
-                owner: owner, reason: reason, timestamp: timestamp)
+                owner: owner, reason: reason)
         else { return nil }
         return javaString(env, reply)
     }

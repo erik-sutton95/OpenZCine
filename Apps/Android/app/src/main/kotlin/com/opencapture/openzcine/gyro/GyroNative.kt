@@ -12,7 +12,7 @@ internal interface GyroNative {
     fun observe(owner: String, recording: Boolean, timestamp: Double, dateSeconds: Double,
         cameraLabel: String, mountPreset: String = "unconfigured", calibrationJSON: String = ""): String?
     fun poll(owner: String, timestamp: Double): String?
-    fun finish(owner: String, reason: String, timestamp: Double): String?
+    fun finish(owner: String, reason: String): String?
     fun close(owner: String)
     fun recoveryCreate(): String
     fun recoveryAccept(owner: String, bytes: ByteArray): Long
@@ -27,7 +27,7 @@ internal object SwiftGyroNative : GyroNative {
         cameraLabel: String, mountPreset: String, calibrationJSON: String): String? =
         SwiftCore.gyroObserve(owner, recording, timestamp, dateSeconds, cameraLabel, mountPreset, calibrationJSON)
     override fun poll(owner: String, timestamp: Double): String? = SwiftCore.gyroPoll(owner, timestamp)
-    override fun finish(owner: String, reason: String, timestamp: Double): String? = SwiftCore.gyroFinish(owner, reason, timestamp)
+    override fun finish(owner: String, reason: String): String? = SwiftCore.gyroFinish(owner, reason)
     override fun close(owner: String) = SwiftCore.gyroClose(owner)
     override fun recoveryCreate(): String = SwiftCore.gyroRecoveryCreate()
     override fun recoveryAccept(owner: String, bytes: ByteArray): Long = SwiftCore.gyroRecoveryAccept(owner, bytes)

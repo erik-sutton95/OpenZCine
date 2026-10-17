@@ -54,7 +54,7 @@ struct GyroMountTests {
         updates += session.observeRecording(
             true, at: 11.1, date: date, cameraLabel: "Test", mountPreset: .frontLeft)
         updates += session.ingest([GyroSample(timestamp: 11.2, x: 1, y: 2, z: 3)])
-        updates += session.finish(reason: .interrupted, at: 11.2)
+        updates += session.finish(reason: .interrupted)
         let finished = updates.compactMap { update -> GyroLogSummary? in
             if case .finished(let summary) = update { return summary }
             return nil

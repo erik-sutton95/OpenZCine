@@ -82,7 +82,7 @@ struct GyroLoggingWireTests {
         #expect(wire.ingest(owner: owner, bytes: Array(repeating: 0, count: 513 * 32)) == nil)
         wire.close(owner: owner)
         #expect(wire.poll(owner: owner, timestamp: 1) == nil)
-        #expect(wire.finish(owner: owner, reason: "not-a-reason", timestamp: 1) == nil)
+        #expect(wire.finish(owner: owner, reason: "not-a-reason") == nil)
     }
 
     @Test func idleStallPublishesHealthWithoutOpeningAFile() throws {

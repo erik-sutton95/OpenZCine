@@ -253,7 +253,7 @@ import UIKit
         updates += session.ingest(Array(remaining))
         observations.removeAll(keepingCapacity: true)
         if let reason = stopping ?? batch.failure {
-            updates += session.finish(reason: reason, at: time)
+            updates += session.finish(reason: reason)
             if batch.failure != nil && stopping == nil {
                 failure = "Gyro capture stopped because sensor samples were lost."
             }

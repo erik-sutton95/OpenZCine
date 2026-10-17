@@ -53,7 +53,7 @@ import Testing
     #expect(descriptor.isPartial)
     #expect(observe(&session, true, at: 11).isEmpty)
     #expect(descriptors(updates).count == 1)
-    let summary = try #require(summaries(session.finish(reason: .interrupted, at: 11)).first)
+    let summary = try #require(summaries(session.finish(reason: .interrupted)).first)
     #expect(summary.isPartial)
 }
 
@@ -62,7 +62,7 @@ import Testing
     _ = observe(&session, false, at: 9)
     var updates = observe(&session, true, at: 10)
     updates += session.ingest(samples(from: 9.9, count: 21))
-    updates += session.finish(reason: .normal, at: 10.1)
+    updates += session.finish(reason: .normal)
     let summary = try #require(summaries(updates).first)
     #expect(summary.sampleCount == 21)
     #expect(summary.rejectedSampleCount == 0)
@@ -76,7 +76,7 @@ func gyroOffsetMatchesTheFirstRetainedSampleAfterImportAndRecovery(firstTimestam
     _ = observe(&session, false, at: 9)
     var updates = observe(&session, true, at: 10)
     updates += session.ingest(samples(from: firstTimestamp, count: 21))
-    updates += session.finish(reason: .interrupted, at: 10.3)
+    updates += session.finish(reason: .interrupted)
     let summary = try #require(summaries(updates).first)
     #expect(summary.descriptor.approximateStartOffset == 2)
     #expect(abs(summary.approximateStartOffset - (10 - firstTimestamp)) < 0.000_001)
@@ -99,7 +99,7 @@ func gyroOffsetMatchesTheFirstRetainedSampleAfterImportAndRecovery(firstTimestam
         GyroSample(timestamp: 10.01, x: .infinity, y: 0, z: 0), sample(10.02),
     ])
     #expect(session.latestSampleTimestamp == 10.02)
-    let summary = try #require(summaries(session.finish(reason: .normal, at: 10.02)).first)
+    let summary = try #require(summaries(session.finish(reason: .normal)).first)
     #expect(summary.sampleCount == 2)
     #expect(summary.rejectedSampleCount == 4)
     #expect(summary.isPartial)
@@ -111,7 +111,7 @@ func gyroOffsetMatchesTheFirstRetainedSampleAfterImportAndRecovery(firstTimestam
     _ = observe(&session, false, at: 10)
     var updates = observe(&session, true, at: 10)
     updates += session.ingest([sample(10), sample(10.000_000_1), sample(10.01)])
-    updates += session.finish(reason: .normal, at: 10.01)
+    updates += session.finish(reason: .normal)
     let summary = try #require(summaries(updates).first)
     #expect(summary.sampleCount == 2)
     #expect(summary.rejectedSampleCount == 1)
@@ -177,13 +177,13 @@ func gyroOffsetMatchesTheFirstRetainedSampleAfterImportAndRecovery(firstTimestam
     #expect(session.isFinished)
     #expect(session.termination == .sensorStalled)
     #expect(session.ingest([sample(12)]).isEmpty)
-    #expect(session.finish(reason: .disabled, at: 12).isEmpty)
+    #expect(session.finish(reason: .disabled).isEmpty)
     #expect(session.termination == .sensorStalled)
 }
 
 @Test func gyroExplicitIdleFinishPublishesItsTerminationWithoutFileUpdates() {
     var session = GyroTakeSession()
-    #expect(session.finish(reason: .disabled, at: 10).isEmpty)
+    #expect(session.finish(reason: .disabled).isEmpty)
     #expect(session.isFinished)
     #expect(session.termination == .disabled)
 }
@@ -221,7 +221,7 @@ func gyroShortPrerollAndMissingPostrollAreMarkedPartial(missingPreroll: Bool) th
     _ = observe(&session, true, at: 10)
     _ = session.ingest([sample(10), sample(10.05)])
     #expect(!session.hasGapWarning)
-    let summary = try #require(summaries(session.finish(reason: .normal, at: 10.05)).first)
+    let summary = try #require(summaries(session.finish(reason: .normal)).first)
     #expect(!summary.hasGapWarning)
 }
 
@@ -243,7 +243,7 @@ func gyroShortPrerollAndMissingPostrollAreMarkedPartial(missingPreroll: Bool) th
         _ = session.ingest(samples(from: 10 + Double(index) / 2, count: 500, step: 0.001))
     }
     _ = observe(&session, true, at: 12)
-    let summary = try #require(summaries(session.finish(reason: .disabled, at: 12)).first)
+    let summary = try #require(summaries(session.finish(reason: .disabled)).first)
     #expect(summary.sampleCount == GyroTakeSession.maximumBufferedSamples)
 }
 
@@ -253,10 +253,10 @@ func gyroInterruptionsFinalizeEveryOpenTakeOnce(reason: GyroLogTermination) thro
     _ = observe(&session, false, at: 10)
     _ = observe(&session, true, at: 10)
     _ = session.ingest([sample(10)])
-    let summary = try #require(summaries(session.finish(reason: reason, at: 10.1)).first)
+    let summary = try #require(summaries(session.finish(reason: reason)).first)
     #expect(summary.termination == reason)
     #expect(summary.isPartial)
-    #expect(session.finish(reason: reason, at: 10.2).isEmpty)
+    #expect(session.finish(reason: reason).isEmpty)
 }
 
 @Test func gyroEncoderDeclaresUnverifiedAxesAndUsesRadiansAndMicroseconds() throws {

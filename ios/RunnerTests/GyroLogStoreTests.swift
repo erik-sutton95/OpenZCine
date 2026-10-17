@@ -26,7 +26,7 @@ struct GyroLogStoreTests {
         await #expect(throws: GyroStoreError.active) { try await store.share(id) }
         await #expect(throws: GyroStoreError.active) { try await store.delete(id) }
         var updates = session.ingest([GyroSample(timestamp: 10, x: 1, y: 2, z: 3)])
-        updates += session.finish(reason: .disabled, at: 10.1)
+        updates += session.finish(reason: .disabled)
         _ = try await store.apply(updates, at: 10.1)
         let url = try await store.share(id)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -105,7 +105,7 @@ struct GyroLogStoreTests {
         var updates = session.observeRecording(
             true, at: 10, date: Date(), cameraLabel: "Saved camera")
         updates += session.ingest([GyroSample(timestamp: 10, x: 1, y: 2, z: 3)])
-        updates += session.finish(reason: .disabled, at: 10.1)
+        updates += session.finish(reason: .disabled)
         let saved = try #require(try await store.apply(updates, at: 10.1).first)
 
         let interrupted = GyroLogDescriptor(

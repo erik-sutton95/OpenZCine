@@ -25,7 +25,7 @@ struct GyroCalibrationExportTests {
             true, at: 10.6, date: date, cameraLabel: "Test",
             mountPreset: .frontDown, mountCalibration: identity)
         updates += session.ingest([GyroSample(timestamp: 10.7, x: 1, y: 2, z: 3)])
-        updates += session.finish(reason: .interrupted, at: 10.8)
+        updates += session.finish(reason: .interrupted)
         let descriptors = updates.compactMap { update -> GyroLogDescriptor? in
             if case .opened(let descriptor) = update { return descriptor }
             return nil

@@ -122,5 +122,27 @@ class GyroLoggingJNITest {
         } finally { calibration.cancel() }
     }
 
+    @Test fun interruptedTakesFinalizeThroughJNI() {
+        assertTrue(SwiftCore.isAvailable)
+        for (reason in listOf("backgrounded", "disconnected", "sensorStalled")) {
+            val owner = SwiftCore.gyroCreate()
+            try {
+                SwiftCore.gyroObserve(owner, false, 0.0, 123.0, "Test camera")
+                SwiftCore.gyroIngest(owner, encodeGyroBatch((0 until 200).map(::sample)))
+                SwiftCore.gyroObserve(owner, true, 2.0, 125.0, "Test camera")
+                SwiftCore.gyroIngest(owner, encodeGyroBatch((200 until 210).map(::sample)))
+                val finished = JSONObject(requireNotNull(SwiftCore.gyroFinish(owner, reason)))
+                assertTrue(finished.getBoolean("finished"))
+                assertFalse(finished.getBoolean("active"))
+                assertEquals(reason, finished.getString("termination"))
+                val updates = finished.getJSONArray("updates")
+                val summary = updates.getJSONObject(updates.length() - 1).getJSONObject("summary")
+                assertEquals(reason, summary.getString("termination"))
+                assertTrue(summary.getBoolean("isPartial"))
+                assertEquals(210, summary.getInt("sampleCount"))
+            } finally { SwiftCore.gyroClose(owner) }
+        }
+    }
+
     private fun sample(index: Int): AndroidGyroSample = AndroidGyroSample(index / 100.0, 1.0, 2.0, 3.0)
 }

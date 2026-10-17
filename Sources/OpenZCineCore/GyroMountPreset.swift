@@ -1,5 +1,3 @@
-import Foundation
-
 /// Fixed phone mounts with the screen parallel to the camera's back, perpendicular to the lens axis.
 /// Directions are viewed from behind an upright camera and never follow display rotation.
 public enum GyroMountPreset: String, CaseIterable, Codable, Sendable, Identifiable {
