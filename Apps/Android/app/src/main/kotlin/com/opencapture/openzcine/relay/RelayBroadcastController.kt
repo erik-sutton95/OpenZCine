@@ -44,7 +44,7 @@ class RelayBroadcastController(
     loadPreferredPort: () -> Int = { 0 },
     savePreferredPort: (Int) -> Unit = {},
     /** Where the broadcast passcode is kept; null keeps it for this run only (tests, previews). */
-    private val secrets: WatcherRelaySecrets? = null,
+    private val passcodes: RelayPasscodes? = null,
 ) {
     private class Source(
         val session: CameraSession,
@@ -79,7 +79,7 @@ class RelayBroadcastController(
     var watcherPasscode: String
         get() = owner.watcherPasscode
         set(value) { owner.watcherPasscode = value }
-    private val passcodeLookup = mutableStateOf(secrets?.hostPasscodeLookup() ?: WatcherRelaySecrets.Lookup.Absent)
+    private val passcodeLookup = mutableStateOf(passcodes?.hostPasscodeLookup() ?: WatcherRelaySecrets.Lookup.Absent)
 
     /**
      * The broadcast passcode in force, observable by the settings field: empty for an open
@@ -94,7 +94,7 @@ class RelayBroadcastController(
      */
     fun savePasscode(code: String): Boolean {
         val next = MonitorWatcherPasscodeRule.entry(code).passcode ?: return false
-        if (secrets != null && !secrets.storeHostPasscode(next)) return false
+        if (passcodes != null && !passcodes.storeHostPasscode(next)) return false
         passcodeLookup.value = if (next.isEmpty()) WatcherRelaySecrets.Lookup.Absent else WatcherRelaySecrets.Lookup.Stored(next)
         owner.watcherPasscode = next
         return true
@@ -105,7 +105,7 @@ class RelayBroadcastController(
      * False while the store still cannot answer, so a broadcast never starts unprotected.
      */
     fun loadPasscode(): Boolean {
-        val lookup = secrets?.hostPasscodeLookup() ?: passcodeLookup.value
+        val lookup = passcodes?.hostPasscodeLookup() ?: passcodeLookup.value
         passcodeLookup.value = lookup
         owner.watcherPasscode = lookup.usableValue ?: return false
         return true

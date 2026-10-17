@@ -82,6 +82,21 @@ class RelayWatchControllerTest {
     }
 
     @Test
+    fun `a failed migration still sends the saved short passcode in the first hello`() {
+        val rig = RelayPasscodesTest.Rig("abc")
+        rig.secure.writesSucceed = false
+        rig.watchers.values["Loopback host"] = "abc"
+        LoopbackRelayHost().use { host ->
+            val controller = controller(host, passcodes = rig.passcodes)
+            controller.start()
+            val (_, hello) = host.acceptHello()
+            assertEquals("abc", hello.passcode)
+            assertEquals("abc", rig.watchers.values["Loopback host"])
+            runBlocking { controller.stop() }
+        }
+    }
+
+    @Test
     fun `undecodable hevc latches within the deadline and rejoins jpeg-only`() {
         LoopbackRelayHost().use { host ->
             val latched = CountDownLatch(1)
@@ -268,6 +283,7 @@ class RelayWatchControllerTest {
         deadlineMillis: Long = 6_000L,
         stallMillis: Long = 8_000L,
         onLatched: (() -> Unit)? = null,
+        passcodes: RelayPasscodes? = null,
     ): RelayWatchController =
         RelayWatchController(
             scope = scope,
@@ -280,6 +296,7 @@ class RelayWatchControllerTest {
                     servedCameraHost = null,
                 ),
             onJpegOnlyLatched = onLatched,
+            passcodes = passcodes,
             hevcDecodeDeadlineMillis = deadlineMillis,
             stallDeadlineMillis = stallMillis,
             log = {},
