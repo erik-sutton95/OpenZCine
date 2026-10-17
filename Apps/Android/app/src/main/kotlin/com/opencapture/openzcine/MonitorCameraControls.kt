@@ -635,7 +635,7 @@ internal fun wbPickerPresentation(
         }
     return MonitorPickerPresentation(
         kind = MonitorPickerKind.WHITE_BALANCE,
-        title = title,
+        title = WbPickerPolicy.TITLE,
         subtitle = WbPickerPolicy.SUBTITLE,
         modes =
             listOf(
@@ -672,7 +672,7 @@ internal fun wbPickerPresentation(
             ),
         initialModeIndex = initialMode,
         popup = NikonCapturePopupState(
-            kind = NikonCapturePopupKind.WHITE_BALANCE, title = title, subtitle = WbPickerPolicy.SUBTITLE,
+            kind = NikonCapturePopupKind.WHITE_BALANCE, title = WbPickerPolicy.TITLE, subtitle = WbPickerPolicy.SUBTITLE,
             modes = emptyList(), codec = codec,
             whiteBalanceMode = if (initialMode == 0) "Color temp" else live,
             tintCells = WhiteBalanceTint.cells(tintCurrent) ?: (0 to 0),

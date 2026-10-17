@@ -3,7 +3,13 @@ package com.opencapture.openzcine
 import com.opencapture.opencine.vocabulary.LadderWrite
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlCapabilities
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.NikonLadderControl
+import com.opencapture.opencine.nikon.WhiteBalanceTint
+import com.opencapture.opencine.vocabulary.CaptureTint
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -40,6 +46,44 @@ class PhotographyPickersTest {
         wbPicker = null,
         photoTimerDelaySeconds = timerDelay,
     )
+
+    @Test
+    fun `photo WB keeps the advertised Auto preset while the movie codec filters it`() {
+        val properties = snapshot.copy(
+            codec = "R3D NE",
+            codecSelection = "R3D NE",
+            whiteBalanceMode = "Daylight",
+            whiteBalanceTint = "A1 · M0.25",
+            controlCapabilities = CameraControlCapabilities(
+                whiteBalanceValues = listOf("Auto", "Daylight"),
+                whiteBalanceTints = listOf("Neutral", "A1 · M0.25"),
+            ),
+        )
+        val dashboard = commandDashboardPresentation(
+            snapshot = properties,
+            refreshStatus = CameraPropertyRefreshStatus.Ready,
+            sessionState = CameraSessionState.Connected(CameraIdentity("body", "Body", "unit-camera")),
+            tileOrder = CommandTileKind.entries,
+        )
+        val movie = assertNotNull(monitorCaptureSettings(dashboard, PhoneStringResolver { resource, _ -> resource.toString() })
+            .first { it.kind == MonitorPickerKind.WHITE_BALANCE }.picker)
+        val photo = assertNotNull(photographyCaptureSettings(properties, movie, photoTimerDelaySeconds = 0)
+            .first { it.kind == MonitorPickerKind.WHITE_BALANCE }.picker)
+        val movieSheet = videoLadderPresentation(movie)
+        val photoSheet = videoLadderPresentation(photo)
+        val moviePresets = movieSheet.tabs.single { it.key == NikonLadderControl.Value(1) }
+        val photoPresets = photoSheet.tabs.single { it.key == NikonLadderControl.Value(1) }
+        assertEquals(listOf("Daylight"), moviePresets.ladder.values)
+        assertEquals(listOf("Auto", "Daylight"), photoPresets.ladder.values)
+        assertEquals(movie.modes, photo.modes, "Photo composition must retain the body's requests and mode keys")
+        val (request, value) = assertNotNull(requestForLadderWrite(photo, LadderWrite(photoPresets.key, "Auto")))
+        assertEquals(CameraControl.WHITE_BALANCE to "Auto", request.control to value)
+        assertEquals(listOf("Auto", "Daylight"), request.options)
+        assertEquals(CaptureTint(greenMagenta = -1, amberBlue = 2, range = WhiteBalanceTint.cellRange),
+            photoSheet.tabs.single { it.key == NikonLadderControl.Value(2) }.tint)
+        assertFalse(nikonCapturePopup(movie).photography, "Photo composition must not mutate the movie popup")
+        assertTrue(nikonCapturePopup(photo).photography)
+    }
 
     @Test
     fun `strip renders the iOS tile order with pinned widths and live values`() {
