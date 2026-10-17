@@ -12,7 +12,7 @@ Free and open source.
 
 [![CI](https://github.com/erik-sutton95/OpenZCine/actions/workflows/ci.yml/badge.svg)](https://github.com/erik-sutton95/OpenZCine/actions/workflows/ci.yml) [![Docs](https://img.shields.io/badge/docs-opencapture.org-blue)](https://opencapture.org/openzcine/docs/) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Discussions](https://img.shields.io/github/discussions/erik-sutton95/OpenZCine?logo=github&label=discussions)](https://github.com/erik-sutton95/OpenZCine/discussions)
 
-[![Join the TestFlight](https://img.shields.io/badge/TestFlight-iPhone_%26_iPad-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://testflight.apple.com/join/xu4d6UK8) [![Get it on Google Play](https://img.shields.io/badge/Google_Play-Android_beta-01875F?style=for-the-badge&logo=googleplay&logoColor=white)](https://play.google.com/store/apps/details?id=com.opencapture.openzcine) [![Download APK](https://img.shields.io/badge/Download_APK-No_Play_Store-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/erik-sutton95/OpenZCine/releases/tag/sideload-v0.2.5-upright)
+[![Join the TestFlight](https://img.shields.io/badge/TestFlight-iPhone_%26_iPad-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://testflight.apple.com/join/xu4d6UK8) [![Get it on Google Play](https://img.shields.io/badge/Google_Play-Android_beta-01875F?style=for-the-badge&logo=googleplay&logoColor=white)](https://play.google.com/store/apps/details?id=com.opencapture.openzcine) [![Download APK](https://img.shields.io/badge/Download_APK-No_Play_Store-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/erik-sutton95/OpenZCine/releases/tag/sideload-v0.2.5-3)
 
 [Website](https://opencapture.org/openzcine/) · [Docs](https://opencapture.org/openzcine/docs/) · [Roadmap](https://github.com/erik-sutton95/OpenZCine/discussions/22) · [Report a bug](https://github.com/erik-sutton95/OpenZCine/issues/new?template=bug_report.yml)
 
@@ -121,7 +121,7 @@ integration, and wider phone and tablet coverage continue to be hardened with re
 | --- | --- | --- |
 | **iPhone and iPad** | [Join the TestFlight](https://testflight.apple.com/join/xu4d6UK8) | One universal app, with the Apple Watch companion. |
 | **Android** | [Public beta on Google Play](https://play.google.com/store/apps/details?id=com.opencapture.openzcine) | Android 10 or newer, arm64. |
-| **Android without Play** | [Sideload APK](https://github.com/erik-sutton95/OpenZCine/releases/tag/sideload-v0.2.5-upright) (**0.2.5 (2)**) | For field monitors and devices without the Play Store. |
+| **Android without Play** | [Sideload APK](https://github.com/erik-sutton95/OpenZCine/releases/tag/sideload-v0.2.5-3) (**0.2.5 (3)**) | For field monitors and devices without the Play Store. |
 
 > [!NOTE]
 > A sideload APK and a Google Play install are signed differently and cannot update each other.
