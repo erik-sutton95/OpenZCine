@@ -74,9 +74,6 @@ struct GyroCaptureTests {
             if labels.allSatisfy({ label in
                 elements.contains {
                     $0.accessibilityLabel == label && !$0.accessibilityFrame.isEmpty
-                        && (!controls.contains(label)
-                            || ($0.accessibilityFrame.width >= 44
-                                && $0.accessibilityFrame.height >= 44))
                 }
             }) {
                 break
@@ -91,22 +88,81 @@ struct GyroCaptureTests {
         Attachment.record(Array(png), named: "SIMULATED-gyro-mixed-pose-verification-landscape.png")
         Attachment.record(
             elements.map {
-                "\(type(of: $0)): \($0.accessibilityLabel ?? "") \($0.accessibilityFrame)"
+                "\(type(of: $0)): \($0.accessibilityLabel ?? "") \($0.accessibilityFrame) id=\(GyroReachGeometry.identifier($0) ?? "") traits=\($0.accessibilityTraits.rawValue)"
             }.joined(separator: "\n"), named: "SIMULATED-gyro-calibration-accessibility.txt")
         let safeBounds = UIAccessibility.convertToScreenCoordinates(
             window.bounds.inset(by: window.safeAreaInsets), in: window)
         for label in labels {
             let element = try #require(
-                elements.first { $0.accessibilityLabel == label },
+                elements.first {
+                    $0.accessibilityLabel == label
+                        && (!controls.contains(label) || $0.accessibilityTraits.contains(.button))
+                },
                 Comment(rawValue: "Missing calibration element: \(label)"))
             #expect(!element.accessibilityFrame.isEmpty)
             #expect(safeBounds.contains(element.accessibilityFrame))
             if controls.contains(label) {
                 #expect(element.accessibilityTraits.contains(.button))
                 #expect(!element.accessibilityTraits.contains(.notEnabled))
-                #expect(element.accessibilityFrame.width >= 44)
-                #expect(element.accessibilityFrame.height >= 44)
             }
+        }
+        // Under the native input bridge envelope the 44pt floor is proven by the attach-only
+        // reader's public coordinate taps with real outcomes and an outside negative; without
+        // the envelope this test keeps its direct layout-and-visibility checks alone.
+        var reach: [String] = []
+        let observer = try GyroReachObserver(
+            window: window, host: host, coordinator: coordinator)
+        defer { observer.stop() }
+        if observer.active {
+            let identifiers = [
+                "gyro.calibration.capture", "gyro.calibration.restart",
+                "gyro.calibration.cancel",
+            ]
+            let poseControls = try identifiers.map {
+                try GyroReachGeometry.control(identifier: $0, in: elements)
+            }
+            observer.publication = .init(
+                mode: "gyro-restart-ready",
+                controls: poseControls.map { receiptControl($0, in: window) },
+                outsidePoint: GyroReachPoint(
+                    try GyroReachGeometry.outsidePoint(above: poseControls), in: window))
+            // The reader taps the outside point first (no outcome may change), then the
+            // restart control's reach point; restarting resets the pose sequence.
+            try await wait("the restart reach outcome") {
+                coordinator.calibrationPoseCount == 0
+            }
+            #expect(coordinator.calibrationInProgress)
+            reach.append("restart: poses 0, in progress true")
+            observer.ownerObservations = reach
+            // Re-begin and reach "Cancel": ending the calibration is that control's outcome.
+            coordinator.beginMountCalibration()
+            fixture.feedCalibrationPose(0, into: coordinator, from: 16)
+            elements = try await settled(host: host, elements: elements, by: identifiers)
+            let cancelControls = try identifiers.map {
+                try GyroReachGeometry.control(identifier: $0, in: elements)
+            }
+            observer.publication = .init(
+                mode: "gyro-cancel-ready",
+                controls: cancelControls.map { receiptControl($0, in: window) })
+            try await wait("the cancel reach outcome") { !coordinator.calibrationInProgress }
+            reach.append("cancel: in progress false")
+            observer.ownerObservations = reach
+            // Re-begin once more; the reader reaches "Capture pose" with a fresh pose.
+            coordinator.beginMountCalibration()
+            fixture.feedCalibrationPose(0, into: coordinator, from: 18)
+            elements = try await settled(host: host, elements: elements, by: identifiers)
+            let captureControls = try identifiers.map {
+                try GyroReachGeometry.control(identifier: $0, in: elements)
+            }
+            observer.publication = .init(
+                mode: "gyro-capture-ready",
+                controls: captureControls.map { receiptControl($0, in: window) })
+            try await wait("the capture reach outcome") {
+                coordinator.calibrationPoseCount == 1
+            }
+            #expect(coordinator.calibrationInProgress)
+            reach.append("capture: poses 1, in progress true")
+            observer.ownerObservations = reach
         }
         coordinator.cancelMountCalibration()
         coordinator.enabled = true
@@ -117,43 +173,77 @@ struct GyroCaptureTests {
         await coordinator.processPending()
         try #require(coordinator.logs.first?.summary != nil)
         coordinator.enabled = true
+        var statusPaintFrame = CGRect.zero
         host.rootView = AnyView(
             VStack {
                 GyroMonitorStatus(coordinator: coordinator)
+                    .onGeometryChange(for: CGRect.self) { proxy in
+                        proxy.frame(in: .global)
+                    } action: {
+                        statusPaintFrame = $0
+                    }
                 GyroLogsView(coordinator: coordinator)
-            })
+            }
+            .padding(.top, 12))
         for _ in 0..<100 {
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
             elements = calibrationUIElements(host.view)
             if ["Share", "Delete"].allSatisfy({ label in
                 elements.contains {
-                    $0.accessibilityLabel == label && $0.accessibilityFrame.width >= 44
-                        && $0.accessibilityFrame.height >= 44
+                    $0.accessibilityLabel == label && !$0.accessibilityFrame.isEmpty
                 }
             }) {
                 break
             }
             try await Task.sleep(for: .milliseconds(20))
         }
-        let status = try #require(
-            elements.first {
-                ($0 as? any UIAccessibilityIdentification)?.accessibilityIdentifier
-                    == "monitor.gyroStatus"
-            })
-        let logActions = try ["Share", "Delete"].map { label in
-            try #require(elements.first { $0.accessibilityLabel == label })
+        // Viewport preparation only. The fixture hosts a complete, scrollable production
+        // logs screen; bring its long take row into view before publishing any input points.
+        // This public scroll operation invokes no gyro action and is not touch evidence.
+        let initialLogActions = try ["Share", "Delete"].map {
+            try GyroReachGeometry.control(labelled: $0, in: elements)
         }
-        for element in [status] + logActions {
-            #expect(element.accessibilityTraits.contains(.button))
-            #expect(!element.accessibilityTraits.contains(.notEnabled))
-            #expect(element.accessibilityFrame.width >= 44)
-            #expect(element.accessibilityFrame.height >= 44)
-            #expect(safeBounds.contains(element.accessibilityFrame))
+        if let scroll = elements.compactMap({ $0 as? UIScrollView }).first(where: {
+            $0.contentSize.height > $0.bounds.height
+        }) {
+            let targetOnScreen = initialLogActions.reduce(CGRect.null) {
+                $0.union($1.button.accessibilityFrame)
+            }
+            let targetInWindow = window.convert(targetOnScreen, from: window.screen.coordinateSpace)
+            scroll.scrollRectToVisible(
+                scroll.convert(targetInWindow, from: window).insetBy(dx: 0, dy: -24),
+                animated: false)
+        }
+        try await wait("the visible log controls and status paint") {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            elements = calibrationUIElements(host.view)
+            return !statusPaintFrame.isEmpty
+                && ["Share", "Delete"].allSatisfy { label in
+                    elements.contains {
+                        $0.accessibilityLabel == label && $0.accessibilityTraits.contains(.button)
+                            && safeBounds.contains($0.accessibilityFrame)
+                    }
+                }
+        }
+        let statusButton = try GyroReachGeometry.control(
+            identifier: "monitor.gyroStatus", in: elements
+        ).button
+        let statusControl = GyroReachGeometry.Control(
+            button: statusButton,
+            painted: window.convert(statusPaintFrame, to: window.screen.coordinateSpace))
+        let logActions = try ["Share", "Delete"].map { label in
+            try GyroReachGeometry.control(labelled: label, in: elements)
+        }
+        for control in [statusControl] + logActions {
+            #expect(control.button.accessibilityTraits.contains(.button))
+            #expect(!control.button.accessibilityTraits.contains(.notEnabled))
+            #expect(safeBounds.contains(control.button.accessibilityFrame))
         }
         Attachment.record(
-            ([status] + logActions).map {
-                "\($0.accessibilityLabel ?? ""): \($0.accessibilityFrame)"
+            ([statusControl] + logActions).map {
+                "\($0.button.accessibilityLabel ?? ""): \($0.button.accessibilityFrame)"
             }.joined(separator: "\n"), named: "SIMULATED-gyro-log-touch-targets.txt")
         let logImage = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -161,6 +251,48 @@ struct GyroCaptureTests {
         Attachment.record(
             Array(try #require(logImage.pngData())),
             named: "SIMULATED-gyro-log-touch-targets-landscape.png")
+        // Under the envelope, the reader taps the passive area above the Share/Delete gap
+        // (no outcome may change),
+        // then the status pill's reach point; `openLogs` is the coordinator's own
+        // observation. The reader then opens and closes the real Share sheet before Delete.
+        if observer.active {
+            let logControls = [statusControl] + logActions
+            observer.publication = .init(
+                mode: "gyro-logs-ready",
+                controls: logControls.map { receiptControl($0, in: window) },
+                neighborPoint: GyroReachPoint(
+                    try GyroReachGeometry.neighborPoint(
+                        between: logActions[0], logActions[1]), in: window))
+            try await wait("the status reach outcome") { coordinator.logsPresented }
+            reach.append("status: logs presented true")
+            observer.ownerObservations = reach
+            observer.publication = .init(
+                mode: "gyro-share-ready",
+                controls: logControls.map { receiptControl($0, in: window) })
+            try await wait("the share reach outcome") { host.presentedViewController != nil }
+            reach.append("share: system sheet presented")
+            observer.ownerObservations = reach
+            try await wait("the share sheet's public close") { host.presentedViewController == nil }
+            #expect(coordinator.logs.count == 1)
+            // The reader reaches Delete, sees the confirmation dialog, and confirms it; the
+            // coordinator's own delete empties the logs as the real outcome.
+            observer.publication = .init(
+                mode: "gyro-delete-ready",
+                controls: logControls.map { receiptControl($0, in: window) })
+            try await wait("the delete confirm outcome") { coordinator.logs.isEmpty }
+            reach.append("delete: logs emptied after confirm")
+            observer.ownerObservations = reach
+            observer.publication = .init(
+                mode: "gyro-settled", controls: logControls.map { receiptControl($0, in: window) })
+            // Leave the final owner observation available for the established polling bridge
+            // before restoring the original window and stopping its publication timer.
+            try await Task.sleep(for: .seconds(1))
+        }
+        Attachment.record(
+            reach.joined(separator: "\n"), named: "SIMULATED-gyro-log-reach.txt")
+        if observer.active {
+            #expect(observer.writeFailure == nil)
+        }
         coordinator.enabled = false
         await coordinator.processPending()
     }
@@ -654,19 +786,384 @@ struct GyroCaptureTests {
         var elements: [NSObject] = []
         func visit(_ object: NSObject) {
             guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            if let view = object as? UIView, view.isHidden || view.alpha < 0.01 { return }
             elements.append(object)
+            // The complete vended tree: SwiftUI hands its nodes over through
+            // `accessibilityElements`, while indexed elements answer with a second, partial
+            // copy — a walk that follows only one of them misses hosted controls.
+            var children = object.accessibilityElements as? [NSObject] ?? []
             let count = object.accessibilityElementCount()
-            if count > 0 && count < 256 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject {
-                        visit(child)
-                    }
+            if count > 0, count != NSNotFound, count < 256 {
+                children += (0..<count).compactMap {
+                    object.accessibilityElement(at: $0) as? NSObject
                 }
             }
-            if let view = object as? UIView { for child in view.subviews { visit(child) } }
+            children += (object as? UIView)?.subviews ?? []
+            for child in children { visit(child) }
         }
         visit(root)
         return elements
+    }
+
+    /// Re-walks after a layout change until every identifier is reachable again.
+    private func settled(
+        host: UIHostingController<AnyView>, elements: [NSObject], by identifiers: [String]
+    ) async throws -> [NSObject] {
+        for _ in 0..<100 {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            let walked = calibrationUIElements(host.view)
+            if identifiers.allSatisfy({ identifier in
+                walked.contains {
+                    GyroReachGeometry.identifier($0) == identifier && !$0.accessibilityFrame.isEmpty
+                }
+            }) {
+                return walked
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw GyroReachGeometry.Failure(reason: "The calibration controls never resettled.")
+    }
+
+    /// Bounded local poll loop at the accepted 30s convention.
+    private func wait(
+        _ what: String, bound: Duration = .seconds(30), _ condition: () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: bound)
+        while ContinuousClock.now < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw GyroReachGeometry.Failure(reason: "Timed out waiting for \(what).")
+    }
+
+    /// The receipt description of one walked control: its identity, its painted and expanded
+    /// frames, and the reach point the reader taps in the expanded lower band.
+    private func receiptControl(_ control: GyroReachGeometry.Control, in window: UIWindow)
+        -> GyroReachControl
+    {
+        let axFrame = control.button.accessibilityFrame
+        let expanded = GyroReachGeometry.region(for: axFrame)
+        return GyroReachControl(
+            identifier: GyroReachGeometry.identifier(control.button),
+            label: control.button.accessibilityLabel,
+            button: control.button.accessibilityTraits.contains(.button),
+            axFrame: GyroReachRect(axFrame),
+            textFrame: control.painted == axFrame ? nil : GyroReachRect(control.painted),
+            expandedFrame: GyroReachRect(expanded),
+            reachPoint: GyroReachPoint(CGPoint(x: expanded.midX, y: expanded.maxY - 2), in: window))
+    }
+
+}
+
+/// Gyro 44pt reach geometry: the painted frame, the expanded hit region the tap-target
+/// helpers produce, and the app-published points the attach-only reader taps. The floor is
+/// proven by real action outcomes from the reader's public coordinate input, never by frame
+/// arithmetic alone; these helpers only describe and locate.
+@MainActor
+enum GyroReachGeometry {
+    struct Failure: LocalizedError {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
+    /// One walked control: the button element and the tightest same-label painted frame.
+    struct Control {
+        let button: NSObject
+        let painted: CGRect
+    }
+
+    /// The interaction region the tap-target helpers expand to: the accessibility frame
+    /// grown symmetrically to Apple's 44pt HIG floor, mirroring `MinTapTargetModifier`'s
+    /// positive padding around the measured content.
+    static func region(for frame: CGRect) -> CGRect {
+        frame.insetBy(
+            dx: -max(0, (44 - frame.width) / 2), dy: -max(0, (44 - frame.height) / 2))
+    }
+
+    /// Verbatim public getter from the accepted HostedAccessibility.identifier helper.
+    /// SwiftUI's vended nodes need not conform to UIAccessibilityIdentification.
+    static func identifier(_ object: NSObject) -> String? {
+        let getter = NSSelectorFromString("accessibilityIdentifier")
+        guard object.responds(to: getter) else { return nil }
+        return object.perform(getter)?.takeUnretainedValue() as? String
+    }
+
+    /// The walked control with a declared accessibility identifier; identifiers decide over
+    /// generic same-label matches wherever the product declares one.
+    static func control(identifier: String, in elements: [NSObject]) throws -> Control {
+        guard
+            let button = elements.first(where: {
+                self.identifier($0) == identifier
+                    && $0.accessibilityTraits.contains(.button)
+            })
+        else {
+            throw Failure(reason: "Missing \(identifier) in the walked tree.")
+        }
+        return Control(button: button, painted: paintedFrame(of: button, in: elements))
+    }
+
+    /// The button element for `label`. A generic same-label match can hit a static text
+    /// title instead of the control, so the button trait decides, per the physical owner's
+    /// measured selector evidence.
+    static func control(labelled label: String, in elements: [NSObject]) throws -> Control {
+        let matching = elements.filter { $0.accessibilityLabel == label }
+        let button = matching.first(where: { $0.accessibilityTraits.contains(.button) })
+        guard let button else {
+            throw Failure(reason: "No \(label) control in the walked tree.")
+        }
+        return Control(button: button, painted: paintedFrame(of: button, in: elements))
+    }
+
+    /// The tightest same-label frame in the walk: the painted control, when the style pads
+    /// the button element out to the floor.
+    static func paintedFrame(of button: NSObject, in elements: [NSObject]) -> CGRect {
+        let frames = elements.filter { $0.accessibilityLabel == button.accessibilityLabel }
+            .map(\.accessibilityFrame)
+        return frames.min { $0.width * $0.height < $1.width * $1.height }
+            ?? button.accessibilityFrame
+    }
+
+    /// A point inside the window and at least 8pt above every control's expanded region.
+    static func outsidePoint(above controls: [Control]) throws -> CGPoint {
+        guard let first = controls.first else {
+            throw Failure(reason: "No control frames to avoid.")
+        }
+        let top =
+            controls.map { region(for: $0.button.accessibilityFrame).minY }.min()
+            ?? region(for: first.button.accessibilityFrame).minY
+        return CGPoint(x: first.button.accessibilityFrame.midX, y: top - 8)
+    }
+
+    /// A passive neighbor above the inter-button gap, outside both action bands.
+    /// Borderless native buttons can own the nominal horizontal AX gap as well; the 44pt
+    /// floor describes a minimum, so an AX-gap midpoint is not an outside-hit oracle.
+    static func neighborPoint(between left: Control, _ right: Control) throws -> CGPoint {
+        let leftRegion = region(for: left.button.accessibilityFrame)
+        let rightRegion = region(for: right.button.accessibilityFrame)
+        guard rightRegion.minX - leftRegion.maxX >= 2 else {
+            throw Failure(reason: "The sibling gap disappeared; no neighbor point exists.")
+        }
+        return CGPoint(
+            x: (leftRegion.maxX + rightRegion.minX) / 2,
+            y: min(leftRegion.minY, rightRegion.minY) - 24)
+    }
+}
+
+// The receipt value types below are mirrored verbatim in the attach-only reader
+// (RunnerUITests): the accepted cross-process contract keeps one shape on both sides.
+
+/// Screen-space point as the app observed it; the reader taps exactly this point.
+struct GyroReachPoint: Codable, Equatable {
+    let x: Double
+    let y: Double
+    let nativeX: Double
+    let nativeY: Double
+
+    init(_ point: CGPoint, in window: UIWindow) {
+        // Geometry and AX frames use the scene-oriented screen space. Public XCTest event
+        // screenPoint uses the fixed screen space, so the app observes and publishes both.
+        x = point.x.rounded(.down)
+        y = point.y.rounded(.down)
+        let native = window.screen.coordinateSpace.convert(
+            CGPoint(x: x, y: y), to: window.screen.fixedCoordinateSpace)
+        nativeX = native.x
+        nativeY = native.y
+    }
+
+    var point: CGPoint { CGPoint(x: x, y: y) }
+    var nativePoint: CGPoint { CGPoint(x: nativeX, y: nativeY) }
+    var finite: Bool { [x, y, nativeX, nativeY].allSatisfy(\.isFinite) }
+}
+
+/// Screen-space rectangle; the reader compares its device-coordinate edges at screen scale.
+struct GyroReachRect: Codable, Equatable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    init(_ rect: CGRect) {
+        x = min(rect.origin.x, rect.origin.x + rect.size.width)
+        y = min(rect.origin.y, rect.origin.y + rect.size.height)
+        width = rect.size.width
+        height = rect.size.height
+    }
+
+    var rect: CGRect {
+        CGRect(origin: CGPoint(x: x, y: y), size: CGSize(width: width, height: height))
+    }
+
+    func contains(_ point: GyroReachPoint, margin: Double = 0) -> Bool {
+        point.x >= x - margin && point.x < x + width + margin
+            && point.y >= y - margin && point.y < y + height + margin
+    }
+
+    var finite: Bool { [x, y, width, height].allSatisfy(\.isFinite) && width > 0 && height > 0 }
+}
+
+/// One gyro control as the reader must see it: identity, painted and expanded frames, and
+/// a reach point 2pt inside the expanded lower edge.
+struct GyroReachControl: Codable, Equatable {
+    let identifier: String?
+    let label: String?
+    let button: Bool
+    let axFrame: GyroReachRect
+    let textFrame: GyroReachRect?
+    let expandedFrame: GyroReachRect
+    let reachPoint: GyroReachPoint
+}
+
+/// The owner observation snapshot: the coordinator and presentation state the reader waits
+/// on. The coordinator is the observation; no callbacks are fabricated.
+struct GyroReachOutcome: Codable, Equatable {
+    let calibrationPoseCount: Int
+    let calibrationInProgress: Bool
+    let mountCalibrationSaved: Bool
+    let logsPresented: Bool
+    let logsCount: Int
+    let presentedClass: String?
+}
+
+/// The app-published reach receipt. The accepted bridge carries it to the reader container;
+/// the app never reads a receipt back.
+struct GyroReachReceipt: Codable {
+    let schema: Int
+    let nonce: String
+    let sourceSeal: String
+    let bundleID: String
+    let simulatorID: String
+    let processID: Int32
+    let sequence: UInt64
+    let observedAt: Double
+    let mode: String
+    let foreground: Bool
+    let keyWindow: Bool
+    let rootMounted: Bool
+    let rootFillsScene: Bool
+    let sceneID: String
+    let windowIdentity: String
+    let windowFrame: GyroReachRect
+    let screenFrame: GyroReachRect
+    let screenScale: Double
+    let orientation: Int
+    let controls: [GyroReachControl]
+    let outsidePoint: GyroReachPoint?
+    let neighborPoint: GyroReachPoint?
+    let outcome: GyroReachOutcome
+    let ownerObservations: [String]
+}
+
+/// Publishes the gyro reach receipt on a fixed timer, mirroring the accepted observer
+/// pattern: the only receipt writer in the app and never a receipt reader. It creates no
+/// screen, window or control state and sends no input; the phase content is the test's.
+@MainActor
+final class GyroReachObserver: NSObject {
+    struct Publication {
+        var mode = ""
+        var controls: [GyroReachControl] = []
+        var outsidePoint: GyroReachPoint?
+        var neighborPoint: GyroReachPoint?
+    }
+
+    /// False in a normal suite run without the focused native input envelope.
+    private(set) var active = false
+    var publication = Publication()
+    var ownerObservations: [String] = []
+    private(set) var writeFailure: String?
+
+    private let window: UIWindow
+    private let host: UIHostingController<AnyView>
+    private let coordinator: GyroCaptureCoordinator
+    private var nonce = ""
+    private var sourceSeal = ""
+    private var simulatorID = ""
+    private var receiptURL: URL?
+    private var timer: Timer?
+    private var sequence: UInt64 = 0
+
+    init(window: UIWindow, host: UIHostingController<AnyView>, coordinator: GyroCaptureCoordinator)
+        throws
+    {
+        self.window = window
+        self.host = host
+        self.coordinator = coordinator
+        super.init()
+        let env = ProcessInfo.processInfo.environment
+        guard env["OPENCINE_NATIVE_UI_MODE"] != nil else { return }
+        guard env["OPENCINE_NATIVE_UI_MODE"] == "gyro-hosted-native-input",
+            let nonce = env["OPENCINE_NATIVE_UI_NONCE"], UUID(uuidString: nonce) != nil,
+            let sourceSeal = env["OPENCINE_NATIVE_UI_SOURCE_SEAL"], sourceSeal.count == 64,
+            let bundleID = env["OPENCINE_NATIVE_UI_BUNDLE_ID"],
+            bundleID == Bundle.main.bundleIdentifier,
+            let simulatorID = env["SIMULATOR_UDID"], UUID(uuidString: simulatorID) != nil
+        else {
+            throw GyroReachGeometry.Failure(reason: "The native input envelope is incomplete.")
+        }
+        self.nonce = nonce
+        self.sourceSeal = sourceSeal
+        self.simulatorID = simulatorID
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "SIMULATED-native-cancel-" + nonce, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        receiptURL = directory.appendingPathComponent("app-receipt.json")
+        active = true
+        let timer = Timer(
+            timeInterval: 0.05, target: self, selector: #selector(observe),
+            userInfo: nil, repeats: true)
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        observe()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    @objc private func observe() {
+        guard let receiptURL else { return }
+        sequence += 1
+        let scene = window.windowScene
+        let publication = publication
+        let receipt = GyroReachReceipt(
+            schema: 1, nonce: nonce, sourceSeal: sourceSeal,
+            bundleID: Bundle.main.bundleIdentifier ?? "",
+            simulatorID: simulatorID, processID: ProcessInfo.processInfo.processIdentifier,
+            sequence: sequence, observedAt: Date().timeIntervalSince1970,
+            mode: publication.mode,
+            foreground: scene?.activationState == .foregroundActive
+                && UIApplication.shared.applicationState == .active,
+            keyWindow: window.isKeyWindow && !window.isHidden,
+            rootMounted: host.view.window === window,
+            rootFillsScene: window.frame == scene?.coordinateSpace.bounds
+                && host.view.frame == window.bounds,
+            sceneID: scene?.session.persistentIdentifier ?? "",
+            windowIdentity: String(describing: ObjectIdentifier(window)),
+            windowFrame: GyroReachRect(
+                window.convert(window.bounds, to: window.screen.coordinateSpace)),
+            screenFrame: GyroReachRect(window.screen.bounds),
+            screenScale: Double(window.screen.scale),
+            orientation: scene?.interfaceOrientation.rawValue ?? 0,
+            controls: publication.controls,
+            outsidePoint: publication.outsidePoint,
+            neighborPoint: publication.neighborPoint,
+            outcome: GyroReachOutcome(
+                calibrationPoseCount: coordinator.calibrationPoseCount,
+                calibrationInProgress: coordinator.calibrationInProgress,
+                mountCalibrationSaved: coordinator.mountCalibration != nil,
+                logsPresented: coordinator.logsPresented,
+                logsCount: coordinator.logs.count,
+                presentedClass: host.presentedViewController.map {
+                    String(describing: type(of: $0))
+                }), ownerObservations: ownerObservations)
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(receipt).write(to: receiptURL, options: .atomic)
+        } catch {
+            writeFailure = String(describing: error)
+        }
     }
 }
 
