@@ -198,7 +198,7 @@ class CommandDashboardViewportComposeTest {
     }
 
     private data class PaintTile(val bounds: Rect, val label: List<String>?)
-    private data class PaintSnapshot(val density: Float, val tiles: List<PaintTile>)
+    private data class PaintSnapshot(val density: Float, val tiles: List<PaintTile>, val intentionalFade: Rect?)
 
     private fun freezeDashboardPaint(): PaintSnapshot {
         val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
@@ -208,18 +208,35 @@ class CommandDashboardViewportComposeTest {
         val nodes = composeRule.onAllNodes(tile and hasAnyAncestor(hasScrollAction()), useUnmergedTree = true)
             .fetchSemanticsNodes()
         val tiles = nodes.map { PaintTile(it.boundsInWindow, it.config.getOrNull(SemanticsProperties.ContentDescription)?.toList()) }
+        val cue = composeRule.onAllNodes(more, useUnmergedTree = true).fetchSemanticsNodes()
+        val fade = if (cue.isNotEmpty()) {
+            val viewport = composeRule.onNode(hasScrollAction() and hasAnyDescendant(last), useUnmergedTree = true)
+                .fetchSemanticsNode().boundsInWindow
+            // CommandSideColumn overlays its existing 44dp fade only while this real cue is present.
+            Rect(viewport.left, maxOf(viewport.top, viewport.bottom - 44f * density), viewport.right, viewport.bottom)
+        } else null
+        println("SIMULATED capture-fade-domain ns=${SystemClock.elapsedRealtimeNanos()} mode=${currentMode()} " +
+            "cue=${cue.map { it.boundsInWindow }} fade=$fade")
         for (entry in tiles) println("SIMULATED capture-frozen-semantics ns=${SystemClock.elapsedRealtimeNanos()} " +
             "mode=${currentMode()} density=$density label=${entry.label} bounds=${entry.bounds}")
-        return PaintSnapshot(density, tiles)
+        return PaintSnapshot(density, tiles, fade)
     }
 
     /** Catch the production picture.notice layer covering real tiles even when waiting is false. */
     private fun assertDashboardPaint(bitmap: Bitmap, name: String, paint: PaintSnapshot) {
         val density = paint.density
         var sampled = 0
+        var finalGridPainted = false
         for (tile in paint.tiles) {
             val bounds = tile.bounds
-            if (bounds.width < 16f * density || bounds.height < 24f * density) continue
+            val fade = paint.intentionalFade
+            val unshadedHeight = if (fade != null && bounds.overlaps(fade)) {
+                maxOf(0f, minOf(bounds.bottom, fade.top) - bounds.top)
+            } else bounds.height
+            if (bounds.width < 16f * density || unshadedHeight < 24f * density) {
+                println("SIMULATED capture-outside-paint-domain label=${tile.label} bounds=$bounds fade=$fade unshadedHeight=$unshadedHeight")
+                continue
+            }
             val left = ceil(bounds.left + 4f * density).toInt().coerceAtLeast(0)
             val right = floor(bounds.right - 4f * density).toInt().coerceAtMost(bitmap.width)
             val top = ceil(bounds.top + 4f * density).toInt().coerceAtLeast(0)
@@ -227,21 +244,32 @@ class CommandDashboardViewportComposeTest {
             assertTrue("A visible tile needs a real screenshot region: $bounds", right > left && bottom > top)
             var surface = 0
             var ink = 0
+            var area = 0
             for (y in top until bottom) for (x in left until right) {
+                if (fade != null && x >= fade.left && x < fade.right && y >= fade.top && y < fade.bottom) continue
+                area += 1
                 val pixel = bitmap.getPixel(x, y)
                 // The established dashboard surface is #1A1B1C; the obscuring notice is black.
                 if (abs(Color.red(pixel) - 26) <= 2 && abs(Color.green(pixel) - 27) <= 2 &&
                     abs(Color.blue(pixel) - 28) <= 2) surface += 1
                 if (Color.red(pixel) >= 80 && Color.green(pixel) >= 80 && Color.blue(pixel) >= 80) ink += 1
             }
-            val area = (right - left) * (bottom - top)
             val label = tile.label
+            if (area == 0) {
+                println("SIMULATED production dashboard paint $name $label wholly inside actual More fade=${paint.intentionalFade}")
+                continue
+            }
             println("SIMULATED production dashboard paint $name $label rect=$left,$top,$right,$bottom surface=$surface/$area ink=$ink")
             assertTrue("The full window must paint the actual tile surface: $label", surface * 2 >= area)
             assertTrue("The full window must paint the actual tile text: $label", ink >= 8)
+            if (label?.any { it.startsWith("Grid:") } == true) finalGridPainted = true
             sampled += 1
         }
         assertTrue("Production dashboard paint must cover multiple visible tiles", sampled >= 4)
+        if (name.endsWith("scrolled-end")) {
+            assertTrue("Final Grid paint must follow the original overflow cue disappearance", paint.intentionalFade == null)
+            assertTrue("The full window must paint the final Grid tile", finalGridPainted)
+        }
     }
 
     private fun currentMode(): String = if (::display.isInitialized) display.mode.name else "UNINITIALIZED"
