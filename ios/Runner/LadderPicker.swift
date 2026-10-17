@@ -76,10 +76,11 @@ struct LadderPickerPanel: View {
             kind: picker.capturePopupKind,
             title: single
                 ? entries[0].element.title
-                : picker == .codec ? model.codecColorChoices.title : picker.valueLabel,
+                : picker.sharedCaptureSheet?.headerLabel
+                    ?? (picker == .codec ? model.codecColorChoices.title : picker.valueLabel),
             subtitle: single
                 ? model.pickerModeValue(picker, mode: entries[0].offset)
-                : model.pickerSubtitle(for: picker),
+                : picker.sharedCaptureSheet?.subtitle ?? model.pickerSubtitle(for: picker),
             modes: entries.map { index, mode in
                 NikonLadderMode(
                     index: index, title: mode.title, detail: mode.detail,

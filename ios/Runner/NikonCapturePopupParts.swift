@@ -11,6 +11,16 @@ extension CameraPicker {
     /// stabilization is two independent switches. Each audio command tile is one tab.
     var usesLadderSheet: Bool { self != .stillQuality && self != .stabilization }
 
+    /// The shared popup whose header (title and subtitle) every app shows for this picker, so
+    /// white balance and shutter read exactly as on Pocket and Insta.
+    var sharedCaptureSheet: CaptureSheet? {
+        switch self {
+        case .whiteBalance: .wb
+        case .shutter: .shutter
+        default: nil
+        }
+    }
+
     var capturePopupKind: NikonCapturePopupKind {
         switch self {
         case .iso: .iso

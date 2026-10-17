@@ -359,9 +359,11 @@ struct NikonMonitorShell: View {
         return .init(
             key: .picker(picker), top: picker.isTopBar,
             chrome: picker.usesLadderSheet ? .sharedSheet : .content,
-            title: picker == .stabilization
-                ? "VR / E-VR" : picker == .codec ? model.codecColorChoices.title : picker.valueLabel,
-            subtitle: model.pickerSubtitle(for: picker))
+            title: picker.sharedCaptureSheet?.headerLabel
+                ?? (picker == .stabilization
+                    ? "VR / E-VR"
+                    : picker == .codec ? model.codecColorChoices.title : picker.valueLabel),
+            subtitle: picker.sharedCaptureSheet?.subtitle ?? model.pickerSubtitle(for: picker))
     }
     private var captureInputs:
         MonitorOperatorCaptureInputs<NikonLiveReadoutKey, Section, NikonCaptureQuickIdentity>
