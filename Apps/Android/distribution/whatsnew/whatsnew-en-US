@@ -1,4 +1,4 @@
-- New OpenCine monitor, camera and media interface, with a new icon.
+- Android release checks now verify essential ML Kit components before shipping.
 - Live View and Multicam show frame timecode when the camera supplies it.
 - Cached clips open offline. Playback controls follow playing and buffering state; Pause stays available while waiting.
 - Large clips use their full file size. Unsupported large-file transfers report an error instead of repeating data.
