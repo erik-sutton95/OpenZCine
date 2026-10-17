@@ -178,7 +178,38 @@ import Testing
             var next = before
             next.relayWatcherPasscode = "6203"
             PreferencesStore.save(next, previous: before, storage: storage)
-            #expect(try legacyFields(storage)["bluetoothShutterEnabled"] == nil)
+            let fields = try legacyFields(storage)
+            #expect(fields["bluetoothShutterEnabled"] == nil)
+            #expect(storage.object(forKey: remote) == nil)
+            #expect(PreferencesStore.loadPreferences(storage: storage) == next)
+        }
+    }
+
+    @Test func unreadableRetiredShutterSurvivesAnExistingSharedChoice() throws {
+        try withStorage { storage in
+            let data = Data(#"{"bluetoothShutterEnabled":"future","future":[1,2,3]}"#.utf8)
+            storage.set(data, forKey: legacy)
+            storage.set(false, forKey: remote)
+            #expect(!PreferencesStore.loadPreferences(storage: storage).bluetoothShutterEnabled)
+            #expect(storage.data(forKey: legacy) == data)
+            #expect(storage.object(forKey: remote) as? Bool == false)
+        }
+    }
+
+    @Test func unrelatedEditsPreserveAnUnreadableRetiredShutter() throws {
+        try withStorage { storage in
+            let data = Data(#"{"bluetoothShutterEnabled":"future","future":[1,2,3]}"#.utf8)
+            storage.set(data, forKey: legacy)
+            let before = PreferencesStore.loadPreferences(storage: storage)
+            #expect(before.bluetoothShutterEnabled)
+            #expect(storage.data(forKey: legacy) == data)
+            var next = before
+            next.relayWatcherPasscode = "SIMULATED-preserved"
+            PreferencesStore.save(next, previous: before, storage: storage)
+            let fields = try legacyFields(storage)
+            #expect(fields["bluetoothShutterEnabled"] as? String == "future")
+            #expect(fields["future"] as? [Int] == [1, 2, 3])
+            #expect(fields["relayWatcherPasscode"] as? String == "SIMULATED-preserved")
             #expect(storage.object(forKey: remote) == nil)
             #expect(PreferencesStore.loadPreferences(storage: storage) == next)
         }

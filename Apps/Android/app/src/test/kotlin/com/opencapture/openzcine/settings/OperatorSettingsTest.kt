@@ -202,4 +202,18 @@ class OperatorSettingsTest {
         assertEquals("future", store.getString("controls.mediaRemoteShutter.v1", null))
         assertFalse(store.contains("OpenZCine.RemoteShutter"))
     }
+
+    @Test
+    fun `an unreadable retired shutter survives a shared choice and unrelated edits`() {
+        store.edit().putString("controls.mediaRemoteShutter.v1", "future")
+            .putBoolean("OpenZCine.RemoteShutter", false).commit()
+        val settings = OperatorSettings(store)
+        assertFalse(settings.mediaRemoteShutterEnabled.value)
+        assertEquals("future", store.getString("controls.mediaRemoteShutter.v1", null))
+        settings.keepScreenAwake.toggle()
+        assertFalse(settings.keepScreenAwake.value)
+        assertEquals("future", store.getString("controls.mediaRemoteShutter.v1", null))
+        assertFalse(OperatorSettings(store).mediaRemoteShutterEnabled.value)
+        assertEquals(false, store.all["OpenZCine.RemoteShutter"])
+    }
 }

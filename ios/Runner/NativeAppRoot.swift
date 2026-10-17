@@ -237,11 +237,11 @@ enum PreferencesStore {
 
     /// Moves the stored remote shutter choice to the shared key once: a value already under the
     /// shared key wins, so a second launch changes nothing. The blob field is removed only after
-    /// it was read as a Bool (or the shared key already holds the choice); every other field stays.
+    /// it was read as a Bool; unreadable values and every other field stay.
     private static func migrateRetiredRemoteShutter(_ raw: [String: Any], storage: UserDefaults) {
-        guard let stored = raw[retiredRemoteShutterField], let key = commonKeys.remoteShutter else { return }
+        guard let stored = raw[retiredRemoteShutterField], let value = legacyBool(stored),
+            let key = commonKeys.remoteShutter else { return }
         if storage.object(forKey: key) == nil {
-            guard let value = legacyBool(stored) else { return }
             storage.set(value, forKey: key)
         }
         var remaining = raw
@@ -251,9 +251,10 @@ enum PreferencesStore {
         }
     }
 
-    /// The blob never carries the remote shutter field again: the shared key owns the choice.
+    /// Retires readable choices from the blob; an unreadable future value remains untouched.
     private static func withoutRetiredRemoteShutter(_ data: Data) -> Data {
         guard var raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            legacyBool(raw[retiredRemoteShutterField]) != nil,
             raw.removeValue(forKey: retiredRemoteShutterField) != nil,
             let stripped = try? JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys])
         else { return data }
