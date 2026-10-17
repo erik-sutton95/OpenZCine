@@ -923,15 +923,16 @@ extension NikonPlaybackOwnerAdoptionTests {
         }
         host.view.frame = window.bounds
         host.view.layoutIfNeeded()
-        let began = await cachedCatalogSettled { library.browsing }
+        let began = try await cachedCatalogSettled { library.browsing }
         XCTAssertTrue(began, "MediaBrowser appearance must begin its existing offline library")
         XCTAssertTrue(fixture.model.mediaLibrary === library)
         XCTAssertNil(library.binding, "Offline browsing must not create a camera session")
 
-        let scanned = await cachedCatalogSettled {
+        let scanned = try await cachedCatalogSettled {
             library.entries[record.asset.id]?.isPlayableOffline == true
         }
-        XCTAssertTrue(scanned)
+        XCTAssertTrue(
+            scanned, "The offline cache scan must publish the completed movie as playable")
         let gallery = MonitorMediaGalleryModel(library: library)
         let request = try XCTUnwrap(
             gallery.open(
@@ -947,8 +948,8 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertTrue(
             context.media.open(
                 request.record, playlist: request.playlist, admitted: request.admission))
-        let ready = await cachedCatalogSettled { context.media.playback?.ready == true }
-        XCTAssertTrue(ready)
+        let ready = try await cachedCatalogSettled { context.media.playback?.ready == true }
+        XCTAssertTrue(ready, "The borrowed cached player must become ready")
         let owner = try XCTUnwrap(context.media.playback)
         let native = try XCTUnwrap(context.native)
         XCTAssertEqual(owner.active?.asset.id, request.record.asset.id)
@@ -962,10 +963,10 @@ extension NikonPlaybackOwnerAdoptionTests {
         await library.dispose()
     }
 
-    private func cachedCatalogSettled(_ predicate: () -> Bool) async -> Bool {
+    private func cachedCatalogSettled(_ predicate: () -> Bool) async throws -> Bool {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while !predicate(), ContinuousClock.now < deadline {
-            await Task.yield()
+            try await Task.sleep(for: .milliseconds(10))
         }
         return predicate()
     }

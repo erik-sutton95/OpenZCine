@@ -21,6 +21,8 @@ regexes = [
   # these keys use rather than allowlisting the `_KEY` name, so a real credential assigned to a
   # `_KEY` constant is still caught.
   '''^(assist|display|link|media|monitor|scope)\.[A-Za-z0-9.]+\.v[0-9]+$''',
+  # Fixed UserDefaults key for the phone mount rotation; contains no credential.
+  '''^gyroMountCalibration\.v1$''',
 ]
 paths = [
   # This config talks about secret patterns on purpose.

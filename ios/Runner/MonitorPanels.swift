@@ -1780,7 +1780,15 @@ struct OperatorSettingsPanel: View {
                     "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
                 protocolHelp:
                     "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
-                versionHelp: MonitorSettingsCopy.versionHelp(app: "OpenZCine")))
+                versionHelp: MonitorSettingsCopy.versionHelp(app: "OpenZCine")),
+            gyro: .init(
+                enabled: Binding(
+                    get: { model.gyroCapture.enabled }, set: { model.setGyroCaptureEnabled($0) }),
+                status: model.gyroCapture.failure ?? model.gyroCapture.statusText,
+                openLogs: model.gyroCapture.openLogs,
+                mountName: model.gyroCapture.mountName,
+                configureMount: model.gyroCapture.openMount)
+        )
     }
 
     private func settingsFeedback() {
