@@ -1,5 +1,2 @@
-- Android release checks now verify essential ML Kit components before shipping.
-- Live View and Multicam show frame timecode when the camera supplies it.
-- Cached clips open offline. Playback controls follow playing and buffering state; Pause stays available while waiting.
-- Large clips use their full file size. Unsupported large-file transfers report an error instead of repeating data.
-- Format keeps image area, resolution and frame rate grouped; codec stays separate.
+- Fixed a crash when the camera's live preview starts or reconnects.
+- Please test connecting to the camera over Wi-Fi and reconnecting while live view is open.
