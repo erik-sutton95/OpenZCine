@@ -19,15 +19,6 @@ struct LadderPickerPanel: View {
     @State private var audioTab: Int?
 
     var body: some View {
-        if picker == .resolution {
-            NikonFormatPicker(title: picker.valueLabel, subtitle: model.pickerSubtitle(for: picker))
-                .onAppear(perform: seed)
-        } else {
-            ladder
-        }
-    }
-
-    private var ladder: some View {
         LadderSheet(
             presentation: state.presentation, enabled: true, onWrite: { perform($0) },
             control: model.shell.control, onHold: picker == .shutter ? { holdShutter() } : nil,
@@ -37,7 +28,11 @@ struct LadderPickerPanel: View {
             },
             tintHelp: picker == .whiteBalance
                 ? "Steps of 0.5 (A-B) and 0.25 (G-M), like the camera body. Double-tap the pad to reset."
-                : nil
+                : nil,
+            formats: picker == .resolution
+                ? nikonLadderFormats(
+                    options: state.presentation.tabs.first?.ladder.values ?? [],
+                    recordingFormats: model.recordingFormatPresentations) : nil
         ) { tab in
             NikonLadderFooter(picker: picker, tab: tab.key)
         }
@@ -63,9 +58,12 @@ struct LadderPickerPanel: View {
     /// The session as values. One command tile is one audio tab, keyed by its real mode index.
     private var state: NikonCapturePopupState {
         let listed = model.pickerModes(for: picker)
+        let defaultOptions =
+            picker == .resolution
+            ? model.recordingFormatPresentations.map(\.token) : picker.options
         let modes =
             listed.isEmpty
-            ? [PickerMode(title: picker.valueLabel, options: picker.options)] : listed
+            ? [PickerMode(title: picker.valueLabel, options: defaultOptions)] : listed
         var entries = Array(modes.enumerated())
         let held = picker == .audio ? audioTab ?? model.pickerInitialMode : nil
         if let held, modes.indices.contains(held) {
@@ -83,7 +81,7 @@ struct LadderPickerPanel: View {
             modes: entries.map { index, mode in
                 NikonLadderMode(
                     index: index, title: mode.title, detail: mode.detail,
-                    options: mode.options.isEmpty ? picker.options : mode.options, base: mode.base,
+                    options: mode.options.isEmpty ? defaultOptions : mode.options, base: mode.base,
                     current: model.pickerModeValue(picker, mode: index),
                     disabled: model.pickerModeDisabled(picker, mode: index),
                     advertised: advertisedProperty(index: index).flatMap {

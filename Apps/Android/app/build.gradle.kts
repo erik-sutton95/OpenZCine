@@ -233,6 +233,7 @@ val stageSwiftCore = tasks.register<Exec>("stageSwiftCore") {
                 "Package.swift",
                 "Sources/OpenCineMedia/**",
                 "Sources/OpenCineCore/**",
+                "Sources/OpenCineCameraVocabulary/**",
                 "Sources/OpenCineFrameIO/**",
                 "Sources/OpenCineFrameIOAndroid/**",
                 "Sources/OpenCineNikon/**",

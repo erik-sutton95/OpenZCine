@@ -9389,7 +9389,7 @@ final class NativeAppModel {
             coordinateWidth: 6048,
             coordinateHeight: 3400,
             // Idle so demo box 0 shows the dim-white style next to the green face/eye boxes
-            // (`.focused` would render every box green — see LiveFocusBoxOverlay.primaryBoxColor).
+            // (`.focused` would render the AF box green too; see `nikonFocusAreas`).
             focusResult: .unknown,
             subjectDetectionActive: true,
             selectedBoxIndex: 1,

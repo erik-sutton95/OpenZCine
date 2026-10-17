@@ -29,7 +29,6 @@ import com.opencapture.openzcine.NikonAssists
 import com.opencapture.openzcine.NikonLutOptions
 import com.opencapture.openzcine.chromeStyle
 import com.opencapture.openzcine.diagnostics.AndroidDiagnosticEvent
-import com.opencapture.opencine.cameracontrols.MonitorOperatorDeliveryHost
 import com.opencapture.openzcine.FeedLutSelection
 import com.opencapture.openzcine.lut.AndroidLutLibrary
 import com.opencapture.openzcine.nikonPlaybackAssistTools
@@ -164,9 +163,7 @@ internal fun MediaPlaybackScreen(
             onClose()
         }
     }
-    DisposableEffect(playerContext) {
-        onDispose { playerContext.media.closePlayback() }
-    }
+    DisposableEffect(playerContext) { onDispose { playerContext.media.closePlayback() } }
     Box(Modifier.fillMaxSize()) {
         MonitorOperatorPlaybackScreen(model = playerContext.media, initial = initial,
             assist = assists.shared, assists = assistSource, usageStore = usage,
@@ -199,17 +196,9 @@ internal fun MediaPlaybackScreen(
 
 @Composable
 private fun PlaybackLoading(message: String) {
-    Column(
-        Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
+    Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
         CircularProgressIndicator(color = LiveDesign.muted)
-        Text(
-            message,
-            modifier = Modifier.padding(top = 12.dp),
-            style = chromeStyle(12f, FontWeight.Medium),
-            color = LiveDesign.muted,
-        )
+        Text(message, Modifier.padding(top = 12.dp), style = chromeStyle(12f, FontWeight.Medium),
+            color = LiveDesign.muted)
     }
 }

@@ -231,11 +231,17 @@ struct NikonMonitorShell: View {
                 model.isPhotographyMode
                 ? model.cameraPropertySnapshot.photographyFeedAspect : 16 / 9
         }
+        let waiting = !model.hasLiveFrameImage && !model.isDemoSession
         return .init(
             aspect: model.displayedFeedRotation.isVertical ? 1 / raw : raw,
-            waiting: !model.hasLiveFrameImage && !model.isDemoSession,
+            waiting: waiting,
             vertical: model.displayedFeedRotation.isVertical, flipped: false,
-            recovering: model.sessionRecovery.isRecovering)
+            recovering: model.sessionRecovery.isRecovering,
+            // The camera's own stream with no camera behind it: the plate says why.
+            notice: waiting && model.videoSource == .cameraLiveView
+                ? nikonCameraStatusNotice(
+                    connection: model.connection, internetHopActive: model.internetHopActive)
+                : nil)
     }
     /// The shared field-monitor geometry. Portrait fill yields to de-squeeze, as on every app.
     private var live: LiveMonitorLayout {
@@ -665,5 +671,28 @@ struct SplitComparisonKey: View {
         .minTapTarget()
         .accessibilityLabel("50/50 comparison")
         .accessibilityValue(model.splitComparisonMuted ? "Hidden" : "Shown")
+    }
+}
+
+/// The picture well's words when the camera's stream has no camera behind it, shown on the shared
+/// waiting plate (twin of the Android `monitorCameraStatusNotice`, same words): no camera,
+/// connecting, or coming back from an internet hop. A connected camera keeps the waiting plate.
+func nikonCameraStatusNotice(
+    connection: NativeAppModel.ConnectionState, internetHopActive: Bool
+) -> MonitorOperatorPictureNotice? {
+    switch connection {
+    case .connected:
+        return nil
+    case _ where internetHopActive:
+        return MonitorOperatorPictureNotice(
+            title: "Reconnecting to camera…",
+            detail: "Returning from the internet hop and looking for the camera network.",
+            progress: true)
+    case .pairing, .reconnecting, .preparingLiveView:
+        return MonitorOperatorPictureNotice(
+            title: "Connecting…", detail: "Searching for the camera and restoring live view.",
+            progress: true)
+    case .disconnected, .scanning:
+        return MonitorOperatorPictureNotice(title: "No camera")
     }
 }

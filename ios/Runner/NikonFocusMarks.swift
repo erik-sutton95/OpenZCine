@@ -2,6 +2,7 @@ import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
 import OpenCineCameraControls
+import OpenCineCameraVocabulary
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
@@ -44,18 +45,44 @@ func liveFocusBoxRect(
     )
 }
 
-/// The camera's AF and subject-detection boxes (from the live-view header) as the shared focus
-/// marks every app draws: box 0, the AF area, is the focus mark at the size the camera declares,
-/// styled by AF state (see `primaryBoxColor`); detected face and eye boxes (box 1 and up) are the
-/// shared tracking brackets in green.
+/// Nikon AF boxes in camera orientation, normalized to the camera's coordinate space (twin of the
+/// Android `NikonFocusAreas`).
+struct NikonFocusAreas: Equatable {
+    let primary: TrackingBox?
+    let others: [TrackingBox]
+    /// Focus achieved, or the camera is tracking a subject: the shared confirmed colour.
+    let confirmed: Bool
+}
+
+/// Nil when the camera reports no usable coordinate space (twin of the Android `nikonFocusAreas`).
+func nikonFocusAreas(_ focus: PTPLiveViewFocusInfo) -> NikonFocusAreas? {
+    guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return nil }
+    let width = Double(focus.coordinateWidth)
+    let height = Double(focus.coordinateHeight)
+    func normalized(_ box: PTPLiveViewAFBox) -> TrackingBox? {
+        guard box.width > 0, box.height > 0 else { return nil }
+        return TrackingBox(
+            x: (Double(box.centerX) - Double(box.width) / 2) / width,
+            y: (Double(box.centerY) - Double(box.height) / 2) / height,
+            width: Double(box.width) / width, height: Double(box.height) / height)
+    }
+    return NikonFocusAreas(
+        primary: focus.boxes.first.flatMap(normalized),
+        others: focus.boxes.dropFirst().compactMap(normalized),
+        confirmed: focus.focusResult == .focused || focus.trackingAFActive)
+}
+
+/// The camera's AF boxes on the shared focus layer every app draws, over the presented (de-squeezed)
+/// picture: the primary box is the focus mark (its size, the focus result colour, the hold-to-lock
+/// fill and the lock glyph); further boxes draw as plain confirmed areas.
 struct LiveFocusBoxOverlay: View, Equatable {
     let focus: PTPLiveViewFocusInfo
-    /// App-only focus-point lock: tints the AF box accent and badges it with the shared lock.
+    /// App-only focus-point lock: the shared lock glyph on the AF box.
     var locked: Bool = false
     /// 0 to 1 while long-pressing the AF box to lock it: how much of its outline has drawn in.
     var lockProgress: CGFloat = 0
     /// Whether the picture underneath is flipped left-to-right. The camera's box coordinates never
-    /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
+    /// are, so the shared layer flips them to keep landing on the face they are tracking.
     var mirrored: Bool = false
     /// Top-to-bottom presentation flip; AF metadata stays in source coordinates.
     var mirroredVertically: Bool = false
@@ -63,67 +90,30 @@ struct LiveFocusBoxOverlay: View, Equatable {
     var desqueeze = NikonDesqueeze.off
 
     nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
-        // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
-        // properties of `focus`, so its memberwise == already covers them.
         lhs.focus == rhs.focus && lhs.locked == rhs.locked
             && lhs.lockProgress == rhs.lockProgress && lhs.mirrored == rhs.mirrored
             && lhs.mirroredVertically == rhs.mirroredVertically
             && lhs.desqueeze == rhs.desqueeze
     }
 
-    /// Idle AF-box white opacity: slightly transparent so acquired/tracking green reads as a
-    /// state change.
-    private static let idleWhiteOpacity = 0.72
-
-    /// Box 0 (AF area) state to colour, Nikon-body-like, in precedence order:
-    /// 1. `locked` (app-side focus-point lock): accent at full opacity, plus the lock badge.
-    /// 2. AF acquired (`focusResult == .focused`) or subject tracking engaged
-    ///    (`trackingAFActive`, the header's tracking-AF status byte): green at full opacity.
-    /// 3. Idle / hunting (`.unknown` / `.notFocused`): dim white; no distinct red state.
-    private var primaryBoxColor: Color {
-        if locked { return LiveDesign.accent }
-        if focus.focusResult == .focused || focus.trackingAFActive { return .green }
-        return .white.opacity(Self.idleWhiteOpacity)
-    }
-
     var body: some View {
         GeometryReader { proxy in
-            let marks = Self.marks(
-                focus, in: proxy.size, desqueeze: desqueeze, mirrored: mirrored,
-                mirroredVertically: mirroredVertically)
-            MonitorTrackingLayer(
-                brackets: marks.subjects.map {
-                    MonitorTrackingBracketValue(normalizedRect: $0, color: .green, lineWidth: 1.5)
-                },
-                focus: marks.area.map {
-                    MonitorFocusMark(
-                        point: CGPoint(x: $0.midX, y: $0.midY), size: $0.size,
-                        color: primaryBoxColor, focusLocked: locked,
-                        lockProgress: Double(lockProgress))
-                },
-                feed: CGRect(origin: .zero, size: proxy.size))
-        }
-        .allowsHitTesting(false)
-    }
-
-    /// The boxes in normalized picture coordinates through ``liveFocusBoxRect``: the AF area
-    /// (box 0) and the detected subjects after it.
-    nonisolated static func marks(
-        _ focus: PTPLiveViewFocusInfo, in size: CGSize, desqueeze: NikonDesqueeze,
-        mirrored: Bool, mirroredVertically: Bool
-    ) -> (area: CGRect?, subjects: [CGRect]) {
-        guard size.width > 0, size.height > 0 else { return (nil, []) }
-        let rects = focus.boxes.map { box in
-            liveFocusBoxRect(
-                box, focus: focus, in: size, desqueeze: desqueeze, mirrored: mirrored,
-                mirroredVertically: mirroredVertically
-            ).map {
-                CGRect(
-                    x: $0.minX / size.width, y: $0.minY / size.height,
-                    width: $0.width / size.width, height: $0.height / size.height)
+            if proxy.size.width > 0, proxy.size.height > 0,
+                let areas = nikonFocusAreas(focus)
+            {
+                MonitorOperatorFocusLayer(
+                    palette: LiveDesign.self,
+                    focus: areas.primary.map {
+                        CGPoint(x: $0.x + $0.width / 2, y: $0.y + $0.height / 2)
+                    },
+                    mirrored: mirrored, showTapFocusBox: true,
+                    flippedVertically: mirroredVertically, focusLocked: locked,
+                    focusArea: areas.primary, otherFocusAreas: areas.others,
+                    focusConfirmed: areas.confirmed, focusLockProgress: Double(lockProgress),
+                    feed: desqueezedRect(CGRect(origin: .zero, size: proxy.size), desqueeze))
             }
         }
-        return (rects.first ?? nil, rects.dropFirst().compactMap { $0 })
+        .allowsHitTesting(false)
     }
 }
 

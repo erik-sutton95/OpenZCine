@@ -53,37 +53,19 @@ struct NikonLadderFooter: View {
     }
 }
 
-/// The recording format popup: the body's format inventory on the shared format picker.
-struct NikonFormatPicker: View {
-    @Environment(NativeAppModel.self) private var model
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        let source = model.operatorLiveIdentity
-        let inventory = model.recordingFormatPresentations
-        let choices = inventory.map { format in
-            CaptureFormatChoice(
-                value: format.token, title: format.token,
-                imageArea: format.imageArea.map { CaptureFormatGroup(id: $0, title: $0) },
-                resolution: CaptureFormatGroup(id: format.resolution, title: format.resolution),
-                frameRate: CaptureFormatGroup(id: format.frameRate, title: format.frameRate))
-        }
-        CaptureFormatPicker(
-            choices: choices, current: model.cameraValue(for: .resolution),
-            enabled: !inventory.isEmpty, haptics: model.preferences.hapticsEnabled,
-            sourceIdentity: AnyHashable(source),
-            isCurrent: { model.operatorLiveIdentity == source },
-            onSelect: { choice in
-                guard model.operatorLiveIdentity == source,
-                    model.recordingFormatPresentations == inventory,
-                    inventory.contains(where: { $0.token == choice.value })
-                else { return }
-                model.applyPicker(.resolution, mode: 0, value: choice.value)
-            }
-        )
-        .monitorCapturePanelHeader(title: title, subtitle: subtitle)
-        .accessibilityIdentifier("ladder_sheet")
+/// A recording-format popup's choices for the shared format picker on the ladder sheet (twin of the
+/// Android `ladderFormats`): the body's reported formats group each ladder token; a token it does
+/// not describe stays unclassified.
+func nikonLadderFormats(
+    options: [String], recordingFormats: [NikonRecordingFormatPresentation]
+) -> [CaptureFormatChoice<String>] {
+    options.map { token in
+        let format = recordingFormats.first { $0.token == token }
+        return CaptureFormatChoice(
+            value: token, title: token,
+            imageArea: format?.imageArea.map { CaptureFormatGroup(id: $0, title: $0) },
+            resolution: format.map { CaptureFormatGroup(id: $0.resolution, title: $0.resolution) },
+            frameRate: format.map { CaptureFormatGroup(id: $0.frameRate, title: $0.frameRate) })
     }
 }
 
