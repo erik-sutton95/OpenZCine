@@ -317,6 +317,56 @@ final class CapturePopupUITests: OpenCineAppUITesting.CapturePopupUITests {
     }
 }
 
+/// SIMULATED: in photography the ISO popup is the same shared ladder drawer as in movie mode,
+/// with the body's Auto and Manual tabs on the shared mode strip.
+final class NikonPhotoCapturePopupUITests: SharedAppUITestCase {
+    @MainActor
+    func testSIMULATEDPhotoISOOpensTheSharedLadderDrawer() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("SIMULATED popup staging requires a private simulator")
+        #endif
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment.merge(
+            [
+                "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live",
+                "ZC_DEMO_GRAPHICAL_REVIEW": "1", "ZC_DEMO_PHOTO": "1",
+            ]
+        ) { _, value in value }
+        app.launch()
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            let iso = app.buttons["monitor.capture.stillISO"]
+            XCTAssertTrue(iso.waitForExistence(timeout: 20), "The photo ISO readout must be shown")
+            rotate(orientation, settling: iso)
+            tapWhenReady(iso, in: app, "The photo ISO readout")
+            XCTAssertTrue(
+                app.buttons["monitor.capture.close"].waitForExistence(timeout: 8),
+                "The photo ISO readout must open the common drawer")
+            XCTAssertTrue(
+                app.descendants(matching: .any)["ladder_sheet"].waitForExistence(timeout: 5),
+                "Photo ISO must draw the shared ladder sheet")
+            let auto = app.buttons["monitor.capture.tab.0"]
+            let manual = app.buttons["monitor.capture.tab.1"]
+            XCTAssertTrue(auto.waitForExistence(timeout: 5))
+            XCTAssertEqual(auto.label, "Auto")
+            XCTAssertEqual(manual.label, "Manual")
+            XCTAssertNotEqual(auto.isSelected, manual.isSelected, "Exactly one tab is selected")
+            let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            let name = orientation == .portrait ? "portrait" : "landscape"
+            shot.name = "SIMULATED Z photo iso popup \(name)"
+            shot.lifetime = .keepAlways
+            add(shot)
+            let close = app.buttons["monitor.capture.close"]
+            close.tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 8))
+        }
+    }
+}
+
 /// SIMULATED pixels through the actual app/provider/inspector; no camera transport or hardware claim.
 final class NikonLiveLUTWheelTouchTests: SharedAppUITestCase {
     @MainActor

@@ -424,6 +424,101 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             Set(CameraPicker.allCases.filter { !$0.usesLadderSheet }), [.stillQuality, .stabilization])
     }
 
+    /// SIMULATED native actions: display positions never replace the body's write keys.
+    func testSIMULATEDCanonicalWhiteBalanceTabsKeepWriteKeysAndOpeningIsReadOnly() async throws {
+        _ = await HostedAccessibility.awaitRuntime()
+        for reportedMode: String? in [nil, "Color temp", "Daylight"] {
+            let sheet = try XCTUnwrap(CameraPicker.whiteBalance.sharedCaptureSheet)
+            var popup = NikonCapturePopupState(
+                kind: .whiteBalance, title: sheet.headerLabel, subtitle: sheet.subtitle,
+                modes: [
+                    NikonLadderMode(index: 0, title: "Kelvin", options: [], current: "5600K"),
+                    NikonLadderMode(
+                        index: 1, title: "Preset", options: ["Auto", "Daylight"],
+                        current: "Daylight"),
+                    NikonLadderMode(index: 2, title: "Tint", options: [], current: ""),
+                ])
+            popup.whiteBalanceMode = reportedMode
+            popup.tintAvailable = true
+            var writes: [LadderWrite<NikonLadderControl>] = []
+            let hosted = try Hosted(
+                LadderSheet(
+                    presentation: popup.presentation, enabled: true, onWrite: { writes.append($0) })
+            )
+            defer { hosted.close() }
+            let initial = reportedMode == "Daylight" ? 0 : 1
+            let mounted = try await hosted.settle {
+                hosted.element("monitor.capture.tab.\(initial)")?.accessibilityTraits.contains(
+                    .selected) == true
+            }
+            XCTAssertTrue(mounted, hosted.identifiers.joined(separator: ", "))
+            XCTAssertTrue(writes.isEmpty, "Opening the drawer must not request a camera write")
+            let order = initial == 1 ? [0, 1] : [1, 0]
+            for index in order {
+                let tab = try XCTUnwrap(hosted.element("monitor.capture.tab.\(index)"))
+                XCTAssertTrue(tab.accessibilityActivate())
+                let selected = try await hosted.settle {
+                    hosted.element("monitor.capture.tab.\(index)")?.accessibilityTraits.contains(
+                        .selected) == true
+                }
+                XCTAssertTrue(selected)
+            }
+            let expected = order.map { index in
+                index == 0
+                    ? LadderWrite(key: NikonLadderControl.value(1), value: "Daylight")
+                    : LadderWrite(key: NikonLadderControl.value(0), value: "5600K")
+            }
+            XCTAssertEqual(writes, expected)
+            let tint = try XCTUnwrap(hosted.element("monitor.capture.tab.2"))
+            XCTAssertTrue(tint.accessibilityActivate())
+            let tintSelected = try await hosted.settle {
+                hosted.element("monitor.capture.tab.2")?.accessibilityTraits.contains(.selected)
+                    == true
+            }
+            XCTAssertTrue(tintSelected)
+            XCTAssertEqual(writes, expected, "Opening Tint must not invent a selected-value write")
+        }
+    }
+
+    /// SIMULATED native actions: shutter activation changes only the original camera circuit.
+    func testSIMULATEDCanonicalShutterTabsChangeOnlyCircuitAndOpeningIsReadOnly() async throws {
+        _ = await HostedAccessibility.awaitRuntime()
+        for circuit in [0, 1] {
+            let sheet = try XCTUnwrap(CameraPicker.shutter.sharedCaptureSheet)
+            var popup = NikonCapturePopupState(
+                kind: .shutter, title: sheet.headerLabel, subtitle: sheet.subtitle,
+                modes: [
+                    NikonLadderMode(index: 0, title: "Angle", options: ["180°"], current: "180°"),
+                    NikonLadderMode(index: 1, title: "Speed", options: ["1/50"], current: "1/50"),
+                ])
+            popup.circuitIndex = circuit
+            var writes: [LadderWrite<NikonLadderControl>] = []
+            let hosted = try Hosted(
+                LadderSheet(
+                    presentation: popup.presentation, enabled: true, onWrite: { writes.append($0) })
+            )
+            defer { hosted.close() }
+            let initial = circuit == 1 ? 0 : 1
+            let mounted = try await hosted.settle {
+                hosted.element("monitor.capture.tab.\(initial)")?.accessibilityTraits.contains(
+                    .selected) == true
+            }
+            XCTAssertTrue(mounted, hosted.identifiers.joined(separator: ", "))
+            XCTAssertTrue(writes.isEmpty)
+            let next = 1 - initial
+            let tab = try XCTUnwrap(hosted.element("monitor.capture.tab.\(next)"))
+            XCTAssertTrue(tab.accessibilityActivate())
+            let selected = try await hosted.settle {
+                hosted.element("monitor.capture.tab.\(next)")?.accessibilityTraits.contains(
+                    .selected) == true
+            }
+            XCTAssertTrue(selected)
+            XCTAssertEqual(
+                writes, [LadderWrite(key: .shutterMode, value: next == 0 ? "Speed" : "Angle")],
+                "A tab switch must not send the landed shutter value")
+        }
+    }
+
     /// Nikon AF boxes normalize to the shared focus layer with the result as its colour (twin of
     /// the Android `nikon AF boxes normalize to the shared focus layer with the result as its colour`).
     func testNikonAFBoxesNormalizeToTheSharedFocusLayerWithTheResultAsItsColour() throws {
