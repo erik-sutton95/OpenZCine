@@ -480,35 +480,39 @@ internal fun LiveFeedView(
                 stats = stats,
                 timestampNanos = { it.timestampNanos },
                 isCurrent = isCurrent,
-                presentationDispatcher = Dispatchers.Main.immediate,
                 // An HDMI capture frame arrives already decoded; everything
                 // else is the camera's live-view JPEG.
                 decode = { frame ->
                     if (incident != null) incident.decode { decoder.decode(frame.jpegData) }
                     else (frame as? BitmapLiveFrame)?.bitmap ?: decoder.decode(frame.jpegData)
                 },
+                publish = { sourceFrame, bitmap ->
+                    withContext(Dispatchers.Main.immediate) {
+                        if (!isCurrent()) return@withContext
+                        val frameColorMode = decodedLiveFeedColorMode(bitmap)
+                        if (presentationState != null) {
+                            presentationState.present(sourceFrame, bitmap, frameColorMode)
+                        } else {
+                            fallbackFrame.value = bitmap.asImageBitmap()
+                            fallbackColorMode.value = frameColorMode
+                        }
+                        if (latestGpuFramesRequested.value &&
+                            frameColorMode == LiveFeedColorMode.SDR
+                        ) {
+                            gpuBackend.submitFrame(bitmap)
+                        } else {
+                            gpuBackend.clearFrame()
+                        }
+                    }
+                },
                 present = { sourceFrame, bitmap ->
-                    val frameColorMode = decodedLiveFeedColorMode(bitmap)
-                    if (presentationState != null) {
-                        presentationState.present(sourceFrame, bitmap, frameColorMode)
-                    } else {
-                        fallbackFrame.value = bitmap.asImageBitmap()
-                        fallbackColorMode.value = frameColorMode
-                    }
-                    if (latestGpuFramesRequested.value &&
-                        frameColorMode == LiveFeedColorMode.SDR
-                    ) {
-                        gpuBackend.submitFrame(bitmap)
-                    } else {
-                        gpuBackend.clearFrame()
-                    }
                     incident?.published()
                     onFrame?.invoke(bitmap)
                     latestPresentedFrame.value?.invoke(
                         sourceFrame,
                         bitmap,
                         latestPreviewBaker.value.takeIf {
-                            frameColorMode == LiveFeedColorMode.SDR
+                            decodedLiveFeedColorMode(bitmap) == LiveFeedColorMode.SDR
                         },
                         latestRenderPlan.value?.nativePlan,
                     )
