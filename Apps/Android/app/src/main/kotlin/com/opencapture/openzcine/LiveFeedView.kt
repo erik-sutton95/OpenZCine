@@ -536,27 +536,32 @@ fun LiveFeedView(
                 decode = { frame ->
                     (frame as? BitmapLiveFrame)?.bitmap ?: decoder.decode(frame.jpegData)
                 },
+                publish = { sourceFrame, bitmap ->
+                    withContext(Dispatchers.Main.immediate) {
+                        if (!isCurrent()) return@withContext
+                        val frameColorMode = decodedLiveFeedColorMode(bitmap)
+                        if (presentationState != null) {
+                            presentationState.present(sourceFrame, bitmap, frameColorMode)
+                        } else {
+                            fallbackFrame.value = bitmap.asImageBitmap()
+                            fallbackColorMode.value = frameColorMode
+                        }
+                        if (latestGpuFramesRequested.value &&
+                            frameColorMode == LiveFeedColorMode.SDR
+                        ) {
+                            gpuBackend.submitFrame(bitmap)
+                        } else {
+                            gpuBackend.clearFrame()
+                        }
+                    }
+                },
                 present = { sourceFrame, bitmap ->
-                    val frameColorMode = decodedLiveFeedColorMode(bitmap)
-                    if (presentationState != null) {
-                        presentationState.present(sourceFrame, bitmap, frameColorMode)
-                    } else {
-                        fallbackFrame.value = bitmap.asImageBitmap()
-                        fallbackColorMode.value = frameColorMode
-                    }
-                    if (latestGpuFramesRequested.value &&
-                        frameColorMode == LiveFeedColorMode.SDR
-                    ) {
-                        gpuBackend.submitFrame(bitmap)
-                    } else {
-                        gpuBackend.clearFrame()
-                    }
                     onFrame?.invoke(bitmap)
                     latestPresentedFrame.value?.invoke(
                         sourceFrame,
                         bitmap,
                         latestPreviewBaker.value.takeIf {
-                            frameColorMode == LiveFeedColorMode.SDR
+                            decodedLiveFeedColorMode(bitmap) == LiveFeedColorMode.SDR
                         },
                     )
                 },
