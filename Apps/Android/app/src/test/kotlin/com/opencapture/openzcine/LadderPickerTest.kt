@@ -74,7 +74,9 @@ class LadderPickerTest {
         assertEquals(CaptureLock.CAMERA_CONTROL, sheet.lock)
         assertTrue(sheet.lock!!.freezesSheet)
         assertFalse(sheet.tabs[0].applyOnActivate)
-        val (request, value) = assertNotNull(requestForLadderWrite(picker, sheet.tabs[1].activate!!))
+        // Pocket's order: Speed, Angle.
+        assertEquals(listOf("Speed", "Angle"), sheet.tabs.map { it.label })
+        val (request, value) = assertNotNull(requestForLadderWrite(picker, sheet.tabs[0].activate!!))
         assertEquals(CameraControl.SHUTTER_MODE to "Speed", request.control to value)
     }
 
@@ -139,7 +141,9 @@ class LadderPickerTest {
             mode("Tint", CameraControl.WHITE_BALANCE_TINT, "A1 \u00B7 M0.25", listOf("Neutral")),
         )
         val sheet = videoLadderPresentation(picker)
-        val kelvin = sheet.tabs[0]
+        // Pocket's order: Mode (the body's presets), Kelvin, Tint.
+        assertEquals(listOf("Mode", "Kelvin", "Tint"), sheet.tabs.map { it.label })
+        val kelvin = sheet.tabs[1]
         assertNull(kelvin.setting)
         assertEquals(listOf("5550K", "5560K"), kelvin.values?.invoke("5550K")?.filter { it == "5550K" || it == "5560K" })
         val steps = assertNotNull(kelvin.steps?.invoke("5560K"))
@@ -147,7 +151,7 @@ class LadderPickerTest {
         assertEquals("5550K", steps.first.value)
         assertTrue(steps.first.lands)
         assertEquals("5570K", steps.second.value)
-        assertEquals(SettingKey.WHITE_BALANCE, sheet.tabs[1].setting?.key)
+        assertEquals(SettingKey.WHITE_BALANCE, sheet.tabs[0].setting?.key)
         val tint = sheet.tabs[2]
         assertEquals(-1, tint.tint?.greenMagenta)
         assertEquals(2, tint.tint?.amberBlue)

@@ -1,13 +1,19 @@
 package com.opencapture.openzcine
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -17,6 +23,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
+import com.opencapture.opencine.appkit.MonitorOperatorCaptureDrawer
 import com.opencapture.opencine.cameracontrols.LocalViewportPortrait
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CodecBitDepthOption
@@ -25,8 +33,10 @@ import com.opencapture.opencine.nikon.NikonCapturePopupState
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,14 +49,31 @@ import org.junit.runner.RunWith
 class LadderSheetComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
+    private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+
+    @Before
+    fun landscape() {
+        device.setOrientationLeft()
+        composeRule.waitUntil(5_000) { device.displayWidth > device.displayHeight }
+    }
+
+    @After
+    fun restoreOrientation() {
+        device.unfreezeRotation()
+    }
 
     @Test
     fun kelvinStepsAndTintTabWriteTheHostKey() {
         val harness = harness()
         show(harness, wb())
         composeRule.onNodeWithText("KELVIN").assertIsDisplayed()
-        composeRule.onNodeWithText("PRESET").assertIsDisplayed()
+        composeRule.onNodeWithText("MODE").assertIsDisplayed()
         composeRule.onNodeWithText("TINT").assertIsDisplayed()
+        assertTabOrder(listOf("MODE", "KELVIN", "TINT"))
+        composeRule.onNodeWithText("KELVIN").assertIsSelected()
+        composeRule.onNodeWithContentDescription("WHITE BALANCE. Kelvin · auto · tint").assertIsDisplayed()
+        composeRule.onNodeWithText("WHITE BALANCE").assertIsDisplayed()
+        composeRule.onNodeWithText("KELVIN · AUTO · TINT").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Decrease Kelvin by 10").performClick()
         save("wb-kelvin")
         composeRule.onNodeWithText("TINT").performClick()
@@ -55,6 +82,9 @@ class LadderSheetComposeTest {
             assertEquals(listOf(CameraControl.WHITE_BALANCE to "5550K"), harness.writes)
         }
         save("wb-tint")
+        composeRule.onNodeWithText("MODE").performClick()
+        composeRule.runOnIdle { assertEquals(CameraControl.WHITE_BALANCE to "Sunny", harness.writes.last()) }
+        save("wb-mode")
     }
 
     @Test
@@ -75,6 +105,11 @@ class LadderSheetComposeTest {
         composeRule.onNodeWithText("Shutter locked on camera", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("ANGLE").assertIsDisplayed()
         composeRule.onNodeWithText("SPEED").assertIsDisplayed()
+        assertTabOrder(listOf("SPEED", "ANGLE"))
+        composeRule.onNodeWithText("ANGLE").assertIsSelected()
+        composeRule.onNodeWithContentDescription("SHUTTER. Angle · speed").assertIsDisplayed()
+        composeRule.onNodeWithText("SHUTTER").assertIsDisplayed()
+        composeRule.onNodeWithText("ANGLE · SPEED").assertIsDisplayed()
         composeRule.runOnIdle { assertTrue(harness.writes.isEmpty()) }
         save("shutter-locked")
     }
@@ -212,20 +247,28 @@ class LadderSheetComposeTest {
             val live = harness.live
             if (live != null) {
                 CompositionLocalProvider(LocalViewportPortrait provides false) {
-                    MonitorControlPickerPanel(
-                        picker = live,
-                        controlsEnabled = true,
-                        feedback = null,
-                        onSelect = { request, label ->
-                            harness.writes += request.control to label
-                            harness.titled += request.title to label
-                        },
-                        onDismiss = {},
-                        slideFromTop = live.kind.isTopBarPicker(),
-                        onToggleMfScrub = {},
-                        timerShotsCount = 2,
-                        onAdjustTimerShots = { delta -> harness.shots += delta },
-                    )
+                    val sheet = videoLadderPresentation(live)
+                    val maximumHeight = LocalConfiguration.current.screenHeightDp.toFloat()
+                    val top = live.kind.isTopBarPicker()
+                    Box(Modifier.fillMaxSize(), contentAlignment = if (top) Alignment.TopCenter else Alignment.BottomCenter) {
+                        MonitorOperatorCaptureDrawer(sheet.title, sheet.subtitle, maximumHeight,
+                            top = top, portrait = false, close = {}) {
+                            MonitorControlPickerPanel(
+                                picker = live,
+                                controlsEnabled = true,
+                                feedback = null,
+                                onSelect = { request, label ->
+                                    harness.writes += request.control to label
+                                    harness.titled += request.title to label
+                                },
+                                onDismiss = {},
+                                slideFromTop = top,
+                                onToggleMfScrub = {},
+                                timerShotsCount = 2,
+                                onAdjustTimerShots = { delta -> harness.shots += delta },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -240,15 +283,31 @@ class LadderSheetComposeTest {
     }
 
     private fun save(name: String, folder: String = "r2a") {
-        writePng(name, composeRule.onNodeWithTag("ladder_sheet").captureToImage(), folder)
+        writePng(name, composeRule.onNodeWithTag("ladder_sheet").captureToImage().asAndroidBitmap(), folder)
+        if (name.startsWith("wb-") || name == "shutter-locked") {
+            val viewport = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            try {
+                assertTrue("Viewport capture must be landscape", viewport.width > viewport.height)
+                writePng("$name-viewport", viewport, folder)
+            } finally {
+                viewport.recycle()
+            }
+        }
     }
 
-    private fun writePng(name: String, image: androidx.compose.ui.graphics.ImageBitmap, folder: String) {
+    private fun assertTabOrder(labels: List<String>) {
+        val bounds = labels.map { composeRule.onNodeWithText(it).fetchSemanticsNode().boundsInRoot }
+        bounds.zipWithNext().forEach { (left, right) ->
+            assertTrue("Tabs must read left to right as $labels", left.right <= right.left)
+        }
+    }
+
+    private fun writePng(name: String, image: Bitmap, folder: String) {
         val dir = InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(folder)
         check(dir != null)
         val file = File(dir, "$name.png")
         FileOutputStream(file).use { out ->
-            image.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, out)
+            image.compress(Bitmap.CompressFormat.PNG, 100, out)
         }
         // executeShellCommandRw returns (stdout, stdin). The connected run uninstalls the app
         // and deletes external files, so the bytes also land on a path the host can pull.
@@ -272,8 +331,8 @@ class LadderSheetComposeTest {
 
     private fun wb() = MonitorPickerPresentation(
         kind = MonitorPickerKind.WHITE_BALANCE,
-        title = "WB",
-        subtitle = "Kelvin / preset / tint",
+        title = "WHITE BALANCE",
+        subtitle = "Kelvin · auto · tint",
         modes = listOf(
             MonitorPickerModePresentation(
                 label = "Kelvin",
@@ -315,7 +374,7 @@ class LadderSheetComposeTest {
     private fun shutter(locked: Boolean) = MonitorPickerPresentation(
         kind = MonitorPickerKind.SHUTTER,
         title = "SHUTTER",
-        subtitle = "Angle / speed",
+        subtitle = "Angle · speed",
         modes = listOf(
             MonitorPickerModePresentation(
                 label = "Angle",
@@ -330,7 +389,7 @@ class LadderSheetComposeTest {
         ),
         interactionLocked = locked,
         popup = NikonCapturePopupState(
-            kind = NikonCapturePopupKind.SHUTTER, title = "SHUTTER", subtitle = "Angle / speed",
+            kind = NikonCapturePopupKind.SHUTTER, title = "SHUTTER", subtitle = "Angle · speed",
             modes = emptyList(), shutterLockedOnCamera = locked,
         ),
     )
