@@ -88,7 +88,6 @@ struct LadderPickerPanel: View {
             }
         }
         .monitorCapturePanelHeader(title: presentation.title, subtitle: presentation.subtitle)
-        .accessibilityIdentifier("ladder_sheet")
     }
 
     private var ladder: some View {

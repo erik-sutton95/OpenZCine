@@ -21,14 +21,24 @@
             let nodes = try await fixture.nodes()
             let format = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Format" })
             let codec = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Codec" })
+            let primaryLine = try fixture.controlFrame("primaryLine")
             let paintedFormat = try fixture.controlFrame("format")
             let paintedCodec = try fixture.controlFrame("codec")
             let ink = try fixture.attachFrameProof(
                 format: format.accessibilityFrame, codec: codec.accessibilityFrame,
                 paintedFormat: paintedFormat, paintedCodec: paintedCodec)
+            XCTAssertEqual(
+                primaryLine.maxY, paintedFormat.maxY, accuracy: 0.5,
+                "The primary text keeps the lower edge of its expanded target")
             XCTAssertLessThanOrEqual(
-                ink.primary.minY - format.accessibilityFrame.minY, Self.directlyBelow,
-                "The primary glyphs sit at the top of their line, level with the row's top edge")
+                ink.primary.minY - primaryLine.minY, Self.directlyBelow,
+                "The primary glyphs keep the top of their visible text line")
+            XCTAssertGreaterThanOrEqual(
+                ink.primary.minY, primaryLine.minY - 0.5,
+                "The invisible target expansion does not move the painted text line")
+            XCTAssertLessThanOrEqual(
+                format.accessibilityFrame.maxY, codec.accessibilityFrame.minY + 0.5,
+                "The full primary and detail targets stay independent")
             XCTAssertGreaterThanOrEqual(
                 ink.detail.minY, ink.primary.maxY,
                 "Codec glyphs belong beneath the large primary glyphs, as one grouped readout")
@@ -49,6 +59,53 @@
             XCTAssertEqual(fixture.actions.formatCalls, 1)
             XCTAssertTrue(codec.accessibilityActivate())
             XCTAssertEqual(fixture.actions.codecCalls, 1)
+        }
+
+        func testMovingPrimaryTextFailsTheFixedTargetAnchorOracle() async throws {
+            let layout = FieldMonitorLayout(width: 320, height: 956, safeArea: .init(top: 59))
+            var fixedTarget = CGRect.zero
+            var originalInk = CGRect.zero
+            do {
+                let reference = try HeaderFixture(
+                    width: 320, layout: layout, storage: "375 GB", separateFormat: true)
+                defer { reference.close() }
+                let nodes = try await reference.nodes()
+                let format = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Format" })
+                let codec = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Codec" })
+                fixedTarget = try reference.controlFrame("format")
+                let line = try reference.controlFrame("primaryLine")
+                XCTAssertEqual(line.maxY, fixedTarget.maxY, accuracy: 0.5)
+                originalInk = try reference.attachFrameProof(
+                    format: format.accessibilityFrame, codec: codec.accessibilityFrame,
+                    paintedFormat: fixedTarget, paintedCodec: reference.controlFrame("codec")
+                ).primary
+            }
+            let displaced = try HeaderFixture(
+                width: 320, layout: layout, storage: "375 GB", separateFormat: true,
+                primaryTextOffset: 2)
+            defer { displaced.close() }
+            let nodes = try await displaced.nodes()
+            let format = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Format" })
+            let codec = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Codec" })
+            let target = try displaced.controlFrame("format")
+            let line = try displaced.controlFrame("primaryLine")
+            for (actual, original) in zip(
+                [target.minX, target.minY, target.width, target.height],
+                [fixedTarget.minX, fixedTarget.minY, fixedTarget.width, fixedTarget.height]
+            ) {
+                XCTAssertEqual(
+                    actual, original, accuracy: 0.5, "Only the text moves, not its target")
+            }
+            let ink = try displaced.attachFrameProof(
+                format: format.accessibilityFrame, codec: codec.accessibilityFrame,
+                paintedFormat: target, paintedCodec: displaced.controlFrame("codec"))
+            XCTAssertEqual(
+                ink.primary.minY - originalInk.minY, 2, accuracy: 0.5,
+                "The negative control moves real native paint")
+            XCTAssertEqual(line.maxY - target.maxY, 2, accuracy: 0.5)
+            XCTAssertGreaterThan(
+                abs(line.maxY - target.maxY), 0.5,
+                "The same unchanged anchor oracle rejects displaced text in a fixed target")
         }
 
         func testLegacyHorizontalControlViolatesTheSameNativeGroupingOracle() async throws {
@@ -128,7 +185,8 @@
         private let previousKeyWindow: UIWindow?
         init(
             width: CGFloat, layout: FieldMonitorLayout, storage: String,
-            separateFormat: Bool = false, legacyHorizontal: Bool = false
+            separateFormat: Bool = false, legacyHorizontal: Bool = false,
+            primaryTextOffset: CGFloat = 0
         ) throws {
             needsControlFrames = separateFormat
             let actions = HeaderActions()
@@ -150,14 +208,21 @@
                                     MonitorBoundedReadoutText(
                                         "[FX] 6K · 25p", maximumSize: 23, minimumSize: 16
                                     )
-                                    .frame(
-                                        minWidth: 44, maxHeight: .infinity,
-                                        alignment: .topTrailing)
-                                }.buttonStyle(.monitorTapTarget).accessibilityLabel("Format")
-                                    .accessibilityValue("[FX] 6K · 25p")
                                     .anchorPreference(
                                         key: HeaderControlAnchorsKey.self, value: .bounds
-                                    ) { ["format": $0] }
+                                    ) {
+                                        ["primaryLine": $0]
+                                    }
+                                    .offset(y: primaryTextOffset)
+                                    .frame(
+                                        minWidth: 44, maxHeight: .infinity,
+                                        alignment: legacyHorizontal ? .topTrailing : .bottomTrailing
+                                    )
+                                }.buttonStyle(.monitorTapTarget).accessibilityLabel("Format")
+                                    .accessibilityValue("[FX] 6K · 25p")
+                                    .transformAnchorPreference(
+                                        key: HeaderControlAnchorsKey.self, value: .bounds
+                                    ) { frames, anchor in frames["format"] = anchor }
                             },
                             detail: {
                                 Button {
@@ -240,7 +305,8 @@
             rendering.opaque = true
             rendering.preferredRange = .standard
             var complete = false
-            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: rendering).image { _ in
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: rendering).image {
+                _ in
                 complete = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
             }
             XCTAssertTrue(complete, "The actual native window must render the control evidence")
@@ -314,7 +380,7 @@
                 }
                 let hasFrames =
                     !needsControlFrames
-                    || ["format", "codec"].allSatisfy { key in
+                    || ["format", "codec", "primaryLine"].allSatisfy { key in
                         guard let rect = actions.frames[key] else { return false }
                         return rect.width > 0 && rect.height > 0 && host.view.window === window
                     }
