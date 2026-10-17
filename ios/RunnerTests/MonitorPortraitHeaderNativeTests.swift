@@ -17,14 +17,20 @@
             let nodes = try await fixture.nodes()
             let format = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Format" })
             let codec = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Codec" })
-            XCTAssertGreaterThanOrEqual(
-                codec.accessibilityFrame.minY, format.accessibilityFrame.maxY + 1.5,
-                "Portrait detail belongs beneath the large primary format, as one grouped readout")
             let paintedFormat = try fixture.controlFrame("format")
             let paintedCodec = try fixture.controlFrame("codec")
-            try fixture.attachFrameProof(
+            let ink = try fixture.attachFrameProof(
                 format: format.accessibilityFrame, codec: codec.accessibilityFrame,
                 paintedFormat: paintedFormat, paintedCodec: paintedCodec)
+            // The stack places glyphs independently of its native target floor. The retained
+            // failure has touching 44pt targets and a 14px painted gap at 3x.
+            XCTAssertGreaterThanOrEqual(
+                ink.codec.minY, ink.format.maxY + 1.5,
+                "Portrait detail belongs beneath the large primary format, as one grouped readout")
+            for target in [format.accessibilityFrame, codec.accessibilityFrame] {
+                XCTAssertGreaterThanOrEqual(target.width, 44)
+                XCTAssertGreaterThanOrEqual(target.height, 44)
+            }
             XCTAssertEqual(
                 paintedCodec.maxX, paintedFormat.maxX, accuracy: 0.5,
                 "Keep the original alignment threshold on actual native control geometry")
@@ -32,8 +38,10 @@
             XCTAssertEqual(codec.accessibilityValue, "R3D NE")
             XCTAssertTrue(format.accessibilityActivate())
             XCTAssertEqual(fixture.actions.formatCalls, 1)
+            XCTAssertEqual(fixture.actions.codecCalls, 0)
             XCTAssertTrue(codec.accessibilityActivate())
             XCTAssertEqual(fixture.actions.codecCalls, 1)
+            XCTAssertEqual(fixture.actions.formatCalls, 1)
         }
 
         func testLegacyHorizontalControlViolatesTheSameNativeGroupingOracle() async throws {
@@ -58,6 +66,24 @@
                 "The old horizontal control must fail the unchanged alignment oracle")
             XCTAssertEqual(format.accessibilityValue, "[FX] 6K · 25p")
             XCTAssertEqual(codec.accessibilityValue, "R3D NE")
+        }
+
+        func testPaintedGroupingObserverRejectsTheLegacyHorizontalControl() async throws {
+            let layout = FieldMonitorLayout(width: 320, height: 956, safeArea: .init(top: 59))
+            let fixture = try HeaderFixture(
+                width: 320, layout: layout, storage: "375 GB", separateFormat: true,
+                legacyHorizontal: true)
+            defer { fixture.close() }
+            let nodes = try await fixture.nodes()
+            let format = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Format" })
+            let codec = try XCTUnwrap(nodes.first { $0.accessibilityLabel == "Codec" })
+            let ink = try fixture.attachFrameProof(
+                format: format.accessibilityFrame, codec: codec.accessibilityFrame,
+                paintedFormat: fixture.controlFrame("format"),
+                paintedCodec: fixture.controlFrame("codec"))
+            XCTAssertLessThan(
+                ink.codec.minY, ink.format.maxY + 1.5,
+                "The same painted-spacing observer must reject the old horizontal controls")
         }
 
         func testCompactPortraitStorageAndPerformanceRemainAdjacentBeforePower() async throws {
@@ -203,27 +229,38 @@
             XCTAssertGreaterThan(rect.height, 0)
             return UIAccessibility.convertToScreenCoordinates(rect, in: host.view)
         }
+        @discardableResult
         func attachFrameProof(
             format: CGRect, codec: CGRect, paintedFormat: CGRect, paintedCodec: CGRect
-        ) throws {
+        ) throws -> (format: CGRect, codec: CGRect) {
             func values(_ rect: CGRect) -> [CGFloat] {
                 [rect.minX, rect.minY, rect.width, rect.height]
             }
-            let data = try JSONSerialization.data(
-                withJSONObject: [
-                    "AXFormat": values(format), "AXCodec": values(codec),
-                    "controlFormat": values(paintedFormat), "controlCodec": values(paintedCodec),
-                    "screenScale": window.screen.scale, "alignmentThreshold": 0.5,
-                ], options: [.sortedKeys])
-            let geometry = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
-            geometry.name = "SIMULATED B5 native control and AX geometry"
-            geometry.lifetime = .keepAlways
-            let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+            let rendererFormat = UIGraphicsImageRendererFormat()
+            rendererFormat.scale = window.screen.scale
+            rendererFormat.opaque = true
+            rendererFormat.preferredRange = .standard
+            let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: rendererFormat)
             var complete = false
             let image = renderer.image { _ in
                 complete = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
             }
             XCTAssertTrue(complete, "The actual native window must render the control evidence")
+            let ink = (
+                format: try inkBounds(in: window.convert(paintedFormat, from: nil), image: image),
+                codec: try inkBounds(in: window.convert(paintedCodec, from: nil), image: image)
+            )
+            let data = try JSONSerialization.data(
+                withJSONObject: [
+                    "AXFormat": values(format), "AXCodec": values(codec),
+                    "controlFormat": values(paintedFormat), "controlCodec": values(paintedCodec),
+                    "inkFormat": values(ink.format), "inkCodec": values(ink.codec),
+                    "screenScale": window.screen.scale, "alignmentThreshold": 0.5,
+                    "paintedGapThreshold": 1.5, "targetMinimum": 44,
+                ], options: [.sortedKeys])
+            let geometry = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            geometry.name = "SIMULATED B5 native control and AX geometry"
+            geometry.lifetime = .keepAlways
             let picture = XCTAttachment(image: image)
             picture.name = "SIMULATED B5 native grouping window"
             picture.lifetime = .keepAlways
@@ -232,6 +269,53 @@
                 activity.add(geometry)
                 activity.add(picture)
             }
+            return ink
+        }
+        private func inkBounds(in rect: CGRect, image: UIImage) throws -> CGRect {
+            let cg = try XCTUnwrap(image.cgImage)
+            XCTAssertEqual(cg.bitsPerPixel, 32)
+            XCTAssertEqual(cg.bitsPerComponent, 8)
+            guard cg.bitsPerPixel == 32, cg.bitsPerComponent == 8 else {
+                throw NSError(domain: "NativeHeaderRaster", code: 1)
+            }
+            XCTAssertTrue(CGRect(origin: .zero, size: image.size).contains(rect))
+            let data = try XCTUnwrap(cg.dataProvider?.data) as Data
+            let left = max(0, Int(floor(rect.minX * image.scale)))
+            let right = min(cg.width, Int(ceil(rect.maxX * image.scale)))
+            let top = max(0, Int(floor(rect.minY * image.scale)))
+            let bottom = min(cg.height, Int(ceil(rect.maxY * image.scale)))
+            guard left < right, top < bottom else {
+                throw NSError(domain: "NativeHeaderRaster", code: 2)
+            }
+            var first = bottom
+            var last = top - 1
+            var minX = right
+            var maxX = left - 1
+            var pixels = 0
+            for y in top..<bottom {
+                for x in left..<right {
+                    let offset = y * cg.bytesPerRow + x * 4
+                    // Same opaque-white threshold as the native storage glyph proof below.
+                    if (0..<4).allSatisfy({ data[offset + $0] >= 200 }) {
+                        first = min(first, y)
+                        last = max(last, y)
+                        minX = min(minX, x)
+                        maxX = max(maxX, x)
+                        pixels += 1
+                    }
+                }
+            }
+            guard first <= last else {
+                XCTFail("No native glyph ink in \(rect); an empty capture cannot prove spacing")
+                throw NSError(domain: "NativeHeaderRaster", code: 3)
+            }
+            XCTAssertLessThan(
+                Double(pixels) / Double((right - left) * (bottom - top)), 0.8,
+                "A solid light frame cannot substitute for native glyphs")
+            return CGRect(
+                x: CGFloat(minX) / image.scale, y: CGFloat(first) / image.scale,
+                width: CGFloat(maxX - minX + 1) / image.scale,
+                height: CGFloat(last - first + 1) / image.scale)
         }
         func nodes() async throws -> [NSObject] {
             for _ in 0..<200 {
