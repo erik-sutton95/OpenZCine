@@ -273,6 +273,25 @@ val verifyReleaseNativeLibraries = tasks.register<Exec>("verifyReleaseNativeLibr
     )
 }
 
+// ML Kit instantiates its ComponentRegistrar classes reflectively (#267); OpenCine's dex check fails
+// every bundleRelease whose registrars lost their constructors to R8.
+val releaseBundle = releaseAabDirectory.map { it.file("app-release.aab") }
+val verifyReleaseComponentRegistrars = tasks.register<Exec>("verifyReleaseComponentRegistrars") {
+    group = "verification"
+    description = "Fail when R8 strips a ComponentRegistrar constructor from the release bundle."
+    dependsOn("bundleRelease")
+    inputs.file(releaseBundle)
+    environment("ANDROID_HOME", androidComponents.sdkComponents.sdkDirectory.get().asFile.absolutePath)
+    commandLine(
+        "bash",
+        repositoryRoot.resolve("../OpenCine/scripts/android-verify-component-registrars.sh").absolutePath,
+        releaseBundle.get().asFile.absolutePath,
+    )
+}
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    finalizedBy(verifyReleaseComponentRegistrars)
+}
+
 dependencies {
     implementation(project(":core-api"))
     // OpenCine common camera contracts (CORE-02 candidate, composite build; see settings).
