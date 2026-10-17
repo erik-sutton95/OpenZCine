@@ -404,7 +404,6 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
                 native.close(active)
                 owner = native.create()
                 apply(native.poll(owner ?: return@replayGyroIngress, observation.timestamp))
-                lastReported = null
             }
             lastReported = observation.recording
             observation.recording?.let { recording ->
