@@ -244,13 +244,39 @@ jobs:
               json.dumps(report, indent=2) + "\n")
           subprocess.run(["xcrun", "simctl", "bootstatus", device_id, "-b"], check=True)
           PY
+      - name: Original storage oracle on a private native 2x iPad
+        env:
+          TEST_RUNNER_CI: "true"
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/native-storage-oracle"
+          mkdir -p "$evidence"
+          udid=""
+          trap 'if [ -n "$udid" ]; then python3 ../OpenCine/scripts/ios-private-simulator.py delete "$udid"; fi' EXIT
+          udid=$(python3 ../OpenCine/scripts/ios-private-simulator.py create \
+            "opc-z-storage-2x-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --device "iPad Pro 11-inch (M4)" --report "$evidence/simulator-setup.json")
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+            -destination "platform=iOS Simulator,id=$udid" -parallel-testing-enabled NO \
+            -resultBundlePath "$evidence/storage-oracle.xcresult" \
+            -only-testing:RunnerTests/MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges test
+      - name: Retain original storage oracle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-storage-oracle-evidence
+          path: ${{ runner.temp }}/native-storage-oracle
+          retention-days: 7
+          if-no-files-found: error
       - name: Run native checks
         env:
           IOS_TEST_RESULT_BUNDLE_PATH: ${{ runner.temp }}/native-ios/Runner.xcresult
           IOS_TEST_LOG_PATH: ${{ runner.temp }}/native-ios/ios-test.log
         run: |
           mkdir -p "$RUNNER_TEMP/native-ios"
-          just native-check
+          just check-demo-isolation swift-check
+          just ios-test -skip-testing:RunnerTests/MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges
+          just ios-build watch-build
       - name: Delete the private iOS test simulator
         if: always()
         run: |

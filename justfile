@@ -100,7 +100,7 @@ ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 
 # Run the iOS shell's Swift Testing suite on the first available iPhone simulator.
-ios-test:
+ios-test *args:
     #!/usr/bin/env bash
     set -euo pipefail
     device_id="${IOS_TEST_DEVICE_ID:-}"
@@ -112,7 +112,7 @@ ios-test:
         exit 1
     fi
     test_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
-      -destination "platform=iOS Simulator,id=$device_id")
+      -destination "platform=iOS Simulator,id=$device_id" {{args}})
     if [ -n "${IOS_TEST_RESULT_BUNDLE_PATH:-}" ]; then
         test_command+=(-resultBundlePath "$IOS_TEST_RESULT_BUNDLE_PATH")
     fi
