@@ -204,9 +204,6 @@ internal fun MonitorAssistState.framing(
         desqueezeDirection = desqueezeDirection,
     )
 
-/** The common trace gain: 100% is unity and 200% is double intensity. */
-internal fun waveformParadeIntensity(percent: Int): Double = percent.coerceIn(0, 200) / 100.0
-
 private const val ASSIST_PREFERENCES = "assist"
 private const val OPERATOR_PREFERENCES = "openzcine.operator-settings"
 private const val PLAYBACK_PREFERENCES = "playbackAssists"

@@ -587,14 +587,6 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `waveform and parade use the common unity brightness scale`() {
-        assertEquals(0.0, waveformParadeIntensity(0))
-        assertEquals(1.0, waveformParadeIntensity(100))
-        assertEquals(2.0, waveformParadeIntensity(200))
-        assertEquals(2.0, waveformParadeIntensity(Int.MAX_VALUE))
-    }
-
-    @Test
     fun `legacy waveform and parade brightness migrates once and repairs wrong typed values`() {
         val versionKey = "assist.scopes.waveformParade.brightnessCalibrationVersion.v1"
         val waveformKey = "assist.scopes.waveform.brightness.v1"

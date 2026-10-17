@@ -231,11 +231,17 @@ struct NikonMonitorShell: View {
                 model.isPhotographyMode
                 ? model.cameraPropertySnapshot.photographyFeedAspect : 16 / 9
         }
+        let waiting = !model.hasLiveFrameImage && !model.isDemoSession
         return .init(
             aspect: model.displayedFeedRotation.isVertical ? 1 / raw : raw,
-            waiting: !model.hasLiveFrameImage && !model.isDemoSession,
+            waiting: waiting,
             vertical: model.displayedFeedRotation.isVertical, flipped: false,
-            recovering: model.sessionRecovery.isRecovering)
+            recovering: model.sessionRecovery.isRecovering,
+            // The camera's own stream with no camera behind it: the plate says why.
+            notice: waiting && model.videoSource == .cameraLiveView
+                ? nikonCameraStatusNotice(
+                    connection: model.connection, internetHopActive: model.internetHopActive)
+                : nil)
     }
     /// The shared field-monitor geometry. Portrait fill yields to de-squeeze, as on every app.
     private var live: LiveMonitorLayout {
@@ -276,9 +282,8 @@ struct NikonMonitorShell: View {
             return Readout(
                 id: .picker(picker), title: value.label, value: label, field: field,
                 quickEnabled: quickEnabled,
-                accessibilityIdentifier: picker.nikonControlSetting.map {
-                    "monitor.capture." + $0.key.rawValue
-                } ?? "")
+                accessibilityIdentifier: "monitor.capture."
+                    + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue))
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
@@ -360,9 +365,11 @@ struct NikonMonitorShell: View {
         return .init(
             key: .picker(picker), top: picker.isTopBar,
             chrome: picker.usesLadderSheet ? .sharedSheet : .content,
-            title: picker == .stabilization
-                ? "VR / E-VR" : picker == .codec ? model.codecColorChoices.title : picker.valueLabel,
-            subtitle: model.pickerSubtitle(for: picker))
+            title: picker.sharedCaptureSheet?.headerLabel
+                ?? (picker == .stabilization
+                    ? "VR / E-VR"
+                    : picker == .codec ? model.codecColorChoices.title : picker.valueLabel),
+            subtitle: picker.sharedCaptureSheet?.subtitle ?? model.pickerSubtitle(for: picker))
     }
     private var captureInputs:
         MonitorOperatorCaptureInputs<NikonLiveReadoutKey, Section, NikonCaptureQuickIdentity>
@@ -417,8 +424,10 @@ struct NikonMonitorShell: View {
             picture: { Self.picture(model) },
             status: { status }, cameraBattery: { cameraBattery }, capture: { captureInputs },
             record: { record },
-            // The Nikon EV needle and level remain native instruments until F04 and A1-31.
-            exposure: nil, level: nil,
+            // The body's exposure indicator feeds the shared EV meter in photography, the only
+            // mode that offers it. The Nikon level remains a native instrument until A1-31.
+            exposure: model.isPhotographyMode ? { model.cameraPropertySnapshot.exposureMeter } : nil,
+            level: nil,
             audio: {
                 model.monitorAvailability.audioMeters
                     ? model.observedLiveAudioLevels.map { .init(levels: $0, caption: nil) } : nil
@@ -573,10 +582,8 @@ private struct NikonCameraSettingExtension: View {
             QualityPickerPanel(embedded: true)
         } else if picker == .stabilization {
             StabilizationPickerPanel()
-        } else if picker.usesLadderSheet {
-            LadderPickerPanel(picker: picker, chromeless: true)
         } else {
-            PickerPanel(picker: picker, embedded: true)
+            LadderPickerPanel(picker: picker)
         }
     }
 }
@@ -594,7 +601,7 @@ private struct NikonCommandDashboard: View {
             onOpenControl: { model.showPicker($0.picker, mode: $0.mode) },
             onMoveTile: { model.moveCommandTile($0, to: $1) },
             healthTrailing: {
-                FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
+                MonitorOperatorLinkGauge<LiveDesign>(fps: model.liveFPS, signalBars: model.liveSignalBars)
             }
         )
     }
@@ -681,5 +688,28 @@ struct SplitComparisonKey: View {
         .minTapTarget()
         .accessibilityLabel("50/50 comparison")
         .accessibilityValue(model.splitComparisonMuted ? "Hidden" : "Shown")
+    }
+}
+
+/// The picture well's words when the camera's stream has no camera behind it, shown on the shared
+/// waiting plate (twin of the Android `monitorCameraStatusNotice`, same words): no camera,
+/// connecting, or coming back from an internet hop. A connected camera keeps the waiting plate.
+func nikonCameraStatusNotice(
+    connection: NativeAppModel.ConnectionState, internetHopActive: Bool
+) -> MonitorOperatorPictureNotice? {
+    switch connection {
+    case .connected:
+        return nil
+    case _ where internetHopActive:
+        return MonitorOperatorPictureNotice(
+            title: "Reconnecting to camera…",
+            detail: "Returning from the internet hop and looking for the camera network.",
+            progress: true)
+    case .pairing, .reconnecting, .preparingLiveView:
+        return MonitorOperatorPictureNotice(
+            title: "Connecting…", detail: "Searching for the camera and restoring live view.",
+            progress: true)
+    case .disconnected, .scanning:
+        return MonitorOperatorPictureNotice(title: "No camera")
     }
 }

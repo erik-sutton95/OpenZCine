@@ -1228,7 +1228,7 @@ final class RunnerTests: XCTestCase {
                 from: root.appendingPathComponent("input.cube"),
                 into: .builtIn))
         XCTAssertThrowsError(
-            try store.importZip(
+            try store.importPack(
                 at: root.appendingPathComponent("input.zip"),
                 into: .builtIn))
         XCTAssertTrue(store.list(.builtIn).isEmpty)
@@ -4496,8 +4496,16 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
             try changeArchive(&bytes)
             try bytes.write(to: zip)
         }
-        XCTAssertThrowsError(try store.importZip(at: zip, into: .red)) { error in
-            if let expectedError { XCTAssertEqual(error as? CustomLUTArchiveError, expectedError) }
+        // A refused cube is counted and never replaces the usable file (the shared pack rule).
+        let result = try store.importPack(at: zip, into: .red)
+        XCTAssertEqual(result.importedCount, 0)
+        XCTAssertEqual(result.foundCubeEntries, 1)
+        if let expectedError {
+            // A limit stops the whole pack, as the Kotlin reader's limit does.
+            XCTAssertEqual(result.archiveError, expectedError.errorDescription)
+        } else {
+            XCTAssertNil(result.archiveError)
+            XCTAssertEqual(result.rejectedCubeEntries, 1)
         }
         XCTAssertEqual(try Data(contentsOf: destination), validArchiveCube)
         XCTAssertEqual(store.cube(category: .red, fileName: "same.cube")?.size, 2)

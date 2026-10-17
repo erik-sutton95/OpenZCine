@@ -1,19 +1,26 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opencapture.opencine.appkit.MonitorControlModel
+import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.nikon.CameraCommandAdmission
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlCapabilities
@@ -38,6 +45,17 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalTestApi::class)
 class NikonCaptureQuickComposeTest {
     @get:Rule val composeRule = createComposeRule()
+    private lateinit var mountedControl: MonitorControlModel
+
+    private fun rootIds(): Set<Int> = composeRule.onAllNodes(isRoot()).fetchSemanticsNodes().map { it.id }.toSet()
+
+    private fun traceFixture(phase: String) {
+        val roots = rootIds()
+        composeRule.runOnIdle {
+            println("SIMULATED quick fixture $phase time=${composeRule.mainClock.currentTime} " +
+                "auto=${composeRule.mainClock.autoAdvance} roots=$roots pending=${mountedControl.state.value.pending.keys}")
+        }
+    }
 
     @Test fun shutterHoldAdjustsTheCurrentCircuitOnlyOnRelease() {
         val session = QuickCamera()
@@ -115,8 +133,8 @@ class NikonCaptureQuickComposeTest {
         session.cameraProperties.value = properties.copy(shutterMode = null,
             controlCapabilities = properties.controlCapabilities.copy(resolutionFrameRates = emptyList()))
         mount(session)
-        drag("SHUTTER", beforeRelease = { assertTrue(session.writes.isEmpty()) })
-        drag("Format", beforeRelease = { assertTrue(session.writes.isEmpty()) })
+        drag("SHUTTER", previewExpected = false, beforeRelease = { assertTrue(session.writes.isEmpty()) })
+        drag("Format", previewExpected = false, beforeRelease = { assertTrue(session.writes.isEmpty()) })
         assertTrue(session.writes.isEmpty())
     }
 
@@ -135,39 +153,129 @@ class NikonCaptureQuickComposeTest {
         assertEquals(CameraControl.STILL_FOCUS_MODE, session.writes.last().first)
     }
 
+    @Test fun hiddenSiblingReadoutCannotOpenWhileHeldPointerCompletes() {
+        val session = QuickCamera()
+        mount(session)
+        val siblingClick = requireNotNull(composeRule.onNode(hasContentDescription("ISO", substring = true))
+            .fetchSemanticsNode().config[SemanticsActions.OnClick].action)
+        val editor = composeRule.runOnIdle { requireNotNull(mountedControl.edit(SettingKey.SHUTTER)) }
+        drag("SHUTTER", beforeRelease = {
+            val beforeClick = rootIds()
+            traceFixture("sibling-click-before")
+            composeRule.runOnIdle { siblingClick() }
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("monitor.capture.close").assertDoesNotExist()
+            assertTrue(session.writes.isEmpty())
+            composeRule.runOnIdle { assertTrue(mountedControl.isCurrent(editor)) }
+            traceFixture("sibling-click-after")
+            assertEquals("An occluded sibling must not create or replace a popup", beforeClick, rootIds())
+        })
+        composeRule.waitUntil(5_000) { session.writes.isNotEmpty() }
+        assertEquals(CameraControl.SHUTTER, session.writes.single().first)
+        assertTrue(session.writes.single().second in listOf("90.0°", "360.0°", "90°", "360°"))
+    }
+
+    @Test fun secondPointerOnHiddenSiblingCannotStartAnAction() {
+        val session = QuickCamera()
+        mount(session)
+        val host = composeRule.onNodeWithTag("SIMULATED-capture-quick-host")
+        val sibling = composeRule.onNode(hasContentDescription("ISO", substring = true))
+            .fetchSemanticsNode().boundsInRoot.center - host.fetchSemanticsNode().boundsInRoot.topLeft
+        val editor = composeRule.runOnIdle { requireNotNull(mountedControl.edit(SettingKey.SHUTTER)) }
+        drag("SHUTTER", beforeRelease = {
+            val beforeSecondPointer = rootIds()
+            traceFixture("sibling-pointer-before")
+            host.performTouchInput { down(pointerId = 1, position = sibling) }
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+            host.performTouchInput { up(pointerId = 1) }
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("monitor.capture.close").assertDoesNotExist()
+            assertTrue(session.writes.isEmpty())
+            composeRule.runOnIdle { assertTrue(mountedControl.isCurrent(editor)) }
+            traceFixture("sibling-pointer-after")
+            assertEquals("A disabled sibling must leave the held preview intact", beforeSecondPointer, rootIds())
+        })
+        composeRule.waitUntil(5_000) { session.writes.isNotEmpty() }
+        assertEquals(CameraControl.SHUTTER, session.writes.single().first)
+        assertTrue(session.writes.single().second in listOf("90.0°", "360.0°", "90°", "360°"))
+    }
+
+    @Test fun secondPointerOnTheHeldReadoutCancelsWithoutAnAction() {
+        val session = QuickCamera()
+        mount(session)
+        val host = composeRule.onNodeWithTag("SIMULATED-capture-quick-host")
+        val target = composeRule.onNode(hasContentDescription("SHUTTER", substring = true))
+            .fetchSemanticsNode().boundsInRoot.center - host.fetchSemanticsNode().boundsInRoot.topLeft
+        val beforeHold = rootIds()
+        drag("SHUTTER", beforeRelease = {
+            host.performTouchInput { down(pointerId = 1, position = target) }
+            composeRule.mainClock.advanceTimeByFrame()
+            host.performTouchInput { up(pointerId = 1) }
+            composeRule.mainClock.autoAdvance = true
+            composeRule.waitUntil(5_000) { rootIds() == beforeHold }
+            composeRule.onNodeWithTag("monitor.capture.close").assertDoesNotExist()
+            traceFixture("held-readout-second-pointer-cancelled")
+        })
+        composeRule.runOnIdle { assertTrue(session.writes.isEmpty()) }
+    }
+
     private fun mount(session: QuickCamera, surrendered: () -> Boolean = { false }) {
-        composeRule.mainClock.autoAdvance = false
+        composeRule.mainClock.autoAdvance = true
         composeRule.setContent {
             val context = LocalContext.current
             val settings = remember { OperatorSettings(context.getSharedPreferences(
                 "SIMULATED-capture-quick", Context.MODE_PRIVATE).also { it.edit().clear().commit() }) }
             val scope = rememberCoroutineScope()
             val common = remember { NikonOpenCineSession(session, scope) }
-            val control = remember { MonitorControlModel(scope).also { it.bind(common) } }
+            val control = remember { MonitorControlModel(scope).also { it.bind(common); mountedControl = it } }
             DisposableEffect(Unit) { onDispose { control.unbind() } }
             OpenZCineTheme {
                 val assists = remember { idleNikonAssists() }
-                MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), frameSource = null,
-                    assists = assists, operatorSettings = settings, liveViewEnabled = false, sessionRecoveryEnabled = false,
-                    controlsSurrendered = surrendered())
+                Box(Modifier.fillMaxSize().testTag("SIMULATED-capture-quick-host")) {
+                    MonitorScreen(session, common, control, rememberTestOperatorSession(assists, settings), frameSource = null,
+                        assists = assists, operatorSettings = settings, liveViewEnabled = false, sessionRecoveryEnabled = false,
+                        controlsSurrendered = surrendered())
+                }
             }
         }
-        composeRule.mainClock.advanceTimeByFrame()
         composeRule.waitUntilAtLeastOneExists(hasContentDescription("SHUTTER", substring = true), 5_000)
+        composeRule.waitForIdle()
     }
 
-    private fun drag(caption: String, beforeRelease: () -> Unit) {
+    private fun drag(caption: String, previewExpected: Boolean = true, beforeRelease: () -> Unit) {
+        composeRule.waitForIdle()
+        composeRule.mainClock.autoAdvance = false
         val readout = composeRule.onNode(hasContentDescription(caption, substring = true))
+        val roots = composeRule.onAllNodes(isRoot()).fetchSemanticsNodes().size
         readout.performTouchInput {
             down(center)
             advanceEventTime(500)
             moveBy(Offset.Zero)
         }
         composeRule.mainClock.advanceTimeBy(500)
-        readout.performTouchInput { moveBy(Offset(-180f, 0f)) }
-        beforeRelease()
-        readout.performTouchInput { up() }
+        composeRule.waitForIdle()
+        val previewRoots = roots + if (previewExpected) 1 else 0
+        assertEquals("The held control must expose exactly its admitted quick preview", previewRoots,
+            composeRule.onAllNodes(isRoot()).fetchSemanticsNodes().size)
+        // A preview hides the original readout from accessibility. Input injection retains the
+        // same pointer, so finish it through the stable host instead of querying the hidden label.
+        val host = composeRule.onNodeWithTag("SIMULATED-capture-quick-host")
+        host.performTouchInput { moveBy(Offset(-180f, 0f)) }
         composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
+        assertEquals("The quick preview must survive movement before admission changes", previewRoots,
+            composeRule.onAllNodes(isRoot()).fetchSemanticsNodes().size)
+        beforeRelease()
+        host.performTouchInput { up() }
+        traceFixture("released:$caption")
+        // Restore normal scheduler progress for the production 120ms typed-write coalescer and
+        // the preview's LaunchedEffect cleanup before another merged-tree query or receipt wait.
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        traceFixture("settled:$caption")
     }
 
     private class QuickCamera : CameraSession by FakeCameraSession(

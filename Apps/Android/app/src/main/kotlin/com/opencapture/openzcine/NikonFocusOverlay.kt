@@ -72,7 +72,7 @@ internal fun CameraFocusOverlay(
     mirrored: Boolean = false,
     mirroredVertical: Boolean = false,
 ) {
-    if (focus == null || focus.boxes.isEmpty()) return
+    if (focus == null || focus.boxes.isEmpty() || feed.width <= 0f || feed.height <= 0f) return
     val marks = nikonFocusAreas(focus) ?: return
     val description =
         focus.accessibilityDescription() +
