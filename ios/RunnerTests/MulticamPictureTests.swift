@@ -89,6 +89,71 @@ final class MulticamPictureTests: XCTestCase {
         }
     }
 
+    /// SIMULATED original LUT-REPLACE-REFRESH-TEST: the same tile and selected filename
+    /// must render the replacement bytes through the existing retained production renderer.
+    func testSameNameImportRefreshesMultiviewPixelsWithoutChangingTheSelectedLook() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source/Operator Look.cube")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let store = CustomLUTStore(root: root.appendingPathComponent("library"))
+        let suite = "SIMULATED.MulticamLUT." + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { storage.removePersistentDomain(forName: suite) }
+        let model = NativeAppModel(lutFileStore: store, assist: .restore(storage: storage))
+        let originalPreferences = model.preferences
+        let originalConfiguration = model.assistConfiguration
+        defer {
+            model.preferences = originalPreferences
+            model.assistConfiguration = originalConfiguration
+        }
+        let selection = LUTSelection.stored(category: .custom, fileName: source.lastPathComponent)
+        let picture = MulticamMemberPicture(selection: selection, fileStore: store)
+        defer { picture.retire() }
+        let frame = solid(80, 80, 80)
+        func cube(_ rgb: String) -> Data {
+            Data(("LUT_3D_SIZE 2\n" + String(repeating: rgb + "\n", count: 8)).utf8)
+        }
+        try cube("1 0 0").write(to: source)
+        try model.importCustomLUT(from: source)
+        picture.setLUT(enabled: true)
+        picture.accept(frame)
+        try await waitUntil("first stored look reaches the tile") { picture.publishedBakes == 1 }
+        let first = try pixel(picture.image)
+        XCTAssertGreaterThan(first.r, 230, "First cube produces red: \(first)")
+        XCTAssertLessThan(first.b, 20, "First cube produces red: \(first)")
+
+        try cube("0 0 1").write(to: source)
+        try model.importCustomLUT(from: source)
+        picture.accept(frame)
+        try await waitUntil("same-name replacement reaches the retained tile") {
+            picture.publishedBakes == 2
+        }
+        let replaced = try pixel(picture.image)
+        XCTAssertGreaterThan(replaced.b, 230, "Replacement cube produces blue: \(replaced)")
+        XCTAssertLessThan(replaced.r, 20, "Replacement cube produces blue: \(replaced)")
+        XCTAssertEqual(picture.lutSelection, selection)
+        XCTAssertEqual(model.assistConfiguration.selectedLUT, selection)
+        XCTAssertTrue(picture.lutEnabled)
+        XCTAssertEqual(store.list(.custom).map(\.fileName), ["Operator Look.cube"])
+
+        try Data("not a cube".utf8).write(to: source)
+        XCTAssertThrowsError(try model.importCustomLUT(from: source))
+        picture.accept(frame)
+        try await waitUntil("rejected replacement preserves the valid tile look") {
+            picture.publishedBakes == 3
+        }
+        let preserved = try pixel(picture.image)
+        XCTAssertGreaterThan(preserved.b, 230)
+        XCTAssertLessThan(preserved.r, 20)
+        XCTAssertEqual(picture.lutSelection, selection)
+        XCTAssertEqual(
+            try Data(
+                contentsOf: root.appendingPathComponent(
+                    "library/custom/Operator Look.cube")), cube("0 0 1"))
+    }
+
     func testMembersBakeTheirOwnLooksIndependently() async throws {
         let source = solid(200, 60, 40)
         let a = picture(.nLogRec709)
