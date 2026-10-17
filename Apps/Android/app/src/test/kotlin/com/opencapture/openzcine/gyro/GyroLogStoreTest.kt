@@ -1,5 +1,10 @@
 package com.opencapture.openzcine.gyro
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -9,6 +14,8 @@ import java.io.IOException
 import java.nio.file.Files
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class GyroLogStoreTest {
     @Test fun `one damaged partial preserves saved logs and other recoverable files`() {
@@ -152,6 +159,67 @@ class GyroLogStoreTest {
             store.delete(incomplete)
             assertTrue(store.entries().isEmpty())
         } finally { root.deleteRecursively() }
+    }
+
+    @Test fun `replacement activity recovery waits for the previous writer to finish`() = runBlocking {
+        val root = Files.createTempDirectory("gyro-store-test").toFile()
+        val oldScope = gyroCaptureScope()
+        val replacementScope = gyroCaptureScope()
+        val writeStarted = CountDownLatch(1)
+        val releaseWrite = CountDownLatch(1)
+        val recoveryStarted = CountDownLatch(1)
+        val jobs = mutableListOf<Job>()
+        val native = RecoveryNative()
+        val oldStore = GyroLogStore(root, native) { file, bytes ->
+            file.write(bytes, 0, 10)
+            writeStarted.countDown()
+            check(releaseWrite.await(5, TimeUnit.SECONDS)) { "Delayed write was not released." }
+            file.write(bytes, 10, bytes.size - 10)
+        }
+        val replacementStore = GyroLogStore(root, native)
+        try {
+            val descriptor = descriptor()
+            val id = descriptor.getString("id")
+            val payload = "valid gyro after recreation"
+            oldStore.apply(reply(JSONObject().put("kind", "opened").put("id", id).put("descriptor", descriptor)))
+            val append = oldScope.async {
+                oldStore.apply(reply(JSONObject().put("kind", "appended").put("id", id)
+                    .put("data", Base64.getEncoder().encodeToString(payload.toByteArray()))))
+            }.also(jobs::add)
+            assertTrue("The previous writer must be in progress.", writeStarted.await(5, TimeUnit.SECONDS))
+            val finish = oldScope.async {
+                oldStore.apply(reply(JSONObject().put("kind", "finished").put("id", id)
+                    .put("summary", summary(descriptor, "normal"))))
+                oldStore.close()
+            }.also(jobs::add)
+            val recovered = replacementScope.async {
+                recoveryStarted.countDown()
+                replacementStore.recover()
+                replacementStore.entries().single()
+            }.also(jobs::add)
+            assertFalse("Recovery must wait for the previous activity's disk work.",
+                recoveryStarted.await(100, TimeUnit.MILLISECONDS))
+            releaseWrite.countDown()
+            withTimeout(5_000) {
+                append.await()
+                finish.await()
+                oldScope.cancel()
+                val entry = recovered.await()
+                assertEquals(payload, entry.file.readText())
+                assertEquals("Complete", entry.health)
+                assertTrue(entry.canShare)
+                assertFalse(entry.active)
+                assertEquals("normal", requireNotNull(entry.summary).getString("termination"))
+            }
+        } finally {
+            releaseWrite.countDown()
+            try { withTimeout(10_000) { jobs.forEach { it.join() } } }
+            finally {
+                oldScope.cancel(); replacementScope.cancel()
+                oldStore.close(); replacementStore.close()
+                root.deleteRecursively()
+            }
+        }
     }
 
     private fun descriptor(): JSONObject {
