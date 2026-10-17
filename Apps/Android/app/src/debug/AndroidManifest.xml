@@ -4,7 +4,7 @@
 
     <application>
         <activity android:name=".MainActivity" android:showWhenLocked="true" android:turnScreenOn="true" />
-    <activity android:name="androidx.activity.ComponentActivity" tools:replace="android:exported,android:theme" android:exported="false" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+    <activity android:name="androidx.activity.ComponentActivity" tools:replace="android:exported,android:theme,android:configChanges" android:exported="false" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|assetsPaths" android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
     </application>
 
 </manifest>

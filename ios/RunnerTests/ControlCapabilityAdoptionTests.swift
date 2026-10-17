@@ -10,7 +10,9 @@ import Testing
 @Suite("Nikon control model adoption")
 struct ControlCapabilityAdoptionTests {
     @MainActor
-    @Test("Without a connected body the static Nikon profile decides, offering no zoom chip or gimbal")
+    @Test(
+        "Without a connected body the static Nikon profile decides, offering no zoom chip or gimbal"
+    )
     func theStaticProfileDecides() {
         let model = NativeAppModel()
         let controls = model.controlCapabilities
