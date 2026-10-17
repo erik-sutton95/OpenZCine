@@ -59,7 +59,7 @@ class RelayWatchController(
     watcherId: String? = null,
     onJpegOnlyLatched: (() -> Unit)? = null,
     /** Where passcodes are remembered per broadcaster; null keeps them for this run only. */
-    private val secrets: WatcherRelaySecrets? = null,
+    private val passcodes: RelayPasscodes? = null,
     hevcDecodeDeadlineMillis: Long = 6_000L,
     stallDeadlineMillis: Long = 8_000L,
     log: (String) -> Unit = { android.util.Log.i("RelayHEVC", it) },
@@ -84,12 +84,12 @@ class RelayWatchController(
         },
         picture = frameSource.pictureOwner,
         credentials = object : RelayViewerCredentials {
-            // A code the store could not keep still joins in this run, never on disk; a store
-            // that cannot answer now joins without one and the broadcaster asks again.
+            // A failed secure migration keeps the old credential usable; new answers that the
+            // store could not keep still join in this run, never in a new plaintext entry.
             override fun passcode(key: String): String? = rememberedPasscodes[key]
-                ?: (secrets?.rememberedPasscodeLookup(key) as? WatcherRelaySecrets.Lookup.Stored)?.value
+                ?: (passcodes?.rememberedPasscodeLookup(key) as? WatcherRelaySecrets.Lookup.Stored)?.value
             override fun rememberPasscode(key: String, code: String) {
-                if (secrets?.storeRememberedPasscode(code, key) == true) rememberedPasscodes.remove(key)
+                if (passcodes?.storeRememberedPasscode(code, key) == true) rememberedPasscodes.remove(key)
                 else rememberedPasscodes[key] = code
             }
             override val jpegOnly: Boolean get() = processJpegOnly

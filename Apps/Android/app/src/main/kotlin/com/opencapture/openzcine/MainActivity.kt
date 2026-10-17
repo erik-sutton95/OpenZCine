@@ -270,24 +270,12 @@ class MainActivity : ComponentActivity() {
                 // install-scoped like the jpeg-only verdict below: a set's passcode does not
                 // change because this app was rebuilt. The plain-text copies of earlier builds
                 // move in once; each leaves only after its sealed copy read back.
-                val relaySecrets =
+                val relayPasscodes =
                     remember {
-                        com.opencapture.opencine.relayruntime.WatcherRelaySecrets(
+                        com.opencapture.openzcine.relay.RelayPasscodes(
                                 applicationContext,
                                 com.opencapture.openzcine.relay.RelayWatchController.SECRETS_SERVICE,
                             )
-                            .also {
-                                it.adoptLegacyRememberedPasscodes(
-                                    applicationContext.getSharedPreferences("relay_passcodes", MODE_PRIVATE)
-                                )
-                                it.adoptLegacyHostPasscode(
-                                    applicationContext.getSharedPreferences(
-                                        com.opencapture.openzcine.relay.RelayBroadcastController.LEGACY_PASSCODE_STORE,
-                                        MODE_PRIVATE,
-                                    ),
-                                    com.opencapture.openzcine.relay.RelayBroadcastController.LEGACY_PASSCODE_KEY,
-                                )
-                            }
                     }
                 val relayBroadcastController =
                     remember {
@@ -302,7 +290,7 @@ class MainActivity : ComponentActivity() {
                             savePreferredPort = { port ->
                                 portPrefs.edit().putInt("listenerPort", port).apply()
                             },
-                            secrets = relaySecrets,
+                            passcodes = relayPasscodes,
                         )
                     }
                 val relayBroadcastUi by relayBroadcastController.ui.collectAsState()
@@ -349,7 +337,7 @@ class MainActivity : ComponentActivity() {
                                     watcherId =
                                         com.opencapture.openzcine.relay.RelayWatcherIdentity
                                             .current(applicationContext),
-                                    secrets = relaySecrets,
+                                    passcodes = relayPasscodes,
                                 )
                                 .also { it.start() }
                     }
@@ -1448,7 +1436,7 @@ class MainActivity : ComponentActivity() {
                                                     com.opencapture.openzcine.relay.RelayWatcherIdentity
                                                         .current(applicationContext),
                                                 onJpegOnlyLatched = persistJpegOnly,
-                                                secrets = relaySecrets,
+                                                passcodes = relayPasscodes,
                                             )
                                             .also { it.start() }
                                 },
