@@ -42,6 +42,8 @@ import java.io.File
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 
 /** Compact capture health, opening the same logs list as Operator Setup. */
 @Composable
@@ -114,17 +116,17 @@ internal fun GyroLogsScreen(state: GyroCaptureState, onShare: (GyroLogEntry) -> 
     }
 }
 
-/** Stages a finalized log in the existing read-only media FileProvider scope. */
-internal fun shareGyroLog(context: Context, entry: GyroLogEntry) {
-    check(entry.canShare) { "This gyro log is not finalized." }
-    val directory = File(context.cacheDir, "share/ready/gyro").apply { mkdirs() }
-    val staged = File(directory, entry.file.name)
-    entry.file.copyTo(staged, overwrite = true)
+/** Stages off Main under the activity's scope; chooser and failure callbacks run on Main. */
+internal fun shareGyroLog(context: Context, entry: GyroLogEntry, scope: CoroutineScope,
+    onFailure: (Exception) -> Unit): Job = shareGyroLog(scope, context.cacheDir, entry,
+    onReady = { staged -> presentGyroLog(context, staged) }, onFailure = onFailure)
+
+private fun presentGyroLog(context: Context, staged: File) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.media-share", staged)
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_STREAM, uri)
-        putExtra(Intent.EXTRA_TITLE, entry.file.name)
+        putExtra(Intent.EXTRA_TITLE, staged.name)
         clipData = ClipData.newRawUri("Gyro log", uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }

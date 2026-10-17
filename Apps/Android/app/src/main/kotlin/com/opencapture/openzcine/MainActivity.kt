@@ -1642,7 +1642,7 @@ class MainActivity : ComponentActivity() {
                 if (gyroLogsPresented) {
                     GyroLogsScreen(gyroState,
                         onShare = { entry ->
-                            runCatching { shareGyroLog(this@MainActivity, entry) }.onFailure {
+                            shareGyroLog(this@MainActivity, entry, connectionScope) {
                                 Toast.makeText(this@MainActivity, it.message ?: "Could not share gyro log.", Toast.LENGTH_LONG).show()
                             }
                         }, onDelete = gyroCapture::delete,

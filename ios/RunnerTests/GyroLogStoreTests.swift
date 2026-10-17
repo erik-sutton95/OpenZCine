@@ -1,9 +1,9 @@
 import Foundation
 import OpenCineAppKitApple
-import UIKit
-import UniformTypeIdentifiers
 import OpenZCineCore
 import Testing
+import UIKit
+import UniformTypeIdentifiers
 
 @testable import Runner
 
@@ -11,9 +11,12 @@ import Testing
 struct GyroLogStoreTests {
     @Test("The native share bridge preserves GCSV as a data file")
     @MainActor func shareType() {
-        let item = MonitorDeliveryShareItem(fileURL: URL(fileURLWithPath: "/take.gcsv"), contentType: .data)
+        let item = MonitorDeliveryShareItem(
+            fileURL: URL(fileURLWithPath: "/take.gcsv"), contentType: .data)
         let controller = UIActivityViewController(activityItems: [], applicationActivities: nil)
-        #expect(item.activityViewController(controller, dataTypeIdentifierForActivityType: nil) == UTType.data.identifier)
+        #expect(
+            item.activityViewController(controller, dataTypeIdentifierForActivityType: nil)
+                == UTType.data.identifier)
     }
 
     @Test("An active take cannot be shared or deleted; a completed take exports GCSV")
