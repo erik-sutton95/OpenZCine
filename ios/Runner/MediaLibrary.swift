@@ -411,12 +411,21 @@ struct MediaClipStore: @unchecked Sendable {
     /// container — e.g. a simulator sample — shows up); index entries are kept even when not yet
     /// downloaded (camera clips awaiting fetch). Sorted by filename.
     func list(cameraID: String) -> [MediaClip] {
+        let indexed = loadIndex(cameraID: cameraID)
+        let names =
+            (try? FileManager.default.contentsOfDirectory(atPath: directory(for: cameraID).path))
+            ?? []
+        return reconciledClips(cameraID: cameraID, indexed: indexed, diskNames: names)
+    }
+
+    private func reconciledClips(cameraID: String, indexed: [MediaClip], diskNames: [String])
+        -> [MediaClip]
+    {
         var byName: [String: MediaClip] = [:]
-        for clip in loadIndex(cameraID: cameraID) { byName[clip.filename] = clip }
+        for clip in indexed { byName[clip.filename] = clip }
 
         let dir = directory(for: cameraID)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        for name in names where Self.isBrowsableMediaFile(name) && byName[name] == nil {
+        for name in diskNames where Self.isBrowsableMediaFile(name) && byName[name] == nil {
             let size = fileSize(at: dir.appendingPathComponent(name))
             byName[name] = MediaClip(
                 cameraID: cameraID, filename: name, handle: nil, storageID: nil,
@@ -553,12 +562,14 @@ struct MediaClipStore: @unchecked Sendable {
             // Preserve the existing indexed-plus-disk readout, including indexed masters that
             // Clear has never owned. An index removal still makes those non-browsable files
             // absent from the legacy readout; this adoption does not expand deletion.
-            return list(cameraID: cameraID).compactMap { clip in
-                guard let filename = MediaClipFilename.safeCameraBasename(clip.filename) else {
-                    return nil
-                }
-                return Self.safeBucketID(clip.cameraID) + "/" + filename
-            }.sorted()
+            let indexed = try observedIndex(cameraID: cameraID)
+            return reconciledClips(cameraID: cameraID, indexed: indexed, diskNames: names)
+                .compactMap { clip in
+                    guard let filename = MediaClipFilename.safeCameraBasename(clip.filename) else {
+                        return nil
+                    }
+                    return Self.safeBucketID(clip.cameraID) + "/" + filename
+                }.sorted()
         }
         var selected = names.filter(Self.isBrowsableMediaFile).map { bucket + "/" + $0 }
         if includingMetadata {
@@ -711,6 +722,23 @@ struct MediaClipStore: @unchecked Sendable {
             let clips = try? JSONDecoder().decode([MediaClip].self, from: data)
         else { return [] }
         return clips.filter { MediaClipFilename.safeCameraBasename($0.filename) != nil }
+    }
+
+    /// Settings observes the same catalog as listing, but an unreadable or malformed index is unknown.
+    /// A missing index alone permits the existing browsable-disk fallback.
+    private func observedIndex(cameraID: String) throws -> [MediaClip] {
+        let location = indexURL(cameraID: cameraID)
+        do {
+            guard
+                try fileManager.attributesOfItem(atPath: location.path)[.type] as? FileAttributeType
+                    == .typeRegular
+            else {
+                throw MonitorMediaCacheError.invalidAddress
+            }
+            return try Self.decodeCatalogBytes(Data(contentsOf: location))
+        } catch let error as CocoaError
+            where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+        { return [] }
     }
 
     private func saveIndex(_ clips: [MediaClip], cameraID: String) {

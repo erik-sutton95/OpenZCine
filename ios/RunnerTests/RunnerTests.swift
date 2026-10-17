@@ -2195,6 +2195,106 @@ extension RunnerTests {
         XCTAssertTrue(store.list(cameraID: "cam").isEmpty)
     }
 
+    @MainActor
+    func testSettingsUnreadableIndexIsUnknownWithoutChangingTheIndexedReadoutSet() async throws {
+        let root = mediaRoot()
+        let store = MediaClipStore(root: root)
+        try writeCachedClip(store, cameraID: "cam", filename: "MASTER.R3D", bytes: 5)
+        try writeCachedClip(store, cameraID: "cam", filename: "DSC_0001.JPG", bytes: 10)
+        let index = store.directory(for: "cam").appendingPathComponent("index.json")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: index.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o644], ofItemAtPath: index.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let model = NativeAppModel(mediaClipStore: store)
+        let settings = MonitorSettingsCacheModel()
+        defer { settings.retire() }
+        settings.refresh(model.captureOperatorMediaCacheSource())
+        try await waitUntil("the unreadable index observation") {
+            settings.bytes != nil || settings.readFailed
+        }
+        XCTAssertTrue(settings.readFailed)
+        XCTAssertNil(settings.bytes)
+        XCTAssertEqual(store.list(cameraID: "cam").map(\.filename), ["DSC_0001.JPG"])
+    }
+
+    @MainActor
+    func testSettingsMalformedIndexIsUnknownWhileLegacyListingStillBrowsesDisk() async throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        try writeCachedClip(store, cameraID: "cam", filename: "DSC_0001.JPG", bytes: 10)
+        try Data("invalid catalog".utf8).write(
+            to: store.directory(for: "cam").appendingPathComponent("index.json"))
+        let model = NativeAppModel(mediaClipStore: store)
+        let settings = MonitorSettingsCacheModel()
+        defer { settings.retire() }
+        settings.refresh(model.captureOperatorMediaCacheSource())
+        try await waitUntil("the malformed index observation") {
+            settings.bytes != nil || settings.readFailed
+        }
+        XCTAssertTrue(settings.readFailed)
+        XCTAssertNil(settings.bytes)
+        XCTAssertEqual(store.list(cameraID: "cam").map(\.filename), ["DSC_0001.JPG"])
+    }
+
+    @MainActor
+    func testSettingsMissingIndexStillCountsBrowsableDiskFiles() async throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        try writeCachedClip(store, cameraID: "cam", filename: "MASTER.R3D", bytes: 5)
+        try writeCachedClip(store, cameraID: "cam", filename: "DSC_0001.JPG", bytes: 10)
+        try FileManager.default.removeItem(
+            at: store.directory(for: "cam").appendingPathComponent("index.json"))
+        let model = NativeAppModel(mediaClipStore: store)
+        let settings = MonitorSettingsCacheModel()
+        defer { settings.retire() }
+        settings.refresh(model.captureOperatorMediaCacheSource())
+        try await waitUntil("the missing index disk fallback") {
+            settings.bytes != nil || settings.readFailed
+        }
+        XCTAssertFalse(settings.readFailed)
+        XCTAssertEqual(settings.bytes, 10)
+    }
+
+    @MainActor
+    func testSettingsClearsNestedThumbnailsWithoutExpandingCameraOrLocalDeletion() async throws {
+        let root = mediaRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MediaClipStore(root: root)
+        try writeCachedClip(store, cameraID: "cam", filename: "MASTER.R3D", bytes: 5)
+        try writeCachedClip(store, cameraID: "cam", filename: "DSC_0001.JPG", bytes: 10)
+        try writeCachedClip(
+            store, cameraID: MediaClipStore.localBucketID, filename: "IMPORT.MOV", bytes: 7)
+        let nested = store.directory(for: "cam").appendingPathComponent("thumbs/old")
+        let deep = nested.appendingPathComponent("deep")
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        try Data(count: 3).write(to: nested.appendingPathComponent("a.jpg"))
+        try Data(count: 4).write(to: deep.appendingPathComponent("b.jpg"))
+        let note = store.directory(for: "cam").appendingPathComponent("keep.txt")
+        try Data(count: 9).write(to: note)
+        let master = try store.localURL(cameraID: "cam", filename: "MASTER.R3D")
+        let model = NativeAppModel(mediaClipStore: store)
+        let settings = MonitorSettingsCacheModel()
+        defer { settings.retire() }
+        settings.refresh(model.captureOperatorMediaCacheSource())
+        try await waitUntil("the approved indexed readout") { settings.bytes != nil }
+        XCTAssertEqual(settings.bytes, 15)
+        settings.requestClear()
+        settings.clear()
+        try await waitUntil("the nested thumbnail clear") {
+            !settings.clearing && settings.bytes == 0
+        }
+        XCTAssertFalse(settings.clearFailed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nested.path))
+        XCTAssertEqual(try Data(contentsOf: master), Data(repeating: 1, count: 5))
+        XCTAssertEqual(try Data(contentsOf: note), Data(count: 9))
+        XCTAssertEqual(store.cachedByteCount(cameraID: MediaClipStore.localBucketID), 7)
+    }
+
     private func writeCachedClip(
         _ store: MediaClipStore, cameraID: String, filename: String, bytes: Int
     ) throws {
