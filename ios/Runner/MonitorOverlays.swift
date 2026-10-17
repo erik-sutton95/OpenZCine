@@ -1,4 +1,3 @@
-import CoreMotion
 import MonitorPresentation
 import MonitorUI
 import OpenCineCameraControls
@@ -343,14 +342,14 @@ struct FeedLevelView: View {
 /// rotated — `isPortrait` selects the mapping for the two orientations the app supports (Portrait,
 /// LandscapeRight). The simulator reports no motion, so the mapping is derived from CoreMotion's
 /// documented axis conventions; on-hardware sign calibration may still want a one-line flip.
-@Observable
+@MainActor @Observable
 final class DeviceLevel {
     var roll: Double = 0
     var pitch: Double = 0
     /// True while the monitor shell is laid out portrait; kept current by the hosting view.
     var isPortrait = false
 
-    @ObservationIgnored private let manager = CMMotionManager()
+    @ObservationIgnored private var motionToken: UUID?
 
     /// Screen-plane roll in degrees from the device-frame gravity vector: 0 = upright for the
     /// given interface orientation, positive = tilted clockwise from the viewer's perspective.
@@ -358,7 +357,9 @@ final class DeviceLevel {
     /// Roll is the angle of gravity off screen-down, toward screen-right: `atan2(g·right, g·down)`.
     /// Portrait: screen right/down = device +x/−y. LandscapeRight (home side right, device +x
     /// pointing at the sky, so g.x = −1 when level): screen right/down = device −y/−x.
-    static func displayRoll(gravityX: Double, gravityY: Double, isPortrait: Bool) -> Double {
+    nonisolated static func displayRoll(gravityX: Double, gravityY: Double, isPortrait: Bool)
+        -> Double
+    {
         let radians =
             isPortrait
             ? atan2(gravityX, -gravityY)
@@ -367,12 +368,11 @@ final class DeviceLevel {
     }
 
     func start() {
-        guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
-        manager.deviceMotionUpdateInterval = 1.0 / 30.0
-        manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
-            guard let self, let g = motion?.gravity else { return }
-            let newRoll = Self.displayRoll(gravityX: g.x, gravityY: g.y, isPortrait: isPortrait)
-            let newPitch = atan2(g.z, (g.x * g.x + g.y * g.y).squareRoot()) * 180 / .pi
+        guard motionToken == nil else { return }
+        motionToken = PhoneMotionDriver.shared.startLevel { [weak self] x, y, z in
+            guard let self else { return }
+            let newRoll = Self.displayRoll(gravityX: x, gravityY: y, isPortrait: isPortrait)
+            let newPitch = atan2(z, (x * x + y * y).squareRoot()) * 180 / .pi
             // Light low-pass so the readout settles instead of jittering on every sample.
             roll = roll * 0.75 + newRoll * 0.25
             pitch = pitch * 0.75 + newPitch * 0.25
@@ -380,7 +380,8 @@ final class DeviceLevel {
     }
 
     func stop() {
-        if manager.isDeviceMotionActive { manager.stopDeviceMotionUpdates() }
+        if let motionToken { PhoneMotionDriver.shared.stopLevel(motionToken) }
+        motionToken = nil
     }
 }
 

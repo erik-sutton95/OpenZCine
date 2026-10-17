@@ -62,6 +62,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.openzcine.bridge.SwiftCore
+import com.opencapture.openzcine.gyro.GyroCaptureCoordinator
+import com.opencapture.openzcine.gyro.GyroLogsScreen
+import com.opencapture.openzcine.gyro.GyroMountScreen
+import com.opencapture.openzcine.gyro.shareGyroLog
+import com.opencapture.opencine.cameracontrols.MonitorSettingsGyroSource
 import com.opencapture.openzcine.bridge.SwiftCoreSmoke
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
@@ -179,6 +184,7 @@ private fun FrameioInternetHopState.allowsMonitorSessionRecovery(): Boolean =
  * feed, NSD transport probe) bypass startup straight to the monitor.
  */
 class MainActivity : ComponentActivity() {
+    private val gyroCapture by lazy { GyroCaptureCoordinator(applicationContext) }
     private lateinit var mediaRemoteShutter: AndroidMediaRemoteShutter
     private val diagnostics: AndroidAppDiagnostics by lazy {
         AndroidAppDiagnostics.create(applicationContext)
@@ -243,6 +249,17 @@ class MainActivity : ComponentActivity() {
                 CompositionLocalProvider(LocalOperatorHaptics provides operatorHaptics) {
                 Box(Modifier.fillMaxSize()) {
                 var monitorSession by remember { mutableStateOf(debugSession) }
+                val gyroState by gyroCapture.state.collectAsState()
+                var gyroLogsPresented by rememberSaveable { mutableStateOf(false) }
+                var gyroMountPresented by rememberSaveable { mutableStateOf(false) }
+                val gyroSource = MonitorSettingsGyroSource(
+                    enabled = gyroState.enabled, setEnabled = gyroCapture::setEnabled,
+                    status = gyroState.status, available = gyroState.available || gyroState.enabled,
+                    openLogs = { gyroLogsPresented = true },
+                    mountName = if (gyroState.mountCalibration != null) "Calibrated"
+                        else gyroState.mountOptions.firstOrNull { it.id == gyroState.mountPreset }?.shortLabel,
+                    configureMount = if (gyroState.mountOptions.isNotEmpty()) ({ gyroMountPresented = true }) else null,
+                )
                 // The HDMI capture feed beside a capture-only session. Non-null
                 // exactly while the monitor is on the HDMI path; closed (CameraX
                 // unbind) whenever the monitor exits.
@@ -849,6 +866,7 @@ class MainActivity : ComponentActivity() {
                                 // including while THIS device holds control, which is the one
                                 // moment the row exists to report (iOS `linkRows`).
                                 relayWatchUi = watchUi,
+                                gyro = gyroSource,
                                 systemSettingsActions = systemSettingsActions,
                                 onReportProblem = { showProblemReport = true },
                                 onCompletedMediaCacheCleared = {
@@ -1070,6 +1088,14 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 null
                             }
+                        LaunchedEffect(uvcSource) { gyroCapture.setCalibrationSourceAvailable(uvcSource == null) }
+                        DisposableEffect(active, returnToMulticam != null) {
+                            val eligible = active.takeIf {
+                                it is SwiftCoreCameraSession && returnToMulticam == null && demo == null
+                            }
+                            gyroCapture.bind(eligible)
+                            onDispose { gyroCapture.bind(null) }
+                        }
                         CompositionLocalProvider(LocalMulticamReturn provides returnToMulticam) {
                         Box {
                             MonitorScreen(
@@ -1087,10 +1113,11 @@ class MainActivity : ComponentActivity() {
                                 // while Operator Setup is on top; otherwise
                                 // the full-screen sheet fights the feed for
                                 // CPU/GPU on lower-tier phones.
-                                liveViewEnabled = overlay == null,
+                                liveViewEnabled = gyroState.calibration.active ||
+                                    overlay == null && !gyroLogsPresented && !gyroMountPresented,
                                 glassTierOverride = DemoHarness.glassTierOverride(intent),
                                 mediaRemoteShutter = mediaRemoteShutter,
-                                isMonitorFront = overlay == null,
+                                isMonitorFront = overlay == null && !gyroLogsPresented && !gyroMountPresented,
                                 sessionRecoveryEnabled =
                                     monitorSessionRecoveryEnabled &&
                                         frameioController.internetHopState
@@ -1118,6 +1145,8 @@ class MainActivity : ComponentActivity() {
                                 onDriveDiagnostic = diagnostics::record,
                                 controlsSurrendered =
                                     relayBroadcastUi.controlHolderName != null,
+                                gyroState = gyroState.takeIf { returnToMulticam == null },
+                                onOpenGyroLogs = { gyroLogsPresented = true },
                             )
                             relayBroadcastUi.controlHolderName?.let { holder ->
                                 Row(
@@ -1224,6 +1253,7 @@ class MainActivity : ComponentActivity() {
                                 ShellModel.Cover.SETTINGS ->
                                     OperatorSettingsScreen(
                                         session = active,
+                                        gyro = gyroSource,
                                         assists = assist,
                                         settings = operatorSettings,
                                         mediaCacheStore = mediaCacheStore,
@@ -1364,6 +1394,7 @@ class MainActivity : ComponentActivity() {
                             }
                         OperatorSettingsScreen(
                             session = null,
+                            gyro = gyroSource,
                             assists = standaloneAssist,
                             settings = operatorSettings,
                             mediaCacheStore = mediaCacheStore,
@@ -1657,6 +1688,21 @@ class MainActivity : ComponentActivity() {
                         onPrivacy = { systemSettingsActions.openPrivacy() },
                     )
                 }
+                if (gyroLogsPresented) {
+                    GyroLogsScreen(gyroState,
+                        onShare = { entry ->
+                            runCatching { shareGyroLog(this@MainActivity, entry) }.onFailure {
+                                Toast.makeText(this@MainActivity, it.message ?: "Could not share gyro log.", Toast.LENGTH_LONG).show()
+                            }
+                        }, onDelete = gyroCapture::delete,
+                        onClose = { gyroLogsPresented = false })
+                }
+                if (gyroMountPresented) {
+                    GyroMountScreen(gyroState, onSelect = gyroCapture::setMountPreset,
+                        onClose = { gyroCapture.stopCalibration(); gyroMountPresented = false },
+                        onCalibrate = gyroCapture::beginCalibration, onCapture = gyroCapture::captureCalibration,
+                        onCancelCalibration = gyroCapture::stopCalibration, onResetCalibration = gyroCapture::resetCalibration)
+                }
                 } // app-root Box
                 } // LocalOperatorHaptics
             } // OpenZCineTheme
@@ -1678,6 +1724,7 @@ class MainActivity : ComponentActivity() {
         }
 
     override fun onPause() {
+        gyroCapture.setForeground(false)
         if (::mediaRemoteShutter.isInitialized) mediaRemoteShutter.disarm()
         AppDiagnostics.manualReport.setForeground(false)
         super.onPause()
@@ -1685,6 +1732,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        gyroCapture.setForeground(true)
         AppDiagnostics.manualReport.setForeground(true)
     }
 
@@ -1699,6 +1747,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        gyroCapture.close()
         if (::mediaRemoteShutter.isInitialized) mediaRemoteShutter.close()
         super.onDestroy()
     }

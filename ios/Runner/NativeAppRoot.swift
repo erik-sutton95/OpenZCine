@@ -910,6 +910,7 @@ final class NativeAppModel {
             syncScreenWakePolicy()
             publishWatchState()
             if oldValue != isMonitorPresented {
+                if !isMonitorPresented { gyroCapture.stop(reason: .disconnected) }
                 // Record admission follows live-view readiness.
                 refreshCommonControlFacts()
                 updateBluetoothShutter()
@@ -1021,7 +1022,14 @@ final class NativeAppModel {
     /// Deliberately independent of the control link: a camera reached over Wi-Fi keeps every
     /// control while its picture arrives over HDMI through a capture device, and a capture device
     /// can drive the monitor with no camera session behind it at all.
-    var videoSource: VideoSourceKind = .cameraLiveView
+    var videoSource: VideoSourceKind = .cameraLiveView {
+        didSet {
+            if oldValue != videoSource {
+                gyroCapture.invalidateMountCalibration(
+                    message: "Camera source changed. Start calibration again.")
+            }
+        }
+    }
     /// What the HDMI capture path is doing. Only meaningful while it is the active source.
     var hdmiCaptureState: UVCVideoSourceState = .waitingForDevice
     /// Last HDMI frame size logged by `presentHDMIFrame` — one witness line per change (#115).
@@ -2248,6 +2256,8 @@ final class NativeAppModel {
     var prefersMediaDuration = false
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
+    let gyroCapture = GyroCaptureCoordinator()
+
     var isRecording = false {
         didSet {
             guard oldValue != isRecording else { return }
@@ -6918,6 +6928,7 @@ final class NativeAppModel {
     private func clearCameraSessionState(
         resetConnection: Bool, preserveMonitorSurface: Bool = false
     ) {
+        gyroCapture.stop(reason: .disconnected)
         // Invalidate any in-flight establishment attempt: it re-checks this generation before
         // publishing a session, so a handshake finishing after this clear can't resurrect state.
         connectionGeneration += 1
@@ -7409,7 +7420,7 @@ final class NativeAppModel {
     /// timecode rides the live-view frame header only — there is no PTP timecode property — so
     /// ending live view froze it (#271). Command uses `streamsHeaderOnly` instead.
     private var shouldPauseLiveFeed: Bool {
-        activePanelHidesLiveFeed
+        activePanelHidesLiveFeed && !gyroCapture.calibrationInProgress
     }
 
     /// Command mode (DISP 3): the dashboard hides the image but shows live timecode and record
@@ -7534,6 +7545,7 @@ final class NativeAppModel {
                 if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
                     handleBodyFiredCapture(session: session)
                 } else if event.eventCode == .movieRecordInterrupted {
+                    gyroCapture.stop(reason: .interrupted)
                     applyCameraRecordState(isRecording: false, force: true)
                     let error =
                         event.recordingInterruptionErrorCode.map { String(format: "0x%08X", $0) }
@@ -7571,6 +7583,7 @@ final class NativeAppModel {
         case .objectAdded, .captureComplete:
             handleBodyFiredCapture(session: session)
         case .movieRecordStarted, .movieRecordComplete, .movieRecordInterrupted:
+            if event.eventCode == .movieRecordInterrupted { gyroCapture.stop(reason: .interrupted) }
             if let state = event.inferredRecordState {
                 applyCameraRecordState(isRecording: state == .recording)
             }
@@ -7632,6 +7645,7 @@ final class NativeAppModel {
     /// worst battery/thermal profile on set, and enough sustained work for iOS to jetsam-kill the
     /// app so it vanishes mid-shoot. The session object is kept so `enterForeground()` can resume.
     func enterBackground() {
+        gyroCapture.stop(reason: .backgrounded)
         AppDiagnostics.shared.record(.enteredBackground)
         screenWakeSuppressedForBackground = true
         syncScreenWakePolicy()
@@ -7734,6 +7748,18 @@ final class NativeAppModel {
         _ frame: PTPLiveViewFrame, delivery: NikonLiveViewPump.Delivery,
         session: NativeCameraSession, frameRate: inout FrameRateSampler
     ) async -> Bool {
+        guard !Task.isCancelled, cameraSession === session else { return false }
+        // Calibration needs the raw header at arrival, before decode or display smoothing.
+        reconcileGyroCapture(recording: frame.isRecording)
+        let cameraDown = frame.level.flatMap { level in
+            level.hasPitch
+                ? GyroCameraGravity.down(
+                    rollDegrees: PTPLevelAngles.signedDegrees(level.roll),
+                    pitchDegrees: PTPLevelAngles.signedDegrees(level.pitch)) : nil
+        }
+        gyroCapture.receiveCalibrationCamera(
+            cameraDown,
+            at: ProcessInfo.processInfo.systemUptime, sourceID: connectionGeneration)
         if delivery.headerOnly {
             liveViewFocus = frame.focus
             applyLiveViewHeaderState(frame)
@@ -8348,11 +8374,15 @@ final class NativeAppModel {
         // Record state (header byte 828). Suppress the override while a queued app command is in
         // flight or briefly after one was sent so the optimistic flip isn't undone before the safe
         // point runs (and while the body catches up).
-        applyCameraRecordState(isRecording: frame.isRecording)
+        // Observed at arrival: decoding must not replay an older REC report after a newer event.
+        applyCameraRecordState(isRecording: frame.isRecording, observeGyro: false)
     }
 
     /// Applies camera-authoritative record state from the live-view header or async PTP events.
-    private func applyCameraRecordState(isRecording recording: Bool, force: Bool = false) {
+    private func applyCameraRecordState(
+        isRecording recording: Bool, force: Bool = false, observeGyro: Bool = true
+    ) {
+        if observeGyro { reconcileGyroCapture(recording: recording) }
         // The camera's report is recorded even while the button defers to an app command below:
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
@@ -13564,6 +13594,18 @@ struct NativeAppRoot: View {
             RedDownloadView { url in await model.importRedZip(from: url) }
                 .environment(model)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { model.gyroCapture.logsPresented },
+                set: { model.gyroCapture.logsPresented = $0 }
+            )
+        ) { GyroLogsView(coordinator: model.gyroCapture) }
+        .sheet(
+            isPresented: Binding(
+                get: { model.gyroCapture.mountPresented },
+                set: { model.gyroCapture.mountPresented = $0 }
+            )
+        ) { GyroMountView(coordinator: model.gyroCapture) }
         .sheet(isPresented: bugReportPresented) { ProblemReportView() }
         .sheet(isPresented: $showsReliabilityPrompt) {
             ReliabilityConsentPrompt { enabled in
@@ -14326,5 +14368,27 @@ extension NativeAppModel {
             cameraRecording: reportedRecording,
             cameraISO: reportedPropertySnapshot.iso.map { Int($0) },
             cameraISOIsAuto: reportedPropertySnapshot.isoAuto)
+    }
+}
+
+extension NativeAppModel {
+    /// Keeps the opt-in local to the phone while recording authority remains with the camera.
+    func setGyroCaptureEnabled(_ enabled: Bool) {
+        gyroCapture.enabled = enabled
+        reconcileGyroCapture(recording: reportedRecording)
+    }
+
+    private func reconcileGyroCapture(recording: Bool?) {
+        let eligible =
+            isConnected && cameraSession != nil && isMonitorPresented
+            && UIApplication.shared.applicationState == .active
+            && !isDemoSession && videoSource != .relay
+            && !multicam.isPresented && multicam.lentMember == nil
+            && !isPhotographyMode
+        gyroCapture.configure(
+            eligible: eligible,
+            cameraLabel: connectedIdentity?.model ?? "Nikon camera", recording: recording,
+            calibrationSourceID: eligible && videoSource == .cameraLiveView
+                ? connectionGeneration : nil)
     }
 }

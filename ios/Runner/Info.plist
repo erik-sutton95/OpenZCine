@@ -71,6 +71,8 @@
 	<array>
 		<string>NIKON_ZR_</string>
 	</array>
+	<key>NSMotionUsageDescription</key>
+	<string>Record the mounted phone’s motion for Gyroflow stabilization.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>OpenZCine uses the camera to scan the Wi-Fi SSID and key shown on your Nikon camera's screen so it can connect to the camera, and on iPad to read the picture from a connected USB video capture device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
