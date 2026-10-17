@@ -4,12 +4,17 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Color
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
@@ -30,6 +35,9 @@ import com.opencapture.opencine.nikon.FakeCameraSession
 import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.openzcine.settings.OperatorSettings
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -124,9 +132,46 @@ class CommandDashboardViewportComposeTest {
         val destination = instrumentation.targetContext.filesDir.resolve("SIMULATED-command-grid-$name.png")
         try {
             destination.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            assertDashboardPaint(bitmap, name)
         } finally {
             bitmap.recycle()
         }
         println("SIMULATED command viewport screenshot: ${destination.name}")
+    }
+
+    /** Catch the production picture.notice layer covering real tiles even when waiting is false. */
+    private fun assertDashboardPaint(bitmap: Bitmap, name: String) {
+        val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+        val tile = SemanticsMatcher("dashboard tile with a value") { node ->
+            node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it.contains(": ") } == true
+        }
+        val nodes = composeRule.onAllNodes(tile and hasAnyAncestor(hasScrollAction()), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+        var sampled = 0
+        for (node in nodes) {
+            val bounds = node.boundsInWindow
+            if (bounds.width < 16f * density || bounds.height < 24f * density) continue
+            val left = ceil(bounds.left + 4f * density).toInt().coerceAtLeast(0)
+            val right = floor(bounds.right - 4f * density).toInt().coerceAtMost(bitmap.width)
+            val top = ceil(bounds.top + 4f * density).toInt().coerceAtLeast(0)
+            val bottom = floor(bounds.bottom - 4f * density).toInt().coerceAtMost(bitmap.height)
+            assertTrue("A visible tile needs a real screenshot region: $bounds", right > left && bottom > top)
+            var surface = 0
+            var ink = 0
+            for (y in top until bottom) for (x in left until right) {
+                val pixel = bitmap.getPixel(x, y)
+                // The established dashboard surface is #1A1B1C; the obscuring notice is black.
+                if (abs(Color.red(pixel) - 26) <= 2 && abs(Color.green(pixel) - 27) <= 2 &&
+                    abs(Color.blue(pixel) - 28) <= 2) surface += 1
+                if (Color.red(pixel) >= 80 && Color.green(pixel) >= 80 && Color.blue(pixel) >= 80) ink += 1
+            }
+            val area = (right - left) * (bottom - top)
+            val label = node.config.getOrNull(SemanticsProperties.ContentDescription)
+            println("SIMULATED production dashboard paint $name $label rect=$left,$top,$right,$bottom surface=$surface/$area ink=$ink")
+            assertTrue("The full window must paint the actual tile surface: $label", surface * 2 >= area)
+            assertTrue("The full window must paint the actual tile text: $label", ink >= 8)
+            sampled += 1
+        }
+        assertTrue("Production dashboard paint must cover multiple visible tiles", sampled >= 4)
     }
 }
