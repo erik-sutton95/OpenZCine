@@ -26,10 +26,24 @@ struct LinkExperience: View {
         } page: { cover in
             NikonCoverPage(cover: cover)
         }
+        .accessibilityHidden(model.showsWatcherBrowse)
         .background {
             if pages { MonitorTheme.background.ignoresSafeArea() }
         }
         .foregroundStyle(pages ? AnyShapeStyle(MonitorTheme.text) : AnyShapeStyle(.primary))
+        .overlay {
+            if model.showsWatcherBrowse, !model.isMonitorPresented {
+                MonitorTheme.background.ignoresSafeArea().overlay {
+                    WatcherBrowseView(
+                        networkInstructions:
+                            "Join the same regular Wi-Fi as the sharing device. Leave the camera's own Wi-Fi before watching; it may block traffic between devices.",
+                        emptyMessage:
+                            "No shared feeds on this network. Check that sharing is on and both devices can reach each other. Allow Local Network if asked."
+                    )
+                    .environment(model)
+                }
+            }
+        }
         // Scanner blur backdrop lives on the presenter (not inside the fullScreenCover) so it
         // fades in place via opacity while the card keeps the cover's slide — the backdrop must
         // not ride the vertical slide.
@@ -94,7 +108,9 @@ struct LinkExperience: View {
         // Owned at the root so the credential scanner can present directly from the join/scan
         // action and from the pair page's join step.
         .cameraWiFiScannerCover(model)
-        .sheet(item: Bindable(model).diagnosticsShareItem) { MonitorActivityShareSheet(items: [$0.url]) }
+        .sheet(item: Bindable(model).diagnosticsShareItem) {
+            MonitorActivityShareSheet(items: [$0.url])
+        }
         .alert(
             "Couldn't Share Diagnostics",
             isPresented: Binding(
@@ -142,6 +158,7 @@ struct LinkExperience: View {
         ShellActions(
             diagnostics: { model.shareDiagnostics() },
             reportProblem: { model.isBugReportPresented = true },
+            watchFeed: { model.openWatcherBrowse() },
             multiview: MulticamCoordinator.tileCount > 1 ? { model.beginMulticam() } : nil,
             integrationAction: { cameraID, action in
                 if action == NativeNikonPort.diagnosticsAction { model.shareDiagnostics() }
@@ -159,11 +176,11 @@ struct LinkExperience: View {
             settings: { model.openStandaloneSettings() },
             extraNearby: { id in
                 guard
-                    let broadcast = model.visibleRelayBroadcasts.first(where: {
+                    model.visibleRelayBroadcasts.contains(where: {
                         Self.relayPrefix + $0.id == id
                     })
                 else { return }
-                model.joinRelay(broadcast)
+                model.openWatcherBrowse()
             })
     }
 

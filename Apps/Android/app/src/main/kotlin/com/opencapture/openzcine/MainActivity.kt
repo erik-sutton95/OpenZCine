@@ -54,6 +54,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import kotlinx.coroutines.flow.catch
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -257,6 +259,9 @@ class MainActivity : ComponentActivity() {
                 // device's broadcast, and BROADCAST its own feed to watchers.
                 var watchController by
                     remember { mutableStateOf<com.opencapture.openzcine.relay.RelayWatchController?>(null) }
+                var watcherBrowsePresented by remember { mutableStateOf(false) }
+                var watcherBrowseError by remember { mutableStateOf<String?>(null) }
+                var watcherBrowseGeneration by remember { mutableStateOf(0) }
                 var relayBroadcastEnabled by remember { mutableStateOf(false) }
                 val relayDeviceName =
                     remember {
@@ -657,7 +662,13 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(currentUvcSource) { currentUvcSource?.start(this@MainActivity) }
                 val monitored = monitorSession
                 val watching = watchController
-                if (monitored == null && watching != null) {
+                val watcherBrowseUi = watching?.ui?.collectAsState()?.value
+                LaunchedEffect(watcherBrowseUi?.phase) {
+                    if (watcherBrowseUi?.phase == com.opencapture.openzcine.relay.RelayWatchUiState.Phase.WATCHING) {
+                        watcherBrowsePresented = false
+                    }
+                }
+                if (monitored == null && watching != null && !watcherBrowsePresented) {
                     val watchUi by watching.ui.collectAsState()
                     LaunchedEffect(watchUi.endedByBroadcaster) {
                         if (watchUi.endedByBroadcaster) {
@@ -779,11 +790,15 @@ class MainActivity : ComponentActivity() {
                     val (broadcasts, filtersDiscovery) =
                         if (monitored == null && !standaloneMedia) {
                             val nearbyBroadcasts by
-                                remember {
+                                remember(watcherBrowseGeneration) {
                                     com.opencapture.openzcine.relay.RelayBroadcastDirectory(
                                             AndroidNsdBrowser(getSystemService(NsdManager::class.java))
                                         )
                                         .broadcasts()
+                                        .catch { error ->
+                                            watcherBrowseError = error.localizedMessage
+                                            emit(emptyList())
+                                        }
                                 }
                                     .collectAsState(initial = emptyList())
                             // Unicast presence sweep (iOS parity): on networks whose routers filter
@@ -792,7 +807,7 @@ class MainActivity : ComponentActivity() {
                             // the network filters discovery (the operator warning in the list).
                             val relayNearby = remember { monitorRelayNearbyOwner() }
                             var nearbyPublication by remember { mutableStateOf(relayNearby.publication) }
-                            LaunchedEffect(Unit) {
+                            LaunchedEffect(watcherBrowseGeneration) {
                                 // The SDK scanner retains the original passive 30-second limiter.
                                 val scanner = CameraListDiscovery()
                                 val publicationSource = relayNearby.beginSweep()
@@ -818,6 +833,40 @@ class MainActivity : ComponentActivity() {
                         } else {
                             emptyList<com.opencapture.openzcine.relay.RelayBroadcast>() to false
                         }
+                    val openWatcherBrowse: () -> Unit = {
+                        if (monitored == null && camerasState.attempts.isEmpty()) {
+                            watcherBrowsePresented = true
+                        }
+                    }
+                    val joinWatcherBroadcast: (com.opencapture.openzcine.relay.RelayBroadcast) -> Unit = join@{ broadcast ->
+                        if (isOnCameraAccessPointNetwork(this@MainActivity)) {
+                            watchOnCameraApNoticeVisible = true
+                            return@join
+                        }
+                        relayBroadcastController.stop(notifyReason = "The broadcast ended.")
+                        relayBroadcastEnabled = false
+                        val previous = watchController
+                        if (previous != null) connectionScope.launch { previous.stop() }
+                        watcherBrowsePresented = true
+                        watchController = com.opencapture.openzcine.relay.RelayWatchController(
+                            scope = connectionScope, deviceName = relayDeviceName, broadcast = broadcast,
+                            watcherId = com.opencapture.openzcine.relay.RelayWatcherIdentity.current(applicationContext),
+                            onJpegOnlyLatched = persistJpegOnly, passcodes = relayPasscodes,
+                        ).also { it.start() }
+                    }
+                    val watcherBrowseHost = com.opencapture.openzcine.relay.RelayWatcherBrowseHost(
+                        broadcasts = { broadcasts }, status = { watcherBrowseUi },
+                        browseError = { watcherBrowseError },
+                        browse = { watcherBrowseError = null; watcherBrowseGeneration += 1 },
+                        join = joinWatcherBroadcast,
+                        submitPasscode = { code -> watchController?.submitPasscode(code) },
+                        close = {
+                            watcherBrowsePresented = false
+                            val leaving = watchController
+                            watchController = null
+                            if (leaving != null) connectionScope.launch { leaving.stop() }
+                        },
+                    )
                     var monitorSessionRecoveryEnabled by remember(monitored) { mutableStateOf(true) }
                     val monitorAssist = remember(monitored) {
                         monitored?.let {
@@ -1359,10 +1408,7 @@ class MainActivity : ComponentActivity() {
                                 transportWizard = false
                                 shell.showCameras()
                             },
-                            onOpenWatcherList = {
-                                transportWizard = false
-                                shell.showCameras()
-                            },
+                            onOpenWatcherList = openWatcherBrowse,
                             onShareDiagnostics = {
                                 if (!systemSettingsActions.shareDiagnostics()) {
                                     Toast.makeText(
@@ -1386,11 +1432,13 @@ class MainActivity : ComponentActivity() {
                     }
                     AppShell(
                         model = shell,
+                        modifier = if (watcherBrowsePresented) Modifier.clearAndSetSemantics {} else Modifier,
                         brand = ShellBrand("OpenZCine", nearbyNote = "on this network"),
                         actions =
                             ShellActions(
                                 diagnostics = { systemSettingsActions.shareDiagnostics() },
                                 reportProblem = { showProblemReport = true },
+                                watchFeed = openWatcherBrowse,
                                 multiview = if (MulticamCoordinator.TILES > 1) {
                                     { camerasModel.consent.retire(); multicam.begin() }
                                 } else null,
@@ -1416,29 +1464,8 @@ class MainActivity : ComponentActivity() {
                                     shell.beginPairing()
                                 },
                                 extraNearby = extra@{ id ->
-                                    val broadcast =
-                                        broadcasts.firstOrNull { RELAY_ROW_PREFIX + it.name == id } ?: return@extra
-                                    // A watcher ON the camera's own AP can see broadcasts but its
-                                    // join cannot reach them (camera APs isolate their clients).
-                                    if (isOnCameraAccessPointNetwork(this@MainActivity)) {
-                                        watchOnCameraApNoticeVisible = true
-                                        return@extra
-                                    }
-                                    relayBroadcastController.stop(notifyReason = "The broadcast ended.")
-                                    relayBroadcastEnabled = false
-                                    watchController =
-                                        com.opencapture.openzcine.relay
-                                            .RelayWatchController(
-                                                scope = connectionScope,
-                                                deviceName = relayDeviceName,
-                                                broadcast = broadcast,
-                                                watcherId =
-                                                    com.opencapture.openzcine.relay.RelayWatcherIdentity
-                                                        .current(applicationContext),
-                                                onJpegOnlyLatched = persistJpegOnly,
-                                                passcodes = relayPasscodes,
-                                            )
-                                            .also { it.start() }
+                                    if (broadcasts.none { RELAY_ROW_PREFIX + it.name == id }) return@extra
+                                    openWatcherBrowse()
                                 },
                             ),
                         monitor = { live ->
@@ -1495,6 +1522,15 @@ class MainActivity : ComponentActivity() {
                         extraNearby = nearbyBroadcastItems(broadcasts, filtersDiscovery),
                         prePage = if (showTransportWizard && !standaloneMedia) pairPage else null,
                     )
+                    if (watcherBrowsePresented) {
+                        com.opencapture.opencine.cameracontrols.WatcherBrowse(
+                            host = watcherBrowseHost,
+                            modifier = Modifier.fillMaxSize().background(MonitorPalette.background)
+                                .windowInsetsPadding(WindowInsets.safeDrawing),
+                            networkInstructions = "Join the same regular Wi-Fi as the sharing device. Leave the camera's own Wi-Fi before watching; it may block traffic between devices.",
+                            emptyMessage = "No shared feeds on this network. Check that sharing is on and both devices can reach each other. Allow Local Network if asked.",
+                        )
+                    }
                     if (multicam.presented) {
                         com.opencapture.opencine.appkit.MultiviewStageVisibility(monitored == null && !standaloneMedia) {
                             MulticamStage(
