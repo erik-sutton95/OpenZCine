@@ -316,7 +316,7 @@ struct LiveFeedModule: View {
                 }
             }
         }
-        .overlay { FeedAlignedAssists(clean: model.displayMode == .clean) }
+        .overlay { FeedAlignedAssists() }
     }
 
 }
@@ -527,70 +527,6 @@ private struct DemoFocusPointerSurface: UIViewRepresentable {
     }
 }
 
-/// AF / subject-detection boxes — isolated from per-frame feed publishes.
-private struct LiveFeedFocusOverlay: View {
-    @Environment(NativeAppModel.self) private var model
-    let lockProgress: CGFloat
-
-    var body: some View {
-        // The AF box is an element like any other: on by default in DISP 1 and DISP 2 (focus
-        // feedback the operator relies on even in the stripped-back view), and hideable in both.
-        // (Command never mounts the feed, so no mode guard is needed.)
-        if model.chromeSectionMounts(.focusBox), let focus = model.liveViewFocus,
-            !focus.boxes.isEmpty
-        {
-            // Focus metadata repeats identically on most frames — the Equatable guard skips the
-            // Canvas redraw unless a box, lock, or progress changed.
-            LiveFocusBoxOverlay(
-                focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
-                mirrored: model.liveFeedMirrored,
-                mirroredVertically: model.liveFeedMirroredVertically,
-                // The raster's own value: the box has to register with the picture as
-                // `LiveFrameRaster.feedScale` actually presents it.
-                desqueeze: model.liveDesqueeze
-            )
-            .equatable()
-            // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
-            // below), and this Canvas draws the boxes itself.
-            .opacity(focusBoxEditDimmed ? 0.3 : 1)
-            // The badge goes on the primary AF box, not the whole feed — a dashed outline round
-            // the entire image would name nothing.
-            .overlay { focusBoxEditTarget(focus) }
-        }
-    }
-
-    /// The AF box is force-mounted while editing a mode that has it switched off — dim it so the
-    /// operator sees it is off and can switch it back on from its badge.
-    private var focusBoxEditDimmed: Bool {
-        guard let mode = model.chromeEditorMode,
-            MonitorDisplayChrome.isConfigurable(.focusBox, in: mode)
-        else { return false }
-        return !model.operatorSession.chrome(for: mode).focusBox
-    }
-
-    /// A zero-content proxy sized to the primary AF box, so the Edit view's outline and badge land
-    /// on the box the operator sees. Mounted only while editing.
-    @ViewBuilder private func focusBoxEditTarget(_ focus: PTPLiveViewFocusInfo) -> some View {
-        if model.chromeEditorMode != nil, let box = focus.boxes.first {
-            GeometryReader { proxy in
-                // Through the drawing mapping, so the badge lands on the box the operator sees
-                // rather than on where an unmirrored, un-de-squeezed one would have been.
-                if let rect = liveFocusBoxRect(
-                    box, focus: focus, in: proxy.size,
-                    desqueeze: model.liveDesqueeze,
-                    mirrored: model.liveFeedMirrored,
-                    mirroredVertically: model.liveFeedMirroredVertically)
-                {
-                    Color.clear
-                        .frame(width: rect.width, height: rect.height)
-                        .chromeEditable(.focusBox, editing: model.chromeEditorMode)
-                        .position(x: rect.midX, y: rect.midY)
-                }
-            }
-        }
-    }
-}
-
 /// Post-capture instant playback: the just-captured still, full-screen over the entire monitor
 /// chrome for the configured review duration (until tapped when ∞) — a focused look at the
 /// frame, not another chrome state. Optional overlays: the AF box the shot focused with, and a
@@ -663,24 +599,10 @@ struct InstantReviewOverlay: View {
                         let focus = review.focus, focus.coordinateWidth > 0,
                         focus.coordinateHeight > 0
                     {
-                        ForEach(Array(focus.boxes.enumerated()), id: \.offset) { _, box in
-                            let scaleX = fitted.width / CGFloat(focus.coordinateWidth)
-                            let scaleY = fitted.height / CGFloat(focus.coordinateHeight)
-                            Rectangle()
-                                .strokeBorder(
-                                    focus.focusResult == .focused
-                                        ? Color.green : Color.white.opacity(0.9),
-                                    lineWidth: 2
-                                )
-                                .frame(
-                                    width: max(10, CGFloat(box.width) * scaleX),
-                                    height: max(10, CGFloat(box.height) * scaleY)
-                                )
-                                .position(
-                                    x: fitted.minX + CGFloat(box.centerX) * scaleX,
-                                    y: fitted.minY + CGFloat(box.centerY) * scaleY
-                                )
-                        }
+                        // The same marks as the live AF box: the picture here is already fitted.
+                        LiveFocusBoxOverlay(focus: focus)
+                            .frame(width: fitted.width, height: fitted.height)
+                            .position(x: fitted.midX, y: fitted.midY)
                     }
                 }
                 if !review.isFullResolution {
@@ -977,143 +899,5 @@ private struct LiveFrameView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIImageView, context: Context) {
         if uiView.image !== image { uiView.image = image }
-    }
-}
-
-/// One AF / subject box mapped from the live-view header's coordinate space onto the PRESENTED
-/// picture inside `size`.
-///
-/// Presented, not the whole frame: the raster carries the de-squeeze as a centred `scaleEffect`
-/// (`LiveFrameRaster.feedScale`), so an anamorphic setup paints the image into a narrower — or
-/// shorter — sub-rect of the same frame. Mapping into the frame left the box drifting sideways off
-/// the subject it is tracking, while the framing aids, which already map through `desqueezedRect`,
-/// stayed put. Android applies its presentation scales before the identical mapping
-/// (`liveOverlayFeedRect`).
-///
-/// Mirroring flips about the presented rect rather than the frame, so a mirrored AND de-squeezed
-/// picture still lands the box on its face.
-func liveFocusBoxRect(
-    _ box: PTPLiveViewAFBox,
-    focus: PTPLiveViewFocusInfo,
-    in size: CGSize,
-    desqueeze: NikonDesqueeze,
-    mirrored: Bool,
-    mirroredVertically: Bool = false
-) -> CGRect? {
-    guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return nil }
-    let feed = desqueezedRect(CGRect(origin: .zero, size: size), desqueeze)
-    let scaleX = feed.width / CGFloat(focus.coordinateWidth)
-    let scaleY = feed.height / CGFloat(focus.coordinateHeight)
-    let width = CGFloat(box.width) * scaleX
-    let height = CGFloat(box.height) * scaleY
-    let inset = CGFloat(box.centerX) * scaleX
-    let centerX = mirrored ? feed.maxX - inset : feed.minX + inset
-    let insetY = CGFloat(box.centerY) * scaleY
-    let centerY = mirroredVertically ? feed.maxY - insetY : feed.minY + insetY
-    return CGRect(
-        x: centerX - width / 2,
-        y: centerY - height / 2,
-        width: width,
-        height: height
-    )
-}
-
-/// Draws the camera's AF / subject-detection boxes (from the live-view header) over the feed:
-/// rounded rectangles with a uniform stroke — the AF / focus box (box 0) styled by AF state
-/// (see `primaryBoxColor`), detected face/eye boxes (box 1+) in green.
-struct LiveFocusBoxOverlay: View, Equatable {
-    let focus: PTPLiveViewFocusInfo
-    /// App-only focus-point lock — tints the AF box accent and badges it with a small lock.
-    var locked: Bool = false
-    /// 0→1 while long-pressing the AF box to lock it: how much of box 0's outline has drawn in.
-    var lockProgress: CGFloat = 0
-    /// Whether the picture underneath is flipped left-to-right. The camera's box coordinates never
-    /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
-    var mirrored: Bool = false
-    /// Top-to-bottom presentation flip; AF metadata stays in source coordinates.
-    var mirroredVertically: Bool = false
-    /// The de-squeeze the raster below is presenting with — see ``liveFocusBoxRect``.
-    var desqueeze = NikonDesqueeze.off
-
-    nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
-        // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
-        // properties of `focus`, so its memberwise == already covers them.
-        lhs.focus == rhs.focus && lhs.locked == rhs.locked
-            && lhs.lockProgress == rhs.lockProgress && lhs.mirrored == rhs.mirrored
-            && lhs.mirroredVertically == rhs.mirroredVertically
-            && lhs.desqueeze == rhs.desqueeze
-    }
-
-    /// Idle AF-box white opacity — slightly transparent so acquired/tracking green reads as a
-    /// state change. Value is tuned in the central visual pass.
-    private static let idleWhiteOpacity = 0.72
-
-    /// Box 0 (AF area) state → style, Nikon-body-like, in precedence order:
-    /// 1. `locked` (app-side focus-point lock) — accent at full opacity, plus the lock badge.
-    /// 2. AF acquired (`focusResult == .focused`) or subject tracking engaged
-    ///    (`trackingAFActive`, the header's tracking-AF status byte) — green at full opacity.
-    /// 3. Idle / hunting (`.unknown` / `.notFocused`) — dim white; no distinct red state.
-    /// Face/eye boxes (index > 0) are always green.
-    private var primaryBoxColor: Color {
-        if locked { return LiveDesign.accent }
-        if focus.focusResult == .focused || focus.trackingAFActive { return .green }
-        return .white.opacity(Self.idleWhiteOpacity)
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Canvas { context, size in
-                    for (index, box) in focus.boxes.enumerated() {
-                        guard
-                            let rect = liveFocusBoxRect(
-                                box, focus: focus, in: size, desqueeze: desqueeze,
-                                mirrored: mirrored, mirroredVertically: mirroredVertically)
-                        else { continue }
-                        let color: Color = index == 0 ? primaryBoxColor : .green
-                        let radius = min(min(rect.width, rect.height) * 0.12, 7)
-                        context.stroke(
-                            Path(roundedRect: rect, cornerRadius: radius),
-                            with: .color(color),
-                            lineWidth: 1.5
-                        )
-                        if locked, index == 0, let lock = context.resolveSymbol(id: "lock") {
-                            context.draw(
-                                lock, at: CGPoint(x: rect.midX, y: rect.minY - 9), anchor: .center)
-                        }
-                    }
-                } symbols: {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(LiveDesign.accent)
-                        .tag("lock")
-                }
-
-                // The lock draw-in: box 0's outline traced in accent as you hold to lock it,
-                // completing as the lock engages — then it gives way to the solid accent box above.
-                if lockProgress > 0.001, !locked, let rect = primaryBoxRect(in: proxy.size) {
-                    let radius = min(min(rect.width, rect.height) * 0.12, 7)
-                    RoundedRectangle(cornerRadius: radius)
-                        .trim(from: 0, to: lockProgress)
-                        .stroke(
-                            LiveDesign.accent,
-                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
-                        )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        .shadow(color: LiveDesign.accent.opacity(0.55), radius: 3)
-                }
-            }
-        }
-        .allowsHitTesting(false)
-    }
-
-    /// Box 0 (the AF / focus area), through the same mapping the Canvas uses so the lock draw-in
-    /// registers exactly over its white outline.
-    private func primaryBoxRect(in size: CGSize) -> CGRect? {
-        guard let box = focus.boxes.first else { return nil }
-        return liveFocusBoxRect(
-            box, focus: focus, in: size, desqueeze: desqueeze, mirrored: mirrored,
-            mirroredVertically: mirroredVertically)
     }
 }

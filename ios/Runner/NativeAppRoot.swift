@@ -24,6 +24,7 @@ import enum MonitorPresentation.MonitorSettingsTab
 import enum MonitorPresentation.MonitorThumbnailSize
 import enum MonitorPresentation.MonitorWatcherPasscodeRule
 import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
+import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
 import class OpenCineCameraVocabulary.CustomLUTStore
 import class OpenCineCameraVocabulary.LUTPreferences
 import struct OpenCineCameraVocabulary.CaptureCodecColorChoice
@@ -491,12 +492,14 @@ extension CustomLUTStore {
         try storedCategory(category).importFile(from: source)
     }
 
-    /// ZIPFoundation owns decoding only. The shared store owns bounds, parse and replacement.
+    /// A downloaded LUT pack (a zip or a lone `.cube`) through the shared pack import: each cube
+    /// is validated and installed on its own, refusals are counted. ZIPFoundation owns decoding
+    /// only; the shared store owns bounds, parse and replacement.
     @discardableResult
-    func importZip(at zipURL: URL, into category: LUTCategory) throws -> [StoredCustomLUT] {
+    func importPack(at file: URL, into category: LUTCategory) throws -> MonitorLutPackImportResult {
         let store = try storedCategory(category)
-        let archive = try Archive(url: zipURL, accessMode: .read)
-        return try store.importArchive { accept in
+        return store.importPack(file: file) { accept in
+            let archive = try Archive(url: file, accessMode: .read)
             for entry in archive where entry.type != .directory {
                 try accept(
                     CustomLUTArchiveEntry(
@@ -9451,7 +9454,7 @@ final class NativeAppModel {
             coordinateWidth: 6048,
             coordinateHeight: 3400,
             // Idle so demo box 0 shows the dim-white style next to the green face/eye boxes
-            // (`.focused` would render every box green — see LiveFocusBoxOverlay.primaryBoxColor).
+            // (`.focused` would render the AF box green too; see `nikonFocusAreas`).
             focusResult: .unknown,
             subjectDetectionActive: true,
             selectedBoxIndex: 1,
@@ -12481,29 +12484,32 @@ final class NativeAppModel {
         redLUTs = lutFileStore.list(.red)
     }
 
-    /// Imports the RED IPP2 zip the WebView downloaded: extracts its cubes, selects a sensible
-    /// default (a REC.709 medium-contrast look when present), and turns the LUT on. Returns the
-    /// number of LUTs recognized (0 means a failed/empty download) so the caller can report it.
+    /// Imports the RED IPP2 pack the shared download flow fetched: installs its cubes, selects a
+    /// sensible default (a REC.709 medium-contrast look when present), and turns the LUT on.
+    /// Returns what the import did so the flow can say it in RED's words.
     @discardableResult
-    func importRedZip(from url: URL) async -> Int {
+    func importRedZip(from url: URL) async -> MonitorLutPackImportResult {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        // The unzip walks and writes hundreds of files — run it off the main actor so the
+        // The import walks and writes hundreds of files: run it off the main actor so the
         // "Adding LUTs…" page keeps animating instead of freezing the UI for the extraction.
         let store = lutFileStore
-        let stored = await Task.detached(priority: .userInitiated) {
-            try? store.importZip(at: url, into: .red)
+        let result = await Task.detached(priority: .userInitiated) {
+            (try? store.importPack(at: url, into: .red))
+                ?? MonitorLutPackImportResult(importedCount: 0, archiveError: "unreadable store")
         }.value
-        guard let stored, let chosen = LUTLibraryIndex.defaultRedLUT(from: stored)
-        else { return 0 }
+        guard result.importedCount > 0 else { return result }
+        let stored = lutFileStore.list(.red)
         for lut in stored {
             LUTCubeCache.invalidate(
                 forKey: LUTSelection.stored(category: .red, fileName: lut.fileName).cacheKey)
         }
         refreshRedLUTs()
-        assistConfiguration.selectedLUT = .stored(category: .red, fileName: chosen.fileName)
-        setAssist(.lut, visible: true)
-        return stored.count
+        if let chosen = LUTLibraryIndex.defaultRedLUT(from: stored) {
+            assistConfiguration.selectedLUT = .stored(category: .red, fileName: chosen.fileName)
+            setAssist(.lut, visible: true)
+        }
+        return result
     }
 
     /// Opens the Media browser with the sidebar tab matched to the active capture side —

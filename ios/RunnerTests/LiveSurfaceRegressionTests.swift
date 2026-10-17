@@ -1,6 +1,8 @@
 import Observation
 import OpenCineAppKit
 import OpenCineApple
+import OpenCineCameraControls
+import OpenCineCameraVocabulary
 import OpenCineCore
 import OpenCineHostedAccessibility
 import OpenZCineCore
@@ -411,6 +413,276 @@ final class LiveSurfaceRegressionTests: XCTestCase {
             UIColor.green.setFill()
             context.fill(CGRect(origin: .zero, size: size))
         }
+    }
+
+    // MARK: Shared capture popups
+
+    /// Every camera picker except the two independent-switch panels draws on the shared ladder
+    /// sheet, movie and photo alike, so no Nikon-only drum panel remains.
+    func testEveryValuePickerDrawsTheSharedLadderSheet() {
+        XCTAssertEqual(
+            Set(CameraPicker.allCases.filter { !$0.usesLadderSheet }), [.stillQuality, .stabilization])
+    }
+
+    /// Nikon AF boxes normalize to the shared focus layer with the result as its colour (twin of
+    /// the Android `nikon AF boxes normalize to the shared focus layer with the result as its colour`).
+    func testNikonAFBoxesNormalizeToTheSharedFocusLayerWithTheResultAsItsColour() throws {
+        func focus(
+            width: Int = 1_920, result: PTPLiveViewFocusInfo.FocusResult = .notFocused,
+            tracking: Bool = false
+        ) -> PTPLiveViewFocusInfo {
+            PTPLiveViewFocusInfo(
+                coordinateWidth: width, coordinateHeight: 1_080,
+                focusResult: result, subjectDetectionActive: false, trackingAFActive: tracking,
+                selectedBoxIndex: nil,
+                boxes: [
+                    PTPLiveViewAFBox(centerX: 960, centerY: 540, width: 192, height: 108),
+                    PTPLiveViewAFBox(centerX: 480, centerY: 270, width: 96, height: 54),
+                ])
+        }
+        let areas = try XCTUnwrap(nikonFocusAreas(focus()))
+        let primary = try XCTUnwrap(areas.primary)
+        XCTAssertEqual(primary.x, 0.45, accuracy: 0.0001)
+        XCTAssertEqual(primary.y, 0.45, accuracy: 0.0001)
+        XCTAssertEqual(primary.width, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(areas.others.count, 1)
+        XCTAssertEqual(try XCTUnwrap(areas.others.first).x, 0.225, accuracy: 0.0001)
+        XCTAssertFalse(areas.confirmed)
+        XCTAssertTrue(try XCTUnwrap(nikonFocusAreas(focus(tracking: true))).confirmed)
+        XCTAssertTrue(try XCTUnwrap(nikonFocusAreas(focus(result: .focused))).confirmed)
+        XCTAssertNil(nikonFocusAreas(focus(width: 0)))
+    }
+
+    /// A missing primary observation must not hide the body's valid secondary subject areas.
+    func testValidSecondaryAFBoxRendersWhenThePrimaryBoxIsInvalid() throws {
+        let focus = PTPLiveViewFocusInfo(
+            coordinateWidth: 1_000, coordinateHeight: 500,
+            focusResult: .notFocused, subjectDetectionActive: true, trackingAFActive: false,
+            selectedBoxIndex: nil,
+            boxes: [
+                PTPLiveViewAFBox(centerX: 100, centerY: 100, width: 0, height: 0),
+                PTPLiveViewAFBox(centerX: 500, centerY: 250, width: 200, height: 100),
+            ])
+        let areas = try XCTUnwrap(nikonFocusAreas(focus))
+        XCTAssertNil(areas.primary)
+        XCTAssertEqual(areas.others.count, 1)
+        let renderer = ImageRenderer(
+            content: LiveFocusBoxOverlay(focus: focus)
+                .frame(width: 400, height: 200).background(Color.black))
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(
+                CGContext(
+                    data: buffer.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        let greenPixels = stride(from: 0, to: bytes.count, by: 4).filter { offset in
+            Int(bytes[offset + 1]) > Int(bytes[offset]) + 32
+                && Int(bytes[offset + 1]) > Int(bytes[offset + 2]) + 32
+        }.count
+        let attachment = XCTAttachment(image: UIImage(cgImage: image))
+        attachment.name = "SIMULATED secondary AF without primary"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(greenPixels, 40, "The valid secondary AF area must remain visible")
+    }
+
+    /// Preserve the original adapter's camera fixture through the shared normalized projection.
+    func testOriginalCameraAFProjectionKeepsItsMirrorAndSubjectCentres() throws {
+        let focus = originalProjectionFocus()
+        let areas = try XCTUnwrap(nikonFocusAreas(focus))
+        let primary = try XCTUnwrap(areas.primary).flipped(horizontal: true, vertical: false)
+        XCTAssertEqual(primary.centerX, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(primary.centerY, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(primary.width, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(primary.height, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(areas.others.count, 1)
+        let secondary = try XCTUnwrap(areas.others.first).flipped(horizontal: true, vertical: false)
+        XCTAssertEqual(secondary.centerX, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(secondary.centerY, 0.2, accuracy: 0.0001)
+        let image = try projectionImage(focus, mirrored: true)
+        let mask = try projectionGreenPixels(image)
+        XCTAssertTrue(mask.contains { $0.x >= 558 && $0.x <= 642 && $0.y >= 178 && $0.y <= 222 })
+        XCTAssertFalse(mask.contains { $0.x >= 158 && $0.x <= 242 && $0.y >= 178 && $0.y <= 222 })
+        XCTAssertTrue(mask.contains { $0.x >= 318 && $0.x <= 482 })
+    }
+
+    /// A temporarily empty picture must not paint lock glyphs or marks outside its zero frame.
+    func testZeroSizeCameraAFProjectionDrawsNoMarksEvenWhenLocked() throws {
+        let focus = originalProjectionFocus()
+        let visible = try projectionImage(focus, locked: true)
+        XCTAssertGreaterThan(try projectionGreenPixels(visible).count, 40)
+        let empty = try projectionImage(focus, locked: true, size: .zero)
+        let attachment = XCTAttachment(image: UIImage(cgImage: empty))
+        attachment.name = "SIMULATED zero-size AF projection"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(try projectionGreenPixels(empty).count, 0)
+    }
+
+    private func originalProjectionFocus() -> PTPLiveViewFocusInfo {
+        PTPLiveViewFocusInfo(
+            coordinateWidth: 1_000, coordinateHeight: 500,
+            focusResult: .focused, subjectDetectionActive: true, selectedBoxIndex: 0,
+            boxes: [
+                PTPLiveViewAFBox(centerX: 250, centerY: 250, width: 100, height: 50),
+                PTPLiveViewAFBox(centerX: 500, centerY: 100, width: 200, height: 100),
+            ])
+    }
+
+    private func projectionImage(
+        _ focus: PTPLiveViewFocusInfo, mirrored: Bool = false, locked: Bool = false,
+        size: CGSize = CGSize(width: 800, height: 400)
+    ) throws -> CGImage {
+        let renderer = ImageRenderer(
+            content: LiveFocusBoxOverlay(focus: focus, locked: locked, mirrored: mirrored)
+                .frame(width: size.width, height: size.height)
+                .frame(width: 800, height: 400).background(Color.black))
+        renderer.scale = 1
+        return try XCTUnwrap(renderer.cgImage)
+    }
+
+    private func projectionGreenPixels(_ image: CGImage) throws -> [CGPoint] {
+        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(
+                CGContext(
+                    data: buffer.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        return stride(from: 0, to: bytes.count, by: 4).compactMap { offset in
+            guard Int(bytes[offset + 1]) > Int(bytes[offset]) + 32,
+                Int(bytes[offset + 1]) > Int(bytes[offset + 2]) + 32
+            else { return nil }
+            let pixel = offset / 4
+            return CGPoint(x: pixel % image.width, y: pixel / image.width)
+        }
+    }
+
+    /// The camera status shows on the shared waiting plate with Android's words: no camera,
+    /// connecting, coming back from an internet hop; a connected camera keeps the waiting plate.
+    func testCameraStatusShowsOnTheSharedWaitingPlate() {
+        XCTAssertNil(nikonCameraStatusNotice(connection: .connected, internetHopActive: true))
+        XCTAssertEqual(
+            nikonCameraStatusNotice(connection: .disconnected, internetHopActive: false),
+            MonitorOperatorPictureNotice(title: "No camera"))
+        XCTAssertEqual(
+            nikonCameraStatusNotice(connection: .reconnecting, internetHopActive: false),
+            MonitorOperatorPictureNotice(
+                title: "Connecting…", detail: "Searching for the camera and restoring live view.",
+                progress: true))
+        XCTAssertEqual(
+            nikonCameraStatusNotice(connection: .disconnected, internetHopActive: true)?.title,
+            "Reconnecting to camera…")
+    }
+
+    /// SIMULATED actual adapter: camera inventory owns every offered format; opening never writes.
+    func testRecordingFormatPanelUsesOnlyAdvertisedTokensAndNeverSeedsAnEmptyInventory()
+        async throws
+    {
+        let token = "4K · 25p"
+        let mode = PTPCameraScreenSizeMode(
+            raw: UInt64(3840) << 48 | UInt64(2160) << 32 | UInt64(25) << 16,
+            label: token)
+        for hasInventory in [true, false] {
+            let model = NativeAppModel(assist: .scratch())
+            model.connection = .connected
+            model.videoSource = .cameraLiveView
+            model.cameraState = model.cameraState.updating(resolutionFrameRate: token)
+            model.cameraScreenModes = hasInventory ? [mode] : []
+            XCTAssertEqual(
+                model.recordingFormatPresentations.map(\.token), hasInventory ? [token] : [])
+            XCTAssertFalse(model.recordingFormatPresentations.contains { $0.token == "6K · 24p" })
+            let hosted = try Hosted(LadderPickerPanel(picker: .resolution).environment(model))
+            defer { hosted.close() }
+            func nodes() -> [NSObject] {
+                HostedAccessibility.elements(in: hosted.host.view).filter(\.isAccessibilityElement)
+            }
+            let mounted = try await hosted.settle {
+                nodes().contains { $0.accessibilityLabel == "Value" }
+            }
+            XCTAssertTrue(mounted, hosted.identifiers.joined(separator: ", "))
+            let elements = nodes()
+            let drum = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Value" })
+            let buttons = elements.filter { $0.accessibilityTraits.contains(.button) }
+            let groups = buttons.compactMap(\.accessibilityLabel).sorted()
+            // Read the complete native button list, including an unclassified "Other" group.
+            // SwiftUI can inherit the sheet's identifier on children; labels and selected traits
+            // still prove the actual offered groups rather than an empty identifier-prefix match.
+            XCTAssertEqual(groups, hasInventory ? ["4K"] : [])
+            if hasInventory {
+                let group = buttons.first { $0.accessibilityLabel == "4K" }
+                XCTAssertEqual(group?.accessibilityTraits.contains(.selected), true)
+            }
+            XCTAssertEqual(drum.accessibilityValue, hasInventory ? "25p" : "Not set")
+            XCTAssertEqual(model.cameraValue(for: .resolution), token)
+            XCTAssertEqual(model.debugPendingCameraWriteCount, 0)
+            XCTAssertTrue(model.shell.control.pending.isEmpty)
+            let facts: [String: Any] = [
+                "SIMULATED": true, "inventory": model.recordingFormatPresentations.map(\.token),
+                "resolutionGroups": groups, "drum": drum.accessibilityValue ?? "",
+                "cameraToken": model.cameraValue(for: .resolution),
+                "nativePendingWrites": model.debugPendingCameraWriteCount,
+                "typedPendingWrites": model.shell.control.pending.count,
+                "nativeAccessibility": elements.map {
+                    [
+                        "identifier": HostedAccessibility.identifier($0) ?? "",
+                        "label": $0.accessibilityLabel ?? "",
+                        "value": $0.accessibilityValue ?? "",
+                        "traits": String($0.accessibilityTraits.rawValue),
+                    ]
+                },
+            ]
+            let data = try JSONSerialization.data(
+                withJSONObject: facts, options: [.prettyPrinted, .sortedKeys])
+            let values = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            values.name = "SIMULATED format adapter " + (hasInventory ? "advertised" : "empty")
+            values.lifetime = .keepAlways
+            add(values)
+            let image = UIGraphicsImageRenderer(bounds: hosted.host.view.bounds).image { _ in
+                _ = hosted.host.view.drawHierarchy(
+                    in: hosted.host.view.bounds, afterScreenUpdates: true)
+            }
+            let picture = XCTAttachment(image: image)
+            picture.name = values.name
+            picture.lifetime = .keepAlways
+            add(picture)
+        }
+    }
+
+    /// The recording format popup is the ladder sheet's shared format picker, one choice per
+    /// camera token; a token the body does not describe stays unclassified.
+    func testRecordingFormatsAreTheLadderSheetFormatPickerOneChoicePerToken() {
+        let mode = PTPCameraScreenSizeMode(
+            raw: UInt64(3840) << 48 | UInt64(2160) << 32 | UInt64(24) << 16, label: "4K 24p")
+        let described = NikonRecordingFormatPresentation(
+            mode: mode, currentCodec: "H.265", isNikonZR: true)
+        let choices = nikonLadderFormats(
+            options: [described.token, "Unknown"], recordingFormats: [described])
+        XCTAssertEqual(choices.map(\.value), [described.token, "Unknown"])
+        XCTAssertEqual(choices[0].resolution?.title, described.resolution)
+        XCTAssertEqual(choices[0].frameRate?.title, "24p")
+        XCTAssertNil(choices[1].resolution)
+        XCTAssertNil(choices[1].frameRate)
+    }
+
+    /// The body's exposure indicator reaches the shared EV meter in photography.
+    func testTheCameraIndicatorFeedsTheSharedExposureMeter() {
+        let model = NativeAppModel()
+        model.applyDemoProperty(.exposureIndicateStatus, data: Data([UInt8(bitPattern: -9)]))
+        model.applyDemoProperty(.exposureIndicateLightup, data: Data([0]))
+        XCTAssertEqual(model.cameraPropertySnapshot.exposureMeter.stops, -1.5)
+        XCTAssertEqual(model.cameraPropertySnapshot.exposureMeter.label, "\u{2212}1.5")
+        model.applyDemoProperty(.exposureIndicateLightup, data: Data([1]))
+        XCTAssertNil(model.cameraPropertySnapshot.exposureMeter.stops)
     }
 }
 

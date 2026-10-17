@@ -43,6 +43,33 @@ class LiveFrameMetadataOverlaysTest {
         assertTrue(assertNotNull(nikonFocusAreas(focus.copy(trackingAFActive = true))).confirmed)
         assertTrue(assertNotNull(nikonFocusAreas(focus.copy(result = LiveFocusResult.FOCUSED))).confirmed)
         assertEquals(null, nikonFocusAreas(focus.copy(coordinateWidth = 0)))
+        val secondaryOnly = assertNotNull(nikonFocusAreas(focus.copy(boxes = listOf(
+            focus.boxes.first().copy(width = 0, height = 0), focus.boxes.last(),
+        ))))
+        assertEquals(null, secondaryOnly.primary)
+        assertEquals(areas.others, secondaryOnly.others)
+    }
+
+    @Test
+    fun `original camera AF projection keeps its mirror and subject centres`() {
+        val focus = LiveFocusInfo(
+            coordinateWidth = 1_000, coordinateHeight = 500,
+            result = LiveFocusResult.FOCUSED, subjectDetectionActive = true,
+            trackingAFActive = false, selectedBoxIndex = 0,
+            boxes = listOf(
+                LiveFocusBox(centerX = 250, centerY = 250, width = 100, height = 50),
+                LiveFocusBox(centerX = 500, centerY = 100, width = 200, height = 100),
+            ),
+        )
+        val areas = assertNotNull(nikonFocusAreas(focus))
+        val primary = assertNotNull(areas.primary).flipped(true, false)
+        assertEquals(0.75, primary.centerX, absoluteTolerance = 0.0001)
+        assertEquals(0.5, primary.centerY, absoluteTolerance = 0.0001)
+        assertEquals(0.1, primary.width, absoluteTolerance = 0.0001)
+        assertEquals(0.1, primary.height, absoluteTolerance = 0.0001)
+        val secondary = areas.others.single().flipped(true, false)
+        assertEquals(0.5, secondary.centerX, absoluteTolerance = 0.0001)
+        assertEquals(0.2, secondary.centerY, absoluteTolerance = 0.0001)
     }
 
     @Test
