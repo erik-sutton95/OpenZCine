@@ -534,6 +534,16 @@ struct NikonMonitorShell: View {
             },
             lookMenu: { NikonLUTPicker() }
         )
+        .overlay(alignment: .topLeading) {
+            if model.activePanel == nil,
+                model.displayMode != .clean || model.gyroCapture.statusIsFailure
+                    || model.gyroCapture.hasGapWarning
+            {
+                GyroMonitorStatus(coordinator: model.gyroCapture)
+                    .padding(.leading, max(16, context.feedSafeArea.leading + 12))
+                    .padding(.top, context.feedSafeArea.top + 48)
+            }
+        }
         .overlay { MonitorRecoveryOverlay() }
         .frame(width: context.viewportWidth, height: context.viewportHeight, alignment: .topLeading)
         .onChange(of: layout.portrait, initial: true) { _, value in model.monitorIsPortrait = value

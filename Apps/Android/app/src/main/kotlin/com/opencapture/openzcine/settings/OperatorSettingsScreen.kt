@@ -169,6 +169,7 @@ internal fun OperatorSettingsScreen(
     accountCurrent: (() -> Boolean)? = null,
     /** The saved setups, for the Link tab's Your cameras card. */
     savedCameras: List<SavedCamera> = emptyList(),
+    gyro: MonitorSettingsGyroSource? = null,
     onClose: () -> Unit,
 ) {
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
@@ -341,6 +342,7 @@ internal fun OperatorSettingsScreen(
             "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
             "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi.",
             "Current OpenZCine build from the native project metadata."),
+        gyro = gyro,
     )
     // Seeds the session once per requested landing tab, before the first frame draws.
     remember(operatorSession, initialTab) { initialTab?.also { operatorSession.settingsTab = it } }

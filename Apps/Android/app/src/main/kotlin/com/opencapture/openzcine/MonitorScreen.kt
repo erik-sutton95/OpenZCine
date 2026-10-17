@@ -6,6 +6,9 @@ import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.media.StorageReadout
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import java.util.concurrent.atomic.AtomicReference
+import com.opencapture.openzcine.gyro.GyroCaptureState
+import com.opencapture.openzcine.gyro.GyroStatusPill
+
 import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.opencine.cameracontrols.*
 import android.os.Build
@@ -306,6 +309,8 @@ internal fun MonitorScreen(
     /** The one note sink; refusals and interruptions arrive through [MonitorControlModel.onNote]. */
     note: String? = null,
     clearNote: (String) -> Unit = {},
+    gyroState: GyroCaptureState? = null,
+    onOpenGyroLogs: () -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
     // A monitor-scoped relay means the wearable never becomes an independent
@@ -2339,6 +2344,15 @@ internal fun MonitorScreen(
                 capturing = stillCapturing, timerRemaining = photoTimerRemaining, bodyPulse = bodyShutterPulse,
                 onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
         )
+
+        gyroState?.takeIf { state ->
+            isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null &&
+                (state.enabled || state.failed) && (!isClean || state.failed)
+        }?.let { state ->
+            GyroStatusPill(state, Modifier.align(Alignment.TopStart)
+                .padding(start = maxOf(16f, safeLeading + 12f).dp, top = (safeTop + 48f).dp),
+                onClick = onOpenGyroLogs)
+        }
 
         // App self-timer tally: a white border pulse at the physical edge per
         // countdown tick (iOS timer tally), fading within each second.

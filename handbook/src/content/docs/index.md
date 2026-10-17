@@ -33,6 +33,7 @@ codes, private media or vendor documents.
 - [Setup and build](./guides/setup/): `just`, Xcode, the demo session without a camera, Android, quality gate
 - [Troubleshooting](./guides/troubleshooting/): discovery, pairing, Wi-Fi, USB-C, live view and delivery
 - [Share This Feed](./guides/share-feed/): broadcast the monitor to other phones and iPads on set
+- [Gyro logging for Gyroflow](./guides/gyro-logging/): mount calibration, recording, export, and stabilization
 - [Architecture](./apps/architecture/): portable Swift core, SwiftUI, Compose
 - [iOS app](./apps/ios/): iPhone, iPad, Apple Watch and TestFlight
 - [Android app](./apps/android/): Compose shell, Wear OS, Google Play and the sideload APK
