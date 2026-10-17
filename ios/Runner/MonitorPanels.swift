@@ -1767,11 +1767,7 @@ struct OperatorSettingsPanel: View {
                 hdr: .init(
                     value: Binding(get: { model.hdrDisplay }, set: { model.hdrDisplay = $0 }),
                     help: MonitorSettingsCopy.hdrPanel(cameraMode: "N-Log or HLG tone mode")),
-                sections: [
-                .statusBar, .toolBar, .cameraValues, .lockButton, .batteries, .recReadout,
-                .timecode, .format, .codec, .color, .storage, .fps, .railRecord, .railMedia, .railSettings,
-                .focusBox,
-            ]),
+                sections: model.controlCapabilities.displaySections),
             cache: .init(
                 source: model.captureOperatorMediaCacheSource(),
                 clearHelp:

@@ -752,6 +752,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             OperatorSettingsScreen(
                                 session = watching.session,
+                                controlSession = watchCommon,
                                 assists = watchAssist,
                                 operatorSession = watchOperatorSession,
                                 settings = operatorSettings,
@@ -1168,6 +1169,7 @@ class MainActivity : ComponentActivity() {
                                 ShellModel.Cover.SETTINGS ->
                                     OperatorSettingsScreen(
                                         session = active,
+                                        controlSession = multicam.lentMember(active)?.control ?: shellSessions.acquire(active),
                                         assists = assist,
                                         operatorSession = operatorSession,
                                         editsLiveView = true,
@@ -1321,6 +1323,7 @@ class MainActivity : ComponentActivity() {
                         }
                         OperatorSettingsScreen(
                             session = null,
+                            controlSession = null,
                             assists = standaloneAssist,
                             operatorSession = standaloneSession,
                             settings = operatorSettings,

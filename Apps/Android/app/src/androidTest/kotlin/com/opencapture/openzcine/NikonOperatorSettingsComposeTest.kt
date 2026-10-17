@@ -601,7 +601,7 @@ class NikonOperatorSettingsComposeTest {
                 val editsCurrentLiveView = editorAvailable?.invoke() ?: editsLiveView
                 SideEffect { operatorSession.declare(offered); operatorSessionShown = operatorSession }
                 OperatorSettingsScreen(
-                    session = session, assists = assists,
+                    session = session, controlSession = null, assists = assists,
                     operatorSession = operatorSession, editsLiveView = editsCurrentLiveView,
                     settings = settings, mediaCacheStore = cache,
                     systemSettingsActions = actions,

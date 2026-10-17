@@ -1,4 +1,5 @@
 import Foundation
+import OpenCineCore
 
 /// Where the monitor's picture comes from.
 ///
@@ -80,56 +81,57 @@ public struct MonitorDataAvailability: Equatable, Sendable {
         holdsRelayControl: Bool = false
     ) {
         self.source = source
-        self.ownsCameraSession = ownsCameraSession
-        self.receivesCameraMetadata = receivesCameraMetadata
-        self.holdsRelayControl = holdsRelayControl
+        self.connectionPolicy = MonitorConnectionPolicy(
+            ownsCameraSession: ownsCameraSession, receivesCameraMetadata: receivesCameraMetadata,
+            holdsRelayControl: holdsRelayControl)
     }
 
     /// Whether this device may issue camera commands at all — over its own session, or proxied
     /// through a relay host. Deliberately distinct from owning the session: a viewer holding the
     /// token drives the camera without ever touching the camera link.
-    public var canDriveCamera: Bool { ownsCameraSession || holdsRelayControl }
+    public var canDriveCamera: Bool { connectionPolicy.canDriveCamera }
 
     public let source: VideoSourceKind
+    public let connectionPolicy: MonitorConnectionPolicy
     /// Whether a PTP session is live — the camera can be read and written.
-    public let ownsCameraSession: Bool
+    public var ownsCameraSession: Bool { connectionPolicy.ownsCameraSession }
     /// Whether this device currently holds the relay's control token — it drives the camera
     /// through the host rather than over a link of its own.
-    public let holdsRelayControl: Bool
+    public var holdsRelayControl: Bool { connectionPolicy.holdsRelayControl }
     /// Whether the camera's readings are arriving, from our own session or a relay host's.
-    public let receivesCameraMetadata: Bool
+    public var receivesCameraMetadata: Bool { connectionPolicy.receivesCameraMetadata }
 
     /// Exposure/focus tiles, their pickers, and the command-mode grid. Purely a control-link
     /// question: PTP properties keep arriving over Wi-Fi while the picture comes over HDMI.
-    public var cameraControls: Bool { canDriveCamera }
+    public var cameraControls: Bool { connectionPolicy.cameraControls }
 
     /// The record button and its state readout. Record is an operation, and the camera reports
     /// the resulting state over PTP events as well as in the frame header, so it survives HDMI.
-    public var recordControl: Bool { canDriveCamera }
+    public var recordControl: Bool { connectionPolicy.recordControl }
 
     /// Browsing and downloading what is on the card — a control-link operation.
-    public var mediaBrowser: Bool { ownsCameraSession }
+    public var mediaBrowser: Bool { connectionPolicy.mediaBrowser }
 
     /// The AF box overlay, and the body's focus confirmation behind it.
-    public var focusBoxes: Bool { receivesCameraMetadata }
-    public var focusConfirmation: Bool { receivesCameraMetadata }
+    public var focusBoxes: Bool { connectionPolicy.focusBoxes }
+    public var focusConfirmation: Bool { connectionPolicy.focusConfirmation }
 
     /// The body's own detections — faces, eyes, subject tracking.
-    public var subjectDetectionBoxes: Bool { receivesCameraMetadata }
+    public var subjectDetectionBoxes: Bool { connectionPolicy.subjectDetectionBoxes }
 
     /// The camera's own audio meter.
-    public var audioMeters: Bool { receivesCameraMetadata }
+    public var audioMeters: Bool { connectionPolicy.audioMeters }
 
     /// Timecode struck by the body.
-    public var cameraTimecode: Bool { receivesCameraMetadata }
+    public var cameraTimecode: Bool { connectionPolicy.cameraTimecode }
 
     /// Whether the *body* is reporting its level angles. The horizon overlay stays up either way,
     /// because it already falls back to the phone's own CoreMotion attitude.
-    public var cameraLevel: Bool { receivesCameraMetadata }
+    public var cameraLevel: Bool { connectionPolicy.cameraLevel }
 
     /// Whether the operator can pick a picture source at all: only worth offering once a control
     /// session exists to switch back to.
-    public var offersSourceSwitch: Bool { ownsCameraSession }
+    public var offersSourceSwitch: Bool { connectionPolicy.offersSourceSwitch }
 
     /// Whether the camera's own live-view frame loop is running.
     ///
