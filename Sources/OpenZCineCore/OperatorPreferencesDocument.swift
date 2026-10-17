@@ -77,7 +77,7 @@ public struct OperatorPreferencesDocument: Sendable {
             // their unknown raw members.
             let stored = original[key]
             if let raw = stored as? [String: Any], let current = reloaded[key] as? [String: Any],
-               let target = value as? [String: Any] {
+                let target = value as? [String: Any] {
                 result[key] = preservingInheritedChoices(in: raw, reloaded: current, desired: target)
             } else if stored == nil || stored is NSNull || !(value is [Any]) || !(stored is [Any]) {
                 result[key] = value
@@ -92,7 +92,7 @@ public struct OperatorPreferencesDocument: Sendable {
             if let before = previous[key] as? [String: Any], let after = value as? [String: Any] {
                 result[key] = merge(original: original[key] as? [String: Any] ?? [:], previous: before, next: after)
             } else if let before = previous[key] as? [String], let after = value as? [String],
-                      let raw = original[key] as? [String] {
+                let raw = original[key] as? [String] {
                 // Unknown and retired raw values stay in place beside edited known values.
                 let known = Set(before)
                 var remaining = after.makeIterator()
