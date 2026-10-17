@@ -171,6 +171,12 @@ capture device while exposure, focus, record and media stay on the camera link.
 Broadcast the monitor to other phones and iPads on set, with per-watcher assists
 and a control handoff. See [Share This Feed](../../guides/share-feed/).
 
+## Phone gyro logging
+
+Rigidly mount this phone to the camera to record motion logs for Gyroflow.
+See [Gyro logging for Gyroflow](../../guides/gyro-logging/) for mount
+calibration, foreground recording, sharing logs, and the Resolve workflow.
+
 ## Device requirements
 
 iOS and iPadOS **17.0** or newer; Frame.io needs **17.4**. watchOS **10** or

@@ -35,6 +35,12 @@ No frame, recognized text or key is logged or kept until a join succeeds. If the
 scanner cannot read the screen, type the name and key; the same validation
 applies.
 
+## Phone gyro logging
+
+Rigidly mount this phone to the camera to record motion logs for Gyroflow.
+See [Gyro logging for Gyroflow](../../guides/gyro-logging/) for mount
+calibration, foreground recording, sharing logs, and the Resolve workflow.
+
 ## Permissions
 
 | Permission | Why |

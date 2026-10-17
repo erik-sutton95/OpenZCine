@@ -46,6 +46,7 @@ export default defineConfig({
             { label: 'iOS', slug: 'apps/ios' },
             { label: 'Android', slug: 'apps/android' },
             { label: 'Share This Feed', slug: 'guides/share-feed' },
+            { label: 'Gyro logging for Gyroflow', slug: 'guides/gyro-logging' },
           ],
         },
         {
