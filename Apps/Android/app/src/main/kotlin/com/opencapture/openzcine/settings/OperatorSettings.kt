@@ -164,20 +164,23 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
 
     /**
      * The shared operator choices on Z's existing keys, so stored values carry over unchanged.
-     * Z has no HDR display or originals-cache choice; those keys are never written.
+     * Z has no HDR display or originals-cache choice; those keys are never written. The remote
+     * shutter uses the shared `<app>.RemoteShutter` key (as on iOS); the retired Z key moves over
+     * once, before the first read ([migrateRetiredRemoteShutter]).
      */
     public val operatorPreferences: MonitorOperatorPreferences = MonitorOperatorPreferences(preferences,
         MonitorOperatorPreferences.Keys(keepScreenAwake = "controls.keepScreenAwake", hdrDisplay = "display.hdr",
             recordConfirmation = "controls.recordConfirmation", haptics = "controls.haptics",
-            cacheOriginals = "cache.originals"))
+            cacheOriginals = "cache.originals", remoteShutter = REMOTE_SHUTTER_KEY))
+        .also { migrateRetiredRemoteShutter(preferences, REMOTE_SHUTTER_KEY) }
 
     // Controls — all four are app-local behavior and therefore safe to expose
     // before Android has camera-property writes.
     public val recordConfirmationEnabled: Toggle = Toggle("controls.recordConfirmation", default = true,
         load = { operatorPreferences.recordConfirmation }, store = { operatorPreferences.recordConfirmation = it })
     /** Foreground hardware shutter, including volume keys while the live monitor is armed. */
-    public val mediaRemoteShutterEnabled: Toggle =
-        Toggle("controls.mediaRemoteShutter.v1", default = true)
+    public val mediaRemoteShutterEnabled: Toggle = Toggle(REMOTE_SHUTTER_KEY, default = true,
+        load = { operatorPreferences.remoteShutter }, store = { operatorPreferences.remoteShutter = it })
     public val hapticsEnabled: Toggle = Toggle("controls.haptics", default = true,
         load = { operatorPreferences.haptics }, store = { operatorPreferences.haptics = it })
     public val keepScreenAwake: Toggle = Toggle("controls.keepScreenAwake", default = true,
@@ -333,6 +336,7 @@ public class OperatorSettings(private val preferences: SharedPreferences) {
         const val STREAM_PRESET_KEY = "link.streamPreset.v1"
         const val QUALITY_BIAS_KEY = "link.qualityBias.v1"
         const val PORTRAIT_FEED_ASPECT_KEY = "display.portraitFeedAspect.v1"
+        const val REMOTE_SHUTTER_KEY = "OpenZCine.RemoteShutter"
         val DISPLAY_KEYS = MonitorDisplayPreferences.Keys("monitorDisplay.live.v1", "monitorDisplay.clean.v1",
             "monitorDisplay.command.v1")
     }
@@ -377,6 +381,21 @@ internal fun seedRetiredDisplayChrome(store: SharedPreferences, display: Monitor
         display.clean = carried("display.clean.", MonitorDisplayChrome.cleanDefaults, ::wholeRail)
     if (!display.hasStoredLayout(MonitorDisplayMode.COMMAND) && (retired("display.command.") || retired("display.")))
         display.command = carried("display.command.", live) { wholeRail(it) ?: wholeRail("display.") }
+}
+
+/** The key Z stored the remote shutter choice under before the shared key (product ruling 2026-10-16). */
+private const val RETIRED_REMOTE_SHUTTER_KEY = "controls.mediaRemoteShutter.v1"
+
+/**
+ * Moves the operator's remote shutter choice from the retired Z key to the shared [key], once. A value
+ * already under the shared key wins, so a second run changes nothing; the retired key is removed only
+ * after it was read as a Boolean (an unreadable value stays, and the shared default applies).
+ */
+internal fun migrateRetiredRemoteShutter(store: SharedPreferences, key: String) {
+    val retired = store.all[RETIRED_REMOTE_SHUTTER_KEY] as? Boolean ?: return
+    val edit = store.edit()
+    if (!store.contains(key)) edit.putBoolean(key, retired)
+    edit.remove(RETIRED_REMOTE_SHUTTER_KEY).apply()
 }
 
 /**
