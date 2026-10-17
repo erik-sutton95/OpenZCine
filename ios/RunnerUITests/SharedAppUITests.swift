@@ -407,17 +407,25 @@ final class GyroNativeInputUITests: XCTestCase {
             userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for a receipt"])
     }
 
-    /// The accepted negative shape: over a bounded window every receipt keeps the outcome
-    /// unchanged, while the receipt stream keeps flowing (freshness proves liveness).
+    /// Every negative receipt advances sequence and time after input, with a final fresh
+    /// observation after the full window; stale bridge snapshots cannot prove no change.
     private func requireUnchanged(
         since baseline: GyroReachReceipt, window: Duration, what: String
     ) async throws {
         let clock = ContinuousClock()
         let limit = clock.now.advanced(by: window)
-        while clock.now < limit {
-            let current = try await receipt(deadline: .seconds(2)) { _ in true }
+        var previous = baseline
+        while true {
+            let completesWindow = clock.now >= limit
+            let observedAfter = Date().timeIntervalSince1970
+            let current = try await receipt(deadline: .seconds(2)) {
+                $0.sequence > previous.sequence
+                    && $0.observedAt > max(previous.observedAt, observedAfter)
+            }
             try require(
                 current.outcome == baseline.outcome, "\(what) changed an owner outcome")
+            previous = current
+            if completesWindow { return }
             try await Task.sleep(for: .milliseconds(200))
         }
     }
