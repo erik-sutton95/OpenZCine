@@ -308,16 +308,14 @@ enum PreferencesStore {
         UserDefaults.standard.set(data, forKey: assistConfigKey)
     }
 
-    static func loadCommandGridOrder() -> [CommandTileKind] {
-        let stored: [CommandTileKind]? = UserDefaults.standard.data(forKey: commandGridOrderKey)
-            .flatMap { try? JSONDecoder().decode([CommandTileKind].self, from: $0) }
-        // Reconcile so tiles added/removed in a newer build are never lost or duplicated.
-        return CommandGridOrder.reconciled(stored ?? CommandGridOrder.default)
-    }
-
-    static func save(_ commandGridOrder: [CommandTileKind]) {
-        guard let data = try? JSONEncoder().encode(commandGridOrder) else { return }
-        UserDefaults.standard.set(data, forKey: commandGridOrderKey)
+    /// The DISP 3 tile order through the shared owner, under the key and JSON shape this store
+    /// always wrote, so an operator's arrangement carries over. Retired names drop out and tiles
+    /// added later join at the end.
+    static func commandTileOrder(storage: UserDefaults = .standard)
+        -> MonitorCommandTileOrderPreferences<CommandTileKind>
+    {
+        MonitorCommandTileOrderPreferences(
+            storage: storage, key: commandGridOrderKey, all: CommandTileKind.allCases)
     }
 
     static let assistToolUsage = MonitorToolUsagePreferences(
@@ -2442,8 +2440,8 @@ final class NativeAppModel {
         }
     }
     /// Operator-chosen order of the command-monitor primary grid tiles (drag to reorder), persisted.
-    var commandGridOrder = PreferencesStore.loadCommandGridOrder() {
-        didSet { PreferencesStore.save(commandGridOrder) }
+    var commandGridOrder = PreferencesStore.commandTileOrder().load() {
+        didSet { PreferencesStore.commandTileOrder().save(commandGridOrder) }
     }
     /// File store for custom-imported LUTs, and the current list (refreshed when the picker opens).
     let lutFileStore: CustomLUTStore
@@ -9341,9 +9339,12 @@ final class NativeAppModel {
         focusPointLocked.toggle()
     }
 
-    /// Reorders a command-grid tile to a new slot (drag-to-reorder). Persisted via `didSet`.
+    /// Reorders a command-grid tile to a slot of the visible grid (drag to reorder); a hidden
+    /// tile keeps its place. Persisted via `didSet`.
     func moveCommandTile(_ kind: CommandTileKind, to index: Int) {
-        let next = CommandGridOrder.moving(kind, to: index, in: commandGridOrder)
+        let hidden = Set(commandGridOrder).subtracting(visibleCommandGridOrder)
+        let next = NikonCommandGridOrder.moving(
+            kind, to: index, in: commandGridOrder, hidden: hidden)
         if next != commandGridOrder { commandGridOrder = next }
     }
 

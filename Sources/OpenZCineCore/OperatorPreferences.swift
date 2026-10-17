@@ -932,35 +932,3 @@ public enum DispOrder {
         return result
     }
 }
-
-/// Pure helpers for the persisted command-grid order.
-public enum CommandGridOrder {
-    /// Every tile in its canonical position.
-    public static let `default` = CommandTileKind.allCases
-
-    /// Reconciles a persisted order with the current tile set: drops duplicates and unknowns (decoded
-    /// from an older/newer build), keeps the operator's arrangement, then appends any tiles that are
-    /// missing in their canonical position so none ever vanish. An empty result falls back to default.
-    public static func reconciled(_ order: [CommandTileKind]) -> [CommandTileKind] {
-        var seen = Set<CommandTileKind>()
-        var result = order.filter { seen.insert($0).inserted }
-        for kind in CommandTileKind.allCases where !seen.contains(kind) {
-            result.append(kind)
-            seen.insert(kind)
-        }
-        return result.isEmpty ? `default` : result
-    }
-
-    /// Returns `order` with `kind` moved to `index` (clamped to the valid range). A no-op if `kind`
-    /// isn't present or is already at `index`.
-    public static func moving(_ kind: CommandTileKind, to index: Int, in order: [CommandTileKind])
-        -> [CommandTileKind]
-    {
-        guard let from = order.firstIndex(of: kind) else { return order }
-        var result = order
-        result.remove(at: from)
-        let clamped = min(max(index, 0), result.count)
-        result.insert(kind, at: clamped)
-        return result
-    }
-}

@@ -571,17 +571,22 @@ private struct NikonCameraSettingExtension: View {
     }
 }
 
-/// Lens, camera health and reorderable body tiles are a coherent native dashboard.
+/// DISP 3: the shared command dashboard over the Nikon tiles, health and pickers. Portrait stacks
+/// the compact grid over the sections, as on Android.
 private struct NikonCommandDashboard: View {
+    @Environment(NativeAppModel.self) private var model
     let layout: FieldMonitorLayout
     var body: some View {
-        VStack(spacing: 12) {
-            CommandHealthStrip()
-            HStack(alignment: .top, spacing: 12) {
-                CommandPrimaryGrid(availableHeight: max(44, layout.picture.height - 72))
-                CommandSideColumn().frame(width: max(160, layout.picture.width * 0.27))
+        MonitorCommandDashboard(
+            tiles: model.commandDashboardTiles, sections: model.commandDashboardSections,
+            health: model.commandDashboardHealth, portrait: layout.portrait,
+            controlsEnabled: !model.interfaceLocked,
+            onOpenControl: { model.showPicker($0.picker, mode: $0.mode) },
+            onMoveTile: { model.moveCommandTile($0, to: $1) },
+            healthTrailing: {
+                FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
             }
-        }
+        )
     }
 }
 
