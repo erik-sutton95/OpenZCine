@@ -50,10 +50,16 @@ internal data class GyroCaptureState(
     val calibration: GyroCalibrationState = GyroCalibrationState(),
 )
 
+private val gyroCaptureDispatcher = Dispatchers.IO.limitedParallelism(1)
+
+/** Keeps replacement recovery behind prior activity writes without sharing cancellation. */
+internal fun gyroCaptureScope(): CoroutineScope =
+    CoroutineScope(SupervisorJob() + gyroCaptureDispatcher)
+
 /** App-owned sensor/file adapter; all take boundaries and health rules are Swift-owned. */
 internal class GyroCaptureCoordinator(context: Context, private val native: GyroNative = SwiftGyroNative,
     private val calibrationNative: GyroCalibrationNative = SwiftGyroCalibrationNative) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+    private val scope = gyroCaptureScope()
     private val preferences = context.getSharedPreferences("gyro-logging", Context.MODE_PRIVATE)
     private val sensorManager = context.getSystemService(SensorManager::class.java)
     private val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
