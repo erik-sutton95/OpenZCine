@@ -45,7 +45,7 @@ struct GyroCaptureTests {
         try #require(scene.interfaceOrientation.isLandscape)
         let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
         let window = UIWindow(windowScene: scene)
-        let host = UIHostingController(rootView: GyroMountView(coordinator: coordinator))
+        let host = UIHostingController(rootView: AnyView(GyroMountView(coordinator: coordinator)))
         window.frame = scene.coordinateSpace.bounds
         window.rootViewController = host
         window.makeKeyAndVisible()
@@ -74,6 +74,9 @@ struct GyroCaptureTests {
             if labels.allSatisfy({ label in
                 elements.contains {
                     $0.accessibilityLabel == label && !$0.accessibilityFrame.isEmpty
+                        && (!controls.contains(label)
+                            || ($0.accessibilityFrame.width >= 44
+                                && $0.accessibilityFrame.height >= 44))
                 }
             }) {
                 break
@@ -101,8 +104,65 @@ struct GyroCaptureTests {
             if controls.contains(label) {
                 #expect(element.accessibilityTraits.contains(.button))
                 #expect(!element.accessibilityTraits.contains(.notEnabled))
+                #expect(element.accessibilityFrame.width >= 44)
+                #expect(element.accessibilityFrame.height >= 44)
             }
         }
+        coordinator.cancelMountCalibration()
+        coordinator.enabled = true
+        coordinator.configure(eligible: true, cameraLabel: "Nikon test camera", recording: true)
+        fixture.feed(from: 20, through: 20.1)
+        await coordinator.processPending()
+        coordinator.enabled = false
+        await coordinator.processPending()
+        try #require(coordinator.logs.first?.summary != nil)
+        coordinator.enabled = true
+        host.rootView = AnyView(
+            VStack {
+                GyroMonitorStatus(coordinator: coordinator)
+                GyroLogsView(coordinator: coordinator)
+            })
+        for _ in 0..<100 {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            elements = calibrationUIElements(host.view)
+            if ["Share", "Delete"].allSatisfy({ label in
+                elements.contains {
+                    $0.accessibilityLabel == label && $0.accessibilityFrame.width >= 44
+                        && $0.accessibilityFrame.height >= 44
+                }
+            }) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let status = try #require(
+            elements.first {
+                ($0 as? any UIAccessibilityIdentification)?.accessibilityIdentifier
+                    == "monitor.gyroStatus"
+            })
+        let logActions = try ["Share", "Delete"].map { label in
+            try #require(elements.first { $0.accessibilityLabel == label })
+        }
+        for element in [status] + logActions {
+            #expect(element.accessibilityTraits.contains(.button))
+            #expect(!element.accessibilityTraits.contains(.notEnabled))
+            #expect(element.accessibilityFrame.width >= 44)
+            #expect(element.accessibilityFrame.height >= 44)
+            #expect(safeBounds.contains(element.accessibilityFrame))
+        }
+        Attachment.record(
+            ([status] + logActions).map {
+                "\($0.accessibilityLabel ?? ""): \($0.accessibilityFrame)"
+            }.joined(separator: "\n"), named: "SIMULATED-gyro-log-touch-targets.txt")
+        let logImage = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        Attachment.record(
+            Array(try #require(logImage.pngData())),
+            named: "SIMULATED-gyro-log-touch-targets-landscape.png")
+        coordinator.enabled = false
+        await coordinator.processPending()
     }
 
     @Test("Calibration saves only after an independent third pose verifies")
