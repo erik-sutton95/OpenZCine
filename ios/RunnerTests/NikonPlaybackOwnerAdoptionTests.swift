@@ -1020,7 +1020,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             previous?.makeKeyAndVisible()
         }
         host.view.frame = window.bounds
-        let mounted = await cachedCatalogSettled {
+        let mounted = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view).contains {
                 $0.isAccessibilityElement && $0.accessibilityLabel == "Favorite clip"
@@ -1084,7 +1084,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         let session = try NikonPlaybackSession(
             clips: [clip, successor], startingAt: clip, model: fixture.model, native: native)
         defer { session.owner.close() }
-        let ready = await cachedCatalogSettled {
+        let ready = try await cachedCatalogSettled {
             session.owner.ready && native.player.currentItem?.status == .readyToPlay
                 && (session.owner.duration ?? 0) > 1
         }
@@ -1100,7 +1100,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         let positioned = await native.seek(seconds: duration - 0.3, tolerance: 0, token: token)
         XCTAssertTrue(positioned)
         session.owner.setPlaying(true)
-        let looped = await cachedCatalogSettled {
+        let looped = try await cachedCatalogSettled {
             ended == [token] && native.player.currentTime().seconds > 0.1
                 && native.player.currentTime().seconds < 1 && native.player.rate > 0
         }
@@ -1115,14 +1115,14 @@ extension NikonPlaybackOwnerAdoptionTests {
         let repositioned = await native.seek(seconds: duration - 0.3, tolerance: 0, token: token)
         XCTAssertTrue(repositioned)
         session.owner.setPlaying(true)
-        let stopped = await cachedCatalogSettled {
+        let stopped = try await cachedCatalogSettled {
             ended == [token, token] && session.owner.reachedEnd && native.player.rate == 0
         }
         XCTAssertTrue(stopped, "Disabling loop must leave the actual native end paused")
         XCTAssertFalse(session.owner.playRequested)
 
         session.owner.goToAdjacent(1)
-        let replaced = await cachedCatalogSettled {
+        let replaced = try await cachedCatalogSettled {
             session.owner.token != token && session.owner.ready
                 && native.player.currentItem?.status == .readyToPlay
         }
@@ -1162,7 +1162,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         let session = try NikonPlaybackSession(
             clips: [clip], startingAt: clip, model: fixture.model, native: native)
         defer { session.owner.close() }
-        let observed = await cachedCatalogSettled {
+        let observed = try await cachedCatalogSettled {
             session.owner.ready
                 && (native.bufferedThroughSeconds(token: session.owner.token) ?? 0) > 1
         }
@@ -1251,7 +1251,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             previous?.makeKeyAndVisible()
         }
         host.view.frame = window.bounds
-        let ready = await cachedCatalogSettled {
+        let ready = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return library.entries.values.filter { $0.isPlayableOffline }.count >= clips.count
                 && Self.galleryScrollViews(host.view).contains {
@@ -1268,7 +1268,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         let before = scroll.contentOffset.y
         XCTAssertGreaterThan(before, 300)
         // The actual visible clip action must enter Nikon's real opening callback.
-        let found = await cachedCatalogSettled {
+        let found = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view).contains {
                 HostedAccessibility.identifier($0)?.hasPrefix("monitor.media.clip.") == true
@@ -1300,7 +1300,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         }
         // Return only once the cover has finished presenting, as an operator can: UIKit ignores
         // a dismissal sent while the presentation transition is still running.
-        let presented = await cachedCatalogSettled {
+        let presented = try await cachedCatalogSettled {
             host.presentedViewController.map { !$0.isBeingPresented } ?? false
         }
         XCTAssertTrue(presented)
@@ -1308,13 +1308,13 @@ extension NikonPlaybackOwnerAdoptionTests {
         for offset in openingOffsets.values { XCTAssertEqual(offset, before, accuracy: 1) }
         if let returningLayout { fixture.model.mediaBrowserLayout = returningLayout }
         host.dismiss(animated: false)
-        let returned = await cachedCatalogSettled { host.presentedViewController == nil }
+        let returned = try await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(returned)
         host.view.layoutIfNeeded()
         if returningLayout != nil {
             // A changed layout remounts the gallery. Sample it once the update has landed and the
             // outgoing scroll view, animated out over 0.2 s, has left the window.
-            let remounted = await cachedCatalogSettled {
+            let remounted = try await cachedCatalogSettled {
                 host.view.layoutIfNeeded()
                 return scroll.window == nil
                     && Self.galleryScrollViews(host.view).contains {
@@ -1403,7 +1403,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        let mounted = await cachedCatalogSettled {
+        let mounted = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view)
                 .contains { $0.accessibilityLabel == "Delete clip from camera" }
@@ -1414,7 +1414,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             HostedAccessibility.elements(in: host.view)
                 .first { $0.accessibilityLabel == "Delete clip from camera" })
         XCTAssertTrue(button.accessibilityActivate())
-        let presented = await cachedCatalogSettled { host.presentedViewController != nil }
+        let presented = try await cachedCatalogSettled { host.presentedViewController != nil }
         XCTAssertTrue(presented)
         let dialog = try XCTUnwrap(host.presentedViewController as? UIAlertController)
         XCTAssertTrue(dialog.message?.contains(clip.filename) == true)
@@ -1422,7 +1422,7 @@ extension NikonPlaybackOwnerAdoptionTests {
         XCTAssertEqual(try fixture.store.catalogBytes(cameraID: bucket), catalog)
         let cancel = try XCTUnwrap(dialog.actions.first { $0.style == .cancel }?.title)
         let destructive = try XCTUnwrap(dialog.actions.first { $0.style == .destructive }?.title)
-        let rendered = await cachedCatalogSettled {
+        let rendered = try await cachedCatalogSettled {
             dialog.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: dialog.view)
                 .contains { $0.accessibilityLabel == destructive }
@@ -1439,7 +1439,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             XCTAssertTrue(
                 [dialog.view as NSObject, dialog].contains { $0.accessibilityPerformEscape() })
         }
-        let dismissed = await cachedCatalogSettled { host.presentedViewController == nil }
+        let dismissed = try await cachedCatalogSettled { host.presentedViewController == nil }
         XCTAssertTrue(dismissed)
         XCTAssertEqual(try Data(contentsOf: url), bytes)
         XCTAssertEqual(try fixture.store.catalogBytes(cameraID: bucket), catalog)
@@ -1448,7 +1448,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             calls.contains { $0.operation == .deleteObject }, "Cancel sends no camera delete")
         fixture.model.debugAdoptEstablishedMediaSession(nil)
         fixture.model.connection = .disconnected
-        let hidden = await cachedCatalogSettled {
+        let hidden = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return !HostedAccessibility.elements(in: host.view)
                 .contains { $0.accessibilityLabel == "Delete clip from camera" }
@@ -1502,7 +1502,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        let mounted = await cachedCatalogSettled {
+        let mounted = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view)
                 .contains { HostedAccessibility.identifier($0) == "monitor.playback.back" }
@@ -1550,13 +1550,13 @@ extension NikonPlaybackOwnerAdoptionTests {
                 $0.accessibilityLabel == "Share photo"
             }
         }
-        let mounted = await cachedCatalogSettled {
+        let mounted = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return share() != nil
         }
         XCTAssertTrue(mounted, "The photo viewer must offer Share")
         XCTAssertTrue(try XCTUnwrap(share()).accessibilityActivate())
-        let offered = await cachedCatalogSettled {
+        let offered = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view).contains {
                 HostedAccessibility.identifier($0)?.hasPrefix("monitor.share.destination.") == true
@@ -1595,7 +1595,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        let favorite = await cachedCatalogSettled {
+        let favorite = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view).contains {
                 $0.accessibilityLabel == "Add to favorites"
@@ -1758,7 +1758,7 @@ extension NikonPlaybackOwnerAdoptionTests {
                 $0.accessibilityIdentifier == "monitor.native.picture"
             }
         }
-        let mounted = await cachedCatalogSettled {
+        let mounted = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return picture() != nil
         }
@@ -1767,7 +1767,7 @@ extension NikonPlaybackOwnerAdoptionTests {
             picture() is MonitorPlaybackFeedHost,
             "the page mounts the shared feed picture, not a private player layer")
         fixture.model.assist.configureTool = .falseColor
-        let previewed = await cachedCatalogSettled {
+        let previewed = try await cachedCatalogSettled {
             host.view.layoutIfNeeded()
             return HostedAccessibility.elements(in: host.view).contains {
                 HostedAccessibility.identifier($0) == "monitor.inspector.preview"
