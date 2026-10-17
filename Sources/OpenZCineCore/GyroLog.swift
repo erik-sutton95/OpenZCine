@@ -113,10 +113,6 @@ public struct GyroLogSummary: Codable, Equatable, Sendable, Identifiable {
     public let isPartial: Bool
     /// Unique take identity.
     public var id: UUID { descriptor.id }
-    /// Operator-visible camera label.
-    public var cameraLabel: String { descriptor.cameraLabel }
-    /// Wall-clock time when recording was observed.
-    public var startDate: Date { descriptor.startDate }
     /// Final GCSV filename.
     public var filename: String { descriptor.filename }
     /// Observed REC start relative to the first retained sample, matching Gyroflow's time origin.
