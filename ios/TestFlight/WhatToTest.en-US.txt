@@ -17,9 +17,8 @@ Fixes
 
 What to test
 
-- Connect and compare exposure, storage, link and recording time with the camera. Check landscape first, then rotate and compare Live View and Multicam clocks.
+- Connect and compare exposure, storage, link and recording time with the camera. Check landscape first, then rotate and compare Live View and Multicam clocks. In portrait, check that every status readout is visible.
 - Fix the phone firmly to the camera. In Phone mount, capture three calibration poses, holding still before each capture.
 - Enable gyro logging and wait for GYRO ARMED. Record a short clip, check the saved log, open Media, then return to Live View and reconnect.
-- Background the app or reconnect during a take. Check the interrupted log when you return.
+- Background the app or reconnect during a take. Check the interrupted log when you return. Reconnect in stills mode, then in video mode, and check the mode is kept.
 - With camera and lens stabilization off, export a short fixed-focal-length take and a ten-minute take. Choose a lens profile and sync in Gyroflow; check the beginning, middle and end.
-- Disconnect and reconnect the camera in stills mode, then in video mode, and check the mode is kept. Rotate to portrait and check the status readouts.
