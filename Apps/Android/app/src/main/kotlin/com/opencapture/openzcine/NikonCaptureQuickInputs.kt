@@ -70,7 +70,6 @@ internal fun <S> nikonCaptureInputs(
     recording: Boolean?,
     commandsEnabled: Boolean,
     owner: NikonCaptureQuickOwner,
-    columns: Int?,
     open: (String) -> Unit,
     dismiss: () -> Unit,
     commit: (String, NikonCaptureQuickIdentity, String) -> Unit,
@@ -83,7 +82,7 @@ internal fun <S> nikonCaptureInputs(
     }.toMap()
     val inputs = MonitorOperatorCaptureInputs(readouts, panel,
         fields = headerReadouts.mapNotNull { value -> value.field?.let { value.id to it } }.toMap(),
-        columns = columns, open = open, dismiss = dismiss,
+        open = open, dismiss = dismiss,
         isTop = { key -> headerReadouts.any { it.id == key } },
         nativeQuick = { key -> native[key]?.let { captured -> MonitorOperatorNativeCaptureQuick(captured,
             MonitorQuickControl(captured.request.options, captured.request.currentValue, captured.marked, identity = captured)) } },

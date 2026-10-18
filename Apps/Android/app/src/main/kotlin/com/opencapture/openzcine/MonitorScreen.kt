@@ -1999,7 +1999,6 @@ internal fun MonitorScreen(
         val (captureInputs, nativeQuickReceipts) = nikonCaptureInputs(readouts, headerReadouts, panelValue,
             quickPickers, cameraProperties, identity, session.reportedRecording.value, quickCommandsEnabled,
             quickCaptureOwner,
-            columns = if (isPortrait && !fieldLayout.tablet) { if (isPhotographyMode) 5 else 3 } else readouts.size,
             open = { id ->
                 // The colour readout opens the same codec and colour popup as the codec readout.
                 (if (id == COLOR_READOUT_ID) MonitorPickerKind.CODEC else MonitorPickerKind.entries.firstOrNull { it.name == id })
