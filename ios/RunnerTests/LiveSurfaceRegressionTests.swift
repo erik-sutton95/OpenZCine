@@ -576,10 +576,13 @@ final class LiveSurfaceRegressionTests: XCTestCase {
                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         }
-        let greenPixels = stride(from: 0, to: bytes.count, by: 4).filter { offset in
-            Int(bytes[offset + 1]) > Int(bytes[offset]) + 32
-                && Int(bytes[offset + 1]) > Int(bytes[offset + 2]) + 32
-        }.count
+        var greenPixels = 0
+        for offset in stride(from: 0, to: bytes.count, by: 4) {
+            let red: Int = Int(bytes[offset])
+            let green: Int = Int(bytes[offset + 1])
+            let blue: Int = Int(bytes[offset + 2])
+            if green > red + 32 && green > blue + 32 { greenPixels += 1 }
+        }
         let attachment = XCTAttachment(image: UIImage(cgImage: image))
         attachment.name = "SIMULATED secondary AF without primary"
         attachment.lifetime = .keepAlways
@@ -653,13 +656,16 @@ final class LiveSurfaceRegressionTests: XCTestCase {
                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         }
-        return stride(from: 0, to: bytes.count, by: 4).compactMap { offset in
-            guard Int(bytes[offset + 1]) > Int(bytes[offset]) + 32,
-                Int(bytes[offset + 1]) > Int(bytes[offset + 2]) + 32
-            else { return nil }
+        var points: [CGPoint] = []
+        for offset in stride(from: 0, to: bytes.count, by: 4) {
+            let red: Int = Int(bytes[offset])
+            let green: Int = Int(bytes[offset + 1])
+            let blue: Int = Int(bytes[offset + 2])
+            guard green > red + 32, green > blue + 32 else { continue }
             let pixel = offset / 4
-            return CGPoint(x: pixel % image.width, y: pixel / image.width)
+            points.append(CGPoint(x: pixel % image.width, y: pixel / image.width))
         }
+        return points
     }
 
     /// The camera status shows on the shared waiting plate with Android's words: no camera,
