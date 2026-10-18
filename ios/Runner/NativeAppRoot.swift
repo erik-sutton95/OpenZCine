@@ -13836,7 +13836,19 @@ struct NativeAppRoot: View {
                 ?? MonitorAppStartup(
                     reports: .init(
                         reporting: ReliabilityDiagnostics.reporting,
-                        tick: { ReliabilityDiagnostics.problemReporting.tick() })))
+                        tick: { ReliabilityDiagnostics.problemReporting.tick() }),
+                    sleep: Self.startupSleep(for:)))
+    }
+
+    /// The startup lifetime's waits. A UI test may hold the launch splash for longer
+    /// (`ZC_DEMO_SPLASH_HOLD_MS`, Debug only), so its covered state can still be sampled on a
+    /// host where launching takes longer than the splash shows; every other wait is unchanged.
+    private static func startupSleep(for duration: Duration) async throws {
+        if duration == LaunchSplashTiming.visibleDuration, let hold = DemoHarness.launchSplashHold {
+            try await hostSleep(for: hold)
+        } else {
+            try await hostSleep(for: duration)
+        }
     }
 
     var body: some View {
