@@ -16,7 +16,11 @@ final class PhysicalMigrationQualificationTests: OpenCineAppUITesting
 final class CamerasPageFollowupTests: OpenCineAppUITesting.CamerasPageFollowupTests {}
 final class DesqueezeUIFlowTests: OpenCineAppUITesting.DesqueezeUIFlowTests {}
 /// Parity finding A1-32 closed: the body's exposure indicator feeds the shared camera EV meter.
-final class EVMeterUIFlowTests: OpenCineAppUITesting.EVMeterUIFlowTests {}
+/// A Nikon body offers that meter in photography only (`MonitorAssistCapabilities.nikon`), so the
+/// review stages the demo camera in photography.
+final class EVMeterUIFlowTests: OpenCineAppUITesting.EVMeterUIFlowTests {
+    override var meterLaunchEnvironment: [String: String] { ["ZC_DEMO_PHOTO": "1"] }
+}
 final class MotionUIFlowTests: OpenCineAppUITesting.MotionUIFlowTests {}
 final class ShareUIFlowTests: OpenCineAppUITesting.ShareUIFlowTests {}
 
@@ -32,6 +36,7 @@ final class ConformanceCoverageTests: OpenCineAppUITesting.ConformanceCoverageTe
 /// SIMULATED launch configuration only; layout and pixel assertions stay in OpenCine.
 final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshotLayoutTests {
     override var expectedStorageText: String { "521 GB" }
+    override var expectedPortraitStorageText: String { "521GB" }
     override var expectedCameraPowerValue: String { "4 of 5 bars" }
     override var expectedCameraPercentText: String? { nil }
     override var reviewLaunchEnvironment: [String: String] {
