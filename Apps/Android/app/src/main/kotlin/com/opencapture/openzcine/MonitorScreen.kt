@@ -1281,13 +1281,15 @@ internal fun MonitorScreen(
                 liveFeedPresentation.sourceWidth.toFloat() / liveFeedPresentation.sourceHeight
             else if (isPhotographyMode) photographyFeedAspect(cameraProperties.imageArea) else 16f / 9f)
                 .let { if (isVerticalFeed) 1f / it else it }
+        val nativeSettings = if (isPhotographyMode) photographySettings else captureSettings
         // The shared field-monitor entry (iOS `LiveMonitorLayout.fieldMonitor`): picture, chrome and scope
         // clearance are common policy; this adapter supplies only the window's facts.
         val geometry = monitorOperatorFieldLayout(
             MonitorOperatorViewport(viewportWidth, viewportHeight, safeLeading, safeTrailing,
                 safeTop, safeBottom, 1f,
                 safeLeading > 0f || safeTrailing > 0f),
-            assists.shared, mounted, portraitAspect, portraitFeedAspectRatio, isVerticalFeed)
+            assists.shared, mounted, portraitAspect, portraitFeedAspectRatio, isVerticalFeed,
+            valueCount = nativeSettings.size)
         val fieldLayout = checkNotNull(geometry.layout.field)
         val isPortraitFill = isPortrait && fieldLayout.fillsPicture
         // Raster/overlay fit: the rotated 9:16 picture pillarboxes inside the fill frame:
@@ -1847,7 +1849,6 @@ internal fun MonitorScreen(
                     isMonitorFront && pendingCommandControl == null)
             commandControlFeedback = null
         }
-        val nativeSettings = if (isPhotographyMode) photographySettings else captureSettings
         fun fieldFor(kind: MonitorPickerKind): MonitorCaptureField? =
             if (isPhotographyMode) null else kind.commonSettingKey?.let(commonControl::captureField)
         val readouts: List<MonitorOperatorLiveReadout<String, MonitorDisplaySection>> = nativeSettings.map { setting ->

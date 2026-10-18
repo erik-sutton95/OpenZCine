@@ -255,7 +255,7 @@ struct NikonMonitorShell: View {
             showsValues: model.chromeSectionMounts(.cameraValues),
             showsBottomBars: model.chromeSectionMounts(.toolBar)
                 || model.chromeSectionMounts(.cameraValues),
-            topControlInset: context.topControlInset)
+            topControlInset: context.topControlInset, valueCount: readouts.count)
     }
     private var readouts: [Readout] {
         let values =
