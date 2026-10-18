@@ -1961,7 +1961,9 @@ internal fun MonitorScreen(
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
             ?: if (activeCommandStabilization) MonitorOperatorCameraPanel("command:stabilization",
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT,
-                title = stringResource(R.string.command_title_vr_combined)) else null
+                title = stringResource(R.string.command_title_vr_combined),
+                subtitle = commandPresentation.tiles.firstOrNull { it.kind == CommandTileKind.STABILIZATION }
+                    ?.let { stringResource(R.string.command_current_value, it.value) }) else null
         val recordingFormat = sharedControlState.snapshot?.let(MonitorCapturePresentation::recordingFormat)
         val formatLabel = nikonRecordingFormatLabel(
             recordingFormat?.let(MonitorCapturePresentation::recordingLabel),
