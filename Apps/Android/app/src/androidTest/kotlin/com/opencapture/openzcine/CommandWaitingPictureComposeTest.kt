@@ -187,13 +187,43 @@ class CommandWaitingPictureComposeTest {
         composeRule.waitForIdle()
     }
 
+    // Configuration and semantics can update while the system still animates display rotation.
+    // Readiness compares whole captures independently of the expected layer or probe colour.
+    private fun settledFullWindowImage(): Bitmap {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val landscape = instrumentation.targetContext.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val deadline = android.os.SystemClock.uptimeMillis() + 5_000
+        var previous = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        try {
+            while (android.os.SystemClock.uptimeMillis() < deadline) {
+                android.os.SystemClock.sleep(80)
+                val next = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+                val ready = (next.width > next.height) == landscape && previous.width == next.width &&
+                    previous.height == next.height && previous.sameAs(next)
+                previous.recycle()
+                if (ready) return next
+                previous = next
+            }
+            error("The full native window did not settle after rotation")
+        } finally {
+            if (!previous.isRecycled) previous.recycle()
+        }
+    }
+
     private fun assertPaint(name: String, expected: Int, detail: Boolean = true) {
         composeRule.waitForIdle()
         val root = composeRule.onRoot().fetchSemanticsNode().boundsInWindow
-        val x = (root.left + layout.onFeed.midX * density).roundToInt()
-        val y = (root.top + (layout.onFeed.midY + if (detail) 64f else -64f) * density).roundToInt()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val image = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        val windowOffset = IntArray(2)
+        instrumentation.runOnMainSync {
+            val decor = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single().window.decorView
+            val screen = IntArray(2); val window = IntArray(2)
+            decor.getLocationOnScreen(screen); decor.getLocationInWindow(window)
+            windowOffset[0] = screen[0] - window[0]; windowOffset[1] = screen[1] - window[1]
+        }
+        val x = (windowOffset[0] + root.left + layout.onFeed.midX * density).roundToInt()
+        val y = (windowOffset[1] + root.top + (layout.onFeed.midY + if (detail) 64f else -64f) * density).roundToInt()
+        val image = settledFullWindowImage()
         try {
             val file = instrumentation.targetContext.filesDir.resolve("SIMULATED-command-waiting-$name.png")
             file.outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
