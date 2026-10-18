@@ -95,6 +95,11 @@ enum DemoHarness {
     /// `ZC_DEMO_CAPTURE_FRAMES=N` dumps the next N live-view frames to disk — see
     /// ``captureLiveViewObject(_:)``.
     static let captureLiveViewFrameCount = value("ZC_DEMO_CAPTURE_FRAMES").flatMap(Int.init)
+    /// `ZC_DEMO_SPLASH_HOLD_MS=N` keeps the launch splash fully visible for N milliseconds instead
+    /// of `LaunchSplashTiming.visibleDuration`, so a UI test can observe the covered cameras page
+    /// even when the simulator takes longer to launch than the splash normally shows.
+    static let launchSplashHold = value("ZC_DEMO_SPLASH_HOLD_MS").flatMap(Int.init)
+        .map { Duration.milliseconds($0) }
 
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
