@@ -503,19 +503,19 @@ internal fun LiveFeedView(
                         } else {
                             gpuBackend.clearFrame()
                         }
+                        latestPresentedFrame.value?.invoke(
+                            sourceFrame,
+                            bitmap,
+                            latestPreviewBaker.value.takeIf {
+                                decodedLiveFeedColorMode(bitmap) == LiveFeedColorMode.SDR
+                            },
+                            latestRenderPlan.value?.nativePlan,
+                        )
                     }
                 },
                 present = { sourceFrame, bitmap ->
                     incident?.published()
                     onFrame?.invoke(bitmap)
-                    latestPresentedFrame.value?.invoke(
-                        sourceFrame,
-                        bitmap,
-                        latestPreviewBaker.value.takeIf {
-                            decodedLiveFeedColorMode(bitmap) == LiveFeedColorMode.SDR
-                        },
-                        latestRenderPlan.value?.nativePlan,
-                    )
                 },
             )
             }

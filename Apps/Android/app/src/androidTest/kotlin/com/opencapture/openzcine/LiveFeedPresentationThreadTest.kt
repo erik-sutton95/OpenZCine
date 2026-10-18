@@ -84,12 +84,12 @@ class LiveFeedPresentationThreadTest {
                     }
                 }
             }
-            assertTrue("Preview frames must reach both worker observers after the selected renderer mounts", frames.await(10, TimeUnit.SECONDS))
+            assertTrue("Preview frames must reach the presented-frame observer after the selected renderer mounts", frames.await(10, TimeUnit.SECONDS))
             scenario.onActivity {
                 assertEquals(160, presentation.sourceWidth)
                 assertEquals(90, presentation.sourceHeight)
                 assertFalse(callbackOnMain.get())
-                assertFalse(relayCallbackOnMain.get())
+                assertTrue(relayCallbackOnMain.get())
             }
         }
     }
