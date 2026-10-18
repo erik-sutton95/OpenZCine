@@ -6,13 +6,15 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.MediaStore
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
-import androidx.test.uiautomator.Direction
-import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -28,6 +30,7 @@ import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import com.opencapture.monitorui.MonitorThumbnailSize
@@ -38,6 +41,7 @@ import com.opencapture.opencine.nikon.SavedCameraTransport
 /** End-to-end device coverage for opening one completed cache with no camera session. */
 @RunWith(AndroidJUnit4::class)
 class OfflineMediaMainActivityTest {
+    @get:Rule val compose = createEmptyComposeRule()
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context: Context = instrumentation.targetContext
     private val device: UiDevice = UiDevice.getInstance(instrumentation)
@@ -174,6 +178,10 @@ class OfflineMediaMainActivityTest {
         device.waitForCamerasAction("Settings").click()
         device.waitForText("Operator Setup")
         device.revealSettingsTab("Storage").click()
+        // The cache card sits below the Storage body fold. Reveal it with bounded native
+        // swipes on the settings body: an unbounded Compose scroll action here can spin
+        // without producing a test result (v5: SIGTERM after 192 s, no method outcome).
+        device.revealSettingsBodyText("Clear")
         device.waitForText("Clear").click()
         // Clearing asks first on every app (A4-06); confirm inside the dialog's own window.
         var dialog: UiObject2 = device.wait(Until.findObject(By.text("Clear cache?")), UI_TIMEOUT_MILLIS)
@@ -248,32 +256,23 @@ class OfflineMediaMainActivityTest {
             ?: throw AssertionError("Timed out waiting for text: $text")
 
     private fun UiDevice.revealSettingsTab(description: String): UiObject2 {
-        repeat(8) {
-            // The live catalog's native frame clock retires nodes while automation reads
-            // them; requery by description instead of holding a UiObject2 across reads
-            // (the same discipline the media selection helpers use).
-            val observed = findObject(By.desc(description))?.let { tab ->
-                try { tab.visibleBounds } catch (_: StaleObjectException) { null }
-            }
-            waitForIdle()
-            val settled = findObject(By.desc(description))?.let { tab ->
-                try { tab.visibleBounds } catch (_: StaleObjectException) { null }
-            }
-            if (observed != null && settled == observed) {
-                findObject(By.desc(description))?.let { return it }
-            }
-            val rail = wait(
-                Until.findObject(By.clazz("android.widget.HorizontalScrollView").scrollable(true)),
-                UI_TIMEOUT_MILLIS,
-            ) ?: throw AssertionError("The native settings tab rail is missing")
-            val bounds = rail.visibleBounds
-            val inset = bounds.width() / 10
-            rail.setGestureMargins(inset, 0, inset, 0)
-            // Native scroll holds before releasing its swipe, avoiding residual fling.
-            rail.scroll(Direction.RIGHT, 0.8f, 600)
+        // Ask the canonical scroll owner to reveal its exact tab, in either orientation.
+        // The caller still sends the native click and verifies the actual cache-clear flow.
+        compose.onNodeWithTag("monitor.settings.tab.$description").performScrollTo()
+        waitForIdle()
+        return waitForDescription(description)
+    }
+
+    // Bounded native reveal for a row below the settings body fold. The original behavior
+    // (find Clear, click it, confirm, verify Removed and the header entry) is unchanged.
+    private fun UiDevice.revealSettingsBodyText(text: String) {
+        val deadline = SystemClock.uptimeMillis() + 12_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (findObject(By.text(text)) != null) return
+            val x = displayWidth / 2
+            swipe(x, (displayHeight * 0.70f).toInt(), x, (displayHeight * 0.45f).toInt(), 100)
             waitForIdle()
         }
-        return waitForDescription(description)
     }
 
     private fun UiDevice.waitForCamerasAction(description: String): UiObject2 {

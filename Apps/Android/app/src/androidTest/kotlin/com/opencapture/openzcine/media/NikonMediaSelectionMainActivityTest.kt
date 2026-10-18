@@ -113,7 +113,7 @@ class NikonMediaSelectionMainActivityTest {
         // Launch can replace the orientation measured while the test host was active.
         device.setOrientationNatural()
         settleNaturalOrientation()
-        requireNotNull(device.wait(Until.findObject(By.desc("Media library")), 15_000)).click()
+        device.waitForCamerasAction("Media library").click()
         row("01")
         settleNaturalOrientation()
     }
@@ -427,6 +427,7 @@ class NikonMediaSelectionMainActivityTest {
                                 .put("x", bounds.centerX()).put("y", bounds.centerY()).put("events", pointerTrace))
                             pointerTrace = previousTrace
                         }
+                        awaitNativeFrame()
                         return
                     }
                 } else {
@@ -441,6 +442,44 @@ class NikonMediaSelectionMainActivityTest {
         }
         nativeDiagnostic("control-did-not-settle", includeFavorites = true)
         error("Actual visible control did not settle: $description")
+    }
+
+    // A control can change the layout session before the native frame has committed.
+    // Finish that frame outside the held-pointer measurements, without observing their outcomes.
+    private fun awaitNativeFrame() {
+        val currentScenario = requireNotNull(scenario)
+        val committed = CountDownLatch(1)
+        val callback = Runnable { committed.countDown() }
+        var removeCallback: (() -> Unit)? = null
+        var verifyOwner: ((MainActivity) -> Unit)? = null
+        try {
+            instrumentation.runOnMainSync {
+                currentScenario.onActivity { activity ->
+                    val window = activity.window
+                    val decor = window.decorView
+                    val token = decor.windowToken
+                    val observer = decor.viewTreeObserver
+                    val width = decor.width
+                    val height = decor.height
+                    check(!activity.isDestroyed && !activity.isFinishing && token != null &&
+                        decor.isAttachedToWindow && decor.isShown && decor.hasWindowFocus() &&
+                        decor.isHardwareAccelerated && observer.isAlive) { "The current media window must accept native input" }
+                    verifyOwner = { current ->
+                        check(current === activity && current.window === window && window.peekDecorView() === decor &&
+                            decor.windowToken === token && decor.width == width && decor.height == height &&
+                            decor.isAttachedToWindow && decor.hasWindowFocus() &&
+                            !current.isDestroyed && !current.isFinishing) { "The media window retired before native input" }
+                    }
+                    removeCallback = { if (observer.isAlive) observer.unregisterFrameCommitCallback(callback) }
+                    observer.registerFrameCommitCallback(callback)
+                    decor.invalidate()
+                }
+            }
+            check(committed.await(5_000, TimeUnit.MILLISECONDS)) { "The current media window must commit its native frame" }
+            instrumentation.runOnMainSync { currentScenario.onActivity { requireNotNull(verifyOwner)(it) } }
+        } finally {
+            instrumentation.runOnMainSync { removeCallback?.invoke() }
+        }
     }
 
     private fun nativeControlPointAvailable(description: String, targetBounds: Rect): Boolean {
@@ -630,6 +669,20 @@ class NikonMediaSelectionMainActivityTest {
         val found = device.wait(Until.findObject(By.descStartsWith("SIMULATED-SEL-$number.R3D")), 10_000)
         if (found == null) nativeDiagnostic("missing-row-$number", includeFavorites = true)
         return requireNotNull(found)
+    }
+
+    // The appkit launch splash is specified visible for 2250ms plus a 350ms fade
+    // (OpenCine MonitorAppRoot), and the system splash covers the header until the first
+    // frame. A header click before both clear is swallowed and the fixture stays on the
+    // cameras home, so the library row never mounts.
+    private fun UiDevice.waitForCamerasAction(description: String): UiObject2 {
+        wait(Until.findObject(By.desc(description)), 15_000)
+        check(wait(Until.gone(By.desc("OpenZCine")), 15_000)) {
+            "The native startup splash still covers the cameras header"
+        }
+        waitForIdle()
+        return wait(Until.findObject(By.desc(description)), 15_000)
+            ?: throw AssertionError("Timed out waiting for cameras action: $description")
     }
 
     private fun selectedCount(count: Int) {

@@ -1,11 +1,15 @@
 package com.opencapture.openzcine
 
+import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.printToString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.compose.ui.semantics.SemanticsActions
 import com.opencapture.opencine.appkit.MultiviewStageLayout
@@ -85,7 +89,29 @@ class MultiviewRoundTripMainActivityTest {
                 root.activeSavedCamera = member.record
                 root.monitorSession = assertNotNull(root.multicam.lend(member.id))
             }
-            compose.onNodeWithContentDescription("Return to Multiview").performClick()
+            // The borrowed monitor is presented by the shell's existing borrow effect; await the
+            // actual mounted control before the same public click, inside the existing 5s budget.
+            try {
+                compose.waitUntil(5_000) {
+                    compose.onAllNodes(hasContentDescription("Return to Multiview"), useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+            } catch (timeout: ComposeTimeoutException) {
+                val state = runCatching {
+                    buildString {
+                        appendLine("monitorSession=${root.monitorSession != null}")
+                        appendLine("activeSavedCamera=${root.activeSavedCamera != null}")
+                        appendLine("lent=${root.multicam.lent}")
+                        appendLine(compose.onRoot(useUnmergedTree = true).printToString())
+                    }
+                }.getOrElse { "state capture failed: ${it.message}" }
+                println("SIMULATED multiview readiness failure\n$state")
+                runCatching {
+                    compose.activity.filesDir.resolve("SIMULATED-multiview-readiness-failure.txt").writeText(state)
+                }
+                throw timeout
+            }
+            compose.onNodeWithContentDescription("Return to Multiview", useUnmergedTree = true).performClick()
             compose.waitUntil(5_000) { root.monitorSession == null && root.multicam.lent == null }
             val returned = compose.onNodeWithTag("multicam.stage", useUnmergedTree = true).fetchSemanticsNode().id
             assertEquals(original, returned, "The actual native stage composition must survive Live View")
