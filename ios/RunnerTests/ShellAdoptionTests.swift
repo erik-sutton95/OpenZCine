@@ -1,9 +1,13 @@
+import Observation
 import OpenCineAppKit
 import OpenCineCore
 import OpenZCineCore
 import Testing
 
 @testable import Runner
+
+/// Whether an observed property was written; the observation callback may run off the main actor.
+private final class CoverWrite: @unchecked Sendable { var seen = false }
 
 /// The Nikon root on the shared `ShellModel`: which cover shows and how a connect and the monitor
 /// treat it. SIMULATED sessions; nothing dials a camera.
@@ -32,8 +36,12 @@ struct ShellAdoptionTests {
         #expect(model.isStandaloneMediaLibraryPresented && model.mediaBrowserSource == .camera)
         model.dismissMediaLibrary()
         #expect(!model.isStandaloneMediaLibraryPresented && !model.isStandaloneSettingsPresented)
+        model.operatorSettingsTab = .display
+        model.operatorSession.settingsScrollOffsets[.display] = 180
         model.openStandaloneSettings()
-        #expect(model.isStandaloneSettingsPresented && model.operatorSettingsTab == .storage)
+        // A2-84: the shared landing rule, the operator's last tab and its scroll offset.
+        #expect(model.isStandaloneSettingsPresented && model.operatorSettingsTab == .display)
+        #expect(model.operatorSession.settingsScrollOffsets[.display] == 180)
         model.dismissMediaLibrary()
         #expect(!model.isStandaloneSettingsPresented)
     }
@@ -90,25 +98,43 @@ struct ShellAdoptionTests {
         #expect(model.shell.monitor == nil)
     }
 
-    /// The Frame.io sign-in and the RED LUT download keep their surface through the hop.
-    @Test("An internet hop re-hosts the monitor's panel once the monitor has gone")
-    func hopRehostsThePanel() {
+    /// The open page keeps its identity through the hop (A2-07): the cover is never cleared, so
+    /// the gallery's scroll, selection and open delivery popup survive the monitor leaving.
+    @Test("An internet hop keeps the monitor's panel page without re-hosting it")
+    func hopKeepsThePanelPage() async {
         for panel in [NativeAppModel.ActivePanel.settings, .media] {
             let model = NativeAppModel()
+            model.hopNative = .init(
+                currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _, _ in }, rejoin: { _, _ in })
             model.shell.present(camera())
             model.isMonitorPresented = true
             model.activePanel = panel
-            model.leaveMonitorForInternetHop(rehostActivePanel: true)
+            let cover = model.shell.cover
+            let coverWritten = CoverWrite()
+            withObservationTracking {
+                _ = model.shell.cover
+            } onChange: {
+                coverWritten.seen = true
+            }
+            let token = model.internetHop.begin(model.hopRoute(rehostActivePanel: true))
+            #expect(token != nil)
+            for _ in 0..<500 where model.shell.monitor != nil { await Task.yield() }
             #expect(model.shell.monitor == nil && model.activePanel == nil)
+            #expect(model.shell.cover == cover && !coverWritten.seen, "the page is never torn down")
             #expect(model.isStandaloneSettingsPresented == (panel == .settings))
             #expect(model.isStandaloneMediaLibraryPresented == (panel == .media))
+            if let token { model.internetHop.end(token) }
         }
         let model = NativeAppModel()
+        model.hopNative = .init(
+            currentSSID: { "SIMULATED-AP" }, leaveNetwork: { _, _ in }, rejoin: { _, _ in })
         model.shell.present(camera())
         model.isMonitorPresented = true
         model.activePanel = .settings
-        model.leaveMonitorForInternetHop(rehostActivePanel: false)
-        #expect(model.shell.cover == nil)
+        let token = model.internetHop.begin(model.hopRoute(rehostActivePanel: false))
+        for _ in 0..<500 where model.shell.monitor != nil { await Task.yield() }
+        #expect(model.shell.cover == nil, "a support link leaves nothing behind")
+        if let token { model.internetHop.end(token) }
     }
 
     @Test("A pending common edit shows over the reported value without being written into it")
@@ -125,20 +151,23 @@ struct ShellAdoptionTests {
         #expect(shown.map(\.label) == reported.map(\.label))
     }
 
-    /// Nikon main toasts a refused third live scope in portrait fit view; the monitor notice is
-    /// that toast on the integration.
-    @Test("A third scope in portrait fit view is refused with the cap notice")
-    func scopeCapRefusalShowsItsNotice() {
+    @Test(
+        "SIMULATED third scope stays active and inspectable while fit renders the first two eligible scopes"
+    )
+    func scopeSelectionDoesNotConfuseActivationWithFitPlacement() {
         let model = NativeAppModel()
         let saved = model.preferences
         let live = model.assist.liveTools
+        let options = model.assist.configureTool
         defer {
             for tool in MonitorAssistTool.scopeTools {
                 model.assist.set(tool, visible: live.contains(tool), context: .liveView)
             }
             model.preferences = saved
+            model.assist.configureTool = options
         }
         model.isMonitorPresented = true
+        model.setDisplayMode(.live)
         model.monitorIsPortrait = true
         model.preferences.portraitFeedAspect = .fit16x9
         for tool in MonitorAssistTool.scopeTools {
@@ -146,14 +175,26 @@ struct ShellAdoptionTests {
         }
         model.setAssist(.waveform, visible: true)
         model.setAssist(.histogram, visible: true)
-        let trigger = model.monitorNoticeTrigger
+        model.monitorNote = nil
 
         model.setAssist(.parade, visible: true)
 
-        #expect(!model.assist.liveTools.contains(.parade))
-        #expect(model.monitorNotice == model.scopeCapNoticeText)
-        #expect(model.monitorNoticeTrigger == trigger + 1)
+        #expect(model.assist.liveTools.isSuperset(of: [.waveform, .histogram, .parade]))
+        #expect(
+            model.renderedFitScopes == [
+                .waveform, .parade,
+            ])
+        #expect(model.monitorNote == nil)
+        model.showAssist(.vectorscope)
+        #expect(model.assist.configureTool == MonitorAssistTool.vectorscope.selection)
         model.toggleAssist(.vectorscope)
-        #expect(model.monitorNoticeTrigger == trigger + 2)
+        #expect(model.assist.liveTools.contains(.vectorscope))
+        #expect(
+            model.renderedFitScopes == [
+                .waveform, .parade,
+            ])
+        model.interfaceLocked = true
+        model.toggleAssist(.vectorscope)
+        #expect(model.assist.liveTools.contains(.vectorscope))
     }
 }

@@ -3,7 +3,6 @@ package com.opencapture.openzcine
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
-import android.os.Build
 import android.os.SystemClock
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -14,7 +13,6 @@ import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -86,12 +84,10 @@ class CriticalCameraFlowsTest {
     }
 
     @Test
-    fun fullGlassLiveViewSurvivesRepeatedOrientationChanges() {
-        assumeTrue(Build.VERSION.SDK_INT >= 33)
+    fun materialOverLiveViewSurvivesRepeatedOrientationChanges() {
         relaunch(
             launchMainActivity()
-                .putExtra(EXTRA_DEMO_FEED, true)
-                .putExtra(EXTRA_GLASS_TIER, GLASS_TIER_FULL),
+                .putExtra(EXTRA_DEMO_FEED, true),
         )
         device.waitForContentDescription(LIVE_VIEW, LIVE_VIEW_TIMEOUT_MILLIS)
 
@@ -144,8 +140,6 @@ class CriticalCameraFlowsTest {
 
     private companion object {
         const val EXTRA_DEMO_FEED = "zc.demo.feed"
-        const val EXTRA_GLASS_TIER = "zc.glass.tier"
-        const val GLASS_TIER_FULL = "full"
         const val EXTRA_PAIRING_STEP = "zc.demo.pairing"
         const val EXTRA_PAIRING_PATH = "zc.demo.pairingPath"
         const val PAIRING_CONNECTING = "connecting"

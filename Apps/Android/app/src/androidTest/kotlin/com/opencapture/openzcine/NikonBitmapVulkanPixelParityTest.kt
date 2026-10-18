@@ -18,6 +18,7 @@ import com.opencapture.opencine.runtime.bitmapVulkanUniforms
 import com.opencapture.openpocketcine.feed.OpcVulkan
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -29,7 +30,7 @@ import org.junit.runner.RunWith
 
 /**
  * Real Vulkan WSI readback, SIMULATED device gate: for the same decoded raster, plan and surface,
- * the shared OpcVulkan Bitmap pipeline presents exactly the swapchain images of the frozen donor
+ * the shared OpcVulkan Bitmap pipeline presents exactly the swapchain images of the input-corrected frozen donor
  * Nikon Vulkan renderer, including how many it presents. No tolerance, no skip.
  */
 @RunWith(AndroidJUnit4::class)
@@ -86,7 +87,19 @@ class NikonBitmapVulkanPixelParityTest {
         override fun pause() = native.pause(session)
         override fun clearFrame() = native.clearFrame(session)
         override fun clearPlan() = native.clearPlan(session)
-        override fun submit(frame: Bitmap) = native.submitBitmap(session, frame)
+        override fun submit(frame: Bitmap): Boolean {
+            // The frozen donor labels RGBA_8888 as BGRA, a known channel defect.
+            // Correct only its fixture input so its unchanged shader/lifetime oracle
+            // sees the same logical RGB as the corrected production Bitmap path.
+            val pixels = IntArray(frame.width * frame.height)
+            frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
+            for (index in pixels.indices) {
+                val pixel = pixels[index]
+                pixels[index] = Color.argb(Color.alpha(pixel), Color.blue(pixel), Color.green(pixel), Color.red(pixel))
+            }
+            val corrected = Bitmap.createBitmap(pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+            return try { native.submitBitmap(session, corrected) } finally { corrected.recycle() }
+        }
         override fun close() = native.destroySession(session)
     }
 
@@ -140,13 +153,23 @@ class NikonBitmapVulkanPixelParityTest {
     private class Readback(val width: Int, val height: Int) : AutoCloseable {
         private val thread = HandlerThread("nikon-vulkan-parity").apply { start() }
         private val frames = LinkedBlockingQueue<ByteArray>()
+        private val arrivals = Semaphore(0)
         val reader: ImageReader = ImageReader.newInstance(
             width, height, PixelFormat.RGBA_8888, 4,
             HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or HardwareBuffer.USAGE_CPU_READ_OFTEN,
         ).apply {
             setOnImageAvailableListener({ source ->
-                source.acquireNextImage()?.use { frames.add(it.packedRgba()) }
+                source.acquireNextImage()?.let { image ->
+                    image.use { frames.add(it.packedRgba()) }
+                    arrivals.release()
+                }
             }, Handler(thread.looper))
+        }
+
+        fun awaitNextPresentation() {
+            check(arrivals.tryAcquire(10, TimeUnit.SECONDS)) {
+                "an accepted visible submit did not reach the Vulkan consumer"
+            }
         }
 
         /** The first [expected] presents, then any further ones until the producer is quiet. */
@@ -237,11 +260,22 @@ class NikonBitmapVulkanPixelParityTest {
     }
 
     private fun render(
-        feed: () -> Feed, width: Int, height: Int, expected: Int, steps: Feed.() -> Unit,
+        feed: () -> Feed, width: Int, height: Int, expected: Int,
+        observeSubmissions: Boolean = false, steps: Feed.() -> Unit,
     ): List<ByteArray> = Readback(width, height).use { readback ->
         feed().use { owner ->
             owner.attach(readback.reader.surface, width, height)
-            owner.steps()
+            val observed = if (observeSubmissions) object : Feed by owner {
+                private var paused = true
+                override fun resume() { owner.resume(); paused = false }
+                override fun pause() { owner.pause(); paused = true }
+                override fun submit(frame: Bitmap): Boolean {
+                    val accepted = owner.submit(frame)
+                    if (accepted && !paused) readback.awaitNextPresentation()
+                    return accepted
+                }
+            } else owner
+            observed.steps()
             readback.presented(expected)
         }
     }
@@ -301,11 +335,11 @@ class NikonBitmapVulkanPixelParityTest {
                 clearPlan()
                 assertTrue(submit(first))
             }
-            val donor = render({ DonorFeed() }, 61, 35, expected = 4, steps)
+            val donor = render({ DonorFeed() }, 61, 35, expected = 4, observeSubmissions = true, steps = steps)
             assertEquals("a paused submit presents nothing", 4, donor.size)
             assertFalse(donor[0].contentEquals(donor[1]))
             assertFalse("clearing the plan drops the LUT", donor[2].contentEquals(donor[3]))
-            assertSamePresents("sequence", donor, render({ SharedFeed() }, 61, 35, expected = 4, steps))
+            assertSamePresents("sequence", donor, render({ SharedFeed() }, 61, 35, expected = 4, observeSubmissions = true, steps = steps))
         } finally {
             first.recycle()
             second.recycle()

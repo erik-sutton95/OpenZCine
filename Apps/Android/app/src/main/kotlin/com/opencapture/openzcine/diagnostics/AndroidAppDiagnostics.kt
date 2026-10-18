@@ -8,12 +8,13 @@ import android.content.Intent
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
+import com.opencapture.opencine.appkit.diagnostics.DiagnosticsDevice
 import com.opencapture.opencine.appkit.diagnostics.ManualProblemReport
 import com.opencapture.opencine.appkit.diagnostics.ManualProblemReportEnvelope
 import com.opencapture.opencine.media.BoundedDiagnosticFormatter
 import com.opencapture.opencine.platform.LocalVPNProbe
 import com.opencapture.openzcine.BuildConfig
-import com.opencapture.openzcine.pairing.looksLikeNikonAccessPointSsid
+import com.opencapture.opencine.nikon.NikonAccessPointSsid
 import java.io.File
 
 private const val DIAGNOSTICS_AUTHORITY_SUFFIX = ".diagnostics-share"
@@ -126,6 +127,7 @@ internal class AndroidAppDiagnostics private constructor(
      * the report's attachment cap. Only Nikon camera access points stay readable.
      */
     fun boundedDiagnosticText(cameraModel: String, phase: String): String {
+        val device = DiagnosticsDevice.current()
         val body =
             BoundedDiagnosticFormatter.format(
                 environment =
@@ -133,9 +135,9 @@ internal class AndroidAppDiagnostics private constructor(
                         product = "OpenZCine",
                         appVersion = BuildConfig.VERSION_NAME,
                         appBuild = BuildConfig.VERSION_CODE.toString(),
-                        osName = "Android",
-                        osVersion = Build.VERSION.RELEASE ?: "?",
-                        deviceModel = Build.MODEL ?: "unknown",
+                        osName = device.osName,
+                        osVersion = device.osVersion,
+                        deviceModel = device.hardwareClass,
                         cameraFamily = "Nikon Z",
                         cameraModel = cameraModel,
                         phase = phase,
@@ -147,7 +149,7 @@ internal class AndroidAppDiagnostics private constructor(
                 exceptions = emptyList(),
                 extras = runCatching { AppDiagnostics.incidents.reportExtras() }.getOrDefault(emptyList()),
                 cap = minOf(ManualProblemReport.ATTACHMENT_MAX_CHARS, BoundedDiagnosticFormatter.CHARACTER_CAP),
-                isSafeNetwork = ::looksLikeNikonAccessPointSsid,
+                isSafeNetwork = NikonAccessPointSsid::isNikonZAccessPoint,
             )
         return ManualProblemReportEnvelope.utf8Prefix(body, ManualProblemReport.ATTACHMENT_MAX_BYTES)
     }
@@ -203,14 +205,25 @@ internal class AndroidAppDiagnostics private constructor(
     }
 
     internal companion object {
+        @Volatile private var processStore: DiagnosticEventStore? = null
+
+        /**
+         * Every instance shares the process's one store. It owns the journal writers and the
+         * files, so a recreated activity must reach the same rings instead of restoring a second
+         * copy from disk while the first still holds unwritten events.
+         */
+        private fun processStore(appContext: Context): DiagnosticEventStore =
+            processStore ?: synchronized(this) {
+                processStore
+                    ?: DiagnosticEventStore(File(appContext.filesDir, "diagnostics/events.log"))
+                        .also { processStore = it }
+            }
+
         fun create(context: Context): AndroidAppDiagnostics =
             context.applicationContext.let { appContext ->
                 AndroidAppDiagnostics(
                     context = appContext,
-                    store =
-                        DiagnosticEventStore(
-                            File(appContext.filesDir, "diagnostics/events.log"),
-                        ),
+                    store = processStore(appContext),
                     exitReader = AndroidHistoricalProcessExitReader(appContext),
                 )
             }

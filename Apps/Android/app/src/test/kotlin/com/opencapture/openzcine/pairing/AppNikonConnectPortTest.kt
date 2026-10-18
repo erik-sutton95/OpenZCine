@@ -25,12 +25,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** The app's `NikonConnectPort`: held setups ask first, failures are typed, sightings name setups. */
 class AppNikonConnectPortTest {
     private val studio = SavedCameraRecord("192.168.1.30", "ZR_3001234", SavedCameraTransport.INFRASTRUCTURE, 1_000, null)
     private val ap =
         SavedCameraRecord("192.168.1.1", "ZR_3001234", SavedCameraTransport.CAMERA_ACCESS_POINT, 2_000, "NIKON_ZR_3001234")
+
+    private val connectCopy = PortCopy { id, args -> "$id ${args.joinToString()}".trim() }
 
     private fun environment() =
         PairingEnvironment(
@@ -52,7 +56,7 @@ class AppNikonConnectPortTest {
 
     @Test
     fun aHeldSavedSetupAsksBeforeTakingOver() = runTest {
-        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope)
+        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope, connectCopy)
         connector.discoveredCameras.value = listOf(DiscoveredCamera("ZR_3001234", "192.168.1.30", 15740, "Phone B"))
         var paired: PairedCamera? = null
         val port =
@@ -65,11 +69,10 @@ class AppNikonConnectPortTest {
 
         val failure = assertFailsWith<NikonConnectException> { port.connect(request) }.failure
         assertEquals(ConnectionFailure.Reason.HeldElsewhere, failure.reason)
-        assertEquals(AppNikonConnectPort.TAKE_OVER, (failure.actions.first() as RecoveryAction.Integration).id)
+        assertEquals(listOf(RecoveryAction.Retry), failure.actions)
         assertNull(paired, "nothing dials a held camera before the operator agrees")
 
-        port.allowTakeOver("192.168.1.30")
-        val connection = port.connect(request)
+        val connection = port.connect(request, takingOverConfirmed = true)
         assertEquals("192.168.1.30", connection.host)
         assertEquals(RouteKind.INFRASTRUCTURE_NETWORK, connection.kind)
         assertEquals("ZR_3001234", paired?.savedCamera?.cameraName)
@@ -77,7 +80,7 @@ class AppNikonConnectPortTest {
 
     @Test
     fun wifiOffAsksForSettings() = runTest {
-        val connector = SavedCameraConnector(environment(), { false }, { false }, backgroundScope)
+        val connector = SavedCameraConnector(environment(), { false }, { false }, backgroundScope, connectCopy)
         val port =
             AppNikonConnectPort(
                 { id, _ -> "$id" }, connector, { listOf(ap) }, { null }, onPaired = {}, onForget = {},
@@ -93,7 +96,7 @@ class AppNikonConnectPortTest {
 
     @Test
     fun sightingsNameSavedSetupsAndPhasesCarryTheAppCopy() = runTest {
-        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope)
+        val connector = SavedCameraConnector(environment(), { true }, { false }, backgroundScope, connectCopy)
         val port =
             AppNikonConnectPort(
                 { id, _ -> "$id" }, connector, { listOf(studio, ap) }, { null }, onPaired = {}, onForget = {},
@@ -133,7 +136,7 @@ class AppNikonConnectPortTest {
             }
         val connector =
             SavedCameraConnector(
-                environment(), { true }, { false }, backgroundScope,
+                environment(), { true }, { false }, backgroundScope, connectCopy,
                 CameraListDiscovery(dialer, { listOf(NikonLocalInterface("wlan0", "192.168.1.42")) }),
             )
         val port =

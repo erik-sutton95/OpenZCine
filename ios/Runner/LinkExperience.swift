@@ -5,7 +5,7 @@ import OpenZCineCore
 import SwiftUI
 
 /// The shared root (`AppShell`): the camera monitor, the shared cameras and pair pages with this
-/// app's own pages before them (the first-pair wizard, preparing live view, its own connect),
+/// app's own first-pair preparation and app-owned connection progress before them,
 /// and the standalone Media and Settings covers.
 struct LinkExperience: View {
     @Environment(NativeAppModel.self) private var model
@@ -26,10 +26,24 @@ struct LinkExperience: View {
         } page: { cover in
             NikonCoverPage(cover: cover)
         }
+        .accessibilityHidden(model.showsWatcherBrowse)
         .background {
             if pages { MonitorTheme.background.ignoresSafeArea() }
         }
         .foregroundStyle(pages ? AnyShapeStyle(MonitorTheme.text) : AnyShapeStyle(.primary))
+        .overlay {
+            if model.showsWatcherBrowse, !model.isMonitorPresented {
+                MonitorTheme.background.ignoresSafeArea().overlay {
+                    WatcherBrowseView(
+                        networkInstructions:
+                            "Join the same regular Wi-Fi as the sharing device. Leave the camera's own Wi-Fi before watching; it may block traffic between devices.",
+                        emptyMessage:
+                            "No shared feeds on this network. Check that sharing is on and both devices can reach each other. Allow Local Network if asked."
+                    )
+                    .environment(model)
+                }
+            }
+        }
         // Scanner blur backdrop lives on the presenter (not inside the fullScreenCover) so it
         // fades in place via opacity while the card keeps the cover's slide — the backdrop must
         // not ride the vertical slide.
@@ -53,6 +67,9 @@ struct LinkExperience: View {
             model.cameras.sessionEnded()
             model.cameras.reloadSaved()
             model.nikonPort.found(model.discoveredCameras)
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            model.syncScreenWakePolicy(sceneActive: phase == .active)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -91,7 +108,9 @@ struct LinkExperience: View {
         // Owned at the root so the credential scanner can present directly from the join/scan
         // action and from the pair page's join step.
         .cameraWiFiScannerCover(model)
-        .sheet(item: Bindable(model).diagnosticsShareItem) { DiagnosticsShareSheet(url: $0.url) }
+        .sheet(item: Bindable(model).diagnosticsShareItem) {
+            MonitorActivityShareSheet(items: [$0.url])
+        }
         .alert(
             "Couldn't Share Diagnostics",
             isPresented: Binding(
@@ -116,12 +135,15 @@ struct LinkExperience: View {
             .allowsHitTesting(false)
     }
 
-    /// The page this app shows before the shared ones, if any (SHELL-02): the wizard, the ready
-    /// page while a connected camera's live view starts, the app's own connect in progress.
+    /// First-pair preparation and connection progress that no shared attempt currently owns.
     private var prePageKind: NikonPrePage.Kind? {
         if model.shouldShowFirstPairWizard { return .wizard }
-        if model.isConnected { return .preparing }
-        if model.showsAppConnectProgress { return .connecting }
+        if model.cameras.attempts.isEmpty
+            && (model.isConnected || model.connection == .preparingLiveView
+                || model.showsAppConnectProgress)
+        {
+            return .connecting
+        }
         return nil
     }
 
@@ -136,21 +158,11 @@ struct LinkExperience: View {
         ShellActions(
             diagnostics: { model.shareDiagnostics() },
             reportProblem: { model.isBugReportPresented = true },
+            watchFeed: { model.openWatcherBrowse() },
             multiview: MulticamCoordinator.tileCount > 1 ? { model.beginMulticam() } : nil,
             integrationAction: { cameraID, action in
-                if action == NativeNikonPort.takeOverAction,
-                    case .saved(let camera, let routeID) = model.cameras.failures[cameraID]?.target,
-                    let host = camera.routes.first(where: { $0.id == routeID })?.extras[
-                        NikonSavedRecordsV0.Extra.host]
-                {
-                    model.nikonPort.allowTakeOver(host: host)
-                    _ = model.cameras.perform(.retry, for: cameraID)
-                    return
-                }
                 if action == NativeNikonPort.diagnosticsAction { model.shareDiagnostics() }
             },
-            privacy: { openURL(SupportLinkCatalog.privacy) },
-            terms: { openURL(SupportLinkCatalog.terms) },
             pair: {
                 // A NEARBY camera's Pair picks it on the shared pair page; "Pair a new camera"
                 // walks the wizard.
@@ -164,11 +176,11 @@ struct LinkExperience: View {
             settings: { model.openStandaloneSettings() },
             extraNearby: { id in
                 guard
-                    let broadcast = model.visibleRelayBroadcasts.first(where: {
+                    model.visibleRelayBroadcasts.contains(where: {
                         Self.relayPrefix + $0.id == id
                     })
                 else { return }
-                model.joinRelay(broadcast)
+                model.openWatcherBrowse()
             })
     }
 
@@ -224,7 +236,6 @@ struct LinkExperience: View {
 struct NikonPrePage: View {
     enum Kind {
         case wizard
-        case preparing
         case connecting
     }
 
@@ -245,12 +256,6 @@ struct NikonPrePage: View {
             case .wizard:
                 StartupFirstPairWizardView(
                     isBusy: model.isStartupActionLocked, contentLayout: layout, safeArea: safeArea)
-            case .preparing:
-                StartupPreparingLiveView(compact: layout.mode == .singleColumn)
-                    .padding(
-                        EdgeInsets(
-                            top: safeArea.top + 24, leading: safeArea.leading + 24,
-                            bottom: safeArea.bottom + 24, trailing: safeArea.trailing + 24))
             case .connecting:
                 NikonConnectScreen(safeArea: safeArea)
             }

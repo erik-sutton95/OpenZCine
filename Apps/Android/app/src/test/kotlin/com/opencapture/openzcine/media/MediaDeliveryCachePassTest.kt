@@ -5,11 +5,63 @@ import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.bridge.SwiftCore
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.io.path.createTempDirectory
+import com.opencapture.opencine.appkit.MonitorDeliveryAdmission
+import com.opencapture.opencine.appkit.MonitorDeliveryDestination
+import com.opencapture.opencine.appkit.MonitorDeliveryModel
+import com.opencapture.opencine.appkit.cacheOriginals
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import com.opencapture.opencine.nikon.NikonNative
+
+// The delivery pre-pass composition the shared coordinator now runs, kept as the test driver.
+/** What the delivery cache pre-pass produced, plus the clips the camera never handed over. */
+private data class MediaDeliveryCachePass(
+    val items: List<MediaDeliveryWorkItem>,
+    val uncachedCount: Int,
+)
+
+/**
+ * Pulls every selected clip that has no complete cache artifact off the camera before delivery
+ * starts (iOS `MediaDeliveryRunner`'s pre-pass, `MediaDeliveryOverlay.swift`). Without it the
+ * delivery paths filtered the selection down to whatever happened to be cached already, so
+ * selecting ten clips with two cached shared two and dropped eight without a word.
+ *
+ * Sequential by contract: the Swift core serializes one PTP data channel, so a parallel pass
+ * would only queue behind itself. A clip the camera still refuses is counted, never dropped
+ * silently, so the run can say how many did not come across.
+ */
+private suspend fun cacheSelectionForDelivery(
+    selection: List<MediaDeliverySelection>,
+    cacheStore: MediaCacheStore,
+    cameraTransferAvailable: Boolean,
+    bridge: MediaObjectTransferBridge,
+    ioContext: CoroutineContext = kotlinx.coroutines.Dispatchers.IO,
+    pollIntervalMillis: Long = 200L,
+    /** `(1-based index among clips being cached, count being cached, clip, 0…1)`. */
+    onProgress: (Int, Int, MediaDeliverySelection, Double) -> Unit = { _, _, _, _ -> },
+): MediaDeliveryCachePass {
+    val originals = NikonDeliveryOriginals(selection, cacheStore, cameraTransferAvailable,
+        bridge, MonitorDeliveryAdmission { true }, ioContext, pollIntervalMillis)
+    originals.loadCompleteEntries()
+    val missing = selection.filter { !originals.service.available(it) }
+    val cached = MonitorDeliveryModel.cacheOriginals(
+        records = selection, destination = MonitorDeliveryDestination.NATIVE_SHARE,
+        admission = originals.admission, originals = originals.service,
+        filename = { it.clip.filename }, sleep = { delay(pollIntervalMillis) },
+        progress = { value ->
+            if (cameraTransferAvailable) missing.getOrNull(value.clipIndex - 1)?.let { item ->
+                onProgress(value.clipIndex, value.totalClips, item, value.clipFraction)
+            }
+        },
+    ) ?: throw CancellationException("Delivery cache source retired.")
+    val items = cached.ready.mapNotNull(originals::workItem)
+    return MediaDeliveryCachePass(items, uncachedCount = selection.size - items.size)
+}
 
 /**
  * The delivery cache pre-pass: every selected clip reaches the destination, and the ones the

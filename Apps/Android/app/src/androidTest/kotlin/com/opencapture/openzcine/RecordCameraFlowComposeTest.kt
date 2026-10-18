@@ -58,16 +58,17 @@ class RecordCameraFlowComposeTest {
             val scope = rememberCoroutineScope()
             val common = remember(session) { NikonOpenCineSession(session, scope) }
             val control = remember(common) { MonitorControlModel(scope).also { it.bind(common) } }
+            val assists = remember { idleNikonAssists() }
             OpenZCineTheme {
                 MonitorScreen(
                     session = session,
                     commonSession = common,
                     commonControl = control,
+                    operatorSession = rememberTestOperatorSession(assists, operatorSettings),
                     frameSource = null,
-                    assists = idleNikonAssists(),
+                    assists = assists,
                     operatorSettings = operatorSettings,
                     liveViewEnabled = false,
-                    glassTierOverride = GLASS_TIER_FLAT,
                 )
             }
         }
@@ -125,7 +126,6 @@ class RecordCameraFlowComposeTest {
                 diameter = 80f,
                 enabled = true,
                 confirm = true,
-                confirmationPolicy = MonitorControlModel.RecordConfirmationPolicy.EXPLICIT_TARGET,
                 onConfirmingChange = { reports += it },
             )
         }
@@ -164,7 +164,6 @@ class RecordCameraFlowComposeTest {
     }
 
     private companion object {
-        const val GLASS_TIER_FLAT = "flat"
         const val START_RECORDING = "Start recording"
         const val STOP_RECORDING = "Stop recording"
         const val CONFIRM_START = "Start"

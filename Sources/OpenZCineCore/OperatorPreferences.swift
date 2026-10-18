@@ -1,4 +1,6 @@
 import Foundation
+import enum MonitorPresentation.MonitorLevelStyle
+import enum OpenCineMedia.ScopeDisplayScale
 
 /// Whether view-assist tool visibility applies to the live monitor or media playback.
 public enum ViewAssistContext: String, Codable, Equatable, Sendable {
@@ -60,42 +62,11 @@ public enum MonitorAssistTool: String, CaseIterable, Codable, Equatable, Identif
         }
     }
 
-    /// Tools that only exist in the photography toolset — the cinema strip never offers them.
-    /// The EV meter mirrors the body's stills exposure indicator, so it is a photography tool.
-    public var isPhotographyOnly: Bool {
-        self == .instantReview || self == .evMeter
-    }
-
     /// Scope-type tools: rendered as panels (floating in landscape/portrait-fill, stacked in
     /// portrait-fit) and subject to the portrait-fit 2-scope display cap.
     public static let scopeTools: [MonitorAssistTool] = [
         .waveform, .parade, .histogram, .vectorscope, .trafficLights,
     ]
-
-    /// Operator-facing label for Display settings strips.
-    public var displaySettingsTitle: String {
-        switch self {
-        case .lut: "LUT"
-        case .peaking: "Peaking"
-        case .falseColor: "False Color"
-        case .zebra: "Zebra"
-        case .waveform: "Waveform"
-        case .parade: "Parade"
-        case .histogram: "Histogram"
-        case .vectorscope: "Vectorscope"
-        case .trafficLights: "Traffic Lights"
-        case .audioMeters: "Audio Levels"
-        case .guides: "Guides"
-        case .grid: "Grid"
-        case .crosshair: "Crosshair"
-        case .level: "Horizon"
-        case .evMeter: "EV Meter"
-        case .desqueeze: "Desqueeze"
-        case .mirror: "Mirror"
-        case .instantReview: "Instant Playback"
-        case .magnification: "Magnification"
-        }
-    }
 }
 
 /// Which capture side of the camera a monitor layout belongs to.
@@ -294,39 +265,39 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        statusBarVisible = try c.decode(Bool.self, forKey: .statusBarVisible)
-        sideRailsVisible = try c.decode(Bool.self, forKey: .sideRailsVisible)
-        assistToolbarVisible = try c.decode(Bool.self, forKey: .assistToolbarVisible)
-        cameraValuesVisible = try c.decode(Bool.self, forKey: .cameraValuesVisible)
+        statusBarVisible = (try? c.decode(Bool.self, forKey: .statusBarVisible)) ?? true
+        sideRailsVisible = (try? c.decode(Bool.self, forKey: .sideRailsVisible)) ?? true
+        assistToolbarVisible = (try? c.decode(Bool.self, forKey: .assistToolbarVisible)) ?? true
+        cameraValuesVisible = (try? c.decode(Bool.self, forKey: .cameraValuesVisible)) ?? true
         // Per-readout flags were added later: an older saved blob lacks them, so default to visible
         // instead of failing the decode (which would reset every preference).
-        recReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .recReadoutVisible) ?? true
-        codecReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .codecReadoutVisible) ?? true
-        mediaReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible) ?? true
-        fpsReadoutVisible = try c.decodeIfPresent(Bool.self, forKey: .fpsReadoutVisible) ?? true
+        recReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .recReadoutVisible)) ?? true
+        codecReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .codecReadoutVisible)) ?? true
+        mediaReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible)) ?? true
+        fpsReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .fpsReadoutVisible)) ?? true
         // Same story for the lock key and the battery cluster: added after these blobs were
         // written, so an absent key means "the operator never chose" — keep them visible.
-        lockButtonVisible = try c.decodeIfPresent(Bool.self, forKey: .lockButtonVisible) ?? true
+        lockButtonVisible = (try? c.decodeIfPresent(Bool.self, forKey: .lockButtonVisible)) ?? true
         batteryIndicatorsVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .batteryIndicatorsVisible) ?? true
+            (try? c.decodeIfPresent(Bool.self, forKey: .batteryIndicatorsVisible)) ?? true
         // Third pass. The two remaining status-bar cells and the AF box were never switchable, so
         // an absent key means "the operator never chose" — keep them visible.
         timecodeReadoutVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .timecodeReadoutVisible) ?? true
+            (try? c.decodeIfPresent(Bool.self, forKey: .timecodeReadoutVisible)) ?? true
         resolutionReadoutVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .resolutionReadoutVisible) ?? true
-        focusBoxVisible = try c.decodeIfPresent(Bool.self, forKey: .focusBoxVisible) ?? true
+            (try? c.decodeIfPresent(Bool.self, forKey: .resolutionReadoutVisible)) ?? true
+        focusBoxVisible = (try? c.decodeIfPresent(Bool.self, forKey: .focusBoxVisible)) ?? true
         // The four rail controls were one `sideRails` blob, so a stored blob's single value is the
         // operator's choice for all four — expand it rather than defaulting them on and putting a
         // hidden rail back on their monitor.
         railRecordVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railRecordVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railRecordVisible)) ?? sideRailsVisible
         railMediaVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railMediaVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railMediaVisible)) ?? sideRailsVisible
         railSettingsVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railSettingsVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railSettingsVisible)) ?? sideRailsVisible
         railDispVisible =
-            try c.decodeIfPresent(Bool.self, forKey: .railDispVisible) ?? sideRailsVisible
+            (try? c.decodeIfPresent(Bool.self, forKey: .railDispVisible)) ?? sideRailsVisible
     }
 
     /// DISP 2's stock configuration: a bare image plus the operator's way around it. The status
@@ -471,7 +442,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var recordConfirmationEnabled: Bool
     /// A Bluetooth HID shutter remote's volume press toggles recording while the live monitor is
     /// up. On by default; the off toggle exists because the mechanism takes over the hardware
-    /// volume buttons.
+    /// volume buttons. The app stores it under the shared remote shutter key
+    /// (`MonitorOperatorPreferences.remoteShutter`); a saved blob's field only seeds that key once.
     public var bluetoothShutterEnabled: Bool
     public var hapticsEnabled: Bool
     public var keepScreenAwake: Bool
@@ -500,8 +472,9 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
     public var photoCommandChrome: DisplayChromeVisibility
     /// The broadcaster's latency-vs-quality stance for the relay encoder.
     public var relayEncoderProfile: RelayEncoderProfile
-    /// Watchers must enter this to receive the broadcast; empty means open. Four digits by UI
-    /// convention, but the wire and the check treat it as an opaque string.
+    /// Watchers must enter this to receive the broadcast; empty means open. The shared watcher
+    /// passcode rule (at least four characters, trimmed) judges a new code; the wire and the check
+    /// treat it as an opaque string.
     public var relayWatcherPasscode: String
     /// Whether watchers may ask for camera control at all.
     public var relayAllowsControlRequests: Bool
@@ -549,11 +522,6 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         setChrome(Self.defaults.chrome(for: mode, capture: capture), for: mode, capture: capture)
     }
 
-    /// The ≤2 scope tools the portrait-fit stacked zone displays out of the `on` live tools: the
-    /// two most recently activated (per ``scopeActivationOrder``), shown in canonical
-    /// ``MonitorAssistTool/scopeTools`` order for display stability. Older active scopes stay
-    /// active-but-hidden and reappear in fill mode. With no recorded order (a migrated install),
-    /// the canonical `prefix(2)` shows.
     /// Records a live scope switching on (it becomes the newest) or off. Other tools are ignored;
     /// playback toggles never call this, so the live recency survives a review session.
     public mutating func recordScopeActivation(_ tool: MonitorAssistTool, on: Bool) {
@@ -562,11 +530,10 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         if on { scopeActivationOrder.append(tool) }
     }
 
+    /// First two eligible active scopes in the common canonical order. Remaining selections
+    /// stay active and return in fill or landscape; stored activation history does not choose fit.
     public func displayedFitScopes(on: Set<MonitorAssistTool>) -> [MonitorAssistTool] {
-        let active = MonitorAssistTool.scopeTools.filter { on.contains($0) }
-        let ordered = scopeActivationOrder.filter { active.contains($0) }
-        let chosen = ordered.isEmpty ? Array(active.prefix(2)) : Array(ordered.suffix(2))
-        return MonitorAssistTool.scopeTools.filter { chosen.contains($0) }
+        Array(MonitorAssistTool.scopeTools.filter { on.contains($0) }.prefix(2))
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -585,20 +552,22 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        dispOrder = DispOrder.reconciled(
-            try container.decode([DispMode].self, forKey: .dispOrder))
+        let savedOrder = (try? container.decode([String].self, forKey: .dispOrder))?
+            .compactMap(DispMode.init(rawValue:)) ?? Self.defaults.dispOrder
+        dispOrder = DispOrder.reconciled(savedOrder)
         if !Self.isValidDisplayOrder(dispOrder) {
             dispOrder = Self.defaults.dispOrder
         }
-        enabledDispModes = Self.normalizedEnabledDispModes(
-            try container.decodeIfPresent(Set<DispMode>.self, forKey: .enabledDispModes)
-                ?? Set(DispMode.allCases))
-        displayChrome = try container.decode(DisplayChromeVisibility.self, forKey: .displayChrome)
-        if let confirmation = try container.decodeIfPresent(
+        let savedEnabled = (try? container.decode([String].self, forKey: .enabledDispModes))?
+            .compactMap(DispMode.init(rawValue:)) ?? DispMode.allCases
+        enabledDispModes = Self.normalizedEnabledDispModes(Set(savedEnabled))
+        displayChrome = (try? container.decode(DisplayChromeVisibility.self, forKey: .displayChrome))
+            ?? Self.defaults.displayChrome
+        if let confirmation = try? container.decode(
             Bool.self, forKey: .recordConfirmationEnabled)
         {
             recordConfirmationEnabled = confirmation
-        } else if let legacyHold = try container.decodeIfPresent(
+        } else if let legacyHold = try? container.decode(
             Bool.self, forKey: .recordHoldEnabled)
         {
             // Migrate the removed Record Hold toggle to Record Confirmation.
@@ -609,21 +578,23 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         // Predates some saved payloads. An absent key means the user never made a choice, so the
         // default-on applies; an explicitly saved false is a real opt-out and is preserved.
         bluetoothShutterEnabled =
-            try container.decodeIfPresent(Bool.self, forKey: .bluetoothShutterEnabled) ?? true
-        hapticsEnabled = try container.decode(Bool.self, forKey: .hapticsEnabled)
-        keepScreenAwake = try container.decodeIfPresent(Bool.self, forKey: .keepScreenAwake) ?? true
+            (try? container.decodeIfPresent(Bool.self, forKey: .bluetoothShutterEnabled)) ?? true
+        hapticsEnabled = (try? container.decode(Bool.self, forKey: .hapticsEnabled)) ?? true
+        keepScreenAwake = (try? container.decodeIfPresent(Bool.self, forKey: .keepScreenAwake)) ?? true
         // Predates this switch. Absent means the operator never chose, so the default-on that
         // shipped with vertical mode applies; an explicitly saved false is a real opt-out.
         autoRotateFeedEnabled =
-            try container.decodeIfPresent(Bool.self, forKey: .autoRotateFeedEnabled) ?? true
-        streamPreset = try container.decode(LiveViewStreamPreset.self, forKey: .streamPreset)
-        qualityBias = try container.decode(LiveViewQualityBias.self, forKey: .qualityBias)
+            (try? container.decodeIfPresent(Bool.self, forKey: .autoRotateFeedEnabled)) ?? true
+        streamPreset = (try? container.decode(LiveViewStreamPreset.self, forKey: .streamPreset))
+            ?? Self.defaults.streamPreset
+        qualityBias = (try? container.decode(LiveViewQualityBias.self, forKey: .qualityBias))
+            ?? Self.defaults.qualityBias
         portraitFeedAspect =
-            try container.decodeIfPresent(PortraitFeedAspect.self, forKey: .portraitFeedAspect)
+            (try? container.decodeIfPresent(PortraitFeedAspect.self, forKey: .portraitFeedAspect))
             ?? .fit16x9
         // Older saved payloads predate this preference — tolerate absence, default to empty.
         scopeActivationOrder =
-            try Self.decodeAssistToolArrayIfPresent(from: container, forKey: .scopeActivationOrder)
+            (try? Self.decodeAssistToolArrayIfPresent(from: container, forKey: .scopeActivationOrder))
             ?? []
         // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
         // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
@@ -636,30 +607,30 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         // old default". It only ever existed in unreleased builds, so the one safe reading is to
         // start clean from the new stock set; DISP 1 and DISP 3 are untouched.
         cleanChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .cleanChromeV2)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .cleanChromeV2))
             ?? .cleanDefaults
         commandChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .commandChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .commandChrome))
             ?? displayChrome
         // Chrome went per-capture-mode after these blobs were written. Everything the operator
         // configured carries into BOTH sides, so a DISP 1 they built for video looks identical the
         // moment the body switches to stills — until they deliberately diverge the two.
         photoDisplayChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoDisplayChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoDisplayChrome))
             ?? displayChrome
         photoCleanChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCleanChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCleanChrome))
             ?? cleanChrome
         photoCommandChrome =
-            try container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCommandChrome)
+            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCommandChrome))
             ?? commandChrome
         relayEncoderProfile =
-            try container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile)
+            (try? container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile))
             ?? .lowLatency
         relayWatcherPasscode =
-            try container.decodeIfPresent(String.self, forKey: .relayWatcherPasscode) ?? ""
+            (try? container.decodeIfPresent(String.self, forKey: .relayWatcherPasscode)) ?? ""
         relayAllowsControlRequests =
-            try container.decodeIfPresent(Bool.self, forKey: .relayAllowsControlRequests) ?? true
+            (try? container.decodeIfPresent(Bool.self, forKey: .relayAllowsControlRequests)) ?? true
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -776,10 +747,8 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
 /// still decodes, its moved keys read once by the app's migration.
 public struct AssistConfiguration: Codable, Equatable, Sendable {
     public struct Level: Codable, Equatable, Sendable {
-        public enum Style: String, CaseIterable, Codable, Equatable, Sendable {
-            case horizon = "Horizon"
-            case gauge = "Gauge"
-        }
+        /// The shared level styles; Nikon declares both (`MonitorAssistCapabilities.nikon`).
+        public typealias Style = MonitorLevelStyle
 
         public init(style: Style = .horizon) {
             self.style = style
@@ -830,11 +799,16 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             case native = "Native"
             case ire = "IRE"
 
-            /// Operator-facing value of a normalized threshold.
+            /// Operator-facing value of a normalized threshold. A native code is the one the
+            /// shared zebra compares on this camera's transfer and ceiling.
             public func displayValue(for ire: Double, mapping: ExposureSignalMapping) -> Int {
                 switch self {
                 case .ire: Int(ire.rounded())
-                case .native: Int(mapping.signalNative(monitorPercent: ire).rounded())
+                case .native:
+                    Int(
+                        (OpenCineMedia.ScopeDisplayScale.signalNative(
+                            monitorPercent: ire, transfer: mapping.curve.monitorTransfer,
+                            clipByte: mapping.clipByte) * 255).rounded())
                 }
             }
 
@@ -844,7 +818,10 @@ public struct AssistConfiguration: Codable, Equatable, Sendable {
             {
                 switch self {
                 case .ire: Double(value)
-                case .native: mapping.monitorPercent(signalNative: Double(value))
+                case .native:
+                    OpenCineMedia.ScopeDisplayScale.monitorPercent(
+                        Double(min(255, max(0, value))) / 255,
+                        transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte)
                 }
             }
         }
@@ -954,62 +931,5 @@ public enum DispOrder {
         let clamped = min(max(index, 0), result.count)
         result.insert(mode, at: clamped)
         return result
-    }
-}
-
-/// Pure helpers for the persisted command-grid order.
-public enum CommandGridOrder {
-    /// Every tile in its canonical position.
-    public static let `default` = CommandTileKind.allCases
-
-    /// Reconciles a persisted order with the current tile set: drops duplicates and unknowns (decoded
-    /// from an older/newer build), keeps the operator's arrangement, then appends any tiles that are
-    /// missing in their canonical position so none ever vanish. An empty result falls back to default.
-    public static func reconciled(_ order: [CommandTileKind]) -> [CommandTileKind] {
-        var seen = Set<CommandTileKind>()
-        var result = order.filter { seen.insert($0).inserted }
-        for kind in CommandTileKind.allCases where !seen.contains(kind) {
-            result.append(kind)
-            seen.insert(kind)
-        }
-        return result.isEmpty ? `default` : result
-    }
-
-    /// Returns `order` with `kind` moved to `index` (clamped to the valid range). A no-op if `kind`
-    /// isn't present or is already at `index`.
-    public static func moving(_ kind: CommandTileKind, to index: Int, in order: [CommandTileKind])
-        -> [CommandTileKind]
-    {
-        guard let from = order.firstIndex(of: kind) else { return order }
-        var result = order
-        result.remove(at: from)
-        let clamped = min(max(index, 0), result.count)
-        result.insert(kind, at: clamped)
-        return result
-    }
-}
-
-extension MonitorAssistTool {
-    /// Assist tools that apply to still photography: the exposure aids (peaking, false
-    /// color, zebra, histogram) plus the composition aids photographers actually use
-    /// (grid, level, de-squeeze). Everything else is cinema-only, which keeps the photo toolbar
-    /// deliberately shorter so the stills strip gets the bar width.
-    ///
-    /// De-squeeze is here because anamorphic lenses are used for stills too, and a squeezed
-    /// preview makes faces, framing and edge behaviour impossible to judge on a tethered shoot.
-    /// It is a display transform in every surface it reaches; the camera original is never
-    /// touched.
-    public var appliesToPhotography: Bool {
-        switch self {
-        case .peaking, .falseColor, .zebra, .histogram, .grid, .level, .evMeter, .instantReview,
-            .desqueeze, .mirror, .magnification:
-            // Mirror joins de-squeeze for the same reason: a body turned back at the subject is
-            // just as common on a stills shoot, and both are display transforms that never reach
-            // the camera original.
-            true
-        case .lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
-            .guides, .crosshair:
-            false
-        }
     }
 }

@@ -15,6 +15,7 @@ import com.opencapture.opencine.appkit.diagnostics.settingsStatus
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.opencine.cameracontrols.*
+import com.opencapture.opencine.appkit.MonitorOperatorSessionModel
 import com.opencapture.opencine.appkit.MonitorSettingsCacheIdentity
 import com.opencapture.opencine.appkit.MonitorSettingsCacheSource
 import com.opencapture.opencine.appkit.MonitorSettingsAccountActions
@@ -29,6 +30,7 @@ import com.opencapture.monitorui.settings.LocalMonitorSettingsScrollContext
 import com.opencapture.monitorui.settings.MonitorOperatorSafetySettings
 import com.opencapture.monitorui.settings.MonitorInputOrientationSettings
 import com.opencapture.monitorui.settings.MonitorAppInformationSettings
+import com.opencapture.opencine.vocabulary.MediaClipFormatting
 import com.opencapture.monitorui.settings.MonitorCacheSettings
 import com.opencapture.monitorui.settings.MonitorProjectLegalSettings
 import com.opencapture.monitorui.settings.MonitorSettingsPage
@@ -38,7 +40,6 @@ import com.opencapture.monitorui.settings.MonitorSettingsTab
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.text.format.Formatter
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -92,11 +93,18 @@ import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.LinkHealthPresentation
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.openzcine.frameio.FrameioConnectionState
-import com.opencapture.openzcine.frameio.FrameioDeliveryController
-import com.opencapture.openzcine.frameio.FrameioNetworkState
+import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE
+import com.opencapture.opencine.vocabulary.ControlCapabilities
+import com.opencapture.opencine.core.CapabilitySnapshot
+import com.opencapture.opencine.nikon.codecColorChoices
+import com.opencapture.opencine.frameio.FrameioConnectionState
+import com.opencapture.opencine.frameio.FrameioDeliveryController
+import com.opencapture.opencine.frameio.FrameioNetworkState
 import com.opencapture.openzcine.diagnostics.AppDiagnostics
+import com.opencapture.openzcine.diagnostics.AndroidSupportLinks
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
+import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.openzcine.media.MediaCacheClearResult
 import com.opencapture.openzcine.media.MediaCacheStore
 import com.opencapture.openzcine.relay.RelayCameraSession
@@ -132,7 +140,12 @@ internal fun settingsActionNeedsInternetHop(state: FrameioNetworkState?): Boolea
 @Composable
 internal fun OperatorSettingsScreen(
     session: CameraSession?,
+    controlSession: NikonOpenCineSession?,
     assists: NikonAssists,
+    /** The display owner the Display rows edit. */
+    operatorSession: MonitorOperatorSessionModel,
+    /** Whether a live monitor sits under these settings, so Edit view can open on it. */
+    editsLiveView: Boolean = false,
     settings: OperatorSettings,
     mediaCacheStore: MediaCacheStore,
     frameioController: FrameioDeliveryController? = null,
@@ -142,7 +155,11 @@ internal fun OperatorSettingsScreen(
     systemSettingsActions: SystemSettingsActions,
     onReportProblem: () -> Unit,
     onCompletedMediaCacheCleared: () -> Unit = {},
-    initialTab: MonitorSettingsTab = MonitorSettingsTab.LINK,
+    /**
+     * A debug launch's or a test's opening tab. Otherwise Settings opens on the operator's last tab,
+     * with each tab's scroll offset, from [operatorSession] (the shared landing-tab rule, A2-84).
+     */
+    initialTab: MonitorSettingsTab? = null,
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
     relaySharingEnabled: Boolean = false,
     onRelayShareToggle: ((Boolean) -> Unit)? = null,
@@ -150,10 +167,15 @@ internal fun OperatorSettingsScreen(
     relayWatchUi: RelayWatchUiState? = null,
     accountModel: MonitorSettingsAccountModel? = null,
     accountCurrent: (() -> Boolean)? = null,
+    /** The saved setups, for the Link tab's Your cameras card. */
+    savedCameras: List<SavedCamera> = emptyList(),
     gyro: MonitorSettingsGyroSource? = null,
     onClose: () -> Unit,
 ) {
     val cameraProperties = if (session == null) null else session.cameraProperties.collectAsState().value
+    val capabilities = if (controlSession == null) null else controlSession.snapshots.collectAsState().value.capabilities
+    val cameraControls = ControlCapabilities.derive(capabilities ?: CapabilitySnapshot(), NIKON_CAPTURE_PROFILE,
+        codecColor = cameraProperties?.codecColorChoices())
     val cameraInput =
         remember(
             cameraProperties?.codec,
@@ -229,10 +251,10 @@ internal fun OperatorSettingsScreen(
         },
         clearSummary = { clearReceipt },
     )
-    val captureMode = if (cameraProperties != null && prefersPhotographyChrome(cameraProperties))
-        CaptureLayoutMode.PHOTO else CaptureLayoutMode.VIDEO
-    val display = rememberNikonBorrowedDisplay(settings, assists.shared, toggleSetting, emitHaptic,
-        captureMode, onEditView = { mode -> settings.beginChromeEditing(mode); closeOwned() })
+    // One layout per DISP mode over the shared owner; Edit view opens on the live monitor and Done
+    // returns here, to Display.
+    val display = MonitorOperatorDisplaySource(operatorSession, cameraControls.displaySections,
+        if (editsLiveView) ({ mode -> retainedAccount.retire(); operatorSession.beginEditing(mode) }) else null)
     val unavailable = stringResource(R.string.settings_image_processing_unavailable)
     val assistSections = listOf(MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA, MonitorAssistTool.WAVE,
         MonitorAssistTool.PARADE, MonitorAssistTool.HISTO, MonitorAssistTool.VECTOR, MonitorAssistTool.PEAK,
@@ -284,33 +306,37 @@ internal fun OperatorSettingsScreen(
             MonitorSettingsReadoutSource(stringResource(R.string.settings_feed_noise_reduction),
                 stringResource(R.string.help_link_feed_noise_reduction), stringResource(R.string.settings_coming_soon)),
         ),
+        savedCameras = monitorSavedCameraSummaries(savedCameras),
+        savedCamerasHelp = stringResource(R.string.help_link_saved_cameras),
     )
     val controls = MonitorSettingsControlsSource(settings.recordConfirmationEnabled.value,
         { settings.recordConfirmationEnabled.value = it }, settings.hapticsEnabled.value,
         { settings.hapticsEnabled.value = it }, settings.keepScreenAwake.value,
         { settings.keepScreenAwake.value = it },
-        "Keeps the live monitor or clip playback awake while the app is active.",
-        remoteShutter = settings.mediaRemoteShutterEnabled.value,
-        setRemoteShutter = { settings.mediaRemoteShutterEnabled.value = it },
-        remoteTitle = stringResource(R.string.settings_media_remote),
-        remoteCaption = stringResource(R.string.settings_media_remote_caption),
-        autoRotateFeed = settings.autoRotateFeedEnabled.value,
-        setAutoRotateFeed = { settings.autoRotateFeedEnabled.value = it },
-        rotationTitle = stringResource(R.string.settings_auto_rotate_feed),
-        rotationHelp = stringResource(R.string.help_controls_auto_rotate_feed))
+        MonitorSettingsCopy.keepScreenAwake,
+        shutter = MonitorSettingsRemoteShutter.mediaButtons(settings.mediaRemoteShutterEnabled.value) {
+            settings.mediaRemoteShutterEnabled.value = it
+        },
+        autoRotate = MonitorSettingsAutoRotate(settings.autoRotateFeedEnabled.value,
+            { settings.autoRotateFeedEnabled.value = it }, stringResource(R.string.settings_auto_rotate_feed),
+            stringResource(R.string.help_controls_auto_rotate_feed)))
     val account = frameioController?.let { controller ->
         accountSource(controller, retainedAccount, accountCurrent ?: { localAccountCurrent })
     }
     val configuration = MonitorOperatorSettingsConfiguration("OpenZCine", linked, phase,
         closeOwned, onDisconnect?.let { disconnect -> { retainedAccount.retire(); disconnect() } }, emitHaptic, link,
         sharingSource(session, relaySharing, settings, relaySharingEnabled, onRelayShareToggle, emitHaptic),
-        stringResource(R.string.settings_subtitle_sharing), "Broadcast & watchers", assistSections, controls,
-        cache = MonitorSettingsCachePresentation(cacheSource, { cacheSizeLabel(context, it) },
-            stringResource(R.string.status_calculating), stringResource(R.string.cache_read_failed),
-            stringResource(R.string.cache_clear_failed), stringResource(R.string.help_storage_cache),
-            stringResource(R.string.help_storage_clear_cache), LiveDesign.good, confirmClear = false),
+        stringResource(R.string.settings_subtitle_sharing), "Broadcast & watchers", controls,
+        cache = MonitorSettingsCachePresentation(cacheSource, formatBytes = { cacheSizeLabel(context, it) },
+            checking = stringResource(R.string.status_calculating), readFailure = stringResource(R.string.cache_read_failed),
+            clearFailure = stringResource(R.string.cache_clear_failed), scopeHelp = stringResource(R.string.help_storage_cache),
+            clearHelp = stringResource(R.string.help_storage_clear_cache), summaryColor = LiveDesign.good),
         account = account,
         support = supportSource(systemSettingsActions, onReportProblem),
+        diagnostics = MonitorSettingsDiagnosticsSource(
+            save = { if (!systemSettingsActions.shareDiagnostics()) toastUnavailable(context) },
+            incidents = AppDiagnostics.incidents),
+        legal = ZLegalDocuments,
         information = MonitorSettingsInformationSource(stringResource(R.string.system_theme_charcoal), "PTP / PTP-IP",
             appVersionText(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
             "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
@@ -318,7 +344,9 @@ internal fun OperatorSettingsScreen(
             "Current OpenZCine build from the native project metadata."),
         gyro = gyro,
     )
-    MonitorOperatorSettingsScreen(configuration, display, initialTab, cacheOwner)
+    // Seeds the session once per requested landing tab, before the first frame draws.
+    remember(operatorSession, initialTab) { initialTab?.also { operatorSession.settingsTab = it } }
+    MonitorOperatorSettingsScreen(configuration, assistSections, display, operatorSession, cacheOwner)
 }
 
 /** Actual broadcast service observations and admitted native actions. */
@@ -348,9 +376,8 @@ private fun sharingSource(session: CameraSession?, sharing: com.opencapture.open
                 }
             }, segmented = true),
         passcodeTitle = stringResource(R.string.sharing_watcher_passcode), passcodeHelp = stringResource(R.string.help_sharing_passcode),
-        passcode = settings.relayWatcherPasscode.value, setPasscode = {
-            settings.relayWatcherPasscode.value = it; sharing?.watcherPasscode = it
-        }, controlRequestsTitle = stringResource(R.string.sharing_control_requests),
+        passcode = sharing?.savedPasscode.orEmpty(), setPasscode = { sharing?.savePasscode(it) },
+        controlRequestsTitle = stringResource(R.string.sharing_control_requests),
         controlRequestsHelp = stringResource(R.string.help_sharing_control_requests),
         controlRequests = settings.relayAllowsControlRequests.value, setControlRequests = {
             settings.relayAllowsControlRequests.value = it; sharing?.allowsControlRequests = it
@@ -372,27 +399,27 @@ private fun sharingSource(session: CameraSession?, sharing: com.opencapture.open
 @Composable
 private fun supportSource(actions: SystemSettingsActions, onReportProblem: () -> Unit): MonitorSettingsSupportSource {
     val context = LocalContext.current
-    val unavailable = stringResource(R.string.system_action_unavailable)
     fun runAction(action: () -> Boolean) {
-        if (!action()) Toast.makeText(context, unavailable, Toast.LENGTH_SHORT).show()
+        if (!action()) toastUnavailable(context)
     }
     var automaticReports by remember { mutableStateOf(AppDiagnostics.reporting.isOptedIn) }
     val report by AppDiagnostics.manualReport.snapshot.collectAsState()
-    return MonitorSettingsSupportSource(automaticReports, AppDiagnostics.reporting.isAvailable,
-        stringResource(R.string.help_system_automatic_reports), stringResource(R.string.help_system_automatic_reports_unavailable),
+    return MonitorSettingsSupportSource(onReportProblem, automaticReports, AppDiagnostics.reporting.isAvailable,
+        MonitorSettingsCopy.automaticReports, stringResource(R.string.help_system_automatic_reports_unavailable),
         { automaticReports = it; AppDiagnostics.reporting.setConsent(it) },
         stringResource(R.string.system_report_problem), stringResource(R.string.help_system_report_problem),
-        stringResource(R.string.action_report), onReportProblem, { runAction(actions::openPrivacy) },
+        stringResource(R.string.action_report),
         report.settingsStatus, if (report.allowsDiscard) ({ AppDiagnostics.manualReport.discard() }) else null,
         listOf(
             MonitorSupportAction("support.open", stringResource(R.string.system_support), actionTitle = stringResource(R.string.action_open),
                 accessibilityLabel = stringResource(R.string.system_open_support), action = { runAction(actions::openSupport) }),
             MonitorSupportAction("support.feature", stringResource(R.string.system_request_feature), actionTitle = stringResource(R.string.action_request),
                 accessibilityLabel = stringResource(R.string.system_request_feature), action = { runAction(actions::requestFeature) }),
-            MonitorSupportAction("support.diagnostics", stringResource(R.string.system_share_diagnostics), actionTitle = stringResource(R.string.action_share),
-                accessibilityLabel = stringResource(R.string.system_share_diagnostics), action = { runAction(actions::shareDiagnostics) }),
-        ), "View the OpenZCine project and contribute on GitHub.", "Read the OpenZCine terms of use.",
-        { runAction(actions::openSource) }, { runAction(actions::openTerms) })
+        ), AndroidSupportLinks.SOURCE, "View the OpenZCine project and contribute on GitHub.", "Read the OpenZCine terms of use.")
+}
+
+private fun toastUnavailable(context: Context) {
+    Toast.makeText(context, context.getString(R.string.system_action_unavailable), Toast.LENGTH_SHORT).show()
 }
 
 /** Existing native account/route service; the common page owns consent, busy state and card jobs. */
@@ -452,7 +479,7 @@ private fun cacheSizeLabel(context: Context, bytes: Long?): String =
     when {
         bytes == null -> context.getString(R.string.status_calculating)
         bytes == 0L -> context.getString(R.string.status_empty)
-        else -> Formatter.formatFileSize(context, bytes)
+        else -> MediaClipFormatting.byteLabel(bytes)
     }
 
 private fun clearResultLabel(context: Context, result: MediaCacheClearResult): String =

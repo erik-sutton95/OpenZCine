@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.StillReleasePoll
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -147,6 +148,9 @@ internal class StillCaptureController(
                     }
                 }
             }
+        } catch (cancelled: CancellationException) {
+            // The monitor left composition mid-release; that is not a refusal to report.
+            throw cancelled
         } catch (error: Exception) {
             // A refused release must never die silently — surface the typed
             // message (body rejection, busy channel, unsupported session) so

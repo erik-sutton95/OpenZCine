@@ -1,13 +1,10 @@
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<?xml version='1.0' encoding='utf-8'?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Device-verification harness only: wake/show the debug monitor over a
-    locked floor device. Release builds carry neither attribute. -->
+
     <application>
-        <activity
-            android:name=".MainActivity"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true" />
+        <activity android:name=".MainActivity" android:showWhenLocked="true" android:turnScreenOn="true" />
+    <activity android:name="androidx.activity.ComponentActivity" tools:replace="android:exported,android:theme,android:configChanges" android:exported="false" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|assetsPaths" android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
     </application>
 
 </manifest>

@@ -17,6 +17,7 @@ import com.opencapture.opencine.relayruntime.RelayViewerFocusCoordinates
 import com.opencapture.opencine.relayruntime.RelayViewerOwner
 import com.opencapture.opencine.relayruntime.RelayViewerPolicy
 import com.opencapture.opencine.relayruntime.RelayViewerRefusal
+import com.opencapture.opencine.relayruntime.WatcherRelaySecrets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,7 +58,8 @@ class RelayWatchController(
     val broadcast: RelayBroadcast,
     watcherId: String? = null,
     onJpegOnlyLatched: (() -> Unit)? = null,
-    onPasscodeRemembered: ((String) -> Unit)? = null,
+    /** Where passcodes are remembered per broadcaster; null keeps them for this run only. */
+    private val passcodes: RelayPasscodes? = null,
     hevcDecodeDeadlineMillis: Long = 6_000L,
     stallDeadlineMillis: Long = 8_000L,
     log: (String) -> Unit = { android.util.Log.i("RelayHEVC", it) },
@@ -82,8 +84,14 @@ class RelayWatchController(
         },
         picture = frameSource.pictureOwner,
         credentials = object : RelayViewerCredentials {
+            // A failed secure migration keeps the old credential usable; new answers that the
+            // store could not keep still join in this run, never in a new plaintext entry.
             override fun passcode(key: String): String? = rememberedPasscodes[key]
-            override fun rememberPasscode(key: String, code: String) { rememberedPasscodes[key] = code }
+                ?: (passcodes?.rememberedPasscodeLookup(key) as? WatcherRelaySecrets.Lookup.Stored)?.value
+            override fun rememberPasscode(key: String, code: String) {
+                if (passcodes?.storeRememberedPasscode(code, key) == true) rememberedPasscodes.remove(key)
+                else rememberedPasscodes[key] = code
+            }
             override val jpegOnly: Boolean get() = processJpegOnly
             override fun latchJpegOnly() { processJpegOnly = true }
         },
@@ -96,7 +104,6 @@ class RelayWatchController(
         onConnected = { source, hello -> session.adopt(source, hello.cameraName ?: hello.hostName) },
         onState = { source, state -> session.applyState(source, state) },
         onJpegOnlyLatched = { onJpegOnlyLatched?.invoke() },
-        onPasscodeRemembered = { onPasscodeRemembered?.invoke(it) },
         log = log,
     )
     init {
@@ -125,9 +132,10 @@ class RelayWatchController(
     internal fun sendCommand(command: MonitorRelayWire.Command, admission: RelayViewerCommandAdmission): Boolean = owner.sendCommand(command, admission)
     suspend fun stop() { owner.stop(); session.close() }
     public companion object {
+        /** The relay secrets' service: the Keystore key alias and its private file. Must not change. */
+        public const val SECRETS_SERVICE: String = "openzcine.watcher-relay"
         private val rememberedPasscodes = java.util.concurrent.ConcurrentHashMap<String, String>()
         @Volatile private var processJpegOnly = false
-        public fun seedPasscodes(stored: Map<String, String>) { rememberedPasscodes.putAll(stored) }
         public fun seedJpegOnly() { processJpegOnly = true }
         internal fun resetJpegOnlyForTesting() { processJpegOnly = false }
     }

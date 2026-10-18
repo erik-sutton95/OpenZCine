@@ -16,13 +16,11 @@ struct MagnificationTests {
         #expect(AssistConfiguration.Magnification.Factor.x4.scale == 4)
     }
 
-    /// It is a view-assist tool with a popup, and it has to reach photography — punching in to
-    /// confirm focus matters at least as much for stills as for cinema.
-    @Test("Magnification is a configurable tool and reaches photography")
+    /// Retired: no surface offers it, while saved names still decode.
+    @Test("Magnification is retired from every surface")
     func toolPolicy() {
-        #expect(MonitorAssistTool.magnification.hasConfiguration)
-        #expect(MonitorAssistTool.magnification.appliesToPhotography)
-        #expect(MonitorAssistTool.magnification.displaySettingsTitle == "Magnification")
+        #expect(MonitorAssistTool.magnification.isRetired)
+        #expect(!MonitorAssistTool.activeCases.contains(.magnification))
     }
 
     @Test("The factor persists and an older saved config still loads")

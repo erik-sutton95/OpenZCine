@@ -109,13 +109,27 @@ connect-attempt trace, shown before sending), optional photos or screenshots and
 email. The report goes privately to OpenCapture through Sentry, not to a public GitHub issue, and
 sends once the phone has left camera Wi-Fi and has internet. Optional automatic crash and error
 reports (off by default, asked once at launch) take the same route. A build without a Sentry DSN
-(`SENTRY_DSN`, empty in the repository) shows both as unavailable. For a TestFlight build with
-reports, set `SENTRY_DSN` in `ios/Runner/Reliability.local.xcconfig` (see the `.example` file),
-as OpenPocketCine does.
+(`SENTRY_DSN`, empty in the repository) shows both as unavailable. Releases follow
+OpenPocketCine's scheme: release `com.opencapture.openzcine@<version>+<build>`, `dist` the build,
+environments `development`, `verification` (debug `OPV_RELIABILITY_VERIFY` probes), `local`
+(Xcode, ad hoc and simulator release installs; Android release builds outside the Play workflow),
+`testflight`, `internal` (the Play internal workflow) and `production` (store builds only), and every build stamps `OPCSourceRevision` and `OPCBuildIdentity` (OpenCine's
+`scripts/sentry/stamp-source-revision.sh`, a Runner build phase).
+
+The TestFlight workflow and `ci_scripts/ci_post_clone.sh` write `ios/Runner/Reliability.local.xcconfig`
+from the `SENTRY_DSN_IOS` secret (OpenCine `scripts/sentry/sentry-dsn-xcconfig.py`). Every archive
+then requires the substituted DSN in its `Info.plist` (`sentry-verify-ios-dsn.py --require`): no
+DSN, no upload. With the `SENTRY_UPLOAD_ENABLED` variable `true`, the archive's dSYMs go to
+`openzcine-ios` (`SENTRY_AUTH_TOKEN` secret, optional `SENTRY_ORG` variable, default
+`opencapture`). Locally, set `SENTRY_DSN` in `ios/Runner/Reliability.local.xcconfig` (see the
+`.example` file). `just sentry-test` runs the offline tooling checks.
 
 Android uses the same form and automatic reports. For a Play build with reports, set the
-`SENTRY_DSN_ANDROID` repository secret (the Play Internal workflow passes it to Gradle) or, locally,
-`SENTRY_DSN_ANDROID` in the environment or in `.local/reliability.properties`.
+`SENTRY_DSN_ANDROID` secret (the Play Internal workflow passes it to Gradle) or, locally,
+`SENTRY_DSN_ANDROID` in the environment or in `.local/reliability.properties`. The workflow binds a
+fresh `SENTRY_PROGUARD_UUID` into the bundle and, with `SENTRY_UPLOAD_ENABLED` `true`, requires the
+DSN and uploads the R8 mapping and native symbols to `openzcine-android` before the Play upload.
+Builds carry `BuildConfig.SOURCE_REVISION` and `BUILD_IDENTITY`.
 
 ## GitHub Actions (fallback)
 

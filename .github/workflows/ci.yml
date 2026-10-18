@@ -44,7 +44,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
-          if grep -Eq '^(Sources/|Tests/|ios/|Package\.swift$|scripts/|justfile$)' <<< "$changed_files"; then
+          if grep -Eq '^(Sources/|Tests/|ios/|Package\.swift$|opencine-pins\.txt$|scripts/|justfile$)' <<< "$changed_files"; then
             if ! grep -Fxq 'ios/TestFlight/WhatToTest.en-US.txt' <<< "$changed_files"; then
               echo "Update ios/TestFlight/WhatToTest.en-US.txt with plain-language changes and test steps." >&2
               exit 1
@@ -57,7 +57,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
-          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|scripts/android-|scripts/verify-android-|scripts/ci-install-swift-android\.sh$|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
+          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|opencine-pins\.txt$|scripts/android-|scripts/verify-android-|scripts/ci-install-swift-android\.sh$|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$changed_files"; then
             if ! grep -Fxq 'Apps/Android/distribution/whatsnew/whatsnew-en-US' <<< "$changed_files"; then
               echo "Update Apps/Android/distribution/whatsnew/whatsnew-en-US with plain-language changes for Play testers." >&2
               exit 1
@@ -65,7 +65,7 @@ jobs:
           fi
 
       - name: Spell check
-        uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
+        uses: crate-ci/typos@00f422f3b19c57bc6338715ebfe3316d38768461 # v1.50.3
 
       - name: Markdown lint
         uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
@@ -180,6 +180,9 @@ jobs:
       # published. Delete when the app pins it by url + version.
       - name: Check out pinned OpenCine packages next to the repository
         run: scripts/checkout-opencine.sh
+      # OpenCine's shared Sentry release tooling, run against this app's Xcode Cloud archive hook.
+      - name: Sentry release configuration
+        run: just sentry-test
       - name: Prepare a private iOS test simulator with real accessibility
         run: |
           mkdir -p "$RUNNER_TEMP/native-ios"
@@ -241,13 +244,39 @@ jobs:
               json.dumps(report, indent=2) + "\n")
           subprocess.run(["xcrun", "simctl", "bootstatus", device_id, "-b"], check=True)
           PY
+      - name: Original storage oracle on a private native 2x iPad
+        env:
+          TEST_RUNNER_CI: "true"
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/native-storage-oracle"
+          mkdir -p "$evidence"
+          udid=""
+          trap 'if [ -n "$udid" ]; then python3 ../OpenCine/scripts/ios-private-simulator.py delete "$udid"; fi' EXIT
+          udid=$(python3 ../OpenCine/scripts/ios-private-simulator.py create \
+            "opc-z-storage-2x-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --device "iPad Pro 11-inch (M4)" --report "$evidence/simulator-setup.json")
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+            -destination "platform=iOS Simulator,id=$udid" -parallel-testing-enabled NO \
+            -resultBundlePath "$evidence/storage-oracle.xcresult" \
+            -only-testing:RunnerTests/MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges test
+      - name: Retain original storage oracle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-storage-oracle-evidence
+          path: ${{ runner.temp }}/native-storage-oracle
+          retention-days: 7
+          if-no-files-found: error
       - name: Run native checks
         env:
           IOS_TEST_RESULT_BUNDLE_PATH: ${{ runner.temp }}/native-ios/Runner.xcresult
           IOS_TEST_LOG_PATH: ${{ runner.temp }}/native-ios/ios-test.log
         run: |
           mkdir -p "$RUNNER_TEMP/native-ios"
-          just native-check
+          just check-demo-isolation swift-check
+          just ios-test -skip-testing:RunnerTests/MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges
+          just ios-build watch-build
       - name: Delete the private iOS test simulator
         if: always()
         run: |
@@ -266,7 +295,7 @@ jobs:
           fi
       - name: Retain iOS test evidence
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-ios-test-evidence
           path: |
@@ -277,6 +306,49 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  conformance:
+    name: Shared conformance scenarios, iOS
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    # Hosted macOS for the same reason as `native`: it runs code from the pull request.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+      - name: Install native tooling
+        run: brew install just || true
+      - name: Check out pinned OpenCine packages next to the repository
+        run: scripts/checkout-opencine.sh
+      # OpenCine's scripts/ios-private-simulator.py: a new iPhone 16 Pro with accessibility enabled in
+      # its own preference store only, the setup every app's conformance job shares.
+      - name: Create a private simulator with accessibility enabled
+        run: |
+          mkdir -p "$RUNNER_TEMP/conformance-ios"
+          udid=$(../OpenCine/scripts/ios-private-simulator.py create \
+            "opc-z-conformance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --report "$RUNNER_TEMP/conformance-ios/simulator-setup.json")
+          echo "CONFORMANCE_DEVICE_ID=$udid" >> "$GITHUB_ENV"
+      - name: Run the shared scenarios and kit suites (RunnerUIReview)
+        run: just conformance-ios "$CONFORMANCE_DEVICE_ID" "$RUNNER_TEMP/conformance-ios/RunnerUIReview.xcresult"
+      - name: Delete the private simulator
+        if: always()
+        run: |
+          if [ -n "${CONFORMANCE_DEVICE_ID:-}" ]; then
+            ../OpenCine/scripts/ios-private-simulator.py delete "$CONFORMANCE_DEVICE_ID"
+          fi
+      - name: Retain conformance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conformance-ios-evidence
+          path: ${{ runner.temp }}/conformance-ios
+          retention-days: 7
+          if-no-files-found: warn
+
   gate:
     name: CI gate
     # The single required status check. `native` and `android` are conditional, and a required
@@ -284,7 +356,7 @@ jobs:
     # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
     # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
     if: always()
-    needs: [meta, secrets, changes, native, android, bug-relay, handbook]
+    needs: [meta, secrets, changes, native, conformance, android, bug-relay, handbook]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have passed or been deliberately skipped
@@ -320,7 +392,7 @@ jobs:
           distribution: temurin
           java-version: "21"
       # Gradle caching; the runner's preinstalled Android SDK provides platform/build-tools.
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
       # Candidate (OpenCine CORE-02 + MEDIA-01): Apps/Android/settings.gradle.kts includes
       # ../../../OpenCine/Android and the Swift Android core stages OpenCineMedia and
       # OpenCineNikon (VENDOR-02) from ../OpenCine, a sibling checkout pinned by SHA in
@@ -353,7 +425,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
       - name: Validate Worker
@@ -370,7 +442,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm

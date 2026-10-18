@@ -1,10 +1,7 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
-import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraRecordingState
-import com.opencapture.opencine.nikon.CameraSessionState
-import com.opencapture.opencine.nikon.LiveFrameTimecode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -51,43 +48,6 @@ class MonitorPreviewPolicyTest {
         advanceUntilIdle()
 
         assertEquals(1, stops)
-    }
-
-    @Test
-    fun `command transition retains camera timecode without retaining the preview source`() = runTest {
-        val cameraA = CameraIdentity("Nikon ZR A", "ZR", "ZR-A")
-        val cameraB = CameraIdentity("Nikon ZR B", "ZR", "ZR-B")
-        val connectedA = CameraSessionState.Connected(cameraA)
-        val timecode = LiveFrameTimecode(true, 1, 2, 3, 4)
-        val retention = MonitorTimecodeRetention(monitorTimecodeOwner(connectedA))
-        retention.accept(timecode)
-        val source =
-            SwiftCoreLiveFrameSource(
-                available = { true },
-                start = {},
-                stop = {},
-                configurePreview = { true },
-                sharingScope = backgroundScope,
-            )
-
-        assertNull(monitorPreviewFrameSource(source, isCommandMode = true))
-        assertEquals(timecode, retention.timecodeFor(connectedA))
-        // Disabled / missing headers must not wipe the last good camera TC
-        // (Nikon briefly reports on=false around record transitions).
-        retention.accept(LiveFrameTimecode(false, 0, 0, 0, 0))
-        assertEquals(timecode, retention.timecodeFor(connectedA))
-        retention.accept(null)
-        assertEquals(timecode, retention.timecodeFor(connectedA))
-        // Second boundary must publish immediately (frame-only ticks are rate-limited).
-        val advanced = LiveFrameTimecode(true, 1, 2, 4, 0)
-        retention.accept(advanced)
-        assertEquals(advanced, retention.timecodeFor(connectedA))
-        assertNull(retention.timecodeFor(CameraSessionState.Disconnected))
-        assertNull(retention.timecodeFor(CameraSessionState.Connected(cameraB)))
-        assertNull(
-            MonitorTimecodeRetention(cameraB)
-                .timecodeFor(CameraSessionState.Connected(cameraB)),
-        )
     }
 
     @Test

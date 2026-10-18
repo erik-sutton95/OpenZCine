@@ -36,13 +36,14 @@ live in the `OpenCineNikon` product of `../OpenCine` (pinned in `opencine-pins.t
 
 OPTIONAL-01: Frame.io request planning, OAuth PKCE, response models and the iOS upload client
 come from the optional `OpenCineFrameIO` product of `../OpenCine`. The Runner links it
-(Watch does not; `OpenZCineCore` stays free of Frame.io), and the Android facade's
-`FrameioWire` uses it through the root `Package.swift`, injecting swift-crypto's SHA-256 for
-PKCE (CryptoKit on Darwin). The app keeps OAuth presentation, the callback scheme and client ID
-(`Frameio.xcconfig`, Android build config), the destination preference and its keychain item
-(service `OpenZCine.frameio`, account `oauth-token`, asserted by `FrameioCredentialsTests`). The
-Kotlin delivery controller, upload history, keystore storage and camera access point hop are
-unchanged. `stageSwiftCore` also fingerprints `Sources/OpenCineFrameIO/**`.
+(Watch does not; `OpenZCineCore` stays free of Frame.io). On Android the facade links
+`OpenCineFrameIOAndroid` (the shared wire and its `FrameioNative` JNI exports; Kotlin injects
+the PKCE SHA-256), and the delivery controller, upload history, metadata sidecar and keystore
+storage are OpenCine's `:frameio` module (A4-09). The app keeps OAuth presentation, the callback
+scheme and client ID (`Frameio.xcconfig`, Android build config), its storage namespace
+(`frameio/FrameioComposition.kt`), the camera access point hop adapter, the destination
+preference and its keychain item (service `OpenZCine.frameio`, account `oauth-token`, asserted
+by `FrameioCredentialsTests`). `stageSwiftCore` also fingerprints `Sources/OpenCineFrameIO/**`.
 
 MEDIA-02 step 4: the iPad HDMI/UVC capture source (`UVCVideoSource`, its states and the format
 choice) comes from the `OpenCineApple` product of `../OpenCine` (the Runner links it; Watch and
@@ -353,9 +354,11 @@ Nikon ZR plus one other Z body, Wi-Fi and USB, on iOS and Android.
     the old-build/new-build installation cycle in item 25 with a setup renamed on the old
     build, then with its name cleared there. Both edits survive repeated new-build launches;
     other routes, camera names, pairing identity and Wi-Fi keys stay intact.
-29. SHELL-02 legal links (iOS and Android): Privacy and Terms open the existing policy pages
-    from Cameras and Pair, including first-run pairing and pairing a nearby camera. Returning
-    to the app leaves the selected pairing step intact.
+29. SHELL-02 legal links (iOS and Android): Privacy and Terms open the bundled pages in the
+    shared legal screen (A2-27) from Cameras and Pair, including first-run pairing and pairing a
+    nearby camera, and from Settings, Report a Problem and the first-launch reports prompt.
+    They read while the phone is on the camera's Wi-Fi, with no browser and no network change.
+    Closing the page leaves the selected pairing step intact.
 
 ### Multiview qualification checks (SHELL-01, untested on physical devices)
 

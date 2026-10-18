@@ -1,8 +1,15 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.vocabulary.LadderWrite
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraControlCapabilities
+import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertyRefreshStatus
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
+import com.opencapture.opencine.nikon.CameraSessionState
+import com.opencapture.opencine.nikon.NikonLadderControl
+import com.opencapture.opencine.nikon.WhiteBalanceTint
+import com.opencapture.opencine.vocabulary.CaptureTint
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -39,6 +46,44 @@ class PhotographyPickersTest {
         wbPicker = null,
         photoTimerDelaySeconds = timerDelay,
     )
+
+    @Test
+    fun `photo WB keeps the advertised Auto preset while the movie codec filters it`() {
+        val properties = snapshot.copy(
+            codec = "R3D NE",
+            codecSelection = "R3D NE",
+            whiteBalanceMode = "Daylight",
+            whiteBalanceTint = "A1 · M0.25",
+            controlCapabilities = CameraControlCapabilities(
+                whiteBalanceValues = listOf("Auto", "Daylight"),
+                whiteBalanceTints = listOf("Neutral", "A1 · M0.25"),
+            ),
+        )
+        val dashboard = commandDashboardPresentation(
+            snapshot = properties,
+            refreshStatus = CameraPropertyRefreshStatus.Ready,
+            sessionState = CameraSessionState.Connected(CameraIdentity("body", "Body", "unit-camera")),
+            tileOrder = CommandTileKind.entries,
+        )
+        val movie = assertNotNull(monitorCaptureSettings(dashboard, PhoneStringResolver { resource, _ -> resource.toString() })
+            .first { it.kind == MonitorPickerKind.WHITE_BALANCE }.picker)
+        val photo = assertNotNull(photographyCaptureSettings(properties, movie, photoTimerDelaySeconds = 0)
+            .first { it.kind == MonitorPickerKind.WHITE_BALANCE }.picker)
+        val movieSheet = videoLadderPresentation(movie)
+        val photoSheet = videoLadderPresentation(photo)
+        val moviePresets = movieSheet.tabs.single { it.key == NikonLadderControl.Value(1) }
+        val photoPresets = photoSheet.tabs.single { it.key == NikonLadderControl.Value(1) }
+        assertEquals(listOf("Daylight"), moviePresets.ladder.values)
+        assertEquals(listOf("Auto", "Daylight"), photoPresets.ladder.values)
+        assertEquals(movie.modes, photo.modes, "Photo composition must retain the body's requests and mode keys")
+        val (request, value) = assertNotNull(requestForLadderWrite(photo, LadderWrite(photoPresets.key, "Auto")))
+        assertEquals(CameraControl.WHITE_BALANCE to "Auto", request.control to value)
+        assertEquals(listOf("Auto", "Daylight"), request.options)
+        assertEquals(CaptureTint(greenMagenta = -1, amberBlue = 2, range = WhiteBalanceTint.cellRange),
+            photoSheet.tabs.single { it.key == NikonLadderControl.Value(2) }.tint)
+        assertFalse(nikonCapturePopup(movie).photography, "Photo composition must not mutate the movie popup")
+        assertTrue(nikonCapturePopup(photo).photography)
+    }
 
     @Test
     fun `strip renders the iOS tile order with pinned widths and live values`() {
@@ -290,6 +335,34 @@ class PhotographyPickersTest {
     }
 
     @Test
+    fun `an unreported value stays unknown instead of seeding the drum`() {
+        // A3-29: a seeded current (ISO 800, JPEG Fine) reads as already applied, so picking it sent
+        // no write while the body's value was unknown. Only the app's own timer has a known value.
+        val unknown = CameraPropertySnapshot(captureSelector = "photo")
+        val pickers = settings(unknown).mapNotNull { it.picker } + photographyTopBarPickers(unknown).values
+        val seeded =
+            pickers.flatMap { picker -> picker.modes.map { "${picker.kind}/${it.label}" to it.request.currentValue } }
+                .filter { (tab, current) -> current.isNotEmpty() && tab != "DRIVE/App-timer" }
+        assertEquals(emptyList(), seeded)
+    }
+
+    @Test
+    fun `each drive tab writes through its own request`() {
+        // A3-03: all three tabs drive STILL_DRIVE and two offer "Off". App-timer Off must
+        // clear the app delay, not reach the body's Built-in Timer.
+        val drive = settings(timerDelay = 5).first { it.kind == MonitorPickerKind.DRIVE }.picker
+        assertNotNull(drive)
+        val tabs = videoLadderPresentation(drive).tabs
+        fun titleFor(tab: Int, value: String) =
+            requestForLadderWrite(drive, LadderWrite(tabs[tab].key, value))?.first?.title
+
+        assertEquals("App-timer", titleFor(2, "Off"))
+        assertEquals("App-timer", titleFor(2, "10s"))
+        assertEquals("Built-in Timer", titleFor(1, "Off"))
+        assertEquals("DRIVE", titleFor(0, "Single"))
+    }
+
+    @Test
     fun `focus tile and mode tab read the stills side not leftover movie AF-F`() {
         // iOS `photographyCaptureValues` used the movie `focusMode` field, so the
         // photo strip showed AF-F or "—" while the Focus panel confirmed AF-S (#272).
@@ -468,49 +541,5 @@ class PhotographyPickersTest {
             snapshot.copy(imageArea = "DX", imageSize = "9999x9999").stillSizeAreaLabel(),
         )
         assertNull(snapshot.copy(imageArea = null, imageSize = null).stillSizeAreaLabel())
-    }
-
-    /**
-     * The body's SET, this drum's ORDER. Same table as the shared core's
-     * `theDriveDrumKeepsReleaseOrderAndDropsTheTimer`.
-     */
-    @Test
-    fun `the drive drum keeps release order and drops the timer`() {
-        // What the ZR actually enumerates: ascending raw value, which interleaves the continuous
-        // modes and drops the self-timer into the middle.
-        val advertised =
-            listOf("Single", "Continuous H", "Continuous L", "Self-timer", "Continuous H+", "C15", "C30")
-
-        val options = StillPickerPolicy.driveDrumOptions(advertised)
-
-        assertEquals(
-            listOf("Single", "Continuous L", "Continuous H", "Continuous H+", "C15", "C30"),
-            options,
-        )
-        assertFalse(options.contains(StillPickerPolicy.SELF_TIMER_LABEL))
-    }
-
-    /** A body is never offered a mode it did not advertise — why advertised beats invented. */
-    @Test
-    fun `the drive drum never invents a mode the body lacks`() {
-        val options = StillPickerPolicy.driveDrumOptions(listOf("Single", "Continuous L"))
-
-        assertEquals(listOf("Single", "Continuous L"), options)
-        assertFalse(options.contains("C120"))
-    }
-
-    /** A position this build has never heard of stays reachable, after the ones it can order. */
-    @Test
-    fun `an unknown advertised drive mode is kept rather than dropped`() {
-        assertEquals(
-            listOf("Single", "Continuous H", "C240"),
-            StillPickerPolicy.driveDrumOptions(listOf("Continuous H", "Single", "C240")),
-        )
-    }
-
-    /** Only excluded positions leaves nothing this drum owns. */
-    @Test
-    fun `a drive enum of only excluded positions is empty`() {
-        assertTrue(StillPickerPolicy.driveDrumOptions(listOf("Self-timer", "Quick")).isEmpty())
     }
 }

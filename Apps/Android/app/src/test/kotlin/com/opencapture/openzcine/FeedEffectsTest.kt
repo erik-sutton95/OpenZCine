@@ -7,7 +7,7 @@ import com.opencapture.opencine.media.MonitorLUTCube
 import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
 import com.opencapture.opencine.media.MonitorZebraPaint
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -234,9 +234,8 @@ class FeedEffectsTest {
         for ((curve, sourceLabel) in listOf(0 to "L3G10", 1 to "N-Log", 2 to "sRGB", 3 to "HLG")) {
             val reference = FeedFalseColorReference(curve, emptyList(), floatArrayOf())
             for (scale in FeedFalseColorScale.entries) {
-                val copy = FalseColorReferenceCopy(scale.label, emptyList(), emptyList(), emptyList())
                 for (read709 in listOf(false, true)) {
-                    val values = FalseColorReferencePresentation(scale, reference, read709).referenceValues(copy)
+                    val values = FalseColorReferencePresentation(scale, reference, read709).referenceValues()
                     val expectedLabel = if (read709 && curve < 2) "709" else sourceLabel
                     assertEquals("${scale.label} · $expectedLabel", values.subtitle)
                     assertEquals(com.opencapture.opencine.cameracontrols.FalseColorReference.axisLabels(scale.sharedScale),
@@ -249,9 +248,8 @@ class FeedEffectsTest {
     @Test
     fun `stop ruler end labels stay inside the shared false colour panel`() {
         val reference = FeedFalseColorReference(0, emptyList(), floatArrayOf(0f, 0.3f, 0.5f, 0.6f, 0.75f, 1f))
-        val copy = FalseColorReferenceCopy("Stops", listOf("Min", "-3", "18%", "Skin", "+2", "Max"), emptyList(), emptyList())
         val fractions =
-            FalseColorReferencePresentation(FeedFalseColorScale.STOPS, reference).referenceValues(copy).markers.map { it.fraction }
+            FalseColorReferencePresentation(FeedFalseColorScale.STOPS, reference).referenceValues().markers.map { it.fraction }
         // The shared ruler starts a label 10 dp before its fraction of the 264 dp panel.
         assertEquals(16.0 / 264, fractions.first(), absoluteTolerance = 1e-9)
         assertEquals(1 - 16.0 / 264, fractions.last(), absoluteTolerance = 1e-9)

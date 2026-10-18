@@ -79,21 +79,28 @@ swift-lint:
 swift-test:
     swift test
 
-# Demo/screenshot env hooks (ZC_DEMO_*, ZC_METAL_FEED, ZC_GPU_SCOPES) must stay inside
-# ios/Runner/DemoHarness.swift, whose Release stubs compile them out of TestFlight builds.
-# Doc-comment mentions elsewhere are allowed; code reads are not.
+# Demo/screenshot env hooks (ZC_DEMO_*, ZC_METAL_FEED, ZC_GPU_SCOPES) and the shared review staging
+# (OPV_UI_REVIEW_*, `ReviewLaunch`) must stay inside ios/Runner/DemoHarness.swift, whose Release
+# stubs compile them out of TestFlight builds. Doc-comment mentions elsewhere are allowed; code
+# reads are not.
 check-demo-isolation:
-    ! grep -rn 'ZC_DEMO\|ZC_METAL_FEED\|ZC_GPU_SCOPES' Sources ios/Runner ios/OpenZCineWatch --include='*.swift' | grep -v '^ios/Runner/DemoHarness.swift:' | grep -vE ':[0-9]+: *///?' | grep .
+    ! grep -rn 'ZC_DEMO\|ZC_METAL_FEED\|ZC_GPU_SCOPES\|OPV_UI_REVIEW_\|ReviewLaunch' Sources ios/Runner ios/OpenZCineWatch --include='*.swift' | grep -v '^ios/Runner/DemoHarness.swift:' | grep -vE ':[0-9]+: *///?' | grep .
 
 # Run all Swift-only checks.
 swift-check: swift-lint swift-test
+
+# The shared conformance scenarios and kit suites (RunnerUIReview: RunnerUITests without the
+# physical camera classes) on one simulator, made with accessibility enabled by
+# ../OpenCine/scripts/ios-private-simulator.py create <name>.
+conformance-ios udid result="":
+    xcodebuild -project ios/Runner.xcodeproj -scheme RunnerUIReview -destination 'platform=iOS Simulator,id={{udid}}' -parallel-testing-enabled NO {{ if result != "" { "-resultBundlePath " + result } else { "" } }} test
 
 # Build the native iOS app for the simulator.
 ios-build:
     xcodebuild -project ios/Runner.xcodeproj -scheme Runner -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 
 # Run the iOS shell's Swift Testing suite on the first available iPhone simulator.
-ios-test:
+ios-test *args:
     #!/usr/bin/env bash
     set -euo pipefail
     device_id="${IOS_TEST_DEVICE_ID:-}"
@@ -105,7 +112,7 @@ ios-test:
         exit 1
     fi
     test_command=(xcodebuild -project ios/Runner.xcodeproj -scheme Runner
-      -destination "platform=iOS Simulator,id=$device_id")
+      -destination "platform=iOS Simulator,id=$device_id" {{args}})
     if [ -n "${IOS_TEST_RESULT_BUNDLE_PATH:-}" ]; then
         test_command+=(-resultBundlePath "$IOS_TEST_RESULT_BUNDLE_PATH")
     fi
@@ -157,6 +164,11 @@ ios-set-version marketing_version build_number:
 # Archive, export, and upload to TestFlight (requires App Store Connect API key in env).
 testflight:
     IOS_UPLOAD_VIA_ALTOOL=1 ./scripts/ios-testflight-upload.sh
+
+# Offline Sentry release-tooling checks (OpenCine scripts/sentry) against this app's archive hook.
+# No network, no uploads.
+sentry-test:
+    OPC_APP_ROOT=. OPC_APP_NAME=Runner bash ../OpenCine/scripts/sentry/sentry-test.sh
 
 # Run all native production checks that do not require camera hardware.
 native-check: check-demo-isolation swift-check ios-test ios-build watch-build

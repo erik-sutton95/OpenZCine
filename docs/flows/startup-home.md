@@ -63,8 +63,11 @@ flowchart TD
   steps in the rail, the current step in the pane.
 - **Code:** `LinkExperience.swift` (`shouldShowFirstPairWizard`), `StartupDesign.swift`, OpenCine
   `PairScreen` + `IntegrationPairingFlow`.
-- **Detail:** `shouldShowFirstPairWizard` is true when `savedCameras.isEmpty` **or**
-  `isPairingNewCamera`. Routes to [camera-ap-join.md](./camera-ap-join.md) — not expanded here.
+- **Detail:** `shouldShowFirstPairWizard` is true when `isPairingNewCamera`, **or** when
+  `savedCameras.isEmpty` and the operator has not chosen the camera list (the wizard's "Open the
+  camera list" row, for a watcher-only device). A fresh install therefore opens the same wizard as
+  Pair a new camera, as `AppShell`'s pre-page over its pair route. Routes to
+  [camera-ap-join.md](./camera-ap-join.md), not expanded here.
 - 📝 Notes:
 
 ### HOME-01 — Your cameras home
@@ -106,6 +109,9 @@ flowchart TD
   saved row via host/name match. Updates `connectionMessage` for recovery copy when hotspot-related.
   Does **not** auto-connect Wi‑Fi saved cameras — operator must tap Connect (USB is the exception,
   HOME-05).
+  USB is browsed only after an operator choice on the cable path (the wizard's Cable Link, a saved
+  USB-C setup, an armed USB-C watch): starting ImageCaptureCore asks for camera control, which iOS
+  shows as the Camera prompt (`discoveryBrowsesUSB`, A2-09).
 - 📝 Notes:
 
 ### HOME-04 — Connect saved camera
@@ -177,11 +183,11 @@ flowchart TD
 ### HOME-08 — Preparing live view
 
 - **Status:** shipped
-- **Screen:** Brief inline `StartupPreparingLiveView` under the progress sheet ("Starting live
-  view…") when `connection == .connected` before the stream starts; progress sheet shows
-  `preparingLiveView` phase.
-- **Code:** `StartupDesign.swift` (`StartupPreparingLiveView`), `NativeAppModel.enterLiveView`,
-  `startLiveView`.
+- **Screen:** No separate page. A shared attempt keeps its card or pair-page progress until the
+  first picture; an app-owned connection (no shared attempt) shows the shared pair page in its
+  `preparingLiveView` phase. See [connect-presentation.md](../connect-presentation.md).
+- **Code:** `LinkExperience.prePageKind`, `NikonConnectScreen` / `NikonConnectFlow.phase`,
+  `NativeAppModel.enterLiveView`, `startLiveView`.
 - **Detail:** Skips the old full-screen "Camera ready" landing — drives straight into the monitor.
   `enterLiveView` sets `connection = .preparingLiveView` (home actions lock). First decoded frame
   sets `isMonitorPresented = true` and dismisses the sheet.
@@ -199,9 +205,9 @@ flowchart TD
 ### HOME-10 — Inline live-view failure
 
 - **Status:** shipped
-- **Screen:** `StartupPreparingLiveView` with error copy + **Back to cameras** outline button (always
-  visible — including when a session exists but live view never started).
-- **Code:** `StartupDesign.swift` (`StartupPreparingLiveView`), `startLiveView` `.neverStarted` /
+- **Screen:** The shared pair page with the error copy and its Back action (always available,
+  including when a session exists but live view never started; Back disconnects it).
+- **Code:** `NikonConnectFlow.flow` (`onBack`), `startLiveView` `.neverStarted` /
   stall-escalate paths.
 - **Detail:** After max stall/never-started retries, `isMonitorPresented` stays false and the
   operator can `disconnect()` back to the list. Background reconnect may also re-trigger
@@ -233,7 +239,7 @@ flowchart TD
 
 - **Status:** shipped
 - **Screen:** Returns to HOME-01 layout; monitor and session torn down.
-- **Code:** `NativeAppModel.disconnect()`, `StartupPreparingLiveView` Back button,
+- **Code:** `NativeAppModel.disconnect()`, the connect pair page's Back action,
   monitor disconnect affordances.
 - **Detail:** Clears session, resets connection to `.disconnected`, restarts discovery loop
   (`resetResults: false`) so row availability refreshes.

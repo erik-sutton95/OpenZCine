@@ -16,12 +16,11 @@ class AndroidThermalPolicyTest {
     }
 
     @Test
-    fun `scope cadence mirrors iOS count and thermal shedding`() {
-        // ~12 Hz base (iOS scopes refresh ~10 Hz; ticking faster only burns
-        // decode + raster + redraw on the hardware floor), 10 Hz when >3.
-        assertEquals(83_333_333L, scopePeriodNanos(3, AndroidThermalTier.NOMINAL))
+    fun `scope cadence follows shared sparse dense and thermal shedding`() {
+        assertEquals(40_000_000L, scopePeriodNanos(1, AndroidThermalTier.NOMINAL))
+        assertEquals(100_000_000L, scopePeriodNanos(3, AndroidThermalTier.NOMINAL))
         assertEquals(100_000_000L, scopePeriodNanos(4, AndroidThermalTier.FAIR))
-        assertEquals(250_000_000L, scopePeriodNanos(1, AndroidThermalTier.SERIOUS))
+        assertEquals(120_000_000L, scopePeriodNanos(1, AndroidThermalTier.SERIOUS))
         assertEquals(500_000_000L, scopePeriodNanos(5, AndroidThermalTier.CRITICAL))
     }
 }

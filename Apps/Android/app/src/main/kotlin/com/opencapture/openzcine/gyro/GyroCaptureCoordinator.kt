@@ -18,8 +18,8 @@ import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.opencine.nikon.SwiftCoreLiveFrameSource
 import com.opencapture.opencine.nikon.metadataOnly
 import com.opencapture.openzcine.bridge.SwiftCore
-import com.opencapture.openzcine.DeviceTiltVector
-import com.opencapture.openzcine.lowPassDeviceTilt
+import com.opencapture.monitorui.MonitorTiltVector
+import com.opencapture.monitorui.MonitorDeviceTiltMath
 import com.opencapture.openzcine.prefersPhotographyChrome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -259,14 +259,14 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
 
     private fun calibrationSensorListener(generation: Long, accelerometer: Boolean): SensorEventListener =
         object : SensorEventListener {
-            private var filtered: DeviceTiltVector? = null
+            private var filtered: MonitorTiltVector? = null
             private val deliveryPending = AtomicBoolean()
             override fun onSensorChanged(event: SensorEvent) {
                 if (event.values.size < 3) return
                 // Android reports support acceleration (+Z face up); the core accepts physical down.
-                val down = if (accelerometer) lowPassDeviceTilt(filtered,
+                val down = if (accelerometer) MonitorDeviceTiltMath.lowPass(filtered,
                     -event.values[0], -event.values[1], -event.values[2])?.also { filtered = it } ?: return
-                    else DeviceTiltVector(-event.values[0], -event.values[1], -event.values[2])
+                    else MonitorTiltVector(-event.values[0], -event.values[1], -event.values[2])
                 if (!down.x.isFinite() || !down.y.isFinite() || !down.z.isFinite()) return
                 val timestamp = event.timestamp / 1_000_000_000.0
                 // File IO shares the serial scope. Never accumulate sensor jobs behind a slow write.

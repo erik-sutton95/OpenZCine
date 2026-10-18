@@ -85,11 +85,13 @@ final class CameraWiFiCredentialStoreTests: XCTestCase {
     }
 }
 
-/// OPTIONAL-01: Frame.io logic comes from OpenCineFrameIO, but the sign-in stays in OpenZCine's
-/// own keychain item. Changing either value signs every operator out.
+/// OPTIONAL-01: the Frame.io host comes from OpenCine, but the sign-in and remembered project
+/// stay in OpenZCine's own keychain item and defaults key. Changing any of them signs every
+/// operator out or forgets their project.
 final class FrameioCredentialsTests: XCTestCase {
     func testTokenStaysInOpenZCineKeychainNamespace() {
-        XCTAssertEqual(FrameioTokenStore.service, "OpenZCine.frameio")
-        XCTAssertEqual(FrameioTokenStore.account, "oauth-token")
+        XCTAssertEqual(NikonFrameio.tokens.service, "OpenZCine.frameio")
+        XCTAssertEqual(NikonFrameio.tokens.account, "oauth-token")
+        XCTAssertEqual(NikonFrameio.destinations.key, "frameio.destination.v1")
     }
 }

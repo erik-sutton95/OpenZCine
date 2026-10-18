@@ -1,5 +1,14 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.LiveFocusResult
+import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.appkit.MonitorReviewOptions
+import com.opencapture.monitorui.MonitorRect
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.Canvas
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -33,6 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import com.opencapture.opencine.cameracontrols.chromeClickable
 
 /** How the shell reacts to a body-fired capture-complete event. */
 internal enum class BodyCaptureSync {
@@ -80,6 +90,8 @@ internal data class InstantReviewPresentation(
     /** Settings line captured at present time so later polls can't rewrite it. */
     val infoLine: String?,
     val starred: Boolean = false,
+    /** The camera's AF metadata when this capture completed; later frames cannot replace it. */
+    val focus: LiveFocusInfo? = null,
 )
 
 /**
@@ -107,6 +119,7 @@ internal class InstantReviewController(private val session: CameraSession) {
         enabled: Boolean,
         compression: String?,
         infoLine: String?,
+        focus: LiveFocusInfo? = null,
     ) {
         if (!enabled) return
         // JPEG-gated: RAW-only qualities have no streamable full image.
@@ -116,7 +129,7 @@ internal class InstantReviewController(private val session: CameraSession) {
             repeat(6) { attempt ->
                 val handle = runCatching { session.resolveNewestStillHandle() }.getOrNull()
                 if (handle != null) {
-                    presentAndUpgrade(handle, infoLine)
+                    presentAndUpgrade(handle, infoLine, focus)
                     return@launch
                 }
                 if (attempt < 5) delay(150)
@@ -124,7 +137,7 @@ internal class InstantReviewController(private val session: CameraSession) {
         }
     }
 
-    private suspend fun presentAndUpgrade(handle: Int, infoLine: String?) {
+    private suspend fun presentAndUpgrade(handle: Int, infoLine: String?, focus: LiveFocusInfo?) {
         val thumbBytes = runCatching { session.stillThumbnail(handle) }.getOrNull() ?: return
         val thumb = decodeReviewBitmap(thumbBytes) ?: return
         _review.value =
@@ -134,6 +147,7 @@ internal class InstantReviewController(private val session: CameraSession) {
                 countdownArmed = false,
                 handle = handle,
                 infoLine = infoLine,
+                focus = focus,
             )
         // The embedded thumb is instant but tiny — stream the full image and
         // swap it over the presented review (abandoned once dismissed). A
@@ -197,9 +211,8 @@ private fun decodeReviewBitmap(bytes: ByteArray): ImageBitmap? {
 
 private const val REVIEW_MAX_PIXEL = 4096
 
-// ponytail: fixed review duration; an operator setting (incl. ∞) follows iOS's
-// assistConfiguration.instantReviewSeconds when settings grow a photo section.
-private const val REVIEW_SECONDS = 3
+/** The captured AF boxes over the review, present only while Focus Point is on. */
+internal const val INSTANT_REVIEW_FOCUS_TAG = "instantReview.focus"
 
 /**
  * The freshest captured still, full-screen until the review duration elapses
@@ -215,13 +228,16 @@ internal fun InstantReviewOverlay(
     modifier: Modifier = Modifier,
     /** De-squeeze configuration; the ratio is derived here, where the still's size is known. */
     desqueeze: LocalFramingAssistConfiguration? = null,
+    options: MonitorReviewOptions = MonitorReviewOptions(),
 ) {
     // The countdown starts only once the full image (or its failure fallback)
     // lands — the operator gets the whole duration with the real image.
-    LaunchedEffect(review.countdownArmed, review.handle) {
+    LaunchedEffect(review.countdownArmed, review.handle, options.duration) {
         if (review.countdownArmed) {
-            delay(REVIEW_SECONDS * 1000L)
-            onDismiss()
+            options.duration.automaticDismissMillis?.let { duration ->
+                delay(duration)
+                onDismiss()
+            }
         }
     }
     val desqueezeAspectRatio =
@@ -256,7 +272,23 @@ internal fun InstantReviewOverlay(
                 modifier = Modifier.size(34.dp),
             )
         }
-        review.infoLine?.let { info ->
+        if (options.showsFocusPoint) review.focus?.takeIf { it.coordinateWidth > 0 && it.coordinateHeight > 0 }?.let { focus ->
+            Canvas(Modifier.fillMaxSize().testTag(INSTANT_REVIEW_FOCUS_TAG)) {
+                val aspect = desqueezeAspectRatio ?: (review.image.width.toFloat() / review.image.height)
+                val fitted = MonitorRect(0f, 0f, size.width, size.height).fittedContent(aspect)
+                focus.boxes.forEach { box ->
+                    val width = (box.width.toFloat() / focus.coordinateWidth * fitted.width).coerceAtLeast(10f)
+                    val height = (box.height.toFloat() / focus.coordinateHeight * fitted.height).coerceAtLeast(10f)
+                    drawRect(if (focus.result == LiveFocusResult.FOCUSED) Color.Green else Color.White,
+                        topLeft = Offset(
+                            fitted.x + box.centerX.toFloat() / focus.coordinateWidth * fitted.width - width / 2,
+                            fitted.y + box.centerY.toFloat() / focus.coordinateHeight * fitted.height - height / 2),
+                        size = Size(width, height),
+                        style = Stroke(2.dp.toPx()))
+                }
+            }
+        }
+        review.infoLine?.takeIf { options.showsCaptureInfo }?.let { info ->
             Text(
                 info,
                 style = chromeStyle(13f, FontWeight.Medium, mono = true),

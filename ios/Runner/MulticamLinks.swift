@@ -13,6 +13,7 @@ final class DemoMulticamLink: MulticamMemberLink, @unchecked Sendable {
     struct Refusal: Error {}
 
     let serialNumber: String
+    let commandOwner: NikonCommandOwner? = NikonCommandOwner()
     private let lock = NSLock()
     private var properties: [PTPPropertyCode: Data]
     private var recording = false
@@ -78,7 +79,10 @@ final class DemoMulticamLink: MulticamMemberLink, @unchecked Sendable {
     func configureMemberLiveView() async {}
     func startLiveView() async throws { lock.withLock { log.append("startLiveView") } }
     func stopLiveView() async { lock.withLock { log.append("stopLiveView") } }
-    func shutdown() async { lock.withLock { log.append("shutdown") } }
+    func shutdown() async {
+        commandOwner?.retire()
+        lock.withLock { log.append("shutdown") }
+    }
 
     func liveViewFrame(deadline: Duration?) async throws -> PTPLiveViewFrame {
         try await Task.sleep(for: frameInterval)

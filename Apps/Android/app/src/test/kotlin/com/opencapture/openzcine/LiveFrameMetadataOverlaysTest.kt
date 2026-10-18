@@ -1,12 +1,14 @@
 package com.opencapture.openzcine
 
+import com.opencapture.monitorui.MonitorDeviceTilt
 import com.opencapture.monitorui.MonitorLevelGeometry
 import com.opencapture.monitorui.MonitorScopeRect
+import com.opencapture.monitorui.MonitorTiltSource
 import com.opencapture.opencine.nikon.LiveCameraLevel
 import com.opencapture.opencine.nikon.LiveFocusBox
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.monitorui.MonitorLevelStyle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -15,24 +17,59 @@ import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class LiveFrameMetadataOverlaysTest {
     @Test
-    fun `focus lock label clamps its full width at both visible feed edges`() {
-        val feed = LiveOverlayRect(left = -100f, top = 0f, width = 600f, height = 300f)
-        val viewport = LiveOverlayRect(left = 0f, top = 0f, width = 400f, height = 300f)
-
-        assertEquals(
-            5f,
-            focusLockLabelLeft(feed, viewport, preferredLeft = -40f, labelWidth = 96f, inset = 5f),
-        )
-        val rightEdge =
-            focusLockLabelLeft(
-                feed,
-                viewport,
-                preferredLeft = 380f,
-                labelWidth = 96f,
-                inset = 5f,
+    fun `nikon AF boxes normalize to the shared focus layer with the result as its colour`() {
+        val focus =
+            LiveFocusInfo(
+                coordinateWidth = 1_920,
+                coordinateHeight = 1_080,
+                result = LiveFocusResult.NOT_FOCUSED,
+                subjectDetectionActive = false,
+                trackingAFActive = false,
+                selectedBoxIndex = null,
+                boxes = listOf(
+                    LiveFocusBox(centerX = 960, centerY = 540, width = 192, height = 108),
+                    LiveFocusBox(centerX = 480, centerY = 270, width = 96, height = 54),
+                ),
             )
-        assertEquals(299f, rightEdge)
-        assertTrue(rightEdge + 96f <= viewport.right)
+
+        val areas = assertNotNull(nikonFocusAreas(focus))
+
+        val primary = assertNotNull(areas.primary)
+        assertEquals(0.45, primary.x, absoluteTolerance = 0.0001)
+        assertEquals(0.45, primary.y, absoluteTolerance = 0.0001)
+        assertEquals(0.1, primary.width, absoluteTolerance = 0.0001)
+        assertEquals(0.225, areas.others.single().x, absoluteTolerance = 0.0001)
+        assertEquals(false, areas.confirmed)
+        assertTrue(assertNotNull(nikonFocusAreas(focus.copy(trackingAFActive = true))).confirmed)
+        assertTrue(assertNotNull(nikonFocusAreas(focus.copy(result = LiveFocusResult.FOCUSED))).confirmed)
+        assertEquals(null, nikonFocusAreas(focus.copy(coordinateWidth = 0)))
+        val secondaryOnly = assertNotNull(nikonFocusAreas(focus.copy(boxes = listOf(
+            focus.boxes.first().copy(width = 0, height = 0), focus.boxes.last(),
+        ))))
+        assertEquals(null, secondaryOnly.primary)
+        assertEquals(areas.others, secondaryOnly.others)
+    }
+
+    @Test
+    fun `original camera AF projection keeps its mirror and subject centres`() {
+        val focus = LiveFocusInfo(
+            coordinateWidth = 1_000, coordinateHeight = 500,
+            result = LiveFocusResult.FOCUSED, subjectDetectionActive = true,
+            trackingAFActive = false, selectedBoxIndex = 0,
+            boxes = listOf(
+                LiveFocusBox(centerX = 250, centerY = 250, width = 100, height = 50),
+                LiveFocusBox(centerX = 500, centerY = 100, width = 200, height = 100),
+            ),
+        )
+        val areas = assertNotNull(nikonFocusAreas(focus))
+        val primary = assertNotNull(areas.primary).flipped(true, false)
+        assertEquals(0.75, primary.centerX, absoluteTolerance = 0.0001)
+        assertEquals(0.5, primary.centerY, absoluteTolerance = 0.0001)
+        assertEquals(0.1, primary.width, absoluteTolerance = 0.0001)
+        assertEquals(0.1, primary.height, absoluteTolerance = 0.0001)
+        val secondary = areas.others.single().flipped(true, false)
+        assertEquals(0.5, secondary.centerX, absoluteTolerance = 0.0001)
+        assertEquals(0.2, secondary.centerY, absoluteTolerance = 0.0001)
     }
 
     @Test
@@ -166,7 +203,7 @@ class LiveFrameMetadataOverlaysTest {
         val reading =
             resolveLiveLevel(
                 camera = LiveCameraLevel(rollDegrees = -0.5, pitchDegrees = 1.0, yawDegrees = 0.0),
-                deviceGravity = DeviceGravityLevel(rollDegrees = 12.0, pitchDegrees = 5.0),
+                deviceGravity = MonitorDeviceTilt(12.0, 5.0, MonitorTiltSource.GRAVITY_SENSOR),
             )
 
         assertNotNull(reading)
@@ -180,11 +217,12 @@ class LiveFrameMetadataOverlaysTest {
         val reading =
             resolveLiveLevel(
                 camera = null,
-                deviceGravity = DeviceGravityLevel(rollDegrees = 2.0, pitchDegrees = -1.0),
+                deviceGravity = MonitorDeviceTilt(2.0, -1.0, MonitorTiltSource.ACCELEROMETER_LOW_PASS),
             )
 
         assertNotNull(reading)
         assertEquals(LiveLevelSource.DEVICE_GRAVITY, reading.source)
+        assertEquals(MonitorTiltSource.ACCELEROMETER_LOW_PASS, reading.deviceTiltProvenance)
     }
 
     @Test
@@ -198,7 +236,7 @@ class LiveFrameMetadataOverlaysTest {
                         source = LiveLevelSource.CAMERA,
                         isDebugFixture = true,
                     ),
-                style = LocalLevelStyle.HORIZON,
+                style = MonitorLevelStyle.HORIZON,
             )
 
         assertEquals("Debug fixture level, not camera metadata, horizon", description)
@@ -220,70 +258,4 @@ class LiveFrameMetadataOverlaysTest {
 
         assertTrue(description.startsWith("Debug focus fixture, not camera focus data."))
     }
-
-    @Test
-    fun `low pass accelerometer tilt stays normalized and maps device axes like gravity`() {
-        val portraitRest = lowPassDeviceTilt(null, sampleX = 0f, sampleY = -9.81f, sampleZ = 0f)
-        val landscapeRest = lowPassDeviceTilt(null, sampleX = -9.81f, sampleY = 0f, sampleZ = 0f)
-
-        assertNotNull(portraitRest)
-        assertNotNull(landscapeRest)
-        assertEquals(1f, vectorMagnitude(portraitRest), absoluteTolerance = 0.000_001f)
-        assertEquals(1f, vectorMagnitude(landscapeRest), absoluteTolerance = 0.000_001f)
-
-        val portrait =
-            deviceGravityLevel(
-                gravityX = portraitRest.x,
-                gravityY = portraitRest.y,
-                gravityZ = portraitRest.z,
-                isPortrait = true,
-                provenance = DeviceTiltProvenance.ACCELEROMETER_LOW_PASS,
-            )
-        val landscape =
-            deviceGravityLevel(
-                gravityX = landscapeRest.x,
-                gravityY = landscapeRest.y,
-                gravityZ = landscapeRest.z,
-                isPortrait = false,
-                provenance = DeviceTiltProvenance.ACCELEROMETER_LOW_PASS,
-            )
-
-        assertNotNull(portrait)
-        assertNotNull(landscape)
-        assertTrue(kotlin.math.abs(portrait.rollDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(landscape.rollDegrees) < 0.000_001)
-
-        val smoothed =
-            lowPassDeviceTilt(
-                previous = portraitRest,
-                sampleX = 9.81f,
-                sampleY = 0f,
-                sampleZ = 0f,
-                retention = 0.8f,
-            )
-        assertNotNull(smoothed)
-        assertEquals(1f, vectorMagnitude(smoothed), absoluteTolerance = 0.000_001f)
-        assertTrue(smoothed.x > 0f)
-        assertTrue(smoothed.y < 0f)
-
-        val fallback = resolveLiveLevel(camera = null, deviceGravity = portrait)
-        assertNotNull(fallback)
-        assertEquals(DeviceTiltProvenance.ACCELEROMETER_LOW_PASS, fallback.deviceTiltProvenance)
-    }
-
-    @Test
-    fun `gravity conversion is level at portrait and landscape rest positions`() {
-        val portrait = deviceGravityLevel(gravityX = 0f, gravityY = -1f, gravityZ = 0f, isPortrait = true)
-        val landscape = deviceGravityLevel(gravityX = -1f, gravityY = 0f, gravityZ = 0f, isPortrait = false)
-
-        assertNotNull(portrait)
-        assertNotNull(landscape)
-        assertTrue(kotlin.math.abs(portrait.rollDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(portrait.pitchDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(landscape.rollDegrees) < 0.000_001)
-        assertTrue(kotlin.math.abs(landscape.pitchDegrees) < 0.000_001)
-    }
-
-    private fun vectorMagnitude(vector: DeviceTiltVector): Float =
-        kotlin.math.sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
 }

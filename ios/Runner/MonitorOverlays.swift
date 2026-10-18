@@ -40,59 +40,6 @@ private func feedOutsideCenter(
     return CGPoint(x: x, y: y)
 }
 
-/// Floating scope panels for media playback — same layout as the live monitor but fed from sampled
-/// `AVPlayer` frames instead of the live-view loop.
-struct PlaybackAssistOverlayModule: View {
-    @Environment(NativeAppModel.self) private var model
-    let scopeAssist: ScopeAssistBundle
-    /// Aspect-fit video rectangle in the overlay coordinate space.
-    let videoRect: CGRect
-    /// Metered playback audio; absent before a real sample or when the tool is off.
-    var audioLevels: MonitorAudioMeterLevels?
-    let onOptions: (MonitorAssistTool) -> Void
-
-    var body: some View {
-        let visible = model.assist.playbackTools
-        GeometryReader { proxy in
-            let screenBounds = CGRect(origin: .zero, size: proxy.size)
-            let feedRect = videoRect
-            ZStack(alignment: .topLeading) {
-                NikonScopeOverlay(
-                    tools: visible, bundle: scopeAssist,
-                    mapping: model.playbackExposureSignalMapping, canvas: screenBounds,
-                    onOptions: onOptions)
-                if visible.contains(.audioMeters) {
-                    let size = MonitorAudioMetrics.panelSize
-                    MovablePanel(
-                        id: "playback-audio", size: size,
-                        defaultCenter: feedOutsideCenter(
-                            feedRect, size, .bottomTrailing, bounds: screenBounds),
-                        bounds: screenBounds
-                    ) {
-                        NikonAudioMeter(levels: audioLevels, sensitivity: nil)
-                    }
-                }
-                if visible.contains(.falseColor)
-                    && model.assist.falseColorReference
-                {
-                    let size = MonitorFalseColorReference.panelSize
-                    MovablePanel(
-                        id: "playback-fcref", size: size,
-                        defaultCenter: CGPoint(x: screenBounds.midX, y: screenBounds.midY),
-                        bounds: screenBounds
-                    ) {
-                        MonitorFalseColorReference(
-                            values: FalseColorReference.values(
-                                scale: model.assist.falseColorScale.nikonScale,
-                                mapping: model.playbackExposureSignalMapping))
-                    }
-                }
-            }
-        }
-        .allowsHitTesting(true)
-    }
-}
-
 /// Nikon's saved panel identities adapt to the common drag owner without a resize control.
 struct MovablePanel<Content: View>: View {
     @Environment(NativeAppModel.self) private var model
@@ -184,10 +131,6 @@ func desqueezedRect(_ full: CGRect, _ desqueeze: NikonDesqueeze) -> CGRect {
 /// same way the index.html prototype does.
 struct FeedAlignedAssists: View {
     @Environment(NativeAppModel.self) private var model
-    /// Clean output mode (DISP 2). Which tools survive it is decided by `MonitorChromePolicy` via
-    /// `renderedLiveAssistTools` — nothing unless the operator pinned it. This flag only carries
-    /// the layout consequence (no bottom bars, so the EV needle drops to the feed edge).
-    var clean: Bool = false
     /// When set (e.g. letterboxed media playback), framing overlays align to this rect instead of
     /// the full geometry.
     var feed: CGRect? = nil
@@ -208,7 +151,7 @@ struct FeedAlignedAssists: View {
             ZStack {
                 MonitorOperatorFramingMarks(
                     assist: model.assist, feed: feed,
-                    visible: Set(visible.map(\.selection)),
+                    visible: Set(visible.map(\.selection)), guideFallback: model.assist.guideAspect,
                     comparison: LUTResolution.splitComparison(
                         visibleTools: visible,
                         enabled: model.assist.splitComparison, vertical: model.assist.splitVertical,
@@ -218,27 +161,6 @@ struct FeedAlignedAssists: View {
                             vertical: $0 == .vertical, originalLabel: SplitComparison.logLabel,
                             processedLabel: SplitComparison.lutLabel)
                     })
-                if visible.contains(.evMeter),
-                    // Photography-only: a persisted visibility set from an older build may
-                    // still carry the tool, so the render guards the mode as well.
-                    model.isPhotographyMode,
-                    let sixths = model.cameraPropertySnapshot.evIndicatorSixths,
-                    model.cameraPropertySnapshot.evIndicatorLit != false
-                {
-                    // Camera-fed exposure needle, seated bottom-centre of the feed. It lifts
-                    // above the capture bar's lane only where a bar actually overlays the feed
-                    // (landscape live, portrait fill); clean mode and portrait fit keep the
-                    // feed bottom free, so it drops to the edge.
-                    let feedBottomFree =
-                        model.monitorIsPortrait
-                        && (model.isPhotographyMode
-                            || model.preferences.portraitFeedAspect != .fill)
-                    EVMeterView(sixths: sixths)
-                        .position(
-                            x: feed.midX, y: feed.maxY - (clean || feedBottomFree ? 28 : 92)
-                        )
-                        .allowsHitTesting(false)
-                }
                 if visible.contains(.level) {
                     FeedLevelView(
                         style: model.assistConfiguration.level.style, feed: feed,
@@ -301,17 +223,13 @@ struct FeedLevelView: View {
         let bottomChrome =
             model.monitorIsPortrait && model.preferences.portraitFeedAspect == .fill
             ? CGFloat(MonitorPortraitLayout.captureBarHeight) : 0
-        Group {
-            if style == .gauge {
-                MonitorLevelOverlay(
-                    display: .gauges(rollDeg: roll, tiltDeg: pitch), feed: feed,
-                    viewport: Self.gaugeViewport(visibleBounds, bottomChrome: bottomChrome),
-                    portrait: model.monitorIsPortrait)
-            } else {
-                LevelHorizonView(roll: roll)
-                    .position(x: feed.midX, y: feed.midY)
-            }
-        }
+        // Both styles are the shared level owner's; Nikon declares them both.
+        MonitorLevelOverlay(
+            display: style == .gauge
+                ? .gauges(rollDeg: roll, tiltDeg: pitch) : .horizon(rollDeg: roll),
+            feed: feed,
+            viewport: Self.gaugeViewport(visibleBounds, bottomChrome: bottomChrome),
+            portrait: model.monitorIsPortrait)
         // Only run device motion while it's actually the source — stop it once the camera supplies a
         // level so the monitor's own tilt can't leak into the readout.
         .onAppear { if usesDeviceFallback { device.start() } }
@@ -382,84 +300,6 @@ final class DeviceLevel {
     func stop() {
         if let motionToken { PhoneMotionDriver.shared.stopLevel(motionToken) }
         motionToken = nil
-    }
-}
-
-/// Rolling horizon: two accent wings around a centre ring, rotating with roll; green when level.
-struct LevelHorizonView: View {
-    let roll: Double
-
-    var body: some View {
-        let level = abs(roll) < 0.8
-        let color = level ? LiveDesign.good : LiveDesign.accent
-        HStack(spacing: 10) {
-            Capsule().fill(color).frame(width: 64, height: 2)
-            Circle().stroke(color, lineWidth: 1.6).frame(width: 10, height: 10)
-            Capsule().fill(color).frame(width: 64, height: 2)
-        }
-        .rotationEffect(.degrees(roll))
-        .animation(.easeOut(duration: 0.18), value: level)
-    }
-}
-
-/// The body's exposure indicator as a compact glass strip: a ±3 EV tick bar (taller ticks
-/// on whole stops), the camera's 1/6-EV needle, and a signed numeric readout that keeps the
-/// truth when the needle clamps at the rail. Read-only — the value comes straight from the
-/// camera's own metering.
-struct EVMeterView: View {
-    let sixths: Int
-
-    private var ev: Double { Double(sixths) / 6 }
-
-    private var readout: String {
-        String(format: "%+.1f", ev)
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(readout)
-                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(abs(ev) < 0.01 ? LiveDesign.text : LiveDesign.accent)
-                .frame(width: 34, alignment: .trailing)
-            Canvas { context, size in
-                let midY = size.height / 2
-                let usable = size.width
-                let evSpan = 3.0
-                func x(forEV value: Double) -> CGFloat {
-                    let clamped = min(evSpan, max(-evSpan, value))
-                    return CGFloat((clamped + evSpan) / (2 * evSpan)) * usable
-                }
-                // Baseline.
-                var base = Path()
-                base.move(to: CGPoint(x: 0, y: midY))
-                base.addLine(to: CGPoint(x: usable, y: midY))
-                context.stroke(base, with: .color(.white.opacity(0.25)), lineWidth: 1)
-                // Ticks every 1/3 EV; whole stops taller.
-                var third = -9
-                while third <= 9 {
-                    let value = Double(third) / 3
-                    let tall = third % 3 == 0
-                    let height: CGFloat = tall ? 8 : 4
-                    var tick = Path()
-                    let tickX = x(forEV: value)
-                    tick.move(to: CGPoint(x: tickX, y: midY - height / 2))
-                    tick.addLine(to: CGPoint(x: tickX, y: midY + height / 2))
-                    context.stroke(
-                        tick, with: .color(.white.opacity(tall ? 0.55 : 0.3)), lineWidth: 1)
-                    third += 1
-                }
-                // The needle.
-                var needle = Path()
-                let needleX = x(forEV: ev)
-                needle.move(to: CGPoint(x: needleX, y: 1))
-                needle.addLine(to: CGPoint(x: needleX, y: size.height - 1))
-                context.stroke(needle, with: .color(LiveDesign.accent), lineWidth: 2)
-            }
-            .frame(width: 132, height: 16)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .liquidGlass(in: Capsule())
     }
 }
 
@@ -559,21 +399,5 @@ enum FalseColorReference {
     ) -> Double {
         guard value.isFinite else { return infiniteFallback }
         return min(1, max(0, (value - domain.lowerBound) / (domain.upperBound - domain.lowerBound)))
-    }
-}
-
-/// The shared Pocket / Insta audio meter over this camera's levels. A source that has not
-/// reported yet draws at the floor, as on Pocket.
-struct NikonAudioMeter: View {
-    let levels: MonitorAudioMeterLevels?
-    let sensitivity: String?
-
-    var body: some View {
-        let floor = MonitorAudioMeterBallistics.floorDB
-        let label = sensitivity?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        MonitorAudioMeter(
-            left: levels?.left.levelDB ?? floor, leftPeak: levels?.left.peakDB ?? floor,
-            right: levels?.right.levelDB ?? floor, rightPeak: levels?.right.peakDB ?? floor,
-            sensitivityLabel: label?.isEmpty == false ? label : nil)
     }
 }

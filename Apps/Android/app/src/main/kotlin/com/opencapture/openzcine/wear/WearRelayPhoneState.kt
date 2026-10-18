@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.wear
 
+import com.opencapture.opencine.core.PowerStatus
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraSessionState
@@ -9,7 +10,6 @@ import com.opencapture.openzcine.wearrelay.WatchConnectionState
 import com.opencapture.openzcine.wearrelay.WatchRecordState
 import com.opencapture.openzcine.wearrelay.WatchRelayState
 import com.opencapture.openzcine.wearrelay.WatchTimecode
-import kotlin.math.roundToInt
 
 /**
  * Current safety conditions for a record request arriving from the wearable.
@@ -106,7 +106,8 @@ internal fun retainWatchFrameMetadata(
  *
  * Timecode/FPS begin unavailable and are replaced only by metadata from an
  * actually presented native camera frame inside [AndroidWearPhoneRelay].
- * Storage and battery enter only from the real Swift-core property snapshot.
+ * Storage enters only from the real Swift-core property snapshot, and the battery only from the
+ * common session's typed [power].
  */
 internal fun androidWatchRelayState(
     sessionState: CameraSessionState,
@@ -115,6 +116,7 @@ internal fun androidWatchRelayState(
     monitorFront: Boolean,
     applicationResumed: Boolean,
     liveFeedActive: Boolean,
+    power: PowerStatus,
 ): WatchRelayState {
     val connectedIdentity = (sessionState as? CameraSessionState.Connected)?.identity
     val foreground = monitorFront && applicationResumed
@@ -125,13 +127,14 @@ internal fun androidWatchRelayState(
             else -> WatchConnectionState.NO_CAMERA
         }
     val hasCamera = connection == WatchConnectionState.CONNECTED
+    val reportedPower = if (hasCamera) power else PowerStatus.unknown
     return WatchRelayState(
         recordState = if (isRecording) WatchRecordState.RECORDING else WatchRecordState.STANDBY,
         timecode = WatchTimecode.unavailable(),
         mediaStatus = null,
         media = if (hasCamera) cameraProperties.storage?.let(::storageLabel) ?: "—" else "—",
-        // The canonical Swift relay model is a non-optional 0...100 value.
-        // Match watchOS by preserving a real zero-percent camera readout.
+        // Retain the deployed raw scalar for old receivers. Active wrist presentation uses
+        // the declared common reading below, including explicit unknown and exhaustion.
         cameraBatteryPercent =
             if (hasCamera) cameraProperties.batteryPercent?.takeIf { it in 0..100 } ?: 0 else 0,
         cameraName = if (hasCamera) connectedIdentity?.name.orEmpty() else "",
@@ -139,17 +142,8 @@ internal fun androidWatchRelayState(
         connection = connection,
         feedLive = hasCamera && liveFeedActive,
         liveFPS = "—",
+        batteryReading = reportedPower.batteryReading, batteryExhausted = reportedPower.exhausted.value,
     )
 }
 
-private fun storageLabel(storage: CameraStorageStatus): String {
-    val freeGiB = storage.freeSpaceBytes.coerceAtLeast(0L) / BYTES_PER_GIB
-    if (storage.totalCapacityBytes <= 0L) return "$freeGiB GB"
-    val percent =
-        ((storage.freeSpaceBytes.toDouble() / storage.totalCapacityBytes.toDouble()) * 100)
-            .roundToInt()
-            .coerceIn(0, 100)
-    return "$freeGiB GB · $percent%"
-}
-
-private const val BYTES_PER_GIB: Long = 1_073_741_824L
+private fun storageLabel(storage: CameraStorageStatus): String = storage.readout?.label ?: "\u2014"

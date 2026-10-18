@@ -1,9 +1,12 @@
 import Foundation
 import MonitorPresentation
+import OpenCineAppKit
 import OpenCineCore
 import OpenCineMulticam
 import OpenZCineCore
 import UIKit
+
+import class OpenCineCameraVocabulary.CustomLUTStore
 
 /// What a member's pump needs from its link beyond the command side (`NikonControlTransport`).
 /// `NativeCameraSession` provides it; tests script it.
@@ -21,10 +24,10 @@ protocol MulticamMemberLink: NikonControlTransport {
 /// Operator-facing multicam sentences. Never "sync" or "genlock": a group press is coordinated
 /// dispatch with per-camera confirmation, not synchronized recording.
 enum MulticamCopy {
-    static let sessionFull = "Multicam holds four cameras."
+    static let sessionFull = "Multiview holds four cameras."
     static let alreadyMember = "That camera is already on the stage."
-    static let cameraWiFi = "Camera Wi-Fi can't join a multicam session."
-    static let hdmi = "HDMI isn't part of multicam."
+    static let cameraWiFi = "Camera Wi-Fi can't join Multiview."
+    static let hdmi = "HDMI isn't part of Multiview."
     static let movieOnly = "Movie mode only."
     static let notReachable = "Not reachable."
     static let emptyPicker =
@@ -73,7 +76,10 @@ final class MulticamMember: Identifiable {
     let slot: Int
     let record: PTPIPSavedCameraRecord
     var status = Status.connecting
-    var frame: UIImage?
+    /// This member's own picture owner (raw frame, LUT state and baked output).
+    let picture: MulticamMemberPicture
+    /// What the tile shows now.
+    var frame: UIImage? { picture.image }
     var timecode: Timecode?
     /// Camera-reported (live-view header); `nil` until a frame says.
     var recording: Bool? {
@@ -99,18 +105,16 @@ final class MulticamMember: Identifiable {
     @ObservationIgnored var control: NikonMemberControl?
     @ObservationIgnored var pump: Task<Void, Never>?
 
-    init(slot: Int, record: PTPIPSavedCameraRecord) {
+    init(slot: Int, record: PTPIPSavedCameraRecord, picture: MulticamMemberPicture) {
         self.slot = slot
         self.record = record
+        self.picture = picture
         device = NikonMulticamPolicy.device(serialNumber: record.serialNumber)
     }
 
     var displayName: String { record.displayTitle }
     var letter: String { ["A", "B", "C", "D"][min(3, max(0, slot))] }
     var isLive: Bool { status == .live }
-    var batteryPercent: Int? {
-        properties.batteryPercent.flatMap { (0...100).contains($0) ? $0 : nil }
-    }
 }
 
 /// OpenZCine multicam on the shared engine: up to four Nikon bodies on four fixed tiles. The
@@ -130,12 +134,22 @@ final class MulticamCoordinator {
     }
 
     var isPresented = false
-    var arrangement = MultiviewPresentationLayout.Arrangement.centerStage
+    let presentation = MultiviewStageState(slotCount: MulticamCoordinator.tileCount)
+    var arrangement: MultiviewPresentationLayout.Arrangement {
+        get { presentation.layout.arrangement }
+        set { presentation.layout = newValue == .grid ? .grid : .centerStage }
+    }
     /// The selected tile; its member is the program camera (assists, values, Live View).
-    var focusedSlot = 0
+    var focusedSlot: Int {
+        get { presentation.selected }
+        set { presentation.selected = newValue }
+    }
     var toast: String?
     private(set) var members: [MulticamMember] = []
     private(set) var groupBusy = false
+    private(set) var cameraEditor: MulticamCameraEditor?
+    /// The member whose LUT options panel is open, if any.
+    private(set) var lookEditor: MonitorEntryID?
     /// The member lent to the single-camera Live View, if any.
     private(set) var lentMember: MonitorEntryID?
     /// Engine membership: members with a live control session, in tile order.
@@ -154,6 +168,11 @@ final class MulticamCoordinator {
     @ObservationIgnored var whiteBalancePresets: [String] = []
     @ObservationIgnored var frameDeadline: Duration = .seconds(10)
     @ObservationIgnored var recordObservationTimeout: Duration = .seconds(5)
+    /// The app's LUT catalog: each member's renderer reads stored cubes from it.
+    @ObservationIgnored var lutFileStore = CustomLUTStore()
+    /// The operator's current look, the starting selection of a member that joins. Never an
+    /// automatic look inferred from an unknown source.
+    @ObservationIgnored var defaultLUT: @MainActor () -> LUTSelection = { .builtIn(.nLogRec709) }
 
     init(isCameraRefusal: @escaping @Sendable (any Error) -> Bool) {
         self.isCameraRefusal = isCameraRefusal
@@ -170,13 +189,15 @@ final class MulticamCoordinator {
     func begin() {
         end()
         isPresented = true
-        arrangement = .centerStage
-        focusedSlot = 0
     }
 
     /// Closes every member link (CloseSession). Never stops a recording.
     func end() {
-        for member in members { stop(member) }
+        closePanels()
+        for member in members {
+            stop(member)
+            member.picture.retire()
+        }
         members = []
         group = MulticamGroup()
         leases.closeAll()
@@ -197,7 +218,7 @@ final class MulticamCoordinator {
         case .integrationRefused(.operationUnavailable):
             return record.path?.kind == .hdmiCapture ? MulticamCopy.hdmi : MulticamCopy.movieOnly
         case .integrationRefused(.notReachable): return MulticamCopy.notReachable
-        case .qualificationUnknown: return "Multicam support is not known for this setup."
+        case .qualificationUnknown: return "Multiview support is not known for this setup."
         default: return MulticamCopy.sessionFull
         }
     }
@@ -218,7 +239,9 @@ final class MulticamCoordinator {
             toast = MulticamCopy.sessionFull
             return nil
         }
-        let member = MulticamMember(slot: target, record: record)
+        let member = MulticamMember(
+            slot: target, record: record,
+            picture: MulticamMemberPicture(selection: defaultLUT(), fileStore: lutFileStore))
         if program == nil { focusedSlot = target }
         members.append(member)
         start(member)
@@ -238,6 +261,7 @@ final class MulticamCoordinator {
         guard let member = member(id) else { return }
         if lentMember == id { lentMember = nil }
         stop(member)
+        member.picture.retire()
         members.removeAll { $0.id == id }
         if member.slot == focusedSlot, let next = members.min(by: { $0.slot < $1.slot }) {
             focusedSlot = next.slot
@@ -245,6 +269,8 @@ final class MulticamCoordinator {
     }
 
     func select(slot: Int) {
+        if cameraEditor?.member != member(atSlot: slot)?.id { closeCameraSettings() }
+        if lookEditor != member(atSlot: slot)?.id { closeLookSettings() }
         focusedSlot = slot
         if let id = member(atSlot: slot)?.id, group[id] != nil { try? group.setStage(id) }
     }
@@ -313,6 +339,115 @@ final class MulticamCoordinator {
         }
     }
 
+    // MARK: Borrowed settings editor
+
+    var cameraSettingsSlots: Set<Int> {
+        Set(
+            members.compactMap { member in
+                guard member.isLive, lentMember != member.id, let owner = member.link?.commandOwner,
+                    owner.isActive, let control = member.control
+                else { return nil }
+                let snapshot = control.session.refresh()
+                guard snapshot.connection == .ready else { return nil }
+                switch snapshot.authority {
+                case .owner, .lease: break
+                case .readOnly, .unavailable: return nil
+                }
+                let editable =
+                    [
+                        .iso, .shutter, .aperture, .whiteBalance, .exposureCompensation, .focusMode,
+                        .frameRate,
+                    ] as [SettingKey]
+                return editable.contains { key in
+                    guard let descriptor = snapshot.capabilities[key],
+                        descriptor.access == .readWrite,
+                        descriptor.availability == .available
+                    else { return false }
+                    return !MonitorCapturePresentation.choices(key, domain: descriptor.domain)
+                        .isEmpty
+                } ? member.slot : nil
+            })
+    }
+
+    func openCameraSettings(slot: Int) {
+        closePanels()
+        guard cameraSettingsSlots.contains(slot), let member = member(atSlot: slot),
+            let source = member.control?.session, let owner = member.link?.commandOwner
+        else { return }
+        select(slot: slot)
+        guard let lease = try? leases.open(member.id, in: group, at: engineState()) else { return }
+        cameraEditor = MulticamCameraEditor(
+            member: member.id, lease: lease, source: source, owner: owner
+        ) { [weak self, weak member, weak source] in
+            guard let self, let member, let source,
+                self.member(member.id) === member, member.control?.session === source,
+                self.lentMember != member.id
+            else { return false }
+            return self.leases.refusal(for: lease, in: self.group, at: self.engineState()) == nil
+        }
+    }
+
+    func closeCameraSettings() {
+        guard let editor = cameraEditor else { return }
+        editor.retire()
+        leases.close(editor.member)
+        cameraEditor = nil
+    }
+
+    /// Every transient panel: settings editor and LUT options. Popups closing, hiding the stage
+    /// and backgrounding all land here; durable presentation is untouched.
+    func closePanels() {
+        closeCameraSettings()
+        closeLookSettings()
+    }
+
+    // MARK: Per-member picture looks
+
+    /// Live members on the stage, each with its own native picture renderer.
+    var pictureLUTSlots: Set<Int> {
+        Set(members.filter { $0.isLive && lentMember != $0.id }.map(\.slot))
+    }
+
+    /// The LUT tool shows on while any capable member's look is on.
+    var lutOn: Bool {
+        let capable = pictureLUTSlots
+        return members.contains { capable.contains($0.slot) && $0.picture.lutEnabled }
+    }
+
+    /// The group LUT tool: every capable member on, unless all already are, then all off.
+    /// Members that cannot render keep their state.
+    func toggleLUT() {
+        let capable = members.filter { pictureLUTSlots.contains($0.slot) }
+        let enable = !capable.allSatisfy(\.picture.lutEnabled)
+        for member in capable { member.picture.setLUT(enabled: enable) }
+    }
+
+    func setLUT(enabled: Bool, on id: MonitorEntryID) {
+        member(id)?.picture.setLUT(enabled: enabled)
+    }
+
+    func setLUT(selection: LUTSelection, on id: MonitorEntryID) {
+        member(id)?.picture.setLUT(selection: selection)
+    }
+
+    func lookOptions() -> [MulticamLookOption] { MulticamLookOption.catalog(lutFileStore) }
+
+    func openLookSettings(slot: Int) {
+        guard pictureLUTSlots.contains(slot), let member = member(atSlot: slot) else { return }
+        closeCameraSettings()
+        select(slot: slot)
+        lookEditor = member.id
+    }
+
+    func closeLookSettings() { lookEditor = nil }
+
+    private func retireStaleCameraEditor() {
+        guard let editor = cameraEditor,
+            leases.refusal(for: editor.lease, in: group, at: engineState()) != nil
+        else { return }
+        closeCameraSettings()
+    }
+
     // MARK: Camera values (per-member write queue with readback)
 
     func descriptor(_ key: SettingKey, of member: MulticamMember) -> SettingDescriptor? {
@@ -346,6 +481,7 @@ final class MulticamCoordinator {
     /// Live View pumps the link now), it holds an editor lease and is `busy` for group plans.
     /// Returns the link to hand to the monitor, or `nil` when it cannot be lent.
     func lend(_ id: MonitorEntryID) -> (any MulticamMemberLink)? {
+        closePanels()
         guard lentMember == nil, let member = member(id), member.isLive, let link = member.link,
             let control = member.control,
             (try? leases.open(id, in: group, at: engineState())) != nil
@@ -454,11 +590,16 @@ final class MulticamCoordinator {
 
     /// A fresh control session over `link` (a new session ID: earlier plans go stale).
     private func attach(_ member: MulticamMember, link: any MulticamMemberLink) {
+        if cameraEditor?.member == member.id { closeCameraSettings() }
+        if lookEditor == member.id { closeLookSettings() }
+        // A replacement link is a new source: the old link's pixels never stay on it.
+        member.picture.reset()
         member.control?.session.close(.replaced)
         let control = NikonMemberControl(
             serialNumber: link.serialNumber,
             facts: NikonControlFacts(whiteBalancePresets: whiteBalancePresets),
-            recordObservationTimeout: recordObservationTimeout, isCameraRefusal: isCameraRefusal)
+            recordObservationTimeout: recordObservationTimeout, commandOwner: link.commandOwner,
+            isCameraRefusal: isCameraRefusal)
         member.control = control
         let entry = MonitorEntryDescriptor(
             id: member.id, name: member.displayName, device: member.device,
@@ -514,7 +655,7 @@ final class MulticamCoordinator {
                 misses = 0
                 // ponytail: UIImage decodes lazily at draw on the main thread; move decode off-main
                 // if four 24 fps tiles show up in a profile.
-                member.frame = UIImage(data: frame.jpeg)
+                member.picture.accept(UIImage(data: frame.jpeg))
                 member.timecode = frame.timecode
                 member.recording = frame.isRecording
                 control.update {
@@ -559,12 +700,19 @@ final class MulticamCoordinator {
             facts.whiteBalancePresets = PTPCameraPropertyDecoders.whiteBalanceOptions(
                 advertised: whiteBalancePresets, codec: facts.reported.fileType)
         }
+        retireStaleCameraEditor()
         member.properties = control.nikonControlFacts.reported
-        if !recording, let storage = try? await link.readStorageInfo() { member.storage = storage }
+        if !recording, let storage = try? await link.readStorageInfo() {
+            member.storage = storage
+            control.update { $0.storage = storage }
+        }
     }
 
     /// The tile keeps its camera with a Retry; the engine stops addressing it.
     private func fail(_ member: MulticamMember, _ reason: String) {
+        if cameraEditor?.member == member.id { closeCameraSettings() }
+        if lookEditor == member.id { closeLookSettings() }
+        member.picture.reset()
         member.status = .failed(reason)
         member.recording = nil
         member.control?.update { $0.liveViewReady = false }
@@ -576,6 +724,9 @@ final class MulticamCoordinator {
     }
 
     private func stop(_ member: MulticamMember) {
+        if cameraEditor?.member == member.id { closeCameraSettings() }
+        if lookEditor == member.id { closeLookSettings() }
+        member.picture.reset()
         member.pump?.cancel()
         member.pump = nil
         member.control?.reset()

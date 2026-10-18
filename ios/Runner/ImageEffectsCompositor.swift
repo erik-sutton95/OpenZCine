@@ -276,53 +276,20 @@ enum ImageEffectsCompositor {
             over: base, source: source, extent: extent, zebra: resolvedZebra(settings: settings))
     }
 
+    /// The shared zebra zones for this camera's transfer and clip (A1-40): the highlight on the
+    /// hottest channel up to the clip shelf, the midtone band on luma, as on every app.
     static func resolvedZebra(settings: ZebraSettings) -> MonitorCodeZebraSpec {
-        let highlight =
-            settings.highlightEnabled
-            ? ExposureScale.signalNative(
-                monitorPercent: settings.highlightIRE,
-                mapping: settings.mapping) / 255.0 : nil
-        let centre =
-            settings.midtoneEnabled ? midtoneComparisonNative(settings: settings) / 255.0 : nil
-        let halfWidth = 5.0 / 255.0
+        let mapping = settings.mapping
         return MonitorCodeZebraSpec(
-            thresholds: MonitorZebraCodeThresholds(
-                highlight: highlight, midtoneLower: centre.map { $0 - halfWidth },
-                midtoneUpper: centre.map { $0 + halfWidth }),
-            highlightColor: MonitorRGB(settings.highlightColor.rgb),
-            midtoneColor: MonitorRGB(settings.midtoneColor.rgb),
-            maskPolicy: MonitorZebraMaskPolicy(highlightMeasure: .rec709Luma, rampBias: 0))
-    }
-
-    /// Resolves the midtone band centre on the native code-value axis.
-    private static func midtoneComparisonNative(settings: ZebraSettings) -> Double {
-        switch settings.unit {
-        case .ire:
-            ExposureScale.signalNative(
-                monitorPercent: settings.midtoneIRE, mapping: settings.mapping)
-        case .native:
-            // Stored threshold remains on the common 0–100 axis; only its editor displays native code.
-            ExposureScale.signalNative(
-                monitorPercent: settings.midtoneIRE, mapping: settings.mapping)
-        }
+            MonitorZebraSpec(
+                highlightEnabled: settings.highlightEnabled, highlightIRE: settings.highlightIRE,
+                highlightColor: MonitorRGB(settings.highlightColor.rgb),
+                midtoneEnabled: settings.midtoneEnabled, midtoneIRE: settings.midtoneIRE,
+                midtoneColor: MonitorRGB(settings.midtoneColor.rgb)),
+            transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte)
     }
 
     private static func falseColorCacheKey(_ settings: FalseColorSettings) -> String {
         "false:\(settings.scale.rawValue):\(settings.curve.rawValue):\(settings.mapping.clipNative):\(settings.read709)"
-    }
-}
-
-extension NativeAppModel {
-    /// Resolves the operator's current assist settings into a sendable payload for playback
-    /// `AVVideoComposition`.
-    func resolvedPlaybackEffects() -> ImageEffectsCompositor.ResolvedEffects {
-        ImageEffectsCompositor.resolve(playbackImageEffects) { selection in
-            switch selection {
-            case .builtIn(let look): return look.cube()
-            case .stored(let category, let fileName):
-                return lutFileStore.cube(category: category, fileName: fileName)?
-                    .preparedForRenderer()
-            }
-        }
     }
 }

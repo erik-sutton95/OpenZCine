@@ -1,14 +1,16 @@
 import Foundation
+import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
 import OpenCineMedia
-import SafariServices
+import OpenCineSentryApple
 import SwiftUI
 import UIKit
 
 /// The app's reliability and problem reports: OpenCine's reporting runtime with this app's names,
-/// destination, camera network and Sentry, wired as Pocket and Insta wire theirs. With no DSN in
-/// the build (`SENTRY_DSN` in Frameio.xcconfig) both stay unavailable and nothing is sent.
+/// destination, camera network and OpenCine's Sentry adapter, wired as Pocket and Insta wire
+/// theirs. With no DSN in the build (`SENTRY_DSN` in Frameio.xcconfig) both stay unavailable and
+/// nothing is sent. Nikon keeps no network readable: the neutral redactor removes every SSID.
 enum ReliabilityDiagnostics {
     static let host = DiagnosticsHost(
         product: "OpenZCine", listingName: "OpenZCine",
@@ -31,27 +33,60 @@ enum ReliabilityDiagnostics {
         ]
     }
     /// A Z body serves 192.168.1.x, the most common home network, so no address prefix marks the
-    /// camera path: the live camera session alone holds reports back (`NativeAppRoot`).
+    /// camera path: the model's camera path lease alone holds reports back (`NativeAppRoot`).
     static let gate = ReliabilityReportingGate(cameraIPv4Prefix: nil)
-    /// No feed-incident capture runs in this app yet, so nothing is a test source.
-    static let origin = FeedIncidentOrigin(
-        derivesTestSource: false, verification: false,
-        buildIdentity: Bundle.main.object(forInfoDictionaryKey: "OPCBuildIdentity") as? String,
-        injectionActivated: { false })
+    /// Canonical live connection observations use the current run origin; no injection is installed.
+    static let origin: FeedIncidentOrigin = {
+        #if DEBUG
+            let verification = ReliabilityReportingVerification.mode != nil
+        #else
+            let verification = false
+        #endif
+        return FeedIncidentOrigin(
+            derivesTestSource: false, verification: verification,
+            buildIdentity: Bundle.main.object(forInfoDictionaryKey: "OPCBuildIdentity") as? String,
+            injectionActivated: { false })
+    }()
     static let reporting = ReliabilityReporting(
         host: host, consent: consent, dsn: dsn, gate: gate, origin: origin,
-        sink: SentryReliabilitySink())
+        sink: SentryReliabilitySink(
+            host: host, consent: consent, urlProtocol: AppReliabilityURLProtocol.self))
+    /// The SDK transport's forwarding session over this runtime (`AppReliabilityURLProtocol`).
+    static let forwarder = ReliabilityReportingForwarder(reporting: reporting)
+    #if DEBUG
+        static let verification = ReliabilityReportingVerification(
+            sentry: reporting, isActive: { UIApplication.shared.applicationState == .active })
+    #endif
+    static let incidents = FeedIncidentRuntime(
+        reporting: reporting,
+        directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("OpenZCine/Diagnostics/incidents", isDirectory: true))
     @MainActor static let problemReporting = ProblemReporting(
         host: host, gate: gate, dsnProvider: dsn.configured,
         isForeground: { UIApplication.shared.applicationState == .active })
 
+    /// Only store builds report `production`; Xcode and ad hoc release installs are `local`.
     private static var environment: String {
         #if DEBUG
-            return "development"
+            ReliabilityEnvironment.apple(
+                debug: true, verification: ReliabilityReportingVerification.mode != nil
+            ).rawValue
         #else
-            return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
-                ? "testflight" : "production"
+            ReliabilityEnvironment.apple(debug: false, verification: false).rawValue
         #endif
+    }
+}
+
+/// The Sentry SDK's URL protocol over this app's reporting runtime.
+final class AppReliabilityURLProtocol: ReliabilityReportingURLProtocol, @unchecked Sendable {
+    override class var forwarder: ReliabilityReportingForwarder { ReliabilityDiagnostics.forwarder }
+}
+
+extension ReliabilityDiagnostics {
+    /// Reporting Privacy from the report sheet and the first-launch consent: the bundled privacy
+    /// page in the shared legal screen, readable while the phone is on the camera's network.
+    @MainActor static func privacyPage(close: @escaping () -> Void) -> MonitorLegalDocumentScreen {
+        MonitorLegalDocumentScreen(documents: .z, page: .privacy, onClose: close)
     }
 }
 
@@ -63,7 +98,7 @@ struct ProblemReportView: View {
             isAvailable: ReliabilityDiagnostics.reporting.isAvailable,
             supportEmail: ReliabilityDiagnostics.supportEmail, accent: MonitorTheme.accent,
             technicalDetails: { AppDiagnostics.shared.manualReport() },
-            privacy: { close in PrivacyPolicyPage(close: close) })
+            privacy: { close in ReliabilityDiagnostics.privacyPage(close: close) })
     }
 }
 
@@ -75,27 +110,6 @@ struct ReliabilityConsentPrompt: View {
         ReliabilityConsentSheet(
             productName: "OpenZCine", accent: MonitorTheme.accent,
             onAccent: MonitorTheme.onAccent, onChoice: onChoice,
-            privacy: { close in PrivacyPolicyPage(close: close) })
-    }
-}
-
-/// The published privacy policy in an in-app Safari sheet (this app keeps no bundled copy).
-private struct PrivacyPolicyPage: UIViewControllerRepresentable {
-    let close: () -> Void
-
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-        let page = SFSafariViewController(url: SupportLinkCatalog.privacy)
-        page.delegate = context.coordinator
-        return page
-    }
-
-    func updateUIViewController(_ page: SFSafariViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(close: close) }
-
-    @MainActor final class Coordinator: NSObject, @preconcurrency SFSafariViewControllerDelegate {
-        let close: () -> Void
-        init(close: @escaping () -> Void) { self.close = close }
-        func safariViewControllerDidFinish(_ controller: SFSafariViewController) { close() }
+            privacy: { close in ReliabilityDiagnostics.privacyPage(close: close) })
     }
 }

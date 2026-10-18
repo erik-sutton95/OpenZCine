@@ -1,7 +1,8 @@
+import MonitorPresentation
 import MonitorUI
 import SwiftUI
 
-/// OpenZCine brand palette — Nikon-inspired gold on charcoal (no third-party trademarks).
+/// OpenZCine brand palette: Nikon-inspired gold on charcoal (no third-party trademarks).
 enum BrandColors {
     static let background = Color(red: 0.065, green: 0.055, blue: 0.047)
     static let backgroundDeep = Color(red: 0.038, green: 0.034, blue: 0.030)
@@ -53,8 +54,8 @@ struct AppLogoMark: View {
 
 /// How long the in-app launch splash stays fully visible before fading out.
 enum LaunchSplashTiming {
-    static let visibleDuration: Duration = .milliseconds(2_250)
-    static let fadeOutDuration: TimeInterval = 0.35
+    static let visibleDuration = MonitorLaunchTiming.visibleDuration
+    static let fadeOutDuration = MonitorLaunchTiming.fadeOutDuration
 }
 
 /// Shared cinematic backdrop for the launch splash.
@@ -91,29 +92,11 @@ struct LaunchSplashContent: View {
     var compact: Bool = false
 
     var body: some View {
-        GeometryReader { proxy in
-            let landscape = proxy.size.width >= proxy.size.height
-            let logoSize = min(proxy.size.width * (landscape ? 0.16 : 0.28), compact ? 72 : 96)
-
-            ZStack {
-                BrandBackdrop()
-
-                if landscape {
-                    HStack(spacing: max(32, proxy.size.width * 0.06)) {
-                        AppLogoMark(size: logoSize)
-                        OpenZCineWordmark(fontSize: compact ? 28 : 34)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, max(32, proxy.size.width * 0.08))
-                } else {
-                    VStack(spacing: 24) {
-                        AppLogoMark(size: logoSize)
-                        OpenZCineWordmark(fontSize: 30)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-        }
+        MonitorLaunchSplashContent(
+            compact: compact,
+            backdrop: { BrandBackdrop() },
+            mark: { AppLogoMark(size: $0) },
+            wordmark: { OpenZCineWordmark(fontSize: $0) })
     }
 }
 
@@ -122,9 +105,8 @@ struct LaunchSplashOverlay: View {
     @Binding var isVisible: Bool
 
     var body: some View {
-        LaunchSplashContent()
-            .opacity(isVisible ? 1 : 0)
-            .animation(.easeOut(duration: LaunchSplashTiming.fadeOutDuration), value: isVisible)
-            .allowsHitTesting(isVisible)
+        MonitorLaunchSplashOverlay(isVisible: $isVisible) {
+            LaunchSplashContent()
+        }
     }
 }

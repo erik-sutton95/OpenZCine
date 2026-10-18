@@ -7,18 +7,48 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PairingFlowTest {
+    /**
+     * A4-20: the wizard asks for the Wi-Fi permission only on a path that uses Wi-Fi. A cable path
+     * with the permission denied reaches detection; before, the first step blocked every path.
+     */
     @Test
-    fun `camera-AP path walks permissions to network and ends there`() {
+    fun `cable paths reach detection without the network permission`() {
+        val fresh = PairingFlowState.initial(permissionGranted = false)
+        assertEquals(PairingStep.CHOOSE_PATH, fresh.step)
+        for (path in listOf(PairingPath.USB_C, PairingPath.HDMI_CAPTURE)) {
+            var flow = fresh.choose(path)
+            val visited = mutableListOf(flow.step)
+            while (!flow.isFinalStep) {
+                flow = flow.advance()
+                visited += flow.step
+            }
+            assertFalse(PairingStep.PERMISSIONS in visited, "$path visited $visited")
+            assertEquals(PairingStep.DISCOVER, flow.step)
+        }
+    }
+
+    @Test
+    fun `wifi paths ask for the network permission right after the choice`() {
+        val fresh = PairingFlowState.initial(permissionGranted = false)
+        for (path in PairingCard.WIRELESS.options) {
+            assertEquals(PairingStep.PERMISSIONS, fresh.choose(path).step)
+            assertEquals(PairingStep.PREPARE, fresh.choose(path).advance().step)
+        }
+    }
+
+    @Test
+    fun `camera-AP path walks choose, permissions, prepare and ends at network`() {
         var state = PairingFlowState.initial(permissionGranted = false)
-        assertEquals(PairingStep.PERMISSIONS, state.step)
+        assertEquals(PairingStep.CHOOSE_PATH, state.step)
         assertEquals(4, state.stepCount)
         assertEquals(1, state.displayStepNumber)
         assertFalse(state.canRetreat)
 
-        state = state.advance()
-        assertEquals(PairingStep.CHOOSE_PATH, state.step)
-
         state = state.choose(PairingPath.CAMERA_ACCESS_POINT)
+        assertEquals(PairingStep.PERMISSIONS, state.step)
+        assertEquals(2, state.displayStepNumber)
+
+        state = state.advance()
         assertEquals(PairingStep.PREPARE, state.step)
         assertEquals(3, state.displayStepNumber)
 
@@ -34,7 +64,7 @@ class PairingFlowTest {
     @Test
     fun `hotspot path adds the discover step as its final step`() {
         var state = PairingFlowState.initial(permissionGranted = false)
-        state = state.advance().choose(PairingPath.PHONE_HOTSPOT)
+        state = state.choose(PairingPath.PHONE_HOTSPOT).advance()
         assertEquals(5, state.stepCount)
 
         state = state.advance()
@@ -51,21 +81,21 @@ class PairingFlowTest {
     @Test
     fun `usb path includes a cable network step then attached-camera discovery`() {
         var state = PairingFlowState.initial(permissionGranted = false)
-        state = state.advance().choose(PairingPath.USB_C)
+        state = state.choose(PairingPath.USB_C)
 
         assertEquals(PairingStep.PREPARE, state.step)
-        assertEquals(5, state.stepCount)
-        assertEquals(3, state.displayStepNumber)
+        assertEquals(4, state.stepCount)
+        assertEquals(2, state.displayStepNumber)
 
         state = state.advance()
         assertEquals(PairingStep.NETWORK, state.step)
         assertFalse(state.isFinalStep)
-        assertEquals(4, state.displayStepNumber)
+        assertEquals(3, state.displayStepNumber)
 
         state = state.advance()
         assertEquals(PairingStep.DISCOVER, state.step)
         assertTrue(state.isFinalStep)
-        assertEquals(5, state.displayStepNumber)
+        assertEquals(4, state.displayStepNumber)
     }
 
     @Test
@@ -77,6 +107,7 @@ class PairingFlowTest {
         assertFalse(state.canRetreat)
 
         state = state.choose(PairingPath.PHONE_HOTSPOT)
+        assertEquals(PairingStep.PREPARE, state.step)
         assertEquals(4, state.stepCount)
         assertEquals(2, state.displayStepNumber)
     }
@@ -84,21 +115,21 @@ class PairingFlowTest {
     @Test
     fun `retreat walks back and stops at the first step`() {
         var state = PairingFlowState.initial(permissionGranted = false)
-        state = state.advance().choose(PairingPath.CAMERA_ACCESS_POINT).advance()
+        state = state.choose(PairingPath.CAMERA_ACCESS_POINT).advance().advance()
         assertEquals(PairingStep.NETWORK, state.step)
 
         state = state.retreat()
         assertEquals(PairingStep.PREPARE, state.step)
         state = state.retreat()
-        assertEquals(PairingStep.CHOOSE_PATH, state.step)
-        state = state.retreat()
         assertEquals(PairingStep.PERMISSIONS, state.step)
+        state = state.retreat()
+        assertEquals(PairingStep.CHOOSE_PATH, state.step)
         assertEquals(state, state.retreat())
     }
 
     @Test
     fun `choosing a new path from choose step resets onto that path`() {
-        var state = PairingFlowState.initial(permissionGranted = false).advance()
+        var state = PairingFlowState.initial(permissionGranted = false)
         state = state.choose(PairingPath.PHONE_HOTSPOT)
         assertEquals(PairingPath.PHONE_HOTSPOT, state.path)
 
@@ -122,6 +153,13 @@ class PairingFlowTest {
         }
     }
 
+    @Test
+    fun `permissions step is rejected on a cable path`() {
+        for (path in PairingCard.CABLE_LINK.options) {
+            assertFailsWith<IllegalArgumentException> { PairingFlowState(step = PairingStep.PERMISSIONS, path = path) }
+        }
+    }
+
     /**
      * The router path is the hotspot path's shape: the app joins and hosts nothing, so it walks
      * the same five steps and ends by finding a camera someone else's network is carrying.
@@ -137,19 +175,18 @@ class PairingFlowTest {
         assertTrue(flow.isFinalStep)
     }
 
+    @Test
+    fun `only the wireless paths use wifi`() {
+        for (path in PairingPath.entries) {
+            assertEquals(path in PairingCard.WIRELESS.options, path.usesWifi)
+        }
+    }
+
     /**
      * The camera-AP mechanisms — the Wi-Fi join and the credential scanner — belong to exactly one
      * path. One question rather than a list of exclusions, because the list is what went wrong:
      * each new path had to remember to opt out, and the ones that forgot cost real bugs.
      */
-    @Test
-    fun `camera permission is waived only when the device has no camera`() {
-        assertTrue(isCameraPermissionSatisfied(hasCamera = false, granted = false))
-        assertTrue(isCameraPermissionSatisfied(hasCamera = false, granted = true))
-        assertFalse(isCameraPermissionSatisfied(hasCamera = true, granted = false))
-        assertTrue(isCameraPermissionSatisfied(hasCamera = true, granted = true))
-    }
-
     @Test
     fun `only the camera access point joins the camera's own network`() {
         for (path in PairingPath.entries) {
@@ -181,15 +218,15 @@ class PairingFlowTest {
     @Test
     fun `hdmi path skips the network step and ends at discovery`() {
         var flow = PairingFlowState.initial(permissionGranted = false)
-        flow = flow.advance().choose(PairingPath.HDMI_CAPTURE)
+        flow = flow.choose(PairingPath.HDMI_CAPTURE)
         assertEquals(PairingStep.PREPARE, flow.step)
-        assertEquals(4, flow.stepCount)
-        assertEquals(3, flow.displayStepNumber)
+        assertEquals(3, flow.stepCount)
+        assertEquals(2, flow.displayStepNumber)
 
         flow = flow.advance()
         assertEquals(PairingStep.DISCOVER, flow.step)
         assertTrue(flow.isFinalStep)
-        assertEquals(4, flow.displayStepNumber)
+        assertEquals(3, flow.displayStepNumber)
 
         // And back: retreat from discovery lands on prepare, never a network step.
         assertEquals(PairingStep.PREPARE, flow.retreat().step)

@@ -1,6 +1,10 @@
 import MonitorPresentation
 import Network
+import OpenCineAppKit
 import OpenCineApple
+import OpenCineCameraControls
+import OpenCineCore
+import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
 import UIKit
@@ -18,7 +22,8 @@ enum DemoHarness {
     // MARK: Hook registry — every env toggle, one place.
 
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
-    /// first downloaded clip (read in `MediaBrowserView`).
+    /// first downloaded clip and `share` opens the delivery popup over it (read in
+    /// `MediaBrowserView`).
     static let openMediaAction = value("ZC_DEMO_OPEN_MEDIA")
     /// `ZC_DEMO_MEDIA_LUT=1` switches the LUT tool on when playback starts.
     static let mediaLUT = flag("ZC_DEMO_MEDIA_LUT")
@@ -82,10 +87,6 @@ enum DemoHarness {
     /// the clean view and its "tap to show controls" hint can be captured headlessly. Synthetic
     /// taps do not reach this app, so the state is otherwise only reachable by hand.
     static let playbackCleanView = flag("ZC_DEMO_PLAYBACK_CLEAN_VIEW")
-    /// `ZC_DEMO_MAGNIFY=1` starts the live view punched in, so the punch-in and the focus box it is
-    /// anchored to can be captured together. Synthetic taps do not reach this app, so the state is
-    /// otherwise only reachable by pressing the key by hand.
-    static let magnificationActive = flag("ZC_DEMO_MAGNIFY")
     /// `ZC_DEMO_RATING_SHADE=handle|open` mounts the star-rating shade in the clip player without a
     /// camera session, closed or already open. Both states need capturing: the rating is read from
     /// the card, so neither is reachable headlessly, and synthetic taps do not reach this app —
@@ -98,7 +99,12 @@ enum DemoHarness {
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
     #if DEBUG
-        private static let environment = ProcessInfo.processInfo.environment
+        /// The shared conformance kit's staging (`ReviewLaunch`, OpenCine
+        /// docs/conformance/SCENARIOS.md), said in the hooks below; an explicit `ZC_*` value wins.
+        private static let review = ReviewLaunch.current
+        private static let environment = ProcessInfo.processInfo.environment.merging(
+            review.map(hooks(for:)) ?? [:]
+        ) { explicit, _ in explicit }
         private static func flag(_ name: String) -> Bool { environment[name] == "1" }
         private static func value(_ name: String) -> String? { environment[name] }
     #else
@@ -108,8 +114,58 @@ enum DemoHarness {
 
     #if !DEBUG
         /// Release stub — the launch harness does not exist outside Debug builds.
-        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {}
+        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) async {}
     #endif
+
+    #if DEBUG
+        /// Exercises typed/legacy precedence at the real shared cameras screen, without a camera.
+        @MainActor static func addSetupSlots(_ supplied: IntegrationSlots) -> IntegrationSlots {
+            guard let mode = value("ZC_DEMO_CHOOSER_SLOT") else { return supplied }
+            var slots = supplied
+            slots.addRoute = { _, done in
+                AnyView(
+                    VStack {
+                        Text("Legacy chooser")
+                        Button("Cancel") { done(nil) }
+                    }.padding())
+            }
+            if mode == "legacy" {
+                slots.addSetup = nil
+            } else if let typed = slots.addSetup {
+                slots.addSetup = { camera, done in
+                    var flow = typed(camera, done)
+                    flow.chooser.title = "Typed chooser"
+                    return flow
+                }
+            }
+            return slots
+        }
+    #else
+        @MainActor static func addSetupSlots(_ supplied: IntegrationSlots) -> IntegrationSlots {
+            supplied
+        }
+    #endif
+
+    /// Actual shared-screen consent review; release builds have no review path.
+    @MainActor static func connectConsentReview() -> AnyView? {
+        #if DEBUG
+            guard let mode = value("ZC_DEMO_CONSENT_SCREEN") else { return nil }
+            return AnyView(ConnectConsentReview(mode: mode))
+        #else
+            return nil
+        #endif
+    }
+
+    /// SIMULATED public-input host for the app's typed independent-setting row projection.
+    /// Its receipts observe row callbacks only; it owns no camera, transport or app preferences.
+    @MainActor static func stabilizationReview() -> AnyView? {
+        #if DEBUG
+            guard let mode = value("ZC_DEMO_STABILIZATION_PANEL") else { return nil }
+            return AnyView(StabilizationReview(mode: mode))
+        #else
+            return nil
+        #endif
+    }
 
     // MARK: Live-view frame capture
 
@@ -226,17 +282,47 @@ enum DemoHarness {
     extension DemoHarness {
         /// The DISP mode a capture is aimed at: the Edit view's mode when one is named, else the
         /// mode the run launches into.
-        static func demoDispMode(_ env: [String: String]) -> DispMode? {
-            if let raw = env["ZC_DEMO_CHROME_EDIT"], let mode = DispMode(rawValue: raw) {
+        static func demoDispMode(_ env: [String: String]) -> MonitorDisplayMode? {
+            if let raw = env["ZC_DEMO_CHROME_EDIT"], let mode = MonitorDisplayMode(rawValue: raw) {
                 return mode
             }
-            return env["ZC_DEMO_DISP"].flatMap(DispMode.init(rawValue:))
+            return env["ZC_DEMO_DISP"].flatMap(MonitorDisplayMode.init(rawValue:))
+        }
+
+        /// The existing hooks a review screen means: the demo session for the monitor screens, with
+        /// the EV meter on as every app's review shows it (the camera's reading in sixths when the
+        /// review names one). The cameras page and the staged clips have none;
+        /// `applyLaunchEnvironment` stages them.
+        private static func hooks(for review: ReviewLaunch) -> [String: String] {
+            var session = [
+                "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_ASSIST_ON": "EV",
+            ]
+            session["ZC_DEMO_EV"] = review.meteredEV.map { String(Int(($0 * 6).rounded())) }
+            switch review.screen {
+            case .cameras: return [:]
+            case .pair: return ["ZC_DEMO_WIZARD_STEP": "0"]
+            case .live: return session
+            case .settings:
+                // The tab hook takes the case name ("storage").
+                let tab = review.settingsTab.map { String(describing: $0) } ?? "link"
+                return session.merging(["ZC_DEMO_PANEL": "settings", "ZC_DEMO_PANEL_TAB": tab]) {
+                    $1
+                }
+            case .chromeEdit: return session.merging(["ZC_DEMO_CHROME_EDIT": "live"]) { $1 }
+            case .media, .playback:
+                let open = ["ZC_DEMO_OPEN_MEDIA": review.screen == .playback ? "play" : "1"]
+                return review.connected ? session.merging(open) { $1 } : open
+            }
         }
 
         /// Stages the model from the launch environment (`SIMCTL_CHILD_ZC_DEMO_*` via
         /// `simctl launch`). No effect in normal launches.
-        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) {
+        @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) async {
             let env = environment
+            if let review, review.screen == .media || review.screen == .playback {
+                // The clips exist before anything below lists them.
+                await stageReviewMedia(review, in: model)
+            }
             // Load the numbered feed before checking AUTOSTART so a later ⌘O entry can use it. A
             // normal Xcode Run gets the checkout fallback; simctl may override it with
             // ZC_DEMO_FEED_DIR. The personal stills are read locally and never enter the app bundle.
@@ -249,6 +335,12 @@ enum DemoHarness {
                 environment: env, fallbackDirectoryPath: localDemoFallback)
             if env["ZC_DEMO_AUTOSTART"] == "1" {
                 model.startDemoSession()
+                if env["ZC_DEMO_GRAPHICAL_REVIEW"] == "1" {
+                    model.seedGraphicalReviewTimecode()
+                }
+                if env["ZC_DEMO_QUICK_SETTINGS"] == "1" {
+                    model.seedQuickDemoCamera()
+                }
                 if env["ZC_DEMO_BLUETOOTH_SHUTTER"] == "1" {
                     // Physical-device diagnostic: enter an immediately recordable monitor with the
                     // opt-in active, so a real HID shutter can be tested without a Nikon session.
@@ -280,6 +372,9 @@ enum DemoHarness {
                     model.applyDemoProperty(
                         .movieFileType,
                         data: PTPCameraPropertyWrite.fileType(raw: 0x0001_0A00).data)
+                    // SIMULATED tone descriptor: H.265 offers SDR, HLG and N-Log; on N-Log.
+                    model.cameraMovieTones[.movieH265ToneMode] = [.sdr, .hlg, .nLog]
+                    model.applyDemoProperty(.movieH265ToneMode, data: Data([1]))
                 }
                 if let raw = env["ZC_DEMO_PICKER"], let picker = CameraPicker(rawValue: raw) {
                     // ZC_DEMO_PICKER_MODE opens the picker on a specific mode tab (e.g. WB Tint).
@@ -293,10 +388,11 @@ enum DemoHarness {
                     // popup-layout captures.
                     model.presentAssistOptions(tool)
                 }
-                if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
+                if let raw = env["ZC_DEMO_DISP"], let mode = MonitorDisplayMode(rawValue: raw) {
                     // Demo/screenshot affordance: launch straight into a DISP mode (live/clean/
                     // command) for headless mode-state captures.
-                    model.displayMode = mode
+                    model.operatorSession.declare(modes: model.displayModes)
+                    model.operatorSession.select(mode)
                 }
                 if let raw = env["ZC_DEMO_RELAY_END_AFTER"], let seconds = Int(raw) {
                     // Verification affordance: a deliberate operator disconnect on a timer, so
@@ -558,35 +654,38 @@ enum DemoHarness {
                 }
                 if let raw = env["ZC_DEMO_CHROME_HIDE"] {
                     // Demo/screenshot affordance: hide monitor-chrome sections (comma-separated
-                    // `DisplayChromeVisibility.Section` raw values, e.g.
+                    // `MonitorDisplayChrome.Section` raw values or the retired Nikon names, e.g.
                     // "lockButton,railMedia,focusBox") so each hidden state can be captured
                     // headlessly — simctl cannot drive the Settings switches. Applies to the DISP
                     // mode named by `ZC_DEMO_CHROME_EDIT`/`ZC_DEMO_DISP`, else the current one,
-                    // on the capture side the body reports.
+                    // in the shared per-DISP chrome.
                     let target = Self.demoDispMode(env) ?? model.displayMode
-                    let capture = model.captureLayoutMode
-                    var chrome = model.preferences.chrome(for: target, capture: capture)
                     for value in raw.split(separator: ",") {
-                        // The short names the earlier hooks used, then the section raw values.
-                        let section: DisplayChromeVisibility.Section? =
+                        // The short names the earlier hooks used, the retired Nikon section names,
+                        // then the shared section raw values.
+                        let sections: [MonitorDisplayChrome.Section] =
                             switch value {
-                            case "lock": .lockButton
-                            case "battery": .batteryIndicators
-                            case "topbar": .statusBar
-                            case "toolbar": .assistToolbar
-                            case "values": .cameraValues
-                            default: DisplayChromeVisibility.Section(rawValue: String(value))
+                            case "lock", "lockButton": [.lockButton]
+                            case "battery", "batteryIndicators": [.batteries]
+                            case "topbar": [.statusBar]
+                            case "toolbar", "assistToolbar": [.toolBar]
+                            case "values": [.cameraValues]
+                            case "timecodeReadout": [.timecode]
+                            case "resolutionReadout": [.format]
+                            case "codecReadout": [.codec]
+                            case "mediaReadout": [.storage]
+                            case "fpsReadout": [.fps]
+                            // "rail" is the retired whole-rail blob: the rail controls.
+                            case "rail": [.railRecord, .railMedia, .railSettings]
+                            default:
+                                MonitorDisplayChrome.Section(rawValue: String(value)).map { [$0] }
+                                    ?? []
                             }
-                        if let section, chrome.isVisible(section) { chrome.toggle(section) }
-                        // "rail" is the retired whole-rail blob — expand it to the four controls.
-                        if value == "rail" {
-                            for control in DisplayChromeVisibility.Section.railControls
-                            where chrome.isVisible(control) {
-                                chrome.toggle(control)
-                            }
+                        for section in sections
+                        where model.operatorSession.chrome(for: target).isVisible(section) {
+                            model.operatorSession.toggle(section, in: target)
                         }
                     }
-                    model.preferences.setChrome(chrome, for: target, capture: capture)
                 }
                 if let mode = Self.demoDispMode(env), env["ZC_DEMO_CHROME_EDIT"] != nil {
                     // Demo/screenshot affordance: open the Edit view on one DISP mode
@@ -611,14 +710,14 @@ enum DemoHarness {
                     }
                     // The demo has no live stream, so seed the scopes from the demo frame once.
                     // Keyed on the switched-on set, not the mode-filtered render set, so a clean-
-                    // view capture with a pinned scope still gets samples.
+                    // view capture with a pinned scope still gets samples (hence every scope).
                     let scopesOn = MonitorAssistTool.scopeTools.contains {
                         model.assist.liveTools.contains($0)
                     }
                     if scopesOn,
                         let mock = model.liveFrameImage ?? UIImage(named: "MockFeed")
                     {
-                        Task { await model.refreshScopes(from: mock) }
+                        Task { await model.refreshScopes(from: mock, full: true) }
                     }
                 }
                 if env["ZC_DEMO_SCOPE_SAMPLES"] == "1",
@@ -698,9 +797,10 @@ enum DemoHarness {
                         }
                     model.forceSessionRecoveryState(staged)
                 }
-                if let raw = env["ZC_DEMO_DISP"], let mode = DispMode(rawValue: raw) {
+                if let raw = env["ZC_DEMO_DISP"], let mode = MonitorDisplayMode(rawValue: raw) {
                     // Demo/screenshot affordance: start in a specific display mode (live/clean/command).
-                    model.displayMode = mode
+                    model.operatorSession.declare(modes: model.displayModes)
+                    model.operatorSession.select(mode)
                 }
                 if env["ZC_DEMO_PANEL"] == "settings" {
                     // Demo/screenshot affordance: open Operator Setup on launch (tab via
@@ -724,7 +824,7 @@ enum DemoHarness {
                 }
             }
             if superResolutionStage == "input" {
-                FeedUpscaleSwitch.presentsSuperResolutionInput = true
+                FeedUpscaleSwitch.shared.presentsSuperResolutionInput = true
             }
             if let strength = liveDenoiseStrength {
                 LiveDenoiseSwitch.shared.strength = strength
@@ -841,6 +941,16 @@ enum DemoHarness {
                 model.isPairingNewCamera = true
                 model.firstPairWizardStep = step
             }
+            if env["ZC_DEMO_FRESH_INSTALL"] == "1" {
+                // SIMULATED fresh install: no saved camera and no camera-list choice yet. Only
+                // this simulator's demo records are forgotten; nothing is dialled.
+                for record in NativeCameraConnectionStore.shared.savedCameras() {
+                    NativeCameraConnectionStore.shared.forgetPairing(host: record.host)
+                }
+                model.savedCameras = NativeCameraConnectionStore.shared.savedCameras()
+                model.showsCameraListWithoutSavedCameras = false
+                model.cameras.reloadSaved()
+            }
             if env["ZC_DEMO_CAMERA_LIST"] == "1" {
                 // Demo/screenshot affordance: land on the camera-list home even with zero saved
                 // cameras — the watcher's destination behind the wizard's "Open the camera list"
@@ -891,6 +1001,41 @@ enum DemoHarness {
                 model.nikonPort.demoOutcome = outcome
                 if let camera = model.cameras.saved.first { model.cameras.connect(camera) }
             }
+            if let mode = env["ZC_DEMO_CONNECT_PREPARING"] {
+                // SIMULATED post-handshake state with shared or app-owned progress: an
+                // established session still waiting for its first frame. No session, network
+                // command or first frame is created by this fixture. (`.connected` also ends the
+                // discovery loop, which would otherwise overwrite a staged state.)
+                // "neverStarted": live view did not start, so the progress sheet is gone.
+                model.connection = .connected
+                model.isConnectionProgressPresented = mode != "neverStarted"
+                model.connectionProgressDeviceName = "SIMULATED ZR"
+                model.connectionPhase = .preparingLiveView
+                model.connectionProgressUsesCard = mode != "standalone" && mode != "neverStarted"
+                model.connectionMessage =
+                    mode == "neverStarted" ? "SIMULATED live view did not start." : "Reading camera settings…"
+            }
+            if let entry = env["ZC_DEMO_CONNECT_CONSENT"] {
+                // SIMULATED consent on actual model paths; the test only cancels, and the integration port is staged.
+                let held = DiscoveredCamera(
+                    ip: "192.0.2.45", name: "SIMULATED camera", source: .heldByAnotherDevice,
+                    heldByDeviceName: "SIMULATED other phone")
+                model.nikonPort.demoOutcome = "connecting"
+                if entry == "direct" {
+                    model.connectToCamera(held)
+                } else {
+                    _ = model.cameras
+                    model.nikonPort.demoSightings = [held]
+                    model.nikonPort.found([])
+                    for _ in 0..<100
+                    where !model.cameras.nearby.contains(where: { $0.id == held.id }) {
+                        await Task.yield()
+                    }
+                    if let sighting = model.cameras.nearby.first(where: { $0.id == held.id }) {
+                        model.cameras.connect(sighting)
+                    }
+                }
+            }
             if let raw = env["ZC_DEMO_HOTSPOT_CARD"] {
                 // Stages the hotspot-recovery strip on the camera list ("active" / "needed") —
                 // the real prompt derives from saved records plus live hotspot state, so
@@ -932,6 +1077,78 @@ enum DemoHarness {
             if let count = env["ZC_DEMO_MULTICAM"].flatMap(Int.init) {
                 stageMulticam(count: count, env: env, model: model)
             }
+            switch review?.screen {
+            case .cameras?:
+                stageReviewCamera(model)
+            case .media?, .playback?:
+                if review?.connected == true {
+                    // The demo session has no card to list, so the Media panel it opened begins
+                    // on the staged index, as a finished listing pass would. Its SIMULATED card (the
+                    // shared ReviewCard over the staged handles) removes what a deletion names.
+                    let card = ReviewCard(
+                        clips: (0..<(review?.mediaCount ?? 0)).map {
+                            MediaObjectHandle(storageID: 65_537, handle: UInt32($0 + 1))
+                        })
+                    model.reviewCameraDelete = { @MainActor location in
+                        card.delete { $0 == location }
+                    }
+                    model.mediaLibrary?.begin()
+                } else {
+                    // The startup screen's Media: everything cached on this phone.
+                    model.openCachedMediaLibrary()
+                }
+            default:
+                break
+            }
+        }
+
+        /// `ReviewLaunch` media: `mediaCount` copies of one generated playable movie in the bucket
+        /// the browser lists, indexed with card handles when they stand for a camera's card. A
+        /// review starts from exactly these clips.
+        @MainActor private static func stageReviewMedia(
+            _ review: ReviewLaunch, in model: NativeAppModel
+        ) async {
+            let store = model.mediaClipStore
+            let bucket = model.mediaBucketID
+            let files = FileManager.default
+            try? files.removeItem(at: store.root)
+            do {
+                let directory = store.directory(for: bucket)
+                try files.createDirectory(at: directory, withIntermediateDirectories: true)
+                let names = (1...review.mediaCount).map { String(format: "REVIEW_%04d.MOV", $0) }
+                let first = directory.appendingPathComponent(names[0])
+                try await ReviewClip.write(to: first)
+                for name in names.dropFirst() {
+                    try files.copyItem(at: first, to: directory.appendingPathComponent(name))
+                }
+                let size = UInt64(try first.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+                let card = review.source == .camera
+                // A minute apart: card clips a second apart would read as one burst series.
+                let clips = names.enumerated().map { index, name in
+                    MediaClip(
+                        cameraID: bucket, filename: name, handle: card ? UInt32(index + 1) : nil,
+                        storageID: card ? 65_537 : nil, sizeBytes: size,
+                        captureDate: String(
+                            format: "20261011T%02d%02d00", 8 + index / 60, index % 60))
+                }
+                store.upsertBatch(clips, cameraID: bucket)
+            } catch {
+                assertionFailure("The review clips could not be staged: \(error)")
+            }
+            model.mediaBrowserSource = review.source == .camera ? .camera : .iPhone
+            model.mediaBrowserLayout = review.layout
+        }
+
+        /// `ReviewLaunch` cameras page: the shared kit's single saved setup, "Travel camera" on
+        /// its own Wi-Fi.
+        @MainActor private static func stageReviewCamera(_ model: NativeAppModel) {
+            let store = NativeCameraConnectionStore.shared
+            for camera in store.savedCameras() { store.forgetKnownPairing(host: camera.host) }
+            store.upsertSavedCamera(
+                host: "192.168.1.1", displayName: "Travel camera", transport: "Wi-Fi",
+                onCameraAccessPoint: true, serialNumber: "REVIEW-TRAVEL",
+                path: .cameraAccessPoint(ssid: nil))
+            model.showSavedCameras()
         }
 
         /// Demo/screenshot affordance: `ZC_DEMO_MULTICAM=<1-4>` opens the multicam stage with that
@@ -1124,6 +1341,218 @@ enum DemoHarness {
 
         @objc private func handleKey(_ command: UIKeyCommand) {
             onKey?(command.input ?? "", command.modifierFlags.contains(.command))
+        }
+    }
+#endif
+
+#if DEBUG
+    /// App-owned values and exact typed callback receipts over the real shared controls.
+    @MainActor
+    private struct StabilizationReview: View {
+        @State private var visible = false
+        @State private var enabled = true
+        @State private var sourceCurrent = true
+        @State private var vrOptions: [String]?
+        @State private var currentVR: String?
+        @State private var currentEVR: String?
+        private let codec: String
+        @State private var requests: [String] = []
+        @State private var refusals = 0
+        @State private var reason: String?
+
+        init(mode: String) {
+            _vrOptions = State(initialValue: mode == "unknown" ? [] : nil)
+            _currentVR = State(initialValue: mode == "unknown" ? nil : "OFF")
+            _currentEVR = State(initialValue: mode == "unknown" ? nil : "OFF")
+            codec = mode == "raw" ? "N-RAW" : "H.265"
+        }
+
+        var body: some View {
+            VStack(spacing: 10) {
+                HStack(spacing: 16) {
+                    Text("SIMULATED independent stabilization")
+                        .accessibilityIdentifier("simulated.stabilization.label")
+                    if visible {
+                        Button("Close stabilization") { visible = false }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.close")
+                    } else {
+                        Button("Open stabilization") { visible = true }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.open")
+                    }
+                }
+                HStack(alignment: .top, spacing: 24) {
+                    Group {
+                        if visible {
+                            MonitorIndependentSettingsPanel(
+                                rows: NikonStabilizationSettings.rows(
+                                    vrOptions: vrOptions, currentVR: currentVR,
+                                    currentEVR: currentEVR, codec: codec),
+                                interactionEnabled: enabled, currentSource: { sourceCurrent },
+                                onSelect: { request, option in
+                                    requests.append("\(request.rawValue):\(option)")
+                                },
+                                onUnavailable: { _, explanation in
+                                    refusals += 1
+                                    reason = explanation
+                                })
+                        } else {
+                            Text("Panel closed")
+                        }
+                    }
+                    .frame(width: 308)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Button(enabled ? "Lock controls" : "Unlock controls") {
+                                enabled.toggle()
+                            }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.lock")
+                            Button("Retire source") { sourceCurrent = false }
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier("simulated.stabilization.retireSource")
+                        }
+                        HStack {
+                            Button("Observe ON") { currentVR = "ON" }
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier("simulated.stabilization.observeOutside")
+                            Button("Offer movie choices") {
+                                vrOptions = ["OFF", "ON", "SPORT"]
+                                currentVR = "unlisted observation"
+                            }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.offerMovie")
+                        }
+                        receipt(
+                            "Requests", key: "requests",
+                            value: requests.isEmpty ? "none" : requests.joined(separator: "|"))
+                        receipt("Refusals", key: "refusals", value: String(refusals))
+                        receipt("Reason", key: "reason", value: reason ?? "none")
+                        receipt(
+                            "Source", key: "source", value: sourceCurrent ? "current" : "retired")
+                        receipt(
+                            "Observations", key: "observations",
+                            value: "\(currentVR ?? "nil")|\(currentEVR ?? "nil")")
+                    }
+                    .frame(width: 330, alignment: .leading)
+                }
+            }
+            .font(.system(size: 12, design: .monospaced))
+            .buttonStyle(.bordered)
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundStyle(.white)
+            .background(Color.black.ignoresSafeArea())
+        }
+
+        private func receipt(_ title: String, key: String, value: String) -> some View {
+            Text("\(title): \(value)")
+                .accessibilityLabel(title)
+                .accessibilityValue(value)
+                .accessibilityIdentifier("simulated.stabilization." + key)
+        }
+    }
+
+    /// SIMULATED driver retains the production Nikon adapter without any camera transport.
+    @MainActor final class NikonQuickDemoDriver: NikonControlDriver {
+        private weak var model: NativeAppModel?
+        weak var session: NikonCameraSession?
+        init(model: NativeAppModel) { self.model = model }
+        var nikonControlFacts: NikonControlFacts {
+            guard let model else { return .init(connection: .disconnected(.requested)) }
+            var facts = model.nikonControlFacts
+            facts.recording = false
+            if model.isDemoSession,
+                ProcessInfo.processInfo.environment["ZC_DEMO_GRAPHICAL_REVIEW"] == "1"
+            {
+                facts.timecode = model.liveTimecode.running
+            }
+            return facts
+        }
+        func queueSettingWrites(
+            _ label: String, for setting: NikonControlSetting,
+            operation: OperationID?
+        ) -> Int {
+            guard let model else { return 0 }
+            let writes = PTPCameraPropertyWrite.requests(
+                control: setting.cameraControl,
+                label: label, snapshot: model.operatorQuickReportedProperties)
+            for write in writes {
+                model.applyBootstrapObservation(.property(write.property, write.data))
+            }
+            Task { @MainActor [weak self] in
+                guard let session = self?.session else { return }
+                if let operation {
+                    session.operationSent(operation)
+                    for write in writes {
+                        session.writeLanded(operation, write: write, readback: write.data)
+                    }
+                }
+                _ = session.refresh()
+            }
+            return writes.count
+        }
+        func queueRecord(start: Bool, operation: OperationID) {}
+    }
+#endif
+
+#if DEBUG
+    /// SIMULATED consent over the actual public screens; empty integrations cannot dial.
+    @MainActor
+    private struct ConnectConsentReview: View {
+        let mode: String
+        @State private var cameras = CamerasModel(
+            integrations: [],
+            store: SavedCamerasStore(document: StoredData(read: { nil }, write: { _ in })))
+        @State private var parentCameras = CamerasModel(
+            integrations: [],
+            store: SavedCamerasStore(document: StoredData(read: { nil }, write: { _ in })))
+        @State private var answers = 0
+        @State private var cancellations = 0
+        @State private var showsChild = true
+
+        var body: some View {
+            VStack {
+                HStack {
+                    Button("Show decision") { present(on: cameras.consent) }
+                    Button("Hide child") { showsChild = false }
+                    Button("Show parent decision") { present(on: parentCameras.consent) }
+                    Text("Answers: \(answers), cancels: \(cancellations)")
+                }
+                if mode.hasPrefix("nested") {
+                    AppShell(
+                        model: ShellModel(cameras: mode == "nestedSame" ? cameras : parentCameras),
+                        brand: ShellBrand(name: "SIMULATED"),
+                        actions: ShellActions(diagnostics: {}, reportProblem: {}),
+                        prePage: { _ in AnyView(child) },
+                        monitor: { _ in EmptyView() }, page: { _ in EmptyView() })
+                } else {
+                    child
+                }
+            }
+        }
+
+        @ViewBuilder private var child: some View {
+            if showsChild {
+                if mode == "pair" {
+                    PairScreen(model: cameras, onDone: {}, onDiagnostics: {}, onReportProblem: {})
+                } else {
+                    CamerasScreen(
+                        model: cameras, brandName: "SIMULATED", onPair: {}, onMedia: {},
+                        onSettings: {})
+                }
+            } else {
+                Text("Child removed")
+            }
+        }
+
+        private func present(on owner: OperatorConsent) {
+            owner.present(
+                OperatorConsentRequest(
+                    title: "SIMULATED decision", message: "No camera commands are connected.",
+                    confirmTitle: "Continue", onConfirm: { answers += 1 },
+                    onCancel: { cancellations += 1 }), source: "review")
         }
     }
 #endif

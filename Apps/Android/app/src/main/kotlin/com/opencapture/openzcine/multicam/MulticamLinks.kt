@@ -1,15 +1,13 @@
 package com.opencapture.openzcine.multicam
 
-import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.graphics.asImageBitmap
 import com.opencapture.opencine.runtime.MonitorJpegFrameDecoder
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
 import com.opencapture.openzcine.pairing.PairingEnvironment
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import kotlinx.coroutines.flow.emptyFlow
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * A member's own link through the saved-profile session factories the camera list uses: its own
@@ -35,12 +33,9 @@ internal fun multicamLink(record: SavedCameraRecord, environment: PairingEnviron
 }
 
 /** Tile-sized JPEG decoding, one bitmap ring per member. */
-internal fun multicamDecoder(): (ByteArray) -> androidx.compose.ui.graphics.ImageBitmap? {
+internal fun multicamDecoder(): (ByteArray) -> android.graphics.Bitmap? {
     val decoder = MonitorJpegFrameDecoder(maxLongSide = TILE_LONG_SIDE)
-    return { jpeg -> decoder.decode(jpeg)?.asImageBitmap() }
+    return { jpeg -> decoder.decode(jpeg) }
 }
 
 private const val TILE_LONG_SIDE = 960
-
-/** Set while Live View shows a lent multicam member: the lock slot becomes Return to Multicam. */
-val LocalMulticamReturn = staticCompositionLocalOf<(() -> Unit)?> { null }

@@ -1,11 +1,14 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkit.MonitorReviewOptions
+import com.opencapture.opencine.appkit.MonitorReviewDuration
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.opencapture.monitorui.MonitorAssistCapabilities
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorFalseColorSelection
 import com.opencapture.monitorui.MonitorGuideAspect
@@ -23,9 +26,10 @@ import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
 import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.openzcine.lut.StoredLutSelection
+import com.opencapture.openzcine.lut.fromPersisted
 import com.opencapture.openzcine.settings.LocalFramingAssistConfiguration
-import com.opencapture.openzcine.settings.LocalLevelStyle
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.monitorui.MonitorLevelStyle
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 
 /**
  * The shared [MonitorAssistState] plus this camera's typed assist extensions: the monitor look LUT
@@ -43,6 +47,21 @@ class NikonAssists internal constructor(
 
     /** PLAY: each new still shows full screen. Session-local, and photography only. */
     var instantReview: Boolean by mutableStateOf(false)
+
+    /** Persisted review choices; PLAY visibility remains scoped to this monitor. */
+    var reviewOptions: MonitorReviewOptions by mutableStateOf(MonitorReviewOptions())
+        private set
+    private var persistReview: (MonitorReviewOptions) -> Unit = {}
+
+    internal fun restoreReviewOptions(options: MonitorReviewOptions, persist: (MonitorReviewOptions) -> Unit) {
+        reviewOptions = options
+        persistReview = persist
+    }
+
+    fun updateReviewOptions(options: MonitorReviewOptions) {
+        reviewOptions = options
+        persistReview(options)
+    }
 
     /** Picking a look arms LUT, as the shared picker does. */
     fun selectLut(selection: FeedLutSelection) {
@@ -63,9 +82,17 @@ private val photographyTools =
         MonitorAssistTool.EV, MonitorAssistTool.DESQ, MonitorAssistTool.MIRROR,
     )
 
-/** The camera-fed EV needle is the body's stills exposure indicator, so cinema never offers it. */
-internal val MonitorAssistTool.isPhotographyOnly: Boolean
-    get() = this == MonitorAssistTool.EV
+/**
+ * What a Nikon body adds to the shared assist list (iOS `MonitorAssistCapabilities.nikon`): the
+ * body's EV needle is its stills exposure indicator, the level draws as a horizon or a gauge, and
+ * there is no ND source. PLAY is this camera's own chip ([NikonAssistChip.InstantReview]).
+ */
+internal val nikonAssistCapabilities =
+    MonitorAssistCapabilities(
+        photographyOnly = setOf(MonitorAssistTool.EV),
+        levelStyles = listOf(MonitorLevelStyle.HORIZON, MonitorLevelStyle.GAUGE),
+        unavailable = setOf(MonitorAssistTool.ND),
+    )
 
 /** Image effects need the API 29 floor and the Swift renderer core. */
 internal val MonitorAssistTool.isImageEffect: Boolean
@@ -106,9 +133,9 @@ internal fun MonitorAssistState.rendersLive(
 internal fun scopesShown(visible: (MonitorAssistTool) -> Boolean): Set<ScopeKind> =
     ScopeKind.canonical.filter { visible(it.assistTool) }.toSet()
 
-/** iOS portrait-fit policy: the two newest active scopes, in canonical order. */
+/** The common portrait-fit policy: first two eligible scopes in canonical order. */
 internal fun MonitorAssistState.portraitScopes(selected: Set<ScopeKind>): List<ScopeKind> =
-    portraitDisplayedScopes(selected, scopeStack.mapNotNull { it.scopeKind })
+    portraitDisplayedScopes(selected)
 
 /** What the GPU chain bakes for one visibility predicate (live or playback). */
 internal fun NikonAssists.feedEffects(visible: (MonitorAssistTool) -> Boolean): FeedEffects =
@@ -155,7 +182,7 @@ internal val MonitorAssistState.feedEffectsConfiguration: FeedEffectsConfigurati
 /** The framing overlays for one visibility predicate; the level style is this camera's own. */
 internal fun MonitorAssistState.framing(
     visible: (MonitorAssistTool) -> Boolean,
-    levelStyle: LocalLevelStyle,
+    levelStyle: MonitorLevelStyle,
 ): LocalFramingAssistConfiguration =
     LocalFramingAssistConfiguration(
         guidesVisible = visible(MonitorAssistTool.GUIDES),
@@ -176,9 +203,6 @@ internal fun MonitorAssistState.framing(
         desqueezeFactor = desqueezeFactor.toFloat(),
         desqueezeDirection = desqueezeDirection,
     )
-
-/** The common trace gain: 100% is unity and 200% is double intensity. */
-internal fun waveformParadeIntensity(percent: Int): Double = percent.coerceIn(0, 200) / 100.0
 
 private const val ASSIST_PREFERENCES = "assist"
 private const val OPERATOR_PREFERENCES = "openzcine.operator-settings"
@@ -245,9 +269,7 @@ internal fun restoreNikonAssists(
             .apply()
         operator.edit().apply { droppedToolbarKeys.forEach(::remove) }.apply()
     }
-    val storedLut =
-        storedLut(assist)?.takeIf(availableStoredLut)?.let(FeedLutSelection::Stored)
-            ?: FeedLutSelection.BuiltIn((assist.all[LUT_KEY] as? String)?.let(FeedLut::fromId) ?: FeedLut.LOG3G10_709)
+    val storedLut = persistedMonitorLut(assist, availableStoredLut)
     if (debugEffects != null || debugScopes != null) {
         val effects = debugEffects ?: FeedEffects.NONE
         val kept =
@@ -275,8 +297,36 @@ internal fun restoreNikonAssists(
                     .putString(LUT_FILE_KEY, lut.value.fileName)
         }
         editor.apply()
+    }.also { state ->
+        state.restoreReviewOptions(MonitorReviewOptions(
+            duration = MonitorReviewDuration.fromSeconds(
+                assist.getInt(REVIEW_SECONDS_KEY, 5)),
+            showsFocusPoint = assist.getBoolean(REVIEW_FOCUS_KEY, true),
+            showsCaptureInfo = assist.getBoolean(REVIEW_INFO_KEY, true),
+        )) { options ->
+            assist.edit().putInt(REVIEW_SECONDS_KEY, options.duration.seconds)
+                .putBoolean(REVIEW_FOCUS_KEY, options.showsFocusPoint)
+                .putBoolean(REVIEW_INFO_KEY, options.showsCaptureInfo).apply()
+        }
     }
 }
+
+/** The instant review's persisted options (iOS `assistConfiguration.instantReview*`). */
+private const val REVIEW_SECONDS_KEY = "instantReview.seconds.v1"
+private const val REVIEW_FOCUS_KEY = "instantReview.focusPoint.v1"
+private const val REVIEW_INFO_KEY = "instantReview.captureInfo.v1"
+
+/** The operator's saved monitor look (kept while LUT is off); a missing stored cube falls back. */
+internal fun persistedMonitorLut(
+    assist: SharedPreferences,
+    availableStoredLut: (StoredLutSelection) -> Boolean = { true },
+): FeedLutSelection =
+    storedLut(assist)?.takeIf(availableStoredLut)?.let(FeedLutSelection::Stored)
+        ?: FeedLutSelection.BuiltIn((assist.all[LUT_KEY] as? String)?.let(FeedLut::fromId) ?: FeedLut.LOG3G10_709)
+
+/** [persistedMonitorLut] from the app's assist preferences, read when it is needed. */
+internal fun persistedMonitorLut(context: Context, availableStoredLut: (StoredLutSelection) -> Boolean): FeedLutSelection =
+    persistedMonitorLut(context.getSharedPreferences(ASSIST_PREFERENCES, Context.MODE_PRIVATE), availableStoredLut)
 
 private fun storedLut(assist: SharedPreferences): StoredLutSelection? =
     if (assist.all[LUT_KIND_KEY] != LUT_STORED) null

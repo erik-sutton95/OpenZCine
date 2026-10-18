@@ -69,7 +69,6 @@ final class NativeNikonPort: NikonConnectPort {
     private unowned let model: NativeAppModel
     private var pending: CheckedContinuation<NikonConnection, Error>?
     private var attemptID = UUID()
-    private var approvedTakeOvers: Set<String> = []
 
     init(model: NativeAppModel) { self.model = model }
 
@@ -99,6 +98,12 @@ final class NativeNikonPort: NikonConnectPort {
     }
 
     func connect(_ request: NikonConnectRequest) async throws -> NikonConnection {
+        try await connect(request, takingOverConfirmed: false)
+    }
+
+    func connect(_ request: NikonConnectRequest, takingOverConfirmed: Bool) async throws
+        -> NikonConnection
+    {
         finish(.failure(CancellationError()))
         let token = UUID()
         attemptID = token
@@ -117,7 +122,7 @@ final class NativeNikonPort: NikonConnectPort {
                 model.lastConnectError = nil
                 model.lastConnectFailureReason = nil
                 do {
-                    try model.runSharedConnect(request)
+                    try model.runSharedConnect(request, takingOverConfirmed: takingOverConfirmed)
                     track()
                 } catch {
                     model.connectionProgressUsesCard = false
@@ -142,10 +147,6 @@ final class NativeNikonPort: NikonConnectPort {
     func forget(hosts: [String]) {
         for host in hosts { model.forgetPairing(host: host) }
     }
-
-    func allowTakeOver(host: String) { approvedTakeOvers.insert(host) }
-
-    func consumeTakeOver(host: String) -> Bool { approvedTakeOvers.remove(host) != nil }
 
     private func finish(_ result: Result<NikonConnection, Error>) {
         let waiter = pending
@@ -209,7 +210,6 @@ final class NativeNikonPort: NikonConnectPort {
     }
 
     static let diagnosticsAction = "diagnostics"
-    static let takeOverAction = "takeOver"
 
     private func stage(_ outcome: String) {
         onPhase?(.discovering, nil)
@@ -225,53 +225,132 @@ final class NativeNikonPort: NikonConnectPort {
     }
 }
 
-/// The add-setup slot: the app's own sheet for the camera's anchor setup. Its actions run once
-/// the sheet has gone (a cover presented mid-dismissal is dropped).
-struct NikonAddSetupSlot: View {
+/// Host setup capabilities, live reachability and actions for the shared typed chooser.
+@MainActor
+private struct NikonSetupOptions {
     let model: NativeAppModel
-    let camera: SavedCamera
-    let done: (RouteDraft?) -> Void
+    let camera: PTPIPSavedCameraRecord
 
-    var body: some View {
+    static func flow(
+        model: NativeAppModel, camera: SavedCamera, done: @escaping (RouteDraft?) -> Void
+    ) -> AddSetupFlow {
         let records = NikonCameras.records(of: camera, in: model.savedCameras)
-        Group {
-            if let anchor = records.first {
-                StartupAddSetupSheet(
-                    camera: anchor, missingKinds: NikonCameras.missingKinds(records),
-                    addRoute: { done(RouteDraft(kind: NikonSavedRecordsV0.routeKind($0))) }
-                )
-                .environment(model)
-            }
+        guard let anchor = records.first else {
+            return AddSetupFlow(
+                chooser: AddSetupChooser(
+                    title: "Add a setup", detail: "This saved setup is no longer available.",
+                    options: []),
+                onSelect: { _ in }, onCancel: { done(nil) })
         }
-        .onDisappear {
-            done(nil)
-            model.runPendingAddSetupAction()
+        let host = Self(model: model, camera: anchor)
+        let options = NikonCameras.missingKinds(records).map { kind in
+            AddSetupOption(
+                id: kind.rawValue, kind: NikonSavedRecordsV0.routeKind(kind),
+                title: host.title(for: kind),
+                detail: host.guidance(for: kind), actionTitle: host.actionTitle(for: kind))
+        }
+        return AddSetupFlow(
+            chooser: AddSetupChooser(
+                title: "Add a setup · \(anchor.displayTitle)",
+                detail:
+                    "One camera, several ways to reach it. Pick how this rig runs; the setup saves itself the first time you connect that way.",
+                options: options),
+            onSelect: { option in
+                switch NikonSavedRecordsV0.pathKind(option.kind) {
+                case .cameraAccessPoint:
+                    model.pendingAddSetupAction = { [weak model] in
+                        model?.beginAddCameraAPSetup(for: anchor)
+                    }
+                    done(nil)
+                case .hdmiCapture:
+                    model.pendingAddSetupAction = { [weak model] in model?.startHDMIMonitorSession()
+                    }
+                    done(nil)
+                case .usbC, .infrastructure, .phoneHotspot:
+                    done(RouteDraft(kind: option.kind))
+                }
+            },
+            onDismiss: {
+                done(nil)
+                model.runPendingAddSetupAction()
+            }, onCancel: { done(nil) })
+    }
+
+    private func actionTitle(for kind: CameraPath.Kind) -> String {
+        let match = discoveredMatch(for: kind)
+        switch kind {
+        case .cameraAccessPoint: return "Join Camera Wi-Fi"
+        case .usbC: return match != nil ? "Connect Now" : "Connect When Plugged In"
+        case .infrastructure: return match != nil ? "Connect Now" : "Find On This Network"
+        case .phoneHotspot: return "Wait For Camera"
+        case .hdmiCapture: return "Use HDMI Capture"
         }
     }
-}
 
-/// Connecting would drop another device's session on this camera: the operator decides.
-struct NikonTakeOverPromptView: View {
-    let prompt: NikonTakeOverPrompt
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Take over \(prompt.camera)?")
-                .font(MonitorTheme.font(15, weight: .semibold))
-            Text(prompt.fallbackText)
-                .font(MonitorTheme.font(12)).foregroundStyle(MonitorTheme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                Button("Cancel") { prompt.cancel() }
-                    .buttonStyle(.bordered)
-                Button("Take Over", role: .destructive) { prompt.confirm() }
-                    .buttonStyle(.borderedProminent)
+    /// The discovered camera that would satisfy this kind RIGHT NOW, if any.
+    private func discoveredMatch(for kind: CameraPath.Kind) -> DiscoveredCamera? {
+        switch kind {
+        case .usbC:
+            return model.discoveredCameras.first { $0.source == .usb }
+        case .infrastructure:
+            // On the camera's own AP this body is discovered, over a network the Wi-Fi
+            // setup can't use. Same rule as the availability chips: no route, no match.
+            guard !model.isOnCameraAccessPointNetwork else { return nil }
+            let accessPointHosts = model.savedCameraAccessPointHosts
+            return model.discoveredCameras.first { discovered in
+                // A camera-AP record's host is an address on the CAMERA's own network:
+                // 192.168.1.1 by convention, which is also the commonest home-router address
+                // there is. Something answering there is either the camera on its access
+                // point (a different setup) or the operator's router, and the liveness dial
+                // this row can come from, a kernel RST, cannot tell those apart. Either
+                // way it is never the Wi-Fi setup being added. Left in, a saved Camera AP
+                // setup put "Connect Now" on the Wi-Fi row of a camera that was nowhere on
+                // this network, and the connect it offered dialled the router.
+                guard let host = PTPIPPairedHosts.normalizedHost(discovered.ip),
+                    !accessPointHosts.contains(host)
+                else { return false }
+                return discovered.source != .usb
+                    && CameraStartupPolicy.savedCamera(
+                        forDiscovered: discovered, in: [camera]) != nil
             }
+        case .cameraAccessPoint, .phoneHotspot, .hdmiCapture:
+            return nil
         }
-        .padding(16)
-        .frame(maxWidth: 420, alignment: .leading)
-        .background(MonitorTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .accessibilityIdentifier("cameras.take-over")
+    }
+
+    private func title(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint: return "Camera access point"
+        case .infrastructure: return "Wi-Fi network"
+        case .phoneHotspot: return "This device's hotspot"
+        case .usbC: return "USB-C cable"
+        case .hdmiCapture: return "HDMI capture"
+        }
+    }
+
+    private func guidance(for kind: CameraPath.Kind) -> String {
+        switch kind {
+        case .cameraAccessPoint:
+            return
+                "This device joins the camera's own Wi-Fi, best in the field with no other "
+                + "gear. You'll be asked for the camera's network key the first time only."
+        case .infrastructure:
+            return
+                "Put the camera and this device on the same network (a set router, house "
+                + "Wi-Fi). Turn on Connect to PC on the camera with a profile for that "
+                + "network; it appears in the camera list and saves on connect. Each network "
+                + "you use keeps its own setup, so a studio and a home router are two."
+        case .phoneHotspot:
+            return
+                "Turn on this device's Personal Hotspot and point a camera network profile "
+                + "at it. The camera joins YOU, once it does, it appears in the list."
+        case .usbC:
+            return
+                "Plug the camera straight into this device. It connects and saves itself, "
+                + "nothing to configure."
+        case .hdmiCapture:
+            return "Use the connect screen's Cable Link → HDMI capture for a picture-only feed."
+        }
     }
 }
 
@@ -282,13 +361,32 @@ struct NikonTakeOverPromptView: View {
 struct NikonConnectFlow {
     let model: NativeAppModel
 
-    private var phase: CameraConnectionPhase { model.resolvedConnectionPhase }
+    var phase: CameraConnectionPhase {
+        let phase = model.resolvedConnectionPhase
+        // An established session without its first frame is still preparing live view, with or
+        // without the progress sheet (live view that never started leaves the sheet dismissed).
+        let established = model.isConnected || model.connection == .preparingLiveView
+        if established, !model.isMonitorPresented, phase == .connected || phase == .idle {
+            return .preparingLiveView
+        }
+        return phase
+    }
 
     func flow(steps: [CameraPairingStep], current: Int) -> IntegrationPairingFlow {
         IntegrationPairingFlow(
             presentation: presentation(steps: steps, current: current),
             onPrimary: primary,
-            onBack: { model.cancelConnectionAttempt() },
+            onBack: {
+                // The progress owner tears down its attempt, an established session included.
+                // Without it (live view never started), Back ends the session directly.
+                if !model.isConnectionProgressPresented,
+                    model.isConnected || model.connection == .preparingLiveView
+                {
+                    model.disconnect()
+                } else {
+                    model.cancelConnectionAttempt()
+                }
+            },
             content: AnyView(NikonConnectPane().environment(model)))
     }
 
@@ -334,6 +432,11 @@ struct NikonConnectFlow {
     private var detail: String {
         let stage = model.connectionStageDetail
         if !stage.isEmpty, phase != .connected, phase != .readyToJoin { return stage }
+        // Without the progress sheet the session's own message (a live view that did not start,
+        // a reconnect) is the useful line.
+        if !model.isConnectionProgressPresented, !model.userFacingConnectionMessage.isEmpty {
+            return model.userFacingConnectionMessage
+        }
         return ConnectionProgressCopy.statusDetail(
             phase: phase, deviceName: model.connectionProgressDeviceName, friendlyError: nil,
             path: model.connectionProgressPathKind)
@@ -355,7 +458,7 @@ struct NikonConnectPane: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 10) {
-            switch model.resolvedConnectionPhase {
+            switch NikonConnectFlow(model: model).phase {
             case .readyToJoin:
                 if model.cameraWiFiJoinNeedsPassword, !model.cameraWiFiJoinHasPasswordDraft {
                     caption("Point at your camera's Connection wizard screen.")
@@ -442,33 +545,30 @@ private struct NikonFieldStyle: ViewModifier {
 /// rejoin, a reconnect it starts itself) on the shared pair page.
 struct NikonConnectScreen: View {
     @Environment(NativeAppModel.self) private var model
-    @Environment(\.openURL) private var openURL
     let safeArea: EdgeInsets
 
     var body: some View {
-        PairScreen(
-            model: model.cameras, safeArea: safeArea,
-            onDone: { model.cancelConnectionAttempt() },
+        let flow = NikonConnectFlow(model: model).flow(
+            steps: [CameraPairingStep("Connect", "")], current: 0)
+        // Presentation only: this established/app-owned connection must not start pair discovery.
+        PairCameraPage(
+            presentation: flow.presentation, safeArea: safeArea,
+            onSelect: flow.onSelect, onPrimary: flow.onPrimary, onBack: flow.onBack,
             onDiagnostics: { model.shareDiagnostics() },
-            onReportProblem: { model.isBugReportPresented = true },
-            pairingFlow: NikonConnectFlow(model: model).flow(
-                steps: [CameraPairingStep("Connect", "")], current: 0),
-            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
-            onTerms: { openURL(SupportLinkCatalog.terms) })
+            onReportProblem: { model.isBugReportPresented = true }
+        ) {
+            flow.content
+        }
     }
 }
 
 extension NativeAppModel {
     func makeCamerasModel() -> CamerasModel {
-        let slots = IntegrationSlots(
-            addRoute: { [unowned self] camera, done in
-                AnyView(NikonAddSetupSlot(model: self, camera: camera, done: done))
-            },
-            prompt: { prompt in
-                (prompt as? NikonTakeOverPrompt).map {
-                    AnyView(NikonTakeOverPromptView(prompt: $0))
-                }
-            })
+        let slots = DemoHarness.addSetupSlots(
+            IntegrationSlots(
+                addSetup: { [unowned self] camera, done in
+                    NikonSetupOptions.flow(model: self, camera: camera, done: done)
+                }))
         // The rebrand-key move runs before the shared store reads the records.
         _ = NativeCameraConnectionStore.shared
         let cameras = CamerasModel(
@@ -483,7 +583,8 @@ extension NativeAppModel {
     }
 
     /// Starts one of the funnel's connects for the shared flow, as the camera rows used to.
-    func runSharedConnect(_ request: NikonConnectRequest) throws {
+    func runSharedConnect(_ request: NikonConnectRequest, takingOverConfirmed: Bool = false) throws
+    {
         switch request {
         case .saved(let host, let path):
             guard
@@ -502,15 +603,12 @@ extension NativeAppModel {
                 onCameraAccessPoint: isOnCameraAccessPointNetwork,
                 hotspotSubnetBases: NativeNetworkInterfaceSnapshot.hotspotSubnetBases())
             if case .available(let discovered) = availability {
-                let approved = nikonPort.consumeTakeOver(host: host)
+                let approved = takingOverConfirmed
                 if discovered.isHeldByAnotherDevice, !approved {
                     throw ConnectionFailure(
                         reason: .heldElsewhere, title: "Camera in use",
-                        message: discovered.heldByLabel ?? "Another device is using this camera.",
-                        actions: [
-                            .integration(id: NativeNikonPort.takeOverAction, title: "Take over"),
-                            .retry,
-                        ],
+                        message: NikonTakeOverPrompt.message(holder: discovered.heldByDeviceName),
+                        actions: [.retry],
                         code: "nikon.held")
                 }
                 connectToCamera(discovered, setup: record, takingOverConfirmed: approved)
@@ -518,7 +616,7 @@ extension NativeAppModel {
                 connectSavedCamera(record)
             }
         case .discovered(let camera, let takeOver):
-            connectToCamera(camera, takingOverConfirmed: takeOver)
+            connectToCamera(camera, takingOverConfirmed: takeOver || takingOverConfirmed)
         case .addSetup(let anchorHost, let anchorPath, let path):
             // Adding a setup arms the funnel's watch for the body on that path.
             guard

@@ -14,6 +14,7 @@ import com.opencapture.monitorui.settings.MonitorSettingsTab
 import com.opencapture.openzcine.OpenZCineTheme
 import com.opencapture.openzcine.diagnostics.SystemSettingsActions
 import com.opencapture.openzcine.idleNikonAssists
+import com.opencapture.openzcine.rememberTestOperatorSession
 import com.opencapture.openzcine.media.MediaCacheStore
 import java.nio.file.Files
 import org.junit.After
@@ -39,7 +40,9 @@ class SystemRowsComposeTest {
             OpenZCineTheme {
                 OperatorSettingsScreen(
                     session = null,
+                    controlSession = null,
                     assists = assists,
+                    operatorSession = rememberTestOperatorSession(assists, settings),
                     settings = settings,
                     mediaCacheStore = cache,
                     systemSettingsActions = actions,
@@ -50,22 +53,27 @@ class SystemRowsComposeTest {
             }
         }
 
-        // The shared Help & Feedback and Project & Legal cards (iOS System page since #228).
-        val actionDescriptions =
-            listOf(
-                "Open Support",
-                "Report a Problem",
-                "Request a Feature",
-                "Share Diagnostics",
-                "Open Source Code",
-                "Open Privacy Policy",
-                "Open Terms of Use",
-            )
-        actionDescriptions.forEach { description ->
+        // The shared Help & Feedback card rows fire the app's recorded native actions.
+        listOf("Open Support", "Report a Problem", "Request a Feature").forEach { description ->
             compose.onNodeWithContentDescription(description)
                 .performScrollTo()
                 .assertHeightIsAtLeast(48.dp)
                 .performClick()
+        }
+
+        // Diagnostics sharing lives in the shared Diagnostic options card (Save diagnostic
+        // report); the native shareDiagnostics callback remains the external action boundary.
+        compose.onNodeWithText("Diagnostic options").performScrollTo().performClick()
+        compose.onNodeWithText("Save", ignoreCase = true).performScrollTo().performClick()
+
+        // The shared Project & Legal card rows: source code opens the web (owned by the shared
+        // card), privacy and terms open Z's bundled legal pages (A2-27). The System tab must
+        // present each of them, so assert the wiring surface stays complete.
+        listOf("Open Source Code", "Open Privacy Policy", "Open Terms of Use").forEach { description ->
+            compose.onNodeWithContentDescription(description)
+                .performScrollTo()
+                .assertHeightIsAtLeast(48.dp)
+                .assertIsDisplayed()
         }
 
         compose.runOnIdle {
@@ -73,9 +81,9 @@ class SystemRowsComposeTest {
             assertEquals(1, report)
             assertEquals(1, actions.feature)
             assertEquals(1, actions.diagnostics)
-            assertEquals(1, actions.source)
-            assertEquals(1, actions.privacy)
-            assertEquals(1, actions.terms)
+            // Privacy and terms are bundled pages (A2-27), not browser actions.
+            assertEquals(0, actions.privacy)
+            assertEquals(0, actions.terms)
         }
         // OpenCine's reporting rows: the automatic-reports row and the reporting privacy link.
         compose.onNodeWithText("Automatic error reports").performScrollTo().assertIsDisplayed()

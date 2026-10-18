@@ -38,7 +38,7 @@ internal class NikonPlaybackNativePort(
         val token: MonitorPlaybackItemToken,
         val record: MonitorMediaRecord<NikonLibraryClip>,
         val preparation: MediaTransferPreparation = MediaTransferPreparation.Loading,
-        val buffered: Float = 0f,
+        val bufferedThroughSeconds: Double? = null,
     )
     private val mutableSource = MutableStateFlow<Source?>(null)
     val preparedSource: StateFlow<Source?> = mutableSource.asStateFlow()
@@ -177,11 +177,19 @@ internal class NikonPlaybackNativePort(
             MonitorPlaybackException(MonitorPlaybackFailure.NATIVE_FAILURE))
     }
 
-    fun updateBuffer(attachment: Attachment?, fraction: Float) {
-        if (!isCurrent(attachment)) return
+    fun updateBuffer(attachment: Attachment?): Double? {
+        if (!isCurrent(attachment)) return null
         requireNotNull(attachment)
-        val captured = mutableSource.value?.takeIf { it.token == attachment.token } ?: return
-        mutableSource.value = captured.copy(buffered = fraction)
+        val captured = mutableSource.value?.takeIf { it.token == attachment.token } ?: return null
+        val item = attachment.player.currentMediaItem
+        if (!isCurrent(attachment)) return null
+        val milliseconds = if (item != null) attachment.player.bufferedPosition else null
+        if (!isCurrent(attachment)) return null
+        val currentItem = attachment.player.currentMediaItem
+        if (!isCurrent(attachment) || mutableSource.value !== captured) return null
+        val through = milliseconds?.takeIf { it >= 0 && currentItem === item }?.div(1000.0)
+        mutableSource.value = captured.copy(bufferedThroughSeconds = through)
+        return through
     }
 
     /** Back waits for the exact native source teardown; no camera command is sent by covers. */

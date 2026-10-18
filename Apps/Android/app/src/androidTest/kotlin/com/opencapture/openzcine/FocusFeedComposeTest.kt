@@ -4,6 +4,10 @@ import android.content.ContentValues
 import android.content.Context
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import com.opencapture.opencine.appkit.MonitorControlModel
 import com.opencapture.opencine.nikon.NikonOpenCineSession
 import android.graphics.Bitmap
@@ -11,18 +15,28 @@ import android.graphics.Color
 import android.os.Environment
 import android.os.SystemClock
 import android.provider.MediaStore
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -41,8 +55,9 @@ import com.opencapture.monitorui.MonitorGuideAspect
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
 import com.opencapture.opencine.media.MonitorDesqueezePreset
 import com.opencapture.openzcine.settings.OperatorSettings
-import com.opencapture.openzcine.settings.PortraitFeedAspect
+import com.opencapture.opencine.cameracontrols.PortraitFeedAspect
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.Collections
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -50,6 +65,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,6 +76,80 @@ class FocusFeedComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
 
+    /** SIMULATED twin of the iOS secondary-only AF rendering regression. */
+    @Test
+    fun validSecondaryAFBoxRendersWhenThePrimaryBoxIsInvalid() {
+        val focus = LiveFocusInfo(
+            coordinateWidth = 1_000, coordinateHeight = 500,
+            result = LiveFocusResult.NOT_FOCUSED, subjectDetectionActive = true,
+            trackingAFActive = false, selectedBoxIndex = null,
+            boxes = listOf(
+                LiveFocusBox(centerX = 100, centerY = 100, width = 0, height = 0),
+                LiveFocusBox(centerX = 500, centerY = 250, width = 200, height = 100),
+            ),
+        )
+        composeRule.setContent {
+            val feed = with(LocalDensity.current) {
+                LiveOverlayRect(0f, 0f, 400.dp.toPx(), 200.dp.toPx())
+            }
+            Box(Modifier.size(400.dp, 200.dp)
+                .background(androidx.compose.ui.graphics.Color.Black)
+                .testTag("SIMULATED-secondary-AF")) {
+                CameraFocusOverlay(focus, feed, locked = false, lockProgress = 0f)
+            }
+        }
+        val image = composeRule.onNodeWithTag("SIMULATED-secondary-AF").captureToImage()
+        val pixels = image.toPixelMap()
+        var greenPixels = 0
+        for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+            val color = pixels[x, y]
+            if (color.green > color.red + 0.125f && color.green > color.blue + 0.125f) greenPixels++
+        }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val proof = File(context.getExternalFilesDir(null), "SIMULATED-secondary-AF.png")
+        proof.outputStream().use { image.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
+        println("SIMULATED secondary AF green pixels=$greenPixels image=${proof.absolutePath}")
+        assertTrue("The valid secondary AF area must remain visible", greenPixels > 40)
+    }
+
+    /** SIMULATED twin of the original zero-size projection contract on iOS. */
+    @Test
+    fun zeroSizeCameraAFProjectionDrawsNoMarksEvenWhenLocked() {
+        var visible by mutableStateOf(false)
+        val focus = LiveFocusInfo(
+            coordinateWidth = 1_000, coordinateHeight = 500,
+            result = LiveFocusResult.FOCUSED, subjectDetectionActive = true,
+            trackingAFActive = false, selectedBoxIndex = 0,
+            boxes = listOf(
+                LiveFocusBox(centerX = 250, centerY = 250, width = 100, height = 50),
+                LiveFocusBox(centerX = 500, centerY = 100, width = 200, height = 100),
+            ),
+        )
+        composeRule.setContent {
+            val feed = with(LocalDensity.current) {
+                LiveOverlayRect(0f, 0f, (if (visible) 400.dp else 0.dp).toPx(),
+                    (if (visible) 200.dp else 0.dp).toPx())
+            }
+            Box(Modifier.size(400.dp, 200.dp)
+                .background(androidx.compose.ui.graphics.Color.Black)
+                .testTag("SIMULATED-zero-AF"), contentAlignment = Alignment.Center) {
+                CameraFocusOverlay(focus, feed, locked = true, lockProgress = 0f)
+            }
+        }
+        fun greenPixels(): Int {
+            val pixels = composeRule.onNodeWithTag("SIMULATED-zero-AF").captureToImage().toPixelMap()
+            var count = 0
+            for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+                val color = pixels[x, y]
+                if (color.green > color.red + 0.125f && color.green > color.blue + 0.125f) count++
+            }
+            return count
+        }
+        assertEquals("An empty picture must not paint AF marks or lock glyphs", 0, greenPixels())
+        composeRule.runOnIdle { visible = true }
+        assertTrue("The same fixture must paint when the picture is present", greenPixels() > 40)
+    }
+
     @Test
     fun tapLockUnlockAndResetStayOnTheTypedSessionSeam() {
         setDeviceRotation(ROTATION_LANDSCAPE_LEFT)
@@ -68,7 +158,7 @@ class FocusFeedComposeTest {
         setMonitor(session, source, "focus-feed-compose-test")
 
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule
             .onNodeWithContentDescription(
@@ -120,7 +210,7 @@ class FocusFeedComposeTest {
             up()
         }
         assertDisplayMode("Live")
-        composeRule.onNodeWithTag("focus_reset_button").performClick()
+        composeRule.onNodeWithTag("monitor.system.focusReset").performClick()
         composeRule.waitUntil(5_000) { session.resetCount == 1 }
     }
 
@@ -162,7 +252,7 @@ class FocusFeedComposeTest {
         val session = FocusSession(focusDelayMillis = 250)
         setMonitor(session, FocusFrameSource(testJpeg()), "focus-feed-rapid-tap-test")
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
         val feed = composeRule.onNodeWithTag("monitor_live_feed")
 
@@ -186,9 +276,9 @@ class FocusFeedComposeTest {
         val session = FocusSession()
         val settings =
             setMonitor(session, FocusFrameSource(testJpeg()), "focus-feed-pinch-test")
-        settings.portraitFeedAspect = PortraitFeedAspect.FIT_16_9
+        settings.portraitFeedAspect = PortraitFeedAspect.FIT_16X9
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+            composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
         }
 
         composeRule.onNodeWithTag("monitor_live_feed").performTouchInput {
@@ -208,7 +298,7 @@ class FocusFeedComposeTest {
 
         // Pinch magnifies the current feed; FIT/FILL remains an explicit operator preference.
         composeRule.waitForIdle()
-        assertEquals(PortraitFeedAspect.FIT_16_9, settings.portraitFeedAspect)
+        assertEquals(PortraitFeedAspect.FIT_16X9, settings.portraitFeedAspect)
         assertDisplayMode("Live")
         assertEquals(null, session.lastFocusPoint)
     }
@@ -241,7 +331,7 @@ class FocusFeedComposeTest {
             }
 
             composeRule.waitUntil(5_000) {
-                composeRule.onAllNodesWithTag("focus_reset_button").fetchSemanticsNodes().isNotEmpty()
+                composeRule.onAllNodesWithTag("monitor.system.focusReset").fetchSemanticsNodes().isNotEmpty()
             }
             composeRule
                 .onNodeWithContentDescription(
@@ -281,10 +371,10 @@ class FocusFeedComposeTest {
                     session = session,
                     commonSession = common,
                     commonControl = control,
+                    operatorSession = rememberTestOperatorSession(assists, settings),
                     frameSource = source,
                     assists = assists,
                     operatorSettings = settings,
-                    glassTierOverride = "flat",
                 )
             }
         }

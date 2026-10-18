@@ -3,6 +3,7 @@
 package com.opencapture.openzcine.media
 
 import androidx.media3.common.Player
+import androidx.media3.common.MediaItem
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.core.MonotonicInstant
 import com.opencapture.opencine.media.*
@@ -24,6 +25,62 @@ import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NikonPlaybackOwnerAdoptionTest {
+    @Test fun `actual attached native buffer publishes seconds and rejects SDK and source retirement`() = runTest {
+        val fixture = Fixture(this)
+        try {
+            for (scenario in listOf("positive", "unset", "missing", "item-replaced", "source-retired", "source-reentry", "read-reentry")) {
+                var accepted = true
+                var admissionReentry: (() -> Unit)? = null
+                val port = NikonPlaybackNativePort(sourceCurrent = {
+                    val callback = admissionReentry; admissionReentry = null; callback?.invoke()
+                    accepted
+                })
+                val token = MonitorPlaybackItemToken(java.util.UUID.randomUUID(), 0)
+                port.retireItem(token)
+                port.candidates(fixture.records[0], fixture.library)
+                var nativeItem: MediaItem? = MediaItem.Builder().setMediaId("SIMULATED-buffer").build()
+                var milliseconds = 2_500L
+                var onRead: (() -> Unit)? = null
+                var reads = 0
+                val player = Proxy.newProxyInstance(Player::class.java.classLoader, arrayOf(Player::class.java)) { _, method, _ ->
+                    when (method.name) {
+                        "getCurrentMediaItem" -> nativeItem
+                        "getBufferedPosition" -> { reads += 1; onRead?.invoke(); milliseconds }
+                        else -> when (method.returnType) {
+                            java.lang.Boolean.TYPE -> false
+                            java.lang.Integer.TYPE -> 0
+                            java.lang.Long.TYPE -> 0L
+                            java.lang.Float.TYPE -> 0f
+                            java.lang.Double.TYPE -> 0.0
+                            else -> null
+                        }
+                    }
+                } as Player
+                val attached = port.attach(player, token, {}) { _, _ -> }
+                assertEquals(2.5, port.updateBuffer(attached))
+                assertEquals(2.5, port.preparedSource.value?.bufferedThroughSeconds)
+                when (scenario) {
+                    "unset" -> milliseconds = -1
+                    "missing" -> nativeItem = null
+                    "item-replaced" -> onRead = { nativeItem = MediaItem.Builder().setMediaId("SIMULATED-successor").build() }
+                    "source-retired" -> accepted = false
+                    "source-reentry" -> admissionReentry = { port.retireItem(token.copy(revision = 1)) }
+                    "read-reentry" -> onRead = { port.retireItem(token.copy(revision = 1)) }
+                }
+                if (scenario == "positive") assertEquals(2.5, port.updateBuffer(attached))
+                else assertNull(port.updateBuffer(attached), "$scenario cannot publish a native buffer observation")
+                if (scenario in setOf("unset", "missing", "item-replaced")) {
+                    assertNull(port.preparedSource.value?.bufferedThroughSeconds)
+                }
+                port.close(token.copy(revision = 1))
+                val closedReads = reads
+                assertNull(port.updateBuffer(attached))
+                assertEquals(closedReads, reads)
+                assertNull(port.preparedSource.value)
+            }
+        } finally { fixture.close() }
+    }
+
     @Test fun `actual pending native attachment cannot overwrite or dispose successor`() = runTest {
         val fixture = Fixture(this)
         try {
@@ -63,17 +120,18 @@ class NikonPlaybackOwnerAdoptionTest {
         val fixture = Fixture(this)
         try {
             val calls = mutableListOf<String>()
-            val session = NikonPlaybackSession(fixture.library, fixture.records[0], fixture.records, this)
+            val native = NikonPlaybackNativePort()
+            val owner = nikonPlaybackModel(fixture.library, native, this).also { it.load(fixture.records[0], fixture.records) }
             runCurrent()
-            val token = session.owner.state.value.token
-            val attached = session.native.attach(player("native", calls), token, { calls += "detach:native" }) { _, _ -> }
+            val token = owner.state.value.token
+            val attached = native.attach(player("native", calls), token, { calls += "detach:native" }) { _, _ -> }
             runCurrent()
-            assertTrue(session.owner.state.value.ready)
+            assertTrue(owner.state.value.ready)
             calls.clear()
             fixture.library.close()
             runCurrent()
-            assertTrue(session.owner.state.value.closed)
-            session.native.detach(attached)
+            assertTrue(owner.state.value.closed)
+            native.detach(attached)
             assertEquals(listOf("detach:native", "pause:native", "release:native"), calls)
         } finally { fixture.close() }
     }
@@ -82,97 +140,56 @@ class NikonPlaybackOwnerAdoptionTest {
         val fixture = Fixture(this)
         try {
             var now = MonotonicInstant(100.seconds)
-            val session = NikonPlaybackSession(fixture.library, fixture.records[0], fixture.records, this, now = { now })
+            val native = NikonPlaybackNativePort()
+            val owner = nikonPlaybackModel(fixture.library, native, this, now = { now }).also { it.load(fixture.records[0], fixture.records) }
             runCurrent()
-            val token = session.owner.state.value.token
+            val token = owner.state.value.token
             val seeks = mutableListOf<Pair<Long, Boolean>>()
-            val attached = session.native.attach(player("seek", mutableListOf()), token, {}) { time, preview -> seeks += time to preview }
+            val attached = native.attach(player("seek", mutableListOf()), token, {}) { time, preview -> seeks += time to preview }
             runCurrent()
-            session.native.publish(attached, MonitorPlaybackEvent.Metadata(MonitorPlaybackMetadata(duration = 10.0)))
-            val edit = assertNotNull(session.owner.beginScrub())
-            session.owner.updateScrub(1.0, edit)
+            native.publish(attached, MonitorPlaybackEvent.Metadata(MonitorPlaybackMetadata(duration = 10.0)))
+            val edit = assertNotNull(owner.beginScrub())
+            owner.updateScrub(1.0, edit)
             runCurrent()
             now = MonotonicInstant(100.seconds + 74.milliseconds)
-            session.owner.updateScrub(2.0, edit)
+            owner.updateScrub(2.0, edit)
             runCurrent()
             assertEquals(listOf(1_000L to true), seeks)
             now = MonotonicInstant(100.seconds + 75.milliseconds)
-            session.owner.updateScrub(3.0, edit)
+            owner.updateScrub(3.0, edit)
             runCurrent()
-            session.owner.commitScrub(edit)
+            owner.commitScrub(edit)
             runCurrent()
             assertEquals(listOf(1_000L to true, 3_000L to true, 3_000L to false), seeks)
-            assertEquals(3.0, session.owner.state.value.position)
-            assertFalse(session.owner.state.value.scrubbing)
-            session.owner.close()
-        } finally { fixture.close() }
-    }
-
-    @Test fun `actual captured delivery completion cannot resume next paused clip`() = runTest {
-        val fixture = Fixture(this)
-        try {
-            val session = NikonPlaybackSession(fixture.library, fixture.records[0], fixture.records, this)
-            runCurrent()
-            val calls = mutableListOf<String>()
-            session.native.attach(player("first", calls), session.owner.state.value.token, {}) { _, _ -> }
-            runCurrent()
-            val delivery = assertNotNull(session.pauseForDelivery(true))
-            session.navigate(fixture.records[1], fixture.records)
-            runCurrent()
-            session.native.attach(player("next", calls), session.owner.state.value.token, {}) { _, _ -> }
-            runCurrent()
-            session.owner.setPlaying(false)
-            val before = calls.toList()
-            session.resumeAfterDelivery(delivery)
-            assertEquals(before, calls)
-            assertFalse(session.owner.state.value.playRequested)
-            assertEquals(fixture.records[1].asset.id, session.owner.state.value.active?.asset?.id)
-            session.owner.close()
+            assertEquals(3.0, owner.state.value.position)
+            assertFalse(owner.state.value.scrubbing)
+            owner.close()
         } finally { fixture.close() }
     }
 
     @Test fun `current filtered record navigation preserves actual address and source payload`() = runTest {
         val fixture = Fixture(this)
         try {
-            val session = NikonPlaybackSession(fixture.library, fixture.records[0], fixture.records, this)
+            val native = NikonPlaybackNativePort()
+            val owner = nikonPlaybackModel(fixture.library, native, this).also { it.load(fixture.records[0], fixture.records) }
             runCurrent()
             // The donor accepts the already-captured target even if the parent filter changes
             // while transfer close suspends. Navigation bounds use the latest parent values.
-            session.navigate(fixture.records[1], listOf(fixture.records[0]))
+            owner.load(fixture.records[1], listOf(fixture.records[0]))
             runCurrent()
-            assertEquals(fixture.records[1].asset.id, session.owner.state.value.active?.asset?.id)
-            assertEquals(listOf(fixture.records[0]), session.owner.state.value.playlist)
-            assertFalse(session.owner.canGoPrevious)
-            assertFalse(session.owner.canGoNext)
-            session.navigate(fixture.records[1], listOf(fixture.records[1]))
+            assertEquals(fixture.records[1].asset.id, owner.state.value.active?.asset?.id)
+            assertEquals(listOf(fixture.records[0]), owner.state.value.playlist)
+            assertFalse(owner.canGoPrevious)
+            assertFalse(owner.canGoNext)
+            owner.load(fixture.records[1], listOf(fixture.records[1]))
             runCurrent()
-            assertEquals(listOf(fixture.records[1]), session.owner.state.value.playlist)
-            assertEquals(fixture.records[1].payload, session.owner.state.value.active?.payload)
+            assertEquals(listOf(fixture.records[1]), owner.state.value.playlist)
+            assertEquals(fixture.records[1].payload, owner.state.value.active?.payload)
             val address = fixture.records[1].address.representations.values.single()
-            assertEquals(fixture.library.cache.directory.file(address).toURI(), session.owner.state.value.item?.url)
-            assertFalse(session.owner.canGoPrevious)
-            assertFalse(session.owner.canGoNext)
-            session.owner.close()
-        } finally { fixture.close() }
-    }
-
-    @Test fun `actual Android lifecycle return preserves donor pause without auto resume`() = runTest {
-        val fixture = Fixture(this)
-        try {
-            val session = NikonPlaybackSession(fixture.library, fixture.records[0], fixture.records, this)
-            runCurrent()
-            val calls = mutableListOf<String>()
-            val item = session.owner.state.value.token
-            session.native.attach(player("scene", calls), item, {}) { _, _ -> }
-            runCurrent()
-            assertTrue(session.owner.state.value.playRequested)
-            session.scenePaused(item)
-            val paused = calls.toList()
-            assertFalse(session.owner.state.value.playRequested)
-            session.sceneResumed(item)
-            assertEquals(paused, calls)
-            assertFalse(session.owner.state.value.playRequested)
-            session.owner.close()
+            assertEquals(fixture.library.cache.directory.file(address).toURI(), owner.state.value.item?.url)
+            assertFalse(owner.canGoPrevious)
+            assertFalse(owner.canGoNext)
+            owner.close()
         } finally { fixture.close() }
     }
 
@@ -335,7 +352,9 @@ class NikonPlaybackOwnerAdoptionTest {
         } finally { f.close() }
     }
 
-    @Test fun `complete Android player scene return preserves original explicit pause`() = runTest {
+    @Test fun `complete Android player scene return follows the shared play request policy`() = runTest {
+        // A4-12: the Nikon player keeps the shared scene-loss policy (Pocket, Insta and Z iOS):
+        // a playing clip resumes when the app returns, an explicit pause stays paused.
         val f = Fixture(backgroundScope)
         try {
             val opening = MonitorMediaGalleryOpen(f.records[0], f.records, f.library.actionToken)
@@ -348,10 +367,15 @@ class NikonPlaybackOwnerAdoptionTest {
             val native = assertNotNull(context.native); val owner = assertNotNull(context.media.state.value.playback)
             val calls = mutableListOf<String>()
             native.attach(player("scene", calls), owner.state.value.token, {}) { _, _ -> }; runCurrent()
+            assertTrue(owner.state.value.ready)
             context.media.sceneActive(false)
-            assertFalse(owner.state.value.playRequested)
+            assertTrue(owner.state.value.playRequested, "Leaving the app keeps the operator's play request")
             calls.clear(); context.media.sceneActive(true); runCurrent()
-            assertTrue(calls.isEmpty()); assertFalse(owner.state.value.playRequested)
+            assertEquals(listOf("play:scene"), calls, "Returning resumes the clip that was playing")
+            owner.setPlaying(false); context.media.sceneActive(false)
+            calls.clear(); context.media.sceneActive(true); runCurrent()
+            assertTrue(calls.isEmpty(), "An explicit pause stays paused across the scene")
+            assertFalse(owner.state.value.playRequested)
             context.media.closePlayback(); runCurrent()
         } finally { f.close() }
     }

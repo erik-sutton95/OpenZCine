@@ -28,8 +28,6 @@ import androidx.test.uiautomator.Until
 import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.openzcine.MainActivity
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import com.opencapture.openzcine.pairing.SharedPreferencesSavedCameraStore
 import java.nio.file.Files
 import java.nio.file.Path
@@ -40,6 +38,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONObject
+import com.opencapture.opencine.appkit.MonitorMediaViewOptions
+import com.opencapture.opencine.appkit.MonitorMediaSort
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -50,6 +50,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import com.opencapture.monitorui.MonitorThumbnailSize
 import com.opencapture.monitorui.MonitorMediaLayout
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** Actual source-owned offline library; all content is SIMULATED metadata/stub bytes. */
 @RunWith(AndroidJUnit4::class)
@@ -95,9 +97,8 @@ class NikonMediaSelectionMainActivityTest {
         val index = MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
         index.rememberCameraListing(bucket, clips)
         index.rememberCameraBucket(record.id, bucket, record.displayTitle)
-        index.saveViewOptions(MediaLibraryViewOptions(
-            source = MediaLibrarySource.CAMERA, layout = MonitorMediaLayout.LIST,
-            sortOrder = MediaLibrarySortOrder.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
+        index.mediaPreferences(bucket).saveViewOptions(MonitorMediaViewOptions(
+            layout = MonitorMediaLayout.LIST, sort = MonitorMediaSort.NAME, thumbnailSize = MonitorThumbnailSize.SMALL,
         ))
         clips.forEach { clip ->
             cache.openEntry(bucket, MediaCacheObjectIdentity(clip), clip.sizeBytes).apply {
@@ -112,7 +113,7 @@ class NikonMediaSelectionMainActivityTest {
         // Launch can replace the orientation measured while the test host was active.
         device.setOrientationNatural()
         settleNaturalOrientation()
-        requireNotNull(device.wait(Until.findObject(By.desc("Media library")), 15_000)).click()
+        device.waitForCamerasAction("Media library").click()
         row("01")
         settleNaturalOrientation()
     }
@@ -168,12 +169,15 @@ class NikonMediaSelectionMainActivityTest {
         tap(center(stableRowBounds("02")))
         selectedCount(2)
         val before = visibleRows()
-        swipe(Point(viewport.centerX(), viewport.bottom - 60),
-            Point(viewport.centerX(), viewport.top + 80), 420)
+        // Selection replaces the display controls with the tray, so measure the catalog
+        // the finger will actually land in instead of reusing the browsing viewport.
+        val selectingViewport = catalogViewport()
+        swipe(Point(selectingViewport.centerX(), selectingViewport.bottom - 60),
+            Point(selectingViewport.centerX(), selectingViewport.top + 80), 420)
         selectedCount(2)
         assertNotEquals(before, visibleRows())
         trace("selecting-after-native-vertical-scroll")
-        requireNotNull(device.findObject(By.desc("Exit media selection"))).click()
+        pressControl("Clear selection")
         assertTrue(device.wait(Until.gone(By.text("2 selected")), 5_000))
         val scrollingBefore = visibleRows()
         swipe(Point(viewport.centerX(), viewport.top + 80),
@@ -220,7 +224,7 @@ class NikonMediaSelectionMainActivityTest {
             println("SIMULATED_SELECTION_TIMING=" + times.put("events", pointerTrace))
             pointerTrace = null
         }
-        requireNotNull(device.findObject(By.desc("Exit media selection"))).click()
+        pressControl("Clear selection")
         trace("edge-terminal")
     }
 
@@ -244,7 +248,7 @@ class NikonMediaSelectionMainActivityTest {
         tap(center(restoredSecond))
         assertNotNull(device.wait(Until.findObject(By.text(
             "SIMULATED-SEL-02.R3D is a camera master; preview is unavailable.")), 5_000))
-        assertTrue(device.wait(Until.gone(By.desc("Exit media selection")), 5_000))
+        assertTrue(device.wait(Until.gone(By.desc("Clear selection")), 5_000))
         trace("grid-master-admission-and-favorite")
         hold(center(stableRowBounds("01")), 650)
         selectedCount(1)
@@ -317,7 +321,7 @@ class NikonMediaSelectionMainActivityTest {
         tap(center(stableRowBounds("03")))
         selectedCount(3)
         trace("list-landscape-fresh-input-after-retirement")
-        pressControl("Exit media selection")
+        pressControl("Clear selection")
         assertTrue(device.wait(Until.gone(By.text("3 selected")), 5_000))
         val before = visibleRows()
         swipe(Point(viewport.centerX(), viewport.bottom - 30),
@@ -345,7 +349,7 @@ class NikonMediaSelectionMainActivityTest {
                 .put("accessibilityEventAcknowledged", backAcknowledged))
             // UiAutomator 2.3 waits for event2048; that acknowledgement can time
             // out after the actual Back callback already retired selection.
-            assertTrue(device.wait(Until.gone(By.desc("Exit media selection")), 5_000))
+            assertTrue(device.wait(Until.gone(By.desc("Clear selection")), 5_000))
             assertEquals(emptySet<String>(), nativeRowsSnapshot(catalogViewport()).selected)
             terminal = center(stableRowBounds("03"))
             inject(MotionEvent.ACTION_MOVE, terminal, down)
@@ -354,7 +358,7 @@ class NikonMediaSelectionMainActivityTest {
             inject(MotionEvent.ACTION_UP, terminal, down)
             finishMatrixTrace("back-retired-pointer")
         }
-        assertTrue(device.wait(Until.gone(By.desc("Exit media selection")), 5_000))
+        assertTrue(device.wait(Until.gone(By.desc("Clear selection")), 5_000))
         assertTrue(device.wait(Until.gone(By.text(
             "SIMULATED-SEL-03.R3D is a camera master; preview is unavailable.")), 5_000))
         val viewport = catalogViewport()
@@ -378,7 +382,7 @@ class NikonMediaSelectionMainActivityTest {
         traceMatrixFinalTap("grid-remounted-after-back-layout-density-category", "02")
         val current = matrixSelected("grid-remounted-after-back-layout-density-category", names("01", "02"))
         traceMatrixSelection("grid-remounted-after-back-layout-density-category", renderedWindowMatch = current)
-        pressControl("Exit media selection")
+        pressControl("Clear selection")
         val before = visibleRows()
         swipe(Point(viewport.centerX(), viewport.bottom - 60),
             Point(viewport.centerX(), viewport.top + 80), 420)
@@ -423,6 +427,7 @@ class NikonMediaSelectionMainActivityTest {
                                 .put("x", bounds.centerX()).put("y", bounds.centerY()).put("events", pointerTrace))
                             pointerTrace = previousTrace
                         }
+                        awaitNativeFrame()
                         return
                     }
                 } else {
@@ -437,6 +442,44 @@ class NikonMediaSelectionMainActivityTest {
         }
         nativeDiagnostic("control-did-not-settle", includeFavorites = true)
         error("Actual visible control did not settle: $description")
+    }
+
+    // A control can change the layout session before the native frame has committed.
+    // Finish that frame outside the held-pointer measurements, without observing their outcomes.
+    private fun awaitNativeFrame() {
+        val currentScenario = requireNotNull(scenario)
+        val committed = CountDownLatch(1)
+        val callback = Runnable { committed.countDown() }
+        var removeCallback: (() -> Unit)? = null
+        var verifyOwner: ((MainActivity) -> Unit)? = null
+        try {
+            instrumentation.runOnMainSync {
+                currentScenario.onActivity { activity ->
+                    val window = activity.window
+                    val decor = window.decorView
+                    val token = decor.windowToken
+                    val observer = decor.viewTreeObserver
+                    val width = decor.width
+                    val height = decor.height
+                    check(!activity.isDestroyed && !activity.isFinishing && token != null &&
+                        decor.isAttachedToWindow && decor.isShown && decor.hasWindowFocus() &&
+                        decor.isHardwareAccelerated && observer.isAlive) { "The current media window must accept native input" }
+                    verifyOwner = { current ->
+                        check(current === activity && current.window === window && window.peekDecorView() === decor &&
+                            decor.windowToken === token && decor.width == width && decor.height == height &&
+                            decor.isAttachedToWindow && decor.hasWindowFocus() &&
+                            !current.isDestroyed && !current.isFinishing) { "The media window retired before native input" }
+                    }
+                    removeCallback = { if (observer.isAlive) observer.unregisterFrameCommitCallback(callback) }
+                    observer.registerFrameCommitCallback(callback)
+                    decor.invalidate()
+                }
+            }
+            check(committed.await(5_000, TimeUnit.MILLISECONDS)) { "The current media window must commit its native frame" }
+            instrumentation.runOnMainSync { currentScenario.onActivity { requireNotNull(verifyOwner)(it) } }
+        } finally {
+            instrumentation.runOnMainSync { removeCallback?.invoke() }
+        }
     }
 
     private fun nativeControlPointAvailable(description: String, targetBounds: Rect): Boolean {
@@ -606,7 +649,7 @@ class NikonMediaSelectionMainActivityTest {
         if (includeFavorites) receipt.put("persistedFavoriteIDs", JSONArray(
             MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context)).favoriteIDs(bucket).sorted()))
         receipt.put("storedViewOptions", MediaLibraryIndex(SharedPreferencesMediaLibraryPreferences(context))
-            .viewOptions(MediaLibrarySource.CAMERA).toString())
+            .mediaPreferences(bucket).viewOptions().toString())
         directory.resolve("$name.json").writeText(receipt.toString(2))
         println("SIMULATED_SELECTION_DIAGNOSTIC=" + JSONObject()
             .put("name", name).put("rotation", device.displayRotation).put("elapsedMs", elapsed)
@@ -626,6 +669,20 @@ class NikonMediaSelectionMainActivityTest {
         val found = device.wait(Until.findObject(By.descStartsWith("SIMULATED-SEL-$number.R3D")), 10_000)
         if (found == null) nativeDiagnostic("missing-row-$number", includeFavorites = true)
         return requireNotNull(found)
+    }
+
+    // The appkit launch splash is specified visible for 2250ms plus a 350ms fade
+    // (OpenCine MonitorAppRoot), and the system splash covers the header until the first
+    // frame. A header click before both clear is swallowed and the fixture stays on the
+    // cameras home, so the library row never mounts.
+    private fun UiDevice.waitForCamerasAction(description: String): UiObject2 {
+        wait(Until.findObject(By.desc(description)), 15_000)
+        check(wait(Until.gone(By.desc("OpenZCine")), 15_000)) {
+            "The native startup splash still covers the cameras header"
+        }
+        waitForIdle()
+        return wait(Until.findObject(By.desc(description)), 15_000)
+            ?: throw AssertionError("Timed out waiting for cameras action: $description")
     }
 
     private fun selectedCount(count: Int) {
@@ -1362,7 +1419,7 @@ class NikonMediaSelectionMainActivityTest {
         selectedCount(1)
         assertTrue(device.wait(Until.gone(By.desc("Add SIMULATED-SEL-01.R3D to favorites")), 5_000))
         trace("card-floor-list-selecting")
-        pressControl("Exit media selection")
+        pressControl("Clear selection")
         device.setOrientationNatural()
         settleNaturalOrientation()
         trace("card-floor-list-portrait")

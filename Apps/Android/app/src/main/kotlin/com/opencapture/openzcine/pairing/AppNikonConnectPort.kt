@@ -12,6 +12,7 @@ import com.opencapture.opencine.nikon.NikonConnectionPhase
 import com.opencapture.opencine.nikon.NikonIntegration
 import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.opencine.nikon.NikonSighting
+import com.opencapture.opencine.nikon.NikonTakeOverPrompt
 import com.opencapture.openzcine.R
 import com.opencapture.openzcine.transport.UsbPtpCameraAccess
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +20,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraRecords
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * OpenCine's `NikonConnectPort` over this app's own reconnect machinery ([SavedCameraConnector])
@@ -26,8 +30,8 @@ import kotlinx.coroutines.launch
  * monitor, [onForget] removes setups (with the access point's key), and the integration reads the
  * records back from [recordsJson].
  *
- * A saved setup another device holds fails with a "Take over" action instead of dialling; the
- * operator's tap ([allowTakeOver]) lets the retry through. An access-point setup the add-setup
+ * A held saved setup reports its admission failure to the integration, which owns consent.
+ * Only its confirmed overload admits the same current request. An access-point setup the add-setup
  * scan produced arrives through [pendingAccessPoint] (its key never enters the shared document).
  */
 internal class AppNikonConnectPort(
@@ -47,7 +51,6 @@ internal class AppNikonConnectPort(
 ) : NikonConnectPort {
     override val sightings = MutableStateFlow<List<NikonSighting>>(emptyList())
     override val phase = MutableStateFlow<Pair<NikonConnectionPhase, String?>?>(null)
-    private val takeOvers = mutableSetOf<String>()
     private var sightingsJob: Job? = null
 
     /** SSID and key the add-setup scan read for the next access-point setup. */
@@ -142,12 +145,9 @@ internal class AppNikonConnectPort(
         return reachable + unsaved + usb
     }
 
-    /** The operator agreed to drop the device holding the camera at [host]: the next connect goes. */
-    fun allowTakeOver(host: String) {
-        takeOvers += host
-    }
+    override suspend fun connect(request: NikonConnectRequest): NikonConnection = connect(request, takingOverConfirmed = false)
 
-    override suspend fun connect(request: NikonConnectRequest): NikonConnection {
+    override suspend fun connect(request: NikonConnectRequest, takingOverConfirmed: Boolean): NikonConnection {
         var apSsid: String? = null
         var apKey: String? = null
         val record: SavedCameraRecord =
@@ -184,28 +184,16 @@ internal class AppNikonConnectPort(
                                 SavedCameraTransport.PHONE_HOTSPOT
                             else -> SavedCameraTransport.INFRASTRUCTURE
                         }
-                    if (request.takeOver) takeOvers += sighting.host
                     SavedCameraRecord(sighting.host, sighting.name.orEmpty(), transport, null, null)
                 }
             }
         val held = connector.discoveryFor(record)?.takeIf { it.isHeldByAnotherDevice }
-        if (held != null && record.host !in takeOvers) {
+        val approved = takingOverConfirmed || (request is NikonConnectRequest.Discovered && request.takeOver)
+        if (held != null && !approved) {
             throw NikonConnectException(
-                NikonIntegration.failure(
-                    ConnectionFailure.Reason.HeldElsewhere, "held",
-                    held.heldByDeviceName?.takeIf(String::isNotBlank)
-                        ?.let { copy.text(R.string.pairing_take_over_message_named, it) }
-                        ?: copy.text(R.string.pairing_take_over_message),
-                ).copy(
-                    actions =
-                        listOf(
-                            RecoveryAction.Integration(TAKE_OVER, copy.text(R.string.action_take_over)),
-                            RecoveryAction.Retry,
-                        ),
-                ),
+                NikonIntegration.failure(ConnectionFailure.Reason.HeldElsewhere, "held", NikonTakeOverPrompt.message(held.heldByDeviceName)),
             )
         }
-        takeOvers.remove(record.host)
         if (request is NikonConnectRequest.Saved && record.transport == SavedCameraTransport.USB_C) {
             onExplicitUsbReconnect(record.host)
         }
@@ -265,7 +253,6 @@ internal class AppNikonConnectPort(
         }
 
     companion object {
-        const val TAKE_OVER: String = "takeOver"
         const val DIAGNOSTICS: String = "diagnostics"
 
         fun kindOf(transport: SavedCameraTransport): RouteKind =

@@ -7,11 +7,15 @@ import OpenCineMedia
 
 /// Native file IO stays in the app: Nikon plays a growing cache before transfer completion.
 /// Logical item, transport, conform and pointer lifetimes belong to MonitorMediaPlaybackModel.
-@MainActor final class NikonPlaybackNativePort: MonitorPlaybackPort {
+/// The picture, scopes, assists and backdrop are the shared playback engine's: this port is one
+/// `MonitorPlaybackFrameSource` over the shared feed, like the plain file owner.
+@MainActor final class NikonPlaybackNativePort: MonitorPlaybackFrameSource {
     let player: AVPlayer
+    let feed: MonitorPlaybackFeedSession
     var onEvent: (@MainActor @Sendable (MonitorPlaybackItemToken, MonitorPlaybackEvent) -> Void)?
-    var beforeItemRetirement: (@MainActor () -> Void)?
-    var afterItemInstallation: (@MainActor (AVPlayerItem) -> Void)?
+    /// The installed item after it became current, and nil before the current item is released
+    /// (the audio tap must leave the item before AVFoundation releases it).
+    var onItemChanged: (@MainActor (AVPlayerItem?) -> Void)?
     var afterPlaybackEnd: (@MainActor (MonitorPlaybackItemToken) -> Void)?
     private(set) var token: MonitorPlaybackItemToken?
     var isScrubbing: @MainActor () -> Bool = { false }
@@ -32,6 +36,7 @@ import OpenCineMedia
     private var enteredTransfer: Task<Void, Never>?
     private var preparationBarrier: (@MainActor () async -> Void)?
     private var facts = MonitorPlaybackMetadata()
+    private weak var preparedBufferItem: AVPlayerItem?
     private let playable: @MainActor (AVURLAsset) async -> Bool
     private let poll: @MainActor () async throws -> Void
     private let captureBeforePrepare: @MainActor () -> (@MainActor () async -> Void)
@@ -49,6 +54,7 @@ import OpenCineMedia
 
     init(
         player: AVPlayer = AVPlayer(),
+        feed: MonitorPlaybackFeedSession = NikonPlaybackFeedSession(),
         playable: @escaping @MainActor (AVURLAsset) async -> Bool = {
             (try? await $0.load(.isPlayable)) == true
         },
@@ -58,6 +64,7 @@ import OpenCineMedia
         captureBeforePrepare: @escaping @MainActor () -> (@MainActor () async -> Void) = { {} }
     ) {
         self.player = player
+        self.feed = feed
         self.playable = playable
         self.poll = poll
         self.captureBeforePrepare = captureBeforePrepare
@@ -202,6 +209,8 @@ import OpenCineMedia
                 url: item.url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         }
         let nativeItem = AVPlayerItem(asset: asset)
+        // The shared feed's output must be on the item before it becomes current.
+        feed.prepare(nativeItem)
         player.replaceCurrentItem(with: nativeItem)
         player.automaticallyWaitsToMinimizeStalling = false
         if progressiveAsset != nil {
@@ -217,7 +226,7 @@ import OpenCineMedia
                 })
         }
         observe(nativeItem, admitted: admitted)
-        afterItemInstallation?(nativeItem)
+        onItemChanged?(nativeItem)
         guard current(admitted), player.currentItem === nativeItem else {
             throw MonitorPlaybackError.retired
         }
@@ -238,6 +247,7 @@ import OpenCineMedia
             self.facts.conform = conform
             self.onEvent?(admitted, .metadata(self.facts))
         }
+        preparedBufferItem = nativeItem
         return facts
     }
 
@@ -267,11 +277,20 @@ import OpenCineMedia
     private func observe(_ item: AVPlayerItem, admitted: MonitorPlaybackItemToken) {
         statusObserver = item.observe(\.status, options: [.initial, .new]) {
             [weak self] _, change in
-            guard change.newValue == .failed else { return }
-            Task { @MainActor in
-                self?.publishFailure(
-                    item, admitted: admitted,
-                    message: item.error?.localizedDescription ?? "Could not open that clip.")
+            switch change.newValue {
+            case .failed:
+                Task { @MainActor in
+                    self?.publishFailure(
+                        item, admitted: admitted,
+                        message: item.error?.localizedDescription ?? "Could not open that clip.")
+                }
+            case .readyToPlay:
+                Task { @MainActor in
+                    guard let self, self.current(admitted), self.player.currentItem === item
+                    else { return }
+                    self.feed.noteItemReady()
+                }
+            default: break
             }
         }
         if bufferRecovery == nil {
@@ -399,12 +418,28 @@ import OpenCineMedia
         guard token == current else { return }
         token = nil
         source = nil
-        beforeItemRetirement = nil
-        afterItemInstallation = nil
+        onItemChanged = nil
         afterPlaybackEnd = nil
+        feed.shutdown()
     }
 
     private func current(_ admitted: MonitorPlaybackItemToken) -> Bool { token == admitted }
+
+    /// Current native temporal extent, independent of camera transfer byte completion.
+    func bufferedThroughSeconds(token admitted: MonitorPlaybackItemToken) -> Double? {
+        guard current(admitted), let captured = source, let item = preparedBufferItem,
+            player.currentItem === item, item.status == .readyToPlay
+        else { return nil }
+        guard current(admitted), source?.item == captured.item,
+            preparedBufferItem === item, player.currentItem === item
+        else { return nil }
+        let ranges = item.loadedTimeRanges
+        guard current(admitted), source?.item == captured.item,
+            preparedBufferItem === item, player.currentItem === item
+        else { return nil }
+        return ranges.map { CMTimeGetSeconds(CMTimeRangeGetEnd($0.timeRangeValue)) }
+            .filter { $0.isFinite && $0 >= 0 }.max()
+    }
 
     /// Back joins the actual entered native task after the shared item owner retires it.
     func captureEnteredTransferCleanup() -> (@MainActor () async -> Void) {
@@ -413,6 +448,7 @@ import OpenCineMedia
     }
 
     private func retireNativeItem() {
+        preparedBufferItem = nil
         bufferRecovery?.close()
         bufferRecovery = nil
         progressiveAsset?.close()
@@ -431,7 +467,8 @@ import OpenCineMedia
         }
         stream = nil
         // The actual audio tap must be detached before the AVPlayerItem is released.
-        beforeItemRetirement?()
+        onItemChanged?(nil)
+        feed.beginSourceChange()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
         if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -439,10 +476,7 @@ import OpenCineMedia
         transportObserver = nil
         statusObserver = nil
         player.pause()
-        if let item = player.currentItem {
-            item.videoComposition = nil
-            (item.asset as? AVURLAsset)?.cancelLoading()
-        }
+        (player.currentItem?.asset as? AVURLAsset)?.cancelLoading()
         player.replaceCurrentItem(with: nil)
     }
 

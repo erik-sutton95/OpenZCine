@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.appkit.MonitorReviewOptions
+import com.opencapture.opencine.appkit.MonitorReviewDuration
 import com.opencapture.monitorui.MonitorAssistTool
 import com.opencapture.monitorui.MonitorAssistUsage
 import com.opencapture.monitorui.MonitorFalseColorSelection
@@ -20,7 +22,8 @@ import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
-import com.opencapture.openzcine.settings.LocalLevelStyle
+import com.opencapture.openzcine.lut.fromPersisted
+import com.opencapture.monitorui.MonitorLevelStyle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -39,6 +42,16 @@ class NikonAssistsTest {
     ) = restoreNikonAssists(assist, operator, playback, debugEffects, debugScopes, availableStoredLut)
 
     private val NikonAssists.live: FeedEffects get() = feedEffects(shared::isOn)
+
+    @Test fun `review duration focus and capture info survive restoring the operator preferences`() {
+        val options = MonitorReviewOptions(MonitorReviewDuration.SEVEN_SECONDS, false, false)
+        restore().updateReviewOptions(options)
+        assertEquals(options, restore().reviewOptions)
+        val held = options.copy(duration = MonitorReviewDuration.UNTIL_DISMISSED)
+        restore().updateReviewOptions(held)
+        assertEquals(held, restore().reviewOptions)
+        assertNull(restore().reviewOptions.duration.automaticDismissMillis)
+    }
 
     @Test
     fun `canonical false color choices reach distinct native scales and retain read mode`() {
@@ -66,7 +79,7 @@ class NikonAssistsTest {
         state.shared.setMirrorAxes(horizontal = false, vertical = true)
         state.shared.toggle(MonitorAssistTool.MIRROR)
         val restored = restore()
-        val framing = restored.shared.framing(restored.shared::isVisible, LocalLevelStyle.HORIZON)
+        val framing = restored.shared.framing(restored.shared::isVisible, MonitorLevelStyle.HORIZON)
         assertFalse(framing.mirrorsHorizontally)
         assertTrue(framing.flipsVertically)
         assertFalse(restored.shared.isPlaybackVisible(MonitorAssistTool.MIRROR))
@@ -131,14 +144,14 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `portrait fit shows the two newest scopes in canonical order`() {
+    fun `portrait fit shows the first two eligible scopes regardless of activation order`() {
         val state = restore().shared
         state.toggle(MonitorAssistTool.WAVE)
         state.toggle(MonitorAssistTool.VECTOR)
         state.toggle(MonitorAssistTool.HISTO)
 
         assertEquals(
-            listOf(ScopeKind.HISTOGRAM, ScopeKind.VECTORSCOPE),
+            listOf(ScopeKind.WAVEFORM, ScopeKind.HISTOGRAM),
             state.portraitScopes(scopesShown(state::isOn)),
         )
         state.toggle(MonitorAssistTool.HISTO)
@@ -269,7 +282,7 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `legacy multi scope selection keeps canonical selection and portrait recency`() {
+    fun `legacy multi scope selection keeps all selections with canonical fit placement`() {
         assist.edit()
             .putString("scopes", "wave,parade,histo,lights")
             .putString("scopeActivationOrder", "wave,parade,histo,lights")
@@ -281,7 +294,7 @@ class NikonAssistsTest {
             scopesShown(state::isOn),
         )
         assertEquals(
-            listOf(ScopeKind.HISTOGRAM, ScopeKind.TRAFFIC_LIGHTS),
+            listOf(ScopeKind.WAVEFORM, ScopeKind.PARADE),
             state.portraitScopes(scopesShown(state::isOn)),
         )
         state.toggle(MonitorAssistTool.WAVE)
@@ -361,7 +374,7 @@ class NikonAssistsTest {
         state.togglePlayback(MonitorAssistTool.GRID)
         state.togglePlayback(MonitorAssistTool.DESQ)
 
-        val framing = state.framing(state::isPlaybackVisible, LocalLevelStyle.HORIZON)
+        val framing = state.framing(state::isPlaybackVisible, MonitorLevelStyle.HORIZON)
         assertFalse(framing.guidesVisible)
         assertTrue(framing.gridVisible)
         assertFalse(framing.centerCrosshairEnabled)
@@ -417,19 +430,6 @@ class NikonAssistsTest {
         val video = nikonLiveAssistChips(photography = false, imageEffects = true)
         assertFalse(video.any { it == NikonAssistChip.InstantReview })
         assertFalse(NikonAssistChip.Tool(MonitorAssistTool.EV) in video)
-    }
-
-    @Test
-    fun `live inspector closes when its tool or lifecycle is no longer interactive`() {
-        val tools = listOf(MonitorAssistTool.PEAK, MonitorAssistTool.EV)
-        assertTrue(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(null, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.EV, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.AUDIO, tools + MonitorAssistTool.AUDIO, true, false, true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.WAVE, tools, liveMode = true, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = false, locked = false, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = true, resumed = true))
-        assertFalse(retainLiveAssistOptions(MonitorAssistTool.PEAK, tools, liveMode = true, locked = false, resumed = false))
     }
 
     /** Restores from a fresh set of stores holding only [operatorValues] (an old install). */
@@ -524,14 +524,14 @@ class NikonAssistsTest {
     fun `framing toolbar actions toggle presentation only and keep the chosen frames`() {
         val state = restore().shared
         state.toggle(MonitorAssistTool.GUIDES)
-        assertTrue(state.framing(state::isOn, LocalLevelStyle.HORIZON).drawsGuides)
+        assertTrue(state.framing(state::isOn, MonitorLevelStyle.HORIZON).drawsGuides)
         assertEquals(setOf(MonitorGuideAspect.CINEMA), state.selectedGuides)
 
         state.toggle(MonitorAssistTool.GRID)
-        assertTrue(state.framing(state::isOn, LocalLevelStyle.HORIZON).drawsGrid)
+        assertTrue(state.framing(state::isOn, MonitorLevelStyle.HORIZON).drawsGrid)
 
         state.toggle(MonitorAssistTool.GUIDES)
-        assertFalse(state.framing(state::isOn, LocalLevelStyle.HORIZON).drawsGuides)
+        assertFalse(state.framing(state::isOn, MonitorLevelStyle.HORIZON).drawsGuides)
         assertEquals(setOf(MonitorGuideAspect.CINEMA), state.selectedGuides)
         assertTrue(restore().shared.isOn(MonitorAssistTool.GRID))
     }
@@ -584,14 +584,6 @@ class NikonAssistsTest {
         assertEquals(150, restored.vectorBrightness)
         assertEquals(0.8, restored.histoScale)
         assertEquals(1.6, restored.lightsScale)
-    }
-
-    @Test
-    fun `waveform and parade use the common unity brightness scale`() {
-        assertEquals(0.0, waveformParadeIntensity(0))
-        assertEquals(1.0, waveformParadeIntensity(100))
-        assertEquals(2.0, waveformParadeIntensity(200))
-        assertEquals(2.0, waveformParadeIntensity(Int.MAX_VALUE))
     }
 
     @Test
@@ -729,5 +721,19 @@ class NikonAssistsTest {
         assertEquals(MonitorCrushClipCompensation.ZERO, restored.crushClipCompensation)
         assertEquals(0.8, restored.histoScale)
         assertEquals(1.5, restored.lightsScale)
+    }
+
+    /** iOS twin: testNikonDeclaresItsOwnAssistsOnTheSharedList. */
+    @Test
+    fun `nikon declares its own assists on the shared list`() {
+        assertEquals(setOf(MonitorAssistTool.EV), nikonAssistCapabilities.photographyOnly)
+        assertEquals(listOf(MonitorLevelStyle.HORIZON, MonitorLevelStyle.GAUGE), nikonAssistCapabilities.levelStyles)
+        assertTrue(MonitorAssistTool.ND in nikonAssistCapabilities.unavailable)
+        val cinema = nikonLiveAssistChips(photography = false, imageEffects = true)
+        val stills = nikonLiveAssistChips(photography = true, imageEffects = true)
+        assertFalse(NikonAssistChip.Tool(MonitorAssistTool.EV) in cinema)
+        assertTrue(NikonAssistChip.Tool(MonitorAssistTool.EV) in stills)
+        assertTrue(NikonAssistChip.Tool(MonitorAssistTool.LEVEL) in cinema)
+        assertFalse(cinema.any { it == NikonAssistChip.Tool(MonitorAssistTool.ND) })
     }
 }

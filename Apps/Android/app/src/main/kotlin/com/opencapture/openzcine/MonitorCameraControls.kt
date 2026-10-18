@@ -1,90 +1,64 @@
 package com.opencapture.openzcine
 
-import com.opencapture.monitorui.MonitorIcon
-import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
-import androidx.activity.compose.BackHandler
+import com.opencapture.opencine.cameracontrols.CaptureCodecColorSectionView
+import com.opencapture.opencine.cameracontrols.CaptureCodecColorTabs
+import com.opencapture.opencine.cameracontrols.PrefToggle
+import com.opencapture.opencine.vocabulary.CaptureCodecColorChoices
+import com.opencapture.opencine.vocabulary.CaptureCodecColorSection
+import com.opencapture.opencine.nikon.WhiteBalanceTint
+import com.opencapture.opencine.nikon.FocusPickerPolicy
+import com.opencapture.opencine.nikon.ShutterPickerPolicy
+import com.opencapture.opencine.nikon.StillPickerLadders
 import com.opencapture.opencine.appkit.MonitorControlModel
-import com.opencapture.opencine.appkit.MonitorCaptureField
-import com.opencapture.opencine.appkit.MonitorCaptureDrum
-import com.opencapture.opencine.nikon.NikonOpenCineSession
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.toggleableState
-import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.opencapture.monitorui.MonitorFieldLayout
-import com.opencapture.monitorui.MonitorRect
 import com.opencapture.opencine.nikon.CameraControl
-import com.opencapture.openzcine.settings.PanelCloseButton
+import com.opencapture.opencine.core.SettingKey
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
-import kotlin.math.max
-import kotlin.math.min
-import kotlinx.coroutines.withTimeoutOrNull
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
+import com.opencapture.opencine.nikon.NikonCapturePopupKind
+import com.opencapture.opencine.nikon.NikonCapturePopupState
+import com.opencapture.opencine.cameracontrols.chromeClickable
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /**
  * iOS `panelRevealCurve`: CSS cubic-bezier(0.16, 1, 0.3, 1), 0.20s ease-out-expo
@@ -159,17 +133,21 @@ internal data class MonitorPickerPresentation(
     /** Which mode tab to open on (iOS dual-base follows `movieBaseISO`). */
     val initialModeIndex: Int = 0,
     /**
-     * Dim drum + mode bar and show [lockBanner] (iOS shutter Control-lock /
+     * Dim drum + mode bar (iOS shutter Control-lock /
      * ISO-while-recording).
      */
     val interactionLocked: Boolean = false,
-    val lockBanner: String? = null,
     /**
      * Dim/disable only the value drum (Auto ISO On). Mode tabs stay interactive so the
      * operator can switch to Auto Off / Manual.
      */
     val drumInteractionLocked: Boolean = false,
-    val drumLockBanner: String? = null,
+    /**
+     * The body's circuit facts for the shared Nikon capture popup (ISO base or Auto, shutter
+     * circuit and lock, white balance mode and tune); its modes come from [modes]. Null for a
+     * picker that is one setting or independent settings.
+     */
+    val popup: NikonCapturePopupState? = null,
 )
 
 /** One readout in the live monitor's capture strip. */
@@ -353,7 +331,7 @@ internal fun monitorCaptureSettings(
         shutterTile?.request == null &&
             shutterTile?.unavailableReason != null &&
             shutterTile.value != "—" &&
-            shutterTile.unavailableReason.contains("locked", ignoreCase = true)
+            shutterTile.unavailableReason?.contains("locked", ignoreCase = true) == true
     val isoPresentation =
         isoPickerPresentation(
             isoTile = isoTile,
@@ -401,32 +379,16 @@ internal fun monitorCaptureSettings(
         ),
         run {
             val irisTile = primary[CommandTileKind.IRIS]
-            val cameraOpts = irisTile?.request?.options.orEmpty()
-            val options =
-                cameraOpts.ifEmpty {
-                    IrisPickerPolicy.options(forLensDescriptor = null)
-                }
-            // Open IRIS whenever we have a live f-number, using the lens/core ladder
-            // if the body did not advertise a writable enum (same as iOS).
-            val live = irisTile?.value?.takeIf { it != "—" }
+            // Only the f-numbers the facade reports. Core already falls back to the lens ladder
+            // where the body allows that write; a body that advertises none leaves IRIS read-only.
             val presentation =
-                if (live != null && options.isNotEmpty()) {
-                    val request =
-                        irisTile.request?.copy(options = options)
-                            ?: CommandControlRequest(
-                                title = strings.resolve(R.string.camera_label_iris),
-                                control = CameraControl.IRIS,
-                                currentValue = if (live in options) live else options.first(),
-                                options = options,
-                            )
+                irisTile?.request?.takeIf { it.options.isNotEmpty() }?.let { request ->
                     MonitorPickerPresentation(
                         kind = MonitorPickerKind.IRIS,
                         title = strings.resolve(R.string.camera_label_iris),
                         subtitle = strings.resolve(R.string.camera_subtitle_iris),
                         modes = listOf(MonitorPickerModePresentation(request.title, request)),
                     )
-                } else {
-                    null
                 }
             MonitorCaptureSettingPresentation(
                 kind = MonitorPickerKind.IRIS,
@@ -440,7 +402,7 @@ internal fun monitorCaptureSettings(
         run {
             val wbTile = primary[CommandTileKind.WHITE_BALANCE]
             val tintTile = exposure.getOrNull(3)
-            val wbPresentation = wbPickerPresentation(wbTile, tintTile, strings)
+            val wbPresentation = wbPickerPresentation(wbTile, tintTile, strings, codec)
             MonitorCaptureSettingPresentation(
                 kind = MonitorPickerKind.WHITE_BALANCE,
                 label = strings.resolve(R.string.camera_label_wb),
@@ -630,12 +592,13 @@ internal fun monitorPickerKindForRequest(
 /**
  * Projects the WB capture-bar picker (iOS `CameraPicker.whiteBalance`):
  * **Kelvin** / **Preset** / **Tint** — not a combined Kelvin·Preset tab.
- * Tint swaps the drum for [WhiteBalanceTintPad].
+ * Tint swaps the drum for the shared tint pad.
  */
 internal fun wbPickerPresentation(
     wbTile: CommandTilePresentation?,
     tintTile: CommandTilePresentation?,
     strings: PhoneStringResolver,
+    codec: String = "",
 ): MonitorPickerPresentation? {
     val live = wbTile?.value?.takeIf { it != "—" } ?: return null
     // Open when the body has a WB readout even if the write domain is still
@@ -668,7 +631,7 @@ internal fun wbPickerPresentation(
         }
     return MonitorPickerPresentation(
         kind = MonitorPickerKind.WHITE_BALANCE,
-        title = title,
+        title = WbPickerPolicy.TITLE,
         subtitle = WbPickerPolicy.SUBTITLE,
         modes =
             listOf(
@@ -704,6 +667,13 @@ internal fun wbPickerPresentation(
                 ),
             ),
         initialModeIndex = initialMode,
+        popup = NikonCapturePopupState(
+            kind = NikonCapturePopupKind.WHITE_BALANCE, title = WbPickerPolicy.TITLE, subtitle = WbPickerPolicy.SUBTITLE,
+            modes = emptyList(), codec = codec,
+            whiteBalanceMode = if (initialMode == 0) "Color temp" else live,
+            tintCells = WhiteBalanceTint.cells(tintCurrent) ?: (0 to 0),
+            tintAvailable = tintTile?.request != null,
+        ),
     )
 }
 
@@ -770,12 +740,10 @@ internal fun shutterPickerPresentation(
             ),
         initialModeIndex = if (modeIsSpeed) 1 else 0,
         interactionLocked = lockedOnCamera,
-        lockBanner =
-            if (lockedOnCamera) {
-                "Shutter locked on camera — hold anywhere to unlock"
-            } else {
-                null
-            },
+        popup = NikonCapturePopupState(
+            kind = NikonCapturePopupKind.SHUTTER, title = title, subtitle = ShutterPickerPolicy.SUBTITLE,
+            modes = emptyList(), circuitIndex = if (modeIsSpeed) 1 else 0, shutterLockedOnCamera = lockedOnCamera,
+        ),
     )
 }
 
@@ -880,16 +848,11 @@ internal fun isoPickerPresentation(
                 IsoPickerPolicy.autoISOModeIndex(codec, isoAuto, exposureMode),
             // Drum is camera-owned while Auto is on or (non-R3D) mode is not M.
             drumInteractionLocked = cameraOwned,
-            drumLockBanner =
-                if (cameraOwned) {
-                    if (IsoPickerPolicy.allowsManualISO(codec, exposureMode)) {
-                        strings.resolve(R.string.iso_auto_drum_locked)
-                    } else {
-                        strings.resolve(R.string.iso_manual_requires_m_mode)
-                    }
-                } else {
-                    null
-                },
+            popup = isoPopup(title, subtitle, codec, live).copy(
+                circuitIndex = IsoPickerPolicy.autoISOModeIndex(codec, isoAuto, exposureMode),
+                autoIso = true, isoCameraOwned = cameraOwned,
+                allowsManualIso = IsoPickerPolicy.allowsManualISO(codec, exposureMode),
+            ),
         )
     }
 
@@ -912,6 +875,7 @@ internal fun isoPickerPresentation(
                         markedValues = IsoPickerPolicy.markedValues(codec, 0),
                     ),
                 ),
+            popup = isoPopup(title, subtitle, codec, live),
         )
     }
     val baseLabel = baseIsoTile?.value?.takeIf { it != "—" }
@@ -951,45 +915,35 @@ internal fun isoPickerPresentation(
         subtitle = subtitle,
         modes = modes,
         initialModeIndex = if (highBase) 1 else 0,
+        popup = isoPopup(title, subtitle, codec, live).copy(circuitIndex = if (highBase) 1 else 0, dualBaseIso = true),
     )
 }
 
-/**
- * Seats the picker against the shared field layout.
- * Landscape capture-bar pickers prefer the **measured** glass pill frame (iOS
- * `captureBarFrame`) so width and trailing edge match the content-hugging bar
- * rather than the wider zone slot.
- */
-internal fun monitorPickerFrame(
-    viewport: MonitorRect,
-    layout: MonitorFieldLayout,
-    isPortrait: Boolean,
-    measuredCaptureBar: MonitorRect? = null,
-): MonitorRect {
-    return com.opencapture.opencine.cameracontrols.monitorOperatorPickerFrame(
-        viewport, layout, isPortrait, measuredCaptureBar)
-}
+/** The movie ISO popup's facts every layout shares: the codec picks the ladders and marks. */
+private fun isoPopup(title: String, subtitle: String, codec: String, live: String?) = NikonCapturePopupState(
+    kind = NikonCapturePopupKind.ISO, title = title, subtitle = subtitle, modes = emptyList(),
+    codec = codec, liveIso = live?.toIntOrNull(),
+)
 
-/**
- * iOS landscape top-deck popdown (`topPickerBody`): width 340 (the two-drum
- * quality pair 400), centred on the tapped pill's cell (info-bar mid as the
- * fallback), dropped just below it. Height fills the space under the anchor —
- * the quality pair's NEF chips and star toggle must never fold under a fixed
- * cap. Command mode centres the panel in the viewport.
- */
-internal fun monitorTopBarPickerFrame(
-    viewport: MonitorRect,
-    layout: MonitorFieldLayout,
-    isCommandCenter: Boolean = false,
-    kind: MonitorPickerKind? = null,
-    anchorPill: MonitorRect? = null,
-): MonitorRect {
-    return com.opencapture.opencine.cameracontrols.monitorOperatorTopPickerFrame(
-        viewport, layout, isCommandCenter,
-        preferredWidth = if (kind == MonitorPickerKind.QUALITY) 400f else 340f,
-        maximumHeight = if (kind == MonitorPickerKind.QUALITY) 380f else 300f,
-        anchor = anchorPill)
-}
+/** The common capture setting this picker edits; null for a Nikon-only picker. */
+internal val MonitorPickerKind.commonSettingKey: SettingKey?
+    get() = when (this) {
+        MonitorPickerKind.ISO -> SettingKey.ISO
+        MonitorPickerKind.SHUTTER -> SettingKey.SHUTTER
+        MonitorPickerKind.IRIS -> SettingKey.APERTURE
+        MonitorPickerKind.WHITE_BALANCE -> SettingKey.WHITE_BALANCE
+        else -> null
+    }
+
+/** The picker a command-surface control opens, when it has one in the common set. */
+internal val CameraControl.commonPickerKind: MonitorPickerKind?
+    get() = when (this) {
+        CameraControl.ISO -> MonitorPickerKind.ISO
+        CameraControl.SHUTTER -> MonitorPickerKind.SHUTTER
+        CameraControl.IRIS -> MonitorPickerKind.IRIS
+        CameraControl.WHITE_BALANCE -> MonitorPickerKind.WHITE_BALANCE
+        else -> null
+    }
 
 /** Whether [kind] uses the top-deck drop-down path on landscape (iOS `isTopBar`). */
 internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
@@ -999,30 +953,20 @@ internal fun MonitorPickerKind.isTopBarPicker(): Boolean =
         this == MonitorPickerKind.QUALITY
 
 /**
- * Anchored glass camera-control picker (iOS `PickerPanel` / `PanelHost`).
- *
- * - Capture / portrait: slides **up** from below the frame.
- * - Landscape top-bar res/codec ([slideFromTop]): slides **down** from above.
- * - [switchPicker] (kind change while open): slide shell stays put; content
- *   cross-fades in place (iOS `.id(picker)` + `.transition(.opacity)` +
- *   `easeInOut(0.14)`).
- * - Outside-tap backdrop + Back dismiss match iOS `handleBackdropTap`.
- * Rails stay reachable (non-modal, transparent backdrop).
+ * The Nikon controls inside the shared monitor's camera popup. The shared popup owns the glass,
+ * the header, placement, the slide and every dismissal (Back, outside tap, close); this slot
+ * supplies the controls only: the shared [LadderSheet] for every picker, and the shared value
+ * drums of the stills QUALITY pair.
  */
 @Composable
 internal fun MonitorControlPickerPanel(
     picker: MonitorPickerPresentation,
-    frame: MonitorRect,
     commonControl: MonitorControlModel? = null,
-    commonField: MonitorCaptureField? = null,
     controlsEnabled: Boolean,
-    pendingControl: CameraControl?,
     feedback: CommandControlFeedback?,
     onSelect: (CommandControlRequest, String) -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
     slideFromTop: Boolean = false,
-    showBackdrop: Boolean = true,
     /** iOS PickerPanel long-press: shutter control lock toggle (0.45s, hold anywhere). */
     onShutterLongPress: (() -> Unit)? = null,
     /** Photo timers' shared shot count, rendered in tabs flagged [MonitorPickerModePresentation.showsTimerShots]. */
@@ -1037,635 +981,89 @@ internal fun MonitorControlPickerPanel(
     mfScrubEnabled: Boolean = true,
     /** Flips the focus-scrub preference; null omits the FOCUS popup's toggle row. */
     onToggleMfScrub: (() -> Unit)? = null,
-    /** Shared monitor popup supplies all panel chrome; this slot supplies controls only. */
-    chromeless: Boolean = false,
+    /** The camera's reported typed recording formats for the resolution sheet. */
+    recordingFormats: List<com.opencapture.opencine.nikon.NikonRecordingFormatPresentation> = emptyList(),
+    /**
+     * The colour half of the one codec and colour popup, drawn under the CODEC ladder: the tones
+     * the body offers for the active codec. Null or colourless leaves the codec ladder alone.
+     */
+    codecColor: CaptureCodecColorChoices? = null,
 ) {
     val writeEnabled = controlsEnabled && com.opencapture.opencine.appkit.LocalMonitorCaptureCommandEnabled.current
-    @Composable fun PickerContent(currentPicker: MonitorPickerPresentation) {
-        if (currentPicker.kind == MonitorPickerKind.QUALITY) {
-            // Image quality is a dual-drum pair, not a value wheel
-            // (iOS `QualityPickerPanel`).
-            QualityPickerPanelBody(
-                picker = currentPicker,
-                nefCompression = nefCompression,
-                onSelect = onSelect,
-                onDismiss = onDismiss,
-                nefOptions =
-                    nefOptions.ifEmpty { StillPickerPolicy.NEF_OPTIONS },
-                controlsEnabled = writeEnabled,
-                chromeless = chromeless,
-            )
-        } else if (currentPicker.kind in ladderKinds) {
-            VideoLadderBody(
-                picker = currentPicker,
-                field = commonField,
-                control = commonControl,
-                controlsEnabled = writeEnabled,
-                error = feedback?.takeIf { it.isError }?.message,
-                unavailable = stringResource(R.string.camera_controls_unavailable),
-                fromTop = slideFromTop,
-                chromeless = chromeless,
-                onWrite = onSelect,
-                onClose = onDismiss,
-                onHold = if (currentPicker.kind == MonitorPickerKind.SHUTTER && writeEnabled) onShutterLongPress else null,
-                tintLabel = { tint ->
-                    WhiteBalanceTintGrid.label(tint.amberBlue ?: 0, tint.greenMagenta)
-                },
-                tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
-                    stringResource(R.string.camera_wb_tint_double_tap_help),
-                footer = { tab ->
-                    if (ladderShowsTimerShots(currentPicker, tab) && onAdjustTimerShots != null) {
-                        TimerShotsRow(
-                            count = timerShotsCount,
-                            enabled = writeEnabled && !tab.disabled,
-                            onAdjust = onAdjustTimerShots,
-                        )
-                    }
-                    if (currentPicker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
-                        MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
-                    }
-                },
-                modifier = if (chromeless) Modifier else Modifier.fillMaxSize(),
-            )
-        } else {
-            PickerPanelBody(
-                picker = currentPicker,
-                commonControl = commonControl,
-                commonField = commonField,
-                frame = frame,
-                controlsEnabled = writeEnabled,
-                pendingControl = pendingControl,
-                feedback = feedback,
-                onSelect = onSelect,
-                onDismiss = onDismiss,
-                onShutterLongPress = onShutterLongPress.takeIf { writeEnabled },
-                timerShotsCount = timerShotsCount,
-                onAdjustTimerShots = onAdjustTimerShots,
-                mfScrubEnabled = mfScrubEnabled,
-                onToggleMfScrub = onToggleMfScrub,
-                chromeless = chromeless,
-            )
-        }
-    }
-    if (chromeless) {
-        PickerContent(picker)
+    if (picker.kind == MonitorPickerKind.QUALITY) {
+        // Image quality is a dual-drum pair, not a value wheel (iOS `QualityPickerPanel`).
+        QualityPickerPanelBody(
+            picker = picker,
+            nefCompression = nefCompression,
+            onSelect = onSelect,
+            onDismiss = onDismiss,
+            nefOptions = nefOptions.ifEmpty { StillPickerLadders.NEF_OPTIONS },
+            controlsEnabled = writeEnabled,
+            chromeless = true,
+        )
         return
     }
-
-    // Dismissal is NEVER gated on an in-flight write (#328): a focus-mode write can hold
-    // the command mutex for seconds — or wedge on a flaky link — and gating Back/scrim
-    // here trapped the operator in the popup. iOS `dismissActivePanel` has no such gate;
-    // the drain loop finishes the write with the panel closed.
-    BackHandler(onBack = onDismiss)
-
-    // Slide container is NOT keyed on kind — switchPicker must not re-slide.
-    // iOS leaves panelRevealed true and only cross-fades body content.
-    var revealed by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { revealed = true }
-    val travel = (frame.height + 40f).dp
-    val revealOffset by
-        animateDpAsState(
-            targetValue =
-                if (revealed) {
-                    0.dp
-                } else if (slideFromTop) {
-                    -travel
-                } else {
-                    travel
-                },
-            animationSpec = IosPanelRevealSpec,
-            label = "monitorPickerReveal",
-        )
-    val revealAlpha = if (revealed) 1f else 0f
-    // iOS switchPicker: withAnimation(.easeInOut(duration: 0.14)).
-    val switchSpec = tween<Float>(durationMillis = 140)
-
-    Box(modifier = modifier.fillMaxSize()) {
-        if (showBackdrop) {
-            // Transparent full-screen hit target — iOS PanelHost clear backdrop.
-            Box(
-                Modifier.fillMaxSize()
-                    .chromeClickable(onClick = onDismiss),
-            )
-        }
-        // Outer box parks the glass card; content swaps via AnimatedContent.
-        Box(
-            modifier =
-                Modifier
-                    .offset(frame.x.dp, frame.y.dp + revealOffset)
-                    .size(frame.width.dp, frame.height.dp)
-                    .alpha(revealAlpha),
-            contentAlignment = Alignment.TopStart,
-        ) {
-            AnimatedContent(
-                targetState = picker,
-                transitionSpec = {
-                    fadeIn(switchSpec) togetherWith fadeOut(switchSpec)
-                },
-                contentKey = { it.kind },
-                label = "monitorPickerSwitch",
-            ) { currentPicker ->
-                PickerContent(currentPicker)
-            }
-        }
-    }
-}
-
-/** Glass card body for one picker setting (header + drum/tint + mode bar). */
-@Composable
-internal fun PickerPanelBody(
-    picker: MonitorPickerPresentation,
-    frame: MonitorRect,
-    commonControl: MonitorControlModel? = null,
-    commonField: MonitorCaptureField? = null,
-    controlsEnabled: Boolean,
-    pendingControl: CameraControl?,
-    feedback: CommandControlFeedback?,
-    onSelect: (CommandControlRequest, String) -> Unit,
-    onDismiss: () -> Unit,
-    onShutterLongPress: (() -> Unit)? = null,
-    timerShotsCount: Int = 1,
-    onAdjustTimerShots: ((Int) -> Unit)? = null,
-    mfScrubEnabled: Boolean = true,
-    onToggleMfScrub: (() -> Unit)? = null,
-    chromeless: Boolean = false,
-) {
-    val pickerDescription =
-        stringResource(R.string.camera_picker_description, picker.title, picker.subtitle)
-    val viewConfiguration = LocalViewConfiguration.current
-    // iOS uses 0.45s; Compose default is often 400ms — use the stricter of the two.
-    val shutterLongPressMs =
-        maxOf(viewConfiguration.longPressTimeoutMillis.toLong(), 450L)
-    val shutterHoldEnabled =
-        picker.kind == MonitorPickerKind.SHUTTER && onShutterLongPress != null
-    var selectedMode by
-        remember(picker.kind) {
-            mutableIntStateOf(picker.initialModeIndex.coerceIn(0, picker.modes.lastIndex.coerceAtLeast(0)))
-        }
-    // Per-tab landed drum position while this picker is open (iOS WB Kelvin↔Preset
-    // restores the last value on that circuit, not the live readout from the
-    // other tab). Seeded from each mode's current camera value / base.
-    val lastByMode =
-        remember(picker.kind) {
-            androidx.compose.runtime.mutableStateListOf(
-                *picker.modes.map { it.request.currentValue }.toTypedArray(),
-            )
-        }
-    // iOS `lastApplied`: last value written per tab. Separate from drum position so
-    // re-selecting the open-time value (e.g. 25p after scrolling to 30p) still writes.
-    val lastAppliedByMode =
-        remember(picker.kind) {
-            androidx.compose.runtime.mutableStateListOf(
-                *picker.modes.map { it.request.currentValue }.toTypedArray(),
-            )
-        }
-    val modeIndex = selectedMode.coerceIn(0, picker.modes.lastIndex.coerceAtLeast(0))
-    val mode = picker.modes.getOrNull(modeIndex) ?: return
-    val isTintMode = mode.request.control == CameraControl.WHITE_BALANCE_TINT
-    val isKelvinMode =
-        picker.kind == MonitorPickerKind.WHITE_BALANCE &&
-            mode.label.equals("Kelvin", ignoreCase = true)
-    // Keep the drum scrollable while a write is in flight (iOS). Pending applies
-    // coalesce in MonitorScreen; freezing the wheel dropped rapid settles.
-    // Full interaction lock (shutter control lock / R3D recording) freezes mode tabs too.
-    // Auto ISO only freezes the value drum so Auto Off remains reachable — the
-    // photo ISO Auto tab does the same per-mode via `drumLocked`.
-    val modeInteractive = controlsEnabled && !picker.interactionLocked
-    val drumInteractive =
-        modeInteractive && !picker.drumInteractionLocked && !mode.drumLocked && !mode.disabled
-    // Ignore drum-settles briefly after a ±10 nudge so scroll snap cannot
-    // overwrite the fine-tuned value with a neighbouring dial step.
-    var suppressDrumSettleUntil by remember(picker.kind) { mutableStateOf(0L) }
-
-    // Always fill the host frame: header + flexible body + fixed mode bar so
-    // the Tint pad can never squash the KELVIN/PRESET/TINT tabs (A12 short).
-    // Tint uses tighter vertical rhythm so the full D-pad (incl. bottom M
-    // chevron) clears the mode bar on short landscape panels.
-    val panelVPad = if (isTintMode) 12.dp else 16.dp
-    val panelGap = if (isTintMode) 8.dp else 12.dp
-    Column(
-        modifier =
-            Modifier
-                .then(if (chromeless) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
-                    .heightIn(max = frame.height.dp)
-                    .overlayGlass(ChromeShape)
-                    .border(1.dp, LiveDesign.hairlineStrong, ChromeShape))
-                // iOS PickerPanel: long-press anywhere (incl. lock banner) toggles shutter
-                // control lock. requireUnconsumed=false so the drum still scrolls.
-                .then(
-                    if (shutterHoldEnabled) {
-                        Modifier.pointerInput(shutterLongPressMs, onShutterLongPress) {
-                            awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false)
-                                val releasedEarly =
-                                    withTimeoutOrNull(shutterLongPressMs) {
-                                        waitForUpOrCancellation()
-                                    }
-                                if (releasedEarly == null) {
-                                    onShutterLongPress?.invoke()
-                                    waitForUpOrCancellation()
-                                }
-                            }
-                        }
-                    } else {
-                        Modifier
-                    },
-                )
-                // Absorb plain taps so they don't fall through to the dismiss scrim.
-                .pointerInput(Unit) { detectTapGestures(onTap = {}) }
-                .then(if (chromeless) Modifier else Modifier.padding(horizontal = 20.dp, vertical = panelVPad))
-                .semantics { contentDescription = pickerDescription },
-        verticalArrangement = Arrangement.spacedBy(panelGap),
-    ) {
-        if (!chromeless) {
-            // iOS `PickerHeader`: kerned heavy name + mono uppercase subtitle.
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    Text(
-                        picker.title,
-                        style = chromeStyle(18f, FontWeight.ExtraBold).copy(letterSpacing = 2.sp),
-                        color = LiveDesign.text,
-                        maxLines = 1,
-                    )
-                    Text(
-                        picker.subtitle.uppercase(),
-                        style =
-                            chromeStyle(11f, FontWeight.SemiBold, mono = true)
-                                .copy(letterSpacing = 1.5.sp),
-                        color = LiveDesign.faint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                        modifier = Modifier.padding(bottom = 2.dp),
-                    )
-                }
-                PanelCloseButton(onDismiss)
-            }
-        }
-
-        // Errors / lock only — never the green "WB set to …" success line.
-        // That toast stole vertical room on short landscape and clipped Tint's
-        // bottom (magenta) D-pad chevron. iOS does not show apply text in-panel.
-        if (feedback?.isError == true) {
-            Text(
-                feedback.message,
-                style = chromeStyle(11f, FontWeight.Medium),
-                color = LiveDesign.rec,
-                maxLines = 2,
-                overflow = TextOverflow.Clip,
-            )
-        }
-        if (!controlsEnabled) {
-            Text(
-                stringResource(R.string.camera_controls_unavailable),
-                style = chromeStyle(11f, FontWeight.Medium),
-                color = LiveDesign.muted,
-                maxLines = 2,
-            )
-        }
-        // The drum-lock banner belongs to the locked drum: picker-wide (movie
-        // Auto ISO), or only while the locked tab is active (photo ISO Auto).
-        val activeDrumBanner =
-            picker.drumLockBanner?.takeIf {
-                picker.drumInteractionLocked || mode.drumLocked
-            }
-        (activeDrumBanner ?: picker.lockBanner)?.let { banner ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(LiveDesign.accentDim, ChromeShape)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                MonitorIcon(
-                    MonitorIcon.LOCK,
-                    null,
-                    Modifier.size(14.dp),
-                    LiveDesign.accent.copy(alpha = 0.9f),
-                )
-                Text(
-                    banner,
-                    style = chromeStyle(11.5f, FontWeight.Medium),
-                    color = LiveDesign.accent.copy(alpha = 0.9f),
-                    maxLines = 2,
+    VideoLadderBody(
+        picker = picker,
+        control = commonControl,
+        controlsEnabled = writeEnabled,
+        error = feedback?.takeIf { it.isError }?.message,
+        unavailable = stringResource(R.string.camera_controls_unavailable),
+        fromTop = slideFromTop,
+        chromeless = true,
+        recordingFormats = recordingFormats,
+        onWrite = onSelect,
+        onClose = onDismiss,
+        onHold = if (picker.kind == MonitorPickerKind.SHUTTER && writeEnabled) onShutterLongPress else null,
+        tintLabel = { tint -> WhiteBalanceTint.label(tint.amberBlue ?: 0, tint.greenMagenta) },
+        tintHelp = stringResource(R.string.camera_wb_tint_steps_help) + "\n" +
+            stringResource(R.string.camera_wb_tint_double_tap_help),
+        footer = { tab ->
+            if (ladderShowsTimerShots(picker, tab) && onAdjustTimerShots != null) {
+                TimerShotsRow(
+                    count = timerShotsCount,
+                    enabled = writeEnabled && !tab.disabled,
+                    onAdjust = onAdjustTimerShots,
                 )
             }
-        }
-
-        // Landed Kelvin / drum selection is owned by the panel so the fixed
-        // fine-adjust row (below this weight slot) can read the same value.
-        // A locked drum (photo ISO Auto) instead tracks the camera's live pick.
-        val landed =
-            if (mode.drumLocked) {
-                mode.request.currentValue
-            } else {
-                lastByMode.getOrNull(modeIndex)?.takeIf { it.isNotBlank() }
-                    ?: mode.request.currentValue
+            if (picker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
+                MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
             }
-        val drumLabels =
-            if (isKelvinMode) {
-                WbPickerPolicy.kelvinOptions(
-                    cameraAdvertised = mode.request.options,
-                    liveLabel = landed,
-                )
-            } else {
-                mode.request.options
-            }
-        val requestForDrum = mode.request.copy(currentValue = landed, options = drumLabels)
-        val options = commandControlOptions(requestForDrum, pendingControl, drumInteractive)
-        val selectedLabel =
-            options.firstOrNull { it.selected }?.label
-                ?: options.firstOrNull()?.label
-                ?: landed
-
-        // Flexible body — drum or tint pad only. Fine-adjust + mode bar are
-        // fixed below so short landscape panels cannot clip ±10 under the wheel.
-        Box(
-            Modifier.fillMaxWidth().then(if (chromeless) Modifier else Modifier.weight(1f, fill = true)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (isTintMode) {
-                val tintAvailable = mode.request.options.isNotEmpty()
-                val tintLabel = landed.ifBlank { "Neutral" }
-                WhiteBalanceTintPad(
-                    currentLabel = tintLabel,
-                    available = tintAvailable,
-                    interactive = drumInteractive && tintAvailable,
-                    onCommit = { label ->
-                        if (modeIndex in lastByMode.indices) lastByMode[modeIndex] = label
-                        if (
-                            modeIndex !in lastAppliedByMode.indices
-                                || label != lastAppliedByMode[modeIndex]
-                        ) {
-                            if (modeIndex in lastAppliedByMode.indices) {
-                                lastAppliedByMode[modeIndex] = label
-                            }
-                            onSelect(mode.request, label)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            } else if (commonControl != null && commonField != null && !isKelvinMode && !mode.drumLocked) {
-                val offered = drumLabels.mapNotNull { NikonOpenCineSession.settingValue(mode.request.control, it) }
-                key(modeIndex) {
-                    MonitorCaptureDrum(commonControl, commonField, enabled = drumInteractive,
-                        modifier = Modifier.fillMaxWidth(),
-                        choices = commonField.choices.filter { it.value in offered },
-                        marked = mode.markedValues,
-                        onDetent = {})
-                }
-            } else {
-                val optionDescription =
-                    stringResource(R.string.camera_picker_options_description, mode.label)
-                key(modeIndex) {
-                    AccentDrumWheel(
-                        options = options.map { it.label },
-                        selection = selectedLabel,
-                        interactive = drumInteractive,
-                        markedValues = mode.markedValues,
-                        // −10 / +10 flank the gold selected Kelvin in the centre band; the codec
-                        // drum reuses the pair for that codec's advertised bit depths.
-                        sideAdjust =
-                            if (isKelvinMode) {
-                                DrumSideAdjust(
-                                    minusEnabled =
-                                        drumInteractive &&
-                                            WbPickerPolicy.canFineAdjust(
-                                                from = selectedLabel,
-                                                delta = -WbPickerPolicy.FINE_STEP_KELVIN,
-                                            ),
-                                    plusEnabled =
-                                        drumInteractive &&
-                                            WbPickerPolicy.canFineAdjust(
-                                                from = selectedLabel,
-                                                delta = WbPickerPolicy.FINE_STEP_KELVIN,
-                                            ),
-                                    onMinus = {
-                                        applyKelvinFineStep(
-                                            modeIndex = modeIndex,
-                                            lastByMode = lastByMode,
-                                            lastAppliedByMode = lastAppliedByMode,
-                                            current = selectedLabel,
-                                            delta = -WbPickerPolicy.FINE_STEP_KELVIN,
-                                            request = mode.request,
-                                            onSelect = onSelect,
-                                            suppressUntil = { suppressDrumSettleUntil = it },
-                                        )
-                                    },
-                                    onPlus = {
-                                        applyKelvinFineStep(
-                                            modeIndex = modeIndex,
-                                            lastByMode = lastByMode,
-                                            lastAppliedByMode = lastAppliedByMode,
-                                            current = selectedLabel,
-                                            delta = WbPickerPolicy.FINE_STEP_KELVIN,
-                                            request = mode.request,
-                                            onSelect = onSelect,
-                                            suppressUntil = { suppressDrumSettleUntil = it },
-                                        )
-                                    },
-                                )
-                            } else {
-                                codecBitDepthAdjust(
-                                    request = mode.request,
-                                    row = selectedLabel,
-                                    enabled = drumInteractive,
-                                    onSelect = onSelect,
-                                )
-                            },
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .semantics {
-                                    contentDescription =
-                                        if (isKelvinMode) {
-                                            "$optionDescription. Use minus 10 and plus 10 " +
-                                                "beside the selected value to fine-adjust."
-                                        } else {
-                                            optionDescription
-                                        }
-                                },
-                        onSettle = { settled ->
-                            // A locked/disabled drum only mirrors the camera —
-                            // its settles never write (photo ISO Auto tracking).
-                            if (!drumInteractive) return@AccentDrumWheel
-                            if (android.os.SystemClock.uptimeMillis() < suppressDrumSettleUntil) {
-                                return@AccentDrumWheel
-                            }
-                            if (settled.isEmpty()) return@AccentDrumWheel
-                            if (modeIndex in lastByMode.indices) {
-                                lastByMode[modeIndex] = settled
-                            }
-                            // iOS: apply when settled != lastApplied (not vs open-time current).
-                            val lastApplied =
-                                lastAppliedByMode.getOrNull(modeIndex).orEmpty()
-                            if (settled != lastApplied) {
-                                if (modeIndex in lastAppliedByMode.indices) {
-                                    lastAppliedByMode[modeIndex] = settled
-                                }
-                                onSelect(mode.request, settled)
-                            }
-                        },
-                    )
-                }
-            }
-        }
-
-        // No in-panel "Applying change…" — iOS is silent while the drum rolls;
-        // the bar/tile value is the feedback. Errors still render above.
-
-        if (mode.showsTimerShots && onAdjustTimerShots != null) {
-            // The timers' shared shot count rides inside both timer tabs —
-            // fired by the app after the countdown (iOS `timerShotsRow`).
-            TimerShotsRow(
-                count = timerShotsCount,
-                enabled = modeInteractive && !mode.disabled,
-                onAdjust = onAdjustTimerShots,
-            )
-        }
-
-        if (picker.modes.size > 1) {
-            // Fixed-height mode bar (never in the weight slot) — preserves full
-            // KELVIN/PRESET/TINT hit targets when the Tint pad is tall.
-            Row(
-                Modifier.fillMaxWidth().wrapContentHeight(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                picker.modes.forEachIndexed { index, candidate ->
-                    val selected = index == modeIndex
-                    val tabEnabled = modeInteractive && !candidate.disabled
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .alpha(
-                                when {
-                                    // iOS `pickerModeDisabled` grays harder than
-                                    // the interaction lock.
-                                    candidate.disabled -> 0.35f
-                                    !modeInteractive -> 0.55f
-                                    else -> 1f
-                                },
-                            )
-                            .background(
-                                if (selected) {
-                                    LiveDesign.accentDim
-                                } else {
-                                    LiveDesign.background.copy(alpha = 0.28f)
-                                },
-                                ChromeShape,
-                            )
-                            .border(
-                                1.5.dp,
-                                if (selected) LiveDesign.accent else LiveDesign.hairline,
-                                ChromeShape,
-                            )
-                            .chromeClickable(enabled = tabEnabled) {
-                                if (index == modeIndex) return@chromeClickable
-                                selectedMode = index
-                                suppressDrumSettleUntil = 0L
-                                candidate.activateRequest?.let { activate ->
-                                    onSelect(activate, activate.currentValue)
-                                }
-                                // iOS: apply the mode's landed value when switching
-                                // circuits (WB Kelvin↔Preset, ISO bases). Skip Tint
-                                // (pad only), Focus (independent tabs), Shutter
-                                // (mode write is activateRequest only), Auto ISO On
-                                // (ISO auto only — no ISO write while camera owns ISO).
-                                val isTint =
-                                    candidate.request.control == CameraControl.WHITE_BALANCE_TINT
-                                val skipApply =
-                                    !candidate.applyValueOnActivate ||
-                                        isTint ||
-                                        picker.kind == MonitorPickerKind.FOCUS ||
-                                        picker.kind == MonitorPickerKind.SHUTTER
-                                if (!skipApply) {
-                                    val value =
-                                        lastByMode.getOrNull(index)?.takeIf { it.isNotBlank() }
-                                            ?: candidate.request.currentValue
-                                    if (value.isNotBlank()) {
-                                        onSelect(candidate.request, value)
-                                    }
-                                }
-                            }
-                            .padding(
-                                vertical =
-                                    when {
-                                        candidate.detail != null -> 9.dp
-                                        // Compact tabs under Tint pad free D-pad clearance.
-                                        isTintMode -> 8.dp
-                                        else -> 12.dp
-                                    },
-                            ),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        Text(
-                            candidate.label.uppercase(),
-                            style =
-                                chromeStyle(13f, FontWeight.Bold).copy(letterSpacing = 0.5.sp),
-                            color = if (selected) LiveDesign.accent else LiveDesign.muted,
-                            maxLines = 1,
-                        )
-                        candidate.detail?.let { detail ->
-                            Text(
-                                detail,
-                                style = chromeStyle(11f, FontWeight.Medium, mono = true),
-                                color = if (selected) LiveDesign.accent else LiveDesign.muted,
-                                maxLines = 1,
-                            )
-                        }
+            if (picker.kind == MonitorPickerKind.CODEC && codecColor?.showsColor == true) {
+                CaptureCodecColorSectionView(CaptureCodecColorSection.COLOR) {
+                    CaptureCodecColorTabs(
+                        choices = codecColor.colors,
+                        selected = codecColor.selectedColor,
+                        enabled = writeEnabled && codecColor.colorEditable,
+                    ) { id ->
+                        val label = codecColor.colors.firstOrNull { it.id == id }?.label ?: return@CaptureCodecColorTabs
+                        onSelect(movieToneRequest(codecColor), label)
                     }
                 }
             }
-        }
-
-        // FOCUS popup only: the live-view focus-scrub toggle (iOS `mfScrubToggleRow`).
-        // Persisted; off hides the scrub strip even in an AF mode. Independent of the
-        // mode bar so it renders whether or not the focus picker exposes multiple tabs.
-        if (picker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
-            MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
-        }
-    }
+        },
+    )
 }
 
-/**
- * FOCUS popup toggle for the live-view focus-scrub strip (iOS `mfScrubToggleRow`): a bordered
- * glass row with a label and the shared settings switch graphic. Off hides the strip regardless
- * of focus mode.
- */
+/** The typed write for a tone pick: Swift validates it against the active codec's offered tones. */
+internal fun movieToneRequest(choices: CaptureCodecColorChoices): CommandControlRequest =
+    CommandControlRequest(
+        title = "Color",
+        control = CameraControl.MOVIE_TONE,
+        currentValue = choices.selectedColorChoice?.label.orEmpty(),
+        options = choices.colors.filter { it.isEditable }.map { it.label },
+    )
+
+/** The shared capture toggle, matching the iOS focus footer; the host owns focus-dial visibility. */
 @Composable
 private fun MfScrubToggleRow(enabled: Boolean, onToggle: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(LiveDesign.background.copy(alpha = 0.28f), ChromeShape)
-            .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .chromeClickable(onClick = onToggle)
-            .semantics {
-                role = Role.Switch
-                toggleableState = ToggleableState(enabled)
-            }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            stringResource(R.string.camera_focus_scrub_toggle),
-            style = chromeStyle(12f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-            maxLines = 1,
-            modifier = Modifier.weight(1f),
-        )
-        MonitorSettingsSwitchGraphic(isOn = enabled)
-    }
+    PrefToggle(
+        title = stringResource(R.string.camera_focus_scrub_toggle),
+        help = "Shows a manual focus dial beside the picture.",
+        checked = enabled,
+        enabled = true,
+        onCheckedChange = { onToggle() },
+    )
 }
 
 /**
@@ -1689,23 +1087,6 @@ internal const val MF_DRIVE_MAX_SPEED_FACTOR = 4f
 
 /** The vertical strip's touch width; the visual capsule is slimmer inside. */
 internal const val MF_DRIVE_STRIP_WIDTH_DP = 44f
-
-/**
- * Seats the MF focus-by-wire strip just left of the right system rail
- * (record/DISP/media/settings), vertically centred in the viewport.
- */
-internal fun mfDriveStripFrame(
-    viewport: MonitorRect,
-    rightRailLeading: Float,
-): MonitorRect {
-    val height = minOf(260f, viewport.height * 0.6f)
-    return MonitorRect(
-        x = rightRailLeading - MF_DRIVE_STRIP_WIDTH_DP - 12f,
-        y = viewport.y + (viewport.height - height) / 2f,
-        width = MF_DRIVE_STRIP_WIDTH_DP,
-        height = height,
-    )
-}
 
 /**
  * Vertical focus-by-wire strip on the live view (MF + proven-drivable lens
@@ -1765,7 +1146,7 @@ internal fun MFDriveStrip(
             Modifier
                 .width(28.dp)
                 .fillMaxHeight()
-                .glass(CircleShape)
+                .monitorMaterial(MonitorMaterial.Compact, CircleShape)
                 .background(
                     Color.White.copy(alpha = if (dragging) 0.14f else 0f),
                     CircleShape,
@@ -1828,296 +1209,5 @@ internal fun MFDriveStrip(
                 )
             }
         }
-    }
-}
-
-/**
- * A pair of buttons flanking the gold selected row: a Kelvin drum's ±10, and the codec drum's
- * advertised bit depths (8-bit left, 10-bit right). Captions default to the Kelvin pair.
- */
-internal data class DrumSideAdjust(
-    val minusEnabled: Boolean,
-    val plusEnabled: Boolean,
-    val onMinus: () -> Unit,
-    val onPlus: () -> Unit,
-    val minusLabel: String = "−10",
-    val plusLabel: String = "+10",
-    val minusDescription: String = "Decrease Kelvin by 10",
-    val plusDescription: String = "Increase Kelvin by 10",
-    /** Filled treatment for a side that IS the current camera value (the active bit depth). */
-    val minusSelected: Boolean = false,
-    val plusSelected: Boolean = false,
-)
-
-/**
- * The advertised bit depths flanking a settled codec row, or null when this drum is not the
- * codec picker or the body offers that codec at a single depth. The grouping decision is the
- * Swift core's ([PTPCameraCodecFamily]); this only renders what it published.
- */
-private fun codecBitDepthAdjust(
-    request: CommandControlRequest,
-    row: String,
-    enabled: Boolean,
-    onSelect: (CommandControlRequest, String) -> Unit,
-): DrumSideAdjust? {
-    if (request.control != CameraControl.CODEC) return null
-    val depths = request.bitDepths.filter { it.codec == row }
-    if (depths.size != 2) return null
-    val low = depths[0]
-    val high = depths[1]
-    return DrumSideAdjust(
-        minusEnabled = enabled,
-        plusEnabled = enabled,
-        onMinus = { onSelect(request, low.writeValue) },
-        onPlus = { onSelect(request, high.writeValue) },
-        minusLabel = low.label,
-        plusLabel = high.label,
-        minusDescription = "Record $row at ${low.label}",
-        plusDescription = "Record $row at ${high.label}",
-        minusSelected = request.bitDepthSelection == low.label,
-        plusSelected = request.bitDepthSelection == high.label,
-    )
-}
-
-private fun applyKelvinFineStep(
-    modeIndex: Int,
-    lastByMode: androidx.compose.runtime.snapshots.SnapshotStateList<String>,
-    lastAppliedByMode: androidx.compose.runtime.snapshots.SnapshotStateList<String>,
-    current: String,
-    delta: Int,
-    request: CommandControlRequest,
-    onSelect: (CommandControlRequest, String) -> Unit,
-    suppressUntil: (Long) -> Unit,
-) {
-    val next = WbPickerPolicy.fineAdjust(from = current, delta = delta) ?: return
-    if (next == current) return
-    suppressUntil(android.os.SystemClock.uptimeMillis() + 450L)
-    if (modeIndex in lastByMode.indices) {
-        lastByMode[modeIndex] = next
-    }
-    if (modeIndex in lastAppliedByMode.indices) {
-        lastAppliedByMode[modeIndex] = next
-    }
-    onSelect(request, next)
-}
-
-/** Centred-row sentinel for a drum whose lazy list has not been measured yet. */
-private const val NOT_LAID_OUT = -1
-
-/**
- * iOS `AccentDrumWheel`: a snapping vertical drum — the centred row renders
- * large in accent between two hairlines, neighbours dim above/below behind a
- * top/bottom fade. Settling on a row calls [onSettle]; the whole wheel dims
- * and stops scrolling when not [interactive] (control lock).
- *
- * Optional [sideAdjust] draws −10 / +10 on either side of the settled row
- * (Kelvin fine-tune) without covering the value itself.
- */
-@Composable
-internal fun AccentDrumWheel(
-    options: List<String>,
-    selection: String,
-    onSettle: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    interactive: Boolean = true,
-    markedValues: Set<String> = emptySet(),
-    wheelHeight: Dp = 176.dp,
-    rowHeight: Dp = 52.dp,
-    sideAdjust: DrumSideAdjust? = null,
-) {
-    if (options.isEmpty()) return
-    val selectedIndex = options.indexOf(selection).coerceAtLeast(0)
-    val listState =
-        androidx.compose.foundation.lazy.rememberLazyListState(
-            initialFirstVisibleItemIndex = selectedIndex,
-        )
-    // Snap item *centers* to the viewport center (not item tops → start).
-    val fling =
-        androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(
-            lazyListState = listState,
-            snapPosition = androidx.compose.foundation.gestures.snapping.SnapPosition.Center,
-        )
-    val centeredIndex by remember {
-        androidx.compose.runtime.derivedStateOf {
-            val layout = listState.layoutInfo
-            val center = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
-            layout.visibleItemsInfo
-                .minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) }
-                // NOT_LAID_OUT, never row 0. LaunchedEffect runs in the ANIMATION callback,
-                // before the measure pass, so on the very first composition `visibleItemsInfo`
-                // is still empty. Reporting row 0 there made the settle collector below fire
-                // `onSettle(options[0])` the instant a picker opened — a camera write of a
-                // placeholder the operator never chose (issue #257).
-                ?.index ?: NOT_LAID_OUT
-        }
-    }
-    // Centre on [selection] only when it is not already the settled row and the
-    // user is not dragging — avoids fighting fling / rapid settles (iOS keeps
-    // local drum state and only snaps when the operator is idle).
-    LaunchedEffect(options, selection) {
-        val index = options.indexOf(selection).coerceAtLeast(0)
-        if (listState.isScrollInProgress) return@LaunchedEffect
-        if (centeredIndex == index) return@LaunchedEffect
-        listState.scrollToItem(index)
-    }
-    // Apply the row the wheel settles on (iOS applies on drum settle). `getOrNull(NOT_LAID_OUT)`
-    // is null, so the pre-layout emission is skipped instead of writing row 0 to the camera.
-    LaunchedEffect(listState, options) {
-        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress to centeredIndex }
-            .collect { (scrolling, index) ->
-                if (!scrolling) options.getOrNull(index)?.let(onSettle)
-            }
-    }
-    // Prefer preferred height; parent maxHeight (landscape drop-down) may clip.
-    androidx.compose.foundation.layout.BoxWithConstraints(
-        modifier
-            .fillMaxWidth()
-            .heightIn(min = rowHeight * 3, max = wheelHeight)
-            .height(wheelHeight)
-            .alpha(if (interactive) 1f else 0.55f),
-        contentAlignment = Alignment.Center,
-    ) {
-        // Always use the laid-out height so padding matches hairlines in landscape
-        // short panels (previously assumed 176.dp while maxHeight was ~128.dp).
-        val actualHeight = maxHeight
-        val edgePadding = ((actualHeight - rowHeight) / 2).coerceAtLeast(0.dp)
-        androidx.compose.foundation.lazy.LazyColumn(
-            state = listState,
-            flingBehavior = fling,
-            userScrollEnabled = interactive,
-            contentPadding =
-                androidx.compose.foundation.layout.PaddingValues(vertical = edgePadding),
-            modifier =
-                Modifier.fillMaxWidth()
-                    .height(actualHeight)
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                        drawContent()
-                        // Top/bottom fade so off-centre rows dissolve, iOS mask.
-                        val fade = size.height * 0.22f
-                        drawRect(
-                            Brush.verticalGradient(
-                                0f to Color.Transparent, 1f to Color.Black, endY = fade,
-                            ),
-                            size = Size(size.width, fade),
-                            blendMode = BlendMode.DstIn,
-                        )
-                        drawRect(
-                            Brush.verticalGradient(
-                                0f to Color.Black, 1f to Color.Transparent,
-                                startY = size.height - fade, endY = size.height,
-                            ),
-                            topLeft = Offset(0f, size.height - fade),
-                            size = Size(size.width, fade),
-                            blendMode = BlendMode.DstIn,
-                        )
-                    },
-        ) {
-            items(options.size, key = { options[it] }) { index ->
-                val option = options[index]
-                val centered = index == centeredIndex
-                Row(
-                    Modifier.fillMaxWidth().height(rowHeight),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        option,
-                        style =
-                            chromeStyle(
-                                if (centered) 30f else 23f,
-                                if (centered) FontWeight.SemiBold else FontWeight.Normal,
-                                mono = true,
-                            ),
-                        color = if (centered) LiveDesign.accent else LiveDesign.muted.copy(alpha = 0.7f),
-                        maxLines = 1,
-                    )
-                    if (option in markedValues) {
-                        Text(
-                            " ★",
-                            style = chromeStyle(if (centered) 13f else 10f, FontWeight.Bold),
-                            color = if (centered) LiveDesign.accent else LiveDesign.muted.copy(alpha = 0.7f),
-                        )
-                    }
-                }
-            }
-        }
-        // Hairlines bracketing the settled row (centre of actualHeight).
-        Box(
-            Modifier.fillMaxWidth().height(1.dp).offset(y = -rowHeight / 2)
-                .background(LiveDesign.hairlineStrong),
-        )
-        Box(
-            Modifier.fillMaxWidth().height(1.dp).offset(y = rowHeight / 2)
-                .background(LiveDesign.hairlineStrong),
-        )
-        // The flanking pair on either side of the selected row — always on when set.
-        sideAdjust?.let { adjust ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight)
-                    .padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                DrumSideStepButton(
-                    label = adjust.minusLabel,
-                    enabled = adjust.minusEnabled,
-                    selected = adjust.minusSelected,
-                    contentDescription = adjust.minusDescription,
-                    onClick = adjust.onMinus,
-                )
-                // Leave the centre open so the gold selected value stays readable.
-                Box(Modifier.weight(1f))
-                DrumSideStepButton(
-                    label = adjust.plusLabel,
-                    enabled = adjust.plusEnabled,
-                    selected = adjust.plusSelected,
-                    contentDescription = adjust.plusDescription,
-                    onClick = adjust.onPlus,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DrumSideStepButton(
-    label: String,
-    enabled: Boolean,
-    contentDescription: String,
-    onClick: () -> Unit,
-    selected: Boolean = false,
-) {
-    Box(
-        Modifier
-            .height(40.dp)
-            .width(56.dp)
-            .alpha(if (enabled) 1f else 0.35f)
-            .background(if (selected) LiveDesign.accent else LiveDesign.accentDim, ChromeShape)
-            .border(
-                1.5.dp,
-                if (enabled) LiveDesign.accent else LiveDesign.hairline,
-                ChromeShape,
-            )
-            .chromeClickable(enabled = enabled, onClick = onClick)
-            .semantics {
-                this.contentDescription = contentDescription
-                this.selected = selected
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = chromeStyle(14f, FontWeight.Bold),
-            color =
-                when {
-                    selected -> LiveDesign.background
-                    enabled -> LiveDesign.accent
-                    else -> LiveDesign.faint
-                },
-            maxLines = 1,
-        )
     }
 }

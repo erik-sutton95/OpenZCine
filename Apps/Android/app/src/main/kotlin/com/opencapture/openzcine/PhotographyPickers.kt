@@ -1,5 +1,9 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.cameracontrols.CaptureDrumWheel
+import com.opencapture.opencine.nikon.StillPickerLadders
+import com.opencapture.opencine.nikon.NikonCapturePopupKind
+import com.opencapture.opencine.nikon.NikonCapturePopupState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
@@ -30,75 +34,16 @@ import androidx.compose.ui.unit.sp
 import com.opencapture.opencine.nikon.CameraControl
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.openzcine.settings.PanelCloseButton
+import com.opencapture.opencine.cameracontrols.chromeClickable
+import com.opencapture.monitorui.MonitorMaterial
+import com.opencapture.monitorui.monitorMaterial
 
 /**
- * Pure iOS-parity policy for the photography (stills) pickers: the hardcoded
- * ladders from `CameraPicker.options` / `.modes` in `NativeAppRoot.swift` and
- * the mode-aware write gates. Camera-advertised enums take precedence at the
- * presentation layer; these are the same fallbacks iOS uses.
+ * Mode-aware write gates and drive rules for the photography (stills) pickers. The ladders the
+ * pickers fall back to live in Core ([StillPickerLadders]); camera-advertised enums take
+ * precedence at the presentation layer.
  */
 internal object StillPickerPolicy {
-    /** iOS `CameraPicker.stillISO.options`. */
-    val ISO_OPTIONS: List<String> =
-        listOf(
-            "100", "125", "160", "200", "250", "320", "400", "500", "640", "800", "1000",
-            "1250", "1600", "2000", "2500", "3200", "4000", "5000", "6400", "8000", "10000",
-            "12800", "16000", "20000", "25600", "32000", "40000", "51200",
-        )
-
-    /** iOS `CameraPicker.stillShutter.options` (camera speed enum fallback). */
-    val SHUTTER_OPTIONS: List<String> =
-        listOf(
-            "30s", "15s", "8s", "4s", "2s", "1s", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60",
-            "1/125", "1/200", "1/250", "1/500", "1/1000", "1/2000", "1/4000", "1/8000", "Bulb",
-        )
-
-    /** iOS `CameraPicker.stillIris.options` (lens-aware enum fallback). */
-    val IRIS_OPTIONS: List<String> =
-        listOf(
-            "f/1.2", "f/1.4", "f/1.8", "f/2.0", "f/2.2", "f/2.5", "f/2.8", "f/3.2", "f/3.5",
-            "f/4.0", "f/4.5", "f/5.0", "f/5.6", "f/6.3", "f/7.1", "f/8.0", "f/9.0", "f/10.0",
-            "f/11.0", "f/13.0", "f/14.0", "f/16.0", "f/18.0", "f/20.0", "f/22.0",
-        )
-
-    /**
-     * Conservative fallback for the release-mode drum when the body has not
-     * advertised its `StillCaptureMode` enum. In the body's own release-mode
-     * order — Single, CL, CH, CH+, then the high-speed positions — not the
-     * app's old Single/CH/CL/CH+ (#274). Minus the dial-only Quick position and
-     * the on-body Self-timer (the Built-in Timer tab owns that engage/restore).
-     * A connected body's advertised order always wins over this.
-     */
-    val DRIVE_OPTIONS: List<String> =
-        listOf(
-            "Single", "Continuous L", "Continuous H", "Continuous H+",
-            "C15", "C30", "C60", "C120",
-        )
-
-    /**
-     * The DRIVE drum's options: the body's advertised SET, in RELEASE order, minus the two
-     * positions this drum does not own.
-     *
-     * Advertised beats invented — a body is never offered a mode it lacks (#274) — but advertised
-     * ORDER is not the body's menu order. The ZR enumerates by raw value, and the raws interleave:
-     * Single `0x0001`, Continuous H `0x0002`, Continuous L `0x8010`, Self-timer `0x8011`,
-     * Continuous H+ `0x8019`. So the drum read Single · CH · CL · CH+, which is neither the
-     * camera's wheel nor any Z body's. [DRIVE_OPTIONS] is that release order, so the advertised
-     * set is kept and this ordering applied over it.
-     *
-     * Anything advertised that this build does not know is kept after the modes it can order,
-     * rather than dropped — a newer body's position stays reachable even when its place is a guess.
-     *
-     * Twin of the shared core's `StillDriveMode.driveDrumOptions`; both are tested against the same
-     * table so the wheel cannot read one order on iPhone and another here.
-     */
-    fun driveDrumOptions(advertised: List<String>): List<String> {
-        val offered = advertised.filterNot { it == SELF_TIMER_LABEL || it == "Quick" }
-        if (offered.isEmpty()) return emptyList()
-        val known = DRIVE_OPTIONS.filter(offered::contains)
-        return known + offered.filterNot(DRIVE_OPTIONS::contains)
-    }
-
     /** Drive modes that keep firing while the shutter stays pressed. */
     val CONTINUOUS_DRIVES: Set<String> =
         setOf("Continuous H", "Continuous L", "Continuous H+", "C15", "C30", "C60", "C120")
@@ -106,64 +51,7 @@ internal object StillPickerPolicy {
     /** The body's own self-timer release-mode label. */
     const val SELF_TIMER_LABEL: String = "Self-timer"
 
-    /** iOS `CameraPicker.stillDrive.modes` App-timer ladder. */
-    val APP_TIMER_OPTIONS: List<String> =
-        listOf("Off", "1s", "2s", "3s", "5s", "10s", "20s", "30s", "60s")
-
-    /** iOS `CameraPicker.stillFocus.modes` ladders. */
-    val FOCUS_MODE_OPTIONS: List<String> = listOf("AF-S", "AF-C", "AF-A", "MF")
-
-    /**
-     * AF-**area** modes. `3D tracking` and `Subject tracking` are spelled the way
-     * the body spells them so neither reads as the adjacent subject-*detection*
-     * tab — the two are separate Nikon settings (#274).
-     */
-    val FOCUS_AREA_OPTIONS: List<String> =
-        listOf(
-            "Pinpoint", "Single", "Dyn-S", "Dyn-M", "Dyn-L", "Wide-S", "Wide-L",
-            "3D tracking", "Auto",
-        )
-    val FOCUS_SUBJECT_OPTIONS: List<String> =
-        listOf("Off", "Auto", "People", "Animal", "Vehicle", "Bird", "Airplane")
-
-    /**
-     * Conservative MODE fallback. No user banks: a body with U1/U2/U3 advertises
-     * them in its `ExposureProgramMode` enum, and inferring them from generic
-     * photo capability offered a Zf three modes it does not have (#274).
-     */
-    val MODE_OPTIONS: List<String> = listOf("Auto", "P", "S", "A", "M")
-    val USER_MODE_OPTIONS: List<String> = listOf("P", "S", "A", "M")
     private val USER_BANKS = setOf("U1", "U2", "U3", "U4")
-
-    /** iOS `CameraPicker.stillMeter.options`. */
-    val METER_OPTIONS: List<String> = listOf("Matrix", "Center", "Spot", "Highlight")
-
-    /** iOS `CameraPicker.stillPicture.options`: the full picture-control set. */
-    val PICTURE_OPTIONS: List<String> =
-        listOf(
-            "Auto", "Standard", "Neutral", "Vivid", "Monochrome", "Portrait", "Landscape",
-            "Flat", "Flat Mono", "Deep Tone Mono", "Rich Tone Portrait",
-            "Dream", "Morning", "Pop", "Sunday", "Somber", "Drama", "Silence", "Bleach",
-            "Melancholic", "Pure", "Denim", "Toy", "Sepia", "Blue", "Red", "Pink",
-            "Charcoal", "Graphite", "Binary", "Carbon",
-        ) + (1..9).map { "Custom $it" } + (1..9).map { "Cloud $it" }
-
-    /** iOS `StillImageArea` labels (photo sensor crop). */
-    val AREA_OPTIONS: List<String> = listOf("FX", "DX", "1:1", "16:9")
-
-    /** iOS `CameraPicker.stillSize.modes` Size-tab fallback ladder. */
-    val SIZE_OPTIONS: List<String> = listOf("Size L", "Size M", "Size S")
-
-    /** iOS flat `stillQuality` options (★ variants compose via the dual drum). */
-    val QUALITY_OPTIONS: List<String> =
-        listOf(
-            "RAW", "RAW+JPEG Fine", "RAW+JPEG Normal", "RAW+JPEG Basic", "JPEG Fine",
-            "JPEG Normal", "JPEG Basic",
-        )
-
-    /** iOS `QualityPickerPanel.nefOptions` (NEF/RAW recording compression). */
-    val NEF_OPTIONS: List<String> =
-        listOf("High efficiency", "High efficiency★", "Lossless compression")
 
     /**
      * Mode-aware manual gate for stills sensitivity (iOS `stillAllowsManualISO`):
@@ -286,7 +174,8 @@ internal fun photographyCaptureSettings(
         showsPicker: Boolean = true,
     ): MonitorPickerPresentation? {
         if (!showsPicker || options.isEmpty()) return null
-        val value = current?.takeIf { it in options } ?: options.first()
+        // Unknown stays blank: the drum seats on its first label without claiming it.
+        val value = current?.takeIf { it in options }.orEmpty()
         return MonitorPickerPresentation(
             kind = kind,
             title = title,
@@ -309,9 +198,9 @@ internal fun photographyCaptureSettings(
 
     // MODE — the main program drum plus the U banks' inner program (iOS stillMode).
     val modeOptions =
-        advertised(CameraControl.EXPOSURE_MODE, StillPickerPolicy.MODE_OPTIONS)
+        advertised(CameraControl.EXPOSURE_MODE, StillPickerLadders.MODE_OPTIONS)
     val userModeOptions =
-        advertised(CameraControl.STILL_USER_MODE_PROGRAM, StillPickerPolicy.USER_MODE_OPTIONS)
+        advertised(CameraControl.STILL_USER_MODE_PROGRAM, StillPickerLadders.USER_MODE_OPTIONS)
     val modePicker =
         MonitorPickerPresentation(
             kind = MonitorPickerKind.MODE,
@@ -325,8 +214,7 @@ internal fun photographyCaptureSettings(
                             CommandControlRequest(
                                 title = "MODE",
                                 control = CameraControl.EXPOSURE_MODE,
-                                currentValue =
-                                    exposureMode?.takeIf { it in modeOptions } ?: "P",
+                                currentValue = exposureMode?.takeIf { it in modeOptions }.orEmpty(),
                                 options = modeOptions,
                             ),
                         applyValueOnActivate = false,
@@ -337,7 +225,7 @@ internal fun photographyCaptureSettings(
                             CommandControlRequest(
                                 title = "MODE",
                                 control = CameraControl.STILL_USER_MODE_PROGRAM,
-                                currentValue = userProgram ?: "P",
+                                currentValue = userProgram.orEmpty(),
                                 options = userModeOptions,
                             ),
                         applyValueOnActivate = false,
@@ -352,13 +240,13 @@ internal fun photographyCaptureSettings(
     // locked); Manual writes the stills ladder, mode-aware (iOS stillISO).
     val liveISO = properties.iso?.toString()
     val isoOptions =
-        if (liveISO != null && liveISO !in StillPickerPolicy.ISO_OPTIONS) {
-            (StillPickerPolicy.ISO_OPTIONS + liveISO)
+        if (liveISO != null && liveISO !in StillPickerLadders.ISO_OPTIONS) {
+            (StillPickerLadders.ISO_OPTIONS + liveISO)
                 .sortedBy { it.toLongOrNull() ?: Long.MAX_VALUE }
         } else {
-            StillPickerPolicy.ISO_OPTIONS
+            StillPickerLadders.ISO_OPTIONS
         }
-    val isoCurrent = liveISO?.takeIf { it in isoOptions } ?: "800"
+    val isoCurrent = liveISO?.takeIf { it in isoOptions }.orEmpty()
     val allowsManualISO = StillPickerPolicy.allowsManualISO(exposureMode)
     fun isoMode(auto: Boolean) =
         MonitorPickerModePresentation(
@@ -391,13 +279,11 @@ internal fun photographyCaptureSettings(
             modes = listOf(isoMode(auto = true), isoMode(auto = false)),
             // Camera truth: the body's Auto-ISO readback picks the open tab.
             initialModeIndex = if (properties.isoAuto == true) 0 else 1,
-            drumLockBanner =
-                if (allowsManualISO) {
-                    "Auto ISO is on — the camera sets sensitivity. " +
-                        "Switch to Manual to choose a value."
-                } else {
-                    "Manual ISO needs a P/S/A/M program. The camera is setting sensitivity."
-                },
+            popup = NikonCapturePopupState(
+                kind = NikonCapturePopupKind.STILL_ISO, title = "ISO", subtitle = "Sensitivity", modes = emptyList(),
+                circuitIndex = if (properties.isoAuto == true) 0 else 1, photography = true,
+                liveIso = properties.iso?.toInt(), stillAllowsManualIso = allowsManualISO,
+            ),
         )
 
     // SHUTTER — the body's stills speed enum with the iOS ladder fallback;
@@ -413,7 +299,7 @@ internal fun photographyCaptureSettings(
             title = "SHUTTER",
             subtitle = "Speed",
             control = CameraControl.STILL_SHUTTER,
-            options = cameraShutter ?: StillPickerPolicy.SHUTTER_OPTIONS,
+            options = cameraShutter ?: StillPickerLadders.SHUTTER_OPTIONS,
             current = properties.shutterSpeed,
             showsPicker = allowsShutter,
         )
@@ -429,7 +315,7 @@ internal fun photographyCaptureSettings(
             title = "IRIS",
             subtitle = "Aperture",
             control = CameraControl.STILL_IRIS,
-            options = cameraApertures ?: StillPickerPolicy.IRIS_OPTIONS,
+            options = cameraApertures ?: StillPickerLadders.IRIS_OPTIONS,
             current = properties.iris,
             showsPicker = allowsIris,
         )
@@ -439,9 +325,9 @@ internal fun photographyCaptureSettings(
     // The body's own release-mode order (Z6III: Single, CL, CH, CH+, …), minus the two positions
     // the app owns: Quick is dial-only and Self-timer belongs to the Built-in Timer tab.
     val driveOptions =
-        StillPickerPolicy.driveDrumOptions(
-                advertised(CameraControl.STILL_DRIVE, StillPickerPolicy.DRIVE_OPTIONS))
-            .ifEmpty { StillPickerPolicy.DRIVE_OPTIONS }
+        StillPickerLadders.driveDrumOptions(
+                advertised(CameraControl.STILL_DRIVE, StillPickerLadders.DRIVE_OPTIONS))
+            .ifEmpty { StillPickerLadders.DRIVE_OPTIONS }
     val drivePicker =
         MonitorPickerPresentation(
             kind = MonitorPickerKind.DRIVE,
@@ -456,8 +342,7 @@ internal fun photographyCaptureSettings(
                                 title = "DRIVE",
                                 control = CameraControl.STILL_DRIVE,
                                 currentValue =
-                                    properties.stillCaptureMode?.takeIf { it in driveOptions }
-                                        ?: driveOptions.first(),
+                                    properties.stillCaptureMode?.takeIf { it in driveOptions }.orEmpty(),
                                 options = driveOptions,
                             ),
                         applyValueOnActivate = false,
@@ -472,7 +357,12 @@ internal fun photographyCaptureSettings(
                                 // engage/restore logic, never a raw drive write.
                                 title = "Built-in Timer",
                                 control = CameraControl.STILL_DRIVE,
-                                currentValue = if (builtInTimerOn) "On" else "Off",
+                                currentValue =
+                                    when (properties.stillCaptureMode) {
+                                        null -> ""
+                                        StillPickerPolicy.SELF_TIMER_LABEL -> "On"
+                                        else -> "Off"
+                                    },
                                 options = listOf("Off", "On"),
                             ),
                         applyValueOnActivate = false,
@@ -486,7 +376,7 @@ internal fun photographyCaptureSettings(
                                 title = "App-timer",
                                 control = CameraControl.STILL_DRIVE,
                                 currentValue = photoTimerLabel(photoTimerDelaySeconds),
-                                options = StillPickerPolicy.APP_TIMER_OPTIONS,
+                                options = StillPickerLadders.APP_TIMER_OPTIONS,
                             ),
                         applyValueOnActivate = false,
                         disabled = builtInTimerOn,
@@ -499,11 +389,11 @@ internal fun photographyCaptureSettings(
     // describes the STILLS focus properties into these lists, so Area carries the body's
     // dynamic-area and 3D-tracking positions rather than the movie set.
     val focusModeOptions =
-        advertised(CameraControl.STILL_FOCUS_MODE, StillPickerPolicy.FOCUS_MODE_OPTIONS)
+        advertised(CameraControl.STILL_FOCUS_MODE, StillPickerLadders.FOCUS_MODE_OPTIONS)
     val focusAreaOptions =
-        advertised(CameraControl.STILL_FOCUS_AREA, StillPickerPolicy.FOCUS_AREA_OPTIONS)
+        advertised(CameraControl.STILL_FOCUS_AREA, StillPickerLadders.FOCUS_AREA_OPTIONS)
     val focusSubjectOptions =
-        advertised(CameraControl.STILL_FOCUS_SUBJECT, StillPickerPolicy.FOCUS_SUBJECT_OPTIONS)
+        advertised(CameraControl.STILL_FOCUS_SUBJECT, StillPickerLadders.FOCUS_SUBJECT_OPTIONS)
     val focusPicker =
         MonitorPickerPresentation(
             kind = MonitorPickerKind.FOCUS,
@@ -519,8 +409,7 @@ internal fun photographyCaptureSettings(
                                 control = CameraControl.STILL_FOCUS_MODE,
                                 currentValue =
                                     properties.activeFocusMode(photography = true)
-                                        ?.takeIf { it in focusModeOptions }
-                                        ?: focusModeOptions.first(),
+                                        ?.takeIf { it in focusModeOptions }.orEmpty(),
                                 options = focusModeOptions,
                             ),
                         applyValueOnActivate = false,
@@ -532,8 +421,7 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_AREA,
                                 currentValue =
-                                    properties.focusArea?.takeIf { it in focusAreaOptions }
-                                        ?: focusAreaOptions.first(),
+                                    properties.focusArea?.takeIf { it in focusAreaOptions }.orEmpty(),
                                 options = focusAreaOptions,
                             ),
                         applyValueOnActivate = false,
@@ -545,8 +433,7 @@ internal fun photographyCaptureSettings(
                                 title = "FOCUS",
                                 control = CameraControl.STILL_FOCUS_SUBJECT,
                                 currentValue =
-                                    properties.focusSubject?.takeIf { it in focusSubjectOptions }
-                                        ?: focusSubjectOptions.first(),
+                                    properties.focusSubject?.takeIf { it in focusSubjectOptions }.orEmpty(),
                                 options = focusSubjectOptions,
                             ),
                         applyValueOnActivate = false,
@@ -560,7 +447,7 @@ internal fun photographyCaptureSettings(
             title = "METER",
             subtitle = "Metering pattern",
             control = CameraControl.STILL_METER,
-            options = advertised(CameraControl.STILL_METER, StillPickerPolicy.METER_OPTIONS),
+            options = advertised(CameraControl.STILL_METER, StillPickerLadders.METER_OPTIONS),
             current = properties.meteringMode,
         )
 
@@ -572,7 +459,7 @@ internal fun photographyCaptureSettings(
             control = CameraControl.STILL_PICTURE_CONTROL,
             options =
                 advertised(
-                    CameraControl.STILL_PICTURE_CONTROL, StillPickerPolicy.PICTURE_OPTIONS),
+                    CameraControl.STILL_PICTURE_CONTROL, StillPickerLadders.PICTURE_OPTIONS),
             current = properties.pictureControl,
         )
 
@@ -634,7 +521,9 @@ internal fun photographyCaptureSettings(
             "WB",
             stillWhiteBalanceValue(properties),
             "5560K",
-            wbPicker,
+            wbPicker?.let { picker ->
+                picker.copy(popup = nikonCapturePopup(picker).copy(photography = true))
+            },
         ),
         tile(MonitorPickerKind.METER, "METER", properties.meteringMode, "Matrix", meterPicker),
         tile(
@@ -672,9 +561,8 @@ internal fun photographyTopBarPickers(
                                 control = CameraControl.STILL_IMAGE_AREA,
                                 currentValue =
                                     properties.imageArea
-                                        ?.takeIf { it in StillPickerPolicy.AREA_OPTIONS }
-                                        ?: "FX",
-                                options = StillPickerPolicy.AREA_OPTIONS,
+                                        ?.takeIf { it in StillPickerLadders.AREA_OPTIONS }.orEmpty(),
+                                options = StillPickerLadders.AREA_OPTIONS,
                             ),
                         applyValueOnActivate = false,
                     ),
@@ -685,10 +573,10 @@ internal fun photographyTopBarPickers(
                                 title = "SIZE",
                                 control = CameraControl.STILL_IMAGE_SIZE,
                                 currentValue =
-                                    (cameraSizes ?: StillPickerPolicy.SIZE_OPTIONS).let { all ->
-                                        properties.imageSize?.takeIf { it in all } ?: all.first()
+                                    (cameraSizes ?: StillPickerLadders.SIZE_OPTIONS).let { all ->
+                                        properties.imageSize?.takeIf { it in all }.orEmpty()
                                     },
-                                options = cameraSizes ?: StillPickerPolicy.SIZE_OPTIONS,
+                                options = cameraSizes ?: StillPickerLadders.SIZE_OPTIONS,
                             ),
                         applyValueOnActivate = false,
                     ),
@@ -707,8 +595,8 @@ internal fun photographyTopBarPickers(
                             CommandControlRequest(
                                 title = "QUALITY",
                                 control = CameraControl.STILL_QUALITY,
-                                currentValue = properties.compression ?: "JPEG Fine",
-                                options = StillPickerPolicy.QUALITY_OPTIONS,
+                                currentValue = properties.compression.orEmpty(),
+                                options = StillPickerLadders.QUALITY_OPTIONS,
                             ),
                     ),
                 ),
@@ -778,8 +666,8 @@ private fun TimerShotsStepButton(
 }
 
 /**
- * The Image-quality dual-drum panel (iOS `QualityPickerPanel`): a RAW On/Off
- * wheel with the NEF compression chips beneath, beside a JPEG/HEIF tier wheel
+ * The Image-quality dual-drum panel (iOS `QualityPickerPanel`, on the shared value drum): a RAW
+ * On/Off drum with the NEF compression chips beneath, beside a JPEG/HEIF tier wheel
  * with the ★ optimal-quality toggle. The pair composes one image-quality
  * write; NEF compression writes its own property. Turning the last active
  * half off bounces the other half back on.
@@ -791,7 +679,7 @@ internal fun QualityPickerPanelBody(
     onSelect: (CommandControlRequest, String) -> Unit,
     onDismiss: () -> Unit,
     /** The body's advertised NEF compressions; the ladder is only a fallback (#274). */
-    nefOptions: List<String> = StillPickerPolicy.NEF_OPTIONS,
+    nefOptions: List<String> = StillPickerLadders.NEF_OPTIONS,
     controlsEnabled: Boolean = true,
     chromeless: Boolean = false,
 ) {
@@ -819,7 +707,7 @@ internal fun QualityPickerPanelBody(
     Column(
         Modifier
             .then(if (chromeless) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
-                .overlayGlass(ChromeShape)
+                .monitorMaterial(MonitorMaterial.Expanded, ChromeShape)
                 .border(1.dp, LiveDesign.hairlineStrong, ChromeShape)
                 .padding(horizontal = 20.dp, vertical = 14.dp)),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -869,15 +757,14 @@ internal fun QualityPickerPanelBody(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 QualityColumnCaption("RAW")
-                AccentDrumWheel(
+                CaptureDrumWheel(
                     options = listOf("On", "Off"),
                     selection = if (config.rawEnabled) "On" else "Off",
-                    wheelHeight = 112.dp,
                     interactive = controlsEnabled,
-                    onSettle = { settled ->
-                        if (!controlsEnabled) return@AccentDrumWheel
+                    onSelect = { settled ->
+                        if (!controlsEnabled) return@CaptureDrumWheel
                         val enabled = settled == "On"
-                        if (enabled == config.rawEnabled) return@AccentDrumWheel
+                        if (enabled == config.rawEnabled) return@CaptureDrumWheel
                         config =
                             if (!enabled && config.tier == StillQualityConfig.TIER_OFF) {
                                 // Dropping RAW with the tier off would select
@@ -921,14 +808,13 @@ internal fun QualityPickerPanelBody(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 QualityColumnCaption("JPEG · HEIF")
-                AccentDrumWheel(
+                CaptureDrumWheel(
                     options = StillQualityConfig.TIER_OPTIONS,
                     selection = config.tier,
-                    wheelHeight = 112.dp,
                     interactive = controlsEnabled,
-                    onSettle = { settled ->
-                        if (!controlsEnabled) return@AccentDrumWheel
-                        if (settled == config.tier) return@AccentDrumWheel
+                    onSelect = { settled ->
+                        if (!controlsEnabled) return@CaptureDrumWheel
+                        if (settled == config.tier) return@CaptureDrumWheel
                         config =
                             if (settled == StillQualityConfig.TIER_OFF) {
                                 if (!config.rawEnabled) {

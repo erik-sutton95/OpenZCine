@@ -1,7 +1,10 @@
 package com.opencapture.openzcine.relay
 
 import android.net.nsd.NsdManager
+import com.opencapture.opencine.core.CameraSession as OpenCineCameraSession
+import com.opencapture.opencine.core.PowerStatus
 import com.opencapture.opencine.nikon.CameraCommandAdmission
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraFocusPoint
 import com.opencapture.opencine.nikon.CameraRecordingState
 import com.opencapture.opencine.nikon.CameraSession
@@ -10,20 +13,24 @@ import com.opencapture.opencine.nikon.CameraTemperatureStatus
 import com.opencapture.opencine.nikon.LiveFocusResult
 import com.opencapture.opencine.nikon.LiveFrame
 import com.opencapture.opencine.nikon.LiveFrameSource
+import com.opencapture.opencine.nikon.MediaStatus
+import com.opencapture.opencine.nikon.MonitorTextFormat
 import com.opencapture.opencine.nikonwire.MonitorRelayWire
 import com.opencapture.opencine.relay.RelayHostControl
 import com.opencapture.opencine.relayruntime.RelayBroadcastAnnouncer
 import com.opencapture.opencine.relayruntime.RelayBroadcastDispatch
 import com.opencapture.opencine.relayruntime.RelayBroadcastFrame
 import com.opencapture.opencine.relayruntime.RelayBroadcastOwner
+import com.opencapture.opencine.relayruntime.WatcherRelaySecrets
+import com.opencapture.monitorui.MonitorWatcherPasscodeRule
+import androidx.compose.runtime.mutableStateOf
 import com.opencapture.openzcine.UNAVAILABLE_MONITOR_VALUE
 import com.opencapture.openzcine.core.RelayEncoderProfile
-import com.opencapture.openzcine.monitorMediaStatus
-import com.opencapture.openzcine.monitorResolutionLabel
 import com.opencapture.openzcine.monitorStorageLabel
 import com.opencapture.openzcine.monitorValueOrNull
 import com.opencapture.openzcine.validBatteryPercent
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 
@@ -36,14 +43,24 @@ class RelayBroadcastController(
     deviceName: String,
     loadPreferredPort: () -> Int = { 0 },
     savePreferredPort: (Int) -> Unit = {},
+    /** Where the broadcast passcode is kept; null keeps it for this run only (tests, previews). */
+    private val passcodes: RelayPasscodes? = null,
 ) {
-    private class Source(val session: CameraSession, val frames: LiveFrameSource, val cameraName: String?)
+    private class Source(
+        val session: CameraSession,
+        val common: OpenCineCameraSession,
+        val frames: LiveFrameSource,
+        val cameraName: String?,
+    )
     private val owner = RelayBroadcastOwner<Source, LiveFrame, MonitorRelayWire.State,
         MonitorRelayWire.FrameMetadata, MonitorRelayWire.Command, MonitorRelayWire.ControlToken,
         MonitorRelayWire.JoinDenied>(
         scope = scope, codec = DeployedMonitorRelayCodec(), hostName = deviceName,
         frames = { it.frames.frames },
-        stateChanges = { merge(it.session.recordingState.map { }, it.session.cameraProperties.map { }) },
+        stateChanges = {
+            merge(it.session.recordingState.map { }, it.session.cameraProperties.map { },
+                it.common.snapshots.map { snapshot -> snapshot.power }.distinctUntilChanged().map { })
+        },
         frame = ::encodedFrame, readState = ::readState, dispatch = ::execute,
         makeAnnouncement = {
             RelayBroadcastAnnouncer(nsdManager, DeployedMonitorRelayCodec().profile, deviceName,
@@ -62,14 +79,50 @@ class RelayBroadcastController(
     var watcherPasscode: String
         get() = owner.watcherPasscode
         set(value) { owner.watcherPasscode = value }
+    private val passcodeLookup = mutableStateOf(passcodes?.hostPasscodeLookup() ?: WatcherRelaySecrets.Lookup.Absent)
+
+    /**
+     * The broadcast passcode in force, observable by the settings field: empty for an open
+     * broadcast, null while the store cannot answer.
+     */
+    val savedPasscode: String? get() = passcodeLookup.value.usableValue
+
+    /**
+     * Stores [code] under the shared watcher passcode rule and applies it to new joins; devices
+     * already watching keep their access until they leave. A code too short for the rule, or one
+     * the store did not keep, changes nothing: the previous code stays in force.
+     */
+    fun savePasscode(code: String): Boolean {
+        val next = MonitorWatcherPasscodeRule.entry(code).passcode ?: return false
+        if (passcodes != null && !passcodes.storeHostPasscode(next)) return false
+        passcodeLookup.value = if (next.isEmpty()) WatcherRelaySecrets.Lookup.Absent else WatcherRelaySecrets.Lookup.Stored(next)
+        owner.watcherPasscode = next
+        return true
+    }
+
+    /**
+     * Reads the stored passcode again (the store may not have answered at launch) and applies it.
+     * False while the store still cannot answer, so a broadcast never starts unprotected.
+     */
+    fun loadPasscode(): Boolean {
+        val lookup = passcodes?.hostPasscodeLookup() ?: passcodeLookup.value
+        passcodeLookup.value = lookup
+        owner.watcherPasscode = lookup.usableValue ?: return false
+        return true
+    }
     var encoderProfile: RelayEncoderProfile
         get() = owner.encoderProfile
         set(value) { owner.encoderProfile = value }
     var allowsControlRequests: Boolean
         get() = owner.allowsControlRequests
         set(value) { owner.allowsControlRequests = value }
-    fun start(session: CameraSession, frames: LiveFrameSource, cameraName: String?, servedCameraHost: String?) =
-        owner.start(Source(session, frames, cameraName), cameraName, servedCameraHost)
+    fun start(
+        session: CameraSession,
+        common: OpenCineCameraSession,
+        frames: LiveFrameSource,
+        cameraName: String?,
+        servedCameraHost: String?,
+    ) = owner.start(Source(session, common, frames, cameraName), cameraName, servedCameraHost)
     fun grantPendingControl() = owner.grantPendingControl()
     fun declinePendingControl() = owner.declinePendingControl()
     val pendingRequest: RelayHostControl.PendingRequest? get() = owner.pendingRequest
@@ -77,6 +130,12 @@ class RelayBroadcastController(
     fun declinePendingControl(request: RelayHostControl.PendingRequest) = owner.declinePendingControl(request)
     fun reclaimControl() = owner.reclaimControl()
     fun stop(notifyReason: String? = null) = owner.stop(notifyReason)
+
+    companion object {
+        /** Where earlier builds kept the broadcast passcode in plain text (OperatorSettings). */
+        const val LEGACY_PASSCODE_STORE: String = "openzcine.operator-settings"
+        const val LEGACY_PASSCODE_KEY: String = "sharing.watcherPasscode"
+    }
 
     private suspend fun execute(source: Source, command: MonitorRelayWire.Command, dispatch: RelayBroadcastDispatch) {
         val session = source.session
@@ -141,99 +200,102 @@ class RelayBroadcastController(
 
     private fun readState(source: Source, latestFPS: Double?, allowsControlRequests: Boolean): MonitorRelayWire.State {
         val session = source.session
-        val cameraName = source.cameraName
         val identityName =
             (session.state.value as? CameraSessionState.Connected)?.identity?.name
-        val recording = session.recordingState.value == CameraRecordingState.RECORDING
-        // The camera's own readings, mapped through the SAME helpers the local readouts use, so a
-        // watcher of an Android broadcast reads identically to one watching iOS. These were all
-        // hardcoded empty, which is why an Android broadcast arrived with blank codec/media/
-        // resolution pills and no camera battery.
-        val snapshot = session.cameraProperties.value
-        return MonitorRelayWire.State(
-            recordState =
-                if (recording) {
-                    MonitorRelayWire.State.RECORD_STATE_RECORDING
-                } else {
-                    MonitorRelayWire.State.RECORD_STATE_STANDBY
-                },
-            resolutionFrameRate =
-                monitorResolutionLabel(
-                    resolution = snapshot.resolution,
-                    frameRate = snapshot.frameRate,
-                    fallback = ""
-                ),
-            codec = snapshot.codec.monitorValueOrNull() ?: "",
-            media = monitorStorageLabel(snapshot.storage).takeIf { it != "\u2014" } ?: "",
-            liveFPS = latestFPS?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "",
-            // The gauge's raw value, not a bar count, the watcher's own gauge maps it, the
-            // same way this device's does. Zero reads as "no camera" on the far side.
-            cameraBatteryPercent = validBatteryPercent(snapshot.batteryPercent) ?: 0,
-            cameraName = cameraName ?: identityName ?: "",
-            lens = snapshot.lens.monitorValueOrNull() ?: "",
-            // The body's real warning state, in the same three words the core stamps
-            // (`CameraWarningStatus.tileLabel`), never a fabricated temperature number.
-            // Empty until the body has been polled, which reads as "not known yet".
-            temperature =
-                when (snapshot.temperatureStatus) {
-                    CameraTemperatureStatus.HOT -> "HOT"
-                    CameraTemperatureStatus.WARNING -> "CHECK"
-                    CameraTemperatureStatus.NORMAL -> "OK"
-                    null -> ""
-                },
-            // The capture bar's five cells. Labels are a wire contract, not copy: the
-            // watcher's strip is built against exactly ISO / SHUTTER / IRIS / WB / FOCUS
-            // (core `CameraDisplayState`), so a different word here renders an empty cell.
-            // Every cell is always sent, a missing one reads as "this camera has no iris",
-            // where a dash reads as "not known yet", which is the truth while properties
-            // are still settling.
-            values =
-                listOf(
-                    MonitorRelayWire.StateValue(
-                        "ISO",
-                        snapshot.iso?.toString() ?: UNAVAILABLE_MONITOR_VALUE
-                    ),
-                    MonitorRelayWire.StateValue(
-                        "SHUTTER",
-                        // Angle when the body is in that mode, seconds otherwise , the same
-                        // preference the local capture bar shows.
-                        snapshot.shutterAngle.monitorValueOrNull()
-                            ?: snapshot.shutterSpeed.monitorValueOrNull()
-                            ?: UNAVAILABLE_MONITOR_VALUE
-                    ),
-                    MonitorRelayWire.StateValue(
-                        "IRIS",
-                        snapshot.iris.monitorValueOrNull() ?: UNAVAILABLE_MONITOR_VALUE
-                    ),
-                    MonitorRelayWire.StateValue(
-                        "WB",
-                        snapshot.whiteBalanceKelvin?.let { "${it}K" }
-                            ?: snapshot.whiteBalanceMode.monitorValueOrNull()
-                            ?: UNAVAILABLE_MONITOR_VALUE
-                    ),
-                    MonitorRelayWire.StateValue(
-                        "FOCUS",
-                        snapshot.focusMode.monitorValueOrNull() ?: UNAVAILABLE_MONITOR_VALUE
-                    ),
-                ),
-            // The MEDIA cell's capacity/duration flip-side, through the SAME estimator the
-            // local top bar uses , null left a watcher's cell stuck on its preview value.
-            mediaStatus =
-                monitorMediaStatus(
-                        storage = snapshot.storage,
-                        codec = snapshot.codec,
-                        resolution = snapshot.resolution,
-                        frameRate = snapshot.frameRate,
-                    )
-                    ?.let {
-                        MonitorRelayWire.MediaStatus(
-                            gigabytesFree = it.gigabytesFree.toInt(),
-                            percentFree = it.percentFree.toInt(),
-                            minutesRemaining = it.minutesRemaining,
-                        )
-                    },
-            isRecording = recording,
+        return relayBroadcastState(
+            snapshot = session.cameraProperties.value,
+            power = source.common.snapshots.value.power,
+            recording = session.recordingState.value == CameraRecordingState.RECORDING,
+            cameraName = source.cameraName ?: identityName,
+            latestFPS = latestFPS,
             allowsControlRequests = allowsControlRequests,
         )
     }
+}
+
+/**
+ * The broadcast state a watcher reads. The camera's own readings go through the SAME helpers the
+ * local readouts use, so a watcher of an Android broadcast reads identically to one watching iOS,
+ * and the battery is the common session's typed power (its declared gauge and exhaustion), never
+ * one re-derived from the legacy percent.
+ */
+internal fun relayBroadcastState(
+    snapshot: CameraPropertySnapshot,
+    power: PowerStatus,
+    recording: Boolean,
+    cameraName: String?,
+    latestFPS: Double?,
+    allowsControlRequests: Boolean,
+): MonitorRelayWire.State {
+    return MonitorRelayWire.State(
+        recordState =
+            if (recording) {
+                MonitorRelayWire.State.RECORD_STATE_RECORDING
+            } else {
+                MonitorRelayWire.State.RECORD_STATE_STANDBY
+            },
+        resolutionFrameRate =
+            MonitorTextFormat.resolutionLabel(snapshot.resolution.monitorValueOrNull(), snapshot.frameRate ?: 0, ""),
+        codec = snapshot.codec.monitorValueOrNull() ?: "",
+        media = monitorStorageLabel(snapshot.storage).takeIf { it != "\u2014" } ?: "",
+        liveFPS = latestFPS?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "",
+        // The gauge's raw value, not a bar count, the watcher's own gauge maps it, the
+        // same way this device's does. Zero reads as "no camera" on the far side.
+        cameraBatteryPercent = validBatteryPercent(snapshot.batteryPercent) ?: 0,
+        cameraName = cameraName ?: "",
+        lens = snapshot.lens.monitorValueOrNull() ?: "",
+        // The body's real warning state, in the same three words the core stamps
+        // (`CameraWarningStatus.tileLabel`), never a fabricated temperature number.
+        // Empty until the body has been polled, which reads as "not known yet".
+        temperature =
+            when (snapshot.temperatureStatus) {
+                CameraTemperatureStatus.HOT -> "HOT"
+                CameraTemperatureStatus.WARNING -> "CHECK"
+                CameraTemperatureStatus.NORMAL -> "OK"
+                null -> ""
+            },
+        // The capture bar's five cells. Labels are a wire contract, not copy: the
+        // watcher's strip is built against exactly ISO / SHUTTER / IRIS / WB / FOCUS
+        // (core `CameraDisplayState`), so a different word here renders an empty cell.
+        // Every cell is always sent, a missing one reads as "this camera has no iris",
+        // where a dash reads as "not known yet", which is the truth while properties
+        // are still settling.
+        values =
+            listOf(
+                MonitorRelayWire.StateValue(
+                    "ISO",
+                    snapshot.iso?.toString() ?: UNAVAILABLE_MONITOR_VALUE
+                ),
+                MonitorRelayWire.StateValue(
+                    "SHUTTER",
+                    // Angle when the body is in that mode, seconds otherwise , the same
+                    // preference the local capture bar shows.
+                    snapshot.shutterAngle.monitorValueOrNull()
+                        ?: snapshot.shutterSpeed.monitorValueOrNull()
+                        ?: UNAVAILABLE_MONITOR_VALUE
+                ),
+                MonitorRelayWire.StateValue(
+                    "IRIS",
+                    snapshot.iris.monitorValueOrNull() ?: UNAVAILABLE_MONITOR_VALUE
+                ),
+                MonitorRelayWire.StateValue(
+                    "WB",
+                    snapshot.whiteBalanceKelvin?.let { "${it}K" }
+                        ?: snapshot.whiteBalanceMode.monitorValueOrNull()
+                        ?: UNAVAILABLE_MONITOR_VALUE
+                ),
+                MonitorRelayWire.StateValue(
+                    "FOCUS",
+                    snapshot.focusMode.monitorValueOrNull() ?: UNAVAILABLE_MONITOR_VALUE
+                ),
+            ),
+        // The MEDIA cell's capacity/duration flip-side, through the SAME estimator the
+        // local top bar uses , null left a watcher's cell stuck on its preview value.
+        mediaStatus =
+            MediaStatus.from(snapshot.storage, snapshot.codec, snapshot.resolution, snapshot.frameRate)
+                ?.let { MonitorRelayWire.MediaStatus(it.gigabytesFree, it.percentFree, it.minutesRemaining, it.estimatedMinutesRemaining, it.freeBytes) },
+        isRecording = recording,
+        allowsControlRequests = allowsControlRequests,
+        batteryReading = power.batteryReading, batteryExhausted = power.exhausted.value,
+    )
 }

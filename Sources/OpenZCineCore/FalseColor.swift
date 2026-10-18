@@ -362,30 +362,31 @@ public enum FalseColorMap {
         }
     }
 
-    // Use the existing generated monitoring look, independent of the selected creative LUT.
-    private static let monitorLookCurves: [ExposureToneCurve: [Double]] = {
-        let looks: [(ExposureToneCurve, MonitorLUT)] = [
-            (.redLog3G10, .log3G10Rec709), (.nikonNLog, .nLogRec709),
-        ]
-        return Dictionary(
-            uniqueKeysWithValues: looks.map { curve, look in
-                let cube = look.cube()
-                let samples = (0...255).map { index in
-                    let code = Float(index) / 255
-                    let rgb = cube.map(red: code, green: code, blue: code)
-                    return 0.2126 * Double(rgb.red) + 0.7152 * Double(rgb.green) + 0.0722
-                        * Double(rgb.blue)
-                }
-                return (curve, samples)
-            })
-    }()
-
     /// Whether this source has an applied built-in monitor look for the requested read mode.
     public static func readsThroughLook(mapping: ExposureSignalMapping, read709: Bool) -> Bool {
         read709 && lookCurve(mapping.curve) != nil
     }
 
     private static func lookCurve(_ curve: ExposureToneCurve) -> [Double]? {
-        monitorLookCurves[curve]
+        NikonMonitorSignal.lookCurves[curve.monitorTransfer]
+    }
+}
+
+/// The source's calibration and monitoring looks supplied to the shared signal lattice.
+/// Persisted compatibility helpers above retain their original scene-linear projection.
+public enum NikonMonitorSignal {
+    public static let lookCurves: [MonitorTransfer: [Double]] =
+        NikonMonitorColorProfile.rec709LookCurves
+
+    /// Only camera-source values enter here; the lattice owns all bands, reading and painting.
+    public static func lattice(
+        scale: FalseColorScale, mapping: ExposureSignalMapping,
+        read709: Bool = false, size: Int = 64
+    ) -> MonitorFalseColorLattice {
+        MonitorFalseColorLattice.signal(
+            scale: scale.sharedScale,
+            transfer: mapping.curve.monitorTransfer, clipByte: mapping.clipByte,
+            lookCurve: lookCurves[mapping.curve.monitorTransfer], readThroughLook: read709,
+            size: size)
     }
 }

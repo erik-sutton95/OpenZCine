@@ -1,5 +1,6 @@
 import MonitorPresentation
 import OpenCineAppKit
+import OpenCineApple
 import OpenCineMedia
 import XCTest
 
@@ -120,6 +121,9 @@ final class NikonAssistsTests: XCTestCase {
         for connected in [true, false] {
             let model = NativeAppModel(assist: relaunch())
             model.connection = connected ? .connected : .disconnected
+            // SIMULATED: a body that reports R3D NE. The chrome no longer starts from the
+            // preview fixture (A1-03), so the reported codec is stated here.
+            model.cameraState = .preview
             model.applyDemoProperty(.liveViewSelector, data: Data([0]))
             XCTAssertTrue(model.isPhotographyMode)
             XCTAssertFalse(model.isDemoSession)
@@ -147,19 +151,24 @@ final class NikonAssistsTests: XCTestCase {
                         model.playbackExposureSignalMapping)
                 }
             }
-            // Verify the actual AVVideoComposition payload, not only the input projection.
+            // Verify what the shared playback engine draws, not only the input projection.
             model.assist.falseColorScale = .stops
             model.assist.falseColorRec709 = true
-            let expected = FalseColorMap.cube(
-                scale: .video,
-                mapping: ExposureSignalMapping(curve: .redLog3G10), read709: true)
-            let resolved = model.resolvedPlaybackEffects()
-            XCTAssertEqual(resolved.baseCubeDimension, expected.size)
-            XCTAssertEqual(
-                resolved.baseCubeData,
-                expected.rgbaComponents.withUnsafeBytes { Data($0) })
-            XCTAssertEqual(try XCTUnwrap(resolved.zebra).curve, .redLog3G10)
-            XCTAssertEqual(try XCTUnwrap(resolved.peaking).gateScale, 1)
+            let mapping = model.playbackExposureSignalMapping
+            let projected = model.nikonPlaybackEffects(model.assist.playbackEffects)
+            XCTAssertEqual(projected.transfer, .log3G10)
+            XCTAssertEqual(projected.resolvedClipByte, mapping.clipByte)
+            XCTAssertTrue(projected.falseColor && projected.zebra && projected.peaking)
+            XCTAssertEqual(projected.nativeImagePlan.peakingGateScale, 1)
+            func paint(_ lookCurves: [MonitorTransfer: [Double]]) -> CubeLUT {
+                MonitorFalseColorMapper(lookCurves: lookCurves).overlayPaintCube(
+                    scale: projected.falseColorScale.liveScale, transfer: projected.transfer,
+                    rec709: true, clipByte: projected.resolvedClipByte)
+            }
+            XCTAssertNotNil(MonitorAssistConfiguration.nikonPlayback.lookCurves[projected.transfer])
+            XCTAssertNotEqual(
+                paint(MonitorAssistConfiguration.nikonPlayback.lookCurves), paint([:]),
+                "the Rec.709 read draws through the Nikon look on the shared engine")
         }
     }
 
@@ -242,7 +251,8 @@ final class NikonAssistsTests: XCTestCase {
     func testCommandShowsNoFeedTool() {
         let model = NativeAppModel(assist: .restore(storage: defaults))
         model.assist.set(.peaking, visible: true, context: .liveView)
-        model.displayMode = .command
+        model.operatorSession.declare(modes: [.live, .clean, .command])
+        model.setDisplayMode(.command)
         XCTAssertTrue(model.renderedLiveAssistTools.isEmpty)
     }
 
@@ -319,9 +329,41 @@ final class NikonAssistsTests: XCTestCase {
     // MARK: - Palette
 
     func testPhotographyLeadsWithInstantPlaybackThenTheEVMeter() {
-        let photo = MonitorAssistTool.activeCases.filter(\.appliesToPhotography).map(\.rawValue)
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        let photo = model.liveAssistPaletteTools.map(\.rawValue)
         let ranked = MonitorToolUsage().rankedIDs(in: photo, seed: nikonAssistUsageSeed)
         XCTAssertEqual(Array(ranked.prefix(2)), ["PLAY", "EV"])
+    }
+
+    /// A1-19: photography keeps the display tools Pocket, Insta and the Pocket baseline keep.
+    func testPhotographyKeepsTheDisplayTools() {
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.isPhotographyMode)
+        for tool in [MonitorAssistTool.lut, .waveform, .parade, .vectorscope, .guides, .crosshair] {
+            XCTAssertTrue(model.liveAssistPaletteTools.contains(tool), "\(tool) leaves photo mode")
+        }
+        model.assist.set(.waveform, visible: true, context: .liveView)
+        XCTAssertTrue(model.renderedLiveAssistTools.contains(.waveform))
+    }
+
+    /// Nikon's own assist entries are typed declarations on the shared list (EV and PLAY for
+    /// stills, two level styles, no ND), and its level style is the shared one.
+    func testNikonDeclaresItsOwnAssistsOnTheSharedList() {
+        let nikon = MonitorAssistCapabilities.nikon
+        XCTAssertEqual(nikon.photographyOnly, [.instantReview, .evMeter])
+        XCTAssertEqual(nikon.levelStyles, [.horizon, .gauge])
+        XCTAssertTrue(nikon.unavailable.contains(.ndMeter))
+        XCTAssertTrue(AssistConfiguration.Level.Style.self == MonitorLevelStyle.self)
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        XCTAssertFalse(model.isPhotographyMode)
+        XCTAssertFalse(model.liveAssistPaletteTools.contains(.evMeter))
+        XCTAssertFalse(model.liveAssistPaletteTools.contains(.instantReview))
+        XCTAssertTrue(model.liveAssistPaletteTools.contains(.level))
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.liveAssistPaletteTools.contains(.evMeter))
+        XCTAssertTrue(model.liveAssistPaletteTools.contains(.instantReview))
     }
 
     func testPlaybackOffersNoCameraFedTool() {

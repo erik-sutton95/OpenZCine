@@ -90,71 +90,6 @@ object SwiftCore {
         deltaTimeSeconds: Float,
     ): FloatArray?
 
-
-    // ── Frame.io (OAuth/API policy remains in the portable Swift core) ──
-
-    /**
-     * Starts a Frame.io Adobe IMS PKCE transaction in the shared core.
-     *
-     * The returned process-local JSON contains `authorizationURL`, `state`,
-     * and `verifier`. It is sensitive OAuth transaction material: callers
-     * must encrypt it at rest, never log it, and clear it after the redirect.
-     * Returns null when the build's public client configuration is absent or
-     * malformed.
-     */
-    external fun frameioBeginAuthorization(clientID: String, redirectURI: String): String?
-
-    /**
-     * Verifies a returned callback against the configured redirect URI and
-     * shared-core OAuth state. Returns the authorization code only on a valid
-     * match; Kotlin must not parse query parameters or decide state policy.
-     */
-    external fun frameioParseRedirect(
-        redirectURI: String,
-        callbackURI: String,
-        expectedState: String,
-    ): String?
-
-    /**
-     * Builds the Adobe IMS form POST for `exchange` or `refresh` using the
-     * shared OAuth policy. The process-local JSON contains `url`, `method`,
-     * and `body`; body data can include a code or refresh token and must never
-     * be logged.
-     */
-    external fun frameioTokenRequest(
-        kind: String,
-        clientID: String,
-        redirectURI: String,
-        code: String?,
-        verifier: String?,
-        refreshToken: String?,
-    ): String?
-
-    /**
-     * Builds one Frame.io V4 request from the portable endpoint and Codable
-     * model policy. The Android HTTPS adapter attaches its encrypted bearer
-     * token; it must not recreate endpoint paths or request bodies locally.
-     */
-    external fun frameioAPIRequest(
-        operation: String,
-        accountID: String?,
-        workspaceID: String?,
-        folderID: String?,
-        fileID: String?,
-        name: String?,
-        fileSize: Long,
-    ): String?
-
-    /**
-     * Canonicalizes a Frame.io API response through the shared Codable models.
-     * Null means the response did not match the known V4 model and must fail
-     * closed rather than being guessed by the Android shell.
-     */
-    external fun frameioDecodeResponse(operation: String, response: String): String?
-
-    /** Resolves an upload MIME family through the shared Frame.io core policy. */
-    external fun frameioMediaTypeForFilename(filename: String): String
-
     /**
      * Registers [listener] and has Swift push a canned connection-phase
      * sequence from a background thread — the callback shape session events
@@ -303,29 +238,29 @@ object SwiftCore {
         zebraMidtoneIre: Float,
     ): FloatArray?
 
+    // Distinct shared-monitor entries beside the retained legacy declarations.
+    external fun bakeMonitorFalseColorCube(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): ByteArray?
+
+    external fun bakeMonitorFalseColorLimitsPaint(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    external fun bakeMonitorFalseColorLimitsWeight(curveOrdinal: Int, clipNative: Float): ByteArray?
+
+    external fun monitorFalseColorReference(
+        scaleOrdinal: Int,
+        curveOrdinal: Int,
+        clipNative: Float,
+    ): FloatArray?
+
     // ── Stored LUT library (strict Swift parser + existing packed cube path) ──
 
     /**
-     * Validates a selected `.cube` document before Android copies it into its app-private library.
-     *
-     * [utf8] is bounded by the Android SAF reader; Swift then enforces the shared `CubeLUT`
-     * source cap, strict UTF-8, cube parser, safe generated [fileName], and canonical
-     * `LUTSelection.cacheKey`. Returns the versioned `US`-separated record
-     * `[version, cubeSize, cacheKey]`, or null when the import must be rejected. Kotlin must never
-     * copy bytes before a non-null result and must not retain the source URI.
-     *
-     * @param categoryOrdinal 0 = Custom, 1 = RED. Built-ins do not use this API.
-     */
-    external fun validateImportedLut(
-        utf8: ByteArray,
-        categoryOrdinal: Int,
-        fileName: String,
-    ): String?
-
-    /**
-     * Revalidates an app-private cube and packs it into the existing RGBA8 2D texture layout used
-     * by [com.opencapture.openzcine.FeedEffectsRenderer]. Null is an unavailable/corrupt state;
-     * Kotlin must not parse or sample the cube as a fallback.
+     * Runs the shared `CubeLUT.validatedImport` gate over an app-private cube and packs it into the
+     * existing RGBA8 2D texture layout used by [com.opencapture.openzcine.FeedEffectsRenderer].
+     * Null is a refused or corrupt cube; Kotlin must not parse or sample the cube as a fallback.
      */
     external fun packImportedLut(utf8: ByteArray): ByteArray?
 

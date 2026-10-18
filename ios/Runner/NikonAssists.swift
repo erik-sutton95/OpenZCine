@@ -11,9 +11,10 @@ import SwiftUI
 final class NikonMonitorLooks: MonitorLookProvider {
     /// Mirrors `AssistConfiguration.selectedLUT` (the model keeps them in step).
     var selection: LUTSelection = .builtIn(.log3G10Rec709)
-    // ponytail: no shared cube preparation; add one when a shared surface (inspector preview,
-    // export) renders Nikon looks through `MonitorAssistState`.
+    /// The shared preview borrows the calibrated native image; controls do not prepare its cube.
     var cube: CubeLUT? { nil }
+    /// The calibrated native graph does not apply the shared input-exposure option.
+    var appliesLUTExposure: Bool { false }
     var transfer: MonitorTransfer { .rec709 }
     var referenceClipByte: Int { 255 }
     func lutExposureTransfer(for transfer: MonitorTransfer) -> MonitorTransfer { transfer }
@@ -41,6 +42,14 @@ extension MonitorFalseColorSelection {
         case .limits: .limits
         }
     }
+}
+
+extension MonitorAssistCapabilities {
+    /// What a Nikon body adds to the shared list: PLAY and the body's EV needle are stills tools,
+    /// the level draws as a horizon or a gauge, and there is no ND source.
+    static let nikon = MonitorAssistCapabilities(
+        photographyOnly: [.instantReview, .evMeter], levelStyles: [.horizon, .gauge],
+        unavailable: [.ndMeter])
 }
 
 extension MonitorAssistTool {

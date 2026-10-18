@@ -3,12 +3,11 @@ package com.opencapture.openzcine.multicam
 import com.opencapture.opencine.multicam.ExclusionReason
 import com.opencapture.opencine.multicam.RecordDirection
 import com.opencapture.opencine.nikon.CameraIdentity
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraRecordingException
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.FakeCameraSession
 import com.opencapture.opencine.nikon.LiveFrame
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,6 +25,8 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import com.opencapture.opencine.nikon.NikonOpenCineSession
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /**
  * NIKON-01 (Android twin of iOS `MulticamCoordinatorTests`): the app's multicam on the shared Kotlin
@@ -34,6 +35,19 @@ import com.opencapture.opencine.nikon.NikonOpenCineSession
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MulticamCoordinatorTest {
+    @Test
+    fun presentationStateSurvivesLeavingAndReenteringStage() = runTest {
+        val stage = stage()
+        stage.arrangement = com.opencapture.monitorui.MultiviewArrangement.GRID
+        stage.select(2)
+        stage.end()
+        stage.begin()
+        assertEquals(com.opencapture.monitorui.MultiviewArrangement.GRID, stage.arrangement)
+        assertEquals(2, stage.focusedSlot)
+        assertTrue(stage.members.isEmpty())
+        stage.end()
+    }
+
     /** A scripted body: reports its record state, refuses record when asked, logs commands. */
     private class Body(
         serial: String,
@@ -137,13 +151,13 @@ class MulticamCoordinatorTest {
         val plan = stage.groupPlan()
         assertEquals(RecordDirection.START, plan.direction)
         assertEquals(3, plan.targets.size)
-        stage.run(plan)
+        stage.run(plan, together = true)
         assertEquals(true, bodies.getValue("h0").reported.value)
         assertEquals(true, bodies.getValue("h2").reported.value)
         assertEquals(false, bodies.getValue("h1").reported.value)
-        assertEquals(MulticamCopy.COULDNT_REC, stage.memberAt(1)?.note)
-        assertNull(stage.memberAt(0)?.note)
-        assertEquals("2 of 3 rolling. ZR h1 didn't start.", stage.toast)
+        assertEquals("Recording command rejected · check camera", stage.memberAt(1)?.note)
+        assertEquals("Recording", stage.memberAt(0)?.note)
+        assertEquals("2 of 3 confirmed · check camera tiles", stage.toast)
         // Partial success is not a transaction: nothing stops the cameras that started.
         assertFalse("stop" in bodies.getValue("h0").log)
     }
@@ -166,7 +180,6 @@ class MulticamCoordinatorTest {
         assertEquals(frames, bodies.getValue("h1").frames, "the lent member's stage feed stands down")
         val during = stage.groupPlan()
         assertEquals(listOf<ExclusionReason>(ExclusionReason.Busy), during.exclusions.map { it.reason })
-        assertEquals(2, during.targets.size)
 
         stage.reclaim()
         settle()
@@ -176,12 +189,33 @@ class MulticamCoordinatorTest {
         assertFalse("disconnect" in bodies.getValue("h1").log, "no CloseSession")
     }
 
+    /** A4-19: Record all is strict in every app, so a camera lent to Live View holds the whole press. */
+    @Test
+    fun recordAllWithOneCameraInLiveViewCommandsNone() = runTest {
+        val stage = stage()
+        for (index in 0 until 3) stage.add(record("h$index"), reachable = true)
+        settle()
+        assertNotNull(stage.lend(assertNotNull(stage.memberAt(1)).id))
+        val plan = stage.groupPlan()
+        assertTrue(plan.isRefused)
+        assertFalse(plan.isExecutable)
+        stage.run(plan, together = true)
+        for (body in bodies.values) assertFalse("start" in body.log)
+        assertEquals("Cameras changed · try again", stage.toast)
+        // A tile's own press still records that camera alone.
+        val own = stage.plan(assertNotNull(stage.memberAt(0)).id)
+        assertTrue(own.isExecutable)
+        stage.run(own, together = false)
+        assertEquals(listOf("start"), bodies.getValue("h0").log.filter { it == "start" })
+        assertFalse("start" in bodies.getValue("h2").log)
+    }
+
     @Test
     fun removeAndEndCloseLinksWithoutStoppingRecording() = runTest {
         val stage = stage()
         for (index in 0 until 2) stage.add(record("h$index"), reachable = true)
         settle()
-        stage.run(stage.groupPlan())
+        stage.run(stage.groupPlan(), together = true)
         assertEquals(true, bodies.getValue("h0").reported.value)
         stage.remove(assertNotNull(stage.memberAt(0)).id)
         stage.end()
@@ -191,5 +225,38 @@ class MulticamCoordinatorTest {
             assertFalse("stop" in body.log)
         }
         assertFalse(stage.presented)
+    }
+
+    /** A5-01: a member's tile draws the body's five-step gauge, never a percent it did not report. */
+    @Test
+    fun tileShowsTheBodysBatteryBars() = runTest {
+        val stage = stage()
+        val member = MulticamMember(0, record("h0"))
+        val properties = MutableStateFlow(CameraPropertySnapshot())
+        val camera = object : CameraSession by FakeCameraSession(
+            CameraIdentity("SIMULATED", "SIMULATED", "SIMULATED"), startConnected = true,
+        ) {
+            override val cameraProperties = properties
+            override val reportedCameraProperties = properties
+        }
+        member.control = NikonOpenCineSession(camera, backgroundScope,
+            clock = { com.opencapture.opencine.core.MonotonicInstant(kotlin.time.Duration.ZERO) })
+        // Read the actual report before the background observer gets a coroutine turn.
+        properties.value = CameraPropertySnapshot(batteryPercent = 58)
+        member.properties = properties.value
+        val reading = tile(member, stage)
+        assertEquals(listOf(null, 3, 5), listOf(reading.battery, reading.batteryBars, reading.batteryBarCount))
+        assertFalse(reading.charging)
+        properties.value = CameraPropertySnapshot(batteryPercent = 58, externalPower = true)
+        member.properties = properties.value
+        assertTrue(tile(member, stage).charging, "external power reads as charging, as the live chrome does")
+        member.properties = CameraPropertySnapshot(batteryPercent = 100)
+        assertEquals(3, tile(member, stage).batteryBars, "the common report owns the gauge")
+        properties.value = CameraPropertySnapshot()
+        member.properties = properties.value
+        assertNull(tile(member, stage).batteryBars, "no reading stays unknown")
+        member.properties = CameraPropertySnapshot(batteryPercent = 58)
+        member.control = null
+        assertNull(tile(member, stage).batteryBars, "an absent common owner does not fall back to legacy properties")
     }
 }

@@ -1,6 +1,7 @@
 import MonitorPresentation
 import MonitorUI
 import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineCameraControls
 import OpenCineMedia
@@ -11,166 +12,107 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// The command-monitor primary grid (DISP 3): eight ride-along controls the operator can reorder by
-/// long-press-dragging a tile. Tiles are absolutely positioned so a dragged tile follows the finger
-/// while the others animate to their new slots; the order persists via `model.commandGridOrder`.
-struct CommandPrimaryGrid: View {
-    @Environment(NativeAppModel.self) private var model
-    let availableHeight: CGFloat
+/// What a command dashboard tile opens: a Nikon picker on one of its segmented tabs.
+struct NikonCommandRequest: Hashable {
+    let picker: CameraPicker
+    var mode = 0
+}
 
-    @State private var draggingKind: CommandTileKind?
-    @State private var dragLocation: CGPoint = .zero
+typealias NikonCommandTile = MonitorCommandTile<CommandTileKind, NikonCommandRequest>
 
-    /// Column count. Landscape (DISP-3) and portrait v2 both pass the default 3.
-    var columns: Int = 3
-    private let spacing: CGFloat = 9
-    private static let space = "commandGrid"
-
-    /// Spring used for both the live shuffle and the drop — smooth with a touch of life.
-    private let shuffle = Animation.spring(response: 0.3, dampingFraction: 0.72)
-
-    /// One resolved grid tile. Video tiles carry their `CommandTileKind` (long-press reorder);
-    /// photography tiles mirror the landscape stills strip tile-for-tile in fixed order.
-    private struct GridTileSpec: Identifiable {
-        let id: String
-        let title: String
-        let value: String
-        let picker: CameraPicker?
-        let kind: CommandTileKind?
+/// The DISP 3 order on the visible grid. The shared dashboard reports a drop as a slot of the
+/// tiles it shows; a tile this body hides (the dual-base Mode tile) keeps its place in the stored
+/// order instead of shifting every slot after it.
+enum NikonCommandGridOrder {
+    static func moving(
+        _ kind: CommandTileKind, to index: Int, in order: [CommandTileKind],
+        hidden: Set<CommandTileKind>
+    ) -> [CommandTileKind] {
+        let full = monitorCommandTileOrder(order, all: CommandTileKind.allCases)
+        let visible = full.filter { !hidden.contains($0) }
+        var moved = moveMonitorCommandTile(visible, kind, targetIndex: index, all: visible)
+            .makeIterator()
+        return full.map { hidden.contains($0) ? $0 : moved.next() ?? $0 }
     }
+}
 
-    private var tiles: [GridTileSpec] {
-        if model.isPhotographyMode {
-            return model.cameraPropertySnapshot.photographyCaptureValues.map { entry in
-                GridTileSpec(
-                    id: entry.label,
-                    title: stillsTitle(entry.label),
-                    value: entry.value,
-                    picker: CameraPicker.forValueLabel(entry.label, photography: true),
-                    kind: nil)
+/// The Nikon values of the shared command dashboard (DISP 3): tile kinds, titles, live values
+/// and the pickers they open. Layout, reorder and accessibility belong to `MonitorCommandDashboard`.
+extension NativeAppModel {
+    /// Video tiles follow the operator's order; photography tiles mirror the landscape stills
+    /// strip tile for tile in its fixed order, so they carry no kind.
+    var commandDashboardTiles: [NikonCommandTile] {
+        if isPhotographyMode {
+            return cameraPropertySnapshot.photographyCaptureValues.map { entry in
+                NikonCommandTile(
+                    title: Self.commandStillsTitle(entry.label), value: entry.value,
+                    request: CameraPicker.forValueLabel(entry.label, photography: true).map {
+                        NikonCommandRequest(picker: $0)
+                    })
             }
         }
-        return model.visibleCommandGridOrder.map { kind in
-            GridTileSpec(
-                id: kind.rawValue, title: title(kind), value: value(kind),
-                picker: picker(kind), kind: kind)
+        return visibleCommandGridOrder.map { kind in
+            NikonCommandTile(
+                kind: kind, title: Self.commandTitle(kind), value: commandValue(kind),
+                request: NikonCommandRequest(picker: Self.commandPicker(kind)))
         }
     }
 
-    var body: some View {
-        GeometryReader { proxy in
-            let tiles = self.tiles
-            let rows = max(1, Int((Double(tiles.count) / Double(columns)).rounded(.up)))
-            // Fill the height on phones, but never stretch a tile past a readable card —
-            // the leftover breathing room reads better than title-and-value islands adrift
-            // in an empty slab (the iPad complaint).
-            let rowHeight = min(
-                150,
-                max(44, (proxy.size.height - spacing * CGFloat(rows - 1)) / CGFloat(rows)))
-            let tileWidth = (proxy.size.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
-                    let isDragging = tile.kind != nil && draggingKind == tile.kind
-                    CommandTile(title: tile.title, value: tile.value, height: rowHeight)
-                        .frame(width: tileWidth)
-                        .scaleEffect(isDragging ? 1.06 : 1)
-                        .shadow(color: .black.opacity(isDragging ? 0.5 : 0), radius: 16, y: 8)
-                        .zIndex(isDragging ? 1 : 0)
-                        // The dragged tile tracks the finger (set outside the shuffle animation, so it's
-                        // instant); the rest read their slot from `index` and spring there.
-                        .position(
-                            isDragging
-                                ? dragLocation
-                                : center(index: index, tileWidth: tileWidth, rowHeight: rowHeight)
-                        )
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-            .contentShape(Rectangle())
-            .coordinateSpace(.named(Self.space))
-            // Quick tap opens the tile's picker; a 0.3s long-press picks it up to reorder. The tap
-            // MUST be a `.simultaneousGesture` — `.onTapGesture` / `.exclusively(before:)` are
-            // subordinate to `.gesture(reorderGesture)`, whose long-press+drag swallows the touch
-            // (the popups-don't-open bug). The drag stays on the *stable* container so it survives
-            // every shuffle; `draggingKind` guards a stray tap mid-reorder.
-            .simultaneousGesture(
-                SpatialTapGesture(coordinateSpace: .named(Self.space))
-                    .onEnded { value in
-                        guard draggingKind == nil else { return }
-                        let current = self.tiles
-                        let s = slot(
-                            at: value.location, tileWidth: tileWidth, rowHeight: rowHeight,
-                            count: current.count)
-                        guard s < current.count, let picker = current[s].picker else { return }
-                        model.showPicker(picker)
-                    }
+    var commandDashboardSections: [MonitorCommandSection<CommandTileKind, NikonCommandRequest>] {
+        func focus(_ title: String, _ value: String, _ mode: Int) -> NikonCommandTile {
+            NikonCommandTile(
+                title: title, value: value, request: NikonCommandRequest(picker: .focus, mode: mode)
             )
-            .gesture(reorderGesture(tileWidth: tileWidth, rowHeight: rowHeight, count: tiles.count))
         }
-    }
-
-    /// Grid title for a photography strip label (mirrors the video tiles' casing).
-    private func stillsTitle(_ label: String) -> String {
-        switch label {
-        case "MODE": "Mode"
-        case "ISO": "ISO"
-        case "SHUTTER": "Shutter"
-        case "IRIS": "Iris"
-        case "DRIVE": "Drive"
-        case "FOCUS": "Focus"
-        case "WB": "White Bal"
-        case "METER": "Meter"
-        case "PROFILE": "Profile"
-        default: label
+        func audio(_ title: String, _ value: String, _ mode: Int, amber: Bool = false)
+            -> NikonCommandTile
+        {
+            NikonCommandTile(
+                title: title, value: value,
+                request: NikonCommandRequest(picker: .audio, mode: mode),
+                amber: amber)
         }
+        return [
+            MonitorCommandSection(
+                title: "Image",
+                cells: [
+                    NikonCommandTile(title: "Tone", value: commandToneLabel),
+                    NikonCommandTile(title: "Picture Profile", value: "\u{2014}", muted: true),
+                ]),
+            MonitorCommandSection(
+                title: "Focus",
+                cells: [
+                    focus("Mode", shownCameraValue("FOCUS") ?? "\u{2014}", 0),
+                    focus("Area", focusArea, 1),
+                    focus("Subject", focusSubject, 2),
+                ]),
+            MonitorCommandSection(
+                title: "Audio",
+                cells: [
+                    audio(
+                        "Sens", commandMicrophoneSensLabel, 0,
+                        amber: commandMicrophoneUsesManualLevel),
+                    audio("32-bit Float", commandAudio32BitFloatLabel, 4),
+                    audio("Input", commandMicrophoneInputLabel, 1),
+                    audio("Wind", commandWindFilterLabel, 2),
+                    audio("Atten", commandInputAttenuatorLabel, 3, amber: commandInputAttenuatorOn),
+                ]),
+            // Grid reads the camera's framing-grid setting (GridDisplay 0xD16C), not the app's
+            // overlay toggle. Assist, DISP and Guides have no camera connection point, so none.
+            MonitorCommandSection(
+                title: "Monitor", cells: [NikonCommandTile(title: "Grid", value: commandGridLabel)]),
+        ]
     }
 
-    private func center(index: Int, tileWidth: CGFloat, rowHeight: CGFloat) -> CGPoint {
-        CGPoint(
-            x: CGFloat(index % columns) * (tileWidth + spacing) + tileWidth / 2,
-            y: CGFloat(index / columns) * (rowHeight + spacing) + rowHeight / 2)
+    var commandDashboardHealth: MonitorCommandHealth {
+        let temperature = cameraState.temperature
+        return MonitorCommandHealth(
+            temperature: temperature, temperatureOk: temperature.hasPrefix("OK"),
+            storage: liveMediaReadout,
+            camera: cameraState.cameraName, lens: cameraState.lens)
     }
 
-    private func slot(at point: CGPoint, tileWidth: CGFloat, rowHeight: CGFloat, count: Int) -> Int
-    {
-        let col = min(max(Int(point.x / (tileWidth + spacing)), 0), columns - 1)
-        let row = max(Int(point.y / (rowHeight + spacing)), 0)
-        return min(max(row * columns + col, 0), count - 1)
-    }
-
-    /// Long-press the grid to pick up the tile under the finger, then drag to reorder; the others
-    /// spring to their new slots. A quick tap instead falls through to the tile's picker button.
-    private func reorderGesture(tileWidth: CGFloat, rowHeight: CGFloat, count: Int) -> some Gesture
-    {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
-            .onChanged { value in
-                // Photography tiles ride the stills strip's fixed order — no reorder.
-                guard !model.isPhotographyMode else { return }
-                guard case .second(true, let drag?) = value else { return }
-                if draggingKind == nil {
-                    let order = model.visibleCommandGridOrder
-                    let start = slot(
-                        at: drag.startLocation, tileWidth: tileWidth, rowHeight: rowHeight,
-                        count: count)
-                    guard start < order.count else { return }
-                    draggingKind = order[start]
-                    dragLocation = drag.startLocation
-                }
-                guard let kind = draggingKind else { return }
-                dragLocation = drag.location
-                let target = slot(
-                    at: drag.location, tileWidth: tileWidth, rowHeight: rowHeight, count: count)
-                if model.commandGridOrder.firstIndex(of: kind) != target {
-                    withAnimation(shuffle) { model.moveCommandTile(kind, to: target) }
-                }
-            }
-            .onEnded { _ in
-                withAnimation(shuffle) { draggingKind = nil }
-            }
-    }
-
-    private func title(_ kind: CommandTileKind) -> String {
+    private static func commandTitle(_ kind: CommandTileKind) -> String {
         switch kind {
         case .mode: "Mode"
         case .iso: "ISO"
@@ -183,7 +125,7 @@ struct CommandPrimaryGrid: View {
         }
     }
 
-    private func picker(_ kind: CommandTileKind) -> CameraPicker? {
+    private static func commandPicker(_ kind: CommandTileKind) -> CameraPicker {
         switch kind {
         case .mode: .mode
         case .iso: .iso
@@ -196,351 +138,32 @@ struct CommandPrimaryGrid: View {
         }
     }
 
-    private func value(_ kind: CommandTileKind) -> String {
+    private func commandValue(_ kind: CommandTileKind) -> String {
         switch kind {
-        case .mode: model.commandExposureMode
-        case .iso: cameraValue("ISO", fallback: "—")
-        case .shutter: cameraValue("SHUTTER", fallback: "—")
-        case .iris: cameraValue("IRIS", fallback: "—")
-        case .whiteBalance: cameraValue("WB", fallback: "—")
-        case .resolutionFramerate: model.cameraState.resolutionFrameRate
-        case .codec: model.cameraState.codec
-        case .ibis: model.commandStabilizationLabel
+        case .mode: commandExposureMode
+        case .iso: shownCameraValue("ISO") ?? "\u{2014}"
+        case .shutter: shownCameraValue("SHUTTER") ?? "\u{2014}"
+        case .iris: shownCameraValue("IRIS") ?? "\u{2014}"
+        case .whiteBalance: shownCameraValue("WB") ?? "\u{2014}"
+        case .resolutionFramerate: cameraState.resolutionFrameRate
+        case .codec: cameraState.codec
+        case .ibis: commandStabilizationLabel
         }
     }
 
-    private func cameraValue(_ label: String, fallback: String) -> String {
-        model.shownCameraValue(label) ?? fallback
-    }
-}
-
-struct CommandHealthStrip: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        HStack(spacing: 10) {
-            CommandStatusBlock(label: "Temp", value: tempValue)
-            CommandStatusBlock(label: "Storage", value: Text(model.mediaReadout))
-            CommandStatusBlock(label: "Camera", value: Text(model.cameraState.cameraName))
-            CommandStatusBlock(label: "Lens", value: Text(model.cameraState.lens))
-            Spacer(minLength: 4)
-            // Hold the FPS chip at its natural size; the wider status blocks scale down first.
-            FPSChip(fps: model.liveFPS, signalBars: model.liveSignalBars)
-                .fixedSize()
-                .layoutPriority(1)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(
-            LiveDesign.surface,
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        )
-    }
-
-    /// Temperature readout with a green "OK" prefix when the body reports healthy, mirroring `.cc-ok`.
-    private var tempValue: Text {
-        let raw = model.cameraState.temperature
-        guard let range = raw.range(of: "OK") else { return Text(raw) }
-        return Text("OK").foregroundStyle(LiveDesign.good) + Text(String(raw[range.upperBound...]))
-    }
-}
-
-struct CommandStatusBlock: View {
-    let label: String
-    let value: Text
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.system(size: 8.5, weight: .bold, design: .default))
-                .foregroundStyle(LiveDesign.faint)
-                .textCase(.uppercase)
-            value
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.55)
-        }
-        .frame(minWidth: 52, maxWidth: 148, alignment: .leading)
-    }
-}
-
-struct CommandSideColumn: View {
-    @Environment(NativeAppModel.self) private var model
-    /// True once the column is scrolled to (or fits within) the bottom, so the fade and the "More"
-    /// hint clear instead of covering the last row.
-    @State private var atBottom = false
-
-    var body: some View {
-        GeometryReader { outer in
-            scroller(viewportHeight: outer.size.height)
-        }
-    }
-
-    private func scroller(viewportHeight: CGFloat) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 4) {
-                CommandSection(title: "Image") {
-                    CmdRow {
-                        CommandSmallTile(title: "Tone", value: model.commandToneLabel)
-                        CommandSmallTile(title: "Picture Profile", value: "—", muted: true)
-                    }
-                }
-
-                CommandSection(title: "Focus") {
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Mode",
-                            value: cameraValue("FOCUS", fallback: "—"),
-                            picker: .focus,
-                            pickerMode: 0)
-                        CommandSmallTile(
-                            title: "Area",
-                            value: model.focusArea,
-                            picker: .focus,
-                            pickerMode: 1)
-                    }
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Subject",
-                            value: model.focusSubject,
-                            picker: .focus,
-                            pickerMode: 2)
-                    }
-                }
-
-                CommandSection(title: "Audio") {
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Sens",
-                            value: model.commandMicrophoneSensLabel,
-                            picker: .audio,
-                            pickerMode: 0,
-                            amber: model.commandMicrophoneUsesManualLevel)
-                        CommandSmallTile(
-                            title: "32-bit Float",
-                            value: model.commandAudio32BitFloatLabel,
-                            picker: .audio,
-                            pickerMode: 4)
-                    }
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Input",
-                            value: model.commandMicrophoneInputLabel,
-                            picker: .audio,
-                            pickerMode: 1)
-                        CommandSmallTile(
-                            title: "Wind",
-                            value: model.commandWindFilterLabel,
-                            picker: .audio,
-                            pickerMode: 2)
-                    }
-                    CmdRow {
-                        CommandSmallTile(
-                            title: "Atten",
-                            value: model.commandInputAttenuatorLabel,
-                            picker: .audio,
-                            pickerMode: 3,
-                            amber: model.commandInputAttenuatorOn)
-                    }
-                }
-
-                CommandSection(title: "Monitor") {
-                    CmdRow {
-                        // Grid reads the camera's framing-grid setting (GridDisplay 0xD16C), not the
-                        // app's local overlay toggle. Assist / DISP / Guides tiles were removed —
-                        // they reflect app-only state with no camera connection point.
-                        CommandSmallTile(title: "Grid", value: model.commandGridLabel)
-                    }
-                }
-            }
-            .padding(.bottom, 20)
-            .background(
-                // Reports the content's bottom edge in the scroll viewport's space; when it reaches
-                // the viewport bottom, we're scrolled to the end (or it all fits).
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: SideColumnBottomKey.self,
-                        value: geo.frame(in: .named("cmdSideScroll")).maxY)
-                }
-            )
-        }
-        .coordinateSpace(.named("cmdSideScroll"))
-        .onPreferenceChange(SideColumnBottomKey.self) { maxY in
-            atBottom = maxY <= viewportHeight + 2
-        }
-        .mask {
-            if atBottom {
-                Rectangle()
-            } else {
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.9),
-                        .init(color: .clear, location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-        }
-        .overlay(alignment: .bottom) {
-            // Non-interactive "more below" scroll hint (prototype `.cmd-more`); clears at the end.
-            if !atBottom {
-                Text("MORE ⌄")
-                    .font(.system(size: 9, weight: .semibold, design: .default))
-                    .foregroundStyle(LiveDesign.muted)
-                    .textCase(.uppercase)
-                    .tracking(0.8)
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 2)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: atBottom)
-    }
-
-    private func cameraValue(_ label: String, fallback: String) -> String {
-        model.shownCameraValue(label) ?? fallback
-    }
-}
-
-/// Carries the command side column's content-bottom Y (in the scroll viewport's space) up so the
-/// view can tell when it's scrolled to the end.
-private struct SideColumnBottomKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// Presentational only — `CommandPrimaryGrid` owns the tap (open picker) and the long-press-drag
-/// (reorder) on one container gesture, so a reorder never also fires a tap.
-struct CommandTile: View {
-    let title: String
-    let value: String
-    var height: CGFloat = 76
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .default))
-                .foregroundStyle(LiveDesign.faint)
-                .textCase(.uppercase)
-                .lineLimit(1)
-                .minimumScaleFactor(0.64)
-            Spacer(minLength: 0)
-            Text(value)
-                // Tall (tablet) tiles carry the value at dashboard scale; phone tiles keep
-                // today's 24pt exactly.
-                .font(
-                    .system(size: height > 120 ? 34 : 24, weight: .medium, design: .monospaced)
-                )
-                .foregroundStyle(LiveDesign.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.46)
-        }
-        // Pad first, then clamp to `height`, so the tile is exactly `height` tall (padding outside
-        // the frame was adding ~20pt per tile, overflowing the grid).
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
-        .background(
-            LiveDesign.surface, in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        }
-    }
-}
-
-struct CommandSmallTile: View {
-    @Environment(NativeAppModel.self) private var model
-    let title: String
-    let value: String
-    var picker: CameraPicker?
-    /// Segmented mode tab to open when `picker` is presented (e.g. FOCUS Area = 1).
-    var pickerMode: Int = 0
-    /// Accent-tinted value (the prototype's `.cmd-stile.amber`) — used for the audio readouts.
-    var amber: Bool = false
-    /// Dimmed value (the prototype's `.cmd-stile.muted`) — used for the placeholder picture profile.
-    var muted: Bool = false
-
-    private var valueColor: Color {
-        if amber { return LiveDesign.accent }
-        if muted { return LiveDesign.faint }
-        return LiveDesign.text
-    }
-
-    var body: some View {
-        Button {
-            if let picker {
-                model.showPicker(picker, mode: pickerMode)
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 9, weight: .bold, design: .default))
-                    .foregroundStyle(LiveDesign.muted)
-                    .textCase(.uppercase)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.66)
-                Text(value)
-                    .font(.system(size: 15, weight: .medium, design: .monospaced))
-                    .foregroundStyle(valueColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-            }
-            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                LiveDesign.surface, in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                    .stroke(LiveDesign.hairline, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.monitorTapTarget)
-        .disabled(picker == nil)
-    }
-}
-
-struct CommandSection<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 9.5, weight: .bold, design: .default))
-                .foregroundStyle(LiveDesign.faint)
-                .textCase(.uppercase)
-                .padding(.leading, 2)
-
-            // Rows of paired tiles; a row holding a single tile spans the full width (the
-            // prototype's `.span2`), since each tile claims the available width equally.
-            VStack(spacing: 5) {
-                content
-            }
-        }
-    }
-}
-
-/// One row of the command side column — one tile fills the width, two split it evenly.
-struct CmdRow<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        HStack(spacing: 6) {
-            content
+    /// Grid title for a photography strip label (the video tiles' casing).
+    private static func commandStillsTitle(_ label: String) -> String {
+        switch label {
+        case "MODE": "Mode"
+        case "ISO": "ISO"
+        case "SHUTTER": "Shutter"
+        case "IRIS": "Iris"
+        case "DRIVE": "Drive"
+        case "FOCUS": "Focus"
+        case "WB": "White Bal"
+        case "METER": "Meter"
+        case "PROFILE": "Profile"
+        default: label
         }
     }
 }
@@ -573,740 +196,113 @@ struct PickerHeader: View {
     }
 }
 
-struct PickerPanel: View {
-    @Environment(NativeAppModel.self) private var model
-    let picker: CameraPicker
-    var embedded = false
-    @State private var selectedMode = 0
-    /// The drum's centred value. Seeded from camera state on appear, then applied each time the
-    /// drum snaps to a new value, so the operator doesn't have to dismiss to confirm.
-    @State private var selection = ""
-    /// Last value written to the camera, so re-centring on the same value (including the initial
-    /// seed) doesn't fire a redundant write.
-    @State private var lastApplied = ""
-    /// IRIS apertures the mounted lens can reach, captured on appear (never read from camera state
-    /// in `body` — that reassigns every live-view frame and would jog the wheel mid-spin).
-    @State private var lensApertures: [String] = []
-    /// Recording modes the camera advertises, captured on appear so the resolution wheel only
-    /// offers values the body will accept.
-    @State private var screenModes: [String] = []
-    /// Codecs the camera advertises, captured on appear (same rationale as `screenModes`).
-    @State private var codecModes: [String] = []
-    /// The same codecs as picker rows, so a row the body offers at two bit depths can flank
-    /// itself with them. Captured on appear alongside `codecModes`.
-    @State private var codecRows: [PTPCameraCodecFamily] = []
+/// Existing independent native writes, never a coupled stabilization command.
+enum NikonStabilizationRequest: String, Sendable {
+    case movieVR = "vr"
+    case electronicVR = "evr"
+}
 
-    private var isShutterControlLocked: Bool {
-        picker == .shutter && model.lockedControls.contains(.shutter)
-    }
+/// Nikon source facts accompany the existing group without changing its eligibility policy.
+struct NikonStabilizationPresentation {
+    let rows: [IndependentSettingRow<NikonStabilizationRequest, NikonStabilizationRequest>]
+    let vrDescriptor: NikonDescriptorEvidence
+    let evrDescriptor: NikonDescriptorEvidence
+}
 
-    private var isISORecordingLocked: Bool {
-        picker == .iso && model.isISORecordingLocked
-    }
-
-    /// Auto ISO On or non-M (non-R3D): value drum is camera-owned.
-    /// R3D NE dual-base is always manual — never locked by exposure mode.
-    private var isISOAutoValueLocked: Bool {
-        picker == .iso && model.showsAutoISOPicker && model.isISOValueCameraOwned
-    }
-
-    private var isPickerInteractionLocked: Bool {
-        isShutterControlLocked || isISORecordingLocked
-    }
-
-    /// Photo ISO's Auto tab: the drum only mirrors the body's live pick.
-    private var isStillISOAutoLocked: Bool {
-        picker == .stillISO && selectedMode == 0
-    }
-
-    private var isDrumInteractionLocked: Bool {
-        isPickerInteractionLocked || isISOAutoValueLocked || isStillISOAutoLocked
-            || model.pickerModeDisabled(picker, mode: selectedMode)
-    }
-
-    private var activePickerModes: [PickerMode] {
-        model.pickerModes(for: picker)
-    }
-
-    /// WB's "Tint" tab renders the fine-tune pad instead of a value drum.
-    private var isTintMode: Bool {
-        picker == .whiteBalance
-            && activePickerModes.indices.contains(selectedMode)
-            && activePickerModes[selectedMode].title == "Tint"
-    }
-
-    /// WB's "Kelvin" tab — dial ladder plus −10 / +10 beside the selected value.
-    private var isKelvinMode: Bool {
-        picker == .whiteBalance
-            && activePickerModes.indices.contains(selectedMode)
-            && activePickerModes[selectedMode].title == "Kelvin"
-    }
-
-    /// The advertised bit depths flanking the settled CODEC row — 8-bit left, 10-bit right, the
-    /// same shape as WB Kelvin's −10 / +10 (Erik's ask on #276). Nil for every codec the body
-    /// advertises at a single depth, so a depth the connected body cannot record is never a
-    /// button. Both sides write an exact advertised value; the filled one is the depth the
-    /// camera's own readback reports, so the pair survives closing and reopening the picker.
-    private var codecDepthAdjust: DrumSideAdjust? {
-        guard picker == .codec,
-            let row = codecRows.first(where: { $0.label == selection }),
-            row.offersBitDepthChoice,
-            let low = row.depths.first, let high = row.depths.last
-        else { return nil }
-        let active = model.activeCodecMode?.bitDepth
-        return DrumSideAdjust(
-            minusEnabled: !isDrumInteractionLocked,
-            plusEnabled: !isDrumInteractionLocked,
-            onMinus: { model.applyPickerValue(low.label, for: .codec) },
-            onPlus: { model.applyPickerValue(high.label, for: .codec) },
-            minusTitle: low.bitDepthLabel,
-            plusTitle: high.bitDepthLabel,
-            minusAccessibilityLabel: "Record \(row.label) at \(low.bitDepth) bit",
-            plusAccessibilityLabel: "Record \(row.label) at \(high.bitDepth) bit",
-            minusSelected: active == low.bitDepth,
-            plusSelected: active == high.bitDepth,
-            hint: "Use the bit-depth buttons beside the codec to switch depth")
-    }
-
-    private func applyKelvinSideStep(delta: Int) {
-        guard
-            let next = WhiteBalanceKelvinPolicy.fineAdjust(from: selection, delta: delta),
-            next != selection
-        else { return }
-        selection = next
-        OperatorSettingsHaptics.selection(enabled: model.preferences.hapticsEnabled)
-    }
-
-    /// Common movie values use the opened descriptor token. Nikon mode tabs and fine-tune
-    /// controls remain typed adapters; a changed camera circuit retires the common drum.
-    private var commonCaptureField: MonitorCaptureField? {
-        guard let setting = picker.nikonControlSetting,
-            !isTintMode, !isKelvinMode, !isISOAutoValueLocked, !isStillISOAutoLocked,
-            !model.isDemoSession, model.videoSource != .relay,
-            !model.pickerModeDisabled(picker, mode: selectedMode)
-        else { return nil }
-        return model.shell.control.captureField(setting.key)
-    }
-
-    var body: some View {
-        Group {
-            if embedded {
-                contents
-            } else {
-                GlassPanel(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) {
-                    contents
-                }
-            }
-        }
-
-        // Seed once on appear — NOT in `body`. Camera state is reassigned every live-view frame, so
-        // reading it per render would re-render the drum mid-spin and break its momentum. Open on the
-        // mode the current value lives in (e.g. ISO 800 → Low Base, focus AF-C → AF Mode).
-        .onAppear {
-            if picker == .iris || picker == .stillIris {
-                lensApertures = model.irisApertures
-            }
-            if picker == .resolution {
-                screenModes = model.resolutionOptions
-            }
-            if picker == .codec {
-                codecRows = model.codecFamilies
-                codecModes = codecRows.map(\.label)
-            }
-            // Dual-circuit pickers always open on the camera's active circuit (`movieBaseISO` /
-            // `movieShutterMode`), never via overlapping ISO steps or `showPicker`'s default mode.
-            if picker == .iso {
-                selectedMode = model.isoPickerModeIndex
-            } else if picker == .stillISO {
-                selectedMode = model.stillISOPickerModeIndex
-            } else if picker == .shutter {
-                selectedMode = model.shutterPickerModeIndex
-            } else if picker == .whiteBalance {
-                // The body's WB mode picks the opening tab: a named preset opens PRESET;
-                // colour temperature (or an unknown mode) opens KELVIN. The camera stays
-                // source of truth — never a remembered tab.
-                let mode = model.cameraPropertySnapshot.wbMode
-                selectedMode = (mode == nil || mode == "Color temp") ? 0 : 1
-            } else if selection.isEmpty {
-                if let initial = model.pickerInitialMode {
-                    selectedMode = initial
-                    model.pickerInitialMode = nil
+/// The existing Swift host projection. This does not normalize Android or wire admission.
+enum NikonStabilizationSettings {
+    static func presentation(
+        vrOptions: [String]?, currentVR: String?, currentEVR: String?, codec: String,
+        vrDescriptor: NikonDescriptorEvidence, evrDescriptor: NikonDescriptorEvidence,
+        actualCodec: PTPCameraFileTypeMode?
+    ) -> NikonStabilizationPresentation {
+        var vr = vrDescriptor
+        // Existing Swift fallback is legacy authorization, independent of the observed GetSet.
+        vr.optionOrigin = vrOptions == nil ? .legacyFallback : .unknown
+        var evr = evrDescriptor
+        evr.optionOrigin = .legacyFallback
+        let effectiveRows = rows(
+            vrOptions: vrOptions, currentVR: currentVR, currentEVR: currentEVR, codec: codec)
+        let projected = effectiveRows.map { row in
+            let evidence = row.id == .movieVR ? vr : evr
+            let latest = evidence.latestAttempt
+            let observed =
+                latest.outcome == .described && latest.descriptor != nil
+                ? latest : (evidence.lastValidObservation ?? evidence.observation)
+            let readOnly = observed.outcome == .described && observed.descriptor?.writable == false
+            let codecReason: String?
+            if row.id == .electronicVR {
+                if let actualCodec {
+                    codecReason =
+                        MonitorTextFormat.isRawCodec(
+                            PTPCameraPropertyDecoders.fileType(actualCodec.raw))
+                        ? "e-VR is unavailable in RAW codecs" : nil
                 } else {
-                    let live = model.cameraValue(for: picker)
-                    if let idx = activePickerModes.firstIndex(where: { $0.options.contains(live) })
-                    {
-                        selectedMode = idx
-                    }
+                    codecReason = "e-VR is unavailable until the camera codec is known"
                 }
-            }
-            if selection.isEmpty {
-                let seeded = model.pickerModeValue(picker, mode: selectedMode)
-                selection = seeded
-                lastApplied = seeded
-            }
-        }
-        // Keep the ANGLE/SPEED tab aligned when the camera (or a rejected write) changes mode.
-        .onChange(of: model.shutterPickerModeIndex) { _, modeIndex in
-            guard picker == .shutter, selectedMode != modeIndex else { return }
-            selectedMode = modeIndex
-            let value = model.pickerModeValue(picker, mode: modeIndex)
-            selection = value
-            lastApplied = value
-        }
-        // Keep the photo Auto/Manual tab aligned with the body's Auto ISO readback — the
-        // camera stays ground truth for a toggle flipped in its own menus.
-        .onChange(of: model.stillISOPickerModeIndex) { _, modeIndex in
-            guard picker == .stillISO, selectedMode != modeIndex else { return }
-            selectedMode = modeIndex
-            let value = model.pickerModeValue(picker, mode: modeIndex)
-            selection = value
-            lastApplied = value
-        }
-        // Keep the LOW/HIGH base tab aligned with `movieBaseISO` readback (R3D NE only).
-        .onChange(of: model.isoPickerModeIndex) { _, modeIndex in
-            guard picker == .iso, model.showsDualBaseISOPicker, selectedMode != modeIndex else {
-                return
-            }
-            selectedMode = modeIndex
-            let value = model.pickerModeValue(picker, mode: modeIndex)
-            selection = value
-            lastApplied = value
-        }
-        // Auto ISO: keep the locked drum centred on the body's effective ISO as it changes
-        // (movie Auto and the photo Auto tab alike).
-        .onChange(of: model.cameraPropertySnapshot.iso) { _, iso in
-            let autoTracks = (picker == .iso && isISOAutoValueLocked) || isStillISOAutoLocked
-            guard autoTracks, let iso, iso > 0 else { return }
-            let next = String(iso)
-            guard next != selection else { return }
-            selection = next
-            lastApplied = next
-        }
-        // Confirm-on-snap: apply each newly-centred value to the active mode's target.
-        .onChange(of: selection) { oldValue, newValue in
-            guard !isDrumInteractionLocked else { return }
-            guard !newValue.isEmpty, newValue != lastApplied else { return }
-            // A descriptor refresh (60 s cadence, lens swap, shutter-circuit switch) can reshape
-            // the option list while the picker is open. When the centred value leaves the list,
-            // SwiftUI re-resolves `.scrollPosition` onto a neighbouring row and writes it back
-            // through the binding — that is the LIST moving, not the operator, and pushing it to
-            // the camera would change a setting nobody touched. Re-baseline silently instead.
-            guard currentOptions.contains(oldValue) else {
-                lastApplied = newValue
-                return
-            }
-            lastApplied = newValue
-            model.applyPicker(picker, mode: selectedMode, value: newValue)
-        }
-        .onLongPressGesture(minimumDuration: 0.45) {
-            guard picker == .shutter else { return }
-            if model.preferences.hapticsEnabled {
-                if isShutterControlLocked {
-                    OperatorSettingsHaptics.unlockConfirm()
-                } else {
-                    OperatorSettingsHaptics.lockConfirm()
-                }
-            }
-            if isShutterControlLocked {
-                model.unlockShutterControlOnCamera()
             } else {
-                model.lockShutterControlOnCamera()
+                codecReason = nil
             }
-        } onPressingChanged: { pressing in
-            guard picker == .shutter, pressing else { return }
-            model.connectionMessage =
-                isShutterControlLocked
-                ? "Hold to unlock shutter control on camera"
-                : "Hold to lock shutter control on camera"
+            let reason = readOnly ? "\(row.title) is read-only on this camera" : codecReason
+            return IndependentSettingRow(
+                id: row.id, title: row.title, options: row.options, current: row.current,
+                request: reason == nil && !row.options.isEmpty ? row.id : nil,
+                unavailableReason: reason)
         }
+        return NikonStabilizationPresentation(rows: projected, vrDescriptor: vr, evrDescriptor: evr)
     }
 
-    /// Banner shown when the camera's shutter control lock is engaged — the drum is dimmed and
-    /// non-interactive until the operator long-presses to queue an unlock write.
-    private var shutterLockBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 11, weight: .semibold))
-            Text("Shutter locked on camera — hold anywhere to unlock")
-                .font(.system(size: 11.5, weight: .medium, design: .default))
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-        }
-        .foregroundStyle(LiveDesign.accent.opacity(0.9))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LiveDesign.accentDim, in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius))
-    }
-
-    /// Banner shown when ISO cannot be changed during an R3D NE recording.
-    private var isoRecordingLockBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "record.circle")
-                .font(.system(size: 11, weight: .semibold))
-            Text("ISO is locked while recording in R3D NE")
-                .font(.system(size: 11.5, weight: .medium, design: .default))
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-        }
-        .foregroundStyle(LiveDesign.rec.opacity(0.95))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LiveDesign.rec.opacity(0.12),
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius))
-    }
-
-    /// Native-base values flagged with stars in the ISO drum.
-    private var markedValues: Set<String> {
-        guard picker == .iso else {
-            guard activePickerModes.indices.contains(selectedMode) else { return [] }
-            let base = activePickerModes[selectedMode].base
-            return base.isEmpty ? [] : [base]
-        }
-        return ISOPickerPolicy.markedValues(
-            codec: model.cameraState.codec, modeIndex: selectedMode)
-    }
-
-    /// Setting name in bold with its dimmed descriptor inline, and an X close button trailing so
-    /// the way out of the menu is explicit (in addition to tapping off).
-    private var contents: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if !embedded { header }
-            if isShutterControlLocked {
-                shutterLockBanner
-            }
-            if isISORecordingLocked {
-                isoRecordingLockBanner
-            }
-            if isISOAutoValueLocked || isStillISOAutoLocked {
-                isoAutoLockBanner
-            }
-            if isTintMode {
-                // The WB Tint tab swaps the drum for the fine-tune pad.
-                WhiteBalanceTintPad()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if let field = commonCaptureField {
-                let offered = currentOptions.compactMap { label in
-                    picker.nikonControlSetting.flatMap {
-                        NikonCameraSession.setting($0, label: label)
-                    }
-                }
-                MonitorCaptureDrum(
-                    control: model.shell.control, field: field,
-                    enabled: !isDrumInteractionLocked,
-                    haptics: model.preferences.hapticsEnabled,
-                    choices: field.choices.filter { offered.contains($0.value) },
-                    marked: markedValues
-                )
-                .id(selectedMode)
-            } else {
-                // −10 / +10 permanently flank the selected Kelvin value; the CODEC drum
-                // reuses the pair for the bit depths a body advertises for that codec.
-                let sideAdjust =
-                    !isKelvinMode
-                    ? codecDepthAdjust
-                    : DrumSideAdjust(
-                        minusEnabled: !isDrumInteractionLocked
-                            && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                from: selection,
-                                delta: -WhiteBalanceKelvinPolicy.fineStepKelvin),
-                        plusEnabled: !isDrumInteractionLocked
-                            && WhiteBalanceKelvinPolicy.canFineAdjust(
-                                from: selection,
-                                delta: WhiteBalanceKelvinPolicy.fineStepKelvin),
-                        onMinus: {
-                            applyKelvinSideStep(
-                                delta: -WhiteBalanceKelvinPolicy.fineStepKelvin)
-                        },
-                        onPlus: {
-                            applyKelvinSideStep(
-                                delta: WhiteBalanceKelvinPolicy.fineStepKelvin)
-                        }
-                    )
-                HStack(spacing: 8) {
-                    if let sideAdjust {
-                        DrumSideAdjustButton(
-                            title: sideAdjust.minusTitle, enabled: sideAdjust.minusEnabled,
-                            selected: sideAdjust.minusSelected,
-                            label: sideAdjust.minusAccessibilityLabel,
-                            action: sideAdjust.onMinus)
-                    }
-                    MonitorValueDrum(
-                        options: currentOptions, selection: $selection,
-                        markedValues: markedValues, isInteractive: !isDrumInteractionLocked,
-                        haptics: model.preferences.hapticsEnabled)
-                    if let sideAdjust {
-                        DrumSideAdjustButton(
-                            title: sideAdjust.plusTitle, enabled: sideAdjust.plusEnabled,
-                            selected: sideAdjust.plusSelected,
-                            label: sideAdjust.plusAccessibilityLabel,
-                            action: sideAdjust.onPlus)
-                    }
-                }
-                .accessibilityHint(sideAdjust?.hint ?? "")
-                // Fresh drum per mode tab: ANGLE→SPEED (or ISO Low→High) swaps the option set
-                // and the centred value at once.
-                .id(selectedMode)
-            }
-            if picker == .stillDrive, selectedMode == 1 || selectedMode == 2 {
-                // The timers' shared shot count rides inside both timer tabs — fired by
-                // the app after the countdown (the body's own count is menu-only).
-                timerShotsRow
-            }
-            if !activePickerModes.isEmpty {
-                modeBar
-            }
-            if picker == .focus || picker == .stillFocus {
-                mfScrubToggleRow
-            }
-        }
-    }
-
-    private var header: some View {
-        PickerHeader(label: picker.valueLabel, subtitle: model.pickerSubtitle(for: picker)) {
-            model.dismissActivePanel()
-        }
-    }
-
-    /// `[−] n [+]` stepper for the timers' shot count, dimmed with its tab's gating.
-    private var timerShotsRow: some View {
-        let disabled = model.pickerModeDisabled(picker, mode: selectedMode)
-        return HStack(spacing: 12) {
-            Text("Shots")
-                .font(.system(size: 12, weight: .semibold))
-                .kerning(1)
-                .textCase(.uppercase)
-                .foregroundStyle(LiveDesign.muted)
-            Spacer(minLength: 8)
-            timerShotsStepButton("minus", enabled: model.photoTimerShotCount > 1) {
-                model.adjustPhotoTimerShots(by: -1)
-            }
-            Text("\(model.photoTimerShotCount)")
-                .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                .foregroundStyle(LiveDesign.text)
-                .frame(minWidth: 28)
-                .contentTransition(.numericText())
-            timerShotsStepButton("plus", enabled: model.photoTimerShotCount < 9) {
-                model.adjustPhotoTimerShots(by: 1)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            LiveDesign.background.opacity(0.28),
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        }
-        .opacity(disabled ? 0.35 : 1)
-        .disabled(disabled)
-    }
-
-    /// Focus popup toggle for the live-view focus scrub strip (shows in AF modes on a
-    /// focus-by-wire lens). Off hides the strip regardless of mode.
-    private var mfScrubToggleRow: some View {
-        @Bindable var model = model
-        return Toggle(isOn: $model.mfDriveScrubEnabled) {
-            Text("Focus dial")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(LiveDesign.text)
-        }
-        .toggleStyle(SwitchToggleStyle(tint: LiveDesign.accent))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            LiveDesign.background.opacity(0.28),
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                .stroke(LiveDesign.hairline, lineWidth: 1)
-        }
-    }
-
-    private func timerShotsStepButton(
-        _ symbol: String, enabled: Bool, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(enabled ? LiveDesign.accent : LiveDesign.faint)
-                .frame(width: 32, height: 32)
-                .liquidGlass(in: Circle())
-        }
-        .buttonStyle(.monitorTapTarget)
-        .disabled(!enabled)
-    }
-
-    /// Segmented tabs (e.g. ANGLE / SPEED) beneath the wheel; the active tab is gold-outlined.
-    private var modeBar: some View {
-        // When any tab carries a detail line, every tab reserves the two-line height so the
-        // row reads as one bar instead of mismatched chips.
-        let anyDetail = activePickerModes.contains { $0.detail != nil }
-        return HStack(spacing: 10) {
-            ForEach(Array(activePickerModes.enumerated()), id: \.offset) { index, mode in
-                let active = index == selectedMode
-                let modeDisabled = model.pickerModeDisabled(picker, mode: index)
-                Button {
-                    guard !isPickerInteractionLocked, !modeDisabled else { return }
-                    selectedMode = index
-                    // Re-centre on the mode's own value: a circuit's base (ISO High → 6400) or an
-                    // independent FOCUS tab's stored value.
-                    let value = model.pickerModeValue(picker, mode: index)
-                    selection = value
-                    lastApplied = value
-                    // ISO dual-base: switch Low/High on the body before applying the circuit value.
-                    if picker == .iso, model.showsDualBaseISOPicker {
-                        model.switchBaseISO(highBase: index == 1)
-                    }
-                    // ISO auto control (non-R3D NE): Auto On/Off toggles MovISOAutoControl.
-                    if picker == .iso, model.showsAutoISOPicker {
-                        model.switchAutoISO(enabled: index == 0)
-                        // Auto On: no ISO write. Auto Off: apply the drum value in manual ISO.
-                        if index == 0 { return }
-                    }
-                    if picker == .stillISO {
-                        model.switchStillAutoISO(enabled: index == 0)
-                        // Auto: the body owns the value. Manual: fall through and apply it.
-                        if index == 0 { return }
-                    }
-                    if picker == .shutter {
-                        model.switchShutterMode(speedMode: index == 1)
-                    }
-                    // Switching a circuit is itself a camera change, so confirm the mode's value
-                    // right away — no drum nudge needed. Exceptions: shutter ANGLE/SPEED only
-                    // selects the active stored circuit (`movieShutterMode`; a value write here
-                    // can fail and falsely engage lock), and FOCUS / photo SIZE / photo DRIVE
-                    // tabs are independent settings, so switching writes nothing. `lastApplied`
-                    // is pre-set above so this write isn't duplicated by the `selection`
-                    // `onChange`.
-                    if picker != .focus, picker != .shutter, picker != .stillSize,
-                        picker != .stillDrive, picker != .stillFocus, picker != .stillMode
-                    {
-                        model.applyPicker(picker, mode: index, value: value)
-                    }
-                } label: {
-                    VStack(spacing: 3) {
-                        Text(mode.title)
-                            .font(.system(size: 13, weight: .bold, design: .default))
-                            .kerning(0.5)
-                            .textCase(.uppercase)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                        if let detail = mode.detail {
-                            Text(detail)
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        }
-                    }
-                    .foregroundStyle(active ? LiveDesign.accent : LiveDesign.muted)
-                    .frame(maxWidth: .infinity, minHeight: anyDetail ? 46 : 1)
-                    .padding(.vertical, mode.detail == nil ? (anyDetail ? 5 : 12) : 9)
-                    .background(
-                        active ? LiveDesign.accentDim : LiveDesign.background.opacity(0.28),
-                        in: RoundedRectangle(
-                            cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: LiveDesign.cornerRadius, style: .continuous)
-                            .stroke(
-                                active ? LiveDesign.accent : LiveDesign.hairline, lineWidth: 1.5)
-                    }
-                }
-                .buttonStyle(.monitorTapTarget)
-                .opacity(modeDisabled ? 0.35 : 1)
-                .disabled(modeDisabled)
-                // Full locks (shutter / R3D record) freeze tabs; Auto ISO only freezes the drum.
-                .opacity(isPickerInteractionLocked ? 0.55 : 1)
-                .allowsHitTesting(!isPickerInteractionLocked)
-            }
-        }
-    }
-
-    private var isoAutoLockBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 11, weight: .semibold))
-            Text(isoAutoLockBannerText)
-                .font(.system(size: 11.5, weight: .medium))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(LiveDesign.accent.opacity(0.9))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LiveDesign.accentDim,
-            in: RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-        )
-    }
-
-    private var isoAutoLockBannerText: String {
-        if model.allowsManualISO {
-            return
-                "Auto ISO is on — the camera sets sensitivity. "
-                + "Switch to Auto Off to choose a value."
-        }
-        return
-            "Manual ISO needs exposure mode M. "
-            + "The camera is setting sensitivity."
-    }
-
-    /// The drum's options for the active mode. IRIS is restricted to the mounted lens's reachable
-    /// apertures; moded settings (ISO circuits, shutter angle/speed) swap the wheel per mode; the
-    /// rest fall back to the flat picker list.
-    private var currentOptions: [String] {
-        if picker == .iris || picker == .stillIris, !lensApertures.isEmpty {
-            return lensApertures
-        }
-        if picker == .resolution, !screenModes.isEmpty { return screenModes }
-        if picker == .codec, !codecModes.isEmpty { return codecModes }
-        if picker == .iso {
-            // Inject live Auto ISO when it sits outside the fixed ladder (e.g. 51200).
-            let liveISO: String? = {
-                guard model.showsAutoISOPicker else { return nil }
-                if let iso = model.cameraPropertySnapshot.iso, iso > 0 {
-                    return String(iso)
-                }
-                return nil
-            }()
-            return ISOPickerPolicy.options(
-                codec: model.cameraState.codec,
-                modeIndex: selectedMode,
-                includingLiveISO: liveISO)
-        }
-        // Kelvin dial ladder, with the live / fine-tuned value inserted when off-ladder.
-        if isKelvinMode {
-            return WhiteBalanceKelvinPolicy.options(including: selection)
-        }
-        // Camera-advertised options for the active mode (focus tabs, shutter angle/speed, WB preset)
-        // take precedence over the hardcoded list. Read live from the model — the ZR refreshes the
-        // speed enum only after switching to speed mode, so a one-shot capture on appear would stick
-        // on the single placeholder value advertised while in angle mode.
-        if var property = picker.optionProperty(forMode: selectedMode) {
-            // The photography WB popup reuses the movie picker — its preset enum comes from
-            // the stills WB property instead.
-            if property == .movieWhiteBalance, model.isPhotographyMode {
-                property = .whiteBalance
-            }
-            // A body advertising exactly one value means exactly one value is selectable — show
-            // that, not the app's union. (The shutter circuits' single-value PLACEHOLDER enum is
-            // filtered upstream in `refreshControlOption`, so it never reaches this cache.)
-            if let cameraMode = model.cameraControlOptions[property], !cameraMode.isEmpty {
-                // R3D NE forbids automatic WB, and the codec can change after the enum was
-                // cached — filter at read time, not cache time. Movie chrome only: stills WB
-                // keeps its autos regardless of the movie codec left behind.
-                if property == .movieWhiteBalance {
-                    return PTPCameraPropertyDecoders.whiteBalanceOptions(
-                        advertised: cameraMode, codec: model.cameraState.codec)
-                }
-                // Same read-time shape as the WB filter above: the body's SET, this drum's order,
-                // and without the two positions the DRIVE tab does not own.
-                if picker == .stillDrive {
-                    return StillDriveMode.driveDrumOptions(advertised: cameraMode)
-                }
-                return cameraMode
-            }
-        }
-        guard !activePickerModes.isEmpty else { return picker.options }
-        let hardcoded = activePickerModes[selectedMode].options
-        let resolved = hardcoded.isEmpty ? picker.options : hardcoded
-        if picker == .whiteBalance, !model.isPhotographyMode,
-            activePickerModes[selectedMode].title == "Preset"
-        {
-            return PTPCameraPropertyDecoders.whiteBalanceOptions(
-                advertised: resolved, codec: model.cameraState.codec)
-        }
-        return resolved
+    static func rows(
+        vrOptions: [String]?, currentVR: String?, currentEVR: String?, codec: String
+    ) -> [IndependentSettingRow<NikonStabilizationRequest, NikonStabilizationRequest>] {
+        let raw = MonitorTextFormat.isRawCodec(codec)
+        return [
+            .init(
+                id: .movieVR, title: "VR", options: vrOptions ?? ["OFF", "ON", "SPORT"],
+                current: currentVR, request: .movieVR, unavailableReason: nil),
+            .init(
+                id: .electronicVR, title: "e-VR", options: ["OFF", "ON"], current: currentEVR,
+                request: raw ? nil : .electronicVR,
+                unavailableReason: raw ? "e-VR is unavailable in RAW codecs" : nil),
+        ]
     }
 }
 
-/// Stabilization picker (movie VR + electronic VR) for the command monitor's VR tile. Unlike the
-/// other settings, VR and e-VR are two independent on/off-style toggles rather than one value wheel,
-/// so this renders its own row-of-buttons layout instead of `PickerPanel`'s value drum.
+/// Stabilization picker for the existing ibis tile, using the shared independent row renderer.
 struct StabilizationPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
-    /// Bumped when the operator taps the disabled e-VR row, to flash the "unavailable in RAW" toast.
-    @State private var evrBlockedNotice = 0
-
-    private var vrOptions: [String] {
-        // No runtime enumeration for this one: 2-byte 0xDxxx props have no describe op on this
-        // body, so `.movieVibrationReduction` is deliberately left out of `enumeratedControls` and
-        // this hardcoded ladder is the only source of options.
-        model.cameraControlOptions[.movieVibrationReduction] ?? ["OFF", "ON", "SPORT"]
-    }
-
-    /// Electronic VR can't be applied to a RAW stream (R3D NE / N-RAW / ProRes RAW HQ), so the row
-    /// is disabled with an explanatory toast rather than silently rejecting the write.
-    private var electronicVRUnavailable: Bool {
-        MonitorTextFormat.isRawCodec(model.cameraState.codec)
-    }
+    @State private var blockedNoticeReason: String?
+    /// Bumped when the operator taps a refused row with an explanation.
+    @State private var blockedNoticeRevision = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            optionRow(
-                title: "VR", options: vrOptions,
-                selected: model.stabilizationVR
-            ) { model.setVibrationReduction($0) }
-            optionRow(
-                title: "e-VR", options: ["OFF", "ON"],
-                selected: model.stabilizationElectronicVR,
-                disabled: electronicVRUnavailable,
-                onDisabledTap: { evrBlockedNotice += 1 }
-            ) { model.setElectronicVR(on: $0 == "ON") }
-        }
+        let source = model.operatorLiveIdentity
+        MonitorIndependentSettingsPanel(
+            rows: model.stabilizationPresentation.rows,
+            interactionEnabled: !model.interfaceLocked && !model.relayControlSurrendered,
+            currentSource: { model.operatorLiveIdentity == source },
+            onSelect: { request, option in
+                model.applyGroupedStabilization(request, option: option, source: source)
+            },
+            onUnavailable: { _, reason in
+                guard let reason else { return }
+                blockedNoticeReason = reason
+                blockedNoticeRevision += 1
+            }
+        )
         // No outer padding — `pickerBodyContent` already wraps this in a padded GlassPanel, so an
         // extra .padding(16) doubled the inset to ~36pt. The toast floats ABOVE the sheet header
         // so it's never cut off at the bottom edge.
         .overlay(alignment: .top) {
-            MonitorTransientNotice(
-                text: "e-VR is unavailable in RAW codecs", revision: evrBlockedNotice
-            )
-            .offset(y: -52)
+            if let blockedNoticeReason {
+                MonitorTransientNotice(
+                    text: blockedNoticeReason, revision: blockedNoticeRevision
+                )
+                .offset(y: -52)
+            }
         }
     }
 
-    private func optionRow(
-        title: String, options: [String], selected: String?,
-        disabled: Bool = false,
-        onDisabledTap: (() -> Void)? = nil,
-        action: @escaping (String) -> Void
-    ) -> some View {
-        HStack(spacing: 10) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-                .frame(width: 44, alignment: .leading)
-            ForEach(options, id: \.self) { option in
-                Button {
-                    if disabled {
-                        onDisabledTap?()
-                    } else {
-                        action(option)
-                    }
-                } label: {
-                    Text(option)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(option == selected ? LiveDesign.accent : LiveDesign.text)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                                .fill(
-                                    option == selected
-                                        ? LiveDesign.accentDim : LiveDesign.surface)
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        // Grey the whole row when disabled; it stays tappable so the toast can explain why.
-        .opacity(disabled ? 0.35 : 1)
-    }
 }
 
 /// A drum-style value wheel with the wireframe's look: a momentum scroll that snaps (`viewAligned`)
@@ -1737,27 +733,14 @@ struct DrumSideAdjustButton: View {
     }
 }
 
-/// Tabbed LUT picker in the assist panel: category tabs over a drum of that category's looks.
-struct LUTPickerContent: View {
-    private struct PendingLUTDeletion: Identifiable {
-        let category: LUTCategory
-        let lut: StoredCustomLUT
-        var id: String { "\(category.rawValue):\(lut.fileName)" }
-    }
+/// Nikon supplies catalogue values and actions; the shared picker owns tabs, rows and import UI.
+struct NikonLUTPicker: View {
+    let embedded: Bool
 
+    init(embedded: Bool = true) { self.embedded = embedded }
     @Environment(NativeAppModel.self) private var model
-    @State private var category: LUTCategory = .builtIn
-    @State private var importing = false
-    @State private var redFilter: RedOutputFilter = .all
-    @State private var pendingDeletion: PendingLUTDeletion?
-    @State private var deletionErrorMessage: String?
-    @State private var importErrorMessage: String?
-    /// Tracks whether a usable internet path exists, so the RED download (which needs the public
-    /// internet) is blocked while the phone is on the camera's local-only Wi‑Fi AP.
-    /// Shared instance — see `InternetReachability.shared` for why a per-view `@State` is banned.
-    private var reachability: InternetReachability { .shared }
+    @State private var redFilter = RedOutputFilter.all
 
-    /// Narrows the RED drum to one output color space (it ships ~16 looks per space).
     enum RedOutputFilter: String, CaseIterable {
         case all = "All"
         case rec709 = "Rec.709"
@@ -1772,398 +755,126 @@ struct LUTPickerContent: View {
         }
     }
 
-    /// Fixed height of the region below the tabs so the popup is the same size on every tab.
-    ///
-    /// Landscape is ~400pt tall and this panel had no headroom left, so the 50/50 row below is
-    /// paid for out of the drum rather than added to the panel — at 180 the panel's own header
-    /// and the category tabs went off the top of the screen.
-    private let contentHeight: CGFloat = 146
-    private let footerHeight: CGFloat = 44
-
     var body: some View {
-        VStack(spacing: 8) {
-            SegmentedButtons(
-                items: LUTCategory.allCases.map(\.rawValue),
-                selected: category.rawValue
-            ) { raw in
-                guard let next = LUTCategory(rawValue: raw), next != category else { return }
-                category = next
-                // Switching tabs immediately applies that tab's look, so the live preview tracks the
-                // tab without the operator having to nudge the drum first.
-                applyRepresentativeLUT(for: next)
-            }
-            tabContent
-                .frame(height: contentHeight)
-            splitComparisonControls
-        }
-        .onAppear {
-            model.refreshCustomLUTs()
-            model.refreshRedLUTs()
-            // Open on the tab of whatever's currently applied, so the drum lands on the live look.
-            category = currentCategory
-            // Warm the built-in cubes off the main thread so the first scroll doesn't hitch.
-            Task.detached(priority: .utility) { LUTCubeCache.prewarmBuiltIns() }
-        }
-        .confirmationDialog(
-            pendingDeletion.map { "Delete \($0.lut.displayName)?" } ?? "Delete LUT?",
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }),
-            titleVisibility: .visible
-        ) {
-            if let pendingDeletion {
-                Button("Delete LUT", role: .destructive) {
-                    delete(pendingDeletion)
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingDeletion = nil }
-        } message: {
-            Text("This removes the stored LUT from this device. This action cannot be undone.")
-        }
-        .alert(
-            "Couldn’t Delete LUT",
-            isPresented: Binding(
-                get: { deletionErrorMessage != nil },
-                set: { if !$0 { deletionErrorMessage = nil } })
-        ) {
-            Button("OK") { deletionErrorMessage = nil }
-        } message: {
-            Text(deletionErrorMessage ?? "The LUT could not be deleted.")
-        }
-        .alert(
-            "Couldn’t Import LUT",
-            isPresented: Binding(
-                get: { importErrorMessage != nil },
-                set: { if !$0 { importErrorMessage = nil } })
-        ) {
-            Button("OK") { importErrorMessage = nil }
-        } message: {
-            Text(importErrorMessage ?? "The LUT could not be imported.")
-        }
-    }
-
-    /// The 50/50 Log-vs-LUT comparison: an off-by-default toggle, with its orientation revealed
-    /// beside it only while it is on. The orientation stays persisted either way, so switching the
-    /// comparison off and back on returns to the operator's own choice.
-    ///
-    /// One row, not a stacked toggle-then-picker: landscape is ~400pt tall and this panel already
-    /// spends most of it on the drum, so the two-row version pushed the category tabs off the top
-    /// of the screen.
-    private var splitComparisonControls: some View {
-        MonitorOperatorLookComparison(
-            assist: model.assist,
+        MonitorLUTPickerView(
+            assist: model.assist, embedded: embedded,
             haptics: OperatorHaptics(isEnabled: { model.preferences.hapticsEnabled }),
-            exposureAvailable: nil,
-            onArm: {
+            palette: LiveDesign.self,
+            prepare: {
+                model.refreshCustomLUTs()
+                model.refreshRedLUTs()
+                Task.detached(priority: .utility) { LUTCubeCache.prewarmBuiltIns() }
+            }, libraries: { libraries }
+        )
+        .onChange(of: model.assist.splitComparison) { _, enabled in
+            if enabled {
                 model.splitComparisonMuted = false
                 model.setAssist(.lut, visible: true)
+            }
+        }
+    }
+
+    /// These descriptors are also used by composition tests, without substituting another provider.
+    var libraries: [LUTPickerLibrary] {
+        let selected = model.assistConfiguration.selectedLUT
+        let builtIn = MonitorLUT.allCases.map {
+            LUTPickerLibrary.Entry(id: $0.rawValue, title: $0.rawValue)
+        }
+        let builtInLook: MonitorLUT? = {
+            if case .builtIn(let look) = selected { return look }
+            return nil
+        }()
+        let builtInLibrary = LUTPickerLibrary(
+            title: LUTCategory.builtIn.rawValue, entries: builtIn,
+            isCurrent: builtInLook != nil, selectedID: builtInLook?.rawValue,
+            representative: .init(
+                id: MonitorLUT.log3G10Rec709.rawValue,
+                title: MonitorLUT.log3G10Rec709.rawValue), caption: builtInLook?.credit ?? "",
+            select: { entry in
+                guard let look = MonitorLUT(rawValue: entry.id) else { return }
+                model.assistConfiguration.selectedLUT = .builtIn(look)
+                model.setAssist(.lut, visible: true)
             })
-    }
-
-    /// The tab matching the currently-applied LUT, so the picker opens where the operator left off.
-    private var currentCategory: LUTCategory {
-        switch model.assistConfiguration.selectedLUT {
-        case .builtIn: return .builtIn
-        case .stored(let category, _): return category
-        }
-    }
-
-    /// Applies a representative look when the operator switches to a tab: the current built-in (or
-    /// Log3G10→709), the recommended RED default, or the first custom import. No-ops for an empty
-    /// RED/Custom tab — its placeholder and import/download button shows instead.
-    private func applyRepresentativeLUT(for category: LUTCategory) {
-        switch category {
-        case .builtIn:
-            if case .builtIn = model.assistConfiguration.selectedLUT { return }
-            model.assistConfiguration.selectedLUT = .builtIn(.log3G10Rec709)
-        case .red:
-            guard let lut = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs) else { return }
-            model.assistConfiguration.selectedLUT = .stored(category: .red, fileName: lut.fileName)
-        case .custom:
-            guard let lut = model.customLUTs.first else { return }
-            model.assistConfiguration.selectedLUT = .stored(
-                category: .custom, fileName: lut.fileName)
-        }
-        model.setAssist(.lut, visible: true)
-    }
-
-    /// Height reserved under the built-in drum for the contributor credit. Always reserved, never
-    /// conditional: a line that appears only on the contributed look would resize the drum mid-scroll.
-    private let creditHeight: CGFloat = 16
-
-    /// The look the built-in drum is currently on — `nil` while a stored LUT is applied.
-    private var selectedBuiltIn: MonitorLUT? {
-        guard case .builtIn(let look) = model.assistConfiguration.selectedLUT else { return nil }
-        return look
-    }
-
-    @ViewBuilder private var tabContent: some View {
-        switch category {
-        case .builtIn:
-            VStack(spacing: 0) {
-                AccentDrumWheel(
-                    options: MonitorLUT.allCases.map(\.rawValue),
-                    selection: Binding(
-                        get: {
-                            selectedBuiltIn?.rawValue
-                                ?? MonitorLUT.allCases.first?.rawValue ?? ""
-                        },
-                        set: { name in
-                            guard let look = MonitorLUT(rawValue: name) else { return }
-                            model.assistConfiguration.selectedLUT = .builtIn(look)
-                            // Picking a look turns the LUT on; the bar toggle is the only "off".
-                            model.setAssist(.lut, visible: true)
-                        }
-                    ),
-                    wheelHeight: contentHeight - creditHeight
-                )
-                // Community-contributed looks are credited here rather than in the label — the drum
-                // is one narrow monospaced line and a name would push the look's own name out.
-                Text(selectedBuiltIn?.credit ?? "")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(LiveDesign.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(height: creditHeight)
-            }
-        case .custom:
-            customTab
-        case .red:
-            redTab
-        }
-    }
-
-    /// Whether the RED download may be entered right now. Blocked (with a reason) while the phone
-    /// is on the camera's Wi‑Fi AP or otherwise has no internet path, so the operator never lands
-    /// on a broken/black download screen with no route to RED's servers.
-    private var redDownloadAvailability: RedLUTDownloadAvailability {
-        reachability.redLUTDownloadAvailability
-    }
-
-    @ViewBuilder private var redTab: some View {
-        if model.redLUTs.isEmpty {
-            VStack(spacing: 8) {
-                placeholder(
-                    "RED IPP2 LUTs",
-                    redDownloadAvailability.blockedReason
-                        ?? "Download RED's official looks — you'll accept RED's terms.")
-                downloadRedButton
-                    .frame(height: footerHeight)
-            }
-        } else {
-            // Already downloaded — a color-space filter over the drum, no download button.
-            VStack(spacing: 8) {
-                redFilterRow
-                redDrum
-            }
-        }
-    }
-
-    private var redFilterRow: some View {
-        HStack(spacing: 6) {
-            ForEach(RedOutputFilter.allCases, id: \.self) { filter in
-                let isOn = redFilter == filter
-                Button {
-                    redFilter = filter
-                } label: {
-                    Text(filter.rawValue)
-                        .font(.system(size: 12, weight: .semibold, design: .default))
-                        .foregroundStyle(isOn ? LiveDesign.accent : LiveDesign.muted)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(isOn ? LiveDesign.accentDim : LiveDesign.glass, in: Capsule())
-                }
-                .buttonStyle(.monitorTapTarget)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .onChange(of: redFilter) { _, _ in
-            // Keep the applied RED LUT in sync with the visible drum: if the current selection falls
-            // outside the new filter, snap to the filter's first item so the displayed and applied
-            // looks can't diverge.
-            guard case .stored(.red, let fileName) = model.assistConfiguration.selectedLUT else {
-                return
-            }
-            if !filteredRedLUTs.contains(where: { $0.fileName == fileName }),
-                let first = filteredRedLUTs.first
-            {
-                model.assistConfiguration.selectedLUT = .stored(
-                    category: .red, fileName: first.fileName)
-            }
-        }
+        let availability = InternetReachability.shared.redLUTDownloadAvailability
+        let red = storedLibrary(
+            .red, files: filteredRedLUTs,
+            empty: .init(
+                title: "RED IPP2 LUTs",
+                hint: availability.blockedReason
+                    ?? "Download RED's official looks. You'll accept RED's terms.",
+                action: .init(
+                    title: "Download from RED",
+                    systemImage: availability.isAvailable ? "arrow.down.circle" : "wifi.slash",
+                    perform: { model.isRedDownloadPresented = true })))
+        let custom = storedLibrary(
+            .custom, files: model.customLUTs,
+            empty: .init(
+                title: "No custom LUTs yet", hint: "Import a .cube file to add your own look."))
+        return [builtInLibrary, red, custom]
     }
 
     private var filteredRedLUTs: [StoredCustomLUT] {
-        let base =
+        let filtered =
             redFilter.match.map { needle in
                 model.redLUTs.filter { $0.fileName.uppercased().contains(needle) }
             } ?? model.redLUTs
-        // Float the recommended default (REC.709 Medium Contrast Soft) to the top so it's the first
-        // item — and the one the drum lands on after a fresh download.
-        guard let defaultLUT = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs),
-            let index = base.firstIndex(of: defaultLUT)
-        else { return base }
-        var reordered = base
-        reordered.remove(at: index)
-        reordered.insert(defaultLUT, at: 0)
-        return reordered
+        guard let preferred = LUTLibraryIndex.defaultRedLUT(from: model.redLUTs),
+            filtered.contains(preferred)
+        else { return filtered }
+        return [preferred] + filtered.filter { $0 != preferred }
     }
 
-    /// The short name of the recommended default, flagged with a star in the drum.
-    private var defaultRedShortName: String? {
-        LUTLibraryIndex.defaultRedLUT(from: model.redLUTs).map { RedPresetName.short($0.fileName) }
-    }
-
-    private var redDrum: some View {
-        AccentDrumWheel(
-            options: filteredRedLUTs.map { RedPresetName.short($0.fileName) },
-            selection: Binding(
-                get: {
-                    if case .stored(.red, let fileName) = model.assistConfiguration.selectedLUT,
-                        filteredRedLUTs.contains(where: { $0.fileName == fileName }),
-                        let lut = model.redLUTs.first(where: { $0.fileName == fileName })
-                    {
-                        return RedPresetName.short(lut.fileName)
-                    }
-                    return filteredRedLUTs.first.map { RedPresetName.short($0.fileName) } ?? ""
-                },
-                set: { shortName in
-                    // Resolve within the *filtered* list so colliding short names across output
-                    // spaces (Rec.709 vs Rec.2020) can't select the wrong stored file.
-                    guard
-                        let lut = filteredRedLUTs.first(where: {
-                            RedPresetName.short($0.fileName) == shortName
-                        })
-                    else { return }
-                    model.assistConfiguration.selectedLUT = .stored(
-                        category: .red, fileName: lut.fileName)
-                    model.setAssist(.lut, visible: true)
-                }
-            ),
-            markedValues: defaultRedShortName.map { [$0] } ?? [],
-            wheelHeight: contentHeight - 36,
-            onDeleteOption: { shortName in
-                guard
-                    let lut = filteredRedLUTs.first(where: {
-                        RedPresetName.short($0.fileName) == shortName
-                    })
-                else { return }
-                pendingDeletion = PendingLUTDeletion(category: .red, lut: lut)
+    private func storedLibrary(
+        _ category: LUTCategory, files: [StoredCustomLUT],
+        empty: LUTPickerLibrary.Empty
+    ) -> LUTPickerLibrary {
+        let selectedID: String? = {
+            if case .stored(let current, let name) = model.assistConfiguration.selectedLUT,
+                current == category
+            {
+                return name
             }
-        )
-    }
-
-    private var downloadRedButton: some View {
-        // Enabled even while blocked: the download screen's gateway explains the block and, on
-        // the camera AP, offers the internet hop (leave camera Wi‑Fi → download → reconnect).
-        let isAvailable = redDownloadAvailability.isAvailable
-        return Button {
-            model.isRedDownloadPresented = true
-        } label: {
-            Label(
-                "Download from RED",
-                systemImage: isAvailable ? "arrow.down.circle" : "wifi.slash"
-            )
-            .font(.system(size: 13, weight: .semibold, design: .default))
-            .foregroundStyle(LiveDesign.text)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(LiveDesign.glassBright, in: Capsule())
+            return nil
+        }()
+        let entries = files.map { lut in
+            LUTPickerLibrary.Entry(
+                id: lut.fileName,
+                title: category == .red ? RedPresetName.short(lut.fileName) : lut.displayName)
         }
-        .buttonStyle(.monitorTapTarget)
-    }
-
-    @ViewBuilder private var customTab: some View {
-        VStack(spacing: 8) {
-            if model.customLUTs.isEmpty {
-                placeholder("No custom LUTs yet", "Import a .cube file to add your own look.")
-            } else {
-                AccentDrumWheel(
-                    options: model.customLUTs.map(\.displayName),
+        let preferred =
+            category == .red
+            ? LUTLibraryIndex.defaultRedLUT(from: model.redLUTs)?.fileName : files.first?.fileName
+        return LUTPickerLibrary(
+            title: category.rawValue, layout: category == .custom ? .files : .drum,
+            entries: entries, isCurrent: selectedID != nil, selectedID: selectedID,
+            representative: entries.first { $0.id == preferred } ?? entries.first,
+            filter: category == .red && !model.redLUTs.isEmpty
+                ? .init(
+                    options: RedOutputFilter.allCases.map(\.rawValue),
                     selection: Binding(
-                        get: {
-                            if case .stored(.custom, let fileName) = model.assistConfiguration
-                                .selectedLUT,
-                                let lut = model.customLUTs.first(where: { $0.fileName == fileName })
+                        get: { redFilter.rawValue },
+                        set: { raw in
+                            guard let filter = RedOutputFilter(rawValue: raw) else { return }
+                            redFilter = filter
+                            if let selectedID,
+                                !filteredRedLUTs.contains(where: { $0.fileName == selectedID }),
+                                let first = filteredRedLUTs.first
                             {
-                                return lut.displayName
+                                model.assistConfiguration.selectedLUT = .stored(
+                                    category: .red, fileName: first.fileName)
                             }
-                            return model.customLUTs.first?.displayName ?? ""
-                        },
-                        set: { displayName in
-                            guard
-                                let lut = model.customLUTs.first(where: {
-                                    $0.displayName == displayName
-                                })
-                            else { return }
-                            model.assistConfiguration.selectedLUT = .stored(
-                                category: .custom, fileName: lut.fileName)
-                            model.setAssist(.lut, visible: true)
-                        }
-                    ),
-                    wheelHeight: contentHeight - footerHeight - 8,
-                    onDeleteOption: { displayName in
-                        guard
-                            let lut = model.customLUTs.first(where: {
-                                $0.displayName == displayName
-                            })
-                        else { return }
-                        pendingDeletion = PendingLUTDeletion(category: .custom, lut: lut)
-                    }
-                )
-            }
-            importButton
-                .frame(height: footerHeight)
-        }
-    }
-
-    private var importButton: some View {
-        Button {
-            importing = true
-        } label: {
-            Label("Import .cube", systemImage: "square.and.arrow.down")
-                .font(.system(size: 13, weight: .semibold, design: .default))
-                .foregroundStyle(LiveDesign.text)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(LiveDesign.glassBright, in: Capsule())
-        }
-        .buttonStyle(.monitorTapTarget)
-        .fileImporter(
-            isPresented: $importing,
-            allowedContentTypes: [UTType(filenameExtension: "cube") ?? .data]
-        ) { result in
-            if case .success(let url) = result {
-                do {
-                    try model.importCustomLUT(from: url)
-                } catch {
-                    importErrorMessage = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func delete(_ pending: PendingLUTDeletion) {
-        pendingDeletion = nil
-        do {
-            try model.deleteStoredLUT(pending.lut, from: pending.category)
-            if pending.category == .red, filteredRedLUTs.isEmpty, !model.redLUTs.isEmpty {
-                redFilter = .all
-            }
-        } catch {
-            deletionErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func placeholder(_ title: String, _ subtitle: String) -> some View {
-        VStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold, design: .default))
-                .foregroundStyle(LiveDesign.text)
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(LiveDesign.muted)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        })) : nil,
+            markedIDs: category == .red ? Set(preferred.map { [$0] } ?? []) : [],
+            empty: empty,
+            select: { entry in
+                model.assistConfiguration.selectedLUT = .stored(
+                    category: category, fileName: entry.id)
+                model.setAssist(.lut, visible: true)
+            },
+            delete: { entry in
+                try model.deleteStoredLUT(StoredCustomLUT(fileName: entry.id), from: category)
+                if category == .red, filteredRedLUTs.isEmpty { redFilter = .all }
+            }, importCube: category == .custom ? { try model.importCustomLUT(from: $0) } : nil)
     }
 }
 
@@ -2211,6 +922,68 @@ extension MonitorSettingsTab {
     }
 }
 
+/// Z's legal set (A2-27): privacy and terms are this app's own text, readable on the camera's
+/// network and ending with the full web page's address (Android twin: `ZLegalDocuments`).
+/// Licenses and NOTICE are the repository's LICENSE, THIRD-PARTY-NOTICES.md and NOTICE, copied
+/// into the bundle's Legal folder at build time (OpenCine `scripts/stage-legal-resources.py`),
+/// with the platform's third-party notices. A build missing one shows the unavailable page.
+extension MonitorLegalDocuments {
+    static let z = MonitorLegalDocuments(
+        wordmark: "OpenZCine", privacy: .text(zPrivacy), terms: .text(zTerms),
+        licenses: bundledText([
+            resource("LICENSE", extension: "txt", subdirectory: "Legal", in: .main),
+            resource("THIRD-PARTY-NOTICES", extension: "txt", subdirectory: "Legal", in: .main),
+            MonitorPlatformLegalNotices.text,
+        ]),
+        notice: bundledText([
+            resource("NOTICE", extension: "txt", subdirectory: "Legal", in: .main)
+        ])
+    )
+
+    private static let zPrivacy = """
+        OpenZCine talks to your Nikon Z camera over Wi-Fi or USB-C. The app has no account. Automatic error reports are optional and off by default.
+
+        OpenCapture is the data controller. Privacy or deletion requests: support@opencapture.org.
+
+        \(MonitorSettingsCopy.reliabilityReportsPrivacy)
+
+        Reporting a problem yourself
+        Report a Problem sends your description and any optional reply email to OpenCapture through Sentry when you tap Send report. Technical details are included only if you choose them and can be reviewed first. You can choose up to three photos or screenshots and review or remove them before sending. Selected images are resized and re-encoded without original filenames or location metadata. Only share images you have permission to send; no images are attached automatically. This one-off submission does not enable automatic reports. Unsent reports stay privately on this phone, expire after 7 days (removed when the app next runs), wait until you leave camera Wi-Fi, and can be removed before delivery. Do not include passwords or other sensitive information in your message. You can decline the first-launch prompt and enable automatic reports later in System.
+
+        What stays on this phone
+        • Saved cameras, pairing profiles and the reconnect identity. Camera Wi-Fi passwords are stored in the iOS Keychain on this phone only.
+        • Operator preferences such as Keep Screen Awake and the selected look.
+        • Imported .cube files you choose to open and RED looks you download.
+        • Saved feed incident and session reports, until you delete them in System.
+
+        What never leaves the phone
+        • Live view, camera settings and pairing traffic stay on the local link. We do not operate a cloud.
+
+        Third parties
+        • Apple may process permission prompts and OS diagnostics under its own policies. TestFlight betas may send crash reports to the developer under Apple terms.
+        • Frame.io is optional. If this build is configured and you sign in, clips you pick upload from this phone to Adobe. The token stays in the on-device Keychain.
+        • RED looks are optional. If you choose Download from RED, the app shows RED's IPP2 output presets page inside the app and downloads the file you pick from RED's servers. That visit and download are governed by RED's own privacy policy.
+        • Saving a clip or using the share sheet is something you start. Apple or the app you pick then handles that file.
+        • The source is at github.com/erik-sutton95/OpenZCine.
+
+        The full privacy policy is https://openzcine.app/privacy/
+        """
+
+    private static let zTerms = """
+        OpenZCine is free software under the Apache License 2.0. You may use, modify, and share it under that license. The App Store build is also subject to Apple's standard Licensed Application End User License Agreement.
+
+        This is an unofficial camera monitor and remote control. It is not affiliated with, endorsed by, or supported by Nikon. "Nikon" and "Nikon Z" are trademarks of Nikon Corporation, used only to identify the cameras the app can talk to. RED, Adobe and Frame.io belong to their owners and are named only to identify optional features.
+
+        OpenZCine remotely controls physical camera equipment. Wireless links drop, settings writes can be rejected, and the display can lag the camera's real state. Always verify the recording state, exposure and media on the camera itself. Use on productions is at your own risk.
+
+        The software is provided on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND. See LICENSE in the repository.
+
+        By using the app you agree to follow the Code of Conduct when participating in the project.
+
+        The full terms are https://openzcine.app/terms/
+        """
+}
+
 /// The internet-backed destination selected from Operator Setup.
 ///
 /// Keeping the selection as a value lets the camera-AP confirmation survive the tap and route to
@@ -2245,7 +1018,7 @@ enum SettingsInternetDestination: String, CaseIterable, Identifiable {
     }
 
     var confirmationMessage: String {
-        "To open \(title), OpenZCine will disconnect from the camera's Wi-Fi and switch to cellular or another internet-connected Wi-Fi network. You can reconnect to the camera after you finish."
+        MonitorSettingsCopy.browserConfirmation(title: title, app: "OpenZCine")
     }
 
     static func demoValue(_ rawValue: String?) -> SettingsInternetDestination? {
@@ -2282,8 +1055,6 @@ struct OperatorSettingsPanel: View {
     @Environment(NativeAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var relayPasscodeDraft: String?
-    @State private var expandedDispSection: DispMode?
-    @State private var displayCaptureMode: CaptureLayoutMode?
     @State private var reliabilityOptIn = ReliabilityDiagnostics.reporting.isOptedIn
 
     var body: some View {
@@ -2294,12 +1065,7 @@ struct OperatorSettingsPanel: View {
                 library: model.mediaLibrary,
                 selectedTab: Binding(
                     get: { model.operatorSettingsTab }, set: { model.operatorSettingsTab = $0 }),
-                scrollOffsets: Binding(
-                    get: { model.operatorSettingsScrollOffsets },
-                    set: { model.operatorSettingsScrollOffsets = $0 }),
-                borrowedDisplay: borrowedDisplay, sourceIdentity: model.shell.monitor?.id,
-                initialReportPresented: model.isStandaloneSettingsPresented
-                    && DemoHarness.openBugReport)
+                operatorSession: model.operatorSession, sourceIdentity: model.shell.monitor?.id)
         }
         .observeMonitorWindowGeometry()
         .onAppear {
@@ -2310,7 +1076,7 @@ struct OperatorSettingsPanel: View {
                 let value = browserDestination(destination)
             {
                 model.settingsSupport.request(value)
-            } else if DemoHarness.openBugReport && !model.isStandaloneSettingsPresented {
+            } else if DemoHarness.openBugReport {
                 model.isBugReportPresented = true
             }
         }
@@ -2321,7 +1087,7 @@ struct OperatorSettingsPanel: View {
     > {
         let menus = NikonAssistMenuAdapter(model: model, compact: true)
         return .init(
-            borrowedSafeArea: insets,
+            safeArea: insets,
             phase: isConnected
                 ? "\(model.cameraState.cameraName) · \(transportLabel)" : model.linkHealthDetail,
             isLive: isConnected, sharingSubtitle: "Broadcast this feed and manage its watchers.",
@@ -2335,55 +1101,61 @@ struct OperatorSettingsPanel: View {
                 model.settingsSupport.retire()
                 model.disconnect()
             }, feedback: settingsFeedback, link: linkSource, sharing: sharingSource,
-            account: accountSource, cache: model.captureOperatorMediaCacheSource(),
-            support: supportSource,
+            assist: .init(
+                state: model.assist, stores: model.scopePanels.operatorStores,
+                falseColorLooks: .signal, palette: LiveDesign.self,
+                haptics: .init(isEnabled: { [weak model] in
+                    model?.preferences.hapticsEnabled == true
+                }),
+                transfer: model.exposureSignalMapping.curve.monitorTransfer,
+                clipByte: model.exposureSignalMapping.clipByte,
+                signalOptions: .init(
+                    falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
+                    reference: menus.falseColorReference,
+                    resetFalseColor: { model.assist.resetOptions(.falseColor) },
+                    resetZebra: {
+                        model.assist.resetOptions(.zebra)
+                        model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
+                    }),
+                exposureHelp:
+                    "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
+                lookLabel: lookLabel,
+                lookCatalog: { AnyView(NikonLUTPicker(embedded: false).environment(model)) }),
+            controls: .init(
+                recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
+                haptics: .init(
+                    value: preferenceBinding(\.hapticsEnabled),
+                    help: "Short confirmation pulses for critical switches and setting changes."),
+                keepAwake: .init(
+                    value: preferenceBinding(\.keepScreenAwake),
+                    help: MonitorSettingsCopy.keepScreenAwake),
+                input: .init(
+                    remoteShutter: .volumeButtons(
+                        enabled: preferenceBinding(\.bluetoothShutterEnabled)),
+                    autoRotate: .init(
+                        enabled: preferenceBinding(\.autoRotateFeedEnabled),
+                        help:
+                            "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
+                    ))),
+            display: .init(
+                hdr: .init(
+                    value: Binding(get: { model.hdrDisplay }, set: { model.hdrDisplay = $0 }),
+                    help: MonitorSettingsCopy.hdrPanel(cameraMode: "N-Log or HLG tone mode")),
+                sections: model.controlCapabilities.displaySections),
+            cache: .init(
+                source: model.captureOperatorMediaCacheSource(),
+                clearHelp:
+                    "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card."
+            ),
+            account: accountSource, support: supportSource,
             information: .init(
-                theme: "Charcoal", protocolName: "PTP / PTP-IP", version: Self.appVersionText,
+                theme: "Charcoal", protocolName: "PTP / PTP-IP",
+                version: MonitorSettingsAppInformation.version(),
                 themeHelp:
                     "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
                 protocolHelp:
                     "Camera control speaks standard PTP over USB and PTP-IP over Wi-Fi; no vendor SDK is bundled or required.",
-                versionHelp: "Current OpenZCine build from the native project metadata."),
-            recordConfirmation: preferenceBinding(\.recordConfirmationEnabled),
-            haptics: preferenceBinding(\.hapticsEnabled),
-            keepAwake: preferenceBinding(\.keepScreenAwake),
-            hapticsHelp: "Short confirmation pulses for critical switches and setting changes.",
-            keepAwakeHelp:
-                "Prevents auto-lock while the live monitor or clip playback is active. Exposure assists increase GPU load. Disable tools you are not using. iOS may still dim when the device overheats.",
-            hdrHelp: "", cacheHelp: "",
-            clearHelp:
-                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact. Connected, the gallery reloads from the camera; favorites of remote-only shots are rebuilt only if those shots are still on the card.",
-            exposureHelp:
-                "Shows the camera's exposure reading in the monitor. The recording is unchanged.",
-            assist: model.assist, stores: model.scopePanels.operatorStores,
-            falseColorLooks: .signal,
-            palette: LiveDesign.self,
-            operatorHaptics: .init(isEnabled: { [weak model] in
-                model?.preferences.hapticsEnabled == true
-            }),
-            transfer: model.scopeAssist.transfer, clipByte: model.scopeAssist.clipByte,
-            lookLabel: lookLabel, lookCatalog: { AnyView(LUTPickerContent().environment(model)) },
-            input: .init(
-                remoteShutter: preferenceBinding(\.bluetoothShutterEnabled),
-                remoteTitle: "Bluetooth Remote Shutter",
-                remoteHelp:
-                    "A paired Bluetooth shutter remote's button press starts or stops recording while the live view is up front. Inside Settings, Media, or other full-screen pages the volume keys behave normally. The phone's volume keys record too, and Record Confirmation is skipped. Presses arrive as volume commands, so the volume may move momentarily before snapping back; the system volume overlay stays hidden while armed.",
-                autoRotateFeed: preferenceBinding(\.autoRotateFeedEnabled),
-                rotationHelp:
-                    "Turns the monitoring image upright when the camera is held on its side or upside down. Off keeps the picture in the camera's native orientation. Display only. The recording is never affected."
-            ),
-            signalOptions: .init(
-                falseColor: AnyView(menus.falseColor), zebra: AnyView(menus.zebra),
-                reference: menus.falseColorReference,
-                resetFalseColor: { model.assist.resetOptions(.falseColor) },
-                resetZebra: {
-                    model.assist.resetOptions(.zebra)
-                    model.assistConfiguration.zebra = AssistConfiguration.defaults.zebra
-                }), resetPolicy: .plotControls,
-            cacheScopeHelp:
-                "Clips and thumbnails cached from the camera for offline playback and sharing, across all paired cameras.",
-            cacheConfirmationMessage:
-                "Removes cached clip files, thumbnails, and camera indexes for every camera. The on-device library is left intact.",
+                versionHelp: MonitorSettingsCopy.versionHelp(app: "OpenZCine")),
             gyro: .init(
                 enabled: Binding(
                     get: { model.gyroCapture.enabled }, set: { model.setGyroCaptureEnabled($0) }),
@@ -2420,7 +1192,13 @@ struct OperatorSettingsPanel: View {
             saved: model.savedCameras.map {
                 .init(id: $0.host, name: $0.displayName, detail: $0.host)
             },
-            savedHelp: "Cameras paired through the connection screen.", sourceGroups: sourceGroups,
+            savedHelp: "Cameras paired through the connection screen.",
+            processing: .init(
+                upscaler: Binding(
+                    get: { FeedUpscaleSwitch.shared.upscaler },
+                    set: { FeedUpscaleSwitch.shared.upscaler = $0 }),
+                feedback: settingsFeedback, rows: processingRows),
+            sourceGroups: sourceGroups,
             healthScore: model.linkHealth, healthCaption: linkHealthCaption)
     }
     private func choice(
@@ -2503,22 +1281,13 @@ struct OperatorSettingsPanel: View {
                         }
                     },
                 ]))
+        return groups
+    }
+
+    /// Z's own processing rows after the shared Feed Upscaler (A2-78): noise reduction and the
+    /// debug frame capture.
+    private var processingRows: [MonitorSettingsSourceProperty] {
         var processing: [MonitorSettingsSourceProperty] = []
-        if MonitorUpscaler.supportedOnThisDevice.count > 1 {
-            processing.append(
-                choice(
-                    id: "processing.upscaler", title: "Feed Upscaler",
-                    help:
-                        "How the live-view frame is enlarged to fill the panel. The camera sends far fewer pixels than the panel has, so something always does this. Off is a plain sample, Fast is a fixed sharpening kernel, and Quality is the OS spatial upscaler.\n\nAI is different in kind: it is a machine-learning model that INFERS detail the camera never captured. It gives the sharpest-looking picture, but the fine texture it adds is invented — plausible rather than real — so it can suggest crispness the lens did not record. Judge critical focus on Quality or Fast, and treat AI as a viewing aid rather than evidence.\n\nOnly the options this device supports are shown.",
-                    options: MonitorUpscaler.supportedOnThisDevice.map(\.rawValue),
-                    value: FeedUpscaleSwitch.shared.upscaler.rawValue,
-                    compact: true
-                ) {
-                    if let value = MonitorUpscaler(rawValue: $0) {
-                        FeedUpscaleSwitch.shared.upscaler = value
-                    }
-                })
-        }
         if LiveDenoiseSwitch.isSupportedOnThisDevice {
             if let reason = LiveDenoiseSwitch.decoderReportsUnavailable {
                 processing.append(
@@ -2549,10 +1318,7 @@ struct OperatorSettingsPanel: View {
                         "Debug: saves raw live-view frames to the app container, one a second, for the focus-peaking test corpus. Start it, dismiss this panel, then rack focus slowly end to end.",
                     value: .native(AnyView(LiveViewCaptureControl()))))
         #endif
-        if !processing.isEmpty {
-            groups.append(.init(id: "processing", title: "Processing", properties: processing))
-        }
-        return groups
+        return processing
     }
 
     private var sharingSource: MonitorSettingsSharingSource {
@@ -2563,8 +1329,8 @@ struct OperatorSettingsPanel: View {
             sharing: Binding(
                 get: { model.isRelayBroadcasting }, set: { model.setRelayBroadcasting($0) }),
             passcode: Binding(
-                get: { relayPasscodeDraft ?? model.preferences.relayWatcherPasscode },
-                set: { relayPasscodeDraft = String($0.filter(\.isNumber).prefix(4)) }),
+                get: { relayPasscodeDraft ?? model.relayHostPasscode ?? "" },
+                set: { relayPasscodeDraft = $0 }),
             controlRequests: Binding(
                 get: { model.preferences.relayAllowsControlRequests },
                 set: { model.setRelayAllowsControlRequests($0) }),
@@ -2580,7 +1346,7 @@ struct OperatorSettingsPanel: View {
                 sharing:
                     "Serves this device's picture and the camera's readings to other devices running OpenZCine. The camera itself only ever talks to one device; this is how a second screen exists at all. Works on a shared network and directly device-to-device. Watchers should NOT join the camera's own Wi-Fi: its access point drops the monitor when a second device joins; they stay on their own network (or none) and find this broadcast in the camera list.",
                 passcode:
-                    "Four digits watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
+                    "A passcode of at least four characters watchers must enter once per device before they receive anything: no picture, no readings without it. Leave empty for an open broadcast. Devices already watching keep their access until they leave.",
                 controlRequests:
                     "Whether watchers may ask to drive the camera at all. Off hides the ask on their side; granting, declining and taking back stay here either way.",
                 priority:
@@ -2588,41 +1354,23 @@ struct OperatorSettingsPanel: View {
             ),
             browseHelp: "Find another device's broadcast in the camera list.",
             browse: model.showSavedCameras,
-            passcodeChanged: {
-                if $0.count == 4 || $0.isEmpty { model.setRelayWatcherPasscode($0) }
-            },
+            passcodeChanged: { model.setRelayWatcherPasscode($0) },
             watchers: model.captureOperatorSettingsWatchers(), unavailableTitle: "Watching",
             unavailableValue: model.cameraState.cameraName)
     }
 
     private var accountActions: MonitorSettingsAccountActions {
         let account = model.frameioAccount.capture()
-        return .init(
+        return .overInternetHop(
             identity: account.identity,
             isCurrent: { [weak model] in model != nil && account.isCurrent },
-            requiresInternetConsent: model.isOnCameraAccessPoint,
             connect: { [weak model] in
                 guard let model else { throw CancellationError() }
                 try await model.connectFrameio(captured: account)
             },
             disconnect: { [weak model] in if account.isCurrent { model?.disconnectFrameio() } },
-            beginInternet: { [weak model] admission in
-                guard let model,
-                    let token = await model.beginInternetHopCaptured(admission: admission)
-                else { return nil }
-                return .init(
-                    isCurrent: { [weak model] in
-                        model?.ownsInternetHop(token) == true && account.isCurrent
-                    },
-                    wait: { [weak model] in
-                        await model?.waitForInternetPath(captured: token, timeoutSeconds: 30)
-                            == true
-                    },
-                    restore: { [weak model] in await model?.restoreInternetHop(token) })
-            },
-            internetFailure:
-                "Couldn't reach the internet after leaving the camera's Wi‑Fi. Check cellular or home Wi‑Fi."
-        )
+            hop: model.internetHop, route: { [weak model] in model?.hopRoute() },
+            internetFailure: MonitorSettingsCopy.accountInternetFailure)
     }
     private var accountSource: MonitorSettingsAccountSource {
         .init(
@@ -2634,10 +1382,9 @@ struct OperatorSettingsPanel: View {
                 if model.isFrameioConnected { return .signedIn }
                 if !model.isFrameioConfigured { return .notConfigured }
                 return model.settingsAccount.busy ? .connecting : .signedOut
-            }, consentTitle: "Leave camera Wi‑Fi to sign in?",
-            consentMessage:
-                "We'll hop to home Wi‑Fi or cellular so you can sign in to Frame.io, then reconnect to the camera automatically.",
-            consentAction: "Sign in")
+            }, consentTitle: MonitorSettingsCopy.accountConsentTitle,
+            consentMessage: MonitorSettingsCopy.accountConsentMessage(service: "Frame.io"),
+            consentAction: MonitorSettingsCopy.accountConsentAction)
     }
 
     private func browserDestination(_ source: SettingsInternetDestination)
@@ -2658,10 +1405,12 @@ struct OperatorSettingsPanel: View {
             makeReport: { try await AppDiagnostics.shared.makeReport() },
             prepareBrowser: { [weak model] admission in
                 guard let model else { return nil }
-                return await model.prepareExternalInternetLinkHandoffCaptured(admission: {
-                    let admitted = admission()
-                    return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
-                })
+                return await model.browserHandoff.prepare(
+                    route: model.hopRoute(rehostActivePanel: false),
+                    admission: {
+                        let admitted = admission()
+                        return admitted && (approvedAPDeparture || !model.isOnCameraAccessPoint)
+                    })
             },
             open: { url in
                 await withCheckedContinuation { continuation in
@@ -2677,8 +1426,7 @@ struct OperatorSettingsPanel: View {
                     model?.finishInternetDestinationPreparation(captured)
                 }
             },
-            internetFailure:
-                "OpenZCine couldn't reach the internet after leaving the camera's Wi-Fi. Check cellular or another Wi-Fi network and try again."
+            internetFailure: MonitorSettingsCopy.browserInternetFailure(app: "OpenZCine")
         )
     }
     private var supportSource: MonitorSettingsSupportSource {
@@ -2689,7 +1437,7 @@ struct OperatorSettingsPanel: View {
                     reliabilityOptIn = $0
                     ReliabilityDiagnostics.reporting.setConsent($0)
                 }), available: ReliabilityDiagnostics.reporting.isAvailable,
-            automaticHelp: Self.reliabilityReportsHelp,
+            automaticHelp: MonitorSettingsCopy.automaticReports,
             unavailableHelp: Self.reliabilityUnavailableHelp,
             sourceHelp: "View the OpenZCine project and contribute on GitHub.",
             termsHelp: "Read the OpenZCine terms of use.",
@@ -2713,10 +1461,12 @@ struct OperatorSettingsPanel: View {
             reportTitle: "Report a Problem", reportActionTitle: "Report",
             diagnosticsHelp:
                 "Create a local report with recent app events and Apple diagnostics. Review it before sharing.",
-            reportAction: model.isStandaloneSettingsPresented
-                ? nil : { model.isBugReportPresented = true },
-            report: { AnyView(ProblemReportView().environment(model)) },
-            shareReport: { AnyView(DiagnosticsShareSheet(url: $0)) })
+            report: { model.isBugReportPresented = true },
+            shareReport: { AnyView(MonitorActivityShareSheet(items: [$0])) },
+            deleteStoredReports: { ReliabilityDiagnostics.incidents.deleteStoredIncidents {} },
+            deleteReportsHelp:
+                "Removes the feed incident and session reports stored on this phone.",
+            legal: .z)
     }
     private var lookLabel: String {
         switch model.assistConfiguration.selectedLUT {
@@ -2724,129 +1474,6 @@ struct OperatorSettingsPanel: View {
         case .stored(_, let name): return (name as NSString).deletingPathExtension
         }
     }
-    private var borrowedDisplay: MonitorOperatorBorrowedDisplay {
-        let capture = editedCaptureMode
-        return .init(
-            layoutHelp:
-                "Video and photo keep their own monitor layouts. This picks which one the DISP sections set up; the camera's own mode dial picks which one the monitor renders.",
-            choices: CaptureLayoutMode.allCases.map { .init(id: $0.rawValue, title: $0.title) },
-            selection: Binding(
-                get: { editedCaptureMode.rawValue },
-                set: {
-                    guard let choice = CaptureLayoutMode(rawValue: $0) else { return }
-                    settingsFeedback()
-                    editedCaptureMode = choice
-                }),
-            expandedSection: Binding(
-                get: { expandedDispSection?.rawValue },
-                set: { expandedDispSection = $0.flatMap(DispMode.init(rawValue:)) }),
-            sections: DispMode.allCases.map { mode in
-                let eligible = mode != .command && capture == model.captureLayoutMode
-                return .init(
-                    id: mode.rawValue, title: "DISP \(dispNumber(mode)) · \(mode.title)",
-                    caption: dispCaption(mode),
-                    reset: {
-                        settingsFeedback()
-                        model.resetChromeVisibility(for: mode, capture: capture)
-                    },
-                    editHint: "Opens the monitor with an eye on each element you can show or hide",
-                    edit: eligible ? { model.beginChromeEditing(mode) } : nil,
-                    unavailableEditHelp: mode == .command
-                        ? nil
-                        : "Switch the camera to \(capture.title.lowercased()) to arrange this on the monitor.",
-                    visibility: chromeToggles(for: mode, capture: capture),
-                    pinsTitle: "View assists that stay on in clean view",
-                    pins: mode == .clean ? cleanPins : [])
-            }, order: displayOrder,
-            returnedFromEditor: {
-                if let returning = model.chromeEditorReturnMode {
-                    expandedDispSection = returning
-                    model.chromeEditorReturnMode = nil
-                }
-            })
-    }
-    private var editedCaptureMode: CaptureLayoutMode {
-        get { displayCaptureMode ?? model.captureLayoutMode }
-        nonmutating set { displayCaptureMode = newValue }
-    }
-
-    private var cleanPins: [MonitorDisplayToggle] {
-        MonitorAssistTool.activeCases.filter { $0 != .evMeter }.map { tool in
-            MonitorDisplayToggle(
-                id: tool.rawValue, title: tool.displaySettingsTitle,
-                isOn: model.assist.cleanViewPinnedTools.contains(tool.selection),
-                accessibilityLabel: "Keep \(tool.displaySettingsTitle) in clean view"
-            ) {
-                model.toggleCleanViewPin(tool)
-            }
-        }
-    }
-
-    private var displayOrder: MonitorDisplayOrderGroup {
-        MonitorDisplayOrderGroup(
-            title: "DISP Button Order",
-            caption: "Drag to reorder; tap to enable or disable modes.",
-            items: model.preferences.dispOrder.map { mode in
-                MonitorDisplayOrderItem(
-                    id: mode.rawValue, title: mode.title,
-                    isOn: model.preferences.enabledDispModes.contains(mode),
-                    highlighted: mode == model.displayMode
-                        && model.preferences.enabledDispModes.contains(mode),
-                    toggle: { model.toggleDispMode(mode) })
-            },
-            reset: {
-                settingsFeedback()
-                model.resetDispPreferences()
-            },
-            move: { id, target in
-                let current = model.preferences.dispOrder
-                guard let source = current.firstIndex(where: { $0.rawValue == id }),
-                    current.indices.contains(target), source != target
-                else { return }
-                model.moveDispOrder(
-                    from: IndexSet(integer: source), to: source < target ? target + 1 : target)
-            })
-    }
-
-    private func dispNumber(_ mode: DispMode) -> Int {
-        (DispMode.allCases.firstIndex(of: mode) ?? 0) + 1
-    }
-
-    private func dispCaption(_ mode: DispMode) -> String {
-        switch mode {
-        case .live:
-            "The full monitor. Set what it shows in Edit view, and which tools reach the tool bar."
-        case .clean:
-            "A stripped-back image. Same elements as DISP 1 — the rail, focus box and batteries start on, everything else off."
-        case .command:
-            "The data dashboard — no feed, so no image assists. Only the side rail is on screen."
-        }
-    }
-
-    private func chromeToggles(for mode: DispMode, capture: CaptureLayoutMode)
-        -> [MonitorDisplayToggle]
-    {
-        DisplayChromeVisibility.configurableSections(in: mode).map { section in
-            MonitorDisplayToggle(
-                id: section.rawValue, title: section.title,
-                isOn: model.preferences.chrome(for: mode, capture: capture).isVisible(section)
-            ) {
-                model.toggleChrome(section, for: mode, capture: capture)
-            }
-        }
-    }
-
-    /// Marketing version + build number from the bundle, e.g. "0.2.0 (9)", matching what
-    /// TestFlight shows for the installed build (CI stamps CFBundleVersion per upload).
-    static var appVersionText: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(version) (\(build))"
-    }
-
-    static let reliabilityReportsHelp =
-        "Optional: send crash and error reports to OpenCapture through Sentry. Off by default. Turn off anytime without losing app features. Uploads wait until you leave camera Wi-Fi. No footage or GPS location. Sentry receives the connection IP; stored event IP and derived geography are removed. See Reporting Privacy below."
     static let reliabilityUnavailableHelp =
         "This build cannot send automatic reports. You can still share diagnostics stored on this phone."
 
@@ -2856,8 +1483,14 @@ struct OperatorSettingsPanel: View {
     }
     private var linkHealthCaption: String {
         guard isConnected || model.isDemoSession else { return model.linkHealthDetail }
-        return
-            "\(model.linkHealthDetail) · \(model.linkHealth >= 80 ? "Stable" : model.linkHealth >= 50 ? "Watch" : "Poor")"
+        let band = MonitorLinkHealthBand(score: model.linkHealth)
+        let bandName =
+            switch band {
+            case .stable: "Stable"
+            case .watch: "Watch"
+            case .poor: "Poor"
+            }
+        return "\(model.linkHealthDetail) · \(bandName)"
     }
     private var transportLabel: String {
         if model.isDemoSession { return "Demo session" }

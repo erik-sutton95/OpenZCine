@@ -74,243 +74,6 @@ enum StartupConnectionCopy {
 
 }
 
-/// Minimal inline state shown while the post-connect property burst and first
-/// live-view frame run after a successful connection (Android "Reading camera
-/// settings…" parity). Replaces the former full-screen "Camera ready" landing.
-struct StartupPreparingLiveView: View {
-    @Environment(NativeAppModel.self) private var model
-    let compact: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 14) {
-                ProgressView()
-                    .controlSize(.regular)
-                    .tint(MonitorTheme.accent)
-                StartupIconSquare(systemName: "camera.aperture", size: 48)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text(
-                    model.userFacingConnectionMessage.isEmpty
-                        ? "Reading camera settings…"
-                        : model.userFacingConnectionMessage
-                )
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(MonitorTheme.text)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            // Always offer a way back: this screen also shows when live view fails to start, and
-            // hiding the button there (a session still exists) left the operator stuck.
-            Button {
-                model.disconnect()
-            } label: {
-                Label("Back to cameras", systemImage: "chevron.backward")
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-                    .frame(maxWidth: 230)
-            }
-            .buttonStyle(StartupOutlineButtonStyle())
-        }
-        .frame(maxWidth: compact ? .infinity : 400, alignment: .leading)
-    }
-}
-
-/// "+ Add setup" on a saved camera: a mini-wizard scoped to THIS camera, offering only the
-/// path kinds it doesn't have yet. Nothing here re-runs first pair — records write themselves
-/// at the next connect, stamped with the declared path; this sheet only prepares the way
-/// (joins the camera's Wi-Fi for AP, instructs for the rest).
-struct StartupAddSetupSheet: View {
-    @Environment(NativeAppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let camera: PTPIPSavedCameraRecord
-    let missingKinds: [CameraPath.Kind]
-    /// The shared flow's add-route (SHELL-02): a reachable path connects now, an unreachable one
-    /// is watched for, and either way the camera's card shows the attempt.
-    let addRoute: (CameraPath.Kind) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Add a setup · \(camera.displayTitle)")
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(MonitorTheme.text)
-            Text(
-                "One camera, several ways to reach it. Pick how this rig runs; the setup "
-                    + "saves itself the first time you connect that way."
-            )
-            .font(.system(size: 13, weight: .regular, design: .rounded))
-            .foregroundStyle(MonitorTheme.muted)
-            ScrollView {
-                VStack(spacing: 10) {
-                    ForEach(missingKinds, id: \.self) { kind in
-                        setupRow(kind)
-                    }
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(MonitorTheme.background)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-    }
-
-    @ViewBuilder private func setupRow(_ kind: CameraPath.Kind) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon(for: kind))
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(MonitorTheme.accent)
-                .frame(width: 30, height: 30)
-                .background(MonitorTheme.raised.opacity(0.5), in: Circle())
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title(for: kind))
-                    .font(.system(size: 14.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(MonitorTheme.text)
-                Text(guidance(for: kind))
-                    .font(.system(size: 12.5, weight: .regular, design: .rounded))
-                    .foregroundStyle(MonitorTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                // Every row DOES something — a "+ Add setup" that only explains is a dead
-                // end. Try-now-else-watch: connect immediately when the path is already
-                // reachable, otherwise dismiss into the list, which is watching for it.
-                setupActionButton(kind)
-                    .padding(.top, 4)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(12)
-        .background(MonitorTheme.raised.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    /// The discovered camera that would satisfy this kind RIGHT NOW, if any.
-    private func discoveredMatch(for kind: CameraPath.Kind) -> DiscoveredCamera? {
-        switch kind {
-        case .usbC:
-            return model.discoveredCameras.first { $0.source == .usb }
-        case .infrastructure:
-            // On the camera's own AP this body is discovered — over a network the Wi-Fi
-            // setup can't use. Same rule as the availability chips: no route, no match.
-            guard !model.isOnCameraAccessPointNetwork else { return nil }
-            let accessPointHosts = model.savedCameraAccessPointHosts
-            return model.discoveredCameras.first { discovered in
-                // A camera-AP record's host is an address on the CAMERA's own network —
-                // 192.168.1.1 by convention, which is also the commonest home-router address
-                // there is. Something answering there is either the camera on its access
-                // point (a different setup) or the operator's router, and the liveness dial
-                // this row can come from — a kernel RST — cannot tell those apart. Either
-                // way it is never the Wi-Fi setup being added. Left in, a saved Camera AP
-                // setup put "Connect Now" on the Wi-Fi row of a camera that was nowhere on
-                // this network, and the connect it offered dialled the router.
-                guard let host = PTPIPPairedHosts.normalizedHost(discovered.ip),
-                    !accessPointHosts.contains(host)
-                else { return false }
-                return discovered.source != .usb
-                    && CameraStartupPolicy.savedCamera(
-                        forDiscovered: discovered, in: [camera]) != nil
-            }
-        case .cameraAccessPoint, .phoneHotspot, .hdmiCapture:
-            return nil
-        }
-    }
-
-    @ViewBuilder private func setupActionButton(_ kind: CameraPath.Kind) -> some View {
-        let match = discoveredMatch(for: kind)
-        let title: String? = {
-            switch kind {
-            case .cameraAccessPoint: return "Join Camera Wi-Fi"
-            case .usbC: return match != nil ? "Connect Now" : "Connect When Plugged In"
-            case .infrastructure:
-                return match != nil ? "Connect Now" : "Find On This Network"
-            case .phoneHotspot: return "Wait For Camera"
-            case .hdmiCapture: return "Use HDMI Capture"
-            }
-        }()
-        if let title {
-            Button {
-                // Anything that PRESENTS (the join cover, the connect popup) runs from the
-                // sheet's onDismiss — fired mid-dismissal it is silently dropped, which is
-                // exactly how "Join Camera Wi-Fi" did nothing. Pure state writes run now.
-                switch kind {
-                case .cameraAccessPoint:
-                    model.pendingAddSetupAction = { [weak model] in
-                        model?.beginAddCameraAPSetup(for: camera)
-                    }
-                case .usbC, .infrastructure, .phoneHotspot:
-                    // Connecting over this path IS adding the setup: the record saves itself
-                    // with the declared path at establishment. Not reachable yet, the attempt
-                    // watches for it (the first discovery on this path connects).
-                    addRoute(kind)
-                case .hdmiCapture:
-                    // Picture-only and no PTP control, so there is nothing to watch FOR — the
-                    // dongle either has a signal or it doesn't. Start the capture session
-                    // straight away; it adopts a live camera link as a source change rather
-                    // than tearing it down (`startHDMIMonitorSession`).
-                    model.pendingAddSetupAction = { [weak model] in
-                        model?.startHDMIMonitorSession()
-                    }
-                }
-                dismiss()
-            } label: {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(MonitorTheme.text)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(MonitorTheme.accent.opacity(0.35), in: Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private func icon(for kind: CameraPath.Kind) -> String {
-        switch kind {
-        case .cameraAccessPoint: return "personalhotspot"
-        case .infrastructure: return "wifi.router"
-        case .phoneHotspot: return "iphone.radiowaves.left.and.right"
-        case .usbC: return "cable.connector"
-        case .hdmiCapture: return "tv"
-        }
-    }
-
-    private func title(for kind: CameraPath.Kind) -> String {
-        switch kind {
-        case .cameraAccessPoint: return "Camera access point"
-        case .infrastructure: return "Wi-Fi network"
-        case .phoneHotspot: return "This device's hotspot"
-        case .usbC: return "USB-C cable"
-        case .hdmiCapture: return "HDMI capture"
-        }
-    }
-
-    private func guidance(for kind: CameraPath.Kind) -> String {
-        switch kind {
-        case .cameraAccessPoint:
-            return
-                "This device joins the camera's own Wi-Fi — best in the field with no other "
-                + "gear. You'll be asked for the camera's network key the first time only."
-        case .infrastructure:
-            return
-                "Put the camera and this device on the same network (a set router, house "
-                + "Wi-Fi). Turn on Connect to PC on the camera with a profile for that "
-                + "network; it appears in the camera list and saves on connect. Each network "
-                + "you use keeps its own setup, so a studio and a home router are two."
-        case .phoneHotspot:
-            return
-                "Turn on this device's Personal Hotspot and point a camera network profile "
-                + "at it. The camera joins YOU — once it does, it appears in the list."
-        case .usbC:
-            return
-                "Plug the camera straight into this device. It connects and saves itself — "
-                + "nothing to configure."
-        case .hdmiCapture:
-            return "Use the connect screen's Cable Link → HDMI capture for a picture-only feed."
-        }
-    }
-}
-
 /// Typography for the wizard rows Nikon still draws (the permission rows), per startup profile.
 struct WizardCompactStyle: Sendable {
     let checklistFontSize: CGFloat
@@ -568,7 +331,6 @@ enum StartupWizardContent {
 
 struct StartupFirstPairWizardView: View {
     @Environment(NativeAppModel.self) private var model
-    @Environment(\.openURL) private var openURL
     let isBusy: Bool
     let contentLayout: StartupContentLayout
     var safeArea = EdgeInsets()
@@ -594,7 +356,7 @@ struct StartupFirstPairWizardView: View {
             onDone: { model.showSavedCameras() },
             onDiagnostics: { model.shareDiagnostics() },
             onReportProblem: { model.isBugReportPresented = true },
-            onWatchFeed: { model.showSavedCameras() },
+            onWatchFeed: { model.openWatcherBrowse() },
             pairingFlow: model.showsAppConnectProgress
                 ? NikonConnectFlow(model: model).flow(
                     steps: railSteps, current: railSteps.count - 1)
@@ -615,9 +377,7 @@ struct StartupFirstPairWizardView: View {
                             model.showSavedCameras()
                         }
                     },
-                    content: AnyView(stepBody)),
-            onPrivacy: { openURL(SupportLinkCatalog.privacy) },
-            onTerms: { openURL(SupportLinkCatalog.terms) }
+                    content: AnyView(stepBody))
         )
         .onReceive(
             NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)
@@ -1110,46 +870,5 @@ struct StartupOutlineButtonStyle: ButtonStyle {
                     Color.white.opacity(0.12), lineWidth: 1)
             )
             .opacity(configuration.isPressed ? 0.78 : 1)
-    }
-}
-
-/// Asks before connecting to a camera another device is holding.
-///
-/// A modifier rather than an alert written into one screen: the pairing wizard and the saved-camera
-/// list both reach the same connect, so the confirmation has to be wherever the operator is when
-/// the model raises it. The alert names the device that loses its session, because "are you sure"
-/// without that is not a decision anyone can make.
-struct TakeOverConfirmation: ViewModifier {
-    /// Passed in rather than read from the environment: this is mounted at the app root, above
-    /// the point where the model is installed, and an `@Environment` lookup there traps at launch.
-    let model: NativeAppModel
-
-    func body(content: Content) -> some View {
-        content.alert(
-            "Take over this camera?",
-            isPresented: Binding(
-                get: { model.pendingTakeOverCamera != nil },
-                set: { if !$0 { model.cancelTakeOver() } }
-            )
-        ) {
-            Button("Take Over", role: .destructive) { model.confirmTakeOver() }
-            Button("Cancel", role: .cancel) { model.cancelTakeOver() }
-        } message: {
-            Text(takeOverMessage)
-        }
-    }
-
-    private var takeOverMessage: String {
-        let holder = model.pendingTakeOverCamera?.heldByDeviceName
-        guard let holder, !holder.isEmpty else {
-            return "Another device is using this camera. Connecting will disconnect it."
-        }
-        return "\(holder) is using this camera. Connecting will disconnect it."
-    }
-}
-
-extension View {
-    func takeOverConfirmation(model: NativeAppModel) -> some View {
-        modifier(TakeOverConfirmation(model: model))
     }
 }

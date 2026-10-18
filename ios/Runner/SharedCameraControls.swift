@@ -1,4 +1,6 @@
 import MonitorUI
+import OpenCineAppKit
+import OpenCineAppKitApple
 import OpenCineCameraControls
 import OpenZCineCore
 import SwiftUI
@@ -16,33 +18,29 @@ typealias AccentDrumWheel = LUTDrumWheel<LiveDesign>
 /// modes: eye badges laid out together above the monitor, and the banner that names the mode.
 typealias ChromeEditBadgeLayer = ChromeEditBadges<NativeAppModel>
 typealias ChromeEditBanner = ChromeEditDoneBanner<NativeAppModel>
-typealias ChromeEditBoundsKey = ChromeEditSectionBoundsKey<DisplayChromeVisibility.Section>
+typealias ChromeEditBoundsKey = ChromeEditSectionBoundsKey<MonitorDisplayChrome.Section>
 
-/// Per-DISP chrome follows the capture side the body reports (photo or video).
+/// The Edit view edits the shared per-DISP chrome the one display owner keeps.
 extension NativeAppModel: ChromeEditHost {
+    typealias ChromeSection = MonitorDisplayChrome.Section
+    typealias ChromeMode = MonitorDisplayMode
     var hapticsEnabled: Bool { preferences.hapticsEnabled }
-    var chromeEditSections: [DisplayChromeVisibility.Section] {
-        DisplayChromeVisibility.Section.allCases
-    }
 
-    func chromeSectionTitle(_ section: DisplayChromeVisibility.Section) -> String { section.title }
-    func chromeSectionID(_ section: DisplayChromeVisibility.Section) -> String { section.rawValue }
-    func chromeModeTitle(_ mode: DispMode) -> String { mode.title }
-
-    func isChromeConfigurable(_ section: DisplayChromeVisibility.Section, in mode: DispMode) -> Bool
+    func isChromeVisible(_ section: MonitorDisplayChrome.Section, in mode: MonitorDisplayMode)
+        -> Bool
     {
-        DisplayChromeVisibility.isConfigurable(section, in: mode)
+        operatorSession.chrome(for: mode).isVisible(section)
     }
 
-    func isChromeVisible(_ section: DisplayChromeVisibility.Section, in mode: DispMode) -> Bool {
-        preferences.chrome(for: mode, capture: captureLayoutMode).isVisible(section)
+    func toggleChrome(_ section: MonitorDisplayChrome.Section, for mode: MonitorDisplayMode) {
+        operatorSession.toggle(section, in: mode)
     }
 }
 
 extension View {
     /// Outlines a monitor element while the Edit view is open on a mode that offers it (dimmed
     /// when hidden) and measures it for its eye badge. Outside the editor this is a no-op.
-    func chromeEditable(_ section: DisplayChromeVisibility.Section, editing mode: DispMode?)
+    func chromeEditable(_ section: MonitorDisplayChrome.Section, editing mode: MonitorDisplayMode?)
         -> some View
     {
         modifier(ChromeEditableModifier<NativeAppModel>(section: section, mode: mode))
@@ -81,5 +79,45 @@ extension LiveDesign: LiveChromePalette {
 
     static func chromeColor(red: CGFloat, green: CGFloat, blue: CGFloat) -> Color {
         MonitorTheme.edrSRGB(red: red, green: green, blue: blue, gain: MonitorTheme.hdrGain)
+    }
+}
+
+/// The same browse view used by the other shells, over this app's deployed relay owner.
+typealias WatcherBrowseView = WatcherBrowse<NativeAppModel>
+
+extension NativeAppModel: WatcherBrowseHost {
+    var watcherJoinStatus: WatcherJoinStatus {
+        if relayJoinNeedsPasscode { return .needsPasscode }
+        switch relayClientState {
+        case .connecting, .waiting: return .connecting
+        case .connected: return .live
+        case .failed(let reason): return .failed(reason)
+        case .idle: return relayFailureReason.map(WatcherJoinStatus.failed) ?? .idle
+        }
+    }
+
+    var watcherPasscodeError: String? { relayJoinNeedsPasscode ? relayFailureReason : nil }
+
+    var watcherFeeds: [WatcherFeedRow] {
+        visibleRelayBroadcasts.map {
+            WatcherFeedRow(id: $0.id, name: $0.name, cameraName: nil)
+        }
+    }
+
+    func startWatcherBrowse() {
+        if watcherBrowseError != nil { stopRelayBrowsing() }
+        startRelayBrowsing(includePeerToPeer: videoSource != .relay)
+    }
+
+    func joinWatcherFeed(id: String) {
+        guard let feed = visibleRelayBroadcasts.first(where: { $0.id == id }) else { return }
+        joinRelay(feed)
+    }
+
+    func retryWatcherPasscode(_ code: String) { submitRelayPasscode(code) }
+
+    func stopWatching() {
+        showsWatcherBrowse = false
+        if videoSource == .relay { leaveRelay() }
     }
 }

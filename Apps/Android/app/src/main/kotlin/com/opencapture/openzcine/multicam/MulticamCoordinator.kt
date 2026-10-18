@@ -1,11 +1,21 @@
 package com.opencapture.openzcine.multicam
 
+import com.opencapture.opencine.multicam.RecordAll
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import android.graphics.Bitmap
 import androidx.compose.ui.graphics.ImageBitmap
+import com.opencapture.opencine.appkit.MonitorCapturePresentation
+import com.opencapture.opencine.core.Availability
+import com.opencapture.opencine.core.ConnectionState
+import com.opencapture.opencine.core.SettingAccess
+import com.opencapture.openzcine.FeedLut
+import com.opencapture.openzcine.FeedLutSelection
+import com.opencapture.openzcine.lut.AndroidLutLibrary
+import com.opencapture.opencine.appkit.MultiviewStageState
+import com.opencapture.opencine.appkit.MultiviewStageLayout
 import com.opencapture.monitorui.MultiviewArrangement
 import com.opencapture.openzcine.monitorTimecodeLabel
 import com.opencapture.opencine.core.CameraCommandIntent
@@ -24,28 +34,21 @@ import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.core.TelemetrySource
 import com.opencapture.opencine.multicam.EditorLeaseException
 import com.opencapture.opencine.multicam.EditorLeases
-import com.opencapture.opencine.multicam.ExclusionReason
 import com.opencapture.opencine.multicam.MulticamGroup
 import com.opencapture.opencine.multicam.MulticamSnapshot
 import com.opencapture.opencine.multicam.RecordDirection
 import com.opencapture.opencine.multicam.RecordPlan
-import com.opencapture.opencine.multicam.RecordSubmissionError
-import com.opencapture.opencine.multicam.RecordSubmissionException
 import com.opencapture.opencine.multicam.ResourceAdmission
 import com.opencapture.opencine.multicam.AdmissionReason
 import com.opencapture.opencine.multicam.ResourceBudget
 import com.opencapture.opencine.multicam.ResourceClaim
 import com.opencapture.opencine.multicam.ResourceRequest
-import com.opencapture.opencine.multicam.TargetOutcome
-import com.opencapture.opencine.multicam.TargetPolicy
 import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.opencine.nikon.NikonMulticamPolicy
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.LiveFrame
-import com.opencapture.openzcine.pairing.SavedCameraRecord
-import com.opencapture.openzcine.pairing.SavedCameraTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +60,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import com.opencapture.opencine.nikon.SwiftCoreCameraSession
+import com.opencapture.opencine.nikon.SavedCameraRecord
+import com.opencapture.opencine.nikon.SavedCameraTransport
 
 /** One member's open link: its own Nikon session and that session's live frames. */
 class MulticamLink(val session: CameraSession, val frames: Flow<LiveFrame>)
@@ -66,27 +71,13 @@ class MulticamLink(val session: CameraSession, val frames: Flow<LiveFrame>)
  * a group press is coordinated dispatch with per-camera confirmation.
  */
 object MulticamCopy {
-    const val SESSION_FULL = "Multicam holds four cameras."
+    const val SESSION_FULL = "Multiview holds four cameras."
     const val ALREADY_MEMBER = "That camera is already on the stage."
-    const val CAMERA_WIFI = "Camera Wi-Fi can't join a multicam session."
+    const val CAMERA_WIFI = "Camera Wi-Fi can't join Multiview."
     const val NOT_REACHABLE = "Not reachable."
     const val EMPTY_PICKER = "No other cameras reachable. Pair one, or plug USB-C / join the same network."
     const val COULDNT_CONNECT = "Couldn't connect"
     const val LOST_CONNECTION = "Connection lost"
-    const val COULDNT_REC = "Couldn't rec"
-    const val CHANGED = "Cameras changed. Try again."
-
-    fun confirm(direction: RecordDirection, names: List<String>): String =
-        if (direction == RecordDirection.START) {
-            "Start recording on ${names.joinToString(", ")}?"
-        } else {
-            "Stop recording on ${names.size} ${if (names.size == 1) "camera" else "cameras"}?"
-        }
-
-    /** `null` when every addressed camera rolls. */
-    fun mixedStart(rolling: Int, total: Int, firstFailed: String): String? =
-        if (rolling < total) "$rolling of $total rolling. $firstFailed didn't start." else null
-
     fun notApplied(setting: String): String = "$setting not applied"
 }
 
@@ -158,10 +149,12 @@ class MulticamMember internal constructor(val slot: Int, val record: SavedCamera
     internal var control: NikonOpenCineSession? = null
     internal var job: Job? = null
 
+    /** This member's own picture and look; it publishes what the tile shows into [frame]. */
+    val picture = MulticamPicture(FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709)) { frame = it }
+
     val displayName: String get() = record.customName?.takeIf { it.isNotBlank() } ?: record.cameraName
     val letter: String get() = listOf("A", "B", "C", "D")[slot.coerceIn(0, 3)]
     val isLive: Boolean get() = status == MemberStatus.Live
-    val batteryPercent: Int? get() = properties.batteryPercent?.takeIf { it in 0..100 }
 }
 
 /**
@@ -176,18 +169,28 @@ class MulticamCoordinator(
     /** Opens one member's own link (the saved-profile session factories). */
     private val connect: suspend (SavedCameraRecord) -> MulticamLink,
     /** A JPEG decoder per member feed (each keeps its own bitmap ring). */
-    private val decoder: () -> (ByteArray) -> ImageBitmap? = { { null } },
+    private val decoder: () -> (ByteArray) -> Bitmap? = { { null } },
     /** Where member frames decode, off the main thread in the app. */
     private val decodeContext: CoroutineContext = Dispatchers.Default,
     private val now: () -> Long = System::currentTimeMillis,
+    /** A member's native look renderer; `null` when this device cannot render one (no LUT tool). */
+    private val lookRenderer: (() -> MulticamLookRenderer)? = null,
+    /** The operator's current single-camera look, which seeds each member's own selection. */
+    private val operatorLook: () -> FeedLutSelection = { FeedLutSelection.BuiltIn(FeedLut.LOG3G10_709) },
+    /** The app's one stored-LUT library, for the per-member look list. */
+    internal val lutLibrary: AndroidLutLibrary? = null,
 ) {
     var presented by mutableStateOf(false)
         private set
-    var arrangement by mutableStateOf(MultiviewArrangement.CENTER_STAGE)
+    val presentation = MultiviewStageState(TILES)
+    var arrangement: MultiviewArrangement
+        get() = presentation.layout.arrangement
+        set(value) { presentation.layout = if (value == MultiviewArrangement.GRID) MultiviewStageLayout.GRID else MultiviewStageLayout.CENTER_STAGE }
 
     /** The selected tile; its member is the program camera. */
-    var focusedSlot by mutableIntStateOf(0)
-        private set
+    var focusedSlot: Int
+        get() = presentation.selected
+        private set(value) { presentation.selected = value }
     val members = mutableStateListOf<MulticamMember>()
     var toast by mutableStateOf<String?>(null)
     var groupBusy by mutableStateOf(false)
@@ -219,13 +222,14 @@ class MulticamCoordinator(
     fun begin() {
         end()
         presented = true
-        arrangement = MultiviewArrangement.CENTER_STAGE
-        focusedSlot = 0
     }
 
     /** Closes every member link. Never stops a recording. */
     fun end() {
+        closeCameraSettings()
+        closeLookSettings()
         members.forEach(::stop)
+        members.forEach { it.picture.retire() }
         members.clear()
         group.entries.map { it.id }.forEach(group::remove)
         leases.closeAll()
@@ -241,7 +245,7 @@ class MulticamCoordinator(
         when (val reason = admission(record, reachable).firstOrNull()) {
             null -> null
             is AdmissionReason.IntegrationRefused -> qualificationCopy(reason.reason)
-            AdmissionReason.QualificationUnknown -> "Multicam support is not known for this setup."
+            AdmissionReason.QualificationUnknown -> "Multiview support is not known for this setup."
             else -> MulticamCopy.SESSION_FULL
         }
 
@@ -276,82 +280,59 @@ class MulticamCoordinator(
         val member = member(id) ?: return
         if (lent == id) lent = null
         stop(member)
+        member.picture.retire()
         members.remove(member)
         if (member.slot == focusedSlot) members.minByOrNull { it.slot }?.let { focusedSlot = it.slot }
     }
 
     fun select(slot: Int) {
+        if (cameraEditor?.member != memberAt(slot)?.id) closeCameraSettings()
         focusedSlot = slot
         memberAt(slot)?.id?.takeIf { group[it] != null }?.let(group::setStage)
     }
 
-    // MARK: Group record
+    // MARK: Group record (the shared RecordAll policy, plan rule and copy)
 
-    /** Group start (nothing rolling) or stop; Nikon keeps its eligible-subset default. */
+    /** Record all: stop when any member rolls, else start; refused while any member cannot record. */
     fun groupPlan(): RecordPlan = plan(group.entries.map { it.id })
 
-    /** One camera's own start or stop (its tile menu, or a Couldn't rec retry). */
+    /** One camera's own start or stop (its tile menu). */
     fun plan(id: MonitorEntryID): RecordPlan = plan(listOf(id))
 
-    fun names(plan: RecordPlan): List<String> =
-        plan.targets.flatMap { it.entries }.mapNotNull { member(it)?.displayName }
-
-    /** Runs [plan] in the coordinator's scope, so Live View replacing the stage does not cancel it. */
-    fun start(plan: RecordPlan) {
-        scope.launch { run(plan) }
+    /**
+     * Runs [plan] in the coordinator's scope, so Live View replacing the stage does not cancel it.
+     * [together]: Record all, which also reports one group line.
+     */
+    fun start(plan: RecordPlan, together: Boolean) {
+        scope.launch { run(plan, together) }
     }
 
-    suspend fun run(plan: RecordPlan) {
+    suspend fun run(plan: RecordPlan, together: Boolean) {
         if (groupBusy) return
         groupBusy = true
         try {
-            val sessions = sessionMap()
-            val submission =
-                try {
-                    plan.submit(group, engineState(), sessions)
-                } catch (error: RecordSubmissionException) {
-                    if (error.error == RecordSubmissionError.STALE) toast = MulticamCopy.CHANGED
-                    return
-                }
-            apply(plan, submission.finished(sessions).outcomes)
+            if (together) toast = RecordAll.progress(plan.direction)
+            for (target in plan.targets) target.entries.forEach { member(it)?.note = RecordAll.WAITING }
+            val result = RecordAll.run(plan, group, engineState(), sessionMap())
+            if (result == null) {
+                toast = RecordAll.CHANGED
+                return
+            }
+            for (member in members) {
+                val outcome = result.outcome(member.id, group) ?: continue
+                RecordAll.note(outcome, plan.direction)?.let { member.note = it }
+            }
+            if (together) {
+                val start = plan.direction == RecordDirection.START
+                toast = RecordAll.summary(result, allMatch = members.all { it.recording == start })
+            }
         } finally {
             groupBusy = false
         }
     }
 
-    private fun plan(entries: List<MonitorEntryID>): RecordPlan {
-        val rolling = entries.any { member(it)?.recording == true }
-        return RecordPlan.make(
-            if (rolling) RecordDirection.STOP else RecordDirection.START,
-            TargetPolicy.ELIGIBLE_SUBSET,
-            entries,
-            group,
-            engineState(),
-        )
-    }
-
-    private fun apply(plan: RecordPlan, outcomes: Map<com.opencapture.opencine.core.CameraSessionID, TargetOutcome>) {
-        val failed = mutableListOf<MulticamMember>()
-        for (target in plan.targets) {
-            val confirmed = outcomes[target.session] == TargetOutcome.Confirmed
-            for (id in target.entries) {
-                val member = member(id)?.takeIf { it.control?.id == target.session } ?: continue
-                member.note = if (confirmed) null else MulticamCopy.COULDNT_REC
-                if (!confirmed) failed += member
-            }
-        }
-        // Shown but not sent (no live view, closed link) did not start either; a lent camera is
-        // simply in its Live View.
-        val excluded =
-            plan.exclusions.filter { it.reason != ExclusionReason.Busy }.mapNotNull { member(it.entry) }
-        excluded.forEach { it.note = MulticamCopy.COULDNT_REC }
-        if (plan.direction != RecordDirection.START) return
-        val total = plan.targets.size + plan.satisfied.size + excluded.size
-        val notRolling = failed + excluded
-        notRolling.firstOrNull()?.let { first ->
-            MulticamCopy.mixedStart(total - notRolling.size, total, first.displayName)?.let { toast = it }
-        }
-    }
+    private fun plan(entries: List<MonitorEntryID>): RecordPlan =
+        RecordAll.plan(entries, { member(it)?.recording == true }, group, engineState())
 
     // MARK: Camera values (that member's own readback-confirmed writes)
 
@@ -373,6 +354,117 @@ class MulticamCoordinator(
         }
     }
 
+    // MARK: Borrowed settings editor
+
+    /** The open camera editor, if any: one member's lease over its own session. */
+    var cameraEditor by mutableStateOf<MulticamCameraEditor?>(null)
+        private set
+
+    /**
+     * Slots whose live, unlent member can take a setting now: its session is ready with command
+     * authority and describes at least one writable, available setting with bounded choices.
+     */
+    val cameraSettingsSlots: Set<Int>
+        get() = members.mapNotNull { member ->
+            if (!member.isLive || lent == member.id || member.link == null) return@mapNotNull null
+            val snapshot = member.control?.refresh() ?: return@mapNotNull null
+            if (snapshot.connection != ConnectionState.Ready) return@mapNotNull null
+            if (snapshot.authority != ControlAuthority.Owner && snapshot.authority !is ControlAuthority.Lease) return@mapNotNull null
+            member.slot.takeIf {
+                multiviewEditableSettings.any { key ->
+                    val descriptor = snapshot.capabilities[key] ?: return@any false
+                    descriptor.access == SettingAccess.READ_WRITE && descriptor.availability == Availability.Available &&
+                        MonitorCapturePresentation.choices(key, descriptor.domain).isNotEmpty()
+                }
+            }
+        }.toSet()
+
+    /** Opens the slot's member editor under a fresh engine lease, retiring any earlier one first. */
+    fun openCameraSettings(slot: Int) {
+        closeCameraSettings()
+        closeLookSettings()
+        if (slot !in cameraSettingsSlots) return
+        val member = memberAt(slot) ?: return
+        val source = member.control ?: return
+        val owner = member.link?.session ?: return
+        select(slot)
+        val lease = try {
+            leases.open(member.id, group, engineState())
+        } catch (_: EditorLeaseException) {
+            return
+        }
+        lateinit var editor: MulticamCameraEditor
+        val session = MulticamEditorSession(source, owner) {
+            // Main-side check at submission; the native gate reads only the editor's receipt.
+            cameraEditor === editor && this@MulticamCoordinator.member(member.id) === member && member.control === source &&
+                member.link?.session === owner && lent != member.id &&
+                leases.refusal(lease, group, engineState()) == null
+        }
+        editor = MulticamCameraEditor(member.id, lease, session)
+        cameraEditor = editor
+    }
+
+    /** Retires the editor and its lease. Never sends a command; recording is untouched. */
+    fun closeCameraSettings() {
+        val editor = cameraEditor ?: return
+        cameraEditor = null
+        editor.retire()
+        leases.close(editor.member)
+    }
+
+    private fun closeEditorOf(member: MulticamMember) {
+        // A bake still running for the old link or session can no longer publish.
+        member.picture.invalidate()
+        if (cameraEditor?.member == member.id) closeCameraSettings()
+        if (lookSettingsSlot == member.slot) closeLookSettings()
+    }
+
+    // MARK: Per-member picture look (LUT)
+
+    /** The member whose look options are open, if any. Transient, never persisted. */
+    var lookSettingsSlot by mutableStateOf<Int?>(null)
+        private set
+
+    /** Slots whose live, unlent member has a native look renderer attached. */
+    val pictureLUTSlots: Set<Int>
+        get() = members.filter { it.isLive && lent != it.id && it.picture.renderCapable }.map { it.slot }.toSet()
+
+    /** Whether any render-capable member shows its look, for the LUT tool state. */
+    val lutOn: Boolean
+        get() = members.any { it.slot in pictureLUTSlots && it.picture.lutEnabled }
+
+    /** The group LUT tool: on for every capable member unless all already are, then off for all. */
+    fun toggleLUT() {
+        val capable = members.filter { it.slot in pictureLUTSlots }
+        if (capable.isEmpty()) return
+        val enabled = !capable.all { it.picture.lutEnabled }
+        capable.forEach { it.picture.showLut(enabled) }
+    }
+
+    fun setLUTEnabled(id: MonitorEntryID, enabled: Boolean) {
+        member(id)?.takeIf { it.slot in pictureLUTSlots }?.picture?.showLut(enabled)
+    }
+
+    fun setLUTSelection(id: MonitorEntryID, selection: FeedLutSelection) {
+        member(id)?.takeIf { it.slot in pictureLUTSlots }?.picture?.select(selection)
+    }
+
+    fun openLookSettings(slot: Int) {
+        closeCameraSettings()
+        if (slot !in pictureLUTSlots) return
+        select(slot)
+        lookSettingsSlot = slot
+    }
+
+    fun closeLookSettings() {
+        lookSettingsSlot = null
+    }
+
+    /** Gives the member its own renderer once its link is live. */
+    internal fun attachPicture(member: MulticamMember) {
+        member.picture.attach(scope, lookRenderer, operatorLook())
+    }
+
     // MARK: Live View loan
 
     /**
@@ -381,6 +473,8 @@ class MulticamCoordinator(
      * the session to show, or null when it cannot be lent.
      */
     fun lend(id: MonitorEntryID): CameraSession? {
+        closeCameraSettings()
+        closeLookSettings()
         if (lent != null) return null
         val member = member(id)?.takeIf { it.isLive } ?: return null
         val session = member.link?.session ?: return null
@@ -485,6 +579,7 @@ class MulticamCoordinator(
     }
 
     private fun attach(member: MulticamMember, link: MulticamLink) {
+        closeEditorOf(member)
         member.control?.closeNow(SessionCloseReason.REPLACED)
         val control = NikonOpenCineSession(link.session, scope)
         member.control = control
@@ -512,6 +607,7 @@ class MulticamCoordinator(
         member.job?.cancel()
         member.status = MemberStatus.Live
         member.note = null
+        attachPicture(member)
         member.job =
             scope.launch {
                 launch {
@@ -525,7 +621,9 @@ class MulticamCoordinator(
                 val decode = decoder()
                 link.frames.conflate().collect { frame ->
                     if (frame.jpegData.isNotEmpty()) {
-                        withContext(decodeContext) { decode(frame.jpegData) }?.let { member.frame = it }
+                        // An immutable copy: the decoder reuses its ring, while a look may still bake.
+                        withContext(decodeContext) { decode(frame.jpegData)?.copy(Bitmap.Config.ARGB_8888, false) }
+                            ?.let(member.picture::accept)
                     }
                     member.timecode =
                         monitorTimecodeLabel(frame.timecode)
@@ -539,6 +637,7 @@ class MulticamCoordinator(
     /** The tile keeps its camera with a Retry; the engine stops addressing it. */
     private fun fail(member: MulticamMember, reason: String) {
         if (member.status is MemberStatus.Failed) return
+        closeEditorOf(member)
         member.status = MemberStatus.Failed(reason)
         member.recording = null
         member.control?.closeNow(SessionCloseReason.LINK_LOST)
@@ -554,6 +653,7 @@ class MulticamCoordinator(
     }
 
     private fun stop(member: MulticamMember) {
+        closeEditorOf(member)
         member.job?.cancel()
         member.job = null
         member.control?.closeNow(SessionCloseReason.REQUESTED)

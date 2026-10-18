@@ -1,6 +1,5 @@
-- Record phone gyro alongside camera takes and export logs for Gyroflow.
-- Calibrate a firmly mounted phone, including tilted holders, or choose a mount preset.
-- Interrupted logs retain available motion data. Share or delete saved logs in Gyro logs.
-- Keep the app open while logging. Choose the lens profile and synchronize in Gyroflow.
-- Fixed a crash when the camera's live preview starts or reconnects.
-- Please test connecting to the camera over Wi-Fi and reconnecting while live view is open.
+- Record phone gyro with Nikon takes; calibrate a firm mount or choose a preset, then export logs for Gyroflow.
+- Share or delete saved logs. Interrupted logs retain available motion data; keep the app open, choose a lens profile and sync in Gyroflow.
+- Camera reports drive exposure, shutter angle, storage, link and recording time; missing values stay unavailable.
+- Live/Multicam clocks and Media return remain consistent; ML Kit release checks retained.
+- Fixed preview start/reconnect crashes.

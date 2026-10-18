@@ -51,110 +51,6 @@
         return javaFloatArray(env, next.payload)
     }
 
-    // MARK: - Frame.io OAuth + request policy
-
-    /// `SwiftCore.frameioBeginAuthorization(clientID, redirectURI): String?`
-    /// — starts a shared-core PKCE transaction. The JSON wire can contain a
-    /// verifier and must remain process-local; Kotlin must never log it.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioBeginAuthorization")
-    public func swiftCoreFrameioBeginAuthorization(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, clientID: jstring?,
-        redirectURI: jstring?
-    ) -> jstring? {
-        guard
-            let clientID = swiftString(env, clientID),
-            let redirectURI = swiftString(env, redirectURI),
-            let payload = AndroidFrameioWire.beginAuthorization(
-                clientID: clientID, redirectURI: redirectURI)
-        else { return nil }
-        return javaString(env, payload)
-    }
-
-    /// `SwiftCore.frameioParseRedirect(redirectURI, callbackURI, expectedState): String?`
-    /// — validates exact redirect identity plus OAuth state, returning only a
-    /// code. Error details and code values are deliberately not logged here.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioParseRedirect")
-    public func swiftCoreFrameioParseRedirect(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, redirectURI: jstring?,
-        callbackURI: jstring?, expectedState: jstring?
-    ) -> jstring? {
-        guard
-            let redirectURI = swiftString(env, redirectURI),
-            let callbackURI = swiftString(env, callbackURI),
-            let expectedState = swiftString(env, expectedState),
-            let code = AndroidFrameioWire.parseRedirect(
-                redirectURI: redirectURI, callbackURI: callbackURI, expectedState: expectedState)
-        else { return nil }
-        return javaString(env, code)
-    }
-
-    /// `SwiftCore.frameioTokenRequest(...)` — builds the shared Adobe IMS form
-    /// request for the Android HTTPS adapter. The returned form can contain an
-    /// auth code or refresh token and must never be logged.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioTokenRequest")
-    public func swiftCoreFrameioTokenRequest(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, kind: jstring?, clientID: jstring?,
-        redirectURI: jstring?, code: jstring?, verifier: jstring?, refreshToken: jstring?
-    ) -> jstring? {
-        guard
-            let kind = swiftString(env, kind),
-            let clientID = swiftString(env, clientID),
-            let redirectURI = swiftString(env, redirectURI),
-            let payload = AndroidFrameioWire.tokenRequest(
-                kind: kind, clientID: clientID, redirectURI: redirectURI,
-                code: swiftString(env, code), verifier: swiftString(env, verifier),
-                refreshToken: swiftString(env, refreshToken))
-        else { return nil }
-        return javaString(env, payload)
-    }
-
-    /// `SwiftCore.frameioAPIRequest(...)` — plans one portable V4 endpoint and
-    /// JSON body. Kotlin attaches an encrypted stored bearer token and performs
-    /// HTTPS; endpoint / request-model policy stays in Swift.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioAPIRequest")
-    public func swiftCoreFrameioAPIRequest(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, operation: jstring?,
-        accountID: jstring?,
-        workspaceID: jstring?, folderID: jstring?, fileID: jstring?, name: jstring?, fileSize: jlong
-    ) -> jstring? {
-        guard
-            let operation = swiftString(env, operation),
-            let payload = AndroidFrameioWire.apiRequest(
-                operation: operation,
-                accountID: swiftString(env, accountID), workspaceID: swiftString(env, workspaceID),
-                folderID: swiftString(env, folderID), fileID: swiftString(env, fileID),
-                name: swiftString(env, name), fileSize: Int64(fileSize))
-        else { return nil }
-        return javaString(env, payload)
-    }
-
-    /// `SwiftCore.frameioDecodeResponse(operation, response): String?` —
-    /// decodes API JSON through the shared Codable models before Kotlin uses it
-    /// for presentation. The raw response is never logged at the bridge.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioDecodeResponse")
-    public func swiftCoreFrameioDecodeResponse(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, operation: jstring?,
-        response: jstring?
-    ) -> jstring? {
-        guard
-            let operation = swiftString(env, operation),
-            let response = swiftString(env, response),
-            let decoded = AndroidFrameioWire.decodedResponse(
-                operation: operation, response: response)
-        else { return nil }
-        return javaString(env, decoded)
-    }
-
-    /// `SwiftCore.frameioMediaTypeForFilename(filename): String` — asks the
-    /// shared core for the upload MIME family instead of inferring it in Kotlin.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_frameioMediaTypeForFilename")
-    public func swiftCoreFrameioMediaTypeForFilename(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, filename: jstring?
-    ) -> jstring? {
-        let filename = swiftString(env, filename) ?? ""
-        return javaString(env, AndroidFrameioWire.mediaType(forFilename: filename))
-    }
-
     // MARK: - Scopes
 
     /// `SwiftCore.scopeLevelAxis(curve, clip): FloatArray`: the shared scopes'
@@ -344,33 +240,65 @@
         return javaFloatArray(env, values)
     }
 
-    // MARK: - Stored LUT library
-
-    /// `SwiftCore.validateImportedLut(bytes, category, fileName): String?` — validates strict
-    /// UTF-8 through the shared `CubeLUT` parser before Android copies a SAF document into
-    /// app-private storage. The compact result is versioned by `LUTLibraryWire`; nil is a
-    /// fail-closed import rejection.
-    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_validateImportedLut")
-    public func swiftCoreValidateImportedLut(
-        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?, category: jint,
-        fileName: jstring?
-    ) -> jstring? {
-        guard let utf8 = swiftBytes(env, utf8, maximumCount: LUTLibraryWire.maximumSourceBytes),
-            let fileName = swiftString(env, fileName),
-            let record = LUTLibraryWire.validatedImport(
-                utf8: utf8, categoryOrdinal: Int(category), fileName: fileName)
+    // Distinct shared-monitor methods beside the retained legacy exports.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeMonitorFalseColorCube")
+    public func swiftCoreBakeMonitorFalseColorCube(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
+        curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedMonitorFalseColor(
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
+                clipNative: Double(clipNative))
         else { return nil }
-        return javaString(env, record)
+        return javaByteArray(env, bytes)
     }
 
-    /// `SwiftCore.packImportedLut(bytes): ByteArray?` — reparses an app-private cube and packs it
-    /// into the existing feed-effects texture layout. Kotlin must render nil as unavailable rather
-    /// than reimplementing cube parsing, interpolation, or colour math.
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeMonitorFalseColorLimitsPaint")
+    public func swiftCoreBakeMonitorFalseColorLimitsPaint(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedMonitorFalseColorLimitsPaint(
+                curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_bakeMonitorFalseColorLimitsWeight")
+    public func swiftCoreBakeMonitorFalseColorLimitsWeight(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, curveOrdinal: jint, clipNative: jfloat
+    ) -> jbyteArray? {
+        guard
+            let bytes = FeedEffectsWire.bakedMonitorFalseColorLimitsWeight(
+                curveOrdinal: Int(curveOrdinal), clipNative: Double(clipNative))
+        else { return nil }
+        return javaByteArray(env, bytes)
+    }
+
+    @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_monitorFalseColorReference")
+    public func swiftCoreMonitorFalseColorReference(
+        env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, scaleOrdinal: jint,
+        curveOrdinal: jint, clipNative: jfloat
+    ) -> jfloatArray? {
+        guard
+            let values = FeedEffectsWire.bakedMonitorFalseColorReference(
+                scaleOrdinal: Int(scaleOrdinal), curveOrdinal: Int(curveOrdinal),
+                clipNative: Double(clipNative))
+        else { return nil }
+        return javaFloatArray(env, values)
+    }
+
+    // MARK: - Stored LUT library
+
+    /// `SwiftCore.packImportedLut(bytes): ByteArray?`: runs the shared `CubeLUT.validatedImport`
+    /// gate over an app-private cube and packs it into the existing feed-effects texture layout.
+    /// Kotlin must treat nil as a refused cube rather than reimplementing parsing or colour math.
     @_cdecl("Java_com_opencapture_openzcine_bridge_SwiftCore_packImportedLut")
     public func swiftCorePackImportedLut(
         env: UnsafeMutablePointer<JNIEnv?>, this _: jobject?, utf8: jbyteArray?
     ) -> jbyteArray? {
-        guard let utf8 = swiftBytes(env, utf8, maximumCount: LUTLibraryWire.maximumSourceBytes),
+        guard let utf8 = swiftBytes(env, utf8, maximumCount: CubeLUT.maximumImportBytes),
             let bytes = LUTLibraryWire.packedImportedLUT(utf8: utf8)
         else { return nil }
         return javaByteArray(env, bytes)

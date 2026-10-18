@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE000000000000000006B2 /* MulticamCameraSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000006B1 /* MulticamCameraSettings.swift */; };
+		C0DE000000000000000006B4 /* MulticamPicture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000006B3 /* MulticamPicture.swift */; };
+		E43BB78DABFEC65A2C255590 /* MonitorPortraitHeaderClearanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */; };
+		B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */; };
+		A25000555EDE55EDE0000004 /* NikonFeedIncidentProducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000555EDE55EDE0000003 /* NikonFeedIncidentProducerTests.swift */; };
+		A25000555EDE55EDE0000002 /* NikonFeedIncidentProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */; };
 		FC5719B6AC51426FBF028301 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FC5719B6AC51426FBF028302 /* PrivacyInfo.xcprivacy */; };
 		5CA01A5203C108E5E0C97A63 /* FrozenNikonRuntimeEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */; };
 		DA09C9A965A9A7BE0DF9AB81 /* FrozenNikonUIImageGraphProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */; };
@@ -15,13 +21,11 @@
 		50CC723D16138C59F5C7EFD8 /* NikonNativeJPEGDecodeOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19D60C2B54A43E317DF5B8CC /* NikonNativeJPEGDecodeOwnershipTests.swift */; };
 		AD553037C8880BD9DF575044 /* NikonNativeUIImageGraphParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6314B694DBD29A6454D548 /* NikonNativeUIImageGraphParityTests.swift */; };
 		C1D000000000000000000002 /* NikonPeakingTinyWindowParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */; };
-		C1E000000000000000000002 /* NikonMediaDeliveryCoordinatorAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */; };
 		1E0000000000000000000051 /* NikonPlaybackOwnerAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0000000000000000000050 /* NikonPlaybackOwnerAdoptionTests.swift */; };
 		C1A000000000000000000002 /* NikonMediaCatalogAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* NikonMediaCatalogAdapter.swift */; };
 		C1B000000000000000000002 /* NikonMediaLibraryAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B000000000000000000001 /* NikonMediaLibraryAdapter.swift */; };
 		C1C000000000000000000002 /* NikonMediaGalleryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C000000000000000000001 /* NikonMediaGalleryProjection.swift */; };
 		A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */; };
-		BA99F4602FF564EC9B91DE89 /* MediaLUTExportAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */; };
 		OZC000000000000000000003 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000002 /* OpenZCineCore */; };
 		OZC000000000000000000013 /* OpenZCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OZC000000000000000000012 /* OpenZCineCore */; };
 		OCC000000000000000000003 /* OpenCineCore in Frameworks */ = {isa = PBXBuildFile; productRef = OCC000000000000000000002 /* OpenCineCore */; };
@@ -31,26 +35,22 @@
 		079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */; };
 		0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */; };
 		0B1C2D3E4F5061728394A5B6 /* MediaDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */; };
-		0C1D2E3F405162738495A6B7 /* MediaDeliveryPopup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */; };
-		0D1E2F30415263748596A7B8 /* MediaDeliveryOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E5F60718293A4B5C6D7E8F9 /* MediaDeliveryOverlay.swift */; };
 		1E0000000000000000000041 /* NikonPlaybackSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0000000000000000000040 /* NikonPlaybackSession.swift */; };
 		1E0000000000000000000031 /* NikonPlaybackNativePort.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0000000000000000000030 /* NikonPlaybackNativePort.swift */; };
-		6DE7C40C0B4E9559417C3A31 /* MediaDeliveryPanelValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A16CD706EA55633F017E854 /* MediaDeliveryPanelValue.swift */; };
-		E77B6A1CF7B37221F21C70C5 /* MediaDeliveryPanelValueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3331FE29406D4BE33DA9E274 /* MediaDeliveryPanelValueTests.swift */; };
 		2C14A5F3090DBBC27051DCBC /* MediaDeliveryCompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BD15F764C285E190D23ADBF /* MediaDeliveryCompositionTests.swift */; };
 		0F8144A1310FEEE9A63795A8 /* MetalLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43398C0B64AE0344D7602746 /* MetalLiveView.swift */; };
 		1D22C3C5DAA147DC1A7F2057 /* InternetReachability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */; };
-		200294648F339E5403B98101 /* FrameioModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */; };
-		223A328A28F6A9969245C3A0 /* FrameioCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 953D4988DD8F529689A672A9 /* FrameioCredentials.swift */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */; };
 		331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */; };
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
 		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
+		CA9A0001C0DE000000000001 /* ControlCapabilityAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */; };
+		F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */; };
+		F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */; };
 		331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */; };
 		331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */; };
 		7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */; };
-		7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */; };
 		46C255DF9F950970DD29C3C8 /* LiveFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705C589D7D31926D41CEF6A /* LiveFrameProcessor.swift */; };
 		4D5E6F708192A3B4C5D6E7F8 /* ImageEffectsCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6F708192A3B4C5D6E7F809 /* ImageEffectsCompositor.swift */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
@@ -60,7 +60,6 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
-		A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */; };
 		A652A40C5850105E136F0739 /* LiveFrameRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852060CB19F3A779DA73A8F3 /* LiveFrameRenderer.swift */; };
 		B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */; };
 		BRND00000000000000000002 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BRND00000000000000000001 /* Branding.swift */; };
@@ -72,14 +71,14 @@
 		C0DE00000000000000000028 /* MonitorExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000029 /* MonitorExperience.swift */; };
 		C0DE0000000000000000002A /* MonitorPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002B /* MonitorPanels.swift */; };
 		LDDR0000000000000000001A /* LadderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = LDDR0000000000000000001B /* LadderPicker.swift */; };
+		DZ105000000000000000031A /* NikonCapturePopupParts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DZ105000000000000000031B /* NikonCapturePopupParts.swift */; };
+		DZ105000000000000000021A /* NikonFocusMarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DZ105000000000000000021B /* NikonFocusMarks.swift */; };
 		C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002D /* MonitorOverlays.swift */; };
 		3271ACF11DA7DF3350753C17 /* PhoneMotionDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */; };
 		074A86DAB1B8D28E46443C2C /* GyroLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */; };
 		DB4FDB2DF037F39A473B9D5D /* GyroLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */; };
 		A5FB56DEA1D22E59F06D55FF /* GyroCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */; };
 		C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000F8 /* SharedCameraControls.swift */; };
-		F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */; };
-		F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000004 /* SentryReliabilitySink.swift */; };
 		F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D000000000000000000002 /* ReliabilityDiagnostics.swift */; };
 		C0DE0000000000000000002E /* MonitorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000002F /* MonitorControls.swift */; };
 		C0DE00000000000000000030 /* DesignShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000031 /* DesignShared.swift */; };
@@ -93,13 +92,11 @@
 		C0DE00000000000000000F03 /* NikonAssistInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F13 /* NikonAssistInspector.swift */; };
 		C0DE00000000000000000F04 /* NikonScopes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F14 /* NikonScopes.swift */; };
 		C0DE000000000000000000C6 /* DemoHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C7 /* DemoHarness.swift */; };
-		C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */; };
 		C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */; };
-		F2D000000000000000000008 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = F2D000000000000000000009 /* Sentry */; };
+		F2D000000000000000000008 /* OpenCineSentryApple in Frameworks */ = {isa = PBXBuildFile; productRef = F2D000000000000000000009 /* OpenCineSentryApple */; };
 		C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000000ED1A02 /* OpenCineMedia */; };
 		CB93FB6A1D71AEDB8B9E9943 /* RedDownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */; };
 		DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DIAG00000000000000000001 /* AppDiagnostics.swift */; };
-		FE72B160881FCAA3A5BAE57C /* FrameioAuthCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58822FE5CB612396F3D33712 /* FrameioAuthCoordinator.swift */; };
 		LVSP00000000000000000002 /* LiveViewSignposts.swift in Sources */ = {isa = PBXBuildFile; fileRef = LVSP00000000000000000001 /* LiveViewSignposts.swift */; };
 		MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */; };
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
@@ -109,8 +106,6 @@
 		D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */; };
 		9AFED89111EB38F38DFF9236 /* GyroCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */; };
 		TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */; };
-		TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */; };
-		TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */; };
 		RLNK00000000000000000002 /* MonitorRelayLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLNK00000000000000000001 /* MonitorRelayLink.swift */; };
 		RVID00000000000000000002 /* MonitorRelayVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVID00000000000000000001 /* MonitorRelayVideo.swift */; };
 		UVCV00000000000000000002 /* UVCVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = UVCV00000000000000000001 /* UVCVideoSource.swift */; };
@@ -128,9 +123,12 @@
 		N0100000000000000000000A /* MulticamStage.swift in Sources */ = {isa = PBXBuildFile; fileRef = N01000000000000000000009 /* MulticamStage.swift */; };
 		N0100000000000000000000C /* MulticamLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000B /* MulticamLinks.swift */; };
 		N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000D /* MulticamCoordinatorTests.swift */; };
+		C0DE000000000000000006B6 /* MulticamPictureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000006B5 /* MulticamPictureTests.swift */; };
 		N02000000000000000000002 /* NikonCamerasFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = N02000000000000000000001 /* NikonCamerasFlow.swift */; };
 		N02000000000000000000004 /* OpenCineAppKit in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000003 /* OpenCineAppKit */; };
 		N02000000000000000000006 /* OpenCineCameraControls in Frameworks */ = {isa = PBXBuildFile; productRef = N02000000000000000000005 /* OpenCineCameraControls */; };
+		F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000022 /* OpenCineFrameIOApple */; };
+		F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000012 /* OpenCineAppKitApple */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
 		C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F12 /* NikonAssistsTests.swift */; };
 		C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */; };
@@ -139,18 +137,24 @@
 		5C2FCD7436D4E972C805B88C /* OpenCineRelayApple in Frameworks */ = {isa = PBXBuildFile; productRef = 4C0197227D33847B6C0F93C4 /* OpenCineRelayApple */; };
 		520CDF33C1C22713AA3E4328 /* OpenCineWatch in Frameworks */ = {isa = PBXBuildFile; productRef = 178DF1758616937177B63BF7 /* OpenCineWatch */; };
 		AB7E9A926DB463CB0A2E51A9 /* SharedAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A98F6D85E2F0268F4C37FA1 /* SharedAppUITests.swift */; };
+		246209D388F78D5F4F398F58 /* ConformanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68B1BBAB041F9DA6BB02D7C /* ConformanceApp.swift */; };
 		83C7A1BB02DD54D4E3E0A4C7 /* OpenCineAppUITesting in Frameworks */ = {isa = PBXBuildFile; productRef = B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */; };
+		A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */ = {isa = PBXBuildFile; productRef = 63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */; };
+		B7F1A0C00000000000000001 /* OpenCineHostedTestSupport in Frameworks */ = {isa = PBXBuildFile; productRef = B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */; };
 		300E5F949AB41695CC76538F /* OpenCineWatch in Frameworks */ = {isa = PBXBuildFile; productRef = 178DF1758616937177B63BF7 /* OpenCineWatch */; };
 		E7EE7B3544C67B943E782CF8 /* NikonMediaDeliverySource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87DF525504BD912A28C21E4F /* NikonMediaDeliverySource.swift */; };
 		1E7BB623225B594944ABE027 /* NikonFrameioDeliveryPorts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8C047563B8391682432DAD /* NikonFrameioDeliveryPorts.swift */; };
-		6C1A81A6B14B02C87395D053 /* NikonDeliveryCapturedRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02431CBEA34963274ABABC3A /* NikonDeliveryCapturedRunTests.swift */; };
 		C656BFB2661FCEEA83CDB53F /* WhiteBalanceTintPublicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C4127801C3C1AF1102F4BF /* WhiteBalanceTintPublicationTests.swift */; };
 		8223CF5F5B9F596EB4A62992 /* NikonDeliveryCapturedSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A785626EA3EFC327A81DD65C /* NikonDeliveryCapturedSourceTests.swift */; };
+		F13D00000000000000000001 /* NikonDeliveryExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F13D00000000000000000002 /* NikonDeliveryExportTests.swift */; };
 		F21ED297792343D7113C587A /* NikonDeliveryNativePortTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13D5097CC097D76C6234A50 /* NikonDeliveryNativePortTests.swift */; };
 		9B77A75D8950A56B591E2E92 /* NikonDeliveryRouteAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1ACA31D7D37EE4B9127FD7 /* NikonDeliveryRouteAdmissionTests.swift */; };
-		F6470FBDBFE4DB47E70D1872 /* NikonDeliveryRouteHandoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CA1C96E053743E416E4FF64 /* NikonDeliveryRouteHandoverTests.swift */; };
 		58A10494F13F8CBF79C58BB1 /* NikonMediaDeliveryCanonicalClaimTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B543D3ECA78C633E8728DF8 /* NikonMediaDeliveryCanonicalClaimTests.swift */; };
 		C063F3617B9CFA2482D67F96 /* NikonPlaybackCleanupBarrierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0834DC7644BF5D84885C8C4 /* NikonPlaybackCleanupBarrierTests.swift */; };
+		15F502000000000000000002 /* NikonMediaOpeningAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */; };
+		D15500000000000000000102 /* SettingsSharedOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15500000000000000000101 /* SettingsSharedOwnerTests.swift */; };
+		D15500000000000000000202 /* SettingsPreferenceMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */; };
+		C0AD00000000000000000102 /* CommandDashboardAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AD00000000000000000101 /* CommandDashboardAdoptionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -202,6 +206,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C0DE000000000000000006B1 /* MulticamCameraSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCameraSettings.swift; sourceTree = "<group>"; };
+		C0DE000000000000000006B3 /* MulticamPicture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamPicture.swift; sourceTree = "<group>"; };
+		2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorPortraitHeaderClearanceTests.swift; path = "../../OpenCine/Tests/MonitorUITests/MonitorPortraitHeaderClearanceTests.swift"; sourceTree = SOURCE_ROOT; };
+		B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPortraitHeaderNativeTests.swift; sourceTree = "<group>"; };
+		A25000555EDE55EDE0000003 /* NikonFeedIncidentProducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFeedIncidentProducerTests.swift; sourceTree = "<group>"; };
+		A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFeedIncidentProducer.swift; sourceTree = "<group>"; };
 		FC5719B6AC51426FBF028302 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonRuntimeEffects.swift; sourceTree = "<group>"; };
 		1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenNikonUIImageGraphProcessor.swift; sourceTree = "<group>"; };
@@ -210,13 +220,11 @@
 		19D60C2B54A43E317DF5B8CC /* NikonNativeJPEGDecodeOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonNativeJPEGDecodeOwnershipTests.swift; sourceTree = "<group>"; };
 		FD6314B694DBD29A6454D548 /* NikonNativeUIImageGraphParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonNativeUIImageGraphParityTests.swift; sourceTree = "<group>"; };
 		C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonPeakingTinyWindowParityTests.swift; sourceTree = "<group>"; };
-		C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaDeliveryCoordinatorAdapterTests.swift; sourceTree = "<group>"; };
 		1E0000000000000000000050 /* NikonPlaybackOwnerAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonPlaybackOwnerAdoptionTests.swift; sourceTree = "<group>"; };
 		C1A000000000000000000001 /* NikonMediaCatalogAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaCatalogAdapter.swift; sourceTree = "<group>"; };
 		C1B000000000000000000001 /* NikonMediaLibraryAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaLibraryAdapter.swift; sourceTree = "<group>"; };
 		C1C000000000000000000001 /* NikonMediaGalleryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaGalleryProjection.swift; sourceTree = "<group>"; };
 		A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackAudioMeterAdoptionTests.swift; sourceTree = "<group>"; };
-		EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLUTExportAdapterTests.swift; sourceTree = "<group>"; };
 		0E2135AF026E5ECA7A9DD631 /* InternetReachability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InternetReachability.swift; sourceTree = "<group>"; };
 		1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlaybackAssists.swift; sourceTree = "<group>"; };
 		2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDelivery.swift; sourceTree = "<group>"; };
@@ -225,21 +233,18 @@
 		331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStoreTests.swift; sourceTree = "<group>"; };
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
 		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
+		CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlCapabilityAdoptionTests.swift; sourceTree = "<group>"; };
+		F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSurfaceRegressionTests.swift; sourceTree = "<group>"; };
+		F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistEngineAdoptionTests.swift; sourceTree = "<group>"; };
 		331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDisplayRollTests.swift; sourceTree = "<group>"; };
 		331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGaugeSeatTests.swift; sourceTree = "<group>"; };
 		7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTimecodeTests.swift; sourceTree = "<group>"; };
-		7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPopupPlacementTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPopup.swift; sourceTree = "<group>"; };
 		43398C0B64AE0344D7602746 /* MetalLiveView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalLiveView.swift; sourceTree = "<group>"; };
 		4705C589D7D31926D41CEF6A /* LiveFrameProcessor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveFrameProcessor.swift; sourceTree = "<group>"; };
-		4E5F60718293A4B5C6D7E8F9 /* MediaDeliveryOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaDeliveryOverlay.swift; sourceTree = "<group>"; };
 		1E0000000000000000000040 /* NikonPlaybackSession.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NikonPlaybackSession.swift; sourceTree = "<group>"; };
 		1E0000000000000000000030 /* NikonPlaybackNativePort.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NikonPlaybackNativePort.swift; sourceTree = "<group>"; };
-		7A16CD706EA55633F017E854 /* MediaDeliveryPanelValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPanelValue.swift; sourceTree = "<group>"; };
-		3331FE29406D4BE33DA9E274 /* MediaDeliveryPanelValueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryPanelValueTests.swift; sourceTree = "<group>"; };
 		2BD15F764C285E190D23ADBF /* MediaDeliveryCompositionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryCompositionTests.swift; sourceTree = "<group>"; };
-		58822FE5CB612396F3D33712 /* FrameioAuthCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioAuthCoordinator.swift; path = Frameio/FrameioAuthCoordinator.swift; sourceTree = "<group>"; };
 		5E6F708192A3B4C5D6E7F809 /* ImageEffectsCompositor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ImageEffectsCompositor.swift; sourceTree = "<group>"; };
 		644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaLibrary.swift; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -247,7 +252,6 @@
 		829F835A9A819D7AC6992CDE /* MediaLUTExport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaLUTExport.swift; sourceTree = "<group>"; };
 		852060CB19F3A779DA73A8F3 /* LiveFrameRenderer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveFrameRenderer.swift; sourceTree = "<group>"; };
 		8A734335F354C2421CD93905 /* Frameio.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Frameio.xcconfig; sourceTree = "<group>"; };
-		953D4988DD8F529689A672A9 /* FrameioCredentials.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioCredentials.swift; path = Frameio/FrameioCredentials.swift; sourceTree = "<group>"; };
 		97C146EE1CF9000F007C117D /* Runner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Runner.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		97C146FB1CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -255,9 +259,7 @@
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9B8454460465D3532DE04016 /* Version.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Version.xcconfig; path = ../Config/Version.xcconfig; sourceTree = "<group>"; };
 		9CBD525AC3DBD970F94757B7 /* RedDownloadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RedDownloadView.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScopeAssistSampling.swift; sourceTree = "<group>"; };
 		B47FA7E6D89EF63D0B2B27B2 /* FrameDecoder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FrameDecoder.swift; sourceTree = "<group>"; };
-		B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FrameioModel.swift; path = Frameio/FrameioModel.swift; sourceTree = "<group>"; };
 		B99B47BB1FB3BC66DC16FAC8 /* Frameio.local.xcconfig.example */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Frameio.local.xcconfig.example; sourceTree = "<group>"; };
 		BRND00000000000000000001 /* Branding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Branding.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000002 /* NativeAppRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAppRoot.swift; sourceTree = "<group>"; };
@@ -268,14 +270,14 @@
 		C0DE00000000000000000029 /* MonitorExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorExperience.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002B /* MonitorPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorPanels.swift; sourceTree = "<group>"; };
 		LDDR0000000000000000001B /* LadderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LadderPicker.swift; sourceTree = "<group>"; };
+		DZ105000000000000000031B /* NikonCapturePopupParts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCapturePopupParts.swift; sourceTree = "<group>"; };
+		DZ105000000000000000021B /* NikonFocusMarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonFocusMarks.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002D /* MonitorOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorOverlays.swift; sourceTree = "<group>"; };
 		3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneMotionDriver.swift; sourceTree = "<group>"; };
 		E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogsView.swift; sourceTree = "<group>"; };
 		0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogStore.swift; sourceTree = "<group>"; };
 		36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroCaptureCoordinator.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F8 /* SharedCameraControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCameraControls.swift; sourceTree = "<group>"; };
-		F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityReportingNetwork.swift; sourceTree = "<group>"; };
-		F2D000000000000000000004 /* SentryReliabilitySink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryReliabilitySink.swift; sourceTree = "<group>"; };
 		F2D000000000000000000002 /* ReliabilityDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliabilityDiagnostics.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000002F /* MonitorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorControls.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000031 /* DesignShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignShared.swift; sourceTree = "<group>"; };
@@ -290,7 +292,6 @@
 		C0DE000000000000000000C5 /* MonitorUnified.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorUnified.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000F2 /* PhotographyChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotographyChrome.swift; sourceTree = "<group>"; };
 		C0DE000000000000000000C7 /* DemoHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoHarness.swift; sourceTree = "<group>"; };
-		C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothShutterMonitor.swift; sourceTree = "<group>"; };
 		C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MediaBrowser.swift; sourceTree = "<group>"; };
 		DIAG00000000000000000001 /* AppDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDiagnostics.swift; sourceTree = "<group>"; };
 		E7F2A1B03D4C5E6F7890ABCD /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
@@ -303,8 +304,6 @@
 		EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogStoreTests.swift; sourceTree = "<group>"; };
 		5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroCaptureTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFeedNoiseFilterWindowTests.swift; sourceTree = "<group>"; };
-		TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryEligibilityTests.swift; sourceTree = "<group>"; };
-		TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaDeliveryOverlayStateTests.swift; sourceTree = "<group>"; };
 		RLNK00000000000000000001 /* MonitorRelayLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayLink.swift; sourceTree = "<group>"; };
 		RVID00000000000000000001 /* MonitorRelayVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorRelayVideo.swift; sourceTree = "<group>"; };
 		UVCV00000000000000000001 /* UVCVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UVCVideoSource.swift; sourceTree = "<group>"; };
@@ -321,6 +320,7 @@
 		N01000000000000000000009 /* MulticamStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamStage.swift; sourceTree = "<group>"; };
 		N0100000000000000000000B /* MulticamLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamLinks.swift; sourceTree = "<group>"; };
 		N0100000000000000000000D /* MulticamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCoordinatorTests.swift; sourceTree = "<group>"; };
+		C0DE000000000000000006B5 /* MulticamPictureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamPictureTests.swift; sourceTree = "<group>"; };
 		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
 		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000F12 /* NikonAssistsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAssistsTests.swift; sourceTree = "<group>"; };
@@ -328,17 +328,21 @@
 		C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaLibraryAdoptionTests.swift; sourceTree = "<group>"; };
 		C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaGalleryProjectionTests.swift; sourceTree = "<group>"; };
 		8A98F6D85E2F0268F4C37FA1 /* SharedAppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedAppUITests.swift; sourceTree = "<group>"; };
+		C68B1BBAB041F9DA6BB02D7C /* ConformanceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConformanceApp.swift; sourceTree = "<group>"; };
 		5F8C2ED9C6442A8DB5B23BDB /* RunnerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		87DF525504BD912A28C21E4F /* NikonMediaDeliverySource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonMediaDeliverySource.swift"; sourceTree = "<group>"; };
 		3D8C047563B8391682432DAD /* NikonFrameioDeliveryPorts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Frameio/NikonFrameioDeliveryPorts.swift"; sourceTree = "<group>"; };
-		02431CBEA34963274ABABC3A /* NikonDeliveryCapturedRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonDeliveryCapturedRunTests.swift"; sourceTree = "<group>"; };
 		C3C4127801C3C1AF1102F4BF /* WhiteBalanceTintPublicationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WhiteBalanceTintPublicationTests.swift"; sourceTree = "<group>"; };
 		A785626EA3EFC327A81DD65C /* NikonDeliveryCapturedSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonDeliveryCapturedSourceTests.swift"; sourceTree = "<group>"; };
+		F13D00000000000000000002 /* NikonDeliveryExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonDeliveryExportTests.swift"; sourceTree = "<group>"; };
 		A13D5097CC097D76C6234A50 /* NikonDeliveryNativePortTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonDeliveryNativePortTests.swift"; sourceTree = "<group>"; };
 		4A1ACA31D7D37EE4B9127FD7 /* NikonDeliveryRouteAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonDeliveryRouteAdmissionTests.swift"; sourceTree = "<group>"; };
-		3CA1C96E053743E416E4FF64 /* NikonDeliveryRouteHandoverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonDeliveryRouteHandoverTests.swift"; sourceTree = "<group>"; };
 		7B543D3ECA78C633E8728DF8 /* NikonMediaDeliveryCanonicalClaimTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NikonMediaDeliveryCanonicalClaimTests.swift"; sourceTree = "<group>"; };
 		F0834DC7644BF5D84885C8C4 /* NikonPlaybackCleanupBarrierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonPlaybackCleanupBarrierTests.swift; sourceTree = "<group>"; };
+		15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaOpeningAdmissionTests.swift; sourceTree = "<group>"; };
+		D15500000000000000000101 /* SettingsSharedOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSharedOwnerTests.swift; sourceTree = "<group>"; };
+		D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPreferenceMigrationTests.swift; sourceTree = "<group>"; };
+		C0AD00000000000000000101 /* CommandDashboardAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandDashboardAdoptionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -348,7 +352,7 @@
 			files = (
 				OZC000000000000000000003 /* OpenZCineCore in Frameworks */,
 				C8D4037E171A24541862E72C /* ZIPFoundation in Frameworks */,
-				F2D000000000000000000008 /* Sentry in Frameworks */,
+				F2D000000000000000000008 /* OpenCineSentryApple in Frameworks */,
 				OCC000000000000000000003 /* OpenCineCore in Frameworks */,
 				C0DE00000000000000ED1A01 /* OpenCineMedia in Frameworks */,
 				F10000000000000000000A01 /* OpenCineFrameIO in Frameworks */,
@@ -359,6 +363,8 @@
 				N01000000000000000000004 /* MonitorUI in Frameworks */,
 				N02000000000000000000004 /* OpenCineAppKit in Frameworks */,
 				N02000000000000000000006 /* OpenCineCameraControls in Frameworks */,
+				F13D00000000000000000021 /* OpenCineFrameIOApple in Frameworks */,
+				F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */,
 				N01000000000000000000002 /* MonitorPresentation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -370,6 +376,12 @@
 				OZC000000000000000000013 /* OpenZCineCore in Frameworks */,
 				520CDF33C1C22713AA3E4328 /* OpenCineWatch in Frameworks */,
 			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		823003F875DF0491C4710777 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (A3DF77F615D438CD602CF7F4 /* OpenCineHostedAccessibility in Frameworks */, B7F1A0C00000000000000001 /* OpenCineHostedTestSupport in Frameworks */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		9A7E3B528B69AC98C5D4448A /* Frameworks */ = {
@@ -384,26 +396,34 @@
 		331C8082294A63A400263BE5 /* RunnerTests */ = {
 			isa = PBXGroup;
 			children = (
+				D15500000000000000000201 /* SettingsPreferenceMigrationTests.swift */,
+				C0AD00000000000000000101 /* CommandDashboardAdoptionTests.swift */,
+				D15500000000000000000101 /* SettingsSharedOwnerTests.swift */,
+				15F502000000000000000001 /* NikonMediaOpeningAdmissionTests.swift */,
+				2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */,
 				F0834DC7644BF5D84885C8C4 /* NikonPlaybackCleanupBarrierTests.swift */,
 				7B543D3ECA78C633E8728DF8 /* NikonMediaDeliveryCanonicalClaimTests.swift */,
-				3CA1C96E053743E416E4FF64 /* NikonDeliveryRouteHandoverTests.swift */,
 				4A1ACA31D7D37EE4B9127FD7 /* NikonDeliveryRouteAdmissionTests.swift */,
 				A13D5097CC097D76C6234A50 /* NikonDeliveryNativePortTests.swift */,
 				C3C4127801C3C1AF1102F4BF /* WhiteBalanceTintPublicationTests.swift */,
 				A785626EA3EFC327A81DD65C /* NikonDeliveryCapturedSourceTests.swift */,
-				02431CBEA34963274ABABC3A /* NikonDeliveryCapturedRunTests.swift */,
+				F13D00000000000000000002 /* NikonDeliveryExportTests.swift */,
 				N0100000000000000000000F /* NikonCamerasMigrationTests.swift */,
 				C0DE00000000000000000F12 /* NikonAssistsTests.swift */,
 				N0100000000000000000000D /* MulticamCoordinatorTests.swift */,
+				C0DE000000000000000006B5 /* MulticamPictureTests.swift */,
+				B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
 				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
+				CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */,
+				F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */,
+				F11A0000000000000000F001 /* AssistEngineAdoptionTests.swift */,
 				331C807E294A618700263BE8 /* LevelDisplayRollTests.swift */,
 				331C807F294A618700263BE9 /* LevelGaugeSeatTests.swift */,
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
-				7C31B2E6A90D4F11B3C05B01 /* MediaPopupPlacementTests.swift */,
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
 				TEST00000000000000000105 /* ShellAdoptionTests.swift */,
@@ -411,23 +431,19 @@
 				EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */,
 				5AE6E2858A57D018E02CC4AB /* GyroCaptureTests.swift */,
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
-				TEST00000000000000000101 /* MediaDeliveryEligibilityTests.swift */,
-				TEST00000000000000000103 /* MediaDeliveryOverlayStateTests.swift */,
-				3331FE29406D4BE33DA9E274 /* MediaDeliveryPanelValueTests.swift */,
 				2BD15F764C285E190D23ADBF /* MediaDeliveryCompositionTests.swift */,
-				EC1AA601081B731934C1DD78 /* MediaLUTExportAdapterTests.swift */,
 				A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */,
 				C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */,
 				C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */,
 				C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */,
 				C1D000000000000000000001 /* NikonPeakingTinyWindowParityTests.swift */,
-				C1E000000000000000000001 /* NikonMediaDeliveryCoordinatorAdapterTests.swift */,
 				1E0000000000000000000050 /* NikonPlaybackOwnerAdoptionTests.swift */,
 				51C92AD0F4030EF563968E52 /* FrozenNikonRuntimeEffects.swift */,
 				1C2BE976DD827DA9702D58CC /* FrozenNikonUIImageGraphProcessor.swift */,
 				40EB57B1007EDD19FCCD50ED /* NikonMetalPresentPolicyTests.swift */,
 				F6720AF76620F39771469F46 /* NikonNativeFrameBakerOwnershipTests.swift */,
 				19D60C2B54A43E317DF5B8CC /* NikonNativeJPEGDecodeOwnershipTests.swift */,
+				A25000555EDE55EDE0000003 /* NikonFeedIncidentProducerTests.swift */,
 				FD6314B694DBD29A6454D548 /* NikonNativeUIImageGraphParityTests.swift */,
 			);
 			path = RunnerTests;
@@ -463,6 +479,8 @@
 				N0100000000000000000000B /* MulticamLinks.swift */,
 				N01000000000000000000009 /* MulticamStage.swift */,
 				N01000000000000000000007 /* MulticamCoordinator.swift */,
+				C0DE000000000000000006B1 /* MulticamCameraSettings.swift */,
+				C0DE000000000000000006B3 /* MulticamPicture.swift */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
@@ -493,7 +511,8 @@
 				C0DE00000000000000000029 /* MonitorExperience.swift */,
 				C0DE0000000000000000002B /* MonitorPanels.swift */,
 				LDDR0000000000000000001B /* LadderPicker.swift */,
-				C0DE000000000000000000C9 /* BluetoothShutterMonitor.swift */,
+				DZ105000000000000000031B /* NikonCapturePopupParts.swift */,
+				DZ105000000000000000021B /* NikonFocusMarks.swift */,
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
 				3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */,
@@ -501,8 +520,6 @@
 				0F2DF5DBF27E14CC59E7713B /* GyroLogStore.swift */,
 				36B3B1F1E86B648FAD793517 /* GyroCaptureCoordinator.swift */,
 				C0DE000000000000000000F8 /* SharedCameraControls.swift */,
-				F2D000000000000000000006 /* ReliabilityReportingNetwork.swift */,
-				F2D000000000000000000004 /* SentryReliabilitySink.swift */,
 				F2D000000000000000000002 /* ReliabilityDiagnostics.swift */,
 				C0DE000000000000000000C5 /* MonitorUnified.swift */,
 				C0DE00000000000000000F11 /* NikonAssists.swift */,
@@ -516,21 +533,15 @@
 				4705C589D7D31926D41CEF6A /* LiveFrameProcessor.swift */,
 				5E6F708192A3B4C5D6E7F809 /* ImageEffectsCompositor.swift */,
 				B47FA7E6D89EF63D0B2B27B2 /* FrameDecoder.swift */,
+				A25000555EDE55EDE0000001 /* NikonFeedIncidentProducer.swift */,
 				43398C0B64AE0344D7602746 /* MetalLiveView.swift */,
-				A1B2C3D4E5F60718293A4B5C /* ScopeAssistSampling.swift */,
 				644DDD304FCF0ED7CCA39F90 /* MediaLibrary.swift */,
 				C55F9DD1E7FF51371E4DC6E1 /* MediaBrowser.swift */,
 				1B2C3D4E5F60718293A4B5C6 /* PlaybackAssists.swift */,
 				2C3D4E5F60718293A4B5C6D7 /* MediaDelivery.swift */,
-				3D4E5F60718293A4B5C6D7E8 /* MediaDeliveryPopup.swift */,
-				4E5F60718293A4B5C6D7E8F9 /* MediaDeliveryOverlay.swift */,
 				1E0000000000000000000040 /* NikonPlaybackSession.swift */,
 				1E0000000000000000000030 /* NikonPlaybackNativePort.swift */,
-				7A16CD706EA55633F017E854 /* MediaDeliveryPanelValue.swift */,
 				829F835A9A819D7AC6992CDE /* MediaLUTExport.swift */,
-				953D4988DD8F529689A672A9 /* FrameioCredentials.swift */,
-				58822FE5CB612396F3D33712 /* FrameioAuthCoordinator.swift */,
-				B9578B6D1A89B8B2442A8FED /* FrameioModel.swift */,
 				8A734335F354C2421CD93905 /* Frameio.xcconfig */,
 				9B8454460465D3532DE04016 /* Version.xcconfig */,
 				B99B47BB1FB3BC66DC16FAC8 /* Frameio.local.xcconfig.example */,
@@ -558,7 +569,7 @@
 		};
 		BBCF836781DAB332000FDFB1 /* RunnerUITests */ = {
 			isa = PBXGroup;
-			children = (8A98F6D85E2F0268F4C37FA1 /* SharedAppUITests.swift */,);
+			children = (C68B1BBAB041F9DA6BB02D7C /* ConformanceApp.swift */, 8A98F6D85E2F0268F4C37FA1 /* SharedAppUITests.swift */,);
 			path = RunnerUITests;
 			sourceTree = "<group>";
 		};
@@ -570,6 +581,7 @@
 			buildConfigurationList = 331C8087294A63A400263BE5 /* Build configuration list for PBXNativeTarget "RunnerTests" */;
 			buildPhases = (
 				331C807D294A63A400263BE5 /* Sources */,
+				823003F875DF0491C4710777 /* Frameworks */,
 				331C807F294A63A400263BE5 /* Resources */,
 			);
 			buildRules = (
@@ -578,6 +590,7 @@
 				331C8086294A63A400263BE5 /* PBXTargetDependency */,
 			);
 			name = RunnerTests;
+			packageProductDependencies = (63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */, B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */,);
 			productName = RunnerTests;
 			productReference = 331C8081294A63A400263BE5 /* RunnerTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -591,6 +604,8 @@
 				97C146EC1CF9000F007C117D /* Resources */,
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				WTCH00000000000000000080 /* Embed Watch Content */,
+				F01000000000000000000001 /* Stamp source revision */,
+				A1E6A1000000000000000001 /* Stage legal files */,
 			);
 			buildRules = (
 			);
@@ -600,7 +615,7 @@
 			name = Runner;
 			packageProductDependencies = (
 				9EA6CE98C555E02FA7EFB7D1 /* ZIPFoundation */,
-				F2D000000000000000000009 /* Sentry */,
+				F2D000000000000000000009 /* OpenCineSentryApple */,
 				OCC000000000000000000002 /* OpenCineCore */,
 				C0DE00000000000000ED1A02 /* OpenCineMedia */,
 				F10000000000000000000A02 /* OpenCineFrameIO */,
@@ -611,6 +626,8 @@
 				N01000000000000000000003 /* MonitorUI */,
 				N02000000000000000000003 /* OpenCineAppKit */,
 				N02000000000000000000005 /* OpenCineCameraControls */,
+				F13D00000000000000000022 /* OpenCineFrameIOApple */,
+				F13D00000000000000000012 /* OpenCineAppKitApple */,
 				N01000000000000000000001 /* MonitorPresentation */,
 				OZC000000000000000000002 /* OpenZCineCore */,
 			);
@@ -686,8 +703,8 @@
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
 				C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
-				F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */,
+				F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */,
 				OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
@@ -737,31 +754,73 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		F01000000000000000000001 /* Stamp source revision */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Stamp source revision";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "bash \"${SRCROOT}/../../OpenCine/scripts/sentry/stamp-source-revision.sh\"\n";
+		};
+		A1E6A1000000000000000001 /* Stage legal files */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Stage legal files";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${SRCROOT}/../../OpenCine/scripts/stage-legal-resources.py\" --app \"${SRCROOT}/..\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legal\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		331C807D294A63A400263BE5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D15500000000000000000202 /* SettingsPreferenceMigrationTests.swift in Sources */,
+				C0AD00000000000000000102 /* CommandDashboardAdoptionTests.swift in Sources */,
+				D15500000000000000000102 /* SettingsSharedOwnerTests.swift in Sources */,
+				15F502000000000000000002 /* NikonMediaOpeningAdmissionTests.swift in Sources */,
+				E43BB78DABFEC65A2C255590 /* MonitorPortraitHeaderClearanceTests.swift in Sources */,
 				C063F3617B9CFA2482D67F96 /* NikonPlaybackCleanupBarrierTests.swift in Sources */,
 				58A10494F13F8CBF79C58BB1 /* NikonMediaDeliveryCanonicalClaimTests.swift in Sources */,
-				F6470FBDBFE4DB47E70D1872 /* NikonDeliveryRouteHandoverTests.swift in Sources */,
 				9B77A75D8950A56B591E2E92 /* NikonDeliveryRouteAdmissionTests.swift in Sources */,
 				F21ED297792343D7113C587A /* NikonDeliveryNativePortTests.swift in Sources */,
 				C656BFB2661FCEEA83CDB53F /* WhiteBalanceTintPublicationTests.swift in Sources */,
 				8223CF5F5B9F596EB4A62992 /* NikonDeliveryCapturedSourceTests.swift in Sources */,
-				6C1A81A6B14B02C87395D053 /* NikonDeliveryCapturedRunTests.swift in Sources */,
+				F13D00000000000000000001 /* NikonDeliveryExportTests.swift in Sources */,
 				N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */,
 				C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */,
 				N0100000000000000000000E /* MulticamCoordinatorTests.swift in Sources */,
+				C0DE000000000000000006B6 /* MulticamPictureTests.swift in Sources */,
+				B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
 				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
+				CA9A0001C0DE000000000001 /* ControlCapabilityAdoptionTests.swift in Sources */,
+				F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */,
+				F11A0000000000000000B001 /* AssistEngineAdoptionTests.swift in Sources */,
 				331C808E294A63AB00263BE8 /* LevelDisplayRollTests.swift in Sources */,
 				331C808F294A63AB00263BE9 /* LevelGaugeSeatTests.swift in Sources */,
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,
-				7C31B2E7A90D4F11B3C05B02 /* MediaPopupPlacementTests.swift in Sources */,
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
 				TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */,
@@ -769,23 +828,19 @@
 				D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */,
 				9AFED89111EB38F38DFF9236 /* GyroCaptureTests.swift in Sources */,
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
-				TEST00000000000000000100 /* MediaDeliveryEligibilityTests.swift in Sources */,
-				TEST00000000000000000102 /* MediaDeliveryOverlayStateTests.swift in Sources */,
-				E77B6A1CF7B37221F21C70C5 /* MediaDeliveryPanelValueTests.swift in Sources */,
 				2C14A5F3090DBBC27051DCBC /* MediaDeliveryCompositionTests.swift in Sources */,
-				BA99F4602FF564EC9B91DE89 /* MediaLUTExportAdapterTests.swift in Sources */,
 				A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */,
 				C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */,
 				C1B000000000000000000004 /* NikonMediaLibraryAdoptionTests.swift in Sources */,
 				C1C000000000000000000004 /* NikonMediaGalleryProjectionTests.swift in Sources */,
 				C1D000000000000000000002 /* NikonPeakingTinyWindowParityTests.swift in Sources */,
-				C1E000000000000000000002 /* NikonMediaDeliveryCoordinatorAdapterTests.swift in Sources */,
 				1E0000000000000000000051 /* NikonPlaybackOwnerAdoptionTests.swift in Sources */,
 				5CA01A5203C108E5E0C97A63 /* FrozenNikonRuntimeEffects.swift in Sources */,
 				DA09C9A965A9A7BE0DF9AB81 /* FrozenNikonUIImageGraphProcessor.swift in Sources */,
 				33E5374DD0792544E78B109F /* NikonMetalPresentPolicyTests.swift in Sources */,
 				7C3A6337E90AF8B2A9888BF9 /* NikonNativeFrameBakerOwnershipTests.swift in Sources */,
 				50CC723D16138C59F5C7EFD8 /* NikonNativeJPEGDecodeOwnershipTests.swift in Sources */,
+				A25000555EDE55EDE0000004 /* NikonFeedIncidentProducerTests.swift in Sources */,
 				AD553037C8880BD9DF575044 /* NikonNativeUIImageGraphParityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -799,6 +854,8 @@
 				N0100000000000000000000C /* MulticamLinks.swift in Sources */,
 				N0100000000000000000000A /* MulticamStage.swift in Sources */,
 				N01000000000000000000008 /* MulticamCoordinator.swift in Sources */,
+				C0DE000000000000000006B2 /* MulticamCameraSettings.swift in Sources */,
+				C0DE000000000000000006B4 /* MulticamPicture.swift in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				DIAG00000000000000000002 /* AppDiagnostics.swift in Sources */,
 				C0DE00000000000000000001 /* NativeAppRoot.swift in Sources */,
@@ -816,7 +873,8 @@
 				C0DE00000000000000000028 /* MonitorExperience.swift in Sources */,
 				C0DE0000000000000000002A /* MonitorPanels.swift in Sources */,
 				LDDR0000000000000000001A /* LadderPicker.swift in Sources */,
-				C0DE000000000000000000C8 /* BluetoothShutterMonitor.swift in Sources */,
+				DZ105000000000000000031A /* NikonCapturePopupParts.swift in Sources */,
+				DZ105000000000000000021A /* NikonFocusMarks.swift in Sources */,
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
 				3271ACF11DA7DF3350753C17 /* PhoneMotionDriver.swift in Sources */,
@@ -824,8 +882,6 @@
 				DB4FDB2DF037F39A473B9D5D /* GyroLogStore.swift in Sources */,
 				A5FB56DEA1D22E59F06D55FF /* GyroCaptureCoordinator.swift in Sources */,
 				C0DE000000000000000000F7 /* SharedCameraControls.swift in Sources */,
-				F2D000000000000000000005 /* ReliabilityReportingNetwork.swift in Sources */,
-				F2D000000000000000000003 /* SentryReliabilitySink.swift in Sources */,
 				F2D000000000000000000001 /* ReliabilityDiagnostics.swift in Sources */,
 				C0DE000000000000000000C4 /* MonitorUnified.swift in Sources */,
 				C0DE00000000000000000F01 /* NikonAssists.swift in Sources */,
@@ -846,21 +902,15 @@
 				46C255DF9F950970DD29C3C8 /* LiveFrameProcessor.swift in Sources */,
 				4D5E6F708192A3B4C5D6E7F8 /* ImageEffectsCompositor.swift in Sources */,
 				78BE124BA79C2860F3D7D6EA /* FrameDecoder.swift in Sources */,
+				A25000555EDE55EDE0000002 /* NikonFeedIncidentProducer.swift in Sources */,
 				0F8144A1310FEEE9A63795A8 /* MetalLiveView.swift in Sources */,
-				A1B2C3D4E5F60718293A4B5D /* ScopeAssistSampling.swift in Sources */,
 				B99D6EF97E8D8305109E60C4 /* MediaLibrary.swift in Sources */,
 				079C56E717DE773E92A622FF /* MediaBrowser.swift in Sources */,
 				0A1B2C3D4E5F60718293A4B5 /* PlaybackAssists.swift in Sources */,
 				0B1C2D3E4F5061728394A5B6 /* MediaDelivery.swift in Sources */,
-				0C1D2E3F405162738495A6B7 /* MediaDeliveryPopup.swift in Sources */,
-				0D1E2F30415263748596A7B8 /* MediaDeliveryOverlay.swift in Sources */,
 				1E0000000000000000000041 /* NikonPlaybackSession.swift in Sources */,
 				1E0000000000000000000031 /* NikonPlaybackNativePort.swift in Sources */,
-				6DE7C40C0B4E9559417C3A31 /* MediaDeliveryPanelValue.swift in Sources */,
 				947DA2098F211AFA82954980 /* MediaLUTExport.swift in Sources */,
-				223A328A28F6A9969245C3A0 /* FrameioCredentials.swift in Sources */,
-				FE72B160881FCAA3A5BAE57C /* FrameioAuthCoordinator.swift in Sources */,
-				200294648F339E5403B98101 /* FrameioModel.swift in Sources */,
 				A652A40C5850105E136F0739 /* LiveFrameRenderer.swift in Sources */,
 				LVSP00000000000000000002 /* LiveViewSignposts.swift in Sources */,
 				MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */,
@@ -882,7 +932,7 @@
 		154E9B51FC8A2105BCF712DF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (AB7E9A926DB463CB0A2E51A9 /* SharedAppUITests.swift in Sources */,);
+			files = (246209D388F78D5F4F398F58 /* ConformanceApp.swift in Sources */, AB7E9A926DB463CB0A2E51A9 /* SharedAppUITests.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
@@ -1000,6 +1050,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1016,6 +1067,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1030,6 +1082,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1280,6 +1333,7 @@
 				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).ConformanceApp";
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -1297,6 +1351,7 @@
 				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).ConformanceApp";
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -1312,6 +1367,7 @@
 				DEVELOPMENT_TEAM = 4V4EGQ6LZA;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				INFOPLIST_KEY_NSPrincipalClass = "$(PRODUCT_MODULE_NAME).ConformanceApp";
 				PRODUCT_BUNDLE_IDENTIFIER = com.opencapture.openzcine.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -1376,6 +1432,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../OpenCine;
 		};
+		F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../OpenCine/Packages/OpenCineSentryApple;
+		};
 		OZC000000000000000000001 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ..;
@@ -1383,14 +1443,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
-			requirement = {
-				kind = exactVersion;
-				version = 9.24.0;
-			};
-		};
 		C1D481E62942495BE87DEEC4 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
@@ -1402,10 +1454,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		F2D000000000000000000009 /* Sentry */ = {
+		F2D000000000000000000009 /* OpenCineSentryApple */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = F2D000000000000000000007 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
+			package = F01000000000000000000002 /* XCLocalSwiftPackageReference "../../OpenCine/Packages/OpenCineSentryApple" */;
+			productName = OpenCineSentryApple;
 		};
 		OCC000000000000000000002 /* OpenCineCore */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -1467,6 +1519,16 @@
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
 			productName = OpenCineCameraControls;
 		};
+		F13D00000000000000000022 /* OpenCineFrameIOApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineFrameIOApple;
+		};
+		F13D00000000000000000012 /* OpenCineAppKitApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
+			productName = OpenCineAppKitApple;
+		};
 		4C0197227D33847B6C0F93C4 /* OpenCineRelayApple */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */;
@@ -1478,6 +1540,8 @@
 			productName = OpenCineWatch;
 		};
 		B8041CF0E118479634AEFA59 /* OpenCineAppUITesting */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineAppUITesting; };
+		63766E8A571F32E477BBB4DC /* OpenCineHostedAccessibility */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineHostedAccessibility; };
+		B7F1A0C00000000000000002 /* OpenCineHostedTestSupport */ = {isa = XCSwiftPackageProductDependency; package = OCC000000000000000000001 /* XCLocalSwiftPackageReference "../../OpenCine" */; productName = OpenCineHostedTestSupport; };
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 97C146E61CF9000F007C117D /* Project object */;

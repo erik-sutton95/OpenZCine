@@ -3,10 +3,13 @@ import CoreVideo
 import Metal
 import MetalKit
 import OpenCineApple
+import OpenCineAppKitApple
 import SwiftUI
 import UIKit
 import VideoToolbox
 import os
+
+import class OpenCineCameraVocabulary.CustomLUTStore
 
 // MetalFX is a device-only framework — there is no `MetalFX.framework` in the iOS Simulator SDK,
 // so an unconditional import breaks `just ios-build` and `just ios-test`. Every use below is behind
@@ -81,7 +84,7 @@ extension Notification.Name {
 struct MetalLiveView: UIViewRepresentable {
     let image: UIImage
     let effects: LiveImageEffects
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
     var source: LiveFrameSampleBus.Source? = nil
     var qualification: (@MainActor () -> MonitorNativeQualificationSnapshot?)? = nil
 
@@ -100,13 +103,13 @@ struct MetalLiveView: UIViewRepresentable {
         }
         view.isPaused = true  // Push model: redraw only when a new frame arrives (setNeedsDisplay).
         view.enableSetNeedsDisplay = true
-        view.colorPixelFormat = .bgra8Unorm
         // Fit, never fill: a frame/picture aspect mismatch must letterbox, not crop —
         // the operator loses exactly the frame edges they are checking (#115).
         view.contentMode = .scaleAspectFit
         view.clipsToBounds = true
         context.coordinator.update(image: image, effects: effects, source: source)
         context.coordinator.attach(view: view)
+        context.coordinator.configureDisplay(view)
         if let qualification {
             context.coordinator.qualificationProbe = MonitorNativeQualificationProbe.install(
                 in: view
@@ -127,7 +130,10 @@ struct MetalLiveView: UIViewRepresentable {
             }
         }
         context.coordinator.noteDrawableSize(uiView.drawableSize)
-        if needsRedraw {
+        // HDR display follows the shared owner on every update, so a Settings change or a
+        // screen recording reaches the next present (A2-31).
+        let formatChanged = context.coordinator.configureDisplay(uiView)
+        if needsRedraw || formatChanged {
             uiView.setNeedsDisplay()
         }
     }
@@ -161,7 +167,7 @@ struct MetalLiveView: UIViewRepresentable {
             return value
         }
 
-        init(fileStore: LUTFileStore) {
+        init(fileStore: CustomLUTStore) {
             device = MTLCreateSystemDefaultDevice()!
             baker = MetalFeedFrameBaker(device: device, fileStore: fileStore)
             presenter = MonitorMetalPicturePresenter(
@@ -171,9 +177,11 @@ struct MetalLiveView: UIViewRepresentable {
                 options: {
                     MonitorPresentationOptions(
                         upscaler: MonitorUpscaler(
-                            rawValue: FeedUpscaleSwitch.rendererReadsUpscaler.rawValue)
+                            rawValue: FeedUpscaleSwitch.shared.upscaler.rawValue)
                             ?? .lanczos,
-                        previewSuperResolutionInput: FeedUpscaleSwitch.presentsSuperResolutionInput,
+                        hdr: LiveHDRDisplay.app.isEnabled, hdrGain: LiveHDRDisplay.app.presentGain,
+                        previewSuperResolutionInput:
+                            FeedUpscaleSwitch.shared.presentsSuperResolutionInput,
                         resampling: .selectedUpscaler, exactCopyAtNativeSize: true)
                 },
                 qualityModelReady: { SuperResolutionModel.isReady })
@@ -203,6 +211,13 @@ struct MetalLiveView: UIViewRepresentable {
         @MainActor func attach(view: MTKView) {
             mtkView = view
             presenter.attach(view)
+        }
+        /// Applies the shared HDR display choice to the drawable; true when its format changed.
+        @MainActor @discardableResult func configureDisplay(_ view: MTKView) -> Bool {
+            LiveHDRDisplay.app.refreshGain(screen: view.window?.screen)
+            let format = view.colorPixelFormat
+            presenter.configureDisplay(view)
+            return view.colorPixelFormat != format
         }
         @MainActor func close() {
             mtkView = nil
@@ -396,53 +411,13 @@ final class LiveDenoiseSwitch {
 /// Which upscaler the feed is using, set from the Link settings row.
 ///
 /// Neither MetalFX nor VideoToolbox super resolution exists in the simulator, so what they buy can
-/// only be judged on a device against a live feed — which makes a relaunch-free picker the only
-/// honest way to compare them with the Lanczos floor on the same shot. Read once per encode rather
-/// than latched at construction, so the next frame carries the change.
-@MainActor
-@Observable
-final class FeedUpscaleSwitch {
-    static let shared = FeedUpscaleSwitch()
-
-    private nonisolated static let storageKey = "OpenZCine.feedUpscaler"
-
-    /// `.lanczos` drops the feed to the floor, the same path a pre-A13 device takes.
-    var upscaler: MonitorUpscaler = FeedUpscaleSwitch.rendererReadsUpscaler {
-        didSet {
-            Self.rendererReadsUpscaler = upscaler
-            UserDefaults.standard.set(upscaler.rawValue, forKey: Self.storageKey)
-        }
-    }
-
-    /// What the renderer actually reads. The encode paths are nonisolated — they run from the draw
-    /// callback, not an actor — so they cannot touch the main-actor property above. A single value
-    /// mirrored on every change is enough: the worst a torn read could do is carry the old upscaler
-    /// for one more frame, which is the very thing being compared.
-    ///
-    /// It seeds itself rather than being seeded by ``shared``, because the renderer runs whether or
-    /// not the settings panel was ever opened — reading the stored choice here is what keeps a
-    /// default of "the best this device has" from collapsing to the floor on an untouched launch.
-    nonisolated(unsafe) static var rendererReadsUpscaler: MonitorUpscaler = .supported(
-        or: storedChoice)
-
-    /// Debug: present the model's input rather than its output (`ZC_DEMO_SR_STAGE=input`).
-    nonisolated(unsafe) static var presentsSuperResolutionInput = false
-    /// The persisted choice, if there is one this build still understands. `nonisolated` because
-    /// the static above it is: the renderer's seed cannot wait for the main actor.
-    ///
-    /// The raw values ARE the stored keys and they were renamed to operator-facing words, so the
-    /// old ones are mapped rather than dropped — an operator who chose MetalFX keeps Quality
-    /// instead of being silently reset to the default.
-    private nonisolated static var storedChoice: MonitorUpscaler? {
-        guard let stored = UserDefaults.standard.string(forKey: storageKey) else { return nil }
-        if let known = MonitorUpscaler(rawValue: stored) { return known }
-        switch stored {
-        case "Lanczos": return .lanczos
-        case "MetalFX": return .spatial
-        case "Super Res": return .superResolution
-        default: return nil
-        }
-    }
-
-    private init() {}
+/// only be judged on a device against a live feed, which makes a relaunch-free picker the only
+/// honest way to compare them with the Lanczos floor on the same shot. The renderer reads
+/// `shared.upscaler` once per encode rather than latching it at construction, so the next frame
+/// carries the change. The store, its legacy-title migration and its lock-guarded renderer read
+/// are the shared OpenCine preference (A2-78).
+enum FeedUpscaleSwitch {
+    static let shared = MonitorUpscalerPreference(
+        storageKey: "OpenZCine.feedUpscaler",
+        onChange: { ReliabilityDiagnostics.reporting.noteFeedUpscaler($0.rawValue) })
 }

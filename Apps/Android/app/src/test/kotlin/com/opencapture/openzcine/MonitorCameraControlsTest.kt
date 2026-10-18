@@ -1,5 +1,7 @@
 package com.opencapture.openzcine
 
+import com.opencapture.opencine.nikon.FocusPickerPolicy
+import com.opencapture.opencine.nikon.ShutterPickerPolicy
 import com.opencapture.monitorui.MonitorLayoutPolicy
 import com.opencapture.monitorui.MonitorFieldLayout
 import com.opencapture.monitorui.MonitorRect
@@ -12,7 +14,8 @@ import com.opencapture.opencine.nikon.withOptimisticControlValue
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.CodecBitDepthOption
-import com.opencapture.openzcine.settings.MonitorDisplayMode
+import com.opencapture.opencine.core.SettingKey
+import com.opencapture.opencine.vocabulary.LadderWrite
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -25,6 +28,57 @@ import com.opencapture.opencine.runtime.nativeFeedContentRect
 
 class MonitorCameraControlsTest {
     private val strings = PhoneStringResolver { resource, _ -> resource.toString() }
+
+    @Test
+    fun `white balance drawer keeps canonical copy and maps display tabs to camera modes`() {
+        val picker = assertNotNull(monitorCaptureSettings(dashboard(cameraSnapshot()), strings)
+            .first { it.kind == MonitorPickerKind.WHITE_BALANCE }.picker)
+        val sheet = videoLadderPresentation(picker)
+        assertEquals("WHITE BALANCE", sheet.title)
+        assertEquals("Kelvin · auto · tint", sheet.subtitle)
+        assertEquals(listOf("Mode", "Kelvin", "Tint"), sheet.tabs.map { it.label })
+        assertEquals(1, sheet.initialTab) // The body reports Kelvin, camera mode 0.
+        val (request, value) = assertNotNull(requestForLadderWrite(picker,
+            LadderWrite(sheet.tabs[0].key, "Sunny")))
+        assertEquals(CameraControl.WHITE_BALANCE to "Sunny", request.control to value)
+        assertEquals("Preset", picker.modes[1].label)
+    }
+
+    @Test
+    fun `shutter drawer keeps canonical copy and angle opens after speed`() {
+        val picker = assertNotNull(monitorCaptureSettings(dashboard(cameraSnapshot()), strings)
+            .first { it.kind == MonitorPickerKind.SHUTTER }.picker)
+        val sheet = videoLadderPresentation(picker)
+        assertEquals("Angle · speed", sheet.subtitle)
+        assertEquals(listOf("Speed", "Angle"), sheet.tabs.map { it.label })
+        assertEquals(1, sheet.initialTab) // The body reports Angle, camera mode 0.
+        val (request, value) = assertNotNull(requestForLadderWrite(picker, assertNotNull(sheet.tabs[0].activate)))
+        assertEquals(CameraControl.SHUTTER_MODE to "Speed", request.control to value)
+        assertEquals(listOf("Angle", "Speed"), picker.modes.map { it.label })
+    }
+
+    @Test
+    fun `size codec and quality pickers drop from the top deck, capture pickers rise from the strip`() {
+        assertTrue(MonitorPickerKind.RESOLUTION.isTopBarPicker())
+        assertTrue(MonitorPickerKind.CODEC.isTopBarPicker())
+        assertTrue(MonitorPickerKind.SIZE.isTopBarPicker())
+        assertTrue(MonitorPickerKind.QUALITY.isTopBarPicker())
+        assertFalse(MonitorPickerKind.ISO.isTopBarPicker())
+    }
+
+    @Test
+    fun `pickers and command controls name one common setting each`() {
+        assertEquals(SettingKey.ISO, MonitorPickerKind.ISO.commonSettingKey)
+        assertEquals(SettingKey.SHUTTER, MonitorPickerKind.SHUTTER.commonSettingKey)
+        assertEquals(SettingKey.APERTURE, MonitorPickerKind.IRIS.commonSettingKey)
+        assertEquals(SettingKey.WHITE_BALANCE, MonitorPickerKind.WHITE_BALANCE.commonSettingKey)
+        assertNull(MonitorPickerKind.FOCUS.commonSettingKey)
+        assertNull(MonitorPickerKind.CODEC.commonSettingKey)
+        assertEquals(SettingKey.APERTURE, CameraControl.IRIS.commonPickerKind?.commonSettingKey)
+        assertEquals(SettingKey.WHITE_BALANCE, CameraControl.WHITE_BALANCE.commonPickerKind?.commonSettingKey)
+        assertNull(CameraControl.FOCUS_MODE.commonPickerKind)
+        assertNull(CameraControl.ISO_AUTO.commonPickerKind)
+    }
 
     @Test
     fun `live capture settings reuse typed command requests`() {
@@ -174,10 +228,23 @@ class MonitorCameraControlsTest {
         val lockedPicker = requireNotNull(lockedShutter.picker)
         assertEquals(listOf("Angle", "Speed"), lockedPicker.modes.map { it.label })
         assertTrue(lockedPicker.interactionLocked)
-        assertNotNull(lockedPicker.lockBanner)
+        assertEquals(true, lockedPicker.popup?.shutterLockedOnCamera)
         assertEquals("Shutter is locked on the camera.", lockedShutter.unavailableReason)
         assertTrue(lockedShutter.controlLocked)
         assertTrue(lockedShutter.dimmed)
+    }
+
+    @Test
+    fun `an iris the body does not advertise stays read-only`() {
+        // A3-20: no f-number enum means no invented ladder; the live value still reads out.
+        val snapshot = cameraSnapshot()
+        val noIris = snapshot.copy(controlCapabilities = snapshot.controlCapabilities.copy(irisValues = emptyList()))
+        val dashboard = dashboard(noIris)
+        val iris = monitorCaptureSettings(dashboard, strings).first { it.kind == MonitorPickerKind.IRIS }
+
+        assertEquals("f/2.8", iris.value)
+        assertNull(iris.picker)
+        assertEquals(emptyList(), dashboard.tiles.first { it.kind == CommandTileKind.IRIS }.request?.options.orEmpty())
     }
 
     @Test
@@ -260,48 +327,6 @@ class MonitorCameraControlsTest {
         )
     }
 
-
-    @Test
-    fun `picker waits for pending camera command before chrome closes it`() {
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.COMMAND,
-                cameraValuesVisible = false,
-                cameraCommandPending = true,
-            ),
-        )
-        assertTrue(
-            !retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.COMMAND,
-                cameraValuesVisible = true,
-                cameraCommandPending = false,
-            ),
-        )
-        assertTrue(
-            !retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = false,
-                cameraCommandPending = false,
-            ),
-        )
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = true,
-                cameraCommandPending = false,
-            ),
-        )
-        // Top-bar resolution/codec pickers stay open without the capture strip.
-        assertTrue(
-            retainMonitorPickerForChrome(
-                mode = MonitorDisplayMode.LIVE,
-                cameraValuesVisible = false,
-                cameraCommandPending = false,
-                isTopBarPicker = true,
-            ),
-        )
-    }
-
     @Test
     fun `top pill pickers open only with camera advertised options`() {
         // Unwritable static ladders must not seed the drum (they always fail apply).
@@ -355,100 +380,6 @@ class MonitorCameraControlsTest {
             ),
         )
         assertEquals("6K · 25p", compactRecordingModeFromRawDisplay("6048x3402 · 25p"))
-    }
-
-    @Test
-    fun `portrait fill picker clears the shared capture strip and system rail`() {
-        val viewport = MonitorRect(0f, 0f, 400f, 800f)
-        val zones = portraitZones(values = MonitorRect(0f, 610f, 400f, 64f))
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = true,
-            )
-
-        assertEquals(12f, frame.x)
-        assertEquals(376f, frame.width)
-        assertTrue(frame.y >= zones.status.y + zones.status.height + 8f)
-        assertTrue(frame.y + frame.height <= zones.values.y - 10f)
-        assertTrue(frame.y + frame.height < zones.system.y)
-    }
-
-    @Test
-    fun `landscape picker leaves both system rails exposed`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 393f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-            )
-
-        // iOS trailing-aligns to the capture bar (not feed ± 8). Side rails stay
-        // outside the capture strip / feed band by zone-map construction.
-        val strip = zones.values
-        assertEquals(strip.x, frame.x, 0.01f)
-        assertEquals(strip.x + strip.width, frame.x + frame.width, 0.01f)
-        assertTrue(frame.x >= viewport.x)
-        assertTrue(frame.x + frame.width <= viewport.x + viewport.width)
-    }
-
-    @Test
-    fun `landscape picker is tall enough for the WB tint pad cluster`() {
-        // SM-A12-class short landscape (~853×384 dp). Tint needs header +
-        // 180dp pad cluster (28+8+108+8+28) + mode tabs + GlassPanel padding.
-        val viewport = MonitorRect(0f, 0f, 853f, 384f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 320f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 384f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-            )
-
-        // 16+16 padding + ~28 header + 14 gap + 180 pad + 14 gap + ~36 tabs ≈ 304.
-        assertTrue(
-            frame.height >= 300f,
-            "picker height ${frame.height} must fit tint pad (≥ 300dp)",
-        )
-        assertTrue(frame.y + frame.height <= zones.values.y - 10f)
-    }
-
-    @Test
-    fun `landscape measured capture bar trailing-aligns the picker`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 393f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-        // Content-hugging glass is narrower and trailing inside the zone slot.
-        val measured = MonitorRect(520f, 332f, 260f, 44f)
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-                measuredCaptureBar = measured,
-            )
-
-        assertEquals(measured.width, frame.width, 0.01f)
-        assertEquals(measured.x + measured.width, frame.x + frame.width, 0.01f)
-        assertEquals(measured.y - 10f, frame.y + frame.height, 0.01f)
     }
 
     @Test
@@ -577,92 +508,6 @@ class MonitorCameraControlsTest {
         assertEquals(2, iso.picker?.modes?.size)
         assertEquals(listOf("Low Base", "High Base"), iso.picker?.modes?.map { it.label })
         assertEquals(false, iso.picker?.drumInteractionLocked)
-        assertEquals(null, iso.picker?.drumLockBanner)
-    }
-
-    @Test
-    fun `top bar res codec frame drops below the info bar at 340dp`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                picture = MonitorRect(59f, 0f, 734f, 393f),
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-        val frame = monitorTopBarPickerFrame(viewport, zones, isCommandCenter = false)
-        assertEquals(340f, frame.width)
-        assertTrue(frame.y >= zones.status.y + zones.status.height + 8f - 0.1f)
-        assertTrue(frame.x >= viewport.x + 8f)
-        assertTrue(frame.x + frame.width <= viewport.x + viewport.width - 8f)
-        assertTrue(MonitorPickerKind.RESOLUTION.isTopBarPicker())
-        assertTrue(MonitorPickerKind.CODEC.isTopBarPicker())
-        assertTrue(!MonitorPickerKind.ISO.isTopBarPicker())
-    }
-
-    @Test
-    fun `top popdown centres under its own pill and quality gets the dual-drum room`() {
-        val viewport = MonitorRect(0f, 0f, 848f, 393f)
-        val zones =
-            portraitZones(values = MonitorRect(430f, 329f, 363f, 48f)).copy(
-                status = MonitorRect(80f, 8f, 690f, 46f),
-            )
-        val pill = MonitorRect(600f, 14f, 90f, 30f)
-
-        val frame =
-            monitorTopBarPickerFrame(
-                viewport,
-                zones,
-                isCommandCenter = false,
-                kind = MonitorPickerKind.SIZE,
-                anchorPill = pill,
-            )
-        // Centred on the tapped pill (iOS cell.midX), dropped just below it.
-        assertEquals(pill.x + pill.width / 2f, frame.x + frame.width / 2f, 0.01f)
-        assertEquals(pill.y + pill.height + 8f, frame.y, 0.01f)
-
-        // The quality pair: 400 wide and the full space under the anchor, so
-        // the NEF chips and star toggle are never folded under a fixed cap.
-        val quality =
-            monitorTopBarPickerFrame(
-                viewport,
-                zones,
-                isCommandCenter = false,
-                kind = MonitorPickerKind.QUALITY,
-                anchorPill = pill,
-            )
-        assertEquals(400f, quality.width)
-        assertEquals(
-            viewport.height - quality.y - 8f,
-            quality.height,
-            0.01f,
-        )
-        assertTrue(quality.height > 300f)
-    }
-
-    @Test
-    fun `landscape picker centres over a wide capture bar at the 420 cap`() {
-        val viewport = MonitorRect(0f, 0f, 900f, 400f)
-        val zones =
-            portraitZones(values = MonitorRect(200f, 330f, 640f, 48f)).copy(
-                status = MonitorRect(80f, 8f, 740f, 46f),
-            )
-        val measured = MonitorRect(220f, 334f, 600f, 44f)
-
-        val frame =
-            monitorPickerFrame(
-                viewport,
-                zones,
-                isPortrait = false,
-                measuredCaptureBar = measured,
-            )
-
-        // iOS bottomPickerBody: width = min(bar, 420), centred on bar.midX.
-        assertEquals(420f, frame.width)
-        assertEquals(
-            measured.x + measured.width / 2f,
-            frame.x + frame.width / 2f,
-            0.01f,
-        )
-        assertEquals(measured.y - 10f, frame.y + frame.height, 0.01f)
     }
 
     @Test

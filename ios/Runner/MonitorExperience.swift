@@ -1,12 +1,15 @@
 import CoreImage
 import MonitorPresentation
 import MonitorUI
+import OpenCineAppKit
 import OpenCineApple
 import OpenCineCameraControls
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
 import UIKit
+
+import class OpenCineCameraVocabulary.CustomLUTStore
 
 /// Shared field-monitor chrome. Surfaces, type, and hairlines come from `MonitorTheme`, the same
 /// tokens Pocket and Insta use. The accent is the OpenZCine gold assigned at launch
@@ -56,23 +59,14 @@ struct MonitorExperience: View {
             .overlay {
                 InstantReviewOverlay()
             }
-            // A watcher asking to drive the camera prompts HERE, on the live view — the Share
-            // This Feed panel answers requests too, but a panel is closed almost always, and a
-            // request only visible there is one nobody sees until the viewer gives up.
-            .overlay(alignment: .top) {
-                RelayControlRequestOverlay()
-                    .animation(
-                        .easeOut(duration: 0.2), value: model.relayPendingControlRequest)
-            }
-            // Haptics: tap on panel open/close, tick on DISP cycle / assist toggle, firm thump on
-            // record start/stop. (Value wheels add their own per-detent feedback.)
-            .sensoryFeedback(.selection, trigger: model.activePanel)
-            .sensoryFeedback(.selection, trigger: model.displayMode)
-            .sensoryFeedback(.selection, trigger: model.assist.liveTools)
-            .sensoryFeedback(.impact(weight: .heavy), trigger: model.isRecording)
-            // Confirm the focus-point app-lock on release — a firm thump locking, a light tap freeing.
+            // The same explicit grant confirmation as the other watcher hosts. The captured
+            // request retains its actual relay owner, source and control revision.
+            .monitorRelayControlRequest(model.captureOperatorSettingsWatchers()?.request)
+            // The shared controls own their feedback and the haptics preference (A1-33). The
+            // focus-point app lock is Nikon's own: a firm thump locking, a light tap freeing.
             .sensoryFeedback(trigger: model.focusPointLocked) { _, locked in
-                locked ? .impact(weight: .heavy) : .impact(weight: .light)
+                guard model.preferences.hapticsEnabled else { return nil }
+                return locked ? .impact(weight: .heavy) : .impact(weight: .light)
             }
     }
 }
@@ -211,8 +205,9 @@ struct LiveFeedModule: View {
             flippedVertically: model.liveFeedMirroredVertically,
             squeeze: desqueezeScale(model.liveDesqueeze))
     }
+    /// The shared surface's admission, applied to the picture's own focus, zoom and swipe.
     private var pictureInteractive: Bool {
-        !model.interfaceLocked && model.chromeEditorMode == nil
+        !model.interfaceLocked && model.chromeEditorMode == nil && model.operatorSession.interactive
             && model.activePanel?.coversFullScreen != true && model.displayMode != .command
     }
 
@@ -235,8 +230,6 @@ struct LiveFeedModule: View {
                     Color.black
                     rotatedFeedImage(
                         width: imageWidth, height: imageHeight, rotation: feedRotation)
-                    FeedVignette()
-                    FeedGrain()
                 }
                 .frame(width: imageWidth, height: imageHeight, alignment: .leading)
                 .position(x: imageWidth / 2, y: imageHeight / 2)
@@ -272,17 +265,15 @@ struct LiveFeedModule: View {
     /// Lays the feed stack out in the camera's own frame (width/height swapped when the body is
     /// vertical), then rotates it upright into the displayed footprint. Gesture locations report
     /// in the pre-rotation space, so tap-to-focus and the AF overlay need no coordinate changes.
-    @ViewBuilder private func rotatedFeedImage(
+    /// One structure for every rotation (landscape rotates by zero), so turning the body keeps
+    /// the picture's zoom, pinch and focus hold (A1-34).
+    private func rotatedFeedImage(
         width: CGFloat, height: CGFloat, rotation: PTPLiveViewRotation
     ) -> some View {
-        if rotation == .landscape {
-            feedImage(width: width, height: height)
-        } else {
-            let swap = rotation.isVertical
-            feedImage(width: swap ? height : width, height: swap ? width : height)
-                .rotationEffect(.degrees(rotation.displayDegreesClockwise))
-                .frame(width: width, height: height)
-        }
+        let swap = rotation.isVertical
+        return feedImage(width: swap ? height : width, height: swap ? width : height)
+            .rotationEffect(.degrees(rotation.displayDegreesClockwise))
+            .frame(width: width, height: height)
     }
 
     @ViewBuilder private func feedImage(width: CGFloat, height: CGFloat) -> some View {
@@ -315,13 +306,12 @@ struct LiveFeedModule: View {
             ZStack {
                 LiveFrameRaster(width: width, height: height)
                 LiveFeedFocusOverlay(lockProgress: progress)
-                LiveFeedWaitingOverlay()
                 if model.demoUIMode {
                     DemoFocusPointerSurface(model: model, size: size)
                 }
             }
         }
-        .overlay { FeedAlignedAssists(clean: model.displayMode == .clean) }
+        .overlay { FeedAlignedAssists() }
     }
 
 }
@@ -388,7 +378,7 @@ private struct LiveFrameFeedLayer: View {
     let effects: LiveImageEffects
     let source: LiveFrameSampleBus.Source?
     let isDemoSession: Bool
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
     let width: CGFloat
     let height: CGFloat
     let qualification: (@MainActor () -> MonitorNativeQualificationSnapshot?)?
@@ -425,7 +415,7 @@ private struct LiveFrameFeedLayer: View {
 private struct DemoProcessedLiveFrameView: UIViewRepresentable {
     let image: UIImage
     let effects: LiveImageEffects
-    let fileStore: LUTFileStore
+    let fileStore: CustomLUTStore
 
     func makeCoordinator() -> Coordinator { Coordinator(fileStore: fileStore) }
 
@@ -456,7 +446,7 @@ private struct DemoProcessedLiveFrameView: UIViewRepresentable {
         private var currentImage: UIImage?
         private var currentEffects: LiveImageEffects?
 
-        init(fileStore: LUTFileStore) {
+        init(fileStore: CustomLUTStore) {
             renderer = LiveFrameRenderer(fileStore: fileStore)
         }
 
@@ -527,71 +517,6 @@ private struct DemoFocusPointerSurface: UIViewRepresentable {
                 model.demoMoveFocusBox(to: location, feedSize: size)
             case .eye:
                 model.demoMoveEyeBox(to: location, feedSize: size)
-            }
-        }
-    }
-}
-
-/// AF / subject-detection boxes — isolated from per-frame feed publishes.
-private struct LiveFeedFocusOverlay: View {
-    @Environment(NativeAppModel.self) private var model
-    let lockProgress: CGFloat
-
-    var body: some View {
-        // The AF box is an element like any other: on by default in DISP 1 and DISP 2 (focus
-        // feedback the operator relies on even in the stripped-back view), and hideable in both.
-        // (Command never mounts the feed, so no mode guard is needed.)
-        if model.chromeSectionMounts(.focusBox), let focus = model.liveViewFocus,
-            !focus.boxes.isEmpty
-        {
-            // Focus metadata repeats identically on most frames — the Equatable guard skips the
-            // Canvas redraw unless a box, lock, or progress changed.
-            LiveFocusBoxOverlay(
-                focus: focus, locked: model.focusPointLocked, lockProgress: lockProgress,
-                mirrored: model.liveFeedMirrored,
-                mirroredVertically: model.liveFeedMirroredVertically,
-                // The raster's own value: the box has to register with the picture as
-                // `LiveFrameRaster.feedScale` actually presents it.
-                desqueeze: model.liveDesqueeze
-            )
-            .equatable()
-            // `chromeEditable` cannot carry the dim here: it goes on a proxy sized to the box (see
-            // below), and this Canvas draws the boxes itself.
-            .opacity(focusBoxEditDimmed ? 0.3 : 1)
-            // The badge goes on the primary AF box, not the whole feed — a dashed outline round
-            // the entire image would name nothing.
-            .overlay { focusBoxEditTarget(focus) }
-        }
-    }
-
-    /// The AF box is force-mounted while editing a mode that has it switched off — dim it so the
-    /// operator sees it is off and can switch it back on from its badge.
-    private var focusBoxEditDimmed: Bool {
-        guard let mode = model.chromeEditorMode,
-            DisplayChromeVisibility.isConfigurable(.focusBox, in: mode)
-        else { return false }
-        return !model.preferences.chrome(for: mode, capture: model.captureLayoutMode)
-            .focusBoxVisible
-    }
-
-    /// A zero-content proxy sized to the primary AF box, so the Edit view's outline and badge land
-    /// on the box the operator sees. Mounted only while editing.
-    @ViewBuilder private func focusBoxEditTarget(_ focus: PTPLiveViewFocusInfo) -> some View {
-        if model.chromeEditorMode != nil, let box = focus.boxes.first {
-            GeometryReader { proxy in
-                // Through the drawing mapping, so the badge lands on the box the operator sees
-                // rather than on where an unmirrored, un-de-squeezed one would have been.
-                if let rect = liveFocusBoxRect(
-                    box, focus: focus, in: proxy.size,
-                    desqueeze: model.liveDesqueeze,
-                    mirrored: model.liveFeedMirrored,
-                    mirroredVertically: model.liveFeedMirroredVertically)
-                {
-                    Color.clear
-                        .frame(width: rect.width, height: rect.height)
-                        .chromeEditable(.focusBox, editing: model.chromeEditorMode)
-                        .position(x: rect.midX, y: rect.midY)
-                }
             }
         }
     }
@@ -669,24 +594,10 @@ struct InstantReviewOverlay: View {
                         let focus = review.focus, focus.coordinateWidth > 0,
                         focus.coordinateHeight > 0
                     {
-                        ForEach(Array(focus.boxes.enumerated()), id: \.offset) { _, box in
-                            let scaleX = fitted.width / CGFloat(focus.coordinateWidth)
-                            let scaleY = fitted.height / CGFloat(focus.coordinateHeight)
-                            Rectangle()
-                                .strokeBorder(
-                                    focus.focusResult == .focused
-                                        ? Color.green : Color.white.opacity(0.9),
-                                    lineWidth: 2
-                                )
-                                .frame(
-                                    width: max(10, CGFloat(box.width) * scaleX),
-                                    height: max(10, CGFloat(box.height) * scaleY)
-                                )
-                                .position(
-                                    x: fitted.minX + CGFloat(box.centerX) * scaleX,
-                                    y: fitted.minY + CGFloat(box.centerY) * scaleY
-                                )
-                        }
+                        // The same marks as the live AF box: the picture here is already fitted.
+                        LiveFocusBoxOverlay(focus: focus)
+                            .frame(width: fitted.width, height: fitted.height)
+                            .position(x: fitted.midX, y: fitted.midY)
                     }
                 }
                 if !review.isFullResolution {
@@ -766,103 +677,33 @@ struct InstantReviewOverlay: View {
     }
 }
 
-/// The broadcaster's control-request prompt, floated over the live view.
-///
-/// Kept to one line plus two answers: the operator is mid-shot, so the prompt must be
-/// answerable without reading a paragraph — and it must never cover the middle of the frame.
-private struct RelayControlRequestOverlay: View {
+/// Why a relay picture is missing and how to get it back, under the shared waiting plate. The
+/// watchdog is already retrying; the button is for the human who wants it now.
+struct RelayJoinRecovery: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if model.isRelayBroadcasting, let requester = model.relayPendingControlRequest {
-            HStack(spacing: 12) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(LiveDesign.accent)
-                Text("\(requester) asks to control the camera")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(LiveDesign.text)
-                    .lineLimit(1)
-                Button {
-                    model.declineRelayControl()
-                } label: {
-                    Text("Decline")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(LiveDesign.muted)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().stroke(LiveDesign.hairlineStrong, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                Button {
-                    model.grantRelayControl()
-                } label: {
-                    Text("Grant")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(LiveDesign.background)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(LiveDesign.accent))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(LiveDesign.glassOpaque)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(LiveDesign.hairline, lineWidth: 1)
-            )
-            // Below the top-bar chip row in both orientations; never near frame centre.
-            .padding(.top, 64)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
-    }
-}
-
-/// Shown until the first decoded frame arrives.
-private struct LiveFeedWaitingOverlay: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        if model.liveFrameImage == nil && !model.isDemoSession {
+        if let reason = model.relayFailureReason {
             VStack(spacing: 10) {
-                Image(systemName: "viewfinder")
-                    .font(.system(size: 28, weight: .light))
-                    .foregroundStyle(LiveDesign.text.opacity(0.28))
-                Text("WAITING FOR LIVE VIEW")
-                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(LiveDesign.text.opacity(0.28))
-                // A viewer session says WHY the picture is missing, where the operator is
-                // looking — the FPS chip can only say FAIL. The watchdog is already retrying;
-                // the button is for the human who wants it now.
-                if model.videoSource == .relay, let reason = model.relayFailureReason {
-                    Text(reason)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(LiveDesign.text.opacity(0.55))
-                        .frame(maxWidth: 400)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if model.relayJoinNeedsPasscode {
-                        RelayJoinPasscodeEntry()
-                            .padding(.top, 2)
-                    } else {
-                        Button {
-                            model.retryRelayJoin()
-                        } label: {
-                            Text("Try again")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(LiveDesign.text.opacity(0.8))
-                                .padding(.horizontal, 18)
-                                .padding(.vertical, 8)
-                                .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 2)
+                Text(reason)
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(LiveDesign.text.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                if model.relayJoinNeedsPasscode {
+                    RelayJoinPasscodeEntry()
+                } else {
+                    Button {
+                        model.retryRelayJoin()
+                    } label: {
+                        Text("Try again")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(LiveDesign.text.opacity(0.8))
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -878,27 +719,16 @@ struct WatcherControlKey: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        Button {
+        MonitorWatcherControlKey(
+            title: model.relayHoldsControl ? "GIVE BACK CONTROL" : "ASK FOR CONTROL",
+            accented: model.relayHoldsControl, palette: LiveDesign.self
+        ) {
             if model.relayHoldsControl {
                 model.releaseRelayControl()
             } else {
                 model.requestRelayControl()
             }
-        } label: {
-            Text(model.relayHoldsControl ? "GIVE BACK CONTROL" : "ASK FOR CONTROL")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .kerning(0.8)
-                .foregroundStyle(model.relayHoldsControl ? LiveDesign.accent : LiveDesign.text)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(.black.opacity(0.55), in: Capsule())
-                .overlay(
-                    Capsule().strokeBorder(
-                        model.relayHoldsControl ? LiveDesign.accent : LiveDesign.hairline,
-                        lineWidth: 1))
         }
-        .buttonStyle(.monitorTapTarget)
-        .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 }
 
@@ -909,58 +739,51 @@ struct BroadcasterControlKey: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        Button {
+        MonitorWatcherControlKey(
+            title: "REVOKE CONTROL", accented: true, holderName: model.relayControlHeldBy,
+            palette: LiveDesign.self
+        ) {
             model.reclaimRelayControl()
-        } label: {
-            HStack(spacing: 8) {
-                Text("REVOKE CONTROL")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .kerning(0.8)
-                    .foregroundStyle(LiveDesign.accent)
-                if let holder = model.relayControlHeldBy {
-                    Text(holder)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(LiveDesign.text.opacity(0.7))
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
-            .background(.black.opacity(0.55), in: Capsule())
-            .overlay(Capsule().strokeBorder(LiveDesign.accent, lineWidth: 1))
         }
-        .buttonStyle(.monitorTapTarget)
-        .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 }
 
-/// The broadcast asked for a passcode: four digits, joined on completion. Lives on the empty
-/// feed where the refusal reason is already showing.
+/// The broadcast asked for a passcode: the shared watcher rule, the same secure field and Join as
+/// the other apps' watchers. Any non-empty answer is sent, trimmed; the host decides. Lives on the
+/// empty feed where the refusal reason is already showing.
 private struct RelayJoinPasscodeEntry: View {
     @Environment(NativeAppModel.self) private var model
     @State private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField("0000", text: $draft)
-            .keyboardType(.numberPad)
-            .textContentType(.oneTimeCode)
-            .multilineTextAlignment(.center)
-            .font(.system(size: 22, weight: .semibold, design: .monospaced))
-            .foregroundStyle(LiveDesign.text.opacity(0.9))
-            .frame(width: 132)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 10).fill(LiveDesign.text.opacity(0.12)))
-            .focused($focused)
-            .onAppear { focused = true }
-            .onChange(of: draft) { _, next in
-                let digits = String(next.filter(\.isNumber).prefix(4))
-                if digits != next { draft = digits }
-                if digits.count == 4 {
-                    model.submitRelayPasscode(digits)
-                    draft = ""
-                }
-            }
+        HStack(spacing: 8) {
+            SecureField("Passcode", text: $draft)
+                .submitLabel(.join)
+                .onSubmit(join)
+                .multilineTextAlignment(.center)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(LiveDesign.text.opacity(0.9))
+                .frame(width: 150)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10).fill(LiveDesign.text.opacity(0.12)))
+                .focused($focused)
+                .onAppear { focused = true }
+            Button("Join", action: join)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(LiveDesign.text.opacity(0.8))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(LiveDesign.text.opacity(0.12)))
+                .buttonStyle(.plain)
+                .disabled(MonitorWatcherPasscodeRule.answer(draft) == nil)
+        }
+    }
+
+    private func join() {
+        guard let code = MonitorWatcherPasscodeRule.answer(draft) else { return }
+        model.submitRelayPasscode(code)
+        draft = ""
     }
 }
 
@@ -987,176 +810,5 @@ private struct LiveFrameView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIImageView, context: Context) {
         if uiView.image !== image { uiView.image = image }
-    }
-}
-
-/// One AF / subject box mapped from the live-view header's coordinate space onto the PRESENTED
-/// picture inside `size`.
-///
-/// Presented, not the whole frame: the raster carries the de-squeeze as a centred `scaleEffect`
-/// (`LiveFrameRaster.feedScale`), so an anamorphic setup paints the image into a narrower — or
-/// shorter — sub-rect of the same frame. Mapping into the frame left the box drifting sideways off
-/// the subject it is tracking, while the framing aids, which already map through `desqueezedRect`,
-/// stayed put. Android applies its presentation scales before the identical mapping
-/// (`liveOverlayFeedRect`).
-///
-/// Mirroring flips about the presented rect rather than the frame, so a mirrored AND de-squeezed
-/// picture still lands the box on its face.
-func liveFocusBoxRect(
-    _ box: PTPLiveViewAFBox,
-    focus: PTPLiveViewFocusInfo,
-    in size: CGSize,
-    desqueeze: NikonDesqueeze,
-    mirrored: Bool,
-    mirroredVertically: Bool = false
-) -> CGRect? {
-    guard focus.coordinateWidth > 0, focus.coordinateHeight > 0 else { return nil }
-    let feed = desqueezedRect(CGRect(origin: .zero, size: size), desqueeze)
-    let scaleX = feed.width / CGFloat(focus.coordinateWidth)
-    let scaleY = feed.height / CGFloat(focus.coordinateHeight)
-    let width = CGFloat(box.width) * scaleX
-    let height = CGFloat(box.height) * scaleY
-    let inset = CGFloat(box.centerX) * scaleX
-    let centerX = mirrored ? feed.maxX - inset : feed.minX + inset
-    let insetY = CGFloat(box.centerY) * scaleY
-    let centerY = mirroredVertically ? feed.maxY - insetY : feed.minY + insetY
-    return CGRect(
-        x: centerX - width / 2,
-        y: centerY - height / 2,
-        width: width,
-        height: height
-    )
-}
-
-/// Draws the camera's AF / subject-detection boxes (from the live-view header) over the feed:
-/// rounded rectangles with a uniform stroke — the AF / focus box (box 0) styled by AF state
-/// (see `primaryBoxColor`), detected face/eye boxes (box 1+) in green.
-struct LiveFocusBoxOverlay: View, Equatable {
-    let focus: PTPLiveViewFocusInfo
-    /// App-only focus-point lock — tints the AF box accent and badges it with a small lock.
-    var locked: Bool = false
-    /// 0→1 while long-pressing the AF box to lock it: how much of box 0's outline has drawn in.
-    var lockProgress: CGFloat = 0
-    /// Whether the picture underneath is flipped left-to-right. The camera's box coordinates never
-    /// are, so the boxes have to be flipped here to keep landing on the face they are tracking.
-    var mirrored: Bool = false
-    /// Top-to-bottom presentation flip; AF metadata stays in source coordinates.
-    var mirroredVertically: Bool = false
-    /// The de-squeeze the raster below is presenting with — see ``liveFocusBoxRect``.
-    var desqueeze = NikonDesqueeze.off
-
-    nonisolated static func == (lhs: LiveFocusBoxOverlay, rhs: LiveFocusBoxOverlay) -> Bool {
-        // `focusResult` / `trackingAFActive` (drawing state via `primaryBoxColor`) are stored
-        // properties of `focus`, so its memberwise == already covers them.
-        lhs.focus == rhs.focus && lhs.locked == rhs.locked
-            && lhs.lockProgress == rhs.lockProgress && lhs.mirrored == rhs.mirrored
-            && lhs.mirroredVertically == rhs.mirroredVertically
-            && lhs.desqueeze == rhs.desqueeze
-    }
-
-    /// Idle AF-box white opacity — slightly transparent so acquired/tracking green reads as a
-    /// state change. Value is tuned in the central visual pass.
-    private static let idleWhiteOpacity = 0.72
-
-    /// Box 0 (AF area) state → style, Nikon-body-like, in precedence order:
-    /// 1. `locked` (app-side focus-point lock) — accent at full opacity, plus the lock badge.
-    /// 2. AF acquired (`focusResult == .focused`) or subject tracking engaged
-    ///    (`trackingAFActive`, the header's tracking-AF status byte) — green at full opacity.
-    /// 3. Idle / hunting (`.unknown` / `.notFocused`) — dim white; no distinct red state.
-    /// Face/eye boxes (index > 0) are always green.
-    private var primaryBoxColor: Color {
-        if locked { return LiveDesign.accent }
-        if focus.focusResult == .focused || focus.trackingAFActive { return .green }
-        return .white.opacity(Self.idleWhiteOpacity)
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Canvas { context, size in
-                    for (index, box) in focus.boxes.enumerated() {
-                        guard
-                            let rect = liveFocusBoxRect(
-                                box, focus: focus, in: size, desqueeze: desqueeze,
-                                mirrored: mirrored, mirroredVertically: mirroredVertically)
-                        else { continue }
-                        let color: Color = index == 0 ? primaryBoxColor : .green
-                        let radius = min(min(rect.width, rect.height) * 0.12, 7)
-                        context.stroke(
-                            Path(roundedRect: rect, cornerRadius: radius),
-                            with: .color(color),
-                            lineWidth: 1.5
-                        )
-                        if locked, index == 0, let lock = context.resolveSymbol(id: "lock") {
-                            context.draw(
-                                lock, at: CGPoint(x: rect.midX, y: rect.minY - 9), anchor: .center)
-                        }
-                    }
-                } symbols: {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(LiveDesign.accent)
-                        .tag("lock")
-                }
-
-                // The lock draw-in: box 0's outline traced in accent as you hold to lock it,
-                // completing as the lock engages — then it gives way to the solid accent box above.
-                if lockProgress > 0.001, !locked, let rect = primaryBoxRect(in: proxy.size) {
-                    let radius = min(min(rect.width, rect.height) * 0.12, 7)
-                    RoundedRectangle(cornerRadius: radius)
-                        .trim(from: 0, to: lockProgress)
-                        .stroke(
-                            LiveDesign.accent,
-                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
-                        )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        .shadow(color: LiveDesign.accent.opacity(0.55), radius: 3)
-                }
-            }
-        }
-        .allowsHitTesting(false)
-    }
-
-    /// Box 0 (the AF / focus area), through the same mapping the Canvas uses so the lock draw-in
-    /// registers exactly over its white outline.
-    private func primaryBoxRect(in size: CGSize) -> CGRect? {
-        guard let box = focus.boxes.first else { return nil }
-        return liveFocusBoxRect(
-            box, focus: focus, in: size, desqueeze: desqueeze, mirrored: mirrored,
-            mirroredVertically: mirroredVertically)
-    }
-}
-
-struct FeedVignette: View {
-    var body: some View {
-        RadialGradient(
-            colors: [.clear, .black.opacity(0.46)],
-            center: .center,
-            startRadius: 70,
-            endRadius: 620
-        )
-        .blendMode(.multiply)
-        .allowsHitTesting(false)
-    }
-}
-
-struct FeedGrain: View {
-    var body: some View {
-        Canvas { context, size in
-            // Deterministic pseudo-random speckle positions relative to the canvas size.
-            for index in 0..<180 {
-                let x = CGFloat((index * 73) % 791) / 791 * size.width
-                let y = CGFloat((index * 47) % 367) / 367 * size.height
-                let opacity = 0.016 + Double(index % 5) * 0.004
-                context.fill(
-                    Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
-                    with: .color(.white.opacity(opacity))
-                )
-            }
-        }
-        // Rasterize once per layout pass — the grain is static relative to the feed rect.
-        .drawingGroup()
-        .allowsHitTesting(false)
     }
 }

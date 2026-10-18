@@ -1,3 +1,4 @@
+import OpenCineRelay
 import OpenCineWatch
 import OpenZCineCore
 import SwiftUI
@@ -14,9 +15,11 @@ struct WatchMonitorView: View {
         let state = controller.state
         let photography = state?.isPhotography == true
         let shots = (state?.shotsRemaining).flatMap { $0.isEmpty ? nil : $0 } ?? "\u{2014}"
-        let header =
-            photography
-            ? shots : (controller.frameTimecode ?? state?.timecode)?.label ?? "--:--:--:--"
+        // A body with its timecode off still reports 00:00:00:00; that reads as absent (A5-05).
+        let timecode = (controller.frameTimecode ?? state?.timecode).flatMap {
+            $0.on ? $0.label : nil
+        }
+        let header = photography ? shots : timecode ?? Timecode.placeholder
         return WatchMonitorPresentation(
             sourceRevision: controller.presentationRevision,
             header: header, headerAccessibility: photography ? "Shots remaining \(shots)" : nil,
@@ -29,25 +32,12 @@ struct WatchMonitorView: View {
     }
 
     private var battery: WatchMonitorBattery? {
-        guard let state = controller.state else { return nil }
-        let gauge = CameraBatteryGauge.gauge(rawBatteryLevel: state.cameraBatteryPercent)
-        guard gauge != .unknown else { return nil }
-        let urgency: WatchMonitorBattery.Urgency
-        switch gauge.urgency {
-        case .nominal: urgency = .nominal
-        case .low: urgency = .low
-        case .depleted: urgency = .depleted
-        }
-        return WatchMonitorBattery(
-            filledBars: gauge.filledBars, barCount: CameraBatteryGauge.barCount,
-            urgency: urgency,
-            accessibilityLabel:
-                "Camera battery \(gauge.filledBars) of \(CameraBatteryGauge.barCount) bars")
+        .measured(controller.state?.batteryReading, exhausted: controller.state?.batteryExhausted)
     }
 
     private var placeholder: String? {
-        if !controller.isReachable { return "Open OpenZCine on iPhone" }
-        if controller.state?.connection == .noCamera { return "No camera connected" }
+        if !controller.isReachable { return WatchRelayCopy.openOnIPhone(appName: "OpenZCine") }
+        if controller.state?.connection == .noCamera { return WatchRelayCopy.noCamera }
         if controller.state?.feedLive == false { return "Feed paused (Command mode)" }
         return nil
     }

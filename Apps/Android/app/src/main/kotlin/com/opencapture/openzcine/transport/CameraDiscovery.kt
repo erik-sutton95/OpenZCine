@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.transport
 
+import com.opencapture.opencine.nikon.NikonHosts
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -84,7 +85,9 @@ class CameraDiscovery(private val browser: NsdBrowser) {
             .scan(emptyMap<String, DiscoveredCamera>()) { known, event ->
                 when (event) {
                     is NsdEvent.ServiceResolved ->
-                        if (isSupportedPtpIpDiscoveryHost(event.host)) {
+                        // The Swift PTP-IP facade opens numeric IPv4 sockets only, and discovery
+                        // keeps the private ranges (Swift `isDefaultScanIPv4`, 10/8 included).
+                        if (NikonHosts.isPrivateIPv4(event.host)) {
                             known +
                                 (event.serviceName to
                                     DiscoveredCamera(event.serviceName, event.host, event.port))
@@ -108,49 +111,6 @@ class CameraDiscovery(private val browser: NsdBrowser) {
         const val PTP_IP_PORT: Int = 15740
 
         /**
-         * Prefix of the camera's own access-point SSID (e.g. `NIKON_ZR_01234`)
-         * — mirrors `CameraWiFiSSID.nikonAccessPointPrefix` in the shared core.
-         */
-        const val NIKON_ZR_SSID_PREFIX: String = "NIKON_ZR_"
-
-        /**
-         * Non-dialable host key for an access-point setup with no learned address.
-         * Mirrors Swift `CameraDiscovery.pendingAccessPointHostPrefix`.
-         */
-        const val PENDING_ACCESS_POINT_HOST_PREFIX: String = "ap:"
-
-        fun pendingAccessPointHostKey(ssid: String?): String {
-            val trimmed = ssid?.trim().orEmpty()
-            return if (trimmed.isNotEmpty()) {
-                PENDING_ACCESS_POINT_HOST_PREFIX + trimmed
-            } else {
-                PENDING_ACCESS_POINT_HOST_PREFIX + "pending"
-            }
-        }
-
-        fun isAccessPointHostKey(host: String): Boolean =
-            host.startsWith(PENDING_ACCESS_POINT_HOST_PREFIX)
-
-        /**
-         * The `a.b.c` of a dotted IPv4 address, or null when it is not one.
-         *
-         * Mirrors Swift `CameraDiscovery.subnetBase(for:)`. A /24 is an assumption, and a
-         * deliberate one: it is what a sweep enumerates and what tells two Wi‑Fi setups apart.
-         * The real prefix is a separate question, asked only when a diagnosis needs it.
-         */
-        fun subnetBase(host: String): String? {
-            val trimmed = host.trim()
-            if (!isSupportedPtpIpDiscoveryHost(trimmed)) return null
-            return trimmed.substringBeforeLast('.').takeIf { it.count { ch -> ch == '.' } == 2 }
-        }
-
-        fun isDialableHost(host: String): Boolean {
-            if (host.isBlank() || isAccessPointHostKey(host)) return false
-            if (host.startsWith("usb:", ignoreCase = true)) return false
-            return isSupportedPtpIpDiscoveryHost(host)
-        }
-
-        /**
          * The host a saved wireless setup may hand the dialer: a live discovery first, else
          * the record's own host when that is a real address. The pending access-point key is
          * NEVER a dial target — it is a bookmark meaning "rediscover on the live link after
@@ -159,38 +119,6 @@ class CameraDiscovery(private val browser: NsdBrowser) {
          * saying the camera was not found.
          */
         fun dialableSavedHost(recordHost: String, discoveredHost: String?): String? =
-            discoveredHost?.takeIf(::isDialableHost) ?: recordHost.takeIf(::isDialableHost)
-
-        /**
-         * Whether an NSD-resolved host is usable by the current PTP-IP stack.
-         *
-         * The Swift PTP-IP facade only opens numeric IPv4 sockets. This mirrors the iOS
-         * discovery path: Bonjour first limits results to `AF_INET`, then the shared
-         * `CameraDiscovery.isDefaultScanIPv4` policy retains only the supported private
-         * ranges. Keep the small parser here instead of crossing JNI: discovery must remain
-         * safe and JVM-testable when the optional Swift library is not installed.
-         *
-         * Mirrors the shared policy (`CameraDiscovery.swift isPrivateIPv4`): all three RFC 1918
-         * ranges INCLUDING `10/8` — set and travel routers commonly hand out 10.x, and iOS
-         * added it deliberately for exactly that. This filter previously excluded 10/8 (with a
-         * comment claiming the core agreed, which had since stopped being true): a camera on a
-         * 10.x router was discoverable on iOS and invisible on Android.
-         */
-        internal fun isSupportedPtpIpDiscoveryHost(host: String): Boolean {
-            val octets = host.split('.')
-            if (octets.size != 4) return false
-
-            val values =
-                octets.map { octet ->
-                    if (octet.isEmpty() || octet.any { !it.isDigit() }) return false
-                    octet.toIntOrNull() ?: return false
-                }
-            if (values.any { it !in 0..255 }) return false
-
-            return values[0] == 10 ||
-                (values[0] == 172 && values[1] in 16..31) ||
-                (values[0] == 192 && values[1] == 168)
-        }
-
+            discoveredHost?.takeIf(NikonHosts::isDialableHost) ?: recordHost.takeIf(NikonHosts::isDialableHost)
     }
 }
