@@ -4577,6 +4577,13 @@ final class NativeAppModel {
                 applyBootstrapObservation(.property(angle.property, angle.data))
             }
             applyBootstrapObservation(.options(.movieShutterAngle, ["90°", "180°", "270°"]))
+            // Manual exposure with manual ISO 800, the value the demo body's ISO readout shows: the
+            // common ISO setting is then reported and writable, as on a body in M. Without it the
+            // readout had no reported value and nothing to edit, which the shared rule keeps inert.
+            applyBootstrapObservation(.property(.exposureProgramMode, Data(ByteCoding.uint16LE(1))))
+            applyBootstrapObservation(.property(.movieISOAutoControl, Data([0])))
+            applyBootstrapObservation(
+                .property(.isoControlSensitivity, Data(ByteCoding.uint32LE(800))))
             applyBootstrapObservation(
                 .property(
                     .movieRecordScreenSize,
