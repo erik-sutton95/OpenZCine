@@ -170,6 +170,9 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         defer { XCUIDevice.shared.orientation = .portrait }
         let app = XCUIApplication()
         app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
+        // A hosted runner spends most of the normal 2.25 s splash inside the launch itself, so
+        // the splash could leave before one bracketed sample. Holding it keeps the proof the same.
+        app.launchEnvironment["ZC_DEMO_SPLASH_HOLD_MS"] = "10000"
         app.launch()
         defer { app.terminate() }
         let splash = app.descendants(matching: .any)["monitor-launch-splash"]
