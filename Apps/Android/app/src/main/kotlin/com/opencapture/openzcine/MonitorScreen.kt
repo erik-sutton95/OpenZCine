@@ -117,6 +117,7 @@ import com.opencapture.monitorui.MonitorSystemControls
 import com.opencapture.monitorui.MonitorSystemControlsVisibility
 import com.opencapture.monitorui.MonitorStatusChrome
 import com.opencapture.monitorui.MonitorStatusPresentation
+import com.opencapture.monitorui.MonitorStorageReadoutFormat
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
 import com.opencapture.opencine.nikon.NikonOpenCineSession
@@ -1404,12 +1405,20 @@ internal fun MonitorScreen(
                 actualLinkHealth.presentation.signalBars)
         }
         var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
-        val topBarMedia = if (relayedState != null) {
-            if (prefersMediaDuration) readoutRetention.media.durationLabel else readoutRetention.media.capacityLabel
+        // Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
+        // Duration mode and every non-portrait surface keep the existing labels.
+        fun mediaLabel(portrait: Boolean): String = if (relayedState != null) {
+            if (prefersMediaDuration) readoutRetention.media.durationLabel
+            else if (portrait) readoutRetention.media.freeBytes?.let {
+                "${MonitorStorageReadoutFormat.wholeUnitCapacity(it)} · ${readoutRetention.media.percentFree}%"
+            } ?: readoutRetention.media.capacityLabel
+            else readoutRetention.media.capacityLabel
         } else {
             val storage = sharedControlState.snapshot?.storage
             if (prefersMediaDuration) storage?.recordingTimeLabel ?: "-- Min"
-            else storage?.storageReadout?.free ?: StorageReadout.UNAVAILABLE
+            else storage?.storageReadout?.let {
+                if (portrait) MonitorStorageReadoutFormat.wholeUnitCapacity(it.freeBytes) else it.free
+            } ?: StorageReadout.UNAVAILABLE
         }
         val watchRelayState =
             remember(
@@ -1938,11 +1947,14 @@ internal fun MonitorScreen(
             val storage = cameraProperties.storage
             val capacity = storage?.readout?.takeIf { photoPillShowsStorage && it.totalBytes != null }
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
-                if (capacity != null) "${capacity.free} ${capacity.percent}"
-                else cameraProperties.shotsRemaining?.let { "${shotsRemainingCompactLabel(it)} SHOTS" },
+                if (capacity != null) {
+                    val free = if (isPortrait) MonitorStorageReadoutFormat.wholeUnitCapacity(capacity.freeBytes)
+                        else capacity.free
+                    "$free ${capacity.percent}"
+                } else cameraProperties.shotsRemaining?.let { "${shotsRemainingCompactLabel(it)} SHOTS" },
                 MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage })
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",
-            topBarMedia, MonitorDisplaySection.STORAGE, action = { prefersMediaDuration = !prefersMediaDuration }) else null
+            mediaLabel(isPortrait), MonitorDisplaySection.STORAGE, action = { prefersMediaDuration = !prefersMediaDuration }) else null
         val resolutionKind = if (isPhotographyMode) MonitorPickerKind.SIZE else MonitorPickerKind.RESOLUTION
         val codecKind = if (isPhotographyMode) MonitorPickerKind.QUALITY else MonitorPickerKind.CODEC
         val panelValue = activeMonitorPicker?.let { picker -> MonitorOperatorCameraPanel(picker.kind.name,

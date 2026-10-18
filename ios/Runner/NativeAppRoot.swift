@@ -20,6 +20,7 @@ import os
 
 import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
+import enum MonitorPresentation.MonitorStorageReadoutFormat
 import enum MonitorPresentation.MonitorSettingsTab
 import enum MonitorPresentation.MonitorThumbnailSize
 import enum MonitorPresentation.MonitorWatcherPasscodeRule
@@ -12669,12 +12670,22 @@ final class NativeAppModel {
     }
 
     /// Operator monitor storage uses the same units as every shared live surface.
-    var liveMediaReadout: String {
-        if videoSource == .relay { return mediaReadout }
+    var liveMediaReadout: String { liveMediaReadout(portrait: false) }
+
+    /// Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
+    /// Duration mode and every non-portrait surface keep the existing labels.
+    func liveMediaReadout(portrait: Bool) -> String {
+        if videoSource == .relay {
+            guard let status = cameraState.mediaStatus else { return cameraState.media }
+            if prefersMediaDuration { return status.durationLabel }
+            guard portrait, let bytes = status.freeBytes else { return status.capacityLabel }
+            return "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
+        }
         let storage = shell.control.snapshot?.storage
-        return prefersMediaDuration
-            ? storage?.recordingTimeLabel ?? "-- Min"
-            : storage?.storageReadout?.free ?? StorageReadout.unavailable
+        if prefersMediaDuration { return storage?.recordingTimeLabel ?? "-- Min" }
+        guard let readout = storage?.storageReadout else { return StorageReadout.unavailable }
+        return portrait
+            ? MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: readout.freeBytes) : readout.free
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {

@@ -292,6 +292,7 @@ struct NikonMonitorShell: View {
     }
     private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, Section> {
         let photo = model.isPhotographyMode
+        let portrait = live.viewport.height > live.viewport.width
         let recordingFormat = model.shell.control.snapshot.map(MonitorCapturePresentation.recordingFormat)
         let recordingLabel = recordingFormat.flatMap(MonitorCapturePresentation.recordingLabel)
         let imageArea = model.recordingFormatPresentations.first { $0.token == model.cameraState.resolutionFrameRate }?.imageArea
@@ -329,12 +330,12 @@ struct NikonMonitorShell: View {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: model.photoPillShowsStorage
-                    ? model.liveMediaReadout
+                    ? model.liveMediaReadout(portrait: portrait)
                     : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() })
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
-                id: .storage, title: "Storage", value: model.liveMediaReadout,
+                id: .storage, title: "Storage", value: model.liveMediaReadout(portrait: portrait),
                 section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil
