@@ -246,7 +246,8 @@ enum NikonStabilizationSettings {
             let reason = readOnly ? "\(row.title) is read-only on this camera" : codecReason
             return IndependentSettingRow(
                 id: row.id, title: row.title, options: row.options, current: row.current,
-                request: reason == nil ? row.id : nil, unavailableReason: reason)
+                request: reason == nil && !row.options.isEmpty ? row.id : nil,
+                unavailableReason: reason)
         }
         return NikonStabilizationPresentation(rows: projected, vrDescriptor: vr, evrDescriptor: evr)
     }
@@ -270,8 +271,9 @@ enum NikonStabilizationSettings {
 /// Stabilization picker for the existing ibis tile, using the shared independent row renderer.
 struct StabilizationPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
-    /// Bumped when the operator taps the disabled e-VR row, to flash the "unavailable in RAW" toast.
-    @State private var evrBlockedNotice = 0
+    @State private var blockedNoticeReason: String?
+    /// Bumped when the operator taps a refused row with an explanation.
+    @State private var blockedNoticeRevision = 0
 
     var body: some View {
         let source = model.operatorLiveIdentity
@@ -282,16 +284,22 @@ struct StabilizationPickerPanel: View {
             onSelect: { request, option in
                 model.applyGroupedStabilization(request, option: option, source: source)
             },
-            onUnavailable: { _, _ in evrBlockedNotice += 1 }
+            onUnavailable: { _, reason in
+                guard let reason else { return }
+                blockedNoticeReason = reason
+                blockedNoticeRevision += 1
+            }
         )
         // No outer padding — `pickerBodyContent` already wraps this in a padded GlassPanel, so an
         // extra .padding(16) doubled the inset to ~36pt. The toast floats ABOVE the sheet header
         // so it's never cut off at the bottom edge.
         .overlay(alignment: .top) {
-            MonitorTransientNotice(
-                text: "e-VR is unavailable in RAW codecs", revision: evrBlockedNotice
-            )
-            .offset(y: -52)
+            if let blockedNoticeReason {
+                MonitorTransientNotice(
+                    text: blockedNoticeReason, revision: blockedNoticeRevision
+                )
+                .offset(y: -52)
+            }
         }
     }
 

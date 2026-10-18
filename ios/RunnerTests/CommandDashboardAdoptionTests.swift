@@ -50,6 +50,36 @@ import Testing
         }
     }
 
+    @Test func stabilizationEmptyEffectiveDomainWithholdsOnlyItsRequest() throws {
+        let codec = try #require(
+            PTPCameraPropertyDecoders.fileTypeModes(fromEnum: [0x0001_0A00]).first)
+        let cases:
+            [([String]?, [String], NikonStabilizationRequest?, [NikonStabilizationRequest])] = [
+                ([], [], nil, [.electronicVR]),
+                (nil, ["OFF", "ON", "SPORT"], .movieVR, [.movieVR, .electronicVR]),
+                (["SPORT", "OFF"], ["SPORT", "OFF"], .movieVR, [.movieVR, .electronicVR]),
+            ]
+        for (options, expectedOptions, expectedRequest, expectedWrites) in cases {
+            let group = NikonStabilizationSettings.presentation(
+                vrOptions: options, currentVR: "unrecognized", currentEVR: "OFF", codec: "H.265",
+                vrDescriptor: .init(), evrDescriptor: .init(), actualCodec: codec)
+            let movie = group.rows[0]
+            #expect(movie.options == expectedOptions)
+            #expect(movie.current == "unrecognized" && movie.unavailableReason == nil)
+            #expect(movie.request == expectedRequest)
+            var writes: [NikonStabilizationRequest] = []
+            for row in group.rows {
+                row.select(
+                    row.id == .movieVR ? "SPORT" : "ON", interactionEnabled: true,
+                    currentSource: { true }, onSelect: { request, _ in writes.append(request) },
+                    onUnavailable: { _, _ in Issue.record("Unexpected refusal") })
+            }
+            #expect(writes == expectedWrites)
+            #expect(group.rows[1].options == ["OFF", "ON"])
+            #expect(group.rows[1].current == "OFF" && group.rows[1].unavailableReason == nil)
+        }
+    }
+
     @Test func stabilizationHostRetainsDescriptorFactsAndLegacyDomain() throws {
         let model = NativeAppModel()
         let code = PTPPropertyCode.movieVibrationReduction.rawValue
@@ -253,6 +283,8 @@ import Testing
             fixture.model.cameraControlOptions[.movieVibrationReduction] = []
             let empty = try await fixture.element("monitor.independentSettings.movieVR.current")
             XCTAssertEqual(empty.accessibilityLabel, "OFF")
+            XCTAssertEqual(fixture.labelCount("e-VR is unavailable in RAW codecs"), 0)
+            fixture.attachLandscape(self)
             fixture.model.cameraControlOptions[.movieVibrationReduction] = ["unlisted"]
             let outside = try await fixture.element("monitor.independentSettings.movieVR.current")
             XCTAssertEqual(outside.accessibilityLabel, "OFF")
@@ -288,6 +320,36 @@ import Testing
             XCTAssertEqual(fixture.model.debugPendingCameraWriteCount, 0)
         }
 
+        func testReadOnlyRefusalShowsItsActualReasonInsteadOfRAW() async throws {
+            let fixture = await StabilizationFixture()
+            defer { fixture.close() }
+            let property = PTPPropertyCode.movieVibrationReduction.rawValue
+            let bytes = ByteCoding.uint32LE(property) + [2, 0, 0, 0, 0, 2, 1, 0, 2]
+            let descriptor = try XCTUnwrap(
+                NikonScalarPropertyDescriptor.parse(
+                    Data(bytes), property: property, valueByteCount: 1))
+            fixture.model.applyBootstrapObservation(
+                .descriptor(
+                    .movieVibrationReduction, .init(outcome: .described, descriptor: descriptor)))
+            _ = try await fixture.element("monitor.independentSettings.movieVR.reason")
+            let reason = "VR is read-only on this camera"
+            let before = fixture.labelCount(reason)
+            XCTAssertGreaterThan(before, 0)
+            let refused = try await fixture.option("movieVR", 1)
+            XCTAssertTrue(refused.accessibilityActivate())
+            for _ in 0..<200 {
+                if fixture.labelCount(reason) > before { break }
+                await Task.yield()
+            }
+            XCTAssertGreaterThan(
+                fixture.labelCount(reason), before, "The refusal notice repeats the actual reason")
+            XCTAssertEqual(fixture.labelCount("e-VR is unavailable in RAW codecs"), 0)
+            XCTAssertEqual(fixture.model.stabilizationVR, "OFF")
+            XCTAssertEqual(fixture.model.stabilizationElectronicVR, "OFF")
+            XCTAssertEqual(fixture.model.debugPendingCameraWriteCount, 0)
+            fixture.attachLandscape(self)
+        }
+
         func testRAWRefusalAndLiveLockKeepObservedValues() async throws {
             let fixture = await StabilizationFixture()
             defer { fixture.close() }
@@ -296,8 +358,15 @@ import Testing
             fixture.model.cameraState = fixture.model.cameraState.applyingCameraProperties(
                 fixture.model.cameraPropertySnapshot)
             _ = try await fixture.element("monitor.independentSettings.electronicVR.reason")
+            let rawReason = "e-VR is unavailable in RAW codecs"
+            let before = fixture.labelCount(rawReason)
             let refused = try await fixture.option("electronicVR", 1)
             XCTAssertTrue(refused.accessibilityActivate())
+            for _ in 0..<200 {
+                if fixture.labelCount(rawReason) > before { break }
+                await Task.yield()
+            }
+            XCTAssertGreaterThan(fixture.labelCount(rawReason), before)
             XCTAssertEqual(fixture.model.stabilizationElectronicVR, "OFF")
             fixture.model.interfaceLocked = true
             let locked = try await fixture.element("monitor.independentSettings.movieVR.option.2") {
@@ -382,6 +451,13 @@ import Testing
                 await Task.yield()
             }
             throw Missing.element(identifier)
+        }
+
+        func labelCount(_ label: String) -> Int {
+            host.view.layoutIfNeeded()
+            return HostedAccessibility.reachable(in: host.view).filter {
+                $0.accessibilityLabel == label
+            }.count
         }
 
         func attachLandscape(_ test: XCTestCase) {
