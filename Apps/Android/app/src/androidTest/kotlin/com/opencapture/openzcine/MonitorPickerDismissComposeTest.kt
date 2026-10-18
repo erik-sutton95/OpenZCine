@@ -1,6 +1,7 @@
 package com.opencapture.openzcine
 
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -17,7 +18,9 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.printToString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
@@ -30,8 +33,10 @@ import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.CameraShutterMode
 import com.opencapture.opencine.nikon.FakeCameraSession
 import com.opencapture.openzcine.settings.OperatorSettings
+import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.json.JSONObject
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -53,7 +58,7 @@ class MonitorPickerDismissComposeTest {
     fun backDismissesPickerWhileWritePending() {
         val session = PendingCamera()
         mount(session)
-        openFocusWithPendingWrite(session)
+        openFocusWithPendingWrite(session, "backDismissesPickerWhileWritePending")
 
         UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()
 
@@ -65,7 +70,7 @@ class MonitorPickerDismissComposeTest {
     fun closeDismissesPickerWhileWritePending() {
         val session = PendingCamera()
         mount(session)
-        openFocusWithPendingWrite(session)
+        openFocusWithPendingWrite(session, "closeDismissesPickerWhileWritePending")
 
         composeRule.onNodeWithTag("monitor.capture.close").performClick()
 
@@ -121,16 +126,55 @@ class MonitorPickerDismissComposeTest {
     }
 
     /** Opens the FOCUS picker through its readout and sends a focus-mode write the camera never answers. */
-    private fun openFocusWithPendingWrite(session: PendingCamera) {
+    private fun openFocusWithPendingWrite(session: PendingCamera, label: String) {
         // The readout can sit outside the test window's touch area; its click action is what opens the picker.
         composeRule.onNode(hasContentDescription("FOCUS", substring = true)).performSemanticsAction(SemanticsActions.OnClick)
-        composeRule.waitUntilAtLeastOneExists(hasTestTag("ladder_sheet"), 5_000)
+        try {
+            composeRule.waitUntilAtLeastOneExists(hasTestTag("ladder_sheet"), 5_000)
+        } catch (failure: Throwable) {
+            // Preserve the failed wait's actual gate state before the compose rule tears the window down.
+            captureLadderGate(label)
+            throw failure
+        }
         // The drum draws its labels; its accessibility action picks by position (MF leads the AF ladder).
         composeRule.onNode(hasContentDescription("AF-C") and SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
             .performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
         composeRule.waitUntil(5_000) { session.queued }
         composeRule.onNodeWithTag("ladder_sheet").assertExists()
         assertTrue(session.writes.isEmpty())
+    }
+
+    // Failure-only, inside the original ladder wait: no extra wait, retry or assertion is added.
+    private fun captureLadderGate(label: String) {
+        runCatching {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val directory = File(instrumentation.targetContext.cacheDir, "SIMULATED-picker-gate").apply { mkdirs() }
+            val file = File(directory, label)
+            val root = composeRule.onRoot().fetchSemanticsNode()
+            val diagnostic = JSONObject()
+                .put("label", label)
+                .put("stage", "ladder-wait-failure")
+                .put("uptimeMs", android.os.SystemClock.uptimeMillis())
+                .put("rootBoundsInRoot", root.boundsInRoot.toString())
+                .put("rootBoundsInWindow", root.boundsInWindow.toString())
+                .put("ladderSheetNodes", composeRule.onAllNodes(hasTestTag("ladder_sheet"),
+                    useUnmergedTree = true).fetchSemanticsNodes().size)
+                .put("captureCloseNodes", composeRule.onAllNodes(hasTestTag("monitor.capture.close"),
+                    useUnmergedTree = true).fetchSemanticsNodes().size)
+                .put("focusReadoutNodes", composeRule.onAllNodes(hasContentDescription("FOCUS", substring = true),
+                    useUnmergedTree = true).fetchSemanticsNodes().size)
+                .put("semantics", composeRule.onRoot(useUnmergedTree = true).printToString())
+            File(file.path + ".json").writeText(diagnostic.toString(2))
+            instrumentation.uiAutomation.takeScreenshot()?.let { image ->
+                try {
+                    File(file.path + ".png").outputStream().use {
+                        check(image.compress(Bitmap.CompressFormat.PNG, 100, it))
+                    }
+                } finally {
+                    image.recycle()
+                }
+            }
+        }.onFailure { android.util.Log.w("PickerGate", "Could not retain $label ladder failure diagnostic", it) }
     }
 
     private class PendingCamera : CameraSession by FakeCameraSession(
