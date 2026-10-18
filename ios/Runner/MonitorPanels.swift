@@ -202,8 +202,55 @@ enum NikonStabilizationRequest: String, Sendable {
     case electronicVR = "evr"
 }
 
+/// Nikon source facts accompany the existing group without changing its eligibility policy.
+struct NikonStabilizationPresentation {
+    let rows: [IndependentSettingRow<NikonStabilizationRequest, NikonStabilizationRequest>]
+    let vrDescriptor: NikonDescriptorEvidence
+    let evrDescriptor: NikonDescriptorEvidence
+}
+
 /// The existing Swift host projection. This does not normalize Android or wire admission.
 enum NikonStabilizationSettings {
+    static func presentation(
+        vrOptions: [String]?, currentVR: String?, currentEVR: String?, codec: String,
+        vrDescriptor: NikonDescriptorEvidence, evrDescriptor: NikonDescriptorEvidence,
+        actualCodec: PTPCameraFileTypeMode?
+    ) -> NikonStabilizationPresentation {
+        var vr = vrDescriptor
+        // Existing Swift fallback is legacy authorization, independent of the observed GetSet.
+        vr.optionOrigin = vrOptions == nil ? .legacyFallback : .unknown
+        var evr = evrDescriptor
+        evr.optionOrigin = .legacyFallback
+        let effectiveRows = rows(
+            vrOptions: vrOptions, currentVR: currentVR, currentEVR: currentEVR, codec: codec)
+        let projected = effectiveRows.map { row in
+            let evidence = row.id == .movieVR ? vr : evr
+            let latest = evidence.latestAttempt
+            let observed =
+                latest.outcome == .described && latest.descriptor != nil
+                ? latest : (evidence.lastValidObservation ?? evidence.observation)
+            let readOnly = observed.outcome == .described && observed.descriptor?.writable == false
+            let codecReason: String?
+            if row.id == .electronicVR {
+                if let actualCodec {
+                    codecReason =
+                        MonitorTextFormat.isRawCodec(
+                            PTPCameraPropertyDecoders.fileType(actualCodec.raw))
+                        ? "e-VR is unavailable in RAW codecs" : nil
+                } else {
+                    codecReason = "e-VR is unavailable until the camera codec is known"
+                }
+            } else {
+                codecReason = nil
+            }
+            let reason = readOnly ? "\(row.title) is read-only on this camera" : codecReason
+            return IndependentSettingRow(
+                id: row.id, title: row.title, options: row.options, current: row.current,
+                request: reason == nil ? row.id : nil, unavailableReason: reason)
+        }
+        return NikonStabilizationPresentation(rows: projected, vrDescriptor: vr, evrDescriptor: evr)
+    }
+
     static func rows(
         vrOptions: [String]?, currentVR: String?, currentEVR: String?, codec: String
     ) -> [IndependentSettingRow<NikonStabilizationRequest, NikonStabilizationRequest>] {
@@ -229,10 +276,7 @@ struct StabilizationPickerPanel: View {
     var body: some View {
         let source = model.operatorLiveIdentity
         MonitorIndependentSettingsPanel(
-            rows: NikonStabilizationSettings.rows(
-                vrOptions: model.cameraControlOptions[.movieVibrationReduction],
-                currentVR: model.stabilizationVR, currentEVR: model.stabilizationElectronicVR,
-                codec: model.cameraState.codec),
+            rows: model.stabilizationPresentation.rows,
             interactionEnabled: !model.interfaceLocked && !model.relayControlSurrendered,
             currentSource: { model.operatorLiveIdentity == source },
             onSelect: { request, option in
@@ -1078,7 +1122,8 @@ struct OperatorSettingsPanel: View {
                     value: preferenceBinding(\.keepScreenAwake),
                     help: MonitorSettingsCopy.keepScreenAwake),
                 input: .init(
-                    remoteShutter: .volumeButtons(enabled: preferenceBinding(\.bluetoothShutterEnabled)),
+                    remoteShutter: .volumeButtons(
+                        enabled: preferenceBinding(\.bluetoothShutterEnabled)),
                     autoRotate: .init(
                         enabled: preferenceBinding(\.autoRotateFeedEnabled),
                         help:
@@ -1096,7 +1141,8 @@ struct OperatorSettingsPanel: View {
             ),
             account: accountSource, support: supportSource,
             information: .init(
-                theme: "Charcoal", protocolName: "PTP / PTP-IP", version: MonitorSettingsAppInformation.version(),
+                theme: "Charcoal", protocolName: "PTP / PTP-IP",
+                version: MonitorSettingsAppInformation.version(),
                 themeHelp:
                     "Charcoal field-monitor chrome with gold accents, tuned for low reflection on set.",
                 protocolHelp:
@@ -1430,7 +1476,12 @@ struct OperatorSettingsPanel: View {
     private var linkHealthCaption: String {
         guard isConnected || model.isDemoSession else { return model.linkHealthDetail }
         let band = MonitorLinkHealthBand(score: model.linkHealth)
-        let bandName = switch band { case .stable: "Stable"; case .watch: "Watch"; case .poor: "Poor" }
+        let bandName =
+            switch band {
+            case .stable: "Stable"
+            case .watch: "Watch"
+            case .poor: "Poor"
+            }
         return "\(model.linkHealthDetail) · \(bandName)"
     }
     private var transportLabel: String {

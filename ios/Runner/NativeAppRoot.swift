@@ -2129,6 +2129,20 @@ final class NativeAppModel {
     /// hardcoded fallback. Reading the real values lets the pickers track whatever the connected body
     /// supports, not just the ZR's defaults.
     var cameraControlOptions: [PTPPropertyCode: [String]] = [:]
+    /// Describe evidence is independent of the historical picker domains and write policy.
+    var cameraDescriptorEvidence: [PTPPropertyCode: NikonDescriptorEvidence] = [:]
+    /// Observable actual readback; optimistic picker snapshots cannot establish codec eligibility.
+    private(set) var stabilizationFileTypeReadback: String?
+    var stabilizationPresentation: NikonStabilizationPresentation {
+        NikonStabilizationSettings.presentation(
+            vrOptions: cameraControlOptions[.movieVibrationReduction],
+            currentVR: stabilizationVR, currentEVR: stabilizationElectronicVR,
+            codec: cameraState.codec,
+            vrDescriptor: cameraDescriptorEvidence[.movieVibrationReduction] ?? .init(),
+            evrDescriptor: cameraDescriptorEvidence[.electronicVR] ?? .init(),
+            actualCodec: PTPCameraPropertyDecoders.fileTypeMode(
+                forFileType: stabilizationFileTypeReadback, in: cameraFileTypeModes))
+    }
     /// Exposure choices actually returned by a descriptor, independent of legacy picker ladders.
     private(set) var advertisedExposureOptions: [PTPPropertyCode: [String]] = [:]
     private var relayedBatteryReading: BatteryReading?
@@ -5106,6 +5120,7 @@ final class NativeAppModel {
     private func resetCameraPropertyState() {
         cameraPropertySnapshot = PTPCameraPropertySnapshot()
         reportedPropertySnapshot = PTPCameraPropertySnapshot()
+        stabilizationFileTypeReadback = nil
         propertyPollIndex = 0
         cameraAnnouncedPropertyChanges.removeAll()
         lastRecordingPropertyPollAt = nil
@@ -7087,6 +7102,7 @@ final class NativeAppModel {
         cameraFileTypeModes = []
         cameraMovieTones = [:]
         cameraControlOptions = [:]
+        cameraDescriptorEvidence = [:]
         lockedControls = []
         if resetConnection {
             connection = .disconnected
@@ -8801,6 +8817,8 @@ final class NativeAppModel {
         case .screenModes(let values): cameraScreenModes = values
         case .fileTypes(let values): cameraFileTypeModes = values
         case .movieTones(let property, let tones): cameraMovieTones[property] = tones
+        case .descriptor(let property, let observation):
+            cameraDescriptorEvidence[property, default: .init()].record(observation)
         case .options(let property, let values):
             cacheAdvertisedControlOptions(values, property: property)
         case .photographyReady: seedInstantReviewBaseline()
@@ -8951,6 +8969,9 @@ final class NativeAppModel {
         let previous = reportedPropertySnapshot
         cameraPropertySnapshot = cameraPropertySnapshot.applying(property: property, data: data)
         reportedPropertySnapshot = reportedPropertySnapshot.applying(property: property, data: data)
+        if property == .movieFileType {
+            stabilizationFileTypeReadback = reportedPropertySnapshot.fileType
+        }
         if previous.captureSelector != reportedPropertySnapshot.captureSelector {
             advertisedExposureOptions = [:]
         } else if previous.shutterMode != reportedPropertySnapshot.shutterMode {
@@ -9148,6 +9169,10 @@ final class NativeAppModel {
                 logConnection("options stillWB: \(options.joined(separator: ", "))")
             }
         }
+        let source = operatorLiveIdentity
+        await NikonPropertyBootstrap(link: session).observeStabilizationDescriptors(
+            isCurrent: { self.cameraSession === session && self.operatorLiveIdentity == source },
+            receive: { self.applyBootstrapObservation($0) })
     }
 
     /// Re-reads one moded control's `GetDevicePropDescEx` enum and caches the picker labels.

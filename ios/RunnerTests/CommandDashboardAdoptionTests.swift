@@ -50,6 +50,84 @@ import Testing
         }
     }
 
+    @Test func stabilizationHostRetainsDescriptorFactsAndLegacyDomain() throws {
+        let model = NativeAppModel()
+        let code = PTPPropertyCode.movieVibrationReduction.rawValue
+        let bytes = [UInt8(code & 255), UInt8((code >> 8) & 255), 2, 0, 0, 0, 0, 2, 0, 0]
+        let descriptor = try #require(
+            NikonScalarPropertyDescriptor.parse(
+                Data(bytes), property: code, valueByteCount: 1))
+        let observation = NikonDescriptorObservation(outcome: .described, descriptor: descriptor)
+        model.applyBootstrapObservation(
+            .descriptor(.movieVibrationReduction, .init(outcome: .pending)))
+        #expect(model.stabilizationPresentation.vrDescriptor.latestAttempt.outcome == .pending)
+        model.applyBootstrapObservation(.descriptor(.movieVibrationReduction, observation))
+        let group = model.stabilizationPresentation
+        #expect(group.vrDescriptor.observation == observation)
+        #expect(group.vrDescriptor.observation.capability.access == .readOnly)
+        #expect(group.vrDescriptor.observation.capability.offer == [])
+        #expect(group.vrDescriptor.optionOrigin == .legacyFallback)
+        #expect(group.rows[0].options == ["OFF", "ON", "SPORT"])
+        #expect(group.rows[0].request == nil)
+        #expect(group.rows[0].unavailableReason == "VR is read-only on this camera")
+        model.applyBootstrapObservation(
+            .descriptor(.movieVibrationReduction, .init(outcome: .transportFailed)))
+        #expect(model.stabilizationPresentation.vrDescriptor.observation == observation)
+        #expect(
+            model.stabilizationPresentation.vrDescriptor.latestAttempt.outcome == .transportFailed)
+        model.disconnect()
+        #expect(model.stabilizationPresentation.vrDescriptor.observation.outcome == .notAttempted)
+    }
+
+    @Test func stabilizationUsesActualRecognizedCodecRatherThanRetainedDisplay() {
+        let model = NativeAppModel()
+        let modes = PTPCameraPropertyDecoders.fileTypeModes(fromEnum: [0x0001_0A00, 0x0031_0C03])
+        model.applyBootstrapObservation(.fileTypes(modes))
+        model.applyDemoProperty(.movieFileType, data: Data(ByteCoding.uint32LE(0x0001_0A00)))
+        model.cameraState = model.cameraState.updating(codec: "H.265")
+        #expect(
+            model.stabilizationPresentation.rows[1].request == nil,
+            "An optimistic or demo snapshot is not an actual codec observation")
+        for raw: UInt32? in [nil, 0x0099_0A00, 0x0031_0C03, 0x0001_0A00] {
+            if let raw {
+                model.applyBootstrapObservation(
+                    .property(.movieFileType, Data(ByteCoding.uint32LE(raw))))
+            }
+            // A retained display label never establishes actual codec eligibility.
+            model.cameraState = model.cameraState.updating(codec: "H.265")
+            let group = model.stabilizationPresentation
+            #expect(group.rows[1].options == ["OFF", "ON"])
+            #expect((group.rows[1].request != nil) == (raw == 0x0001_0A00))
+        }
+    }
+
+    @Test func stabilizationLastValidAccessSurvivesCatalogAndAttemptSeparation() throws {
+        let code = PTPPropertyCode.movieVibrationReduction.rawValue
+        func observed(writable: Bool) throws -> NikonDescriptorObservation {
+            let bytes = ByteCoding.uint32LE(code) + [2, 0, writable ? 1 : 0, 0, 0, 2, 1, 0, 2]
+            let descriptor = try #require(
+                NikonScalarPropertyDescriptor.parse(
+                    Data(bytes), property: code, valueByteCount: 1))
+            return .init(outcome: .described, descriptor: descriptor)
+        }
+        let retained = try observed(writable: true)
+        let lastValid = try observed(writable: false)
+        var evidence = NikonDescriptorEvidence(
+            observation: retained,
+            latestAttempt: .init(outcome: .notAttempted), lastValidObservation: lastValid)
+        let codec = try #require(PTPCameraPropertyDecoders.fileTypeModes(fromEnum: [0x0001_0A00]).first)
+        func group() -> NikonStabilizationPresentation {
+            NikonStabilizationSettings.presentation(
+                vrOptions: nil, currentVR: nil, currentEVR: nil,
+                codec: "H.265", vrDescriptor: evidence, evrDescriptor: .init(), actualCodec: codec)
+        }
+        #expect(group().rows[0].options == ["OFF", "ON", "SPORT"])
+        #expect(group().rows[0].request == nil)
+        #expect(group().rows[1].request == .electronicVR)
+        evidence.latestAttempt = retained
+        #expect(group().rows[0].request == .movieVR)
+    }
+
     private func withStorage(_ body: (UserDefaults) throws -> Void) throws {
         let suite = "SIMULATED.CommandGrid.\(UUID().uuidString)"
         let storage = try #require(UserDefaults(suiteName: suite))
@@ -214,7 +292,7 @@ import Testing
             let fixture = await StabilizationFixture()
             defer { fixture.close() }
             let codec = PTPCameraPropertyWrite.fileType(raw: 0x0002_0C02)
-            fixture.model.applyDemoProperty(codec.property, data: codec.data)
+            fixture.model.applyBootstrapObservation(.property(codec.property, codec.data))
             fixture.model.cameraState = fixture.model.cameraState.applyingCameraProperties(
                 fixture.model.cameraPropertySnapshot)
             _ = try await fixture.element("monitor.independentSettings.electronicVR.reason")
@@ -263,6 +341,12 @@ import Testing
         init(seed: Bool = true) async {
             _ = await HostedAccessibility.awaitRuntime()
             model.isDemoSession = true
+            // The grouped host now needs an actual recognized codec observation. Seed it through
+            // the production readback seam; the existing write/RAW assertions stay unchanged.
+            model.applyBootstrapObservation(.fileTypes(
+                PTPCameraPropertyDecoders.fileTypeModes(fromEnum: [0x0001_0A00, 0x0002_0C02])))
+            model.applyBootstrapObservation(.property(
+                .movieFileType, Data(ByteCoding.uint32LE(0x0001_0A00))))
             if seed {
                 model.setVibrationReduction("OFF")
                 model.setElectronicVR(on: false)

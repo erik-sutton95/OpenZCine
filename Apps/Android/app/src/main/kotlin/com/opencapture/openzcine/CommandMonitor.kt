@@ -35,6 +35,11 @@ import com.opencapture.opencine.nikon.CodecBitDepthOption
 import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.WbPickerPolicy
+import com.opencapture.opencine.nikon.NikonDescriptorEvidence
+import com.opencapture.opencine.nikon.NikonDescriptorForm
+import com.opencapture.opencine.nikon.NikonDescriptorReadOutcome
+import com.opencapture.opencine.core.SettingAccess
+import com.opencapture.opencine.core.SupportStatus
 
 /** The stable, persisted tile identifiers used by the DISP 3 primary grid. */
 internal enum class CommandTileKind {
@@ -79,6 +84,7 @@ internal sealed interface CommandPanelRequest
 
 internal data class CommandStabilizationRequest(
     val rows: List<IndependentSettingRow<CameraControl, CommandControlRequest>>,
+    val descriptors: Map<CameraControl, NikonDescriptorEvidence> = emptyMap(),
 ) : CommandPanelRequest
 
 /** One semantically validated intent passed from the Compose sheet to the session control API. */
@@ -533,6 +539,7 @@ internal fun commandDashboardPresentation(
                     value = snapshot.vibrationReduction,
                     control = CameraControl.VIBRATION_REDUCTION,
                     blockedReason = strings.resolve(R.string.command_reason_movie_vr),
+                    writable = !capabilities.vibrationReductionDescriptor.hasReadOnlyDescriptor(),
                 ).copy(
                     title = strings.resolve(R.string.command_title_vr_combined),
                     value = stabilization ?: "—",
@@ -545,7 +552,8 @@ internal fun commandDashboardPresentation(
                     value = snapshot.electronicVr,
                     control = CameraControl.ELECTRONIC_VR,
                     blockedReason = strings.resolve(R.string.command_reason_evr),
-                    writable = electronicVRAllowsCodec(codec),
+                    writable = electronicVRAllowsCodec(codec) &&
+                        !capabilities.electronicVrDescriptor.hasReadOnlyDescriptor(),
                 ),
         )
     val focusCells =
@@ -691,6 +699,10 @@ internal fun commandDashboardPresentation(
                     unavailableReason = tile.unavailableReason,
                 )
             },
+            descriptors = mapOf(
+                CameraControl.VIBRATION_REDUCTION to capabilities.vibrationReductionDescriptor,
+                CameraControl.ELECTRONIC_VR to capabilities.electronicVrDescriptor,
+            ),
         ),
         // iOS CommandSideColumn: Image → Focus → Audio → Monitor (no Exposure / VR side tiles).
         sideSections =
@@ -881,6 +893,16 @@ internal fun compactRecordingModeFromRawDisplay(display: String): String? {
  */
 internal fun electronicVRAllowsCodec(codec: String?): Boolean =
     codec?.takeIf { it.isNotBlank() }?.let { !MonitorTextFormat.isRawCodec(it) } ?: false
+
+/** Latest parsed access wins; a failed attempt keeps the retained descriptor's access fact. */
+private fun NikonDescriptorEvidence.hasReadOnlyDescriptor(): Boolean {
+    fun com.opencapture.opencine.nikon.NikonDescriptorObservation.isParsed(): Boolean =
+        outcome == NikonDescriptorReadOutcome.DESCRIBED && form != NikonDescriptorForm.UNKNOWN &&
+            capability.support == SupportStatus.SUPPORTED
+    val actual = latestAttempt.takeIf { it.isParsed() }
+        ?: lastValidObservation?.takeIf { it.isParsed() } ?: observation
+    return actual.isParsed() && actual.capability.access == SettingAccess.READ_ONLY
+}
 
 /** True only when a completed property refresh reflects the accepted control write. */
 internal fun cameraPropertyConfirmsSelection(
