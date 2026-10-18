@@ -4726,10 +4726,15 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
             context.draw(
                 cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
         }
-        return stride(from: 0, to: bytes.count, by: 4).filter {
-            Int(bytes[$0 + 1]) > 90 && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0]) * 13
-                && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0 + 2]) * 13
-        }.count
+        var count = 0
+        for offset in stride(from: 0, to: bytes.count, by: 4) {
+            let red: Int = Int(bytes[offset])
+            let green: Int = Int(bytes[offset + 1])
+            let blue: Int = Int(bytes[offset + 2])
+            let greenScaled: Int = green * 10
+            if green > 90 && greenScaled > red * 13 && greenScaled > blue * 13 { count += 1 }
+        }
+        return count
     }
 }
 
