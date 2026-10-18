@@ -1,4 +1,5 @@
 import Foundation
+import MonitorPresentation
 import MonitorUI
 import OpenCineApple
 import OpenCineCore
@@ -264,47 +265,15 @@ struct StartupWizardPermissionsStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    Image(systemName: "lock.shield")
-                        .font(.system(size: style.isTight ? 12 : 14, weight: .semibold))
-                        .foregroundStyle(MonitorTheme.accent)
-                    Text("iOS permissions")
-                        .font(
-                            .system(
-                                size: style.isTight ? 10 : 11, weight: .semibold, design: .rounded)
-                        )
-                        .foregroundStyle(MonitorTheme.muted)
-                    Spacer(minLength: 0)
+            ForEach(StartupPermissionKind.allCases) { kind in
+                Button {
+                    coordinator.request(kind)
+                } label: {
+                    CameraPairingCheckRow(check(for: kind))
+                        .contentShape(Rectangle())
                 }
-                .padding(.horizontal, style.isTight ? 12 : 14)
-                .padding(.top, style.isTight ? 10 : 12)
-                .padding(.bottom, style.isTight ? 6 : 8)
-
-                ForEach(Array(StartupPermissionKind.allCases.enumerated()), id: \.element.id) {
-                    index, kind in
-                    if index > 0 {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.10))
-                            .frame(height: 1)
-                            .padding(.leading, style.isTight ? 42 : 48)
-                    }
-                    StartupPermissionRow(
-                        kind: kind,
-                        state: coordinator.state(for: kind),
-                        style: style
-                    ) {
-                        coordinator.request(kind)
-                    }
-                }
+                .buttonStyle(.plain)
             }
-            .background(
-                MonitorTheme.surface, in: RoundedRectangle(cornerRadius: MonitorTheme.radius)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: MonitorTheme.radius)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
 
             if !coordinator.allRequiredGranted {
                 Text("Required to reach your camera over Wi‑Fi. Allow it to continue.")
@@ -321,93 +290,19 @@ struct StartupWizardPermissionsStep: View {
             if phase == .active { coordinator.refresh() }
         }
     }
-}
 
-private struct StartupPermissionRow: View {
-    let kind: StartupPermissionKind
-    let state: CameraNetworkPermissionState
-    let style: WizardCompactStyle
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(alignment: .center, spacing: style.isTight ? 8 : 10) {
-                Image(systemName: kind.systemImage)
-                    .font(.system(size: style.isTight ? 14 : 16, weight: .semibold))
-                    .foregroundStyle(MonitorTheme.accent)
-                    .frame(width: style.isTight ? 30 : 34, height: style.isTight ? 30 : 34)
-                    .background(MonitorTheme.accent.opacity(0.14), in: Circle())
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(kind.title)
-                        .font(
-                            .system(
-                                size: style.checklistFontSize + 2, weight: .semibold,
-                                design: .rounded)
-                        )
-                        .foregroundStyle(MonitorTheme.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(kind.detail)
-                        .font(
-                            .system(
-                                size: style.checklistDetailFontSize + 1, weight: .regular,
-                                design: .rounded)
-                        )
-                        .foregroundStyle(MonitorTheme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 8)
-
-                statusControl
+    private func check(for kind: StartupPermissionKind) -> CameraPairingCheck {
+        let state = coordinator.state(for: kind)
+        let label =
+            switch state {
+            case .allowed: "Allowed"
+            case .denied: "Settings"
+            case .requested: "Requested"
+            case .unknown: "Allow"
             }
-            .padding(.horizontal, style.isTight ? 14 : 16)
-            .padding(.vertical, style.isTight ? 11 : 13)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        return CameraPairingCheck(
+            title: kind.title, subtitle: kind.detail,
+            state: state == .allowed ? .complete : .active, stateLabel: label)
     }
 
-    @ViewBuilder private var statusControl: some View {
-        switch state {
-        case .allowed:
-            pill(
-                text: "Allowed", systemImage: "checkmark",
-                fill: MonitorTheme.linkHealthColor(.stable).opacity(0.16),
-                stroke: MonitorTheme.linkHealthColor(.stable).opacity(0.5),
-                textColor: MonitorTheme.linkHealthColor(.stable))
-        case .denied:
-            pill(
-                text: "Settings", systemImage: "gearshape.fill",
-                fill: MonitorTheme.raised.opacity(0.6),
-                stroke: Color.white.opacity(0.12), textColor: MonitorTheme.muted)
-        case .requested:
-            pill(
-                text: "Requested", systemImage: nil, fill: MonitorTheme.raised.opacity(0.6),
-                stroke: Color.white.opacity(0.12), textColor: MonitorTheme.muted)
-        case .unknown:
-            pill(
-                text: "Allow", systemImage: nil, fill: MonitorTheme.accent,
-                stroke: .clear, textColor: MonitorTheme.onAccent)
-        }
-    }
-
-    private func pill(
-        text: String, systemImage: String?, fill: Color, stroke: Color, textColor: Color
-    ) -> some View {
-        HStack(spacing: 5) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .bold))
-            }
-            Text(text)
-                .font(.system(size: style.isTight ? 14 : 15, weight: .semibold, design: .rounded))
-        }
-        .foregroundStyle(textColor)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(fill, in: Capsule())
-        .overlay(Capsule().stroke(stroke, lineWidth: 1))
-        .fixedSize()
-    }
 }

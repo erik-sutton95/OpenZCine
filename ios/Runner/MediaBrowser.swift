@@ -184,6 +184,7 @@ struct MediaBrowserView: View {
                         localURL: model.clipLocalURL(clip),
                         thumbnailURL: model.clipThumbnailURL(clip),
                         needsDuration: request.resolvedDuration == nil,
+                        isCurrent: request.isCurrent,
                         onDuration: { if request.isCurrent() { request.duration($0) } })
                 }
             } else {
@@ -365,42 +366,38 @@ private struct MediaClipThumbnail: View {
     let localURL: URL?
     let thumbnailURL: URL?
     let needsDuration: Bool
+    let isCurrent: () -> Bool
     let onDuration: (String) -> Void
 
     @Environment(NativeAppModel.self) private var model
-    @State private var thumbnail: UIImage?
 
     private var isPhoto: Bool { clip.mediaKind == .photo }
 
     var body: some View {
-        ZStack {
-            LiveDesign.surface
-            if let thumbnail {
-                Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                Image(systemName: isPhoto ? "photo" : "film")
-                    .font(.system(size: list ? 20 : 28, weight: .light))
-                    .foregroundStyle(LiveDesign.faint)
-            }
-        }
         // Orientation joins the trigger: a row that learns its rotation re-decodes upright.
-        .task(id: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)") {
-            await loadThumbnail()
-            await loadDuration()
+        MonitorMediaCatalogArtwork(
+            identity: "\(clip.id)#\(list ? "list" : "grid")",
+            reload: "\(localURL?.absoluteString ?? "")#o\(clip.exifOrientation ?? 0)",
+            isCurrent: isCurrent, load: loadThumbnail, afterLoad: loadDuration
+        ) {
+            Image(systemName: isPhoto ? "photo" : "film")
+                .font(.system(size: list ? 20 : 28, weight: .light))
+                .foregroundStyle(LiveDesign.faint)
         }
     }
 
-    private func loadThumbnail() async {
+    private func loadThumbnail() async -> UIImage? {
+        guard isCurrent(), !Task.isCancelled else { return nil }
         // Keyed by resolved orientation so a row learning its rotation re-decodes upright.
         let variant = list ? "list" : "grid"
         let cacheKey = "\(clip.id)#\(variant)#o\(clip.exifOrientation ?? 0)" as NSString
         if let cached = MediaCellThumbnailCache.shared.object(forKey: cacheKey) {
-            thumbnail = cached
-            return
+            return cached
         }
-        func present(_ image: UIImage) {
+        func present(_ image: UIImage) -> UIImage? {
+            guard isCurrent(), !Task.isCancelled else { return nil }
             MediaCellThumbnailCache.shared.setObject(image, forKey: cacheKey)
-            thumbnail = image
+            return image
         }
         let thumbPixels = list ? 480 : 640
         if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
@@ -409,33 +406,33 @@ private struct MediaClipThumbnail: View {
             if let image = await MediaCellImageLoader.shared.downsampled(
                 data: data, maxPixelSize: thumbPixels, fallbackOrientation: clip.exifOrientation)
             {
-                present(image)
-                return
+                return present(image)
             }
             // Self-heal: a cached thumb that doesn't decode would re-fail (and spam ImageIO
             // errors) on every cell realisation. Deletes only the cached thumb, never the media.
+            guard isCurrent(), !Task.isCancelled else { return nil }
             try? FileManager.default.removeItem(at: thumbnailURL)
         }
         if isPhoto, isDownloaded, let localURL,
             let image = await MediaCellImageLoader.shared.downsampled(
                 at: localURL, maxPixelSize: 640, fallbackOrientation: clip.exifOrientation)
         {
-            present(image)
-            return
+            return present(image)
         }
+        guard isCurrent(), !Task.isCancelled else { return nil }
         if !isDownloaded, clip.handle != nil {
             await model.ensureThumbnail(for: clip)
+            guard isCurrent(), !Task.isCancelled else { return nil }
             if let cachedURL = model.clipThumbnailURL(clip),
                 let data = try? Data(contentsOf: cachedURL),
                 let image = await MediaCellImageLoader.shared.downsampled(
                     data: data, maxPixelSize: thumbPixels,
                     fallbackOrientation: clip.exifOrientation)
             {
-                present(image)
-                return
+                return present(image)
             }
         }
-        guard isDownloaded, !isPhoto, let localURL else { return }
+        guard isCurrent(), !Task.isCancelled, isDownloaded, !isPhoto, let localURL else { return nil }
         let asset = AVURLAsset(url: localURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -443,14 +440,17 @@ private struct MediaClipThumbnail: View {
         generator.maximumSize = CGSize(width: framePixels, height: framePixels)
         let time = CMTime(seconds: 0.2, preferredTimescale: 600)
         if let cgImage = try? await generator.image(at: time).image {
-            present(UIImage(cgImage: cgImage))
+            return present(UIImage(cgImage: cgImage))
         }
+        return nil
     }
 
     private func loadDuration() async {
-        guard !isPhoto, needsDuration, isDownloaded, let localURL else { return }
+        guard isCurrent(), !Task.isCancelled, !isPhoto, needsDuration, isDownloaded,
+            let localURL else { return }
         let asset = AVURLAsset(url: localURL)
-        if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
+        if let duration = try? await asset.load(.duration), isCurrent(), !Task.isCancelled,
+            duration.isValid, duration.seconds > 0 {
             onDuration(MediaClipFormatting.durationLabel(seconds: Int(duration.seconds)))
         }
     }

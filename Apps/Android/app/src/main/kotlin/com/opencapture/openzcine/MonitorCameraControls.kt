@@ -2,13 +2,13 @@ package com.opencapture.openzcine
 
 import com.opencapture.opencine.cameracontrols.CaptureCodecColorSectionView
 import com.opencapture.opencine.cameracontrols.CaptureCodecColorTabs
+import com.opencapture.opencine.cameracontrols.PrefToggle
 import com.opencapture.opencine.vocabulary.CaptureCodecColorChoices
 import com.opencapture.opencine.vocabulary.CaptureCodecColorSection
 import com.opencapture.opencine.nikon.WhiteBalanceTint
 import com.opencapture.opencine.nikon.FocusPickerPolicy
 import com.opencapture.opencine.nikon.ShutterPickerPolicy
 import com.opencapture.opencine.nikon.StillPickerLadders
-import com.opencapture.monitorui.settings.MonitorSettingsSwitchGraphic
 import com.opencapture.opencine.appkit.MonitorControlModel
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
@@ -43,13 +43,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.toggleableState
-import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -1058,36 +1054,16 @@ internal fun movieToneRequest(choices: CaptureCodecColorChoices): CommandControl
         options = choices.colors.filter { it.isEditable }.map { it.label },
     )
 
-/**
- * FOCUS popup toggle for the live-view focus-scrub strip (iOS `mfScrubToggleRow`): a bordered
- * glass row with a label and the shared settings switch graphic. Off hides the strip regardless
- * of focus mode.
- */
+/** The shared capture toggle, matching the iOS focus footer; the host owns focus-dial visibility. */
 @Composable
 private fun MfScrubToggleRow(enabled: Boolean, onToggle: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(LiveDesign.background.copy(alpha = 0.28f), ChromeShape)
-            .border(1.dp, LiveDesign.hairline, ChromeShape)
-            .chromeClickable(onClick = onToggle)
-            .semantics {
-                role = Role.Switch
-                toggleableState = ToggleableState(enabled)
-            }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            stringResource(R.string.camera_focus_scrub_toggle),
-            style = chromeStyle(12f, FontWeight.SemiBold),
-            color = LiveDesign.text,
-            maxLines = 1,
-            modifier = Modifier.weight(1f),
-        )
-        MonitorSettingsSwitchGraphic(isOn = enabled)
-    }
+    PrefToggle(
+        title = stringResource(R.string.camera_focus_scrub_toggle),
+        help = "Shows a manual focus dial beside the picture.",
+        checked = enabled,
+        enabled = true,
+        onCheckedChange = { onToggle() },
+    )
 }
 
 /**

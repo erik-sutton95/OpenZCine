@@ -30,33 +30,6 @@ enum OperatorSettingsHaptics {
     }
 }
 
-struct SegmentedButtons: View {
-    let items: [String]
-    let selected: String
-    let onSelect: (String) -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(items, id: \.self) { item in
-                Button {
-                    onSelect(item)
-                } label: {
-                    Text(item)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(item == selected ? LiveDesign.accent : LiveDesign.muted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(
-                            item == selected ? LiveDesign.accentDim : LiveDesign.glassBright,
-                            in: Capsule()
-                        )
-                }
-                .buttonStyle(.monitorTapTarget)
-            }
-        }
-    }
-}
-
 /// Converts the existing source-owned selection callback into a common binding.
 struct NikonSettingsChoices: View {
     @Environment(NativeAppModel.self) private var model

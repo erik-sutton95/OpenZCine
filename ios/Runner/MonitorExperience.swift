@@ -59,14 +59,9 @@ struct MonitorExperience: View {
             .overlay {
                 InstantReviewOverlay()
             }
-            // A watcher asking to drive the camera prompts HERE, on the live view — the Share
-            // This Feed panel answers requests too, but a panel is closed almost always, and a
-            // request only visible there is one nobody sees until the viewer gives up.
-            .overlay(alignment: .top) {
-                RelayControlRequestOverlay()
-                    .animation(
-                        .easeOut(duration: 0.2), value: model.relayPendingControlRequest)
-            }
+            // The same explicit grant confirmation as the other watcher hosts. The captured
+            // request retains its actual relay owner, source and control revision.
+            .monitorRelayControlRequest(model.captureOperatorSettingsWatchers()?.request)
             // The shared controls own their feedback and the haptics preference (A1-33). The
             // focus-point app lock is Nikon's own: a firm thump locking, a light tap freeing.
             .sensoryFeedback(trigger: model.focusPointLocked) { _, locked in
@@ -682,63 +677,6 @@ struct InstantReviewOverlay: View {
     }
 }
 
-/// The broadcaster's control-request prompt, floated over the live view.
-///
-/// Kept to one line plus two answers: the operator is mid-shot, so the prompt must be
-/// answerable without reading a paragraph — and it must never cover the middle of the frame.
-private struct RelayControlRequestOverlay: View {
-    @Environment(NativeAppModel.self) private var model
-
-    var body: some View {
-        if model.isRelayBroadcasting, let requester = model.relayPendingControlRequest {
-            HStack(spacing: 12) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(LiveDesign.accent)
-                Text("\(requester) asks to control the camera")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(LiveDesign.text)
-                    .lineLimit(1)
-                Button {
-                    model.declineRelayControl()
-                } label: {
-                    Text("Decline")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(LiveDesign.muted)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().stroke(LiveDesign.hairlineStrong, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                Button {
-                    model.grantRelayControl()
-                } label: {
-                    Text("Grant")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(LiveDesign.background)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(LiveDesign.accent))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(LiveDesign.glassOpaque)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(LiveDesign.hairline, lineWidth: 1)
-            )
-            // Below the top-bar chip row in both orientations; never near frame centre.
-            .padding(.top, 64)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
-    }
-}
-
 /// Why a relay picture is missing and how to get it back, under the shared waiting plate. The
 /// watchdog is already retrying; the button is for the human who wants it now.
 struct RelayJoinRecovery: View {
@@ -781,27 +719,16 @@ struct WatcherControlKey: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        Button {
+        MonitorWatcherControlKey(
+            title: model.relayHoldsControl ? "GIVE BACK CONTROL" : "ASK FOR CONTROL",
+            accented: model.relayHoldsControl, palette: LiveDesign.self
+        ) {
             if model.relayHoldsControl {
                 model.releaseRelayControl()
             } else {
                 model.requestRelayControl()
             }
-        } label: {
-            Text(model.relayHoldsControl ? "GIVE BACK CONTROL" : "ASK FOR CONTROL")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .kerning(0.8)
-                .foregroundStyle(model.relayHoldsControl ? LiveDesign.accent : LiveDesign.text)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(.black.opacity(0.55), in: Capsule())
-                .overlay(
-                    Capsule().strokeBorder(
-                        model.relayHoldsControl ? LiveDesign.accent : LiveDesign.hairline,
-                        lineWidth: 1))
         }
-        .buttonStyle(.monitorTapTarget)
-        .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 }
 
@@ -812,28 +739,12 @@ struct BroadcasterControlKey: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        Button {
+        MonitorWatcherControlKey(
+            title: "REVOKE CONTROL", accented: true, holderName: model.relayControlHeldBy,
+            palette: LiveDesign.self
+        ) {
             model.reclaimRelayControl()
-        } label: {
-            HStack(spacing: 8) {
-                Text("REVOKE CONTROL")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .kerning(0.8)
-                    .foregroundStyle(LiveDesign.accent)
-                if let holder = model.relayControlHeldBy {
-                    Text(holder)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(LiveDesign.text.opacity(0.7))
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
-            .background(.black.opacity(0.55), in: Capsule())
-            .overlay(Capsule().strokeBorder(LiveDesign.accent, lineWidth: 1))
         }
-        .buttonStyle(.monitorTapTarget)
-        .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 }
 

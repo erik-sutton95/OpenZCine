@@ -61,16 +61,12 @@ struct NikonAssistOptions: View {
                 selected: model.assist.gridOptions, feedback: selectionFeedback,
                 onToggle: { model.assist.toggleGrid($0) })
         case .level:
-            SegmentedButtons(
-                items: MonitorAssistCapabilities.nikon.levelStyles.map(\.title),
-                selected: model.assistConfiguration.level.style.title
-            ) { value in
-                if let style = MonitorAssistCapabilities.nikon.levelStyles.first(where: {
-                    $0.title == value
-                }) {
-                    model.assistConfiguration.level.style = style
-                }
-            }
+            MonitorSegmentedControl(
+                options: MonitorAssistCapabilities.nikon.levelStyles,
+                selection: Binding(
+                    get: { model.assistConfiguration.level.style },
+                    set: { model.assistConfiguration.level.style = $0 }),
+                compact: true, title: { $0.title })
         case .desqueeze:
             // On/off is the palette's DE-SQ chip; this only configures factor and axis.
             MonitorDesqueezeMenu(

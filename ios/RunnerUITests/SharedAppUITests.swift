@@ -317,6 +317,67 @@ final class CapturePopupUITests: OpenCineAppUITesting.CapturePopupUITests {
     }
 }
 
+/// SIMULATED native input: compact level options keep their 44pt target without a taller drawing.
+final class LevelSelectorHitTargetTests: SharedAppUITestCase {
+    @MainActor
+    func testSIMULATEDLevelOptionsAcceptUpperAndLowerTargetEdgeTaps() throws {
+        #if !targetEnvironment(simulator)
+            throw XCTSkip("SIMULATED level staging requires a private simulator")
+        #endif
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment.merge([
+            "ZC_DEMO_AUTOSTART": "1", "ZC_DEMO_QUICK_SETTINGS": "1", "ZC_DEMO_DISP": "live",
+            "ZC_DEMO_GRAPHICAL_REVIEW": "1",
+        ]) { _, value in value }
+        app.launch()
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        let expand = app.buttons["monitor.assists.expand"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 20))
+        rotate(.landscapeLeft, settling: expand)
+        tapWhenReady(expand, in: app, "The View Assist palette")
+        let level = app.buttons["monitor.assist.LEVEL"]
+        for _ in 0..<5 where !level.isHittable {
+            let palette = app.scrollViews.allElementsBoundByIndex.first {
+                $0.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'monitor.assist.'"))
+                    .count > 0
+            }
+            try XCTUnwrap(palette, "View Assist palette must be scrollable").swipeLeft()
+        }
+        XCTAssertTrue(level.isHittable)
+        level.press(forDuration: 0.6)
+        let horizon = app.buttons["Horizon"].firstMatch
+        let gauge = app.buttons["Gauge"].firstMatch
+        XCTAssertTrue(horizon.waitForExistence(timeout: 8))
+        XCTAssertTrue(gauge.waitForExistence(timeout: 8))
+        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+            rotate(orientation, settling: horizon)
+            for (target, other) in [(horizon, gauge), (gauge, horizon)] {
+                for offset in [CGFloat(-21), 21] {
+                    tapWhenReady(other, in: app, "The other level style")
+                    waitForSelected(other)
+                    // One point inside the 44pt floor, outside the compact painted label.
+                    target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                        .withOffset(CGVector(dx: 0, dy: offset)).tap()
+                    waitForSelected(target)
+                    XCTAssertFalse(other.isSelected, "An edge tap must select only its own option")
+                }
+            }
+            capture("SIMULATED-level-target-\(orientation.rawValue)")
+        }
+    }
+
+    @MainActor
+    private func waitForSelected(_ option: XCUIElement) {
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: option)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+    }
+}
+
 /// SIMULATED: in photography the ISO popup is the same shared ladder drawer as in movie mode,
 /// with the body's Auto and Manual tabs on the shared mode strip.
 final class NikonPhotoCapturePopupUITests: SharedAppUITestCase {

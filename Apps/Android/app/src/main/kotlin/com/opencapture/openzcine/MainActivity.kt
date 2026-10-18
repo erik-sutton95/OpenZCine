@@ -1131,8 +1131,12 @@ class MainActivity : ComponentActivity() {
                                 onOpenGyroLogs = { gyroLogsPresented = true },
                             )
                             relayBroadcastUi.controlHolderName?.let { holder ->
-                                Row(
-                                    Modifier.align(Alignment.BottomCenter)
+                                com.opencapture.opencine.cameracontrols.MonitorWatcherControlKey(
+                                    text = stringResource(R.string.sharing_revoke_control),
+                                    accented = true,
+                                    holderName = holder,
+                                    onClick = { relayBroadcastController.reclaimControl() },
+                                    modifier = Modifier.align(Alignment.BottomCenter)
                                         // The watcher's key already clears the bottom chrome per
                                         // orientation; this pill's own fixed 64dp was
                                         // orientation-blind and landed on the portrait system
@@ -1143,71 +1147,22 @@ class MainActivity : ComponentActivity() {
                                             bottom =
                                                 com.opencapture.openzcine.relay
                                                     .relayControlKeyBottomInset()
-                                        )
-                                        .clip(RoundedCornerShape(22.dp))
-                                        .background(
-                                            androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f)
-                                        )
-                                        .clickable { relayBroadcastController.reclaimControl() }
-                                        .padding(horizontal = 16.dp, vertical = 9.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        stringResource(R.string.sharing_revoke_control),
-                                        color = androidx.compose.ui.graphics.Color(0xFFE0A73A),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.8.sp,
-                                    )
-                                    Text(
-                                        holder,
-                                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f),
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                    )
-                                }
+                                        ),
+                                )
                             }
                             relayBroadcastUi.pendingControlRequestName?.let { asking ->
                                 val pendingRequest = relayBroadcastUi.pendingControlRequest
-                                Row(
-                                    Modifier.align(Alignment.TopCenter)
-                                        .padding(top = 10.dp)
-                                        .background(
-                                            androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.72f),
-                                            RoundedCornerShape(22.dp),
-                                        )
-                                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        stringResource(
-                                            R.string.sharing_asks_to_control, asking
-                                        ),
-                                        color = androidx.compose.ui.graphics.Color.White,
-                                        fontSize = 13.sp,
-                                    )
-                                    Text(
-                                        stringResource(R.string.sharing_decline),
-                                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f),
-                                        fontSize = 13.sp,
-                                        modifier =
-                                            Modifier.clickable {
-                                                relayBroadcastController
-                                                    .let { owner -> pendingRequest?.let(owner::declinePendingControl) }
-                                            },
-                                    )
-                                    Text(
-                                        stringResource(R.string.sharing_grant),
-                                        color = androidx.compose.ui.graphics.Color(0xFFE0A73A),
-                                        fontSize = 13.sp,
-                                        modifier =
-                                            Modifier.clickable {
-                                                pendingRequest?.let(relayBroadcastController::grantPendingControl)
-                                            },
-                                    )
-                                }
+                                com.opencapture.opencine.cameracontrols.MonitorRelayControlRequest(
+                                    title = stringResource(R.string.sharing_asks_to_control, asking),
+                                    grantLabel = stringResource(R.string.sharing_grant),
+                                    denyLabel = stringResource(R.string.sharing_decline),
+                                    onGrant = {
+                                        pendingRequest?.let(relayBroadcastController::grantPendingControl)
+                                    },
+                                    onDeny = {
+                                        pendingRequest?.let(relayBroadcastController::declinePendingControl)
+                                    },
+                                )
                             }
                         }
                     }

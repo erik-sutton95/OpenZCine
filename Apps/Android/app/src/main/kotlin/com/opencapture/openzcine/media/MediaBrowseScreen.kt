@@ -3,6 +3,7 @@ package com.opencapture.openzcine.media
 import com.opencapture.opencine.cameracontrols.MonitorOperatorMediaDelivery
 import com.opencapture.opencine.cameracontrols.MonitorOperatorMediaPresentation
 import com.opencapture.opencine.cameracontrols.MonitorOperatorMediaScreen
+import com.opencapture.opencine.cameracontrols.MonitorMediaCatalogArtwork
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryPresentation
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryEmpty
 import com.opencapture.opencine.cameracontrols.MonitorMediaGalleryFilters
@@ -26,7 +27,6 @@ import com.opencapture.opencine.nikon.NikonMediaDeletionPlan
 import com.opencapture.openzcine.NikonAssists
 import com.opencapture.opencine.appkit.LocalOperatorHaptics
 import android.content.Context
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -59,7 +59,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -826,10 +825,13 @@ private fun ClipArtwork(
     modifier: Modifier = Modifier,
     admission: () -> Boolean = { true },
 ) {
-    var thumbnail by remember(clip.libraryKey(cameraID), source) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(clip.libraryKey(cameraID), source, cameraConnected, connectionOwner) {
-        if (!admission()) return@LaunchedEffect
-        val decoded = withContext(Dispatchers.IO) {
+    MonitorMediaCatalogArtwork(
+        identity = clip.libraryKey(cameraID) to source,
+        reload = cameraConnected to connectionOwner,
+        isCurrent = admission,
+        modifier = modifier,
+        load = {
+            withContext(Dispatchers.IO) {
                 val cameraThumbnail =
                     if (
                         source == MediaLibrarySource.CAMERA &&
@@ -854,17 +856,8 @@ private fun ClipArtwork(
                     }
                 cameraThumbnail ?: cachedStillThumbnail(cacheStore, cameraID, clip)
             }
-        if (admission()) thumbnail = decoded
-    }
-    val image = thumbnail
-    if (image != null) {
-        Image(
-            bitmap = image,
-            contentDescription = null,
-            modifier = modifier,
-            contentScale = ContentScale.Crop,
-        )
-    } else {
+        },
+    ) {
         MonitorIcon(MonitorIcon.FILM, null, Modifier.size(30.dp), LiveDesign.faint)
     }
 }
