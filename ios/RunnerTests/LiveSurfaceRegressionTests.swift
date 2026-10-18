@@ -440,7 +440,8 @@ final class LiveSurfaceRegressionTests: XCTestCase {
     /// sheet, movie and photo alike, so no Nikon-only drum panel remains.
     func testEveryValuePickerDrawsTheSharedLadderSheet() {
         XCTAssertEqual(
-            Set(CameraPicker.allCases.filter { !$0.usesLadderSheet }), [.stillQuality, .stabilization])
+            Set(CameraPicker.allCases.filter { !$0.usesLadderSheet }),
+            [.stillQuality, .stabilization])
     }
 
     /// SIMULATED native actions: display positions never replace the body's write keys.

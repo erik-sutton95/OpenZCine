@@ -59,7 +59,8 @@ enum RelayLegacyWatcherPasscodes {
         let remaining = legacy.filter { host, raw in
             guard let code = raw as? String else { return true }
             let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !keychain.adoptLegacyRememberedPasscode(trimmed, forHost: host).releasesLegacyCopy
+            return !keychain.adoptLegacyRememberedPasscode(trimmed, forHost: host)
+                .releasesLegacyCopy
         }
         if remaining.isEmpty {
             defaults.removeObject(forKey: key)
