@@ -2048,6 +2048,11 @@ internal fun MonitorScreen(
                 !isPhotographyMode && mounted(MonitorDisplaySection.REC_READOUT), statusStorage, headerReadouts,
                 link.label, link.bars,
                 MonitorDisplaySection.FPS,
+                portraitFormat = if (isPhotographyMode || !mounted(MonitorDisplaySection.FORMAT)) null else
+                    MonitorOperatorLiveReadout(resolutionKind.name, MONITOR_FORMAT_READOUT_TITLE,
+                        if (isDemoSession || relayedState != null) readoutRetention.resolution
+                        else recordingFormat?.let(MonitorCapturePresentation::recordingLabel),
+                        MonitorDisplaySection.FORMAT, action = { openSharedPicker(resolutionKind) }),
                 color = if (isPhotographyMode || !mounted(MonitorDisplaySection.COLOR)) null else
                     MonitorOperatorLiveReadout(COLOR_READOUT_ID, "Color", codecColor.selectedColorChoice?.label ?: "--",
                         MonitorDisplaySection.COLOR, action = { openSharedPicker(MonitorPickerKind.CODEC) }),

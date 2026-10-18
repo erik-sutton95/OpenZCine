@@ -351,7 +351,12 @@ struct NikonMonitorShell: View {
             recording: recording, showsTimecode: !photo && model.chromeSectionMounts(.timecode),
             showsRecording: !photo && model.chromeSectionMounts(.recReadout), storage: storage,
             format: format, fps: fps ? model.liveFPS : nil,
-            signalBars: fps ? model.liveSignalBars : nil, fpsSection: .fps, color: color)
+            signalBars: fps ? model.liveSignalBars : nil, fpsSection: .fps,
+            portraitFormat: !photo && model.chromeSectionMounts(.format) ? .init(
+                id: .picker(.resolution), title: "Format",
+                value: model.isDemoSession || model.videoSource == .relay
+                    ? model.cameraState.resolutionFrameRate : recordingLabel ?? "--", section: .format) : nil,
+            color: color)
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
     private var cameraBattery: MonitorOperatorPowerReading? {
