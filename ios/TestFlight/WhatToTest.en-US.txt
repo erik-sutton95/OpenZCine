@@ -1,11 +1,11 @@
 New and changed
 
+- Camera controls and Media now use the shared OpenCine screens, so they look and behave as in the other OpenCine camera apps.
 - Exposure, shutter angle, storage and link readouts follow the values supplied by the camera.
 - Recording duration follows confirmed recording state.
 - Live View and Multicam share consistent clock and camera-control presentation.
-- Record the phone's gyro alongside Nikon camera takes and export motion logs for stabilization in Gyroflow.
+- Record the phone's gyro alongside Nikon camera takes; review, share, delete or export motion logs for Gyroflow.
 - Calibrate a firmly mounted phone, including tilted holders, or choose a mount preset. Saved alignment applies to future takes.
-- Review, share and delete saved takes in Gyro logs.
 
 Fixes
 

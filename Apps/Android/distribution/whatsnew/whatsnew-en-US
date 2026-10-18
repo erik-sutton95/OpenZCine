@@ -1,5 +1,5 @@
-- Record phone gyro with Nikon takes; calibrate a firm mount or choose a preset, then export logs for Gyroflow.
-- Share or delete saved logs. Interrupted logs retain available motion data; keep the app open, choose a lens profile and sync in Gyroflow.
+- Camera controls and Media use the shared OpenCine screens.
+- Record phone gyro with Nikon takes; calibrate a firm mount or pick a preset, then export logs for Gyroflow.
+- Share or delete saved logs; interrupted logs keep available motion data.
 - Camera reports drive exposure, shutter angle, storage, link and recording time; missing values stay unavailable.
-- Live/Multicam clocks and Media return remain consistent; ML Kit release checks retained.
-- Fixed preview start/reconnect crashes.
+- Live/Multicam clocks and Media return stay consistent; preview start/reconnect crashes are fixed.
