@@ -1960,7 +1960,8 @@ extension RunnerTests {
         let tab = model.operatorSettingsTab
         model.operatorSettingsTab = .system
         defer { model.operatorSettingsTab = tab }
-        try await snapshot(AnyView(OperatorSettingsPanel().environment(model)), named: "z-settings-system")
+        try await snapshot(
+            AnyView(OperatorSettingsPanel().environment(model)), named: "z-settings-system")
         for page in MonitorLegalPage.allCases {
             guard case .text(let text) = MonitorLegalDocuments.z[page] else {
                 return XCTFail("\(page.title) is bundled text")
@@ -1974,10 +1975,13 @@ extension RunnerTests {
 
     @MainActor
     @discardableResult
-    private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil) async throws -> String? {
+    private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil)
+        async throws -> String?
+    {
         let host = UIHostingController(rootView: view)
         // Drawing needs a window in the app's scene; a detached window renders blank.
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
         window.rootViewController = host
@@ -1990,7 +1994,8 @@ extension RunnerTests {
         for _ in 0..<80 {
             host.view.layoutIfNeeded()
             if let identifier {
-                label = HostedAccessibility.elements(in: host.view)
+                label =
+                    HostedAccessibility.elements(in: host.view)
                     .first { HostedAccessibility.identifier($0) == identifier }?.accessibilityLabel
                 if label != nil { break }
             }

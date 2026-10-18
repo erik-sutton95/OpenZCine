@@ -9,7 +9,6 @@ import OpenCineCameraControls
 import OpenCineCore
 import OpenCineFrameIO
 import OpenCineMedia
-import struct OpenCineCameraVocabulary.ControlCapabilities
 import OpenCineRelay
 import OpenCineRelayApple
 import OpenZCineCore
@@ -20,16 +19,17 @@ import os
 
 import struct MonitorPresentation.MonitorEdgeInsets
 import enum MonitorPresentation.MonitorMediaLayout
-import enum MonitorPresentation.MonitorStorageReadoutFormat
 import enum MonitorPresentation.MonitorSettingsTab
+import enum MonitorPresentation.MonitorStorageReadoutFormat
 import enum MonitorPresentation.MonitorThumbnailSize
 import enum MonitorPresentation.MonitorWatcherPasscodeRule
-import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
-import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
-import class OpenCineCameraVocabulary.CustomLUTStore
-import class OpenCineCameraVocabulary.LUTPreferences
 import struct OpenCineCameraVocabulary.CaptureCodecColorChoice
 import struct OpenCineCameraVocabulary.CaptureCodecColorChoices
+import struct OpenCineCameraVocabulary.ControlCapabilities
+import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
+import class OpenCineCameraVocabulary.CustomLUTStore
+import class OpenCineCameraVocabulary.LUTPreferences
+import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
 
 private let connectionLogger = Logger(
     subsystem: "OpenZCine",
@@ -210,7 +210,9 @@ enum PreferencesStore {
     /// The shared HDR display choice (A2-31), on the common key Pocket and Insta use too.
     static var hdrDisplay: Bool {
         get { MonitorOperatorPreferences(storage: .standard, keys: commonKeys).hdrDisplay }
-        set { MonitorOperatorPreferences(storage: .standard, keys: commonKeys).hdrDisplay = newValue }
+        set {
+            MonitorOperatorPreferences(storage: .standard, keys: commonKeys).hdrDisplay = newValue
+        }
     }
 
     private static let commonKeys = MonitorOperatorPreferences.Keys(
@@ -230,9 +232,13 @@ enum PreferencesStore {
         if let data, let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let legacyValues = [
                 (commonKeys.keepScreenAwake, legacyBool(raw["keepScreenAwake"])),
-                (commonKeys.recordConfirmation, legacyBool(raw["recordConfirmationEnabled"])
-                    ?? legacyBool(raw["recordHoldEnabled"])),
-                (commonKeys.haptics, legacyBool(raw["hapticsEnabled"]))]
+                (
+                    commonKeys.recordConfirmation,
+                    legacyBool(raw["recordConfirmationEnabled"])
+                        ?? legacyBool(raw["recordHoldEnabled"])
+                ),
+                (commonKeys.haptics, legacyBool(raw["hapticsEnabled"])),
+            ]
             for (key, value) in legacyValues where storage.object(forKey: key) == nil {
                 if let value { storage.set(value, forKey: key) }
             }
@@ -280,7 +286,9 @@ enum PreferencesStore {
         save(preferences, previous: loadPreferences(), storage: .standard)
     }
 
-    static func save(_ preferences: OperatorPreferences, previous: OperatorPreferences, storage: UserDefaults) {
+    static func save(
+        _ preferences: OperatorPreferences, previous: OperatorPreferences, storage: UserDefaults
+    ) {
         let common = MonitorOperatorPreferences(storage: storage, keys: commonKeys)
         if preferences.keepScreenAwake != previous.keepScreenAwake {
             common.keepScreenAwake = preferences.keepScreenAwake
@@ -301,16 +309,20 @@ enum PreferencesStore {
         legacy.hapticsEnabled = previous.hapticsEnabled
         legacy.bluetoothShutterEnabled = previous.bluetoothShutterEnabled
         guard legacy != previous else { return }
-        guard let original = storage.data(forKey: preferencesKey)
-            ?? (try? JSONEncoder().encode(OperatorPreferences.defaults)).map(
+        guard
+            let original = storage.data(forKey: preferencesKey)
+                ?? (try? JSONEncoder().encode(OperatorPreferences.defaults)).map(
                     withoutRetiredRemoteShutter),
-            let data = try? OperatorPreferencesDocument(data: original).updating(legacy, previous: previous)
+            let data = try? OperatorPreferencesDocument(data: original).updating(
+                legacy, previous: previous)
         else { return }
         storage.set(withoutRetiredRemoteShutter(data), forKey: preferencesKey)
     }
 
     private static func legacyBool(_ raw: Any?) -> Bool? {
-        guard let raw, let data = try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed])
+        guard let raw,
+            let data = try? JSONSerialization.data(
+                withJSONObject: raw, options: [.fragmentsAllowed])
         else { return nil }
         return try? JSONDecoder().decode(Bool.self, from: data)
     }
@@ -1814,7 +1826,8 @@ final class NativeAppModel {
         lastGoodFrameAt = Date()
         client.connect(to: discovery.endpoint)
         var joinPasscode =
-            relaySubmittedPasscodes[discovery.name] ?? Self.storedRelayPasscode(forHost: discovery.name)
+            relaySubmittedPasscodes[discovery.name]
+            ?? Self.storedRelayPasscode(forHost: discovery.name)
         #if DEBUG
             joinPasscode = joinPasscode ?? demoRelayJoinPasscode
         #endif
@@ -1827,7 +1840,8 @@ final class NativeAppModel {
     /// once per device.
     static func storedRelayPasscode(forHost host: String) -> String? {
         RelayLegacyWatcherPasscodes.move(into: .app, from: .standard)
-        if case .stored(let code) = WatcherRelayKeychain.app.rememberedPasscodeLookup(forHost: host) {
+        if case .stored(let code) = WatcherRelayKeychain.app.rememberedPasscodeLookup(forHost: host)
+        {
             return code
         }
         return RelayLegacyWatcherPasscodes.unmoved(forHost: host, in: .standard)
@@ -1838,7 +1852,8 @@ final class NativeAppModel {
 
     /// Stores the entered code and rejoins with it.
     func submitRelayPasscode(_ code: String) {
-        guard let target = relayJoinTarget, let trimmed = MonitorWatcherPasscodeRule.answer(code) else { return }
+        guard let target = relayJoinTarget, let trimmed = MonitorWatcherPasscodeRule.answer(code)
+        else { return }
         let saved = WatcherRelayKeychain.app.storeRememberedPasscode(trimmed, forHost: target.name)
         relaySubmittedPasscodes[target.name] = saved ? nil : trimmed
         relayJoinNeedsPasscode = false
@@ -12351,7 +12366,8 @@ final class NativeAppModel {
         publishCameraDisplayState()
         guard !isDemoSession else { return }
         enqueueCameraWrite(
-            PendingCameraWrite(picker: .stabilization, value: label, write: write, admission: admission))
+            PendingCameraWrite(
+                picker: .stabilization, value: label, write: write, admission: admission))
         connectionMessage = "Queued VR \(label) for the next live-view safe point."
         drainPendingWritesIfIdle()
     }
@@ -12679,7 +12695,8 @@ final class NativeAppModel {
             guard let status = cameraState.mediaStatus else { return cameraState.media }
             if prefersMediaDuration { return status.durationLabel }
             guard portrait, let bytes = status.freeBytes else { return status.capacityLabel }
-            return "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
+            return
+                "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
         }
         let storage = shell.control.snapshot?.storage
         if prefersMediaDuration { return storage?.recordingTimeLabel ?? "-- Min" }
@@ -13825,7 +13842,9 @@ struct NativeAppRoot: View {
         }
         // The one share sheet, above every cover (A2-52).
         .monitorDeliverySharePresenter(model.delivery.lifetime)
-        .monitorHDRDisplay(.app, active: model.hdrDisplayActive, screenCaptured: Bindable(model).screenCaptured)
+        .monitorHDRDisplay(
+            .app, active: model.hdrDisplayActive, screenCaptured: Bindable(model).screenCaptured
+        )
         .environment(model)
         .environment(model.delivery)
         .observeMonitorWindowGeometry()
