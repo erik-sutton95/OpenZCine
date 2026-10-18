@@ -1221,7 +1221,12 @@ final class NativeAppModel {
     /// Hardware HEVC for an incoming stream; created with a viewer session.
     @ObservationIgnored private var relayVideoDecoder: MonitorRelayVideoDecoder?
 
-    var isRelayBroadcasting = false
+    var isRelayBroadcasting = false {
+        willSet {
+            let surrendered = newValue && relayControlHeldBy != nil && !applyingRelayCommand
+            if surrendered != relayControlSurrendered { groupedStabilizationProducer?.retire() }
+        }
+    }
     var relayPeerCount = 0
     /// Viewer side: whether this device currently holds the camera.
     var relayHoldsControl = false
@@ -1231,6 +1236,10 @@ final class NativeAppModel {
     var relayPendingControlRequest: String?
     var relayPendingRequest: RelayHostControl.PendingRequest?
     var relayControlHeldBy: String? {
+        willSet {
+            let surrendered = isRelayBroadcasting && newValue != nil && !applyingRelayCommand
+            if surrendered != relayControlSurrendered { groupedStabilizationProducer?.retire() }
+        }
         didSet { refreshCommonControlFacts() }
     }
     /// An armed add-setup watch: the operator tapped "Connect When Plugged In" / "Find On
@@ -4494,6 +4503,11 @@ final class NativeAppModel {
         var debugConnectionGeneration: Int { connectionGeneration }
         var debugHasSessionRecoveryTask: Bool { recoveryEpisode.isRunning }
         var debugPendingCameraWriteCount: Int { pendingCameraWrites.count }
+        /// Services the real property queue at a SIMULATED native safe point.
+        func debugServiceNextCameraWrite() async -> Bool {
+            guard let cameraSession else { return false }
+            return await performNextPendingCameraWrite(session: cameraSession)
+        }
         func debugEnqueueCameraWrite(_ property: PTPPropertyCode) {
             enqueueCameraWrite(
                 PendingCameraWrite(
@@ -12250,21 +12264,75 @@ final class NativeAppModel {
         }
     }
 
+    /// The grouped panel's producer, separate from legacy direct setting operations.
+    func applyGroupedStabilization(
+        _ request: NikonStabilizationRequest, option: String,
+        source: MonitorOperatorLiveIdentity
+    ) {
+        guard operatorLiveIdentity == source, !interfaceLocked, !relayControlSurrendered else {
+            return
+        }
+        #if DEBUG
+            if isDemoSession {
+                switch request {
+                case .movieVR: setVibrationReduction(option)
+                case .electronicVR: setElectronicVR(on: option == "ON")
+                }
+                return
+            }
+        #endif
+        guard let native = cameraSession, let owner = native.commandOwner else { return }
+        let producer = currentGroupedStabilizationProducer()
+        let commonAuthority = controlSession?.captureCommandAuthority()
+        let admission = NikonCommandAdmission(owner: owner) {
+            producer.isActive && (commonAuthority?() ?? true)
+        }
+        switch request {
+        case .movieVR: setVibrationReduction(option, admission: admission)
+        case .electronicVR: setElectronicVR(on: option == "ON", admission: admission)
+        }
+    }
+
+    @ObservationIgnored private var groupedStabilizationProducer: NikonCommandOwner?
+
+    /// One observation per producer lifetime, shared by surviving/superseded row payloads.
+    /// Pending values, popup state and ordinary property reports are deliberately not observed.
+    private func currentGroupedStabilizationProducer() -> NikonCommandOwner {
+        if let groupedStabilizationProducer, groupedStabilizationProducer.isActive {
+            return groupedStabilizationProducer
+        }
+        let producer = NikonCommandOwner()
+        groupedStabilizationProducer = producer
+        withObservationTracking {
+            _ = cameraSession
+            _ = videoSource
+            _ = liveFrameSource
+            _ = operatorSession.locked
+            _ = shell.monitor?.id
+        } onChange: {
+            // Before-mutation notification: no actor state is read on the native executor.
+            producer.retire()
+        }
+        return producer
+    }
+
     /// Queues a movie-VR write ("OFF"/"ON"/"SPORT"). [verify-on-HW]
-    func setVibrationReduction(_ label: String) {
+    func setVibrationReduction(_ label: String, admission: NikonCommandAdmission? = nil) {
+        guard admitsCameraCommand(admission) else { return }
         guard let write = PTPCameraPropertyWrite.vibrationReduction(label: label) else { return }
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: write.property, data: write.data)
         publishCameraDisplayState()
         guard !isDemoSession else { return }
         enqueueCameraWrite(
-            PendingCameraWrite(picker: .stabilization, value: label, write: write))
+            PendingCameraWrite(picker: .stabilization, value: label, write: write, admission: admission))
         connectionMessage = "Queued VR \(label) for the next live-view safe point."
         drainPendingWritesIfIdle()
     }
 
     /// Queues an electronic-VR on/off write. [verify-on-HW]
-    func setElectronicVR(on: Bool) {
+    func setElectronicVR(on: Bool, admission: NikonCommandAdmission? = nil) {
+        guard admitsCameraCommand(admission) else { return }
         let write = PTPCameraPropertyWrite.electronicVR(on: on)
         cameraPropertySnapshot = cameraPropertySnapshot.applying(
             property: write.property, data: write.data)
@@ -12272,7 +12340,8 @@ final class NativeAppModel {
         guard !isDemoSession else { return }
         enqueueCameraWrite(
             PendingCameraWrite(
-                picker: .stabilization, value: on ? "e-VR ON" : "e-VR OFF", write: write))
+                picker: .stabilization, value: on ? "e-VR ON" : "e-VR OFF", write: write,
+                admission: admission))
         connectionMessage = "Queued e-VR \(on ? "ON" : "OFF") for the next live-view safe point."
         drainPendingWritesIfIdle()
     }

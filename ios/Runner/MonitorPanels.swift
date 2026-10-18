@@ -236,10 +236,7 @@ struct StabilizationPickerPanel: View {
             interactionEnabled: !model.interfaceLocked && !model.relayControlSurrendered,
             currentSource: { model.operatorLiveIdentity == source },
             onSelect: { request, option in
-                switch request {
-                case .movieVR: model.setVibrationReduction(option)
-                case .electronicVR: model.setElectronicVR(on: option == "ON")
-                }
+                model.applyGroupedStabilization(request, option: option, source: source)
             },
             onUnavailable: { _, _ in evrBlockedNotice += 1 }
         )

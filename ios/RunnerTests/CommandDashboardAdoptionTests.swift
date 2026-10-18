@@ -324,3 +324,199 @@ import Testing
         private enum Missing: Error { case element(String) }
     }
 #endif
+
+
+/// SIMULATED grouped producer through the actual app safe-point queue and Nikon transport.
+@MainActor @Suite struct GroupedStabilizationQueueTests {
+    @Test func revokedQueuedSelectionDoesNotSendAndFreshSelectedRowStillDispatches() async throws {
+        let (model, native, wire) = try await fixture()
+        defer { model.debugAdoptEstablishedMediaSession(nil); native.close() }
+        model.applyGroupedStabilization(.movieVR, option: "SPORT", source: model.operatorLiveIdentity)
+        #expect(model.debugPendingCameraWriteCount == 1)
+        model.interfaceLocked = true
+        model.interfaceLocked = false
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.writes.isEmpty, "Regranting authority cannot revive an expired queued request")
+        #expect(model.debugPendingCameraWriteCount == 0)
+        model.applyGroupedStabilization(.electronicVR, option: "ON", source: model.operatorLiveIdentity)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.writes == [.electronicVR])
+        #expect(model.stabilizationElectronicVR == "ON")
+        #expect(model.stabilizationVR != "SPORT")
+        #expect(model.debugPendingCameraWriteCount == 0)
+    }
+
+    @Test func queuedNativeWaiterRevokesButEnteredWriteKeepsAuthoritativeReadback() async throws {
+        for entered in [false, true] {
+            let (model, native, wire) = try await fixture()
+            defer { model.debugAdoptEstablishedMediaSession(nil); native.close() }
+            model.applyGroupedStabilization(.movieVR, option: "SPORT", source: model.operatorLiveIdentity)
+            await wire.arm(entered ? .write : .read)
+            let blocker = entered ? nil : Task { try await native.readCameraProperty(.electronicVR) }
+            if !entered { await wire.waitUntilHeld() }
+            let drain = Task { await model.debugServiceNextCameraWrite() }
+            if entered { await wire.waitUntilHeld() }
+            else {
+                await wire.waitUntilQueued()
+                #expect(await wire.writes.isEmpty, "The admitted write has not entered the wire")
+                #expect(model.debugPendingCameraWriteCount == 0)
+            }
+            model.interfaceLocked = true
+            await wire.release()
+            _ = try await blocker?.value
+            #expect(await drain.value)
+            #expect(await wire.writes == (entered ? [.movieVibrationReduction] : []))
+            #expect(entered ? model.stabilizationVR == "SPORT" : model.stabilizationVR != "SPORT")
+            #expect(model.debugPendingCameraWriteCount == 0)
+            // Legacy direct operations continue to work while the grouped receipt is expired.
+            model.setElectronicVR(on: true)
+            #expect(await model.debugServiceNextCameraWrite())
+            #expect(await wire.writes.last == .electronicVR)
+        }
+    }
+
+    @Test func popupFeedbackAndUnchangedAuthorityDoNotRetireQueuedSelection() async throws {
+        let (model, native, wire) = try await fixture()
+        defer { model.debugAdoptEstablishedMediaSession(nil); native.close() }
+        model.applyGroupedStabilization(.movieVR, option: "ON", source: model.operatorLiveIdentity)
+        model.connectionMessage = "SIMULATED unrelated feedback"
+        model.activePanel = .picker(.stabilization)
+        model.dismissActivePanel()
+        model.interfaceLocked = false
+        model.isRelayBroadcasting = true
+        model.relayControlHeldBy = nil
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.writes == [.movieVibrationReduction])
+        #expect(model.stabilizationVR == "ON")
+    }
+
+    @Test func surrenderAndRegrantCannotReviveAnAlreadyQueuedSelection() async throws {
+        let (model, native, wire) = try await fixture()
+        defer { model.debugAdoptEstablishedMediaSession(nil); native.close() }
+        model.isRelayBroadcasting = true
+        model.applyGroupedStabilization(.electronicVR, option: "ON", source: model.operatorLiveIdentity)
+        model.relayControlHeldBy = "SIMULATED watcher"
+        model.relayControlHeldBy = nil
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.writes.isEmpty)
+        model.applyGroupedStabilization(.movieVR, option: "ON", source: model.operatorLiveIdentity)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.writes == [.movieVibrationReduction])
+    }
+
+    @Test func sourceReplacementCannotBorrowOldQueuedReceipt() async throws {
+        let (model, first, firstWire) = try await fixture()
+        let secondWire = GroupedQueueTransport()
+        let second = try await NativeCameraSession.establish(
+            transport: secondWire, host: "usb:SIMULATED-second", cameraName: "SIMULATED", requestPairing: false)
+        defer { model.debugAdoptEstablishedMediaSession(nil); first.close(); second.close() }
+        let shown = model.operatorLiveIdentity
+        model.applyGroupedStabilization(.movieVR, option: "SPORT", source: shown)
+        await secondWire.clearWrites()
+        model.debugAdoptEstablishedMediaSession(second)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await firstWire.writes.isEmpty)
+        #expect(await secondWire.writes.isEmpty, "A replacement with identical display facts cannot borrow old authority")
+        model.applyGroupedStabilization(.movieVR, option: "ON", source: model.operatorLiveIdentity)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await secondWire.writes == [.movieVibrationReduction])
+        #expect(model.stabilizationVR == "ON")
+    }
+
+    private func fixture() async throws -> (NativeAppModel, NativeCameraSession, GroupedQueueTransport) {
+        let wire = GroupedQueueTransport()
+        let native = try await NativeCameraSession.establish(
+            transport: wire, host: "usb:SIMULATED-grouped", cameraName: "SIMULATED", requestPairing: false)
+        await wire.clearWrites()
+        let model = NativeAppModel()
+        model.debugAdoptEstablishedMediaSession(native)
+        model.isMonitorPresented = true
+        model.applyDemoProperty(.movieVibrationReduction, data: Data([0]))
+        model.applyDemoProperty(.electronicVR, data: Data([0]))
+        return (model, native, wire)
+    }
+}
+
+private actor GroupedQueueTransport: CameraTransport {
+    enum Hold { case read, write }
+    nonisolated let kind = CameraTransportKind.usb
+    private let establishment = LargeTransferTransport(operations: [.setDevicePropValue, .getDevicePropValue])
+    private var values: [UInt32: Data] = [:]
+    private(set) var writes: [PTPPropertyCode] = []
+    private var hold: Hold?
+    private var held = false
+    private var entered: CheckedContinuation<Void, Never>?
+    private var released: CheckedContinuation<Void, Never>?
+    private var transactionActive = false
+    private var transactionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var queued: CheckedContinuation<Void, Never>?
+    func waitUntilQueued() async {
+        if !transactionWaiters.isEmpty { return }
+        await withCheckedContinuation { queued = $0 }
+    }
+    private func acquireTransaction() async {
+        if !transactionActive { transactionActive = true; return }
+        await withCheckedContinuation {
+            transactionWaiters.append($0)
+            queued?.resume(); queued = nil
+        }
+    }
+    private func releaseTransaction() {
+        if transactionWaiters.isEmpty { transactionActive = false }
+        else { transactionWaiters.removeFirst().resume() }
+    }
+    func clearWrites() { writes = [] }
+    func arm(_ hold: Hold) { self.hold = hold }
+    func waitUntilHeld() async {
+        if held { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+    func release() { released?.resume(); released = nil; held = false }
+    func executeTransaction(
+        operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
+        dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?
+    ) async throws -> PTPIPTransactionResult {
+        try await transact(
+            operationCode: operationCode, transactionID: transactionID, parameters: parameters,
+            dataPhase: dataPhase, dataOut: dataOut, deadline: deadline, admission: nil)
+    }
+    func executeTransaction(
+        operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
+        dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?, admission: NikonCommandAdmission
+    ) async throws -> PTPIPTransactionResult {
+        try await transact(
+            operationCode: operationCode, transactionID: transactionID, parameters: parameters,
+            dataPhase: dataPhase, dataOut: dataOut, deadline: deadline, admission: admission)
+    }
+    private func transact(
+        operationCode: PTPOperationCode, transactionID: UInt32?, parameters: [UInt32],
+        dataPhase: PTPDataPhase, dataOut: Data?, deadline: Duration?, admission: NikonCommandAdmission?
+    ) async throws -> PTPIPTransactionResult {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        try admission?.requireCurrent()
+        if operationCode == .getDeviceInfo {
+            return try await establishment.executeTransaction(
+                operationCode: operationCode, transactionID: transactionID, parameters: parameters,
+                dataPhase: dataPhase, dataOut: dataOut, deadline: deadline)
+        }
+        let property = parameters.first ?? 0
+        if operationCode == .setDevicePropValue {
+            if let code = PTPPropertyCode(rawValue: property) { writes.append(code) }
+            values[property] = dataOut
+        }
+        if (hold == .read && operationCode == .getDevicePropValue)
+            || (hold == .write && operationCode == .setDevicePropValue)
+        {
+            hold = nil; held = true; entered?.resume(); entered = nil
+            await withCheckedContinuation { released = $0 }
+        }
+        let response = ByteCoding.uint16LE(PTPResponseCode.ok.rawValue)
+            + ByteCoding.uint32LE(transactionID ?? 1)
+        return PTPIPTransactionResult(
+            operationResponse: try PTPOperationResponse(payloadBytes: response),
+            data: operationCode == .getDevicePropValue ? values[property] ?? Data([0]) : Data())
+    }
+    func nextEvent() async throws -> PTPEvent { throw NativeCameraSessionError.connectionClosed }
+    nonisolated func close() {}
+}

@@ -568,35 +568,31 @@ internal fun MonitorScreen(
      * optimistically, an in-flight write never blocks it, and only the last label per control goes out.
      */
     val nativeWrites = remember(session) {
-        MonitorNativeWrites<CameraControl, Pair<CommandControlRequest, String>>(
-            recordScope,
-            write = { control, (_, label) ->
-                // Facade applyControl already confirms the write on the wire. Do not soft-fail from a
-                // lagging property poll (see docs/android-control-writes.md).
-                if (control in NikonOpenCineSession.CONTROLS && (!prefersPhotographyChrome(session.cameraProperties.value) ||
-                        control !in setOf(CameraControl.SHUTTER, CameraControl.IRIS))) {
-                    NikonOpenCineSession.settingValue(control, label)?.let { commonControl.set(it, label) }
-                } else {
-                    session.applyControl(control, label)
-                }
-                // One refresh keeps tiles and bar honest; settles still enqueue while this runs.
-                session.refreshProperties()
+        nikonNativeControlWrites(
+            recordScope, session,
+            commonWrite = { control, label ->
+                // Keep the legacy common controls on their original submission route.
+                val common = control in NikonOpenCineSession.CONTROLS &&
+                    (!prefersPhotographyChrome(session.cameraProperties.value) ||
+                        control !in setOf(CameraControl.SHUTTER, CameraControl.IRIS))
+                if (common) NikonOpenCineSession.settingValue(control, label)?.let { commonControl.set(it, label) }
+                common
             },
-            // Already matches the readback (scrolled back, or a coalesced write landed): skip the wire trip.
-            // REC and codec always write, like iOS: a soft label match can lag behind the body.
-            confirmed = { control, (_, label) ->
+            confirmed = { control, label ->
                 control != CameraControl.RESOLUTION_FRAMERATE && control != CameraControl.CODEC &&
                     cameraPropertyConfirmsSelection(session.cameraProperties.value, control, label)
             },
-            refused = { _, (request, _), error ->
+            refused = { selection, error ->
                 commandControlFeedback = CommandControlFeedback(
-                    appContext.getString(R.string.control_error, request.title,
+                    appContext.getString(R.string.control_error, selection.request.title,
                         error.message ?: appContext.getString(R.string.control_change_rejected)),
                     isError = true,
                 )
             },
         )
     }
+    val stabilizationCommands = remember(session) { NikonStabilizationCommands() }
+    DisposableEffect(stabilizationCommands) { onDispose { stabilizationCommands.close() } }
     val pendingCommandControl = nativeWrites.pending
     val resources = LocalResources.current
     val stringResolver = remember(resources) { resources.phoneStringResolver() }
@@ -782,7 +778,7 @@ internal fun MonitorScreen(
                     IsoPickerPolicy.isAutoISOActive(cameraProperties.isoAuto, codecForISO)
             ) {
                 nativeWrites.submit(CameraControl.ISO_AUTO,
-                    CommandControlRequest(
+                    NikonNativeControlSelection(CommandControlRequest(
                         title = "ISO",
                         control = CameraControl.ISO_AUTO,
                         currentValue = IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
@@ -791,13 +787,13 @@ internal fun MonitorScreen(
                                 IsoPickerPolicy.AUTO_ISO_ON_LABEL,
                                 IsoPickerPolicy.AUTO_ISO_OFF_LABEL,
                             ),
-                    ) to IsoPickerPolicy.AUTO_ISO_OFF_LABEL)
+                    ), IsoPickerPolicy.AUTO_ISO_OFF_LABEL))
             }
             commandControlFeedback = null
             if (activeCommandControl?.control == request.control) {
                 activeCommandControl = request.copy(currentValue = label)
             }
-            nativeWrites.submit(request.control, request to label)
+            nativeWrites.submit(request.control, NikonNativeControlSelection(request, label))
         }
     /**
      * Photography write router (iOS `applyPicker` stills paths): the DRIVE
@@ -2019,7 +2015,20 @@ internal fun MonitorScreen(
                     }
                 }
             })
-        SideEffect { quickCaptureOwner.publish(nativeQuickReceipts) }
+        SideEffect {
+            quickCaptureOwner.publish(nativeQuickReceipts)
+            val localRevision = operatorSession.captureCommandRevision()
+            val commonAuthority = commonSession.captureCommandAuthority()
+            stabilizationCommands.publish(session, identity, commandControlsEnabled) {
+                // The native dispatcher may run off-main. These are only published facts and
+                // the existing display owner's atomic lifetime, never Compose state reads.
+                val latest = commonControl.state.value.snapshot
+                localRevision() && session.state.value is CameraSessionState.Connected &&
+                    (session.propertyRefreshStatus.value as? CameraPropertyRefreshStatus.Degraded)?.failure != CameraPropertyRefreshFailure.MEDIA_BUSY &&
+                    latest?.session == identity.camera && latest?.epoch == identity.epoch &&
+                    commonAuthority()
+            }
+        }
         val source = MonitorOperatorLiveSource(
             identity = { MonitorOperatorLiveIdentity(commonControl.state.value.snapshot?.session,
                 commonControl.state.value.snapshot?.epoch, currentPicture.value) },
@@ -2363,7 +2372,12 @@ internal fun MonitorScreen(
                                     commonControl.state.value.snapshot?.epoch, currentPicture.value)
                         },
                         feedback = commandControlFeedback,
-                        onSelect = applyCameraControl,
+                        onSelect = { request, label ->
+                            if (commandControlsEnabled) stabilizationCommands.selection(request, label)?.let { selection ->
+                                commandControlFeedback = null
+                                nativeWrites.submit(request.control, selection)
+                            }
+                        },
                         onUnavailable = { _, reason ->
                             commandControlFeedback = reason?.let { CommandControlFeedback(it, isError = true) }
                         },
