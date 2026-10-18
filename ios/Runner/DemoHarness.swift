@@ -1013,7 +1013,8 @@ enum DemoHarness {
                 model.connectionPhase = .preparingLiveView
                 model.connectionProgressUsesCard = mode != "standalone" && mode != "neverStarted"
                 model.connectionMessage =
-                    mode == "neverStarted" ? "SIMULATED live view did not start." : "Reading camera settings…"
+                    mode == "neverStarted"
+                    ? "SIMULATED live view did not start." : "Reading camera settings…"
             }
             if let entry = env["ZC_DEMO_CONNECT_CONSENT"] {
                 // SIMULATED consent on actual model paths; the test only cancels, and the integration port is staged.

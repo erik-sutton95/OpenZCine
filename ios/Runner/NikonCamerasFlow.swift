@@ -555,10 +555,8 @@ struct NikonConnectScreen: View {
             presentation: flow.presentation, safeArea: safeArea,
             onSelect: flow.onSelect, onPrimary: flow.onPrimary, onBack: flow.onBack,
             onDiagnostics: { model.shareDiagnostics() },
-            onReportProblem: { model.isBugReportPresented = true }
-        ) {
-            flow.content
-        }
+            onReportProblem: { model.isBugReportPresented = true },
+            extra: { flow.content })
     }
 }
 

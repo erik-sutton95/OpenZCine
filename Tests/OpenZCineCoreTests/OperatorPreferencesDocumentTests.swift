@@ -5,8 +5,9 @@ import Testing
 
 @Suite struct OperatorPreferencesDocumentTests {
     private func fixture() throws -> Data {
-        var raw = try #require(JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
+        var raw = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(OperatorPreferences.defaults)) as? [String: Any])
         raw["hapticsEnabled"] = false
         raw["keepScreenAwake"] = false
         raw["streamPreset"] = "future-stream"
@@ -16,7 +17,8 @@ import Testing
         var chrome = try #require(raw["displayChrome"] as? [String: Any])
         chrome["futureStyle"] = ["color": "amber", "gain": 3]
         raw["displayChrome"] = chrome
-        return try JSONSerialization.data(withJSONObject: raw, options: [.prettyPrinted, .sortedKeys])
+        return try JSONSerialization.data(
+            withJSONObject: raw, options: [.prettyPrinted, .sortedKeys])
     }
 
     @Test func loadingAndNoOpUpdateKeepOriginalBytes() throws {
@@ -44,11 +46,13 @@ import Testing
         #expect(raw["streamPreset"] as? String == "future-stream")
         #expect(raw["portraitFeedAspect"] as? String == "future-aspect")
         #expect(raw["scopeActivationOrder"] as? [String] == ["WAVE", "FUTURE", "PLAY", "MAG"])
-        #expect(NSDictionary(dictionary: try #require(raw["futureSetting"] as? [String: Any]))
-            .isEqual(to: try #require(before["futureSetting"] as? [String: Any])))
+        #expect(
+            NSDictionary(dictionary: try #require(raw["futureSetting"] as? [String: Any]))
+                .isEqual(to: try #require(before["futureSetting"] as? [String: Any])))
         let chrome = try #require(raw["displayChrome"] as? [String: Any])
-        #expect(NSDictionary(dictionary: try #require(chrome["futureStyle"] as? [String: Any]))
-            .isEqual(to: ["color": "amber", "gain": 3]))
+        #expect(
+            NSDictionary(dictionary: try #require(chrome["futureStyle"] as? [String: Any]))
+                .isEqual(to: ["color": "amber", "gain": 3]))
         #expect(chrome["statusBarVisible"] as? Bool == next.displayChrome.statusBarVisible)
         #expect(raw["autoRotateFeedEnabled"] as? Bool == next.autoRotateFeedEnabled)
         #expect(document.data == original)
@@ -59,8 +63,9 @@ import Testing
         let previous = document.decoded()
         var next = previous
         next.scopeActivationOrder = [.histogram, .waveform]
-        let raw = try #require(JSONSerialization.jsonObject(
-            with: document.updating(next, previous: previous)) as? [String: Any])
+        let raw = try #require(
+            JSONSerialization.jsonObject(
+                with: document.updating(next, previous: previous)) as? [String: Any])
         let values = try #require(raw["scopeActivationOrder"] as? [String])
         #expect(values.filter { ["HISTO", "WAVE"].contains($0) } == ["HISTO", "WAVE"])
         #expect(values.contains("FUTURE"))
@@ -84,14 +89,20 @@ import Testing
 
     @Test(arguments: ["statusBar", "sideRails"])
     func editingLegacyChromePreservesUntouchedInheritedChoices(field: String) throws {
-        let original = Data(#"{"displayChrome":{"statusBarVisible":false,"sideRailsVisible":false,"futureStyle":{"gain":7}},"futureSetting":"retain"}"#.utf8)
+        let original = Data(
+            #"{"displayChrome":{"statusBarVisible":false,"sideRailsVisible":false,"futureStyle":{"gain":7}},"futureSetting":"retain"}"#
+                .utf8)
         let document = OperatorPreferencesDocument(data: original)
         let previous = document.decoded()
         var next = previous
-        if field == "statusBar" { next.displayChrome.statusBarVisible = true }
-        else { next.displayChrome.sideRailsVisible = true }
+        if field == "statusBar" {
+            next.displayChrome.statusBarVisible = true
+        } else {
+            next.displayChrome.sideRailsVisible = true
+        }
         let updated = try document.updating(next, previous: previous)
-        #expect(OperatorPreferencesDocument(data: updated).decoded() == next,
+        #expect(
+            OperatorPreferencesDocument(data: updated).decoded() == next,
             "Changing one legacy layout must preserve the other inherited layouts and rail choices")
         let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
         #expect(raw["futureSetting"] as? String == "retain")
@@ -99,9 +110,10 @@ import Testing
         #expect((chrome["futureStyle"] as? [String: Int])?["gain"] == 7)
     }
 
-
     @Test func nullLegacyLayoutsKeepTheirInheritedChoicesAfterParentEdit() throws {
-        let original = Data(#"{"displayChrome":{"statusBarVisible":false},"commandChrome":null,"photoDisplayChrome":null,"photoCommandChrome":null,"futureSetting":null}"#.utf8)
+        let original = Data(
+            #"{"displayChrome":{"statusBarVisible":false},"commandChrome":null,"photoDisplayChrome":null,"photoCommandChrome":null,"futureSetting":null}"#
+                .utf8)
         let document = OperatorPreferencesDocument(data: original)
         let previous = document.decoded()
         var next = previous
@@ -113,27 +125,34 @@ import Testing
     }
 
     @Test func editingAnInheritedVideoCommandLayoutKeepsItsPhotoSibling() throws {
-        let original = Data(#"{"displayChrome":{"statusBarVisible":false,"sideRailsVisible":false},"futureSetting":"retain"}"#.utf8)
+        let original = Data(
+            #"{"displayChrome":{"statusBarVisible":false,"sideRailsVisible":false},"futureSetting":"retain"}"#
+                .utf8)
         let document = OperatorPreferencesDocument(data: original)
         let previous = document.decoded()
         var next = previous
         next.commandChrome.statusBarVisible = true
         let updated = try document.updating(next, previous: previous)
-        #expect(OperatorPreferencesDocument(data: updated).decoded() == next,
+        #expect(
+            OperatorPreferencesDocument(data: updated).decoded() == next,
             "Editing one inherited layout must keep the photo layout that inherited from it")
         let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
         #expect(raw["futureSetting"] as? String == "retain")
     }
 
     @Test func unreadableLayoutsAndRailsKeepTheirInheritedChoicesAfterParentEdit() throws {
-        let original = Data(#"{"displayChrome":{"sideRailsVisible":false,"railRecordVisible":"yes","futureStyle":{"gain":7}},"commandChrome":"corrupt","photoDisplayChrome":7,"futureSetting":"retain"}"#.utf8)
+        let original = Data(
+            #"{"displayChrome":{"sideRailsVisible":false,"railRecordVisible":"yes","futureStyle":{"gain":7}},"commandChrome":"corrupt","photoDisplayChrome":7,"futureSetting":"retain"}"#
+                .utf8)
         let document = OperatorPreferencesDocument(data: original)
         let previous = document.decoded()
         var next = previous
         next.displayChrome.sideRailsVisible = true
         let updated = try document.updating(next, previous: previous)
-        #expect(OperatorPreferencesDocument(data: updated).decoded() == next,
-            "An unreadable stored value inherits like an absent one, so a parent edit must not move it")
+        #expect(
+            OperatorPreferencesDocument(data: updated).decoded() == next,
+            "An unreadable stored value inherits like an absent one, so a parent edit must not move it"
+        )
         let raw = try #require(JSONSerialization.jsonObject(with: updated) as? [String: Any])
         #expect(raw["futureSetting"] as? String == "retain")
         let chrome = try #require(raw["displayChrome"] as? [String: Any])
@@ -143,7 +162,8 @@ import Testing
     @Test func untouchedChoicesOwnedElsewhereKeepTheirStoredBytes() throws {
         // The app overlays choices that now live in shared keys onto the decoded document, so
         // `previous` can differ from the document; an unrelated edit must not write them back.
-        let original = Data(#"{"displayChrome":{"sideRailsVisible":false},"hapticsEnabled":true}"#.utf8)
+        let original = Data(
+            #"{"displayChrome":{"sideRailsVisible":false},"hapticsEnabled":true}"#.utf8)
         let document = OperatorPreferencesDocument(data: original)
         var previous = document.decoded()
         previous.keepScreenAwake = false

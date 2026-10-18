@@ -320,7 +320,9 @@ struct RelayPasscodeKeychainTests {
         let model = NativeAppModel()
         let savedPreference = model.preferences.relayWatcherPasscode
         defer {
-            if case .stored(let code) = saved { keychain.storeHostPasscode(code) } else {
+            if case .stored(let code) = saved {
+                keychain.storeHostPasscode(code)
+            } else {
                 keychain.storeHostPasscode("")
             }
             model.preferences.relayWatcherPasscode = savedPreference
@@ -350,7 +352,9 @@ struct RelayPasscodeKeychainTests {
         let model = NativeAppModel()
         let savedPreference = model.preferences.relayWatcherPasscode
         defer {
-            if case .stored(let code) = saved { keychain.storeHostPasscode(code) } else {
+            if case .stored(let code) = saved {
+                keychain.storeHostPasscode(code)
+            } else {
                 keychain.storeHostPasscode("")
             }
             model.preferences.relayWatcherPasscode = savedPreference
