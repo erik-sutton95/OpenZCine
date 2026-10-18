@@ -3,7 +3,7 @@
 # included OpenCine build (monitor-ui, multicam) must load the same Android Gradle plugin.
 androidCompileSdk = "37"
 agp = "9.4.1"
-kotlin = "2.4.20"
+kotlin = "2.4.21"
 coroutines = "1.11.0"
 composeBom = "2026.09.00"
 activityCompose = "1.13.0"
