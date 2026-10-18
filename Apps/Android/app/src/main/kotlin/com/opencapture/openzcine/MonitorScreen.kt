@@ -530,6 +530,10 @@ internal fun MonitorScreen(
         mutableStateOf(commandTileOrderStore.load())
     }
     var activeCommandControl by remember { mutableStateOf<CommandControlRequest?>(null) }
+    var activeCommandStabilization by remember(session) { mutableStateOf(false) }
+    var stabilizationSource by remember(session) {
+        mutableStateOf(sharedControlState.snapshot?.let { it.session to it.epoch })
+    }
     var activeMonitorPickerKind by remember { mutableStateOf<MonitorPickerKind?>(null) }
     // iOS `isRedDownloadPresented` — full-screen RED IPP2 download cover.
     var redDownloadPresented by remember { mutableStateOf(false) }
@@ -553,6 +557,7 @@ internal fun MonitorScreen(
         lastCaptureSelector = cameraProperties.captureSelector
         if (previous != null && cameraProperties.captureSelector != previous) {
             activeCommandControl = null
+            activeCommandStabilization = false
             activeMonitorPickerKind = null
             assists.shared.configureTool = null
         }
@@ -717,14 +722,17 @@ internal fun MonitorScreen(
      * markers, the WB tint pad and the FOCUS Mode/Area/Subject bar went missing there. Controls the
      * strip has no cell for (audio, tone, grid) still take the drum.
      */
-    val openCommandControl: (CommandControlRequest) -> Unit = { request ->
+    val openCommandControl: (CommandPanelRequest) -> Unit = { request ->
         assists.shared.configureTool = null
         // Same picker source the portrait live grid resolves against, so a stills body never
         // matches a cinema request against the movie strip.
         val pickerSource = if (isPhotographyMode) photographySettings else captureSettings
-        val kind = monitorPickerKindForRequest(pickerSource, request)
+        val single = request as? CommandControlRequest
+        val kind = single?.let { monitorPickerKindForRequest(pickerSource, it) }
         activeMonitorPickerKind = kind
-        activeCommandControl = if (kind == null) request else null
+        activeCommandControl = if (kind == null) single else null
+        activeCommandStabilization = request is CommandStabilizationRequest
+        stabilizationSource = sharedControlState.snapshot?.let { it.session to it.epoch }
         commandControlFeedback = null
     }
     val applyCameraControl: (CommandControlRequest, String) -> Unit =
@@ -1827,6 +1835,7 @@ internal fun MonitorScreen(
         val openSharedPicker: (MonitorPickerKind) -> Unit = { kind ->
             assists.shared.configureTool = null
             activeCommandControl = null
+            activeCommandStabilization = false
             activeMonitorPickerKind = nextMonitorPicker(activeMonitorPickerKind, kind,
                 sessionState is CameraSessionState.Connected && !locked && editingDisplay == null &&
                     isMonitorFront && pendingCommandControl == null)
@@ -1950,6 +1959,9 @@ internal fun MonitorScreen(
             ?: activeCommandControl?.let { request -> MonitorOperatorCameraPanel("command:${request.control.name}",
                 false, chrome = MonitorOperatorCameraPanelChrome.CONTENT, title = request.title,
                 subtitle = stringResource(R.string.command_current_value, request.currentValue)) }
+            ?: if (activeCommandStabilization) MonitorOperatorCameraPanel("command:stabilization",
+                false, chrome = MonitorOperatorCameraPanelChrome.CONTENT,
+                title = stringResource(R.string.command_title_vr_combined)) else null
         val recordingFormat = sharedControlState.snapshot?.let(MonitorCapturePresentation::recordingFormat)
         val formatLabel = nikonRecordingFormatLabel(
             recordingFormat?.let(MonitorCapturePresentation::recordingLabel),
@@ -1982,7 +1994,7 @@ internal fun MonitorScreen(
                 (if (id == COLOR_READOUT_ID) MonitorPickerKind.CODEC else MonitorPickerKind.entries.firstOrNull { it.name == id })
                     ?.let(openSharedPicker)
             },
-            dismiss = { activeMonitorPickerKind = null; activeCommandControl = null; commandControlFeedback = null },
+            dismiss = { activeMonitorPickerKind = null; activeCommandControl = null; activeCommandStabilization = false; commandControlFeedback = null },
             commit = { key, captured, target ->
                 val admission = com.opencapture.opencine.nikon.CameraCommandAdmission(session) {
                     val latest = commonControl.state.value.snapshot
@@ -2089,7 +2101,7 @@ internal fun MonitorScreen(
                             MfDriveEligibility.UNAVAILABLE &&
                         // The strip absorbs taps, so it waits for every panel to close (iOS `showsMFDriveScrub
                         // … && activePanel == nil`).
-                        activeCommandControl == null && activeMonitorPickerKind == null &&
+                        activeCommandControl == null && !activeCommandStabilization && activeMonitorPickerKind == null &&
                         assists.shared.configureTool == null
                 ) { accepts ->
                     // Re-arm the relative position when the dial (re)appears.
@@ -2339,6 +2351,22 @@ internal fun MonitorScreen(
                         )
                     }
                 }
+                if (activeCommandStabilization && key == "command:stabilization") {
+                    CommandStabilizationPanel(
+                        request = commandPresentation.stabilization,
+                        controlsEnabled = commandControlsEnabled,
+                        currentSource = {
+                            stabilizationSource == commonControl.state.value.snapshot?.let { it.session to it.epoch } &&
+                                identity == MonitorOperatorLiveIdentity(commonControl.state.value.snapshot?.session,
+                                    commonControl.state.value.snapshot?.epoch, currentPicture.value)
+                        },
+                        feedback = commandControlFeedback,
+                        onSelect = applyCameraControl,
+                        onUnavailable = { _, reason ->
+                            commandControlFeedback = reason?.let { CommandControlFeedback(it, isError = true) }
+                        },
+                    )
+                }
             },
             photoRelease = { enabled, decoration -> MonitorPhotoRelease(geometry.layout.record.width, enabled, decoration,
                 capturing = stillCapturing, timerRemaining = photoTimerRemaining, bodyPulse = bodyShutterPulse,
@@ -2346,7 +2374,7 @@ internal fun MonitorScreen(
         )
 
         gyroState?.takeIf { state ->
-            isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null &&
+            isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&
                 (state.enabled || state.failed) && (!isClean || state.failed)
         }?.let { state ->
             GyroStatusPill(state, Modifier.align(Alignment.TopStart)

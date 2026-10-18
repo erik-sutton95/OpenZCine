@@ -778,6 +778,133 @@ final class CommandGridScreenshotUITests: SharedAppUITestCase {
     }
 }
 
+/// SIMULATED callback receipts from actual shared row views, driven only by public XCUI input.
+/// These prove the app projection and row callbacks, not camera transport or hardware acceptance.
+@MainActor
+final class GroupedStabilizationInputUITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    private func finish() {
+        app?.terminate()
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    func testVisibleSelectionsSendExactlyTheirIndependentRequests() {
+        defer { finish() }
+        launch("normal")
+        tap("open")
+        expect("requests", "none")
+        tapRow("movieVR", 2)
+        expect("requests", "vr:SPORT")
+        tapRow("electronicVR", 1)
+        expect("requests", "vr:SPORT|evr:ON")
+        tap("close")
+        expect("requests", "vr:SPORT|evr:ON")
+        tap("open")
+        expect("requests", "vr:SPORT|evr:ON")
+        capture("independent-requests")
+    }
+
+    func testRAWLockAndRetiredSourceRefuseActualTouches() {
+        defer { finish() }
+        launch("raw")
+        tap("open")
+        tapRow("electronicVR", 1)
+        expect("requests", "none")
+        expect("refusals", "1")
+        expect("reason", "e-VR is unavailable in RAW codecs")
+        tap("lock")
+        let locked = row("movieVR", 2)
+        XCTAssertTrue(locked.exists)
+        XCTAssertFalse(locked.isEnabled)
+        XCTAssertTrue(app.frame.contains(locked.frame))
+        XCTAssertGreaterThanOrEqual(locked.frame.height, 44)
+        // Public coordinate input still reaches the visible disabled region; no handler shortcut.
+        locked.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        expect("requests", "none")
+        tap("lock")
+        tap("retireSource")
+        expect("source", "retired")
+        tapRow("movieVR", 2)
+        expect("requests", "none")
+        expect("refusals", "1")
+        capture("refused-touches")
+    }
+
+    func testUnknownEmptyAndUnlistedReadbacksNeverInferSelection() {
+        defer { finish() }
+        launch("unknown")
+        tap("open")
+        expect("observations", "nil|nil")
+        XCTAssertFalse(row("electronicVR", 0).isSelected)
+        XCTAssertFalse(row("electronicVR", 1).isSelected)
+        tap("observeOutside")
+        let observed = app.staticTexts["monitor.independentSettings.movieVR.current"]
+        XCTAssertTrue(observed.waitForExistence(timeout: 5))
+        XCTAssertEqual(observed.label, "ON")
+        expect("requests", "none")
+        tapRow("electronicVR", 1)
+        expect("requests", "evr:ON")
+        expect("observations", "ON|nil")
+        tap("offerMovie")
+        XCTAssertEqual(observed.label, "unlisted observation")
+        XCTAssertFalse(row("movieVR", 0).isSelected)
+        XCTAssertFalse(row("movieVR", 1).isSelected)
+        XCTAssertFalse(row("movieVR", 2).isSelected)
+        tapRow("movieVR", 2)
+        expect("requests", "evr:ON|vr:SPORT")
+        expect("observations", "unlisted observation|nil")
+        capture("unknown-and-unlisted")
+    }
+
+    private func launch(_ mode: String) {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_STABILIZATION_PANEL"] = mode
+        app.launch()
+        XCTAssertTrue(app.staticTexts["simulated.stabilization.label"].waitForExistence(timeout: 5))
+    }
+
+    private func tap(_ identifier: String) {
+        let button = app.buttons["simulated.stabilization." + identifier]
+        XCTAssertTrue(
+            waitUntilHittable(button, timeout: 5), "Visible public control: \(identifier)")
+        button.tap()
+    }
+
+    private func row(_ identifier: String, _ index: Int) -> XCUIElement {
+        app.buttons["monitor.independentSettings.\(identifier).option.\(index)"]
+    }
+
+    private func tapRow(_ identifier: String, _ index: Int) {
+        let button = row(identifier, index)
+        XCTAssertTrue(waitUntilHittable(button, timeout: 5))
+        button.tap()
+    }
+
+    private func expect(_ identifier: String, _ value: String) {
+        let receipt = app.staticTexts["simulated.stabilization." + identifier]
+        let matches = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", value), object: receipt)
+        XCTAssertEqual(XCTWaiter.wait(for: [matches], timeout: 3), .completed)
+    }
+
+    private func capture(_ label: String) {
+        let image = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        image.name = "SIMULATED-grouped-\(label)-landscape-public-input"
+        image.lifetime = .keepAlways
+        add(image)
+        let receipt = XCTAttachment(
+            string:
+                "SIMULATED row callback scope; requests=\(app.staticTexts["simulated.stabilization.requests"].value ?? "unread"); refusals=\(app.staticTexts["simulated.stabilization.refusals"].value ?? "unread")"
+        )
+        receipt.name = "SIMULATED grouped row callback receipt"
+        receipt.lifetime = .keepAlways
+        add(receipt)
+    }
+}
+
 // The receipt value types below mirror the app-side definitions in RunnerTests
 // (`GyroCaptureTests.swift`): the accepted cross-process contract keeps one shape on both
 // sides, carried by the `NativeUIReceiptBridge` container convention.

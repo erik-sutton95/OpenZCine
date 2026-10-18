@@ -13,7 +13,12 @@ import com.opencapture.monitorui.MonitorCommandTile
 import com.opencapture.monitorui.monitorCommandTileOrder
 import com.opencapture.monitorui.moveMonitorCommandTile
 import com.opencapture.opencine.appkit.MonitorCommandTileOrderPreferences
+import com.opencapture.opencine.appkit.LocalMonitorCaptureCommandEnabled
 import com.opencapture.opencine.cameracontrols.LadderSheet
+import com.opencapture.opencine.cameracontrols.IndependentSettingRow
+import com.opencapture.opencine.cameracontrols.MonitorIndependentSettingsPanel
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
 import com.opencapture.opencine.vocabulary.LadderSheetPresentation
 import com.opencapture.opencine.vocabulary.LadderTab
 import com.opencapture.opencine.nikon.CameraControl
@@ -42,15 +47,7 @@ internal enum class CommandTileKind {
     CODEC,
     STABILIZATION,
 
-    /**
-     * Electronic VR. iOS carries it as the second row of one stabilization panel
-     * (ios/Runner/MonitorPanels.swift:1552-1590), but the DISP 3 dialog writes exactly the one
-     * [CameraControl] the tile it opened carries, so e-VR needs a tile of its own to have any
-     * write path: the [STABILIZATION] tile reads out "VR / e-VR" yet can only write movie VR.
-     *
-     * ponytail: two tiles instead of iOS's one two-row panel — collapse this back into
-     * [STABILIZATION] once the DISP 3 dialog can host more than one control.
-     */
+    /** Retained in the full saved order for old builds; its row opens from STABILIZATION. */
     ELECTRONIC_VR,
 }
 
@@ -65,9 +62,24 @@ internal fun commandTileOrderStore(preferences: SharedPreferences): MonitorComma
 internal fun normalizeCommandTileOrder(order: List<CommandTileKind>): List<CommandTileKind> =
     monitorCommandTileOrder(order, CommandTileKind.entries)
 
-/** Moves one tile to [targetIndex] while retaining a complete, valid order. */
-internal fun moveCommandTile(order: List<CommandTileKind>, kind: CommandTileKind, targetIndex: Int): List<CommandTileKind> =
-    moveMonitorCommandTile(order, kind, targetIndex, CommandTileKind.entries)
+/** Only the rendered projection hides e-VR; the persisted full list retains its identity. */
+internal fun visibleCommandTileOrder(order: List<CommandTileKind>): List<CommandTileKind> =
+    normalizeCommandTileOrder(order).filter { it != CommandTileKind.ELECTRONIC_VR }
+
+/** Mirrors the accepted Swift hidden-slot move: visible indices never move the hidden identity. */
+internal fun moveCommandTile(order: List<CommandTileKind>, kind: CommandTileKind, targetIndex: Int): List<CommandTileKind> {
+    val full = normalizeCommandTileOrder(order)
+    val visible = visibleCommandTileOrder(full)
+    val moved = moveMonitorCommandTile(visible, kind, targetIndex, visible).iterator()
+    return full.map { if (it == CommandTileKind.ELECTRONIC_VR) it else moved.next() }
+}
+
+/** App-owned presentation route; a group is never one camera control write. */
+internal sealed interface CommandPanelRequest
+
+internal data class CommandStabilizationRequest(
+    val rows: List<IndependentSettingRow<CameraControl, CommandControlRequest>>,
+) : CommandPanelRequest
 
 /** One semantically validated intent passed from the Compose sheet to the session control API. */
 internal data class CommandControlRequest(
@@ -82,7 +94,7 @@ internal data class CommandControlRequest(
     val bitDepths: List<CodecBitDepthOption> = emptyList(),
     /** Caption of the depth the body is recording at, so the pair can fill the active side. */
     val bitDepthSelection: String? = null,
-)
+) : CommandPanelRequest
 
 /** The user-visible outcome of an accepted or rejected control write. */
 internal data class CommandControlFeedback(
@@ -144,11 +156,31 @@ internal data class CommandDashboardPresentation(
     val health: MonitorCommandHealth,
     val frameRate: String,
     val refreshSummary: String,
+    val stabilization: CommandStabilizationRequest = CommandStabilizationRequest(emptyList()),
 ) {
     /** The side column as the shared dashboard draws it. */
     val sections: List<MonitorCommandSection<CommandTileKind, CommandControlRequest>>
         get() = sideSections.map { MonitorCommandSection(it.title, it.cells) }
+
+    // Capture-strip consumers keep the existing single-control projections above. Only the
+    // dashboard's generic presentation slot carries a grouped route.
+    val panelTiles: List<MonitorCommandTile<CommandTileKind, CommandPanelRequest>>
+        get() = tiles.map { tile ->
+            val request = if (tile.kind == CommandTileKind.STABILIZATION) {
+                stabilization.takeIf { it.rows.any { row -> row.request != null } }
+            } else tile.request
+            tile.forPanel(request)
+        }
+
+    val panelSections: List<MonitorCommandSection<CommandTileKind, CommandPanelRequest>>
+        get() = sideSections.map { section ->
+            MonitorCommandSection(section.title, section.cells.map { it.forPanel(it.request) })
+        }
 }
+
+private fun CommandTilePresentation.forPanel(request: CommandPanelRequest?) =
+    MonitorCommandTile(kind, title, value, request,
+        if (request == null) unavailableReason else null, amber, muted)
 
 /**
  * Projects the real Swift-core snapshot into the Android command dashboard.
@@ -505,10 +537,7 @@ internal fun commandDashboardPresentation(
                     title = strings.resolve(R.string.command_title_vr_combined),
                     value = stabilization ?: "—",
                 ),
-            // The combined tile above only writes movie VR, so e-VR was displayed and never
-            // settable. Same advertised-options machinery as every other tile; the extra gate is
-            // iOS's: RAW codecs refuse e-VR, and a codec still unread fails closed rather than
-            // offering a write the body will reject.
+            // Keep the existing independent projection and codec refusal for the grouped row.
             CommandTileKind.ELECTRONIC_VR to
                 advertisedEditable(
                     kind = CommandTileKind.ELECTRONIC_VR,
@@ -648,7 +677,21 @@ internal fun commandDashboardPresentation(
             }
             ?: "—"
     return CommandDashboardPresentation(
-        tiles = normalizeCommandTileOrder(tileOrder).mapNotNull(tilesByKind::get),
+        tiles = visibleCommandTileOrder(tileOrder).mapNotNull(tilesByKind::get),
+        stabilization = CommandStabilizationRequest(
+            listOf(CommandTileKind.STABILIZATION, CommandTileKind.ELECTRONIC_VR).map { kind ->
+                val tile = tilesByKind.getValue(kind)
+                val control = if (kind == CommandTileKind.STABILIZATION) CameraControl.VIBRATION_REDUCTION else CameraControl.ELECTRONIC_VR
+                IndependentSettingRow(
+                    id = control,
+                    title = strings.resolve(if (kind == CommandTileKind.STABILIZATION) R.string.command_title_vr else R.string.command_title_evr),
+                    options = capabilities.options(control),
+                    current = (if (kind == CommandTileKind.STABILIZATION) snapshot.vibrationReduction else snapshot.electronicVr).monitorValueOrNull(),
+                    request = tile.request,
+                    unavailableReason = tile.unavailableReason,
+                )
+            },
+        ),
         // iOS CommandSideColumn: Image → Focus → Audio → Monitor (no Exposure / VR side tiles).
         sideSections =
             listOf(
@@ -963,20 +1006,42 @@ internal fun CommandDashboard(
     portrait: Boolean,
     controlsEnabled: Boolean,
     pendingControl: CameraControl?,
-    onOpenControl: (CommandControlRequest) -> Unit,
+    onOpenControl: (CommandPanelRequest) -> Unit,
     onMoveTile: (CommandTileKind, Int) -> Unit,
     liveFps: String,
     signalBars: Int,
 ) {
     MonitorCommandDashboard(
-        presentation.tiles, presentation.sections, presentation.health, portrait, controlsEnabled,
+        presentation.panelTiles, presentation.panelSections, presentation.health, portrait, controlsEnabled,
         pending = pendingControl != null,
-        applying = { it.control == pendingControl },
+        applying = { request -> when (request) {
+            is CommandControlRequest -> request.control == pendingControl
+            is CommandStabilizationRequest -> request.rows.any { it.request?.control == pendingControl && pendingControl != null }
+        } },
         onOpenControl = onOpenControl,
         onMoveTile = onMoveTile,
     ) {
         // The link gauge every app's status bar draws (tap toggles bars and fps).
         com.opencapture.monitorui.MonitorTelemetry(signalBars, liveFps, emptyList(), horizontal = true, showsPower = false)
+    }
+}
+
+/** Actual shared row controls; the live composition supplies popup chrome and native dispatch. */
+@Composable
+internal fun CommandStabilizationPanel(
+    request: CommandStabilizationRequest,
+    controlsEnabled: Boolean,
+    currentSource: () -> Boolean,
+    feedback: CommandControlFeedback?,
+    onSelect: (CommandControlRequest, String) -> Unit,
+    onUnavailable: (CameraControl, String?) -> Unit,
+) {
+    val commandEnabled = LocalMonitorCaptureCommandEnabled.current
+    Column {
+        MonitorIndependentSettingsPanel(request.rows, controlsEnabled && commandEnabled, currentSource,
+            onSelect = { target, label -> if (label.isNotBlank()) onSelect(target, label) },
+            onUnavailable = onUnavailable)
+        feedback?.let { Text(it.message) }
     }
 }
 

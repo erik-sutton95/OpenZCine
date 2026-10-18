@@ -196,40 +196,53 @@ struct PickerHeader: View {
     }
 }
 
-/// Stabilization picker (movie VR + electronic VR) for the command monitor's VR tile. Unlike the
-/// other settings, VR and e-VR are two independent on/off-style toggles rather than one value wheel,
-/// so this renders its own row-of-buttons layout instead of the shared ladder drum.
+/// Existing independent native writes, never a coupled stabilization command.
+enum NikonStabilizationRequest: String, Sendable {
+    case movieVR = "vr"
+    case electronicVR = "evr"
+}
+
+/// The existing Swift host projection. This does not normalize Android or wire admission.
+enum NikonStabilizationSettings {
+    static func rows(
+        vrOptions: [String]?, currentVR: String?, currentEVR: String?, codec: String
+    ) -> [IndependentSettingRow<NikonStabilizationRequest, NikonStabilizationRequest>] {
+        let raw = MonitorTextFormat.isRawCodec(codec)
+        return [
+            .init(
+                id: .movieVR, title: "VR", options: vrOptions ?? ["OFF", "ON", "SPORT"],
+                current: currentVR, request: .movieVR, unavailableReason: nil),
+            .init(
+                id: .electronicVR, title: "e-VR", options: ["OFF", "ON"], current: currentEVR,
+                request: raw ? nil : .electronicVR,
+                unavailableReason: raw ? "e-VR is unavailable in RAW codecs" : nil),
+        ]
+    }
+}
+
+/// Stabilization picker for the existing ibis tile, using the shared independent row renderer.
 struct StabilizationPickerPanel: View {
     @Environment(NativeAppModel.self) private var model
     /// Bumped when the operator taps the disabled e-VR row, to flash the "unavailable in RAW" toast.
     @State private var evrBlockedNotice = 0
 
-    private var vrOptions: [String] {
-        // No runtime enumeration for this one: 2-byte 0xDxxx props have no describe op on this
-        // body, so `.movieVibrationReduction` is deliberately left out of `enumeratedControls` and
-        // this hardcoded ladder is the only source of options.
-        model.cameraControlOptions[.movieVibrationReduction] ?? ["OFF", "ON", "SPORT"]
-    }
-
-    /// Electronic VR can't be applied to a RAW stream (R3D NE / N-RAW / ProRes RAW HQ), so the row
-    /// is disabled with an explanatory toast rather than silently rejecting the write.
-    private var electronicVRUnavailable: Bool {
-        MonitorTextFormat.isRawCodec(model.cameraState.codec)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            optionRow(
-                title: "VR", options: vrOptions,
-                selected: model.stabilizationVR
-            ) { model.setVibrationReduction($0) }
-            optionRow(
-                title: "e-VR", options: ["OFF", "ON"],
-                selected: model.stabilizationElectronicVR,
-                disabled: electronicVRUnavailable,
-                onDisabledTap: { evrBlockedNotice += 1 }
-            ) { model.setElectronicVR(on: $0 == "ON") }
-        }
+        let source = model.operatorLiveIdentity
+        MonitorIndependentSettingsPanel(
+            rows: NikonStabilizationSettings.rows(
+                vrOptions: model.cameraControlOptions[.movieVibrationReduction],
+                currentVR: model.stabilizationVR, currentEVR: model.stabilizationElectronicVR,
+                codec: model.cameraState.codec),
+            interactionEnabled: !model.interfaceLocked && !model.relayControlSurrendered,
+            currentSource: { model.operatorLiveIdentity == source },
+            onSelect: { request, option in
+                switch request {
+                case .movieVR: model.setVibrationReduction(option)
+                case .electronicVR: model.setElectronicVR(on: option == "ON")
+                }
+            },
+            onUnavailable: { _, _ in evrBlockedNotice += 1 }
+        )
         // No outer padding — `pickerBodyContent` already wraps this in a padded GlassPanel, so an
         // extra .padding(16) doubled the inset to ~36pt. The toast floats ABOVE the sheet header
         // so it's never cut off at the bottom edge.
@@ -241,43 +254,6 @@ struct StabilizationPickerPanel: View {
         }
     }
 
-    private func optionRow(
-        title: String, options: [String], selected: String?,
-        disabled: Bool = false,
-        onDisabledTap: (() -> Void)? = nil,
-        action: @escaping (String) -> Void
-    ) -> some View {
-        HStack(spacing: 10) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(LiveDesign.muted)
-                .frame(width: 44, alignment: .leading)
-            ForEach(options, id: \.self) { option in
-                Button {
-                    if disabled {
-                        onDisabledTap?()
-                    } else {
-                        action(option)
-                    }
-                } label: {
-                    Text(option)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(option == selected ? LiveDesign.accent : LiveDesign.text)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: LiveDesign.cornerRadius)
-                                .fill(
-                                    option == selected
-                                        ? LiveDesign.accentDim : LiveDesign.surface)
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        // Grey the whole row when disabled; it stays tappable so the toast can explain why.
-        .opacity(disabled ? 0.35 : 1)
-    }
 }
 
 /// A drum-style value wheel with the wireframe's look: a momentum scroll that snaps (`viewAligned`)

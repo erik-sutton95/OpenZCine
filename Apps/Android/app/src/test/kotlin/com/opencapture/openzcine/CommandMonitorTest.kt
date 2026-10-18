@@ -668,8 +668,8 @@ class CommandMonitorTest {
     }
 
     @Test
-    fun `electronic VR tile carries the write the combined VR tile cannot`() {
-        fun evrTile(codec: String) =
+    fun `grouped electronic VR retains its independent request and RAW refusal`() {
+        fun evrRow(codec: String) =
             commandDashboardPresentation(
                 snapshot =
                     CameraPropertySnapshot(
@@ -689,19 +689,18 @@ class CommandMonitorTest {
                     ),
                 tileOrder = CommandTileKind.entries.toList(),
             )
-                .tiles
-                .first { it.kind == CommandTileKind.ELECTRONIC_VR }
+                .stabilization.rows.single { it.id == CameraControl.ELECTRONIC_VR }
 
-        val writable = evrTile("H.265")
-        assertEquals("OFF", writable.value)
+        val writable = evrRow("H.265")
+        assertEquals("OFF", writable.current)
         val request = assertNotNull(writable.request)
         assertEquals(CameraControl.ELECTRONIC_VR, request.control)
         assertEquals(listOf("OFF", "ON"), request.options)
         assertNull(writable.unavailableReason)
 
         // RAW keeps the readout and drops the write, like iOS's greyed row.
-        val blocked = evrTile("N-RAW")
-        assertEquals("OFF", blocked.value)
+        val blocked = evrRow("N-RAW")
+        assertEquals("OFF", blocked.current)
         assertNull(blocked.request)
         assertEquals(
             "Electronic VR is unavailable for this camera or active codec.",
@@ -757,8 +756,8 @@ class CommandMonitorTest {
             )
 
         // Every Nikon tile once, the stored order first, the rest in declared order.
-        assertEquals(normalizeCommandTileOrder(order), presentation.tiles.map { it.kind })
-        assertEquals(CommandTileKind.entries.size, presentation.tiles.size)
+        assertEquals(normalizeCommandTileOrder(order).filter { it != CommandTileKind.ELECTRONIC_VR }, presentation.tiles.map { it.kind })
+        assertEquals(CommandTileKind.entries.size - 1, presentation.tiles.size)
         val iso = presentation.tiles[1]
         assertEquals("800", iso.value)
         assertEquals(CameraControl.ISO, assertNotNull(iso.request).control)

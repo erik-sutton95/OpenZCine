@@ -13655,7 +13655,9 @@ struct NativeRootContent: View {
     @Environment(NativeAppModel.self) private var model
 
     var body: some View {
-        if let review = DemoHarness.connectConsentReview() {
+        if let review = DemoHarness.stabilizationReview() {
+            review
+        } else if let review = DemoHarness.connectConsentReview() {
             review
         } else {
             ZStack {

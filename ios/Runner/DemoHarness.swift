@@ -2,6 +2,7 @@ import MonitorPresentation
 import Network
 import OpenCineAppKit
 import OpenCineApple
+import OpenCineCameraControls
 import OpenCineCore
 import OpenCineMedia
 import OpenZCineCore
@@ -150,6 +151,17 @@ enum DemoHarness {
         #if DEBUG
             guard let mode = value("ZC_DEMO_CONSENT_SCREEN") else { return nil }
             return AnyView(ConnectConsentReview(mode: mode))
+        #else
+            return nil
+        #endif
+    }
+
+    /// SIMULATED public-input host for the app's typed independent-setting row projection.
+    /// Its receipts observe row callbacks only; it owns no camera, transport or app preferences.
+    @MainActor static func stabilizationReview() -> AnyView? {
+        #if DEBUG
+            guard let mode = value("ZC_DEMO_STABILIZATION_PANEL") else { return nil }
+            return AnyView(StabilizationReview(mode: mode))
         #else
             return nil
         #endif
@@ -1334,6 +1346,114 @@ enum DemoHarness {
 #endif
 
 #if DEBUG
+    /// App-owned values and exact typed callback receipts over the real shared controls.
+    @MainActor
+    private struct StabilizationReview: View {
+        @State private var visible = false
+        @State private var enabled = true
+        @State private var sourceCurrent = true
+        @State private var vrOptions: [String]?
+        @State private var currentVR: String?
+        @State private var currentEVR: String?
+        private let codec: String
+        @State private var requests: [String] = []
+        @State private var refusals = 0
+        @State private var reason: String?
+
+        init(mode: String) {
+            _vrOptions = State(initialValue: mode == "unknown" ? [] : nil)
+            _currentVR = State(initialValue: mode == "unknown" ? nil : "OFF")
+            _currentEVR = State(initialValue: mode == "unknown" ? nil : "OFF")
+            codec = mode == "raw" ? "N-RAW" : "H.265"
+        }
+
+        var body: some View {
+            VStack(spacing: 10) {
+                HStack(spacing: 16) {
+                    Text("SIMULATED independent stabilization")
+                        .accessibilityIdentifier("simulated.stabilization.label")
+                    if visible {
+                        Button("Close stabilization") { visible = false }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.close")
+                    } else {
+                        Button("Open stabilization") { visible = true }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.open")
+                    }
+                }
+                HStack(alignment: .top, spacing: 24) {
+                    Group {
+                        if visible {
+                            MonitorIndependentSettingsPanel(
+                                rows: NikonStabilizationSettings.rows(
+                                    vrOptions: vrOptions, currentVR: currentVR,
+                                    currentEVR: currentEVR, codec: codec),
+                                interactionEnabled: enabled, currentSource: { sourceCurrent },
+                                onSelect: { request, option in
+                                    requests.append("\(request.rawValue):\(option)")
+                                },
+                                onUnavailable: { _, explanation in
+                                    refusals += 1
+                                    reason = explanation
+                                })
+                        } else {
+                            Text("Panel closed")
+                        }
+                    }
+                    .frame(width: 308)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Button(enabled ? "Lock controls" : "Unlock controls") {
+                                enabled.toggle()
+                            }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.lock")
+                            Button("Retire source") { sourceCurrent = false }
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier("simulated.stabilization.retireSource")
+                        }
+                        HStack {
+                            Button("Observe ON") { currentVR = "ON" }
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier("simulated.stabilization.observeOutside")
+                            Button("Offer movie choices") {
+                                vrOptions = ["OFF", "ON", "SPORT"]
+                                currentVR = "unlisted observation"
+                            }
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("simulated.stabilization.offerMovie")
+                        }
+                        receipt(
+                            "Requests", key: "requests",
+                            value: requests.isEmpty ? "none" : requests.joined(separator: "|"))
+                        receipt("Refusals", key: "refusals", value: String(refusals))
+                        receipt("Reason", key: "reason", value: reason ?? "none")
+                        receipt(
+                            "Source", key: "source", value: sourceCurrent ? "current" : "retired")
+                        receipt(
+                            "Observations", key: "observations",
+                            value: "\(currentVR ?? "nil")|\(currentEVR ?? "nil")")
+                    }
+                    .frame(width: 330, alignment: .leading)
+                }
+            }
+            .font(.system(size: 12, design: .monospaced))
+            .buttonStyle(.bordered)
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundStyle(.white)
+            .background(Color.black.ignoresSafeArea())
+        }
+
+        private func receipt(_ title: String, key: String, value: String) -> some View {
+            Text("\(title): \(value)")
+                .accessibilityLabel(title)
+                .accessibilityValue(value)
+                .accessibilityIdentifier("simulated.stabilization." + key)
+        }
+    }
+
     /// SIMULATED driver retains the production Nikon adapter without any camera transport.
     @MainActor final class NikonQuickDemoDriver: NikonControlDriver {
         private weak var model: NativeAppModel?
