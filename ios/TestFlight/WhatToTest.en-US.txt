@@ -12,6 +12,8 @@ Fixes
 - Returning from Media restores the selected camera's live picture.
 - Storage readouts retain reported precision and mark missing measurements as unavailable.
 - Interrupted gyro takes preserve available motion data for recovery after a disconnect, backgrounding or app restart.
+- After a disconnect, recovery keeps the camera in the stills or video mode you were using.
+- In portrait, the status readouts use a three-column grid that grows with the number of rows.
 
 What to test
 
@@ -20,3 +22,4 @@ What to test
 - Enable gyro logging and wait for GYRO ARMED. Record a short clip, check the saved log, open Media, then return to Live View and reconnect.
 - Background the app or reconnect during a take. Check the interrupted log when you return.
 - With camera and lens stabilization off, export a short fixed-focal-length take and a ten-minute take. Choose a lens profile and sync in Gyroflow; check the beginning, middle and end.
+- Disconnect and reconnect the camera in stills mode, then in video mode, and check the mode is kept. Rotate to portrait and check the status readouts.
