@@ -47,6 +47,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.derivedStateOf
@@ -2108,303 +2109,305 @@ internal fun MonitorScreen(
                 (tool !in ScopeKind.canonical.map { it.assistTool } ||
                     (scopeSource !== emptyScopes && (!isPortrait || isPortraitFill || tool.scopeKind in portraitScopes)))
         }.toSet()
-        MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
-            MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
-                { usage = it; usageStore.value = it }, nikonUsageSeed,
-                fitted = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList()),
-            MonitorOperatorBodyViews(
-                dashboard = { accepts ->
-                    CommandDashboard(commandPresentation, isPortrait, commandControlsEnabled && accepts,
-                        pendingCommandControl, openCommandControl, moveCommandTileTo,
-                        link.label, link.bars)
-                },
-                focusDrive = if (
-                    // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`), default OFF; off
-                    // hides the strip even in an AF focus mode. Video and photo alike.
-                    operatorSettings.mfDriveScrubEnabled.value && !isClean &&
-                        sessionState is CameraSessionState.Connected && !isDemoSession &&
-                        // Mirrors the shared core's `MFDriveEligibility.resolve`: no mode or MF means no dial
-                        // (the lens ring owns focus in MF); AF-F mounts it inert below.
-                        mfDriveEligibility(cameraProperties.activeFocusMode(photography = isPhotographyMode)) !=
-                            MfDriveEligibility.UNAVAILABLE &&
-                        // The strip absorbs taps, so it waits for every panel to close (iOS `showsMFDriveScrub
-                        // … && activePanel == nil`).
-                        activeCommandControl == null && !activeCommandStabilization && activeMonitorPickerKind == null &&
-                        assists.shared.configureTool == null
-                ) { accepts ->
-                    // Re-arm the relative position when the dial (re)appears.
-                    DisposableEffect(Unit) {
-                        mfDrive.resetDial()
-                        onDispose {}
-                    }
-                    // The shared admission decides whether the lens may move (A3-02): a surrendered or
-                    // read-only monitor shows the strip inert.
-                    MFDriveStrip(
-                        atEnd = mfDriveAtEnd,
-                        enabled = accepts && mfDriveEligibility(
-                            cameraProperties.activeFocusMode(photography = isPhotographyMode),
-                        ) == MfDriveEligibility.DRIVABLE,
-                        onDrive = { pulses -> mfDrive.drive(recordScope, pulses) },
-                        modifier = Modifier.fillMaxSize(),
-                        netPulses = mfDriveNetPulses,
-                        dialFraction = mfDriveDialFraction,
-                    )
-                } else null,
-                resetFocus = reset, comparison = comparison),
-            modifier = Modifier.fillMaxSize(),
-            portraitAspect = portraitAspect,
-            setPortraitAspect = { operatorSettings.portraitFeedAspect = it },
-            picture = {
-            Box(
-                Modifier.zone(effectiveFeed)
-                    .clipToBounds()
-                    // Canvas content is not exposed as an accessibility node
-                    // by every Android view bridge. The feed container is the
-                    // stable, descriptive region for TalkBack and UI tests.
-                    .semantics {
-                        stateDescription = displayModeDescription
-                        contentDescription = liveViewDescription
-                        if (focusGestureContext.canRecognizeFocusGesture) {
-                            onLongClick(
-                                label = focusLockActionLabel,
-                            ) {
-                                toggleFocusPointLock()
-                                true
+        key(session) {
+            MonitorOperatorLiveSurface(commonControl, operatorSession, geometry, source,
+                MonitorOperatorLiveAssists(assistSource, palette, rendered, null, signal, usage,
+                    { usage = it; usageStore.value = it }, nikonUsageSeed,
+                    fitted = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList()),
+                MonitorOperatorBodyViews(
+                    dashboard = { accepts ->
+                        CommandDashboard(commandPresentation, isPortrait, commandControlsEnabled && accepts,
+                            pendingCommandControl, openCommandControl, moveCommandTileTo,
+                            link.label, link.bars)
+                    },
+                    focusDrive = if (
+                        // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`), default OFF; off
+                        // hides the strip even in an AF focus mode. Video and photo alike.
+                        operatorSettings.mfDriveScrubEnabled.value && !isClean &&
+                            sessionState is CameraSessionState.Connected && !isDemoSession &&
+                            // Mirrors the shared core's `MFDriveEligibility.resolve`: no mode or MF means no dial
+                            // (the lens ring owns focus in MF); AF-F mounts it inert below.
+                            mfDriveEligibility(cameraProperties.activeFocusMode(photography = isPhotographyMode)) !=
+                                MfDriveEligibility.UNAVAILABLE &&
+                            // The strip absorbs taps, so it waits for every panel to close (iOS `showsMFDriveScrub
+                            // … && activePanel == nil`).
+                            activeCommandControl == null && !activeCommandStabilization && activeMonitorPickerKind == null &&
+                            assists.shared.configureTool == null
+                    ) { accepts ->
+                        // Re-arm the relative position when the dial (re)appears.
+                        DisposableEffect(Unit) {
+                            mfDrive.resetDial()
+                            onDispose {}
+                        }
+                        // The shared admission decides whether the lens may move (A3-02): a surrendered or
+                        // read-only monitor shows the strip inert.
+                        MFDriveStrip(
+                            atEnd = mfDriveAtEnd,
+                            enabled = accepts && mfDriveEligibility(
+                                cameraProperties.activeFocusMode(photography = isPhotographyMode),
+                            ) == MfDriveEligibility.DRIVABLE,
+                            onDrive = { pulses -> mfDrive.drive(recordScope, pulses) },
+                            modifier = Modifier.fillMaxSize(),
+                            netPulses = mfDriveNetPulses,
+                            dialFraction = mfDriveDialFraction,
+                        )
+                    } else null,
+                    resetFocus = reset, comparison = comparison),
+                modifier = Modifier.fillMaxSize(),
+                portraitAspect = portraitAspect,
+                setPortraitAspect = { operatorSettings.portraitFeedAspect = it },
+                picture = {
+                Box(
+                    Modifier.zone(effectiveFeed)
+                        .clipToBounds()
+                        // Canvas content is not exposed as an accessibility node
+                        // by every Android view bridge. The feed container is the
+                        // stable, descriptive region for TalkBack and UI tests.
+                        .semantics {
+                            stateDescription = displayModeDescription
+                            contentDescription = liveViewDescription
+                            if (focusGestureContext.canRecognizeFocusGesture) {
+                                onLongClick(
+                                    label = focusLockActionLabel,
+                                ) {
+                                    toggleFocusPointLock()
+                                    true
+                                }
                             }
                         }
-                    }
-                    .testTag("monitor_live_feed"),
-                contentAlignment = Alignment.Center,
-            ) {
-            liveBackdrop?.let { backdrop ->
-                // Passive geometry for the shared material: where the picture draws in this zone. It
-                // stays outside the punch-in layer, so a zoomed picture samples unzoomed (blurred anyway).
-                Box(Modifier.matchParentSize().monitorBackdropSource(backdrop.source,
-                    imageRect = liveBackdropImageRect(effectiveFeed.width * density.density,
-                        effectiveFeed.height * density.density, liveFeedPresentation.sourceWidth,
-                        liveFeedPresentation.sourceHeight, portraitRasterFill,
-                        localFraming.horizontalPresentationScale, localFraming.verticalPresentationScale),
-                    mirrored = renderedFraming.mirrorsHorizontally,
-                    flippedVertically = renderedFraming.flipsVertically))
-            }
-            Box(
-                // Vertical mode first: the whole feed stack — raster, AF boxes, punch-in,
-                // gestures — lays out in the camera's own frame and rotates upright as one,
-                // inside the zone clip.
-                Modifier.liveFeedBodyRotation(displayedFeedRotation)
-                    // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
-                    // AF box and focus ring are siblings of it, so scaling the raster alone would
-                    // leave them behind at unmagnified positions over a magnified picture. Inside
-                    // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
-                    // of the gestures so Compose maps a touch back through the scale and
-                    // tap-to-focus still lands on the pixel under the finger.
-                    // OUTSIDE the zoom layer, as the playback viewer's is. Inside it, Compose maps
-                    // pointer positions back through the scale before reporting them, so a finger
-                    // travelling D pixels arrives as D/scale and the picture tracks at a fraction
-                    // of the finger — worse the further you zoom.
-                    //
-                    // Pinch always transforms; a one-finger drag only pans once zoomed, so an
-                    // unzoomed drag still reaches the DISP swipe in the arbiter below.
-                    .transformable(
-                        state = feedTransformState,
-                        canPan = { committedZoom.isZoomed },
-                    )
-                    .graphicsLayer {
-                        // A CENTER-anchored scale then the offset, in that order — the pair every
-                        // formula in FeedZoom is written against. Anchoring on the AF box instead
-                        // (as the retired MAG tool did) would make the pinch pivot somewhere the
-                        // operator's fingers are not.
-                        //
-                        // Read inside this lambda on purpose: graphicsLayer defers its state reads
-                        // to the draw phase, so a gesture redraws without recomposing.
-                        val zoom = committedZoom
-                        scaleX = zoom.scale
-                        scaleY = zoom.scale
-                        transformOrigin = TransformOrigin.Center
-                        translationX = zoom.offsetX
-                        translationY = zoom.offsetY
-                    }
-                    .onSizeChanged { feedPointerSize = it }
-                    // Stays INSIDE the layer: tap-to-focus wants its coordinates mapped back
-                    // through the scale so a tap lands on the pixel under the finger.
-                    .focusFeedGestures(
-                        sourceIdentity = sharedControlState.snapshot?.let { it.session to it.epoch },
-                        geometry = feedGestureGeometry,
-                        context = focusGestureContext,
-                        isPortrait = isPortrait,
-                        isZoomed = isFeedZoomed,
-                        onHoldingChanged = { focusLockHolding = it },
-                        // A zoom or a pan must never move the focus box. The arbiter lives inside
-                        // the zoom layer, so its coordinates are divided by the scale: a 200px pan
-                        // at 4x reaches it as 50px, lands under its tap threshold, and would be
-                        // read as a tap-to-focus. Deferring to the transform while it is running
-                        // settles it by intent rather than by tuning a threshold against a moving
-                        // coordinate space. A discrete tap starts no transform and still focuses.
-                        onAction = { action ->
-                            if (!feedTransformState.isTransformInProgress) {
-                                handleFocusFeedAction(action)
-                            }
-                        },
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (pictureFrameSource != null) {
-                    LiveFeedView(
-                        pictureFrameSource,
-                        // De-squeeze only. The punch-in is a separate layer on the feed container
-                        // so it also carries the AF box and focus ring, and so it can take its own
-                        // origin — the two transforms need different ones.
-                        Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = localFraming.horizontalPresentationScale
-                            scaleY = localFraming.verticalPresentationScale
-                        },
-                        incidentObserver = incidentProducer,
-                        onPresentedFrame = { frame, bitmap, baker, look ->
-                            // TC is owned by the stream collector above; present
-                            // path only drives FPS + wear (decode can lag a take).
-                            presentedFrames.presented(android.os.SystemClock.elapsedRealtime())
-                            hasPresentedFrame = true
-                            recoveryPictures.notePresented()
-                            inspectorPreview.accept(pictureFrameSource, bitmap)
-                            wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
-                            liveBackdrop?.accept(pictureFrameSource, bitmap, look)
-                        },
-                        presentationState = liveFeedPresentation,
-                        collectFrames = monitorFrameSource != null,
-                        effects = renderedEffects,
-                        configuration = assists.shared.feedEffectsConfiguration,
-                        cameraInput = exposureAssistCameraInput,
-                        lutLibrary = lutLibrary,
-                        effectsPresentationState = liveFeedEffectsPresentation,
-                        aspectFill = portraitRasterFill,
-                        // Reads the DISP-filtered set, not the raw config, so clean view honours
-                        // the pin exactly as every other framing tool does.
+                        .testTag("monitor_live_feed"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                liveBackdrop?.let { backdrop ->
+                    // Passive geometry for the shared material: where the picture draws in this zone. It
+                    // stays outside the punch-in layer, so a zoomed picture samples unzoomed (blurred anyway).
+                    Box(Modifier.matchParentSize().monitorBackdropSource(backdrop.source,
+                        imageRect = liveBackdropImageRect(effectiveFeed.width * density.density,
+                            effectiveFeed.height * density.density, liveFeedPresentation.sourceWidth,
+                            liveFeedPresentation.sourceHeight, portraitRasterFill,
+                            localFraming.horizontalPresentationScale, localFraming.verticalPresentationScale),
                         mirrored = renderedFraming.mirrorsHorizontally,
-                        mirroredVertical = renderedFraming.flipsVertically,
-                        // A rotated (vertical) feed presents via Compose: SurfaceView buffers
-                        // composite outside the Compose layer and never rotate with it.
-                        preferComposablePresentation = displayedFeedRotation != LiveFeedRotation.LANDSCAPE,
-                    )
-                    // Nothing draws over the picture here: the waiting plate is the surface's, and the
-                    // picture carries no texture (A3-04). Without a feed the plate carries the
-                    // camera status (MonitorOperatorLivePicture.notice).
+                        flippedVertically = renderedFraming.flipsVertically))
                 }
-                LocalFramingAssistOverlay(
-                    configuration = renderedFraming,
-                    presentationState = liveFeedPresentation,
-                    aspectFill = portraitRasterFill,
-                    splitComparison = renderedEffects.activeSplitComparison,
-                )
-                LiveFrameMetadataOverlay(
-                    presentationState = liveFeedPresentation,
-                    configuration = renderedFraming,
-                    isPortrait = isPortrait,
-                    aspectFill = portraitRasterFill,
-                    gaugeBottomChromeInset = levelGaugeBottomChromeInset,
-                    focusPointLocked = focusPointLocked,
-                    focusLockProgress = focusLockProgress,
-                    focusBoxVisible = mounted(MonitorDisplaySection.FOCUS_BOX),
-                    focusBoxAlpha = 1f,
-                    // The editor's outline, dimming and badge, through the surface's one editor.
-                    focusBoxEditModifier = if (editingDisplay == null) null
-                        else Modifier.monitorOperatorChromeEditable(MonitorDisplaySection.FOCUS_BOX),
-                )
-            }
-                // Outside the rotated stack: reads as screen chrome, never sideways text.
-                LiveFeedColorModeNotice(
-                    colorMode = liveFeedPresentation.colorMode,
-                    effectsActive = !renderedEffects.isIdentity,
-                    modifier =
-                        Modifier.align(Alignment.TopCenter)
-                            .padding(top = liveFeedColorNoticeTopInset.dp),
-                )
-            }
-            },
-            cameraPanel = { key, _, isTopDropDown, _ ->
-                activeMonitorPicker?.takeIf { it.kind.name == key }?.let { picker ->
-                    CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
-                    MonitorControlPickerPanel(
-                        picker = picker,
-                        recordingFormats = cameraProperties.controlCapabilities.recordingFormats,
-                        commonControl = if (isPhotographyMode) null else commonControl,
-                        controlsEnabled = commandControlsEnabled,
-                        feedback = commandControlFeedback,
-                        onSelect =
-                            if (isPhotographyMode) {
-                                applyPhotographyControl
-                            } else {
-                                applyCameraControl
-                            },
-                        // Unconditional (#328): never hold the popup hostage to an in-flight
-                        // write — the drain loop completes it with the panel closed (iOS
-                        // `dismissActivePanel` has no pending gate either).
-                        onDismiss = {
-                            activeMonitorPickerKind = null
-                            commandControlFeedback = null
-                        },
-                        slideFromTop = isTopDropDown,
-                        // The stills SHUTTER picker has no movie TV-lock hold.
-                        onShutterLongPress =
-                            if (isPhotographyMode) null else shutterLongPressToggle,
-                        timerShotsCount = photoTimerShotCount,
-                        onAdjustTimerShots =
-                            if (isPhotographyMode) {
-                                { delta ->
-                                    photoTimerShotCount =
-                                        (photoTimerShotCount + delta).coerceIn(1, 9)
+                Box(
+                    // Vertical mode first: the whole feed stack — raster, AF boxes, punch-in,
+                    // gestures — lays out in the camera's own frame and rotates upright as one,
+                    // inside the zone clip.
+                    Modifier.liveFeedBodyRotation(displayedFeedRotation)
+                        // Punch-in goes LAST and wraps the WHOLE feed stack, not just the raster: the
+                        // AF box and focus ring are siblings of it, so scaling the raster alone would
+                        // leave them behind at unmagnified positions over a magnified picture. Inside
+                        // clipToBounds so the magnified frame is still cropped to the feed zone; ahead
+                        // of the gestures so Compose maps a touch back through the scale and
+                        // tap-to-focus still lands on the pixel under the finger.
+                        // OUTSIDE the zoom layer, as the playback viewer's is. Inside it, Compose maps
+                        // pointer positions back through the scale before reporting them, so a finger
+                        // travelling D pixels arrives as D/scale and the picture tracks at a fraction
+                        // of the finger — worse the further you zoom.
+                        //
+                        // Pinch always transforms; a one-finger drag only pans once zoomed, so an
+                        // unzoomed drag still reaches the DISP swipe in the arbiter below.
+                        .transformable(
+                            state = feedTransformState,
+                            canPan = { committedZoom.isZoomed },
+                        )
+                        .graphicsLayer {
+                            // A CENTER-anchored scale then the offset, in that order — the pair every
+                            // formula in FeedZoom is written against. Anchoring on the AF box instead
+                            // (as the retired MAG tool did) would make the pinch pivot somewhere the
+                            // operator's fingers are not.
+                            //
+                            // Read inside this lambda on purpose: graphicsLayer defers its state reads
+                            // to the draw phase, so a gesture redraws without recomposing.
+                            val zoom = committedZoom
+                            scaleX = zoom.scale
+                            scaleY = zoom.scale
+                            transformOrigin = TransformOrigin.Center
+                            translationX = zoom.offsetX
+                            translationY = zoom.offsetY
+                        }
+                        .onSizeChanged { feedPointerSize = it }
+                        // Stays INSIDE the layer: tap-to-focus wants its coordinates mapped back
+                        // through the scale so a tap lands on the pixel under the finger.
+                        .focusFeedGestures(
+                            sourceIdentity = sharedControlState.snapshot?.let { it.session to it.epoch },
+                            geometry = feedGestureGeometry,
+                            context = focusGestureContext,
+                            isPortrait = isPortrait,
+                            isZoomed = isFeedZoomed,
+                            onHoldingChanged = { focusLockHolding = it },
+                            // A zoom or a pan must never move the focus box. The arbiter lives inside
+                            // the zoom layer, so its coordinates are divided by the scale: a 200px pan
+                            // at 4x reaches it as 50px, lands under its tap threshold, and would be
+                            // read as a tap-to-focus. Deferring to the transform while it is running
+                            // settles it by intent rather than by tuning a threshold against a moving
+                            // coordinate space. A discrete tap starts no transform and still focuses.
+                            onAction = { action ->
+                                if (!feedTransformState.isTransformInProgress) {
+                                    handleFocusFeedAction(action)
                                 }
-                            } else {
-                                null
                             },
-                        nefCompression = cameraProperties.rawCompression,
-                        nefOptions =
-                            cameraProperties.controlCapabilities.options(
-                                CameraControl.STILL_RAW_COMPRESSION),
-                        mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
-                        onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
-                        codecColor = if (isPhotographyMode) null else codecColor,
-                    )
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (pictureFrameSource != null) {
+                        LiveFeedView(
+                            pictureFrameSource,
+                            // De-squeeze only. The punch-in is a separate layer on the feed container
+                            // so it also carries the AF box and focus ring, and so it can take its own
+                            // origin — the two transforms need different ones.
+                            Modifier.fillMaxSize().graphicsLayer {
+                                scaleX = localFraming.horizontalPresentationScale
+                                scaleY = localFraming.verticalPresentationScale
+                            },
+                            incidentObserver = incidentProducer,
+                            onPresentedFrame = { frame, bitmap, baker, look ->
+                                // TC is owned by the stream collector above; present
+                                // path only drives FPS + wear (decode can lag a take).
+                                presentedFrames.presented(android.os.SystemClock.elapsedRealtime())
+                                hasPresentedFrame = true
+                                recoveryPictures.notePresented()
+                                inspectorPreview.accept(pictureFrameSource, bitmap)
+                                wearRelay.ingestPresentedFrame(session, frame, bitmap, baker)
+                                liveBackdrop?.accept(pictureFrameSource, bitmap, look)
+                            },
+                            presentationState = liveFeedPresentation,
+                            collectFrames = monitorFrameSource != null,
+                            effects = renderedEffects,
+                            configuration = assists.shared.feedEffectsConfiguration,
+                            cameraInput = exposureAssistCameraInput,
+                            lutLibrary = lutLibrary,
+                            effectsPresentationState = liveFeedEffectsPresentation,
+                            aspectFill = portraitRasterFill,
+                            // Reads the DISP-filtered set, not the raw config, so clean view honours
+                            // the pin exactly as every other framing tool does.
+                            mirrored = renderedFraming.mirrorsHorizontally,
+                            mirroredVertical = renderedFraming.flipsVertically,
+                            // A rotated (vertical) feed presents via Compose: SurfaceView buffers
+                            // composite outside the Compose layer and never rotate with it.
+                            preferComposablePresentation = displayedFeedRotation != LiveFeedRotation.LANDSCAPE,
+                        )
+                        // Nothing draws over the picture here: the waiting plate is the surface's, and the
+                        // picture carries no texture (A3-04). Without a feed the plate carries the
+                        // camera status (MonitorOperatorLivePicture.notice).
                     }
+                    LocalFramingAssistOverlay(
+                        configuration = renderedFraming,
+                        presentationState = liveFeedPresentation,
+                        aspectFill = portraitRasterFill,
+                        splitComparison = renderedEffects.activeSplitComparison,
+                    )
+                    LiveFrameMetadataOverlay(
+                        presentationState = liveFeedPresentation,
+                        configuration = renderedFraming,
+                        isPortrait = isPortrait,
+                        aspectFill = portraitRasterFill,
+                        gaugeBottomChromeInset = levelGaugeBottomChromeInset,
+                        focusPointLocked = focusPointLocked,
+                        focusLockProgress = focusLockProgress,
+                        focusBoxVisible = mounted(MonitorDisplaySection.FOCUS_BOX),
+                        focusBoxAlpha = 1f,
+                        // The editor's outline, dimming and badge, through the surface's one editor.
+                        focusBoxEditModifier = if (editingDisplay == null) null
+                            else Modifier.monitorOperatorChromeEditable(MonitorDisplaySection.FOCUS_BOX),
+                    )
                 }
-                activeCommandControl?.takeIf { "command:${it.control.name}" == key }?.let { request ->
-                    CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
-                        CommandControlDialog(
-                            request = request,
+                    // Outside the rotated stack: reads as screen chrome, never sideways text.
+                    LiveFeedColorModeNotice(
+                        colorMode = liveFeedPresentation.colorMode,
+                        effectsActive = !renderedEffects.isIdentity,
+                        modifier =
+                            Modifier.align(Alignment.TopCenter)
+                                .padding(top = liveFeedColorNoticeTopInset.dp),
+                    )
+                }
+                },
+                cameraPanel = { key, _, isTopDropDown, _ ->
+                    activeMonitorPicker?.takeIf { it.kind.name == key }?.let { picker ->
+                        CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
+                        MonitorControlPickerPanel(
+                            picker = picker,
+                            recordingFormats = cameraProperties.controlCapabilities.recordingFormats,
+                            commonControl = if (isPhotographyMode) null else commonControl,
                             controlsEnabled = commandControlsEnabled,
-                            pendingControl = pendingCommandControl,
                             feedback = commandControlFeedback,
-                            onSelect = { label -> applyCameraControl(request, label) },
-                            onDismiss = { activeCommandControl = null },
-                            chromeless = true,
+                            onSelect =
+                                if (isPhotographyMode) {
+                                    applyPhotographyControl
+                                } else {
+                                    applyCameraControl
+                                },
+                            // Unconditional (#328): never hold the popup hostage to an in-flight
+                            // write — the drain loop completes it with the panel closed (iOS
+                            // `dismissActivePanel` has no pending gate either).
+                            onDismiss = {
+                                activeMonitorPickerKind = null
+                                commandControlFeedback = null
+                            },
+                            slideFromTop = isTopDropDown,
+                            // The stills SHUTTER picker has no movie TV-lock hold.
+                            onShutterLongPress =
+                                if (isPhotographyMode) null else shutterLongPressToggle,
+                            timerShotsCount = photoTimerShotCount,
+                            onAdjustTimerShots =
+                                if (isPhotographyMode) {
+                                    { delta ->
+                                        photoTimerShotCount =
+                                            (photoTimerShotCount + delta).coerceIn(1, 9)
+                                    }
+                                } else {
+                                    null
+                                },
+                            nefCompression = cameraProperties.rawCompression,
+                            nefOptions =
+                                cameraProperties.controlCapabilities.options(
+                                    CameraControl.STILL_RAW_COMPRESSION),
+                            mfScrubEnabled = operatorSettings.mfDriveScrubEnabled.value,
+                            onToggleMfScrub = { operatorSettings.mfDriveScrubEnabled.toggle() },
+                            codecColor = if (isPhotographyMode) null else codecColor,
+                        )
+                        }
+                    }
+                    activeCommandControl?.takeIf { "command:${it.control.name}" == key }?.let { request ->
+                        CompositionLocalProvider(com.opencapture.opencine.cameracontrols.LocalViewportPortrait provides isPortrait) {
+                            CommandControlDialog(
+                                request = request,
+                                controlsEnabled = commandControlsEnabled,
+                                pendingControl = pendingCommandControl,
+                                feedback = commandControlFeedback,
+                                onSelect = { label -> applyCameraControl(request, label) },
+                                onDismiss = { activeCommandControl = null },
+                                chromeless = true,
+                            )
+                        }
+                    }
+                    if (activeCommandStabilization && key == "command:stabilization") {
+                        CommandStabilizationPanel(
+                            request = commandPresentation.stabilization,
+                            controlsEnabled = commandControlsEnabled,
+                            currentSource = {
+                                stabilizationSource == commonControl.state.value.snapshot?.let { it.session to it.epoch } &&
+                                    identity == MonitorOperatorLiveIdentity(commonControl.state.value.snapshot?.session,
+                                        commonControl.state.value.snapshot?.epoch, currentPicture.value)
+                            },
+                            feedback = commandControlFeedback,
+                            onSelect = { request, label ->
+                                if (commandControlsEnabled) stabilizationCommands.selection(request, label)?.let { selection ->
+                                    commandControlFeedback = null
+                                    nativeWrites.submit(request.control, selection)
+                                }
+                            },
+                            onUnavailable = { _, reason ->
+                                commandControlFeedback = reason?.let { CommandControlFeedback(it, isError = true) }
+                            },
                         )
                     }
-                }
-                if (activeCommandStabilization && key == "command:stabilization") {
-                    CommandStabilizationPanel(
-                        request = commandPresentation.stabilization,
-                        controlsEnabled = commandControlsEnabled,
-                        currentSource = {
-                            stabilizationSource == commonControl.state.value.snapshot?.let { it.session to it.epoch } &&
-                                identity == MonitorOperatorLiveIdentity(commonControl.state.value.snapshot?.session,
-                                    commonControl.state.value.snapshot?.epoch, currentPicture.value)
-                        },
-                        feedback = commandControlFeedback,
-                        onSelect = { request, label ->
-                            if (commandControlsEnabled) stabilizationCommands.selection(request, label)?.let { selection ->
-                                commandControlFeedback = null
-                                nativeWrites.submit(request.control, selection)
-                            }
-                        },
-                        onUnavailable = { _, reason ->
-                            commandControlFeedback = reason?.let { CommandControlFeedback(it, isError = true) }
-                        },
-                    )
-                }
-            },
-            photoRelease = { enabled, decoration -> MonitorPhotoRelease(geometry.layout.record.width, enabled, decoration,
-                capturing = stillCapturing, timerRemaining = photoTimerRemaining, bodyPulse = bodyShutterPulse,
-                onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
-        )
+                },
+                photoRelease = { enabled, decoration -> MonitorPhotoRelease(geometry.layout.record.width, enabled, decoration,
+                    capturing = stillCapturing, timerRemaining = photoTimerRemaining, bodyPulse = bodyShutterPulse,
+                    onPressed = photoShutterPressed, onReleased = photoShutterReleased) },
+            )
+        }
 
         gyroState?.takeIf { state ->
             isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&

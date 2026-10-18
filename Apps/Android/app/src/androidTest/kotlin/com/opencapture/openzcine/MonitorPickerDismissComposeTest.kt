@@ -13,12 +13,12 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.printToString
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -145,35 +145,69 @@ class MonitorPickerDismissComposeTest {
     }
 
     // Failure-only, inside the original ladder wait: no extra wait, retry or assertion is added.
+    // Every diagnostic read and file operation is caught, so the original ladder throwable is
+    // always the one the test reports.
     private fun captureLadderGate(label: String) {
         runCatching {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val directory = File(instrumentation.targetContext.cacheDir, "SIMULATED-picker-gate").apply { mkdirs() }
             val file = File(directory, label)
-            val root = composeRule.onRoot().fetchSemanticsNode()
             val diagnostic = JSONObject()
                 .put("label", label)
                 .put("stage", "ladder-wait-failure")
                 .put("uptimeMs", android.os.SystemClock.uptimeMillis())
-                .put("rootBoundsInRoot", root.boundsInRoot.toString())
-                .put("rootBoundsInWindow", root.boundsInWindow.toString())
-                .put("ladderSheetNodes", composeRule.onAllNodes(hasTestTag("ladder_sheet"),
-                    useUnmergedTree = true).fetchSemanticsNodes().size)
-                .put("captureCloseNodes", composeRule.onAllNodes(hasTestTag("monitor.capture.close"),
-                    useUnmergedTree = true).fetchSemanticsNodes().size)
-                .put("focusReadoutNodes", composeRule.onAllNodes(hasContentDescription("FOCUS", substring = true),
-                    useUnmergedTree = true).fetchSemanticsNodes().size)
-                .put("semantics", composeRule.onRoot(useUnmergedTree = true).printToString())
-            File(file.path + ".json").writeText(diagnostic.toString(2))
-            instrumentation.uiAutomation.takeScreenshot()?.let { image ->
-                try {
-                    File(file.path + ".png").outputStream().use {
-                        check(image.compress(Bitmap.CompressFormat.PNG, 100, it))
+            // One failing read must not lose the rest of the gate state: every field is recorded
+            // independently and the metadata is written before any screenshot is attempted.
+            fun record(key: String, read: () -> Any?) {
+                diagnostic.put(key, runCatching(read).getOrElse {
+                    "unavailable: ${it.javaClass.simpleName}: ${it.message}"
+                })
+            }
+            record("rootCount") { composeRule.onAllNodes(isRoot()).fetchSemanticsNodes().size }
+            record("rootBoundsInRoot") {
+                org.json.JSONArray(composeRule.onAllNodes(isRoot()).fetchSemanticsNodes()
+                    .map { it.boundsInRoot.toString() })
+            }
+            record("rootBoundsInWindow") {
+                org.json.JSONArray(composeRule.onAllNodes(isRoot()).fetchSemanticsNodes()
+                    .map { it.boundsInWindow.toString() })
+            }
+            record("ladderSheetNodes") {
+                composeRule.onAllNodes(hasTestTag("ladder_sheet"), useUnmergedTree = true)
+                    .fetchSemanticsNodes().size
+            }
+            record("captureCloseNodes") {
+                composeRule.onAllNodes(hasTestTag("monitor.capture.close"), useUnmergedTree = true)
+                    .fetchSemanticsNodes().size
+            }
+            record("focusReadoutNodes") {
+                composeRule.onAllNodes(hasContentDescription("FOCUS", substring = true), useUnmergedTree = true)
+                    .fetchSemanticsNodes().size
+            }
+            record("semantics") {
+                val roots = composeRule.onAllNodes(isRoot()).fetchSemanticsNodes()
+                buildString {
+                    roots.indices.forEach { index ->
+                        if (index > 0) appendLine()
+                        appendLine("ROOT $index")
+                        appendLine(runCatching {
+                            composeRule.onAllNodes(isRoot())[index].printToString(maxDepth = Int.MAX_VALUE)
+                        }.getOrElse { "unavailable: ${it.javaClass.simpleName}: ${it.message}" })
                     }
-                } finally {
-                    image.recycle()
                 }
             }
+            File(file.path + ".json").writeText(diagnostic.toString(2))
+            runCatching {
+                instrumentation.uiAutomation.takeScreenshot()?.let { image ->
+                    try {
+                        File(file.path + ".png").outputStream().use {
+                            check(image.compress(Bitmap.CompressFormat.PNG, 100, it))
+                        }
+                    } finally {
+                        image.recycle()
+                    }
+                }
+            }.onFailure { android.util.Log.w("PickerGate", "Could not retain $label ladder failure screenshot", it) }
         }.onFailure { android.util.Log.w("PickerGate", "Could not retain $label ladder failure diagnostic", it) }
     }
 
