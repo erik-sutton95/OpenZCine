@@ -2413,9 +2413,10 @@ internal fun MonitorScreen(
             isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&
                 (state.enabled || state.failed) && (!isClean || state.failed)
         }?.let { state ->
-            GyroStatusPill(state, Modifier.align(Alignment.TopStart)
-                .padding(start = maxOf(16f, safeLeading + 12f).dp, top = (safeTop + 48f).dp),
-                onClick = onOpenGyroLogs)
+            // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
+            Box(Modifier.align(Alignment.TopStart).zone(fieldLayout.appBadge), contentAlignment = Alignment.CenterStart) {
+                GyroStatusPill(state, onClick = onOpenGyroLogs)
+            }
         }
 
         // App self-timer tally: a white border pulse at the physical edge per

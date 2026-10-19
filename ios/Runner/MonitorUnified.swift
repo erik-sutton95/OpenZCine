@@ -549,14 +549,14 @@ struct NikonMonitorShell: View {
             },
             lookMenu: { NikonLUTPicker() }
         )
-        .overlay(alignment: .topLeading) {
+        .overlay {
             if model.activePanel == nil,
                 model.displayMode != .clean || model.gyroCapture.statusIsFailure
                     || model.gyroCapture.hasGapWarning
             {
+                // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
                 GyroMonitorStatus(coordinator: model.gyroCapture)
-                    .padding(.leading, max(16, context.feedSafeArea.leading + 12))
-                    .padding(.top, context.feedSafeArea.top + 48)
+                    .liveModuleFrame(layout.appBadge.cgRect, alignment: .leading)
             }
         }
         .overlay { MonitorRecoveryOverlay() }

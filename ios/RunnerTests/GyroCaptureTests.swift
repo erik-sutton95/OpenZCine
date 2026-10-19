@@ -686,6 +686,13 @@ struct GyroCaptureTests {
         #expect(!coordinator.motionRunning)
     }
 
+    @Test("Only a reported video selector arms; photo and an unread selector wait (ZT-06)")
+    func selectorArms() {
+        #expect(!GyroCaptureCoordinator.selectorArms(nil))
+        #expect(!GyroCaptureCoordinator.selectorArms(.photo))
+        #expect(GyroCaptureCoordinator.selectorArms(.video))
+    }
+
     @Test("Ineligible sources cannot start motion, including a recording report")
     func ineligible() async {
         let fixture = GyroFixture()
