@@ -59,8 +59,10 @@ Xcode Cloud replaces most of the GitHub workflow with managed equivalents:
 ### Tester-facing release notes
 
 TestFlight notes are reviewed product copy, not a transformed Git commit log. Any pull request that
-can trigger a TestFlight build must replace `ios/TestFlight/WhatToTest.en-US.txt`. The required
-format is:
+can trigger a TestFlight build must replace `ios/TestFlight/WhatToTest.en-US.txt`. A branch that
+changes only test targets (`Tests/`, `ios/RunnerTests/`, `ios/RunnerUITests/`, or the Android
+`src/test` and `src/androidTest` source sets) is exempt: no test source ships to testers. The
+required format is:
 
 ```text
 What's changed
