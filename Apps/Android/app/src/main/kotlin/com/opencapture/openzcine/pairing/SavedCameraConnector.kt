@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.NikonBodyWake
 import com.opencapture.opencine.nikon.NikonHosts
 import com.opencapture.openzcine.R
 import com.opencapture.opencine.nikon.CameraConnectionPhase
@@ -38,6 +39,9 @@ internal sealed interface SavedCameraPhase {
     data class WatchingForSetup(val title: String, val transport: SavedCameraTransport) : SavedCameraPhase
 
     data class Joining(val title: String) : SavedCameraPhase
+
+    /** A router or hotspot setup discovery does not see: asking the network first ([NikonBodyWake]). */
+    data class Waking(val title: String) : SavedCameraPhase
 
     data class Connecting(val title: String) : SavedCameraPhase
 
@@ -246,6 +250,16 @@ internal class SavedCameraConnector(
                         }
                             ?: throw SavedCameraConnectException(copy.text(R.string.conn_ap_camera_not_found, ssid))
                 }
+            } else if (discoveryFor(record) == null && record.host !in aliveHosts.value) {
+                // A router or hotspot setup the list does not see is dialled at its stored address
+                // blind. Ask the network first: a body that answers goes on, a silent one ends here
+                // with copy naming the real cause, not a PTP timeout (Swift twin: the iOS connect).
+                _phase.value = SavedCameraPhase.Waking(record.displayTitle)
+                val wake = NikonBodyWake.awaitAnswer(host) { listDiscovery.alive(setOf(it)).isNotEmpty() }
+                if (wake is NikonBodyWake.Outcome.Silent) {
+                    throw SavedCameraConnectException(NikonBodyWake.silentMessage(record.displayTitle))
+                }
+                _phase.value = SavedCameraPhase.Connecting(record.displayTitle)
             }
 
             val isCameraAp = record.transport == SavedCameraTransport.CAMERA_ACCESS_POINT

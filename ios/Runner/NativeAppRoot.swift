@@ -3906,6 +3906,32 @@ final class NativeAppModel {
                 startDiscoveryLoop(resetResults: false)
                 return
             }
+            // A router or hotspot setup the list does not see is dialled at its stored address
+            // blind. Ask the network first (`NikonBodyWake`): a body that answers goes on, a
+            // silent one ends here with copy naming the real cause, not a PTP timeout.
+            if transportKind == .ptpIP, discoveredCamera == nil, !preservingMonitorSurface,
+                let kind = savedCamera?.path?.kind, kind == .infrastructure || kind == .phoneHotspot
+            {
+                connectionPhase = .discovering
+                connectionMessage = NikonBodyWake.wakingMessage(
+                    deviceName: connectionProgressDeviceName)
+                let wake = await NikonBodyWake.awaitAnswer(
+                    host: host, isAlive: { await NativeNikonDiscovery.dialer.isAlive($0) })
+                guard connectionGeneration == generation else { return }
+                logConnection("wake host=\(host) \(wake)")
+                if !wake.answered {
+                    AppDiagnostics.shared.record(.connectionPtpFailed)
+                    connection = .disconnected
+                    connectionPhase = .failed
+                    connectionProgressShowsFailure = true
+                    connectionMessage = NikonBodyWake.silentMessage(
+                        deviceName: connectionProgressDeviceName)
+                    connectionFailureDetail = connectionMessage
+                    startDiscoveryLoop(resetResults: false)
+                    return
+                }
+                connectionPhase = .handshaking
+            }
             AppDiagnostics.shared.record(.connectionHandshaking)
             let strategy = CameraStartupPolicy.connectionStrategy(
                 host: host,
