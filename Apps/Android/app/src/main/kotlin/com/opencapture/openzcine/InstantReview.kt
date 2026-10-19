@@ -36,7 +36,10 @@ import androidx.compose.ui.unit.dp
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.openzcine.media.MediaExifOrientation
 import com.opencapture.openzcine.media.upright
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,13 +82,14 @@ internal data class InstantReviewPresentation(
     val image: ImageBitmap,
     /**
      * False while the tiny embedded thumb stands in — the overlay blurs it
-     * behind a spinner, and the review countdown doesn't start until the full
-     * image lands (or its stream fails).
+     * behind a spinner, and the review countdown doesn't start until the sharp
+     * image (the JPEG/HEIF itself, or a RAW's embedded preview) lands, or its
+     * read fails.
      */
     val isFullResolution: Boolean,
-    /** Arms the timed dismissal (full image landed, or its stream gave up). */
+    /** Arms the timed dismissal (sharp image landed, or its read gave up). */
     val countdownArmed: Boolean,
-    /** The captured JPEG's object handle so the overlay can rate it in place. */
+    /** The captured still's object handle so the overlay can rate it in place. */
     val handle: Int,
     /** Settings line captured at present time so later polls can't rewrite it. */
     val infoLine: String?,
@@ -97,13 +101,19 @@ internal data class InstantReviewPresentation(
 /**
  * Post-capture instant playback (iOS `scheduleInstantReview` /
  * `fetchAndPresentReview`): after a completed release with the PLAY tool on,
- * diff the card against the pre-capture baseline, present the embedded thumb
- * immediately (blurred, spinner), then stream the full image in chunks between
- * live-view frames and swap it over the presented review. One review per run,
- * JPEG-gated — a RAW-only quality has no streamable full image.
- * [verify-on-HW: enumeration lag per body]
+ * look up the shot's card object (the `ObjectAdded` handle, else a diff
+ * against the pre-capture baseline; Core OpenCineNikon `NikonStillReview`
+ * owns the rules) for up to [INSTANT_REVIEW_OBJECT_WINDOW_MILLIS], present the
+ * embedded thumb immediately (blurred, spinner), then read the sharp image
+ * between live-view frames and swap it over the presented review. One review
+ * per run, for every quality: JPEG/HEIF read whole, a RAW-only shot shows its
+ * NEF's embedded preview.
+ * [verify-on-HW: card write time per body and quality]
  */
-internal class InstantReviewController(private val session: CameraSession) {
+internal class InstantReviewController(
+    private val session: CameraSession,
+    private val decode: (ByteArray) -> ImageBitmap? = ::decodeReviewBitmap,
+) {
     private val _review = MutableStateFlow<InstantReviewPresentation?>(null)
     val review: StateFlow<InstantReviewPresentation?> = _review
     private var fetchJob: Job? = null
@@ -117,50 +127,66 @@ internal class InstantReviewController(private val session: CameraSession) {
     fun onCaptureRunCompleted(
         scope: CoroutineScope,
         enabled: Boolean,
-        compression: String?,
         infoLine: String?,
         focus: LiveFocusInfo? = null,
     ) {
         if (!enabled) return
-        // JPEG-gated: RAW-only qualities have no streamable full image.
-        if (compression?.contains("JPEG") != true) return
         fetchJob?.cancel()
         fetchJob = scope.launch {
-            repeat(6) { attempt ->
+            // A slow card write (RAW+JPEG Fine* in M/P/A/S) can land well after
+            // the release completes, so the lookup runs for a time window.
+            val deadline = System.nanoTime() + INSTANT_REVIEW_OBJECT_WINDOW_MILLIS * 1_000_000L
+            while (System.nanoTime() < deadline) {
                 val handle = runCatching { session.resolveNewestStillHandle() }.getOrNull()
                 if (handle != null) {
                     presentAndUpgrade(handle, infoLine, focus)
                     return@launch
                 }
-                if (attempt < 5) delay(150)
+                delay(INSTANT_REVIEW_OBJECT_POLL_MILLIS)
             }
         }
     }
 
     private suspend fun presentAndUpgrade(handle: Int, infoLine: String?, focus: LiveFocusInfo?) {
-        val thumbBytes = runCatching { session.stillThumbnail(handle) }.getOrNull() ?: return
-        val thumb = decodeReviewBitmap(thumbBytes) ?: return
-        _review.value =
-            InstantReviewPresentation(
-                image = thumb,
-                isFullResolution = false,
-                countdownArmed = false,
-                handle = handle,
-                infoLine = infoLine,
-                focus = focus,
-            )
-        // The embedded thumb is instant but tiny — stream the full image and
+        val thumb = readOrNull { session.stillThumbnail(handle) }?.let(decode)
+        if (thumb != null) {
+            // A dismissal or a newer run cancelled this job: never resurrect or overwrite.
+            currentCoroutineContext().ensureActive()
+            _review.value =
+                InstantReviewPresentation(
+                    image = thumb,
+                    isFullResolution = false,
+                    countdownArmed = false,
+                    handle = handle,
+                    infoLine = infoLine,
+                    focus = focus,
+                )
+        }
+        // The embedded thumb is instant but tiny: read the sharp image and
         // swap it over the presented review (abandoned once dismissed). A
-        // failed stream arms the countdown on the thumb so a timed review can
-        // never hang on the blurred stand-in.
-        val full =
-            runCatching { session.stillFullImage(handle) }.getOrNull()
-                ?.let(::decodeReviewBitmap)
-        val current = _review.value ?: return
-        if (current.handle != handle) return
+        // failed read arms the countdown on the thumb so a timed review can
+        // never hang on the blurred stand-in. Without a thumb the sharp image
+        // is presented directly.
+        val sharp = readOrNull { session.stillFullImage(handle) }?.let(decode)
+        currentCoroutineContext().ensureActive()
+        val current = _review.value
+        if (thumb == null) {
+            if (sharp == null) return
+            _review.value =
+                InstantReviewPresentation(
+                    image = sharp,
+                    isFullResolution = true,
+                    countdownArmed = true,
+                    handle = handle,
+                    infoLine = infoLine,
+                    focus = focus,
+                )
+            return
+        }
+        if (current == null || current.handle != handle) return
         _review.value =
-            if (full != null) {
-                current.copy(image = full, isFullResolution = true, countdownArmed = true)
+            if (sharp != null) {
+                current.copy(image = sharp, isFullResolution = true, countdownArmed = true)
             } else {
                 current.copy(countdownArmed = true)
             }
@@ -190,6 +216,16 @@ internal class InstantReviewController(private val session: CameraSession) {
     }
 }
 
+/** A failed read is no image; a cancelled one stays cancelled so a stale job cannot write. */
+private suspend fun <T> readOrNull(read: suspend () -> T?): T? =
+    try {
+        read()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        null
+    }
+
 /** Display-sized decode — the review never shows more pixels than the screen. */
 private fun decodeReviewBitmap(bytes: ByteArray): ImageBitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -210,6 +246,15 @@ private fun decodeReviewBitmap(bytes: ByteArray): ImageBitmap? {
 }
 
 private const val REVIEW_MAX_PIXEL = 4096
+
+/**
+ * How long a review looks for the shot's card object; mirrors Core
+ * `NikonStillReviewPolicy.objectWindowMilliseconds` (iOS uses it directly).
+ */
+internal const val INSTANT_REVIEW_OBJECT_WINDOW_MILLIS = 4_000L
+
+/** Pause between lookups; mirrors `NikonStillReviewPolicy.objectPollIntervalMilliseconds`. */
+internal const val INSTANT_REVIEW_OBJECT_POLL_MILLIS = 150L
 
 /** The captured AF boxes over the review, present only while Focus Point is on. */
 internal const val INSTANT_REVIEW_FOCUS_TAG = "instantReview.focus"

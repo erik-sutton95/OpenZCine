@@ -806,13 +806,17 @@ extension NikonPlaybackOwnerAdoptionTests {
         writer.add(input)
         guard writer.startWriting() else { throw CocoaError(.fileWriteUnknown) }
         writer.startSession(atSourceTime: .zero)
+        // Fixture setup, not a playback budget: on a loaded hosted runner the encoder can hold
+        // one frame back for seconds, so the whole movie shares one deadline. A failed writer
+        // reports its own error instead of an anonymous write failure.
+        let until = ContinuousClock.now.advanced(by: .seconds(60))
         for frame in 0..<60 {
-            let until = ContinuousClock.now.advanced(by: .seconds(5))
             while !input.isReadyForMoreMediaData, writer.status == .writing,
                 ContinuousClock.now < until
             {
                 try await Task.sleep(for: .milliseconds(1))
             }
+            if writer.status == .failed { throw writer.error ?? CocoaError(.fileWriteUnknown) }
             guard input.isReadyForMoreMediaData else { throw CocoaError(.fileWriteUnknown) }
             let pool = try XCTUnwrap(adaptor.pixelBufferPool)
             var optional: CVPixelBuffer?
@@ -839,13 +843,15 @@ extension NikonPlaybackOwnerAdoptionTests {
             guard
                 adaptor.append(
                     buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 10))
-            else { throw CocoaError(.fileWriteUnknown) }
+            else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         }
         input.markAsFinished()
         await withCheckedContinuation { continuation in
             writer.finishWriting { continuation.resume() }
         }
-        guard writer.status == .completed else { throw CocoaError(.fileWriteUnknown) }
+        guard writer.status == .completed else {
+            throw writer.error ?? CocoaError(.fileWriteUnknown)
+        }
     }
     static func prefixEnd(_ data: Data) throws -> Int {
         var cursor = 0

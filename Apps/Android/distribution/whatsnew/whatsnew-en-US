@@ -1,5 +1,5 @@
-- Reconnecting keeps stills or video mode; Try again after cancelling a camera Wi-Fi join asks again.
-- Record phone gyro with Nikon takes; calibrate a firm mount or pick a preset, then export logs for Gyroflow.
-- Share or delete saved logs; interrupted logs keep available motion data.
-- Camera reports drive exposure, shutter angle, storage, link and recording time; missing values stay unavailable.
-- Live/Multicam clocks and Media return stay consistent; preview start/reconnect crashes fixed.
+- Instant review covers RAW-only photos and appears sooner; the GYRO pill no longer covers the screen lock.
+- Tap-to-focus no longer sticks busy while the focus dial drives; top bar readouts get their glow back.
+- Photo mode shows shots left as a picture icon and count; with two cards it follows the stills card.
+- A camera another phone is using asks before take-over; the other phone stops reconnecting.
+- Reconnecting keeps stills or video mode, and an unseen saved Wi-Fi camera is woken first.

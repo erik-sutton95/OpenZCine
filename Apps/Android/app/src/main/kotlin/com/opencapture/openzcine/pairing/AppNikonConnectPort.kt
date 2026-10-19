@@ -4,6 +4,7 @@ import com.opencapture.opencine.core.ConnectionFailure
 import com.opencapture.opencine.core.DiscoveryMode
 import com.opencapture.opencine.core.RecoveryAction
 import com.opencapture.opencine.core.RouteKind
+import com.opencapture.opencine.nikon.NikonBodyWake
 import com.opencapture.opencine.nikon.NikonConnectException
 import com.opencapture.opencine.nikon.NikonConnectPort
 import com.opencapture.opencine.nikon.NikonConnectRequest
@@ -221,6 +222,9 @@ internal class AppNikonConnectPort(
 
     override fun forget(hosts: List<String>) = onForget(hosts)
 
+    /** A fresh presence sweep: the list's held rows can predate the phone that went live. */
+    override suspend fun currentHolder(host: String): String? = connector.currentHolder(host)
+
     private fun failure(reason: ConnectionFailure.Reason, code: String, message: String): NikonConnectException {
         val failure = NikonIntegration.failure(reason, code, message)
         return NikonConnectException(
@@ -243,6 +247,7 @@ internal class AppNikonConnectPort(
                         else -> copy.text(R.string.conn_searching_detail, phase.title)
                     }
             is SavedCameraPhase.Joining -> NikonConnectionPhase.JOINING_WIFI to copy.text(R.string.conn_joining_detail)
+            is SavedCameraPhase.Waking -> NikonConnectionPhase.DISCOVERING to NikonBodyWake.wakingMessage(phase.title)
             is SavedCameraPhase.Connecting ->
                 NikonConnectionPhase.HANDSHAKING to copy.text(R.string.conn_handshaking_detail, phase.title)
             is SavedCameraPhase.Pairing -> NikonConnectionPhase.PAIRING to copy.text(R.string.conn_pairing_detail, phase.title)
