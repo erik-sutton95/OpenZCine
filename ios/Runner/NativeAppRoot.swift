@@ -5118,9 +5118,22 @@ final class NativeAppModel {
         case restoreSubjectDetection(context: FocusResetContext)
     }
 
-    private func resetCameraPropertyState() {
-        cameraPropertySnapshot = PTPCameraPropertySnapshot()
-        reportedPropertySnapshot = PTPCameraPropertySnapshot()
+    private static func heldCaptureMode(_ snapshot: PTPCameraPropertySnapshot, keeping: Bool)
+        -> PTPCameraPropertySnapshot
+    {
+        guard keeping else { return PTPCameraPropertySnapshot() }
+        return PTPCameraPropertySnapshot(
+            captureSelector: snapshot.captureSelector, shotsRemaining: snapshot.shotsRemaining)
+    }
+
+    /// `keepingCaptureMode` is a restart or same-host recovery: the held body stays in stills or
+    /// video (and keeps its shot count) until a re-read replaces them, so its chrome never falls
+    /// back to the other mode meanwhile.
+    private func resetCameraPropertyState(keepingCaptureMode: Bool = false) {
+        cameraPropertySnapshot = Self.heldCaptureMode(
+            cameraPropertySnapshot, keeping: keepingCaptureMode)
+        reportedPropertySnapshot = Self.heldCaptureMode(
+            reportedPropertySnapshot, keeping: keepingCaptureMode)
         stabilizationFileTypeReadback = nil
         propertyPollIndex = 0
         cameraAnnouncedPropertyChanges.removeAll()
@@ -7094,7 +7107,7 @@ final class NativeAppModel {
         lastAppliedStreamCompression = nil
         lastDescriptorRefreshAt = nil
         lastStorageRefreshAt = nil
-        resetCameraPropertyState()
+        resetCameraPropertyState(keepingCaptureMode: preserveMonitorSurface)
         // Camera-specific option lists and operator locks must not carry into the next session — a
         // different body (or a fresh re-poll of the same one) advertises its own controls. Cleared
         // here at session teardown, NOT in resetCameraPropertyState, which also runs on every
@@ -7119,7 +7132,7 @@ final class NativeAppModel {
         let incident = feedIncidentProducer?.beginPreview()
         let retiredDecodeSource = frameDecoder.retireSource()
         Task { await frameDecoder.resetProcessors(source: retiredDecodeSource) }
-        if videoSource == .cameraLiveView { resetCameraPropertyState() }
+        if videoSource == .cameraLiveView { resetCameraPropertyState(keepingCaptureMode: true) }
         var frameRate = FrameRateSampler()
         monitorRuntime?.startPreview(
             bootstrap: { [weak self] in

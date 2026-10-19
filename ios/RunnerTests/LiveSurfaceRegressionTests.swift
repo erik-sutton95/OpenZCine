@@ -270,6 +270,25 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertTrue(model.isRecording, "an unlocked movie monitor takes the remote press")
     }
 
+    /// A same-host recovery held a stills body but drew video chrome (STBY, red ring, GB) until
+    /// a re-read that never came. The capture mode survives the recovery; a disconnect clears it.
+    func testASameHostRecoveryKeepsTheStillsMode() {
+        let model = NativeAppModel()
+        model.startDemoSession()
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        model.applyDemoProperty(.exposureRemaining, data: Data([0xED, 0x1B, 0, 0]))
+        XCTAssertTrue(model.isPhotographyMode)
+
+        model.clearCameraSessionState(resetConnection: false, preserveMonitorSurface: true)
+        XCTAssertTrue(model.isPhotographyMode, "recovery keeps the held body in stills")
+        XCTAssertEqual(model.cameraPropertySnapshot.shotsRemaining, 7149)
+        XCTAssertNil(model.cameraPropertySnapshot.iso, "every other value waits for its re-read")
+
+        model.clearCameraSessionState(resetConnection: true)
+        XCTAssertFalse(model.isPhotographyMode, "a disconnect leaves no mode for the next body")
+        XCTAssertNil(model.cameraPropertySnapshot.shotsRemaining)
+    }
+
     /// A1-25: a relayed record ran through the shared record entry without the host's interface
     /// lock, against its own documented contract. That entry now refuses under the lock.
     func testTheSharedRecordEntryRefusesUnderTheHostLock() {
