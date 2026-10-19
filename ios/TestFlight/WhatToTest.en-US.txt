@@ -1,5 +1,6 @@
 New and changed
 
+- DISP 3 (the command dashboard) is back in the live view's style: the REC chip and a large timecode head it, with larger tiles. Tap a tile to change it; hold and drag to reorder.
 - Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
 - In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
 - Connecting to a saved Wi-Fi camera that the camera list cannot see now wakes it first, and reports that it is not on the network if it stays silent.
@@ -19,6 +20,7 @@ Fixes
 
 What to test
 
+- In video, press DISP until the command dashboard shows (DISP 3). Check the REC chip and timecode on top, tap a tile to change it, hold and drag a tile to move it, and start a recording (the chip turns red). In Photo mode DISP 3 is not offered.
 - In video, turn a LUT on, switch the camera to Photo and check the preview colours match the camera, then switch back to video and check the LUT returns.
 - Turn on instant review (PLAY). Shoot RAW, JPEG and RAW+JPEG in A, S, M and P; check each review turns sharp. With photos on card 2, compare shots left (picture icon and count) and where app photos land.
 - With gyro logging on, tap the GYRO pill; it opens the logs and never locks the controls. Turn the focus dial and tap a new point mid-turn; focus keeps responding.

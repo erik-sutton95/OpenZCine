@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- DISP 3 (the command dashboard) returns in the shared live view's style on iOS and Android: the
+  record chip and hero timecode (frames in the accent) head it again, with the live view's type
+  and larger tiles. DISP stays 1, 2, 3 in video and 1, 2 in photo.
+
 - Live View and Multicam preserve Nikon frame timecode when it is reported by
   the camera, including frame zero. Cameras without frame timecode keep their
   seconds display; no frame rate is guessed.
