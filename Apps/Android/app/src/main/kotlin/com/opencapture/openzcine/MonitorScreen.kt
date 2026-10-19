@@ -5,6 +5,7 @@ import com.opencapture.opencine.media.recordingTimeLabel
 import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.media.StorageReadout
 import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.MonitorTextFormat
 import java.util.concurrent.atomic.AtomicReference
 import com.opencapture.openzcine.gyro.GyroCaptureState
 import com.opencapture.openzcine.gyro.GyroStatusPill
@@ -1948,13 +1949,19 @@ internal fun MonitorScreen(
         val statusStorage = if (isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE)) {
             val storage = cameraProperties.storage
             val capacity = storage?.readout?.takeIf { photoPillShowsStorage && it.totalBytes != null }
+            // Remaining shots read as a picture glyph and the count, which keeps the portrait
+            // header's telemetry clear of the camera cutout; the storage flip keeps the card.
+            val shots = cameraProperties.shotsRemaining.takeIf { capacity == null }
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
                 if (capacity != null) {
                     val free = if (isPortrait) MonitorStorageReadoutFormat.wholeUnitCapacity(capacity.freeBytes)
                         else capacity.free
                     "$free ${capacity.percent}"
-                } else cameraProperties.shotsRemaining?.let { "${shotsRemainingCompactLabel(it)} SHOTS" },
-                MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage })
+                } else shots?.let(MonitorTextFormat::shotsRemainingCompactLabel),
+                MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage },
+                icon = if (capacity == null) MonitorIcon.IMAGE else null,
+                accessibilityLabel = if (capacity != null) null
+                    else shots?.let(MonitorTextFormat::shotsRemainingAccessibilityLabel) ?: "Shots remaining unknown")
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",
             mediaLabel(isPortrait), MonitorDisplaySection.STORAGE, action = { prefersMediaDuration = !prefersMediaDuration }) else null
         val resolutionKind = if (isPhotographyMode) MonitorPickerKind.SIZE else MonitorPickerKind.RESOLUTION
