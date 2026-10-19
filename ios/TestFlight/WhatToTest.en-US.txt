@@ -8,17 +8,18 @@ New and changed
 
 Fixes
 
-- In Photo mode the LUT turns off again, so the stills preview shows the camera's colours. Switching back to video brings your LUT back.
+- In Photo mode the LUT turns off again, so the stills preview shows the camera's colours, and the waveform, parade, vectorscope, traffic lights and audio meters leave too, and portrait Fill no longer crops the photo. Switching back to video brings them back.
+- On a fresh install and after Reset, zebras start at 100 IRE and traffic lights at a quarter stop again.
 - Instant review now works for RAW-only photos and appears sooner for JPEG and RAW+JPEG, in every exposure mode.
 - The GYRO status pill no longer sits on the screen lock, so tapping it cannot grey out the controls. Gyro logging only arms once the camera reports video mode.
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
 - After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver. A volume-button remote shutter is protected against a rare quit.
-- With two cards, the shots counter counts only the card the camera saves photos to, and photos taken from the app go to that card.
+- With two cards, the shots counter and photos taken from the app follow the card the camera saves photos to.
 - On a fresh install, the Local Network permission is asked for only at the permissions step of setup, not on the first screen.
 
 What to test
 
-- In video, turn a LUT on, switch the camera to Photo and check the preview colours match the camera, then switch back to video and check the LUT returns.
+- In video, turn on a LUT, the waveform and audio meters, and pick portrait Fill. Switch the camera to Photo: colours match the camera, the tools leave and the whole photo shows. Back in video they return.
 - Turn on instant review (PLAY). Shoot RAW, JPEG and RAW+JPEG in A, S, M and P; check each review turns sharp. With photos on card 2, compare shots left and where app photos land.
 - With gyro logging on, tap the GYRO pill; it opens the logs and never locks the controls. Turn the focus dial and tap a new point mid-turn; focus keeps responding.
 - Reinstall: the Local Network prompt should appear only at the permissions step. Then connect to a saved Wi-Fi camera while it is waking from power saving.
