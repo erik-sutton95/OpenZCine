@@ -1,5 +1,5 @@
-- Reconnecting keeps stills or video mode; portrait status readouts use a three-column grid.
-- Record phone gyro with Nikon takes; calibrate a firm mount or pick a preset, then export logs for Gyroflow.
-- Share or delete saved logs; interrupted logs keep available motion data.
+- Stills/video mode survives reconnects; portrait readouts use a 3-column grid.
+- Photo mode shows remaining shots as a picture icon and count, clear of the camera cutout.
+- Record phone gyro with Nikon takes; calibrate a mount or pick a preset; share, delete or export logs for Gyroflow.
 - Camera reports drive exposure, shutter angle, storage, link and recording time; missing values stay unavailable.
-- Live/Multicam clocks and Media return stay consistent; preview start/reconnect crashes are fixed.
+- Live/Multicam clocks and Media return stay consistent; start/reconnect crashes fixed.
