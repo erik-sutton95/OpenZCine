@@ -120,4 +120,7 @@ internal class CameraListDiscovery(
 
     /** The saved hosts something occupies (the list's only wireless readiness signal). */
     suspend fun alive(hosts: Collection<String>): Set<String> = discovery.liveness(hosts)
+
+    /** The device holding [host] now, from a fresh presence sweep outside the list's window. */
+    suspend fun currentHolder(host: String): String? = discovery.currentHolder(host)
 }

@@ -341,11 +341,31 @@ final class NikonAssistsTests: XCTestCase {
         let model = NativeAppModel(assist: .restore(storage: defaults))
         model.applyDemoProperty(.liveViewSelector, data: Data([0]))
         XCTAssertTrue(model.isPhotographyMode)
-        for tool in [MonitorAssistTool.lut, .waveform, .parade, .vectorscope, .guides, .crosshair] {
+        for tool in [MonitorAssistTool.waveform, .parade, .vectorscope, .guides, .crosshair] {
             XCTAssertTrue(model.liveAssistPaletteTools.contains(tool), "\(tool) leaves photo mode")
         }
         model.assist.set(.waveform, visible: true, context: .liveView)
         XCTAssertTrue(model.renderedLiveAssistTools.contains(.waveform))
+    }
+
+    /// ZT-01: a LUT left on in video never grades the display-referred stills feed, and the
+    /// flip back to video brings it back without the operator touching it.
+    func testPhotographyDropsTheLUTAndVideoRestoresIt() {
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        model.assist.set(.lut, visible: true, context: .liveView)
+        XCTAssertFalse(model.isPhotographyMode)
+        XCTAssertTrue(model.renderedLiveAssistTools.contains(.lut))
+        XCTAssertNotNil(model.liveImageEffects.lut)
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.isPhotographyMode)
+        XCTAssertFalse(model.liveAssistPaletteTools.contains(.lut))
+        XCTAssertFalse(model.renderedLiveAssistTools.contains(.lut))
+        XCTAssertNil(model.liveImageEffects.lut)
+        XCTAssertNil(model.liveImageEffects.splitComparison)
+        XCTAssertTrue(model.assist.isVisible(.lut), "the saved switch stays on")
+        model.applyDemoProperty(.liveViewSelector, data: Data([1]))
+        XCTAssertFalse(model.isPhotographyMode)
+        XCTAssertNotNil(model.liveImageEffects.lut)
     }
 
     /// Nikon's own assist entries are typed declarations on the shared list (EV and PLAY for
@@ -353,6 +373,7 @@ final class NikonAssistsTests: XCTestCase {
     func testNikonDeclaresItsOwnAssistsOnTheSharedList() {
         let nikon = MonitorAssistCapabilities.nikon
         XCTAssertEqual(nikon.photographyOnly, [.instantReview, .evMeter])
+        XCTAssertEqual(nikon.videoOnly, [.lut])
         XCTAssertEqual(nikon.levelStyles, [.horizon, .gauge])
         XCTAssertTrue(nikon.unavailable.contains(.ndMeter))
         XCTAssertTrue(AssistConfiguration.Level.Style.self == MonitorLevelStyle.self)
