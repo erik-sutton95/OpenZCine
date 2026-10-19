@@ -12,18 +12,20 @@ platforms it touches; a skipped job counts as passed in the gate.
 | Job | Checks |
 | --- | --- |
 | Meta checks, Secret scan | pin drift warning, hygiene, tester notes format, typos, Markdown, offline links, EditorConfig, actionlint; gitleaks |
-| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, iOS unit tests on a private iPhone simulator, Watch build |
+| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; parallel, two workers), Watch build; SwiftPM and compilation caches from main |
 | Android | `assembleDebug`, UI test compile, `test lint`, release native library and Wear checks |
 | Anonymous bug relay, Handbook | relay `npm run check`; static site build |
 
-No simulator UI suite, iPad oracle or quarantined test runs here, and pull requests no longer
+No simulator UI suite, iPad oracle, portrait header layout matrix
+(`MonitorPortraitHeaderClearanceTests`) or quarantined test runs here, and pull requests no longer
 have to edit tester notes (see Release time).
 
 ## Nightly tier: `.github/workflows/nightly.yml`
 
-Every night at 02:30 UTC on `main`, and on `workflow_dispatch`. It calls `ci.yml` with
-`full: true`: every job regardless of paths, plus the shared conformance scenarios on iOS and
-the original storage oracle on a private 2x iPad. On `main`, OpenCine's
+Every night at 04:45 UTC on `main` (OpenCine 02:30, Pocket 03:15, Insta 04:00), and on
+`workflow_dispatch`. It calls `ci.yml` with `full: true`: every job regardless of paths, plus
+the shared conformance scenarios on iOS, the portrait header layout matrix and the original
+storage oracle on a private 2x iPad. On `main`, OpenCine's
 `scripts/ci-nightly-report.sh` keeps one issue, **Nightly CI failing on main** (label
 `ci-nightly`): opened or updated with the failing jobs and run link on failure, closed by the
 next passing night.
