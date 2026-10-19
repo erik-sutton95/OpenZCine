@@ -1,24 +1,16 @@
 New and changed
 
-- Camera controls and Media now use the shared OpenCine screens, so they look and behave as in the other OpenCine camera apps.
-- Exposure, shutter angle, storage and link readouts follow the values supplied by the camera.
-- Recording duration follows confirmed recording state.
-- Live View and Multicam share consistent clock and camera-control presentation.
-- Record the phone's gyro alongside Nikon camera takes; review, share, delete or export motion logs for Gyroflow.
-- Calibrate a firmly mounted phone, including tilted holders, or choose a mount preset. Saved alignment applies to future takes.
+- In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
 
 Fixes
 
-- Returning from Media restores the selected camera's live picture.
-- Storage readouts retain reported precision and mark missing measurements as unavailable.
-- Interrupted gyro takes preserve available motion data for recovery after a disconnect, backgrounding or app restart.
-- After a disconnect, recovery keeps the camera in the stills or video mode you were using.
-- In portrait, the status readouts use a three-column grid that grows with the number of rows.
+- Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
+- After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver.
+- Using a volume button as the remote shutter is protected against a rare unexpected quit.
 
 What to test
 
-- Connect and compare exposure, storage, link and recording time with the camera. Check landscape first, then rotate and compare Live View and Multicam clocks. In portrait, check that every status readout is visible.
-- Fix the phone firmly to the camera. In Phone mount, capture three calibration poses, holding still before each capture.
-- Enable gyro logging and wait for GYRO ARMED. Record a short clip, check the saved log, open Media, then return to Live View and reconnect.
-- Background the app or reconnect during a take. Check the interrupted log when you return. Reconnect in stills mode, then in video mode, and check the mode is kept.
-- With camera and lens stabilization off, export a short fixed-focal-length take and a ten-minute take. Choose a lens profile and sync in Gyroflow; check the beginning, middle and end.
+- Rotate to portrait and check that the format readout and the clock share the same top edge, and that every status readout is visible.
+- In landscape, open and collapse the assist palette. With VoiceOver on, check that only the visible buttons are announced.
+- Turn the on-screen focus dial, then tap a new focus point mid-turn, several times. Focus should keep responding without a busy message.
+- Use a volume button as the remote shutter to start and stop a recording; report any unexpected quit.
