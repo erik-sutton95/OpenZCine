@@ -67,13 +67,12 @@ enum class ScopeKind(val token: String) {
     ;
 
     /**
-     * Whether this scope is offered in still photography. Only the histogram is
-     * (mirrors `MonitorAssistTool.appliesToPhotography` on iOS, where among the
-     * scope tools HISTO alone is photography-visible); the cinema scopes are
-     * suppressed, so a photography scope band must not bill them.
+     * Whether this scope is offered in still photography: only the histogram, since the
+     * cinema scopes are video only (`nikonAssistCapabilities.videoOnly`, shared with iOS),
+     * so a photography scope band must not bill them.
      */
     val appliesToPhotography: Boolean
-        get() = this == HISTOGRAM
+        get() = assistTool.appliesToPhotography
 
     companion object {
         /** Canonical presentation order, matching `MonitorAssistTool.scopeTools` on iOS. */

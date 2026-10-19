@@ -20,6 +20,7 @@ import com.opencapture.opencine.media.MonitorPeakingColor
 import com.opencapture.opencine.media.MonitorPeakingSense
 import com.opencapture.opencine.media.MonitorZebraPaint
 import com.opencapture.opencine.appkit.MonitorAssistState
+import com.opencapture.opencine.appkit.MonitorDisplayMode
 import com.opencapture.openzcine.lut.StoredLutCategory
 import com.opencapture.openzcine.lut.StoredLutSelection
 import com.opencapture.openzcine.lut.fromPersisted
@@ -341,10 +342,12 @@ class NikonAssistsTest {
     }
 
     @Test
-    fun `fresh installs take the shared assist defaults with the look off`() {
+    fun `fresh installs take the Nikon zebra and compensation defaults with the look off`() {
+        // ZAA-227 / ZAA-228: Z shipped 100 IRE highlight zebras and a quarter stop of crush/clip
+        // tolerance on both platforms; the shared 99 / 0 are Pocket's.
         val state = restore().shared
-        assertEquals(99.0, state.zebraHighlightIRE)
-        assertEquals(MonitorCrushClipCompensation.ZERO, state.crushClipCompensation)
+        assertEquals(100.0, state.zebraHighlightIRE)
+        assertEquals(MonitorCrushClipCompensation.QUARTER, state.crushClipCompensation)
         assertFalse(state.isOn(MonitorAssistTool.LUT))
     }
 
@@ -703,7 +706,7 @@ class NikonAssistsTest {
         assertEquals(MonitorPeakingSense.MED, restored.peakingSensitivity)
         assertEquals(MonitorZebraUnit.IRE, restored.zebraUnit)
         assertTrue(restored.zebraHighlight)
-        assertEquals(99.0, restored.zebraHighlightIRE)
+        assertEquals(100.0, restored.zebraHighlightIRE)
         assertEquals(MonitorZebraPaint.WHITE, restored.zebraHighlightColor)
         assertTrue(restored.zebraMidtone)
         assertEquals(55.0, restored.zebraMidtoneIRE)
@@ -718,7 +721,7 @@ class NikonAssistsTest {
         assertEquals(100, restored.vectorBrightness)
         assertEquals(1.2, restored.vectorScale)
         assertTrue(restored.histoTrafficLights)
-        assertEquals(MonitorCrushClipCompensation.ZERO, restored.crushClipCompensation)
+        assertEquals(MonitorCrushClipCompensation.QUARTER, restored.crushClipCompensation)
         assertEquals(0.8, restored.histoScale)
         assertEquals(1.5, restored.lightsScale)
     }
@@ -735,5 +738,35 @@ class NikonAssistsTest {
         assertTrue(NikonAssistChip.Tool(MonitorAssistTool.EV) in stills)
         assertTrue(NikonAssistChip.Tool(MonitorAssistTool.LEVEL) in cinema)
         assertFalse(cinema.any { it == NikonAssistChip.Tool(MonitorAssistTool.ND) })
+    }
+
+    /** ZAA-227 / ZAA-228: an operator who never moved a value keeps the Nikon default; a stored one wins. */
+    @Test
+    fun `migrated operators who never moved zebra or compensation keep the Nikon defaults`() {
+        val untouched = migrate("assist.zebra.highlight.enabled.v1" to true)
+        assertEquals(100.0, untouched.zebraHighlightIRE)
+        assertEquals(MonitorCrushClipCompensation.QUARTER, untouched.crushClipCompensation)
+        val configured = migrate("assist.zebra.highlight.ire.v1" to 95f, "scope-meter-v1" to 0)
+        assertEquals(95.0, configured.zebraHighlightIRE)
+        assertEquals(MonitorCrushClipCompensation.ZERO, configured.crushClipCompensation)
+    }
+
+    /** ZIA-010..013 twin: the cinema analysis tools and the LUT are video only, on both platforms. */
+    @Test
+    fun `photo hides the LUT scopes traffic lights and audio meters and video restores them`() {
+        val videoOnly = setOf(
+            MonitorAssistTool.LUT, MonitorAssistTool.WAVE, MonitorAssistTool.PARADE,
+            MonitorAssistTool.VECTOR, MonitorAssistTool.LIGHTS, MonitorAssistTool.AUDIO,
+        )
+        assertEquals(videoOnly, nikonAssistCapabilities.videoOnly)
+        val state = restore().shared
+        videoOnly.forEach { if (!state.isOn(it)) state.toggle(it) }
+        for (tool in videoOnly) {
+            assertFalse(state.rendersLive(tool, MonitorDisplayMode.LIVE, photography = true), tool.name)
+            assertTrue(state.rendersLive(tool, MonitorDisplayMode.LIVE, photography = false), tool.name)
+            assertTrue(state.isOn(tool), "the saved switch stays on")
+        }
+        val stills = nikonLiveAssistChips(photography = true, imageEffects = true)
+        for (tool in videoOnly) assertFalse(NikonAssistChip.Tool(tool) in stills, tool.name)
     }
 }
