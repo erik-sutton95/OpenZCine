@@ -843,13 +843,15 @@ extension NikonPlaybackOwnerAdoptionTests {
             guard
                 adaptor.append(
                     buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 10))
-            else { throw CocoaError(.fileWriteUnknown) }
+            else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         }
         input.markAsFinished()
         await withCheckedContinuation { continuation in
             writer.finishWriting { continuation.resume() }
         }
-        guard writer.status == .completed else { throw CocoaError(.fileWriteUnknown) }
+        guard writer.status == .completed else {
+            throw writer.error ?? CocoaError(.fileWriteUnknown)
+        }
     }
     static func prefixEnd(_ data: Data) throws -> Int {
         var cursor = 0
