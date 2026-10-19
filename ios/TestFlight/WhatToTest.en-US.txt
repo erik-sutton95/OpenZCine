@@ -14,6 +14,8 @@ Fixes
 - Interrupted gyro takes preserve available motion data for recovery after a disconnect, backgrounding or app restart.
 - After a disconnect, recovery keeps the camera in the stills or video mode you were using.
 - In portrait, the status readouts use a three-column grid that grows with the number of rows.
+- Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
+- After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver.
 
 What to test
 

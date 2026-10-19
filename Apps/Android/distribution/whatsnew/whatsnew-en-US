@@ -1,5 +1,5 @@
 - Reconnecting keeps stills or video mode; portrait status readouts use a three-column grid.
-- Record phone gyro with Nikon takes; calibrate a firm mount or pick a preset, then export logs for Gyroflow.
-- Share or delete saved logs; interrupted logs keep available motion data.
-- Camera reports drive exposure, shutter angle, storage, link and recording time; missing values stay unavailable.
-- Live/Multicam clocks and Media return stay consistent; preview start/reconnect crashes are fixed.
+- Record phone gyro with Nikon takes; calibrate or pick a preset; share, delete or export logs for Gyroflow.
+- Camera reports drive exposure, shutter angle, storage, link and record time; missing values show unavailable.
+- Live/Multicam clocks and Media return agree; start/reconnect crashes fixed.
+- Interrupted gyro logs keep available motion data. Focus no longer sticks busy while the dial drives.
