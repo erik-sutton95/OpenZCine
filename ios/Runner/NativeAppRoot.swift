@@ -55,7 +55,9 @@ func logConnection(_ message: String) {
     /// Streams every `logConnection` line to a developer machine on the LAN, so a live hardware
     /// repro can be watched without the operator copying Console output between devices.
     ///
-    /// Debug-only diagnostics, inert unless a sink is advertised: browses for
+    /// Debug-only diagnostics, inert unless a sink is advertised and Local Network access was
+    /// already granted (lines wait in the bounded buffer until then, so the tap never raises the
+    /// system prompt at launch, ahead of the wizard's permissions step): browses for
     /// `_ozc-logtap._tcp` (advertise one with `dns-sd -R tap _ozc-logtap._tcp local 9099` and
     /// listen on 9099), connects unicast TCP, and streams timestamped device-prefixed lines.
     /// Attachment itself is evidence: finding the sink takes the same mDNS browse the relay
@@ -101,7 +103,7 @@ func logConnection(_ message: String) {
         }
 
         private func startIfNeeded() {
-            guard !started else { return }
+            guard !started, LocalNetworkAccess.grantRemembered() else { return }
             started = true
             let browser = NWBrowser(
                 for: .bonjour(type: "_ozc-logtap._tcp", domain: nil), using: .tcp)
@@ -1667,6 +1669,10 @@ final class NativeAppModel {
         relayBrowser = browser
         browser.start(includePeerToPeer: includePeerToPeer)
     }
+
+    /// Whether a relay browse is running; nothing may start one before the operator chooses a
+    /// network path, since the browse raises the Local Network prompt.
+    var isRelayBrowsing: Bool { relayBrowser != nil }
 
     func stopRelayBrowsing() {
         relayBrowser?.stop()
@@ -3518,10 +3524,11 @@ final class NativeAppModel {
             alreadyPairedCameras: !savedCameras.isEmpty
         )
         firstPairWizardStep = .chooseTransport
-        // A device that only ever watches never pairs, so the wizard is the ONLY screen it sees —
-        // and broadcasts must be findable from it, or a watcher is walled into a connection setup
-        // it has no camera for. Browsing is idempotent and joining tears it down.
-        startRelayBrowsing()
+        // No relay browse here: the wizard is the first screen of a fresh install, and any
+        // Bonjour browse raises the system Local Network prompt before the operator has chosen
+        // a path or reached the permissions step. A watcher-only device reaches broadcasts by
+        // choosing to: the pair page's watch-feed entry opens the shared browse, and the
+        // "Open the camera list" row starts the list's discovery, as in Pocket and Insta.
     }
 
     private func enterFirstPairDiscoveryStep() {
