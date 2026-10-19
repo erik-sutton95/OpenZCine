@@ -183,15 +183,17 @@ import XCTest
         host.view.frame = window.bounds
     }
 
+    /// Polls every 50 ms for up to 5 s. `XCTNSPredicateExpectation` samples about once a second,
+    /// so on a loaded hosted runner a 5 s wait saw only a few layouts (OpenCine #18).
     func wait(_ condition: @escaping () -> Bool) async -> Bool {
-        let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate { [self] _, _ in
-                MainActor.assumeIsolated {
-                    host.view.layoutIfNeeded()
-                    return condition()
-                }
-            }, object: nil)
-        return await XCTWaiter.fulfillment(of: [ready], timeout: 5) == .completed
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        repeat {
+            host.view.layoutIfNeeded()
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        } while ContinuousClock.now < deadline
+        host.view.layoutIfNeeded()
+        return condition()
     }
     func element(_ id: String) async throws -> NSObject {
         let found = await wait {
