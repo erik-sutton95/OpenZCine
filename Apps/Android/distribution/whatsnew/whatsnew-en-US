@@ -1,2 +1,3 @@
+- Instant review works for RAW-only photos and appears sooner for JPEG and RAW+JPEG.
+- The GYRO pill no longer covers the screen lock; gyro arms only in video mode.
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
-- Turn the focus dial, tap a new focus point mid-turn a few times, and check focus keeps responding.

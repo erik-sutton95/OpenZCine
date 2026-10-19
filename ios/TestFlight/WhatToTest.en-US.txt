@@ -1,16 +1,21 @@
 New and changed
 
+- Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
 - In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
 
 Fixes
 
+- In Photo mode the LUT turns off again, so the stills preview shows the camera's colours. Switching back to video brings your LUT back.
+- Instant review now works for RAW-only photos and appears sooner for JPEG and RAW+JPEG, in every exposure mode.
+- The GYRO status pill no longer sits on the screen lock, so tapping it cannot grey out the controls. Gyro logging only arms once the camera reports video mode.
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
 - After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver.
 - Using a volume button as the remote shutter is protected against a rare unexpected quit.
 
 What to test
 
-- Rotate to portrait and check that the format readout and the clock share the same top edge, and that every status readout is visible.
-- In landscape, open and collapse the assist palette. With VoiceOver on, check that only the visible buttons are announced.
+- In video, turn a LUT on, switch the camera to Photo and check the preview colours match the camera, then switch back to video and check the LUT returns.
+- Turn on instant review (PLAY). Shoot RAW only, then JPEG, then RAW+JPEG, in A, S, M and P modes, and check each review appears and turns sharp.
+- With gyro logging on, tap the GYRO pill in landscape and portrait. It should open the gyro logs and never lock the controls.
 - Turn the on-screen focus dial, then tap a new focus point mid-turn, several times. Focus should keep responding without a busy message.
-- Use a volume button as the remote shutter to start and stop a recording; report any unexpected quit.
+- Rotate to portrait and check the format readout and clock share the same top edge. In landscape, collapse the assist palette and check VoiceOver announces only visible buttons.
