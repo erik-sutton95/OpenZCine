@@ -627,6 +627,21 @@ private struct NikonCommandDashboard: View {
     }
 }
 
+/// VoiceOver for the Nikon still release (behavior audit ZIA-052, ZIA-360).
+enum NikonPhotoReleaseAccessibility {
+    /// An open bulb or time exposure ends on the next release, so it is spoken as such.
+    static func label(openShutter: Bool, capturing: Bool, timerRunning: Bool) -> String {
+        if openShutter { return "End exposure" }
+        return timerRunning ? "Timer running" : capturing ? "Capturing" : "Shutter"
+    }
+
+    static let traits: AccessibilityTraits = .isButton
+
+    /// A VoiceOver release takes the admission a touch takes: the shared surface stops touches
+    /// under the interface lock and while another phone holds the controls.
+    static func admits(locked: Bool, surrendered: Bool) -> Bool { !locked && !surrendered }
+}
+
 /// Nikon still release keeps finger-down/finger-up, burst/timer and body-trigger feedback.
 /// A remote relay or SIMULATED demo has its own bounded command adapter during migration.
 private struct NikonPhotoRelease: View {
@@ -674,8 +689,21 @@ private struct NikonPhotoRelease: View {
                         bodyShutterFlash = false
                     }
                 }
+                .accessibilityLabel(
+                    NikonPhotoReleaseAccessibility.label(
+                        openShutter: model.stillReleaseIsOpenShutter,
+                        capturing: model.isStillCapturing,
+                        timerRunning: model.stillTimerRemaining != nil)
+                )
+                .accessibilityAddTraits(NikonPhotoReleaseAccessibility.traits)
                 .accessibilityAction {
-                    if model.operatorLiveIdentity == source { model.captureStill() }
+                    guard
+                        NikonPhotoReleaseAccessibility.admits(
+                            locked: model.interfaceLocked,
+                            surrendered: model.relayControlSurrendered),
+                        model.operatorLiveIdentity == source
+                    else { return }
+                    model.captureStill()
                 }
                 .accessibilityIdentifier("monitor.system.shutter")
             }

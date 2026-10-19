@@ -22,6 +22,14 @@ struct LadderPickerPanel: View {
         LadderSheet(
             presentation: state.presentation, enabled: true, onWrite: { perform($0) },
             control: model.shell.control, onHold: picker == .shutter ? { holdShutter() } : nil,
+            onHoldPressing: picker == .shutter
+                ? { pressing in
+                    guard pressing,
+                        let hint = Self.shutterHoldHint(
+                            locked: model.lockedControls.contains(.shutter))
+                    else { return }
+                    model.showMonitorNotice(hint)
+                } : nil,
             tintLabel: {
                 WhiteBalanceTint.label(
                     amberBlueCell: $0.amberBlue ?? 0, greenMagentaCell: $0.greenMagenta)
@@ -174,6 +182,12 @@ struct LadderPickerPanel: View {
         case .value(let mode):
             model.applyPicker(picker, mode: mode, value: write.value)
         }
+    }
+
+    /// While a finger rests on the SHUTTER sheet, the monitor says what holding it does
+    /// (behavior audit ZIA-124).
+    static func shutterHoldHint(locked: Bool) -> String? {
+        locked ? "Hold to unlock shutter control on camera" : "Hold to lock shutter control on camera"
     }
 
     private func holdShutter() {
