@@ -538,6 +538,7 @@ struct USBCameraTransportDetachTests {
     /// Hosted run 39248287990 aborted in `NativeNikonPort.startDiscovery` with
     /// `swift_abortRetainUnowned`: the shared integration's stream termination reached the port
     /// after the test's model was gone. A late call must do nothing.
+    @MainActor
     @Test("The Nikon port ignores calls that arrive after its model is gone")
     func portOutlivingItsModelIgnoresLateCalls() async throws {
         var owner: NativeAppModel? = NativeAppModel()
