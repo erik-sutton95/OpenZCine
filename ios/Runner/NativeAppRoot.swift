@@ -10365,7 +10365,8 @@ final class NativeAppModel {
         guard assist.instantReview else { return }
         instantReviewFetchTask?.cancel()
         instantReviewFetchTask = Task { [weak self] in
-            let deadline = ContinuousClock.now
+            let deadline =
+                ContinuousClock.now
                 + .milliseconds(NikonStillReviewPolicy.objectWindowMilliseconds)
             while ContinuousClock.now < deadline {
                 guard let self, !Task.isCancelled, self.cameraSession === session else { return }
@@ -11333,9 +11334,10 @@ final class NativeAppModel {
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
         guard displayMode != .command else { return [] }
         let photography = isPhotographyMode
-        var tools = Set(MonitorAssistTool.activeCases.filter {
-            assist.isVisible($0.selection) && !(photography && $0.isNikonVideoOnly)
-        })
+        var tools = Set(
+            MonitorAssistTool.activeCases.filter {
+                assist.isVisible($0.selection) && !(photography && $0.isNikonVideoOnly)
+            })
         // The camera's audio meter rides in the live-view frame header, and there is no substitute
         // — the phone's microphone is not what the camera is recording. On any other picture source
         // the meter leaves rather than holding its last reading, which would look live.
