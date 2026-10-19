@@ -1356,6 +1356,9 @@ class MainActivity : ComponentActivity() {
                             settings = operatorSettings,
                             mediaCacheStore = mediaCacheStore,
                             frameioController = frameioController,
+                            // The passcode is stored in the relay secrets, the same store a later
+                            // broadcast reads, so standalone Settings can set it (ZAB-352).
+                            standalonePasscodes = relayPasscodes,
                             accountModel = settingsAccount, accountCurrent = { settingsAccountCurrent },
                             savedCameras = camerasState.saved,
                             // The shared landing-tab rule; a typed review stages the tab it names,
