@@ -611,12 +611,16 @@ extension NativeAppModel {
                         actions: [.retry],
                         code: "nikon.held")
                 }
-                connectToCamera(discovered, setup: record, takingOverConfirmed: approved)
+                connectToCamera(
+                    discovered, setup: record, takingOverConfirmed: approved,
+                    operatorRequested: true)
             } else {
                 connectSavedCamera(record)
             }
         case .discovered(let camera, let takeOver):
-            connectToCamera(camera, takingOverConfirmed: takeOver || takingOverConfirmed)
+            connectToCamera(
+                camera, takingOverConfirmed: takeOver || takingOverConfirmed,
+                operatorRequested: true)
         case .addSetup(let anchorHost, let anchorPath, let path):
             // Adding a setup arms the funnel's watch for the body on that path.
             guard

@@ -535,3 +535,120 @@ struct USBCameraTransportDetachTests {
         transport.close()
     }
 }
+
+/// FINAL-Z3-08: Cancel on the iOS "Wants to Join" alert is a "no" for the automatic re-offers
+/// (reconnect, setup watch), never for the operator's own next Connect or Try again. Every peer is
+/// SIMULATED: the join is the alert's answer, the dial is recorded and refused, no Wi-Fi changes.
+@MainActor
+@Suite("Camera access-point join decline")
+struct CameraAccessPointJoinDeclineTests {
+    private static let ssid = "NIKON_ZR_TEST"
+    private static let host = "192.0.2.1"
+
+    @MainActor
+    private final class Peers {
+        var events: [String] = []
+        var answers: [Bool] = []
+        var answersProbe = false
+
+        func install(on model: NativeAppModel) {
+            model.cameraNetworkJoinPeers = NativeAppModel.CameraNetworkJoinPeers(
+                join: { [unowned self] target in
+                    guard case .specificSSID(let ssid) = target else {
+                        Issue.record("join target lost the saved SSID")
+                        return
+                    }
+                    events.append("join:\(ssid)")
+                    if !(answers.isEmpty ? true : answers.removeFirst()) {
+                        throw WiFiJoinCoordinator.JoinError.userDenied
+                    }
+                },
+                isAlive: { [unowned self] _ in answersProbe },
+                dial: { [unowned self] host in events.append("dial:\(host)") })
+        }
+    }
+
+    private func accessPointSetup() -> PTPIPSavedCameraRecord {
+        PTPIPSavedCameraRecord(
+            host: Self.host, displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: PTPIPSavedCameraPresentation(customName: nil, wifiSSID: Self.ssid),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: Self.ssid))
+    }
+
+    private func model(_ peers: Peers, setup: PTPIPSavedCameraRecord) -> NativeAppModel {
+        let model = NativeAppModel()
+        model.savedCameras = [setup]
+        model.connectedWiFiSSID = nil
+        model.cameraHost = setup.host
+        peers.install(on: model)
+        return model
+    }
+
+    private func settle(_ model: NativeAppModel) async {
+        for _ in 0..<300 {
+            if !model.debugIsEstablishingConnection { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("the attempt never settled")
+    }
+
+    @Test("Cancel then an immediate Try again asks to join once more before any dial")
+    func explicitRetryAfterDeclineAsksAgain() async throws {
+        let peers = Peers()
+        let setup = accessPointSetup()
+        let model = model(peers, setup: setup)
+        defer { model.cancelConnectionAttempt() }
+        peers.answers = [false, true]
+        peers.answersProbe = true
+
+        model.connectSavedCamera(setup)
+        await settle(model)
+        #expect(peers.events == ["join:\(Self.ssid)"])
+        #expect(model.connectionPhase == .failed)
+
+        // The shared flow's Try again on the failed row.
+        try model.runSharedConnect(.saved(host: Self.host, path: .cameraAccessPoint))
+        await settle(model)
+        #expect(
+            peers.events == ["join:\(Self.ssid)", "join:\(Self.ssid)", "dial:\(Self.host)"],
+            "exactly one more join request, and the dial only after it")
+    }
+
+    @Test("An automatic reconnect after a decline neither re-prompts nor dials off-network")
+    func automaticReconnectAfterDeclineStaysQuiet() async {
+        let peers = Peers()
+        let setup = accessPointSetup()
+        let model = model(peers, setup: setup)
+        defer { model.cancelConnectionAttempt() }
+        peers.answers = [false]
+
+        model.connectSavedCamera(setup)
+        await settle(model)
+
+        // A setup watch or paired reconnect: the funnel without an operator tap.
+        model.connectToCamera(setup: setup)
+        await settle(model)
+        #expect(peers.events == ["join:\(Self.ssid)"], "no second alert, no dial")
+        #expect(model.connectionPhase == .failed)
+        #expect(
+            model.connectionMessage == WiFiJoinCoordinator.JoinError.userDenied.errorDescription)
+    }
+
+    @Test("An automatic reconnect after a decline still dials a camera that already answers")
+    func automaticReconnectDialsWhenOnTheCameraNetwork() async {
+        let peers = Peers()
+        let setup = accessPointSetup()
+        let model = model(peers, setup: setup)
+        defer { model.cancelConnectionAttempt() }
+        peers.answers = [false]
+
+        model.connectSavedCamera(setup)
+        await settle(model)
+
+        // The operator joined the camera's Wi-Fi in Settings; iOS 26 hides the SSID from us.
+        peers.answersProbe = true
+        model.connectToCamera(setup: setup)
+        await settle(model)
+        #expect(peers.events == ["join:\(Self.ssid)", "dial:\(Self.host)"])
+    }
+}
