@@ -11292,10 +11292,14 @@ final class NativeAppModel {
 
     /// The live assist tools that actually render right now. The single funnel every live overlay,
     /// scope, image effect and sampler reads, which is what makes clean view genuinely clean
-    /// (#256). Photography keeps the display tools, as on every app (A1-19).
+    /// (#256). Photography keeps the display tools, as on every app (A1-19), but drops the video
+    /// ones (the LUT): the saved switch is untouched, so the flip back to video restores it.
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
         guard displayMode != .command else { return [] }
-        var tools = Set(MonitorAssistTool.activeCases.filter { assist.isVisible($0.selection) })
+        let photography = isPhotographyMode
+        var tools = Set(MonitorAssistTool.activeCases.filter {
+            assist.isVisible($0.selection) && !(photography && $0.isNikonVideoOnly)
+        })
         // The camera's audio meter rides in the live-view frame header, and there is no substitute
         // — the phone's microphone is not what the camera is recording. On any other picture source
         // the meter leaves rather than holding its last reading, which would look live.
