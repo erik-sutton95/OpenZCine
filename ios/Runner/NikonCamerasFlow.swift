@@ -101,6 +101,12 @@ final class NativeNikonPort: NikonConnectPort {
         try await connect(request, takingOverConfirmed: false)
     }
 
+    /// A fresh presence sweep: the list's held rows can predate the phone that went live.
+    func currentHolder(of host: String) async -> String? {
+        guard demoOutcome == nil else { return nil }
+        return await NativeNikonDiscovery.shared.currentHolder(of: host)
+    }
+
     func connect(_ request: NikonConnectRequest, takingOverConfirmed: Bool) async throws
         -> NikonConnection
     {

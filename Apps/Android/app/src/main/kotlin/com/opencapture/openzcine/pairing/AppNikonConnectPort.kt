@@ -221,6 +221,9 @@ internal class AppNikonConnectPort(
 
     override fun forget(hosts: List<String>) = onForget(hosts)
 
+    /** A fresh presence sweep: the list's held rows can predate the phone that went live. */
+    override suspend fun currentHolder(host: String): String? = connector.currentHolder(host)
+
     private fun failure(reason: ConnectionFailure.Reason, code: String, message: String): NikonConnectException {
         val failure = NikonIntegration.failure(reason, code, message)
         return NikonConnectException(
