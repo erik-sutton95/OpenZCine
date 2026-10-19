@@ -627,7 +627,7 @@ class NikonAssistsTest {
                 "assist.scopes.waveform.scale.v1" to Float.NaN,
                 "assist.scopes.vector.scale.v1" to Float.NEGATIVE_INFINITY,
             )
-        assertEquals(99.0, state.zebraHighlightIRE)
+        assertEquals(100.0, state.zebraHighlightIRE)
         assertEquals(55.0, state.zebraMidtoneIRE)
         assertEquals(1.0, state.waveScale)
         assertEquals(1.0, state.vectorScale)
@@ -635,7 +635,7 @@ class NikonAssistsTest {
 
     @Test
     fun `legacy compensation values migrate with clamps`() {
-        assertEquals(MonitorCrushClipCompensation.ZERO, migrate().crushClipCompensation)
+        assertEquals(MonitorCrushClipCompensation.QUARTER, migrate().crushClipCompensation)
         assertEquals(MonitorCrushClipCompensation.HALF, migrate("assist.scopes.crushClipCompensation.v1" to 5).crushClipCompensation)
         assertEquals(MonitorCrushClipCompensation.ONE, migrate("assist.scopes.crushClipCompensation.v1" to 15).crushClipCompensation)
         assertEquals(MonitorCrushClipCompensation.ZERO, migrate("assist.scopes.crushClipCompensation.v1" to -1).crushClipCompensation)
