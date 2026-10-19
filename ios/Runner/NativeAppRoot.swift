@@ -5007,6 +5007,8 @@ final class NativeAppModel {
         .gridDisplay,
     ]
     private var lastKnownStorage: PTPStorageInfo?
+    /// Last card-slot diagnostic logged, so an unchanged assignment is not logged every refresh.
+    private var lastCardSlotDiagnostic: String?
     private var pendingCameraWrites: [PendingCameraWrite] = []
 
     /// Camera observations, distinct from optimistic picker display values.
@@ -5140,12 +5142,14 @@ final class NativeAppModel {
         case restoreSubjectDetection(context: FocusResetContext)
     }
 
-    private static func heldCaptureMode(_ snapshot: PTPCameraPropertySnapshot, keeping: Bool)
+    static func heldCaptureMode(_ snapshot: PTPCameraPropertySnapshot, keeping: Bool)
         -> PTPCameraPropertySnapshot
     {
         guard keeping else { return PTPCameraPropertySnapshot() }
         return PTPCameraPropertySnapshot(
-            captureSelector: snapshot.captureSelector, shotsRemaining: snapshot.shotsRemaining)
+            captureSelector: snapshot.captureSelector,
+            shotsRemaining: snapshot.cameraShotsRemaining,
+            stillsCardShots: snapshot.stillsCardShots)
     }
 
     /// `keepingCaptureMode` is a restart or same-host recovery: the held body stays in stills or
@@ -9442,17 +9446,26 @@ final class NativeAppModel {
         if !tones.isEmpty { cameraMovieTones[property] = tones }
     }
 
-    /// Reads storage capacity/free space and caches the result. Unverified against real hardware;
-    /// on rejection or error the last known value is retained.
+    /// Reads every card and the body's slot assignment, then caches the readout card: the stills
+    /// card in photo mode, else the first usable card. The shots counter follows the stills card
+    /// alone, and in photo mode a remote release is pointed at it when the body lets the host
+    /// choose (ZT-04/ZT-05). On rejection or no card the last known value is retained.
     private func refreshStorageInfo(session: NativeCameraSession) async {
-        do {
-            if let info = try await session.readStorageInfo() {
-                lastKnownStorage = info
-                publishCameraDisplayState()
-            }
-        } catch {
-            // Storage query not supported or transiently unavailable — keep the last value.
+        let readout = await session.readCardSlots()
+        guard let first = readout.cards.first else { return }
+        let photo = cameraPropertySnapshot.captureSelector == .photo
+        if readout.diagnosticSummary != lastCardSlotDiagnostic {
+            lastCardSlotDiagnostic = readout.diagnosticSummary
+            connectionLogger.info(
+                "card slots \(readout.diagnosticSummary, privacy: .public)")
         }
+        if photo, await session.alignActiveSlotToStillsCard(readout) {
+            connectionLogger.info("active slot pointed at stills slot")
+        }
+        lastKnownStorage = (photo ? readout.stillsCard?.info : nil) ?? first.info
+        cameraPropertySnapshot = cameraPropertySnapshot.applyingCardSlots(readout)
+        reportedPropertySnapshot = reportedPropertySnapshot.applyingCardSlots(readout)
+        publishCameraDisplayState()
     }
 
     /// Computes the current `MediaStatus` from cached storage + the camera's codec/resolution/fps.
@@ -11220,9 +11233,7 @@ final class NativeAppModel {
                 // read-back right after corrects the estimate rather than waiting for the
                 // slow poll round-robin to reach ExposureRemaining).
                 if let shots = cameraPropertySnapshot.shotsRemaining, shots > 0 {
-                    cameraPropertySnapshot = cameraPropertySnapshot.applying(
-                        property: .exposureRemaining,
-                        data: Data(ByteCoding.uint32LE(UInt32(shots - 1))))
+                    cameraPropertySnapshot = cameraPropertySnapshot.decrementingShotsRemaining()
                     publishCameraDisplayState()
                 }
                 await readAndApplyCameraProperty(session: session, property: .exposureRemaining)
