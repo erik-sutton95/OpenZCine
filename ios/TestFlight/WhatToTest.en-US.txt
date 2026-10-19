@@ -2,6 +2,7 @@ New and changed
 
 - Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
 - In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
+- Connecting to a saved Wi-Fi camera that the camera list cannot see now wakes it first, and reports that it is not on the network if it stays silent.
 
 Fixes
 
@@ -9,14 +10,14 @@ Fixes
 - Instant review now works for RAW-only photos and appears sooner for JPEG and RAW+JPEG, in every exposure mode.
 - The GYRO status pill no longer sits on the screen lock, so tapping it cannot grey out the controls. Gyro logging only arms once the camera reports video mode.
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
-- After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver.
-- Using a volume button as the remote shutter is protected against a rare unexpected quit.
+- After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver. A volume-button remote shutter is protected against a rare quit.
 - With two cards, the shots counter counts only the card the camera saves photos to, and photos taken from the app go to that card.
+- On a fresh install, the Local Network permission is asked for only at the permissions step of setup, not on the first screen.
 
 What to test
 
 - In video, turn a LUT on, switch the camera to Photo and check the preview colours match the camera, then switch back to video and check the LUT returns.
-- Turn on instant review (PLAY). Shoot RAW only, then JPEG, then RAW+JPEG, in A, S, M and P modes, and check each review appears and turns sharp.
+- Turn on instant review (PLAY). Shoot RAW, JPEG and RAW+JPEG in A, S, M and P; check each review turns sharp. With photos on card 2, compare shots left and where app photos land.
 - With gyro logging on, tap the GYRO pill in landscape and portrait. It should open the gyro logs and never lock the controls.
-- With two cards and photos set to the second slot, compare the shots counter with the camera and check which card a photo from the app is saved to.
+- Reinstall: the Local Network prompt should appear only at the permissions step. Then connect to a saved Wi-Fi camera while it is waking from power saving.
 - Turn the on-screen focus dial, then tap a new focus point mid-turn, several times. Focus should keep responding without a busy message. In portrait, check the format readout and clock align.
