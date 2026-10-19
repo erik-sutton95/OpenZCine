@@ -289,6 +289,38 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertNil(model.cameraPropertySnapshot.shotsRemaining)
     }
 
+    /// ZT-04: with two cards the counter shows the stills card alone. A same-host recovery keeps
+    /// that figure, and the next ExposureRemaining read (both cards under overflow) must not
+    /// bring the summed count back.
+    func testARecoveryKeepsTheStillsCardCountNotTheSummedOne() {
+        let readout = NikonCardSlotReadout(
+            cards: [
+                NikonStorageCard(
+                    storageID: 0x0001_0001, slot: 1,
+                    info: PTPStorageInfo(
+                        totalCapacityBytes: 512_000_000_000, freeSpaceBytes: 400_000_000_000,
+                        freeSpaceInImages: 10_141)),
+                NikonStorageCard(
+                    storageID: 0x0002_0001, slot: 2,
+                    info: PTPStorageInfo(
+                        totalCapacityBytes: 512_000_000_000, freeSpaceBytes: 400_000_000_000,
+                        freeSpaceInImages: 10_120)),
+            ],
+            primarySlot: NikonScalarPropertyDescriptor.parse(
+                Data([0x56, 0xD1, 0x02, 0x00, 1, 0, 1, 2, 2, 0, 0, 1]),
+                property: PTPPropertyCode.primarySlot.rawValue, valueByteCount: 1))
+        let live = PTPCameraPropertySnapshot(captureSelector: .photo)
+            .applying(property: .exposureRemaining, data: Data(ByteCoding.uint32LE(20_261)))
+            .applyingCardSlots(readout)
+        XCTAssertEqual(live.shotsRemaining, 10_120)
+
+        let held = NativeAppModel.heldCaptureMode(live, keeping: true)
+        XCTAssertEqual(held.shotsRemaining, 10_120)
+        let reread = held.applying(
+            property: .exposureRemaining, data: Data(ByteCoding.uint32LE(20_261)))
+        XCTAssertEqual(reread.shotsRemaining, 10_120)
+    }
+
     /// A1-25: a relayed record ran through the shared record entry without the host's interface
     /// lock, against its own documented contract. That entry now refuses under the lock.
     func testTheSharedRecordEntryRefusesUnderTheHostLock() {
