@@ -95,6 +95,11 @@ enum DemoHarness {
     /// `ZC_DEMO_CAPTURE_FRAMES=N` dumps the next N live-view frames to disk — see
     /// ``captureLiveViewObject(_:)``.
     static let captureLiveViewFrameCount = value("ZC_DEMO_CAPTURE_FRAMES").flatMap(Int.init)
+    /// `ZC_DEMO_SPLASH_HOLD_MS=N` keeps the launch splash fully visible for N milliseconds instead
+    /// of `LaunchSplashTiming.visibleDuration`, so a UI test can observe the covered cameras page
+    /// even when the simulator takes longer to launch than the splash normally shows.
+    static let launchSplashHold = value("ZC_DEMO_SPLASH_HOLD_MS").flatMap(Int.init)
+        .map { Duration.milliseconds($0) }
 
     // MARK: Environment access — Debug reads the process env; Release is hardwired inert.
 
@@ -419,6 +424,12 @@ enum DemoHarness {
                 if env["ZC_DEMO_PHOTO"] == "1" {
                     // Stage photography chrome (compact stills strip + rail shutter, no assist).
                     model.demoTogglePhotographyMode()
+                }
+                if let raw = env["ZC_DEMO_SHOTS"], let shots = UInt32(raw) {
+                    // Demo/screenshot affordance: a long remaining-shots count (the photo header
+                    // readout against the Dynamic Island).
+                    model.applyDemoProperty(
+                        .exposureRemaining, data: Data(ByteCoding.uint32LE(shots)))
                 }
                 if let label = env["ZC_DEMO_PHOTO_AREA"],
                     let area = StillImageArea.area(forLabel: label)
@@ -1013,7 +1024,8 @@ enum DemoHarness {
                 model.connectionPhase = .preparingLiveView
                 model.connectionProgressUsesCard = mode != "standalone" && mode != "neverStarted"
                 model.connectionMessage =
-                    mode == "neverStarted" ? "SIMULATED live view did not start." : "Reading camera settings…"
+                    mode == "neverStarted"
+                    ? "SIMULATED live view did not start." : "Reading camera settings…"
             }
             if let entry = env["ZC_DEMO_CONNECT_CONSENT"] {
                 // SIMULATED consent on actual model paths; the test only cancels, and the integration port is staged.

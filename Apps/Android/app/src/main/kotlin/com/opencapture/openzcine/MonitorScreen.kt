@@ -5,6 +5,7 @@ import com.opencapture.opencine.media.recordingTimeLabel
 import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.media.StorageReadout
 import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.MonitorTextFormat
 import java.util.concurrent.atomic.AtomicReference
 import com.opencapture.openzcine.gyro.GyroCaptureState
 import com.opencapture.openzcine.gyro.GyroStatusPill
@@ -276,6 +277,8 @@ internal fun MonitorScreen(
     mediaRemoteShutter: MonitorRemoteShutter? = null,
     isMonitorFront: Boolean = true,
     sessionRecoveryEnabled: Boolean = true,
+    /** The device holding this camera now; recovery stops with Camera taken over instead. */
+    currentCameraHolder: suspend () -> String? = { null },
     linkHealth: AndroidLinkHealthMonitor? = null,
     activeTransportIsUsb: Boolean = false,
     isDemoSession: Boolean = false,
@@ -420,6 +423,7 @@ internal fun MonitorScreen(
         pictures = recoveryPictures,
         enabled = sessionRecoveryEnabled,
         retryTicket = sessionRecoveryRetryTicket,
+        currentCameraHolder = currentCameraHolder,
         onRecoveryState = { sessionRecoveryState = it },
     )
 
@@ -969,7 +973,6 @@ internal fun MonitorScreen(
                 instantReview.onCaptureRunCompleted(
                     recordScope,
                     enabled = true,
-                    compression = snapshot.compression,
                     infoLine = photographyReviewInfoLine(snapshot),
                     focus = captureReviewFocus.get(),
                 )
@@ -980,7 +983,6 @@ internal fun MonitorScreen(
         instantReview.onCaptureRunCompleted(
             recordScope,
             enabled = isPhotographyMode && assists.instantReview,
-            compression = cameraProperties.compression,
             infoLine = photographyReviewInfoLine(cameraProperties),
             focus = captureReviewFocus.get(),
         )
@@ -1948,13 +1950,19 @@ internal fun MonitorScreen(
         val statusStorage = if (isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE)) {
             val storage = cameraProperties.storage
             val capacity = storage?.readout?.takeIf { photoPillShowsStorage && it.totalBytes != null }
+            // Remaining shots read as a picture glyph and the count, which keeps the portrait
+            // header's telemetry clear of the camera cutout; the storage flip keeps the card.
+            val shots = cameraProperties.shotsRemaining.takeIf { capacity == null }
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
                 if (capacity != null) {
                     val free = if (isPortrait) MonitorStorageReadoutFormat.wholeUnitCapacity(capacity.freeBytes)
                         else capacity.free
                     "$free ${capacity.percent}"
-                } else cameraProperties.shotsRemaining?.let { "${shotsRemainingCompactLabel(it)} SHOTS" },
-                MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage })
+                } else shots?.let(MonitorTextFormat::shotsRemainingCompactLabel),
+                MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage },
+                icon = if (capacity == null) MonitorIcon.IMAGE else null,
+                accessibilityLabel = if (capacity != null) null
+                    else shots?.let(MonitorTextFormat::shotsRemainingAccessibilityLabel) ?: "Shots remaining unknown")
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",
             mediaLabel(isPortrait), MonitorDisplaySection.STORAGE, action = { prefersMediaDuration = !prefersMediaDuration }) else null
         val resolutionKind = if (isPhotographyMode) MonitorPickerKind.SIZE else MonitorPickerKind.RESOLUTION
@@ -2413,9 +2421,10 @@ internal fun MonitorScreen(
             isMonitorFront && activeMonitorPickerKind == null && activeCommandControl == null && !activeCommandStabilization &&
                 (state.enabled || state.failed) && (!isClean || state.failed)
         }?.let { state ->
-            GyroStatusPill(state, Modifier.align(Alignment.TopStart)
-                .padding(start = maxOf(16f, safeLeading + 12f).dp, top = (safeTop + 48f).dp),
-                onClick = onOpenGyroLogs)
+            // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
+            Box(Modifier.align(Alignment.TopStart).zone(fieldLayout.appBadge), contentAlignment = Alignment.CenterStart) {
+                GyroStatusPill(state, onClick = onOpenGyroLogs)
+            }
         }
 
         // App self-timer tally: a white border pulse at the physical edge per

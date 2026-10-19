@@ -229,7 +229,8 @@ struct FeedLevelView: View {
                 ? .gauges(rollDeg: roll, tiltDeg: pitch) : .horizon(rollDeg: roll),
             feed: feed,
             viewport: Self.gaugeViewport(visibleBounds, bottomChrome: bottomChrome),
-            portrait: model.monitorIsPortrait)
+            portrait: model.monitorIsPortrait
+        )
         // Only run device motion while it's actually the source — stop it once the camera supplies a
         // level so the monitor's own tilt can't leak into the readout.
         .onAppear { if usesDeviceFallback { device.start() } }
