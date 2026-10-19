@@ -180,7 +180,9 @@ internal fun MediaPlaybackScreen(
                     colorLabel = record.asset.colorLabel,
                     transfer = picture?.transfer, clipByte = picture?.clipByte,
                     clockStyle = MonitorPlaybackClockStyle.ELAPSED_MINUTES_SECONDS,
-                    bufferedThroughSeconds = captured?.bufferedThroughSeconds)
+                    bufferedThroughSeconds = captured?.bufferedThroughSeconds,
+                    notice = item?.let { playbackShareNotice(playbackShareState(it.state, it.downloadedBytes, it.expectedLength),
+                        currentTransfer.value) })
             }, nativeAudio = { value -> picture?.audio?.takeIf { value === logical } },
             close = ::close, share = ::share,
             signalOptions = signal,
