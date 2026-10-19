@@ -14735,7 +14735,7 @@ extension NativeAppModel {
             && UIApplication.shared.applicationState == .active
             && !isDemoSession && videoSource != .relay
             && !multicam.isPresented && multicam.lentMember == nil
-            && !isPhotographyMode
+            && GyroCaptureCoordinator.selectorArms(cameraPropertySnapshot.captureSelector)
         gyroCapture.configure(
             eligible: eligible,
             cameraLabel: connectedIdentity?.model ?? "Nikon camera", recording: recording,
