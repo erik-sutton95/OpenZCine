@@ -8,6 +8,7 @@ on:
       - "feat/**"
       - "codex/**"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -28,6 +29,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Warn when the OpenCine pin is behind
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pin="$(awk '$1 == "OpenCine" { print $2; exit }' opencine-pins.txt)"
+          core_sha="$(git ls-remote https://github.com/erik-sutton95/OpenCine.git refs/heads/main | cut -f1 || true)"
+          if [ -z "$pin" ] || [ -z "$core_sha" ] || [ "$pin" = "$core_sha" ]; then
+            exit 0
+          fi
+          ahead="$(gh api "repos/erik-sutton95/OpenCine/compare/${pin}...${core_sha}" --jq '.ahead_by' 2>/dev/null || true)"
+          if [ -n "$ahead" ] && [ "$ahead" != "0" ]; then
+            echo "::warning::OpenCine pin ${pin:0:7} is ${ahead} commits behind Core main ${core_sha:0:7}"
+          fi
+
       - name: Repository hygiene
         run: ./scripts/check-repository-hygiene.sh
 
@@ -43,8 +60,32 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          # Owner decision 2026-10-19: tester notes are written once per release at
+          # the release gate, so a pin-only bot branch is exempt.
+          pin_only_bot=false
+          if [ "$changed_files" = "opencine-pins.txt" ]; then
+            if [ "$EVENT_NAME" = "pull_request" ] &&
+              [ "$HEAD_REF" = "bot/pin-core" ] &&
+              [ "$HEAD_REPO" = "$REPOSITORY" ] &&
+              [ "$PR_AUTHOR" = "github-actions[bot]" ]; then
+              pin_only_bot=true
+            fi
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REF_NAME" = "bot/pin-core" ]; then
+              pin_only_bot=true
+            fi
+          fi
+          if [ "$pin_only_bot" = true ]; then
+            echo "Pin-only bot change: tester notes are written once per release at the release gate."
+            exit 0
+          fi
           # Test targets never ship in a TestFlight archive, so a test-only branch has nothing
           # testers have not already been asked to try.
           production_files="$(grep -vE '^(Tests/|ios/RunnerTests/|ios/RunnerUITests/)' <<< "$changed_files" || true)"
@@ -59,8 +100,32 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          # Owner decision 2026-10-19: tester notes are written once per release at
+          # the release gate, so a pin-only bot branch is exempt.
+          pin_only_bot=false
+          if [ "$changed_files" = "opencine-pins.txt" ]; then
+            if [ "$EVENT_NAME" = "pull_request" ] &&
+              [ "$HEAD_REF" = "bot/pin-core" ] &&
+              [ "$HEAD_REPO" = "$REPOSITORY" ] &&
+              [ "$PR_AUTHOR" = "github-actions[bot]" ]; then
+              pin_only_bot=true
+            fi
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REF_NAME" = "bot/pin-core" ]; then
+              pin_only_bot=true
+            fi
+          fi
+          if [ "$pin_only_bot" = true ]; then
+            echo "Pin-only bot change: tester notes are written once per release at the release gate."
+            exit 0
+          fi
           # Unit and instrumented test source sets never ship in the Play bundle.
           production_files="$(grep -vE '^Apps/Android/[^/]+/src/(test|androidTest)/' <<< "$changed_files" || true)"
           if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|opencine-pins\.txt$|scripts/android-|scripts/verify-android-|scripts/ci-install-swift-android\.sh$|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$production_files"; then
@@ -117,15 +182,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      code: ${{ steps.filter.outputs.code }}
-      android: ${{ steps.filter.outputs.android }}
+      # The pin bot dispatches CI on bot/pin-core after a GITHUB_TOKEN push, which
+      # does not trigger pull_request. Run the shared-core jobs as if the pin changed.
+      code: ${{ steps.filter.outputs.code == 'true' || (github.event_name == 'workflow_dispatch' && github.ref_name == 'bot/pin-core') }}
+      android: ${{ steps.filter.outputs.android == 'true' || (github.event_name == 'workflow_dispatch' && github.ref_name == 'bot/pin-core') }}
       bug_relay: ${{ steps.filter.outputs.bug_relay }}
       handbook: ${{ steps.filter.outputs.handbook }}
     steps:
-      # `dorny/paths-filter` fetches the base ref to diff on push events, which needs the checkout's
-      # git credentials — so this job keeps them (unlike the others). It runs no repository code, so
-      # the token is never exposed to untrusted code.
+      # `dorny/paths-filter` fetches the base ref to diff on push / dispatch, which needs the
+      # checkout's git credentials, so this job keeps them (unlike the others). It runs no
+      # repository code, so the token is never exposed to untrusted code.
+      #
+      # On push it runs `git fetch origin <base> <head>`. A head like `bot/pin-core`
+      # (workflow_dispatch on a slash branch) is a git refspec (`bot:pin-core`), so we fetch
+      # the default branch with an explicit refspec and keep enough history that the
+      # merge-base already exists and that fetch is skipped.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Fetch default branch for path filter
+        run: |
+          set -euo pipefail
+          default_branch="${{ github.event.repository.default_branch }}"
+          git fetch --no-tags origin \
+            "refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
