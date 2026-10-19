@@ -61,8 +61,10 @@ Xcode Cloud replaces most of the GitHub workflow with managed equivalents:
 TestFlight notes are reviewed product copy, not a transformed Git commit log. Any pull request that
 can trigger a TestFlight build must replace `ios/TestFlight/WhatToTest.en-US.txt`. A branch that
 changes only test targets (`Tests/`, `ios/RunnerTests/`, `ios/RunnerUITests/`, or the Android
-`src/test` and `src/androidTest` source sets) is exempt: no test source ships to testers. The
-required format is:
+`src/test` and `src/androidTest` source sets) is exempt: no test source ships to testers. A pin-only
+bot pull request (`bot/pin-core`, changed files exactly `opencine-pins.txt`) is also exempt from the
+TestFlight and Play notes gates: tester notes are written once per release at the release gate
+(owner decision 2026-10-19). The required format is:
 
 ```text
 What's changed
