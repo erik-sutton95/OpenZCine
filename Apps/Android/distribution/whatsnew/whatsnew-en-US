@@ -1,3 +1,4 @@
 - Instant review works for RAW-only photos and appears sooner for JPEG and RAW+JPEG.
 - The GYRO pill no longer covers the screen lock; gyro arms only in video mode.
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
+- With two cards, the shots counter counts only the card the camera saves photos to, and app photos go to that card.
