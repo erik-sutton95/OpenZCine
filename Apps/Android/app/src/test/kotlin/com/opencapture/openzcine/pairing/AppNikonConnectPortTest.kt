@@ -154,6 +154,36 @@ class AppNikonConnectPortTest {
         assertEquals(setOf("192.168.1.30"), connector.aliveHosts.value)
     }
 
+    /** physical-C C9: the shared take-over prompt asks this before a saved setup dials. */
+    @Test
+    fun currentHolderIsAFreshPresenceSweepThatNeverReachesTheCamera() = runTest {
+        val dials = mutableListOf<NikonDialPurpose>()
+        val dialer =
+            object : NikonDialer {
+                override suspend fun presence(host: String): NikonPresence? =
+                    (if (host == "192.168.1.7") NikonPresence("Phone B", "192.168.1.30") else null)
+                        .also { dials += NikonDialPurpose.PRESENCE }
+
+                override suspend fun isAlive(host: String): Boolean = false.also { dials += NikonDialPurpose.PRESENCE }
+
+                override suspend fun scanControlPort(host: String, timeoutMillis: Int): HostProbeVerdict =
+                    HostProbeVerdict.OPEN.also { dials += NikonDialPurpose.CAMERA_CONTROL }
+            }
+        val connector =
+            SavedCameraConnector(
+                environment(), { true }, { false }, backgroundScope, connectCopy,
+                CameraListDiscovery(dialer, { listOf(NikonLocalInterface("wlan0", "192.168.1.42")) }),
+            )
+        val port =
+            AppNikonConnectPort(
+                { id, _ -> "$id" }, connector, { listOf(studio, ap) }, { null }, onPaired = {}, onForget = {},
+                onExplicitUsbReconnect = {}, scope = backgroundScope, offersDiagnostics = false,
+            )
+        assertEquals("Phone B", port.currentHolder("192.168.1.30"))
+        assertEquals(null, port.currentHolder("192.168.1.31"))
+        assertTrue(NikonDialPurpose.CAMERA_CONTROL !in dials)
+    }
+
     @Test
     fun aRemovedAccessPointSetupTakesItsKey() {
         val second = ap.copy(host = "ap:NIKON_Z8_5009999", wifiSsid = "NIKON_Z8_5009999", cameraName = "Z_8_5009999")

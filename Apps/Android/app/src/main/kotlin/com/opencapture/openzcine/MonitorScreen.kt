@@ -276,6 +276,8 @@ internal fun MonitorScreen(
     mediaRemoteShutter: MonitorRemoteShutter? = null,
     isMonitorFront: Boolean = true,
     sessionRecoveryEnabled: Boolean = true,
+    /** The device holding this camera now; recovery stops with Camera taken over instead. */
+    currentCameraHolder: suspend () -> String? = { null },
     linkHealth: AndroidLinkHealthMonitor? = null,
     activeTransportIsUsb: Boolean = false,
     isDemoSession: Boolean = false,
@@ -420,6 +422,7 @@ internal fun MonitorScreen(
         pictures = recoveryPictures,
         enabled = sessionRecoveryEnabled,
         retryTicket = sessionRecoveryRetryTicket,
+        currentCameraHolder = currentCameraHolder,
         onRecoveryState = { sessionRecoveryState = it },
     )
 

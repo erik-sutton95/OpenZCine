@@ -6887,6 +6887,12 @@ final class NativeAppModel {
                     guard let self else { return false }
                     self.startRecoveryAttempt(host: attempt.targetID)
                     return true
+                },
+                holder: { [weak self] attempt, number in
+                    guard self?.isDemoSession == false else { return nil }
+                    return await NikonTakeOverRecovery.holder(beforeAttempt: number) {
+                        await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
+                    }
                 }),
             attemptDeadline: NikonSessionRecovery.attemptDeadline, timing: timing,
             changed: { [weak self] snapshot, episode in
@@ -6920,6 +6926,7 @@ final class NativeAppModel {
         // restart a run behind it. The episode refuses too; this also covers a painted state.
         if case .pausedAfterRepeatedDrops = sessionRecovery { return }
         if case .waitingForOperator = sessionRecovery { return }
+        if case .takenOver = sessionRecovery { return }
         let target = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return }
         recoveryEpisode.begin(targetID: target, trigger: trigger, reason: reason)
@@ -7001,6 +7008,9 @@ final class NativeAppModel {
                 "recovery handed to the operator host=\(cameraHost) after \(attempts) attempt(s)")
         case .pausedAfterRepeatedDrops(let drops):
             logConnection("recovery paused after \(drops) drops host=\(cameraHost)")
+        case .takenOver(let holder):
+            logConnection(
+                "recovery stopped: \(holder ?? "another device") holds host=\(cameraHost)")
         case .retrying:
             break
         }
@@ -7024,7 +7034,7 @@ final class NativeAppModel {
                 // of held frames bridges the operator's decision, then the watchers' own stall
                 // watchdogs take over honestly.
                 switch self.sessionRecovery {
-                case .pausedAfterRepeatedDrops, .waitingForOperator:
+                case .pausedAfterRepeatedDrops, .waitingForOperator, .takenOver:
                     heldBeats += 1
                     if heldBeats > 30 { return }
                 default:

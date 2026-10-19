@@ -142,6 +142,9 @@ internal class SavedCameraConnector(
             }
     }
 
+    /** The device holding [host] now (a fresh presence sweep; the list's rows can be 30 s old). */
+    suspend fun currentHolder(host: String): String? = listDiscovery.currentHolder(host)
+
     fun stopDiscovery() {
         discovery?.cancel()
         discovery = null
