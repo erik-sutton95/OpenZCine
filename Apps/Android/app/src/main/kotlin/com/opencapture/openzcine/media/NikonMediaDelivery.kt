@@ -9,6 +9,7 @@ import com.opencapture.opencine.frameio.FrameioDeliveryController
 import com.opencapture.opencine.frameio.FrameioInternetLease
 import com.opencapture.opencine.frameio.FrameioProject
 import com.opencapture.opencine.frameio.FrameioSidecarFacts
+import com.opencapture.opencine.nikon.NikonMediaClipRecord
 import com.opencapture.opencine.nikon.NikonMediaContentKind
 import com.opencapture.opencine.runtime.MonitorMovieExportContainer
 import com.opencapture.openzcine.FeedLutSelection
@@ -182,9 +183,17 @@ internal class NikonMediaDelivery(
             return (planned || nativeCurrent()) && contentCurrent()
         }
         fun selectionFacts(connectionOwner: Long?) = MonitorDeliverySelectionFacts(records.map {
-            MonitorDeliveryFileFacts(it.payload.clip.filename, it.payload.clip.sizeBytes.takeIf { size -> size > 0 })
+            nikonDeliveryFileFacts(it.payload.clip)
         }, selection.count {
             runCatching { cacheStore.completedEntryOrNull(it.cameraID, MediaCacheObjectIdentity(it.clip), it.clip.sizeBytes) }.getOrNull() != null
         }, if (nativeCurrent()) connectionOwner != null else false)
     }
 }
+
+/** A still travels as its original, so the popup offers it no clip export (ZIB-469); unsupported files stay unknown. */
+internal fun nikonDeliveryFileFacts(clip: NikonMediaClipRecord): MonitorDeliveryFileFacts =
+    MonitorDeliveryFileFacts(clip.filename, clip.sizeBytes.takeIf { it > 0 }, when (clip.contentKind) {
+        NikonMediaContentKind.STILL_PHOTO -> true
+        NikonMediaContentKind.PLAYABLE_PROXY, NikonMediaContentKind.R3D_MASTER -> false
+        NikonMediaContentKind.UNSUPPORTED -> null
+    })
