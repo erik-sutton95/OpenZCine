@@ -2169,6 +2169,11 @@ final class NativeAppModel {
         return cameraPower.flatMap { $0.charging.value ?? $0.externalPower.value }
     }
 
+    /// The body reports running on external power (spoken as such, and "EXT" without a level).
+    var cameraExternalPower: Bool? {
+        videoSource == .relay ? nil : cameraPower?.externalPower.value
+    }
+
     var cameraBatteryExhausted: Bool? {
         videoSource == .relay ? relayedBatteryExhausted : cameraPower?.exhausted.value
     }
