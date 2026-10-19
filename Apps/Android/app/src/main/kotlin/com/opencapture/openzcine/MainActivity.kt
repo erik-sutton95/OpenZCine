@@ -1099,6 +1099,10 @@ class MainActivity : ComponentActivity() {
                                     monitorSessionRecoveryEnabled &&
                                         frameioController.internetHopState
                                             .allowsMonitorSessionRecovery(),
+                                currentCameraHolder = {
+                                    activeSavedCamera?.host?.takeIf(String::isNotBlank)
+                                        ?.let { savedCameraConnector.currentHolder(it) }
+                                },
                                 linkHealth = monitorLinkHealth,
                                 incidentProducer = incidentProducer,
                                 activeTransportIsUsb =

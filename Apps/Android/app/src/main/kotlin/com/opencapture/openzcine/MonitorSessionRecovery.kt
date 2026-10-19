@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
@@ -28,13 +29,18 @@ internal fun MonitorSessionRecoveryEffect(
     pictures: MonitorPictureClock,
     enabled: Boolean,
     retryTicket: Int = 0,
+    /** The device holding this session's camera now; recovery stops instead of taking it back. */
+    currentCameraHolder: suspend () -> String? = { null },
     onRecoveryState: (SessionRecoveryUi) -> Unit = {},
 ) {
+    val holder by rememberUpdatedState(currentCameraHolder)
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val lifecycleActive = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
     val coordinator =
         remember(session, pictures) {
-            PictureAwareMonitorSessionRecoveryCoordinator(session, pictures)
+            PictureAwareMonitorSessionRecoveryCoordinator(
+                session, pictures, currentHolder = { holder() },
+            )
         }
     val retriedTicket = remember(coordinator) { mutableIntStateOf(retryTicket) }
     LaunchedEffect(coordinator, enabled, lifecycleActive, retryTicket) {
