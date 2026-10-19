@@ -91,9 +91,7 @@ class MonitorTelemetryBatteryRenderTest {
             } }
         }
         rule.mainClock.advanceTimeBy(32)
-        // A reported exhaustion is spoken as well as pulsed (behavior audit ZIA-230/364).
-        val badge = rule.onNodeWithContentDescription(
-            if (exhausted == true) "Camera battery 1 of 5 bars, exhausted" else "Camera battery 1 of 5 bars")
+        val badge = rule.onNodeWithContentDescription("Camera battery 1 of 5 bars")
         badge.assertIsDisplayed()
         val first = badge.captureToImage().toPixelMap()
         rule.mainClock.advanceTimeBy(608)

@@ -382,7 +382,7 @@ struct NikonMonitorShell: View {
     private var cameraBattery: MonitorOperatorPowerReading? {
         .camera(
             model.cameraBatteryReading, exhausted: model.cameraBatteryExhausted,
-            charging: model.cameraPowerCharging, externalPower: model.cameraExternalPower)
+            charging: model.cameraPowerCharging)
     }
 
     private var panel: MonitorOperatorCameraPanel<NikonLiveReadoutKey>? {

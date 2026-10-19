@@ -124,14 +124,9 @@ class MonitorReadoutsTest {
         val critical = requireNotNull(sessionBatteryReading(1, externalPower = false))
         assertEquals(1, critical.bars)
         assertTrue(critical.exhausted)
-        // An unread battery is absent, never an empty red cell, unless the body reports external
-        // power: then the pill reads EXT with the bolt, as before the shared surface (ZAA-304).
-        val external = requireNotNull(sessionBatteryReading(null, externalPower = true))
-        assertNull(external.bars)
-        assertNull(external.percent)
-        assertEquals(true, external.externalPower)
+        // An unread battery is absent, never an empty red cell.
+        assertNull(sessionBatteryReading(null, externalPower = true))
         assertNull(sessionBatteryReading(0, externalPower = null))
-        assertNull(sessionBatteryReading(null, externalPower = false))
     }
 
     @Test

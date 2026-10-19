@@ -2190,11 +2190,6 @@ final class NativeAppModel {
         return cameraPower.flatMap { $0.charging.value ?? $0.externalPower.value }
     }
 
-    /// The body reports running on external power (spoken as such, and "EXT" without a level).
-    var cameraExternalPower: Bool? {
-        videoSource == .relay ? nil : cameraPower?.externalPower.value
-    }
-
     var cameraBatteryExhausted: Bool? {
         videoSource == .relay ? relayedBatteryExhausted : cameraPower?.exhausted.value
     }
@@ -12754,9 +12749,10 @@ final class NativeAppModel {
                 "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
         }
         let storage = shell.control.snapshot?.storage
-        return LiveMediaReadout.label(
-            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
-            portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
+        if prefersMediaDuration { return storage?.recordingTimeLabel ?? "-- Min" }
+        guard let readout = storage?.storageReadout else { return StorageReadout.unavailable }
+        return portrait
+            ? MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: readout.freeBytes) : readout.free
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
