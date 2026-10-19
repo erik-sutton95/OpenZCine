@@ -888,3 +888,32 @@ final class LiveSurfaceScreens: XCTestCase {
         }
     }
 }
+
+/// Behavior audit ZIA-052 / ZIA-360: the baseline still release spoke "End exposure" while a bulb
+/// or time exposure was open, was a button, and VoiceOver could not release what touch could not.
+final class NikonPhotoReleaseAccessibilityTests: XCTestCase {
+    func testOpenExposureIsSpokenAsEndExposure() {
+        XCTAssertEqual(
+            NikonPhotoReleaseAccessibility.label(openShutter: true, capturing: true, timerRunning: false),
+            "End exposure")
+        XCTAssertEqual(
+            NikonPhotoReleaseAccessibility.label(openShutter: false, capturing: true, timerRunning: false),
+            "Capturing")
+        XCTAssertEqual(
+            NikonPhotoReleaseAccessibility.label(openShutter: false, capturing: false, timerRunning: true),
+            "Timer running")
+        XCTAssertEqual(
+            NikonPhotoReleaseAccessibility.label(openShutter: false, capturing: false, timerRunning: false),
+            "Shutter")
+    }
+
+    func testTheReleaseIsAButton() {
+        XCTAssertTrue(NikonPhotoReleaseAccessibility.traits.contains(.isButton))
+    }
+
+    func testVoiceOverReleaseTakesTheTouchAdmission() {
+        XCTAssertTrue(NikonPhotoReleaseAccessibility.admits(locked: false, surrendered: false))
+        XCTAssertFalse(NikonPhotoReleaseAccessibility.admits(locked: true, surrendered: false))
+        XCTAssertFalse(NikonPhotoReleaseAccessibility.admits(locked: false, surrendered: true))
+    }
+}
