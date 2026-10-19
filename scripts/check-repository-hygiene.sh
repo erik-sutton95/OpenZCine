@@ -22,7 +22,7 @@ is_forbidden_path() {
     vendor|vendor/*|ref|ref/*|captures|captures/*|.local|.local/*|.codex|.codex/*)
       return 0
       ;;
-    .build|.build/*|build|build/*)
+    graphify-out|graphify-out/*|.build|.build/*|build|build/*)
       return 0
       ;;
     .env|.env.*|*/.env|*/.env.*|.envrc|*/.envrc|secrets.*|*/secrets.*|*.secret)
