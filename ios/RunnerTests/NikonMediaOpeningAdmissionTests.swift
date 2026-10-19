@@ -31,6 +31,10 @@ import XCTest
         _ = try await fixture.element("monitor.photo.back")
         let members = fixture.model.burstMembers(of: record.payload)
         XCTAssertEqual(members.count, 3, "The actual series cover must retain all frames")
+        // Frame identity, not the whole record: EXIF orientation can arrive after the cover opens.
+        func frames(_ clips: [MediaClip]) -> [String] {
+            clips.map { $0.cameraID + "/" + $0.filename }
+        }
         for (completed, total, selected, title, detail) in [
             (0, 1, 1, "Deleting 1 item…", "0 of 1"),
             (2, 3, 3, "Deleting 3 items…", "2 of 3"),
@@ -50,7 +54,7 @@ import XCTest
             fixture.capture(
                 self, name: "SIMULATED-Z-burst-progress-\(completed)-\(total)-\(selected)")
             XCTAssertTrue(fixture.model.mediaLibrary === fixture.library)
-            XCTAssertEqual(fixture.model.burstMembers(of: record.payload), members)
+            XCTAssertEqual(frames(fixture.model.burstMembers(of: record.payload)), frames(members))
             for member in members {
                 XCTAssertTrue(
                     fixture.model.mediaClipStore.isDownloaded(
