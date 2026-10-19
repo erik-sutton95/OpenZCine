@@ -15,6 +15,7 @@ jobs:
     name: Trigger opencapture.org deploy
     if: github.repository == 'erik-sutton95/OpenZCine'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Call the Vercel deploy hook
         env:

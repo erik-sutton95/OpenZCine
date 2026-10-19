@@ -58,13 +58,12 @@ Xcode Cloud replaces most of the GitHub workflow with managed equivalents:
 
 ### Tester-facing release notes
 
-TestFlight notes are reviewed product copy, not a transformed Git commit log. Any pull request that
-can trigger a TestFlight build must replace `ios/TestFlight/WhatToTest.en-US.txt`. A branch that
-changes only test targets (`Tests/`, `ios/RunnerTests/`, `ios/RunnerUITests/`, or the Android
-`src/test` and `src/androidTest` source sets) is exempt: no test source ships to testers. A pin-only
-bot pull request (`bot/pin-core`, changed files exactly `opencine-pins.txt`) is also exempt from the
-TestFlight and Play notes gates: tester notes are written once per release at the release gate
-(owner decision 2026-10-19). The required format is:
+TestFlight notes are reviewed product copy, not a transformed Git commit log. They are written once
+per release, not in every pull request (owner decision 2026-10-19): before a release, a notes pull
+request replaces `ios/TestFlight/WhatToTest.en-US.txt` with what changed since the previous one.
+Every release path fails fast while the notes are stale ([`ci.md`](ci.md#release-time)): the Xcode
+Cloud archive runs [`ci_pre_xcodebuild.sh`](../ios/ci_scripts/ci_pre_xcodebuild.sh) and the GitHub
+fallback runs the same check before its native checks. The required format is:
 
 ```text
 What's changed
@@ -88,7 +87,9 @@ Write for non-developer camera operators:
 
 For a build with no tester-facing app behavior, write that plainly and ask testers to continue
 their normal camera workflow. `scripts/ios-release-notes-check.sh` enforces the format, character
-limit, and a small denylist of implementation jargon. Pull-request CI also verifies that the notes
+limit, and a small denylist of implementation jargon, in pull-request Meta checks and again at
+release time, where OpenCine's `scripts/tester-notes-release-check.py` also fails when an earlier
+successful TestFlight build already carried the current notes.
 
 ## Crash reports and tester diagnostics
 

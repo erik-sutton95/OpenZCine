@@ -176,6 +176,12 @@ just android-check
 
 For dual-platform product work, run **both** `just native-check` and `just android-check`.
 
+Hosted CI has two tiers ([`docs/ci.md`](docs/ci.md)): the PR tier feeds the one required check,
+**CI gate**; the nightly tier runs the full suite on `main` and keeps one "Nightly CI failing on
+main" issue. A PR-tier failure is fixed, or the test is quarantined with an issue; there are no
+accepted reds. CodeRabbit is advisory: read, verify and fix or answer its findings, but it does not
+block merges.
+
 ## Project management (Kaneo)
 
 Work is tracked on the OpenZCine Kaneo board (project `OPE`). Keep it in sync as part of normal
