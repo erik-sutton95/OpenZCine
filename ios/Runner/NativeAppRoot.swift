@@ -12695,10 +12695,8 @@ final class NativeAppModel {
             return "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
         }
         let storage = shell.control.snapshot?.storage
-        if prefersMediaDuration { return storage?.recordingTimeLabel ?? "-- Min" }
-        guard let readout = storage?.storageReadout else { return StorageReadout.unavailable }
-        return portrait
-            ? MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: readout.freeBytes) : readout.free
+        return LiveMediaReadout.label(storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
+            portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
