@@ -329,16 +329,17 @@ struct NikonMonitorShell: View {
         if photo && model.chromeSectionMounts(.timecode) {
             // Remaining shots read as a picture glyph and the count, which keeps the portrait
             // header's telemetry clear of the Dynamic Island; the storage flip keeps the card.
-            let shots = model.photoPillShowsStorage ? nil : model.cameraPropertySnapshot.shotsRemaining
+            let flipped = model.photoPillShowsStorage
+            let shots = flipped ? nil : model.cameraPropertySnapshot.shotsRemaining
+            let spoken = shots.map(MonitorTextFormat.shotsRemainingAccessibilityLabel)
             storage = .init(
                 id: .storage, title: "Storage",
-                value: model.photoPillShowsStorage
+                value: flipped
                     ? model.liveMediaReadout(portrait: portrait)
                     : shots.map(MonitorTextFormat.shotsRemainingCompactLabel) ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() },
-                valueIcon: model.photoPillShowsStorage ? nil : .image,
-                accessibilityLabel: model.photoPillShowsStorage
-                    ? nil : shots.map(MonitorTextFormat.shotsRemainingAccessibilityLabel) ?? "Shots remaining unknown")
+                valueIcon: flipped ? nil : .image,
+                accessibilityLabel: flipped ? nil : spoken ?? "Shots remaining unknown")
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
                 id: .storage, title: "Storage", value: model.liveMediaReadout(portrait: portrait),

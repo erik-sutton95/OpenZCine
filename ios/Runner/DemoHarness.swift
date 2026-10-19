@@ -423,7 +423,8 @@ enum DemoHarness {
                 if let raw = env["ZC_DEMO_SHOTS"], let shots = UInt32(raw) {
                     // Demo/screenshot affordance: a long remaining-shots count (the photo header
                     // readout against the Dynamic Island).
-                    model.applyDemoProperty(.exposureRemaining, data: Data(ByteCoding.uint32LE(shots)))
+                    model.applyDemoProperty(
+                        .exposureRemaining, data: Data(ByteCoding.uint32LE(shots)))
                 }
                 if let label = env["ZC_DEMO_PHOTO_AREA"],
                     let area = StillImageArea.area(forLabel: label)
