@@ -7664,6 +7664,7 @@ final class NativeAppModel {
         monitorRuntime?.startEventDrain(
             receive: { [weak self] event in
                 guard let self, cameraSession === session else { return }
+                noteStillReviewEvent(event)
                 if event.eventCode == .captureComplete || event.eventCode == .objectAdded {
                     handleBodyFiredCapture(session: session)
                 } else if event.eventCode == .movieRecordInterrupted {
@@ -7702,6 +7703,7 @@ final class NativeAppModel {
     /// Capture events sync the app to a body-fired shutter; record-lifecycle events update the
     /// record state.
     private func handlePolledDeviceEvent(_ event: PTPEvent, session: NativeCameraSession) {
+        noteStillReviewEvent(event)
         switch event.eventCode {
         case .objectAdded, .captureComplete:
             handleBodyFiredCapture(session: session)
@@ -10196,9 +10198,10 @@ final class NativeAppModel {
         let focus: PTPLiveViewFocusInfo?
         let infoLine: String?
         /// False while the tiny embedded thumb stands in — the overlay blurs it behind a
-        /// spinner, and the review duration doesn't start counting until the full image lands.
+        /// spinner, and the review duration doesn't start counting until the sharp image (the
+        /// JPEG/HEIF itself, or a RAW's embedded preview) lands.
         var isFullResolution: Bool = true
-        /// The captured JPEG's object handle, so the overlay can rate the shot in place.
+        /// The captured still's object handle, so the overlay can rate the shot in place.
         /// Nil in the demo and for fallback presentations without a resolved object.
         var handle: UInt32? = nil
     }
@@ -10208,9 +10211,10 @@ final class NativeAppModel {
     private(set) var instantReview: InstantReviewState?
     @ObservationIgnored private var instantReviewDismissTask: Task<Void, Never>?
     @ObservationIgnored private var instantReviewFetchTask: Task<Void, Never>?
-    /// Last known object handles per storage — the baseline a post-capture diff runs against.
-    /// Maintained outside the shutter path so the release itself never waits on enumeration.
-    @ObservationIgnored private var knownObjectHandles: [UInt32: Set<UInt32>] = [:]
+    /// The post-capture diff baseline (last known object handles per storage) plus the handles
+    /// `ObjectAdded` announced since. Seeded outside the shutter path so the release itself never
+    /// waits on enumeration; the rules are Core's (`NikonStillReview.swift`).
+    @ObservationIgnored private let stillReviewTracker = NikonStillReviewObjectTracker()
     /// The focus box frozen at capture time (shutter press / body-capture detect). The review's
     /// focus overlay uses THIS, not live `liveViewFocus` — incoming frames overwrite the live
     /// value during the post-shutter fetch window, so a box moved before the preview lands would
@@ -10257,6 +10261,9 @@ final class NativeAppModel {
     func dismissInstantReview() {
         instantReviewDismissTask?.cancel()
         instantReviewDismissTask = nil
+        // A dismissed review stops its image read so the shared channel is released.
+        instantReviewFetchTask?.cancel()
+        instantReviewFetchTask = nil
         capturedFocusForReview = nil
         withAnimation(.easeInOut(duration: 0.18)) { instantReview = nil }
     }
@@ -10269,112 +10276,75 @@ final class NativeAppModel {
                 selector: cameraPropertySnapshot.captureSelector),
             assist.instantReview
         else { return }
-        Task { [weak self] in
-            for (storageID, _) in await session.readAllStorageInfo() {
-                let handles = (try? await session.getObjectHandles(storageID: storageID)) ?? []
-                self?.knownObjectHandles[storageID] = Set(handles)
-            }
-        }
+        let tracker = stillReviewTracker
+        Task { await session.seedStillReviewBaseline(tracker: tracker) }
+    }
+
+    /// Notes the object handle an `ObjectAdded` event names, from either event channel, so the
+    /// next review goes straight to the new object instead of diffing every card.
+    private func noteStillReviewEvent(_ event: PTPEvent) {
+        stillReviewTracker.note(event)
     }
 
     /// After a completed release with the PLAY tool on, overlay the just-captured frame: the
-    /// tiny embedded thumb lands instantly, then the full JPEG streams in and replaces it.
-    /// Completion is per-run, never per-frame — a held burst schedules exactly one review,
-    /// of its last frame, only after the finger lifts and the run ends. JPEG-gated — a
-    /// RAW-only quality has no streamable full image, so the review sits out.
-    /// [verify-on-HW: enumeration lag per body]
+    /// tiny embedded thumb lands instantly, then the sharp image (the JPEG/HEIF itself, or a
+    /// RAW-only shot's embedded preview) replaces it. Completion is per-run, never per-frame:
+    /// a held burst schedules exactly one review, of its last frame, only after the finger
+    /// lifts and the run ends. Every quality reviews: the shot's object is looked up within
+    /// Core's window, so a slow card write (RAW+JPEG Fine* in M/P/A/S) still lands.
+    /// [verify-on-HW: card write time per body and quality]
     private func scheduleInstantReview(session: NativeCameraSession) {
         guard assist.instantReview else { return }
-        guard cameraPropertySnapshot.compression?.contains("JPEG") == true else { return }
         instantReviewFetchTask?.cancel()
         instantReviewFetchTask = Task { [weak self] in
-            for attempt in 0..<6 {
+            let deadline = ContinuousClock.now
+                + .milliseconds(NikonStillReviewPolicy.objectWindowMilliseconds)
+            while ContinuousClock.now < deadline {
                 guard let self, !Task.isCancelled, self.cameraSession === session else { return }
                 if await self.fetchAndPresentReview(session: session) { return }
-                if attempt < 5 {
-                    try? await Task.sleep(for: .milliseconds(150))
-                }
+                try? await Task.sleep(
+                    for: .milliseconds(NikonStillReviewPolicy.objectPollIntervalMilliseconds))
             }
         }
     }
 
-    /// The just-captured JPEG handle: the diff against the pre-capture baseline (a RAW+JPEG
-    /// pair adds two objects — ObjectInfo picks the JPEG/HEIF side). With a baseline but no
-    /// diff yet the caller retries; falling back to the highest handle there would show the
-    /// PREVIOUS photo, so that stands in only when no baseline was ever seeded.
-    private func resolveNewestJPEGHandle(session: NativeCameraSession) async -> UInt32? {
-        let hadBaseline = !knownObjectHandles.isEmpty
-        var newHandles: Set<UInt32> = []
-        var maxHandle: UInt32 = 0
-        for (storageID, _) in await session.readAllStorageInfo() {
-            let handles = Set((try? await session.getObjectHandles(storageID: storageID)) ?? [])
-            if let known = knownObjectHandles[storageID] {
-                newHandles.formUnion(handles.subtracting(known))
-            }
-            maxHandle = max(maxHandle, handles.max() ?? 0)
-            knownObjectHandles[storageID] = handles
-        }
-        let candidates: [UInt32]
-        if !newHandles.isEmpty {
-            candidates = newHandles.sorted(by: >)
-        } else if !hadBaseline, maxHandle > 0 {
-            candidates = [maxHandle]
-        } else {
-            return nil
-        }
-        for handle in candidates {
-            guard let info = try? await session.getObjectInfo(handle: handle) else { continue }
-            let name = info.filename.lowercased()
-            if name.hasSuffix(".jpg") || name.hasSuffix(".jpeg") || name.hasSuffix(".hif") {
-                return handle
-            }
-        }
-        return nil
-    }
-
+    /// One lookup and, once the shot's object is found, its review: the camera thumb (blurred)
+    /// first, then the sharp image swapped over it. False only while the object is not on the
+    /// card yet, so the caller retries.
     private func fetchAndPresentReview(session: NativeCameraSession) async -> Bool {
-        guard let handle = await resolveNewestJPEGHandle(session: session) else { return false }
-        guard let thumbData = try? await session.getThumb(handle: handle),
-            let thumb = UIImage(data: thumbData)
+        guard let choice = await session.resolveStillReviewObject(tracker: stillReviewTracker)
         else { return false }
-        presentInstantReview(thumb, isFullResolution: false, handle: handle)
-        // The embedded thumb is instant but tiny — stream the full image and swap it over
-        // the presented review (abandoned if the review is dismissed meanwhile). If the
-        // stream fails while the review is still up, the countdown starts on the thumb so
-        // a timed review can never hang on the blurred stand-in.
-        if let full = await fetchFullImage(session: session, handle: handle) {
-            upgradeInstantReview(full)
+        var presentedThumb = false
+        if let thumbData = try? await session.getThumb(handle: choice.handle),
+            let thumb = UIImage(data: thumbData), !Task.isCancelled
+        {
+            presentInstantReview(thumb, isFullResolution: false, handle: choice.handle)
+            presentedThumb = true
+        }
+        // The camera thumb is instant but tiny: read the sharp image and swap it over the
+        // presented review (a dismissal cancels this task, which stops the read). If the read
+        // fails while the review is still up, the countdown starts on the thumb so a timed
+        // review can never hang on the blurred stand-in.
+        let sharp = await sharpReviewImage(session: session, choice: choice)
+        guard !Task.isCancelled, cameraSession === session else { return true }
+        if let sharp {
+            if presentedThumb {
+                upgradeInstantReview(sharp)
+            } else {
+                presentInstantReview(sharp, handle: choice.handle)
+            }
         } else if instantReview?.isFullResolution == false {
             startInstantReviewCountdown()
         }
         return true
     }
 
-    /// Chunked full-object fetch, interleaving with live-view frames on the shared channel.
-    /// Aborts as soon as the review is dismissed so the channel isn't held hostage.
-    private func fetchFullImage(session: NativeCameraSession, handle: UInt32) async -> UIImage? {
-        guard let info = try? await session.getObjectInfo(handle: handle),
-            info.compressedSize > 0, info.compressedSize < 60_000_000
-        else { return nil }
-        var data = Data()
-        data.reserveCapacity(Int(info.compressedSize))
-        var offset: UInt32 = 0
-        let chunk: UInt32 = 1_000_000
-        while offset < info.compressedSize {
-            guard !Task.isCancelled, cameraSession === session, instantReview != nil else {
-                return nil
-            }
-            let length = min(chunk, info.compressedSize - offset)
-            guard
-                let part = try? await session.getPartialObject(
-                    handle: handle, offset: offset, length: length),
-                !part.isEmpty
-            else { return nil }
-            data.append(part)
-            offset += UInt32(part.count)
-        }
-        // Display-sized decode — the review never shows more pixels than the screen, and a
-        // full 45 MP decode allocates surfaces the device may refuse.
+    /// The review's sharp image, decoded display-sized: the review never shows more pixels
+    /// than the screen, and a full 45 MP decode allocates surfaces the device may refuse.
+    private func sharpReviewImage(
+        session: NativeCameraSession, choice: NikonStillReviewSelection.Choice
+    ) async -> UIImage? {
+        guard let data = await session.stillReviewImageData(for: choice) else { return nil }
         return await MediaCellImageLoader.shared.downsampled(data: data, maxPixelSize: 4096)
     }
 

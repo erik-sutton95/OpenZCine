@@ -969,7 +969,6 @@ internal fun MonitorScreen(
                 instantReview.onCaptureRunCompleted(
                     recordScope,
                     enabled = true,
-                    compression = snapshot.compression,
                     infoLine = photographyReviewInfoLine(snapshot),
                     focus = captureReviewFocus.get(),
                 )
@@ -980,7 +979,6 @@ internal fun MonitorScreen(
         instantReview.onCaptureRunCompleted(
             recordScope,
             enabled = isPhotographyMode && assists.instantReview,
-            compression = cameraProperties.compression,
             infoLine = photographyReviewInfoLine(cameraProperties),
             focus = captureReviewFocus.get(),
         )
