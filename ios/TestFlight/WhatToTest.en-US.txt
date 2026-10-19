@@ -3,6 +3,8 @@ New and changed
 - Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
 - In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
 - Connecting to a saved Wi-Fi camera that the camera list cannot see now wakes it first, and reports that it is not on the network if it stays silent.
+- Connecting to a camera another phone is using now asks before taking it over; the other phone then shows Camera taken over instead of reconnecting.
+- If the live picture's decoder fails, the picture recovers at the next keyframe instead of staying frozen.
 
 Fixes
 
@@ -18,6 +20,6 @@ What to test
 
 - In video, turn a LUT on, switch the camera to Photo and check the preview colours match the camera, then switch back to video and check the LUT returns.
 - Turn on instant review (PLAY). Shoot RAW, JPEG and RAW+JPEG in A, S, M and P; check each review turns sharp. With photos on card 2, compare shots left and where app photos land.
-- With gyro logging on, tap the GYRO pill in landscape and portrait. It should open the gyro logs and never lock the controls.
+- With gyro logging on, tap the GYRO pill; it opens the logs and never locks the controls. Turn the focus dial and tap a new point mid-turn; focus keeps responding.
 - Reinstall: the Local Network prompt should appear only at the permissions step. Then connect to a saved Wi-Fi camera while it is waking from power saving.
-- Turn the on-screen focus dial, then tap a new focus point mid-turn, several times. Focus should keep responding without a busy message. In portrait, check the format readout and clock align.
+- With two phones, connect the second to a camera the first is using. It should ask first; after Take Over, the first phone shows Camera taken over and stops reconnecting.

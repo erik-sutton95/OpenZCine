@@ -1,5 +1,5 @@
-- Instant review works for RAW-only photos and appears sooner for JPEG and RAW+JPEG.
-- The GYRO pill no longer covers the screen lock, and top bar readouts get their dark glow back.
-- Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
-- With two cards, the shots counter counts only the card the camera saves photos to, and app photos go to that card.
-- A saved Wi-Fi camera the list cannot see is woken before connecting.
+- Instant review covers RAW-only photos and appears sooner; the GYRO pill no longer covers the screen lock.
+- Tap-to-focus no longer sticks busy while the focus dial drives; top bar readouts get their glow back.
+- With two cards, the shots counter and app photos follow the stills card.
+- A camera another phone is using asks before take-over; the other phone stops reconnecting.
+- Reconnecting keeps stills or video mode, and an unseen saved Wi-Fi camera is woken first.
