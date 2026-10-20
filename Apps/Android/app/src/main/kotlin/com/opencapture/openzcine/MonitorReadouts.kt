@@ -3,14 +3,18 @@ package com.opencapture.openzcine
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.opencapture.monitorui.MonitorIcon
 import com.opencapture.monitorui.MonitorTimecodeFormat
 import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
 import com.opencapture.opencine.core.Rational
+import com.opencapture.opencine.core.ISOValue
+import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraSessionState
 import com.opencapture.opencine.nikon.CameraStorageStatus
+import com.opencapture.opencine.nikon.IsoPickerPolicy
 import com.opencapture.opencine.nikon.LiveFrameTimecode
 import com.opencapture.opencine.nikon.MediaStatus
 import com.opencapture.opencine.nikon.MonitorTextFormat
@@ -87,6 +91,26 @@ internal fun nikonRecordingFormatLabel(label: String?, imageArea: String?): Stri
  */
 internal fun nikonExposureStops(properties: CameraPropertySnapshot): Double? =
     if (properties.evIndicatorLit == false) null else properties.evIndicatorSixths?.let { it / 6.0 }
+
+/** How the strip marks a camera-owned value and whether a hold on it toggles the body shutter lock. */
+internal data class NikonReadoutCue(val dimmed: Boolean, val badge: MonitorIcon?, val holdTogglesShutterLock: Boolean)
+
+internal fun nikonReadoutCue(setting: MonitorCaptureSettingPresentation, photography: Boolean): NikonReadoutCue =
+    NikonReadoutCue(
+        dimmed = setting.dimmed,
+        badge = MonitorIcon.LOCK.takeIf { setting.controlLocked },
+        // Stills shutter belongs to the program; the movie SHUTTER hold is the MovieTVLock toggle.
+        holdTogglesShutterLock = setting.kind == MonitorPickerKind.SHUTTER && !photography,
+    )
+
+/** A movie strip value from the common seam; `null` is unreported. */
+internal fun nikonCommonReadoutLabel(value: SettingValue?, properties: CameraPropertySnapshot): String? =
+    when ((value as? SettingValue.Iso)?.value) {
+        ISOValue.Auto ->
+            IsoPickerPolicy.autoISOLabel(properties.iso, properties.isoAuto, properties.codec.orEmpty())
+                ?: MonitorCapturePresentation.label(value)
+        else -> value?.let(MonitorCapturePresentation::label)
+    }
 
 /**
  * iOS never blanks a top-bar readout: values seed from `CameraDisplayState.preview`

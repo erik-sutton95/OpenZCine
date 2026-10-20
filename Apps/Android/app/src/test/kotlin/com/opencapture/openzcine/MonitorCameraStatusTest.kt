@@ -104,4 +104,17 @@ class MonitorCameraStatusTest {
         assertEquals(MonitorCameraStatus.HopRejoinedRestoring, status)
         assertTrue(status.showsProgress())
     }
+
+    @Test
+    fun `connected while the first property read runs says it is reading camera settings`() {
+        // ZAA-349: baseline held live view behind a spinner and "Reading camera settings…".
+        val identity = CameraIdentity(name = "ZR", model = "ZR", serialNumber = "1")
+        val reading = resolveMonitorCameraStatus(CameraSessionState.Connected(identity = identity),
+            hopState = null, initialPropertiesReady = false)
+        assertEquals(MonitorCameraStatus.Connected("ZR", readingSettings = true), reading)
+        assertTrue(reading.showsProgress())
+        val ready = resolveMonitorCameraStatus(CameraSessionState.Connected(identity = identity), hopState = null)
+        assertEquals(MonitorCameraStatus.Connected("ZR"), ready)
+        assertFalse(ready.showsProgress())
+    }
 }
