@@ -114,7 +114,7 @@ internal class StillCaptureController(
                     StillReleasePoll.COMPLETE -> {
                         openShutter.set(false)
                         if (press.releaseCompleted()) {
-                            // Finger still down: chain a burst run — one command
+                            // Finger still down, so chain a burst run. One command
                             // release delivers a bounded run of frames, so the hold
                             // itself drives the burst. The bracket is best-effort: a
                             // refusal (release/AF settling) still lets the run fire.
