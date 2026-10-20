@@ -2,6 +2,7 @@ import MonitorUI
 import OpenCineAppKit
 import OpenCineCore
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import OpenCineMulticam
 import SwiftUI
 import UIKit
@@ -288,13 +289,11 @@ final class MulticamCoordinatorTests: XCTestCase {
             lastSeenAt: nil, serialNumber: serial, path: path)
     }
 
-    private func waitUntil(
-        _ what: String, timeout: TimeInterval = 3, _ condition: () -> Bool
-    ) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { return XCTFail("timed out waiting for \(what)") }
-            try await Task.sleep(for: .milliseconds(20))
+    /// Readiness only: the shared hang guard (`HostedCondition`) instead of a short fixed window,
+    /// which a loaded hosted runner overran.
+    private func waitUntil(_ what: String, _ condition: @MainActor () -> Bool) async throws {
+        if !(await HostedCondition.wait(until: condition)) {
+            XCTFail("timed out waiting for \(what)")
         }
     }
 

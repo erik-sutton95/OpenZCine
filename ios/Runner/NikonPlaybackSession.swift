@@ -83,7 +83,7 @@ struct NikonPlaybackTailPresentation {
     init?(
         model: NativeAppModel, initial: MonitorMediaGalleryOpen<MediaClip>,
         delivery: MonitorDeliveryCoordinator? = nil,
-        cameraTransferReleased: @escaping @MainActor () async -> Void = {}
+        cameraTransferReleased: (@MainActor () async -> Void)? = nil
     ) {
         guard let library = model.mediaLibrary, library.isCurrent(initial.admission),
             let source = model.captureMediaLibraryAction([initial.record.payload]),
@@ -100,7 +100,9 @@ struct NikonPlaybackTailPresentation {
         self.initial = initial
         self.library = library
         app = model
-        self.cameraTransferReleased = cameraTransferReleased
+        // Resolved here, not as a closure-literal default: RunnerTests' @testable copies of an
+        // async default can disagree on context size with the app's (swiftlang/swift#92017).
+        self.cameraTransferReleased = cameraTransferReleased ?? {}
         let delivery = delivery ?? model.delivery
         self.delivery = delivery
         let host = NikonPlaybackHost(model: model, delivery: delivery)
