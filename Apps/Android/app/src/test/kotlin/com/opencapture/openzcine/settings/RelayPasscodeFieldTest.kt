@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.settings
 
+import androidx.compose.runtime.snapshots.Snapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -43,5 +44,38 @@ class RelayPasscodeFieldTest {
         )
         assertFalse(field.store("1357"))
         assertEquals("4821", stored)
+    }
+
+    @Test
+    fun theStandaloneCodeIsComposeStateSoAStoredCodeRedraws() {
+        var lookups = 0
+        var stored: String? = "4821"
+        val field = RelayPasscodeField(
+            controller = null,
+            readStored = { lookups++; stored },
+            storeStored = { stored = it; true },
+        )
+        repeat(3) { field.value }
+        assertEquals(1, lookups, "a recomposition must not read the secrets store again")
+
+        var stateReads = 0
+        val observed = Snapshot.takeSnapshot(readObserver = { stateReads++ })
+        try {
+            observed.enter { field.value }
+        } finally {
+            observed.dispose()
+        }
+        assertTrue(stateReads > 0, "the field must read Compose state so a change redraws it")
+
+        var applied = false
+        val handle = Snapshot.registerApplyObserver { _, _ -> applied = true }
+        try {
+            assertTrue(field.store("1357"))
+            Snapshot.sendApplyNotifications()
+        } finally {
+            handle.dispose()
+        }
+        assertTrue(applied, "a stored code must notify the composition")
+        assertEquals("1357", field.value)
     }
 }

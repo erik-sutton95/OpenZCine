@@ -1,5 +1,8 @@
 package com.opencapture.openzcine.settings
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.opencapture.monitorui.MonitorWatcherPasscodeRule
 import com.opencapture.openzcine.relay.RelayBroadcastController
 
@@ -14,12 +17,18 @@ internal class RelayPasscodeField(
     private val readStored: () -> String?,
     private val storeStored: (String) -> Boolean,
 ) {
+    /** The secrets store's code, read once and kept as Compose state so a stored code redraws. */
+    private var standalone by mutableStateOf(readStored())
+
     /** The code in force: the live controller's, else the relay secrets store's. */
-    val value: String get() = controller?.savedPasscode ?: readStored().orEmpty()
+    val value: String get() = controller?.savedPasscode ?: standalone.orEmpty()
 
     /** Stores under the shared rule; a too-short entry or a store refusal changes nothing. */
     fun store(entry: String): Boolean {
         val next = MonitorWatcherPasscodeRule.entry(entry).passcode ?: return false
-        return controller?.savePasscode(next) ?: storeStored(next)
+        controller?.let { return it.savePasscode(next) }
+        if (!storeStored(next)) return false
+        standalone = next
+        return true
     }
 }
