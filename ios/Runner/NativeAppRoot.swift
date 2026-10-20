@@ -903,6 +903,9 @@ final class NativeAppModel {
     var lastConnectError: (any Error)?
     var lastConnectFailureReason: ConnectionFailure.Reason?
     @ObservationIgnored lazy var nikonPort = NativeNikonPort(model: self)
+    /// Held for the Nikon port's connect in flight: releasing the model releases it, which ends
+    /// that attempt (observation never reports a deallocation).
+    @ObservationIgnored var nikonConnectReleaseWatch: NikonConnectReleaseWatch?
     @ObservationIgnored lazy var cameras = makeCamerasModel()
     /// The root (`AppShell`): the camera monitor, the shared pair page (a NEARBY camera's Pair)
     /// and the standalone Media and Settings covers.

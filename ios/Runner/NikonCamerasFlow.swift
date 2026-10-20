@@ -124,6 +124,11 @@ final class NativeNikonPort: NikonConnectPort {
                     finish(.failure(CancellationError()))
                     return
                 }
+                // The model holds this watch for the attempt: a model torn down mid-connect ends
+                // it, as no observed property reports a deallocation.
+                model?.nikonConnectReleaseWatch = NikonConnectReleaseWatch { [weak self] in
+                    Task { @MainActor in self?.modelReleased(during: token) }
+                }
                 if let demoOutcome {
                     stage(demoOutcome)
                     return
@@ -160,6 +165,12 @@ final class NativeNikonPort: NikonConnectPort {
 
     func forget(hosts: [String]) {
         for host in hosts { model?.forgetPairing(host: host) }
+    }
+
+    /// The model went away while attempt `token` waited: nothing is left to cancel but the wait.
+    private func modelReleased(during token: UUID) {
+        guard attemptID == token else { return }
+        finish(.failure(CancellationError()))
     }
 
     private func finish(_ result: Result<NikonConnection, Error>) {
@@ -239,6 +250,17 @@ final class NativeNikonPort: NikonConnectPort {
                         "The camera didn't answer in time. Check it is on and on this network, then try again."
                 )))
     }
+}
+
+/// Runs `onRelease` when its holder lets it go. `NativeAppModel` holds one for the Nikon port's
+/// connect in flight, so a model torn down mid-connect ends the attempt instead of leaving it
+/// suspended. Replacing it with the next attempt's watch fires it too; the port ignores a stale one.
+final class NikonConnectReleaseWatch: Sendable {
+    private let onRelease: @Sendable () -> Void
+
+    init(_ onRelease: @escaping @Sendable () -> Void) { self.onRelease = onRelease }
+
+    deinit { onRelease() }
 }
 
 /// Host setup capabilities, live reachability and actions for the shared typed chooser.
