@@ -2078,7 +2078,9 @@ internal fun MonitorScreen(
                     MonitorOperatorLiveReadout(COLOR_READOUT_ID, "Color", codecColor.selectedColorChoice?.label ?: "--",
                         MonitorDisplaySection.COLOR, action = { openSharedPicker(MonitorPickerKind.CODEC) }),
                 recordingSection = MonitorDisplaySection.REC_READOUT,
-                timecodeSection = MonitorDisplaySection.TIMECODE),
+                timecodeSection = MonitorDisplaySection.TIMECODE,
+                // A Z body has no shooting-mode readout; its profile declares the codec accent.
+                headerAccent = com.opencapture.opencine.nikon.NIKON_CAPTURE_PROFILE.headerAccent),
             // A watcher's camera battery arrives over the relay as the host's raw level (cameraReadouts).
             cameraBattery = if (relayedState != null) {
                 com.opencapture.opencine.cameracontrols.cameraPowerReading(relayedState.batteryReading,
