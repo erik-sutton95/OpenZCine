@@ -659,11 +659,23 @@ enum NikonPhotoReleaseAccessibility {
         return timerRunning ? "Timer running" : capturing ? "Capturing" : "Shutter"
     }
 
+    /// The release is a button, as in the baseline.
     static let traits: AccessibilityTraits = .isButton
 
     /// A VoiceOver release takes the admission a touch takes: the shared surface stops touches
     /// under the interface lock and while another phone holds the controls.
     static func admits(locked: Bool, surrendered: Bool) -> Bool { !locked && !surrendered }
+
+    /// The VoiceOver activation: captures only when admitted and the release still belongs to
+    /// the live camera. Returns whether it captured.
+    @discardableResult
+    static func activate(
+        locked: Bool, surrendered: Bool, isLiveSource: Bool, capture: () -> Void
+    ) -> Bool {
+        guard admits(locked: locked, surrendered: surrendered), isLiveSource else { return false }
+        capture()
+        return true
+    }
 }
 
 /// Nikon still release keeps finger-down/finger-up, burst/timer and body-trigger feedback.
@@ -721,13 +733,11 @@ private struct NikonPhotoRelease: View {
                 )
                 .accessibilityAddTraits(NikonPhotoReleaseAccessibility.traits)
                 .accessibilityAction {
-                    guard
-                        NikonPhotoReleaseAccessibility.admits(
-                            locked: model.interfaceLocked,
-                            surrendered: model.relayControlSurrendered),
-                        model.operatorLiveIdentity == source
-                    else { return }
-                    model.captureStill()
+                    NikonPhotoReleaseAccessibility.activate(
+                        locked: model.interfaceLocked,
+                        surrendered: model.relayControlSurrendered,
+                        isLiveSource: model.operatorLiveIdentity == source
+                    ) { model.captureStill() }
                 }
                 .accessibilityIdentifier("monitor.system.shutter")
             }

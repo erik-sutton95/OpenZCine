@@ -958,4 +958,23 @@ final class NikonPhotoReleaseAccessibilityTests: XCTestCase {
         XCTAssertFalse(NikonPhotoReleaseAccessibility.admits(locked: true, surrendered: false))
         XCTAssertFalse(NikonPhotoReleaseAccessibility.admits(locked: false, surrendered: true))
     }
+
+    func testTheVoiceOverActionCapturesOnlyWhenAdmittedAndLive() {
+        var captures = 0
+        let capture = { captures += 1 }
+        XCTAssertTrue(
+            NikonPhotoReleaseAccessibility.activate(
+                locked: false, surrendered: false, isLiveSource: true, capture: capture))
+        XCTAssertEqual(captures, 1)
+        XCTAssertFalse(
+            NikonPhotoReleaseAccessibility.activate(
+                locked: true, surrendered: false, isLiveSource: true, capture: capture))
+        XCTAssertFalse(
+            NikonPhotoReleaseAccessibility.activate(
+                locked: false, surrendered: true, isLiveSource: true, capture: capture))
+        XCTAssertFalse(
+            NikonPhotoReleaseAccessibility.activate(
+                locked: false, surrendered: false, isLiveSource: false, capture: capture))
+        XCTAssertEqual(captures, 1, "a locked, surrendered or stale release must not capture")
+    }
 }
