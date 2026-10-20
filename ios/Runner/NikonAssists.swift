@@ -59,7 +59,8 @@ extension MonitorAssistCapabilities {
 extension MonitorAssistDefaults {
     /// Z's own fresh and Reset values, on both platforms: 100 IRE highlight zebras and a quarter
     /// stop of crush/clip tolerance (ZAA-227, ZAA-228). The shared 99 IRE and zero are Pocket's.
-    static let nikon = MonitorAssistDefaults(zebraHighlightIRE: 100, crushClipCompensation: .quarter)
+    static let nikon = MonitorAssistDefaults(
+        zebraHighlightIRE: 100, crushClipCompensation: .quarter)
 }
 
 extension MonitorAssistTool {
