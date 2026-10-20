@@ -8976,6 +8976,9 @@ final class NativeAppModel {
         switch observation {
         case .property(let property, let data):
             applyCameraRead(property, data)
+            // The DISP cycle follows the camera mode from the first read on, not only after a
+            // photo/video flip: a connect or reconnect declares it here (baseline computed it).
+            if property == .liveViewSelector { operatorSession.declare(modes: displayModes) }
             publishCameraDisplayState()
             syncFocusFromSnapshot()
             syncShutterLockFromSnapshot()
@@ -12351,6 +12354,42 @@ final class NativeAppModel {
         return program.isEmpty || program == "M" || program == "A"
     }
 
+    /// How the strip marks a camera-owned value (baseline 0.55 dim and lock glyph): photo SHUTTER
+    /// outside M/S and IRIS outside M/A belong to the program; a camera shutter lock and the
+    /// R3D NE ISO lock while recording are locks. A hold on the movie SHUTTER cell toggles the
+    /// camera lock wherever no quick adjust owns the hold.
+    func readoutCue(for picker: CameraPicker) -> (
+        dimmed: Bool, badge: MonitorIcon?, holdsShutterLock: Bool
+    ) {
+        switch picker {
+        case .stillShutter: (!stillAllowsShutterControl, nil, false)
+        case .stillIris: (!stillAllowsIrisControl, nil, false)
+        case .shutter:
+            lockedControls.contains(.shutter) ? (true, .lock, true) : (false, nil, true)
+        case .iso: isISORecordingLocked ? (true, .lock, false) : (false, nil, false)
+        default: (false, nil, false)
+        }
+    }
+
+    /// Whether a press on the strip cell may open its quick drum: a movie SHUTTER adjusts only a
+    /// known, unlocked circuit, and a camera-owned (dimmed) value has nothing to adjust.
+    func readoutQuickEnabled(for picker: CameraPicker) -> Bool {
+        (picker != .shutter
+            || (cameraPropertySnapshot.shutterLocked == false
+                && cameraPropertySnapshot.shutterMode != nil
+                && !lockedControls.contains(.shutter)))
+            && stillProgramAllows(picker) && !readoutCue(for: picker).dimmed
+    }
+
+    /// Whether the exposure program leaves this stills value to the operator.
+    func stillProgramAllows(_ picker: CameraPicker) -> Bool {
+        switch picker {
+        case .stillShutter: stillAllowsShutterControl
+        case .stillIris: stillAllowsIrisControl
+        default: true
+        }
+    }
+
     /// Toggles the stills Auto ISO control with an optimistic snapshot update; the queued
     /// write's readback confirms it, and a change made on the body flows back through the
     /// poll the same way.
@@ -12534,6 +12573,8 @@ final class NativeAppModel {
         // picker. Entering clean still sweeps in-flight popups (see `displayMode.didSet`).
         // The shared camera panel dismisses the outgoing setting before opening another.
         guard activePanel == nil, assist.configureTool == nil else { return }
+        // The program owns this stills value: the dimmed tile opens no drum the body would refuse.
+        guard stillProgramAllows(picker) else { return }
         // ISO and shutter tabs follow `movieBaseISO` / `movieShutterMode` on appear — not a
         // caller-supplied default — so seeding mode 0 here would reopen on the wrong circuit.
         switch picker {
@@ -12548,6 +12589,23 @@ final class NativeAppModel {
             Task {
                 await refreshShutterModeDependentOptions(session: session, mode: mode)
             }
+        }
+    }
+
+    /// Hold to lock or unlock the camera shutter control, from the SHUTTER panel or strip cell.
+    func toggleShutterLockOnCamera() {
+        let locked = lockedControls.contains(.shutter)
+        if preferences.hapticsEnabled {
+            if locked {
+                OperatorSettingsHaptics.unlockConfirm()
+            } else {
+                OperatorSettingsHaptics.lockConfirm()
+            }
+        }
+        if locked {
+            unlockShutterControlOnCamera()
+        } else {
+            lockShutterControlOnCamera()
         }
     }
 
@@ -12612,9 +12670,11 @@ final class NativeAppModel {
         cameraPropertySnapshot.electronicVR
     }
 
-    /// Tone/gamma inferred from the active codec family.
+    /// The active codec's tone as the body reports it (baseline "N-Log"), else the tone a codec
+    /// name implies (R3D: Log3G10), else the dash placeholder.
     var commandToneLabel: String {
-        PTPCameraPropertyDecoders.toneLabel(fromCodec: cameraState.codec) ?? "—"
+        movieToneReadout ?? PTPCameraPropertyDecoders.toneLabel(fromCodec: cameraState.codec)
+            ?? "\u{2014}"
     }
 
     /// Audio input sensitivity — the ZR-documented property when polled (Auto / 1–20), else the
@@ -13408,6 +13468,20 @@ extension NativeAppModel {
         monitorRuntime?.updateFacts(nikonControlFacts)
     }
 
+    /// A movie strip value from the common seam. Movie Auto ISO shows the body's working ISO
+    /// ("A3200"), as the baseline strip did; the common vocabulary carries only "Auto".
+    func commonReadoutLabel(_ value: SettingValue) -> String {
+        if value == .iso(.auto),
+            let working = ISOPickerPolicy.autoISOLabel(
+                iso: reportedPropertySnapshot.iso.map { Int($0) },
+                isoAuto: reportedPropertySnapshot.isoAuto,
+                codec: reportedPropertySnapshot.fileType ?? "")
+        {
+            return working
+        }
+        return MonitorCapturePresentation.label(value)
+    }
+
     var nikonControlFacts: NikonControlFacts {
         let photography = StillCapturePolicy.prefersPhotographyChrome(
             selector: reportedPropertySnapshot.captureSelector)
@@ -13432,7 +13506,10 @@ extension NativeAppModel {
                     advertisedExposureOptions[.movieShutterAngle] ?? []
                 case .speed:
                     advertisedExposureOptions[.movieShutterSpeed] ?? []
-                case nil: []
+                // No `MovieShutterMode` (non-ZR bodies): the encoder writes by label shape.
+                case nil:
+                    (advertisedExposureOptions[.movieShutterAngle] ?? [])
+                        + (advertisedExposureOptions[.movieShutterSpeed] ?? [])
                 }
             }(),
             apertureLabels: advertisedExposureOptions[.movieFNumber] ?? [],

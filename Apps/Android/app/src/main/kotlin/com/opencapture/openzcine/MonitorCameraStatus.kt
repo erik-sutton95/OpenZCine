@@ -15,7 +15,8 @@ import com.opencapture.opencine.frameio.FrameioInternetHopState
  * progress — hop state is the reliable signal for that path.
  */
 internal sealed interface MonitorCameraStatus {
-    data class Connected(val name: String) : MonitorCameraStatus
+    /** [readingSettings]: the post-connect property bootstrap still holds live view back. */
+    data class Connected(val name: String, val readingSettings: Boolean = false) : MonitorCameraStatus
 
     data object Connecting : MonitorCameraStatus
 
@@ -42,6 +43,7 @@ internal sealed interface MonitorCameraStatus {
 internal fun resolveMonitorCameraStatus(
     sessionState: CameraSessionState,
     hopState: FrameioInternetHopState?,
+    initialPropertiesReady: Boolean = true,
 ): MonitorCameraStatus {
     if (sessionState !is CameraSessionState.Connected) {
         when (hopState) {
@@ -59,7 +61,8 @@ internal fun resolveMonitorCameraStatus(
     }
 
     return when (sessionState) {
-        is CameraSessionState.Connected -> MonitorCameraStatus.Connected(sessionState.identity.name)
+        is CameraSessionState.Connected ->
+            MonitorCameraStatus.Connected(sessionState.identity.name, readingSettings = !initialPropertiesReady)
         CameraSessionState.Connecting -> MonitorCameraStatus.Connecting
         CameraSessionState.Disconnected -> MonitorCameraStatus.NoCamera
     }
@@ -68,7 +71,7 @@ internal fun resolveMonitorCameraStatus(
 /** Whether this status represents an in-progress search / rejoin (show spinner). */
 internal fun MonitorCameraStatus.showsProgress(): Boolean =
     when (this) {
-        is MonitorCameraStatus.Connected,
+        is MonitorCameraStatus.Connected -> readingSettings
         MonitorCameraStatus.NoCamera,
         is MonitorCameraStatus.HopFailed,
         -> false
@@ -107,7 +110,8 @@ internal fun monitorCameraStatusAccessibility(status: MonitorCameraStatus): Stri
 internal fun monitorCameraStatusNotice(status: MonitorCameraStatus): MonitorOperatorPictureNotice {
     val title =
         when (status) {
-            is MonitorCameraStatus.Connected -> status.name
+            is MonitorCameraStatus.Connected ->
+                if (status.readingSettings) stringResource(R.string.camera_reading_properties) else status.name
             MonitorCameraStatus.Connecting -> stringResource(R.string.camera_connecting_short)
             MonitorCameraStatus.NoCamera -> stringResource(R.string.camera_none)
             MonitorCameraStatus.HopLeavingCamera ->
@@ -142,3 +146,13 @@ internal fun monitorCameraStatusNotice(status: MonitorCameraStatus): MonitorOper
 
     return MonitorOperatorPictureNotice(title, detail, status.showsProgress())
 }
+
+/**
+ * The waiting plate's words: the camera status while no picture source runs, and while the first
+ * property read still holds live view back ("Reading camera settings…", ZAA-349).
+ */
+internal fun monitorPictureNotice(
+    pictureSourcePresent: Boolean,
+    initialPropertiesReady: Boolean,
+    notice: MonitorOperatorPictureNotice,
+): MonitorOperatorPictureNotice? = if (!pictureSourcePresent || !initialPropertiesReady) notice else null

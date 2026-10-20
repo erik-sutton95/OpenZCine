@@ -773,6 +773,10 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertEqual(
             nikonCameraStatusNotice(connection: .disconnected, internetHopActive: true)?.title,
             "Reconnecting to camera…")
+        // ZAA-349 twin: the post-connect property read says so (baseline StartupPreparingLiveView).
+        XCTAssertEqual(
+            nikonCameraStatusNotice(connection: .preparingLiveView, internetHopActive: false),
+            MonitorOperatorPictureNotice(title: "Reading camera settings…", progress: true))
     }
 
     /// SIMULATED actual adapter: camera inventory owns every offered format; opening never writes.
