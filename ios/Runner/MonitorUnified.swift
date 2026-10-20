@@ -367,7 +367,9 @@ struct NikonMonitorShell: View {
                     value: model.isDemoSession || model.videoSource == .relay
                         ? model.cameraState.resolutionFrameRate : recordingLabel ?? "--",
                     section: .format) : nil,
-            color: color)
+            color: color,
+            // A Z body has no shooting-mode readout; its profile declares the codec accent.
+            headerAccent: NikonCameraSession.captureProfile.headerAccent)
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
     private var cameraBattery: MonitorOperatorPowerReading? {
