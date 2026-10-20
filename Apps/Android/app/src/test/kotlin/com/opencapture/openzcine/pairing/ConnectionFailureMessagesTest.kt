@@ -85,6 +85,36 @@ class ConnectionFailureMessagesTest {
         assertEquals(busy, friendlyCameraConnectionFailure(CameraConnectionFailure.BUSY, busy))
     }
 
+    /**
+     * A raw protocol or transport error reaches this mapper as an untyped failure; the operator
+     * gets the reachability copy, never the dump (ZAB-147, the old "ptp-ip"/"0x" sanitizer).
+     */
+    @Test
+    fun `a technical failure detail falls back to reachability guidance`() {
+        assertEquals(
+            "Couldn't reach the camera. Check Wi‑Fi and try again.",
+            friendlyCameraConnectionFailure(CameraConnectionFailure.OTHER, "PTP-IP response 0x2019"),
+        )
+        assertEquals(
+            "Couldn't reach the camera. Check Wi‑Fi and try again.",
+            friendlyCameraConnectionFailure(null, "USB bulk transfer failed 0x80070005"),
+        )
+        assertEquals(
+            "Couldn't reach the camera. Check Wi‑Fi and try again.",
+            friendlyCameraConnectionFailure(
+                CameraConnectionFailure.OTHER,
+                "java.lang.IllegalStateException: unexpected packet",
+            ),
+        )
+        assertEquals(
+            "Couldn't reach the camera. Check Wi‑Fi and try again.",
+            friendlyCameraConnectionFailure(
+                CameraConnectionFailure.OTHER,
+                "read failed: errno 54 (Connection reset by peer)",
+            ),
+        )
+    }
+
     /** No pairing source classifies failure words again (the producer types them). */
     @Test
     fun `no connect failure is classified by its text`() {

@@ -12,7 +12,8 @@ import com.opencapture.opencine.nikon.CameraConnectionFailure
  * refusal gets its own guidance instead of a generic "Couldn't reach".
  *
  * [detail] is shown as is only when the failure has no copy of its own (another device holds the
- * camera, or an untyped failure); a blank detail reads as unreachable.
+ * camera, or an untyped failure) and the text is operator-facing; a blank or technical detail
+ * reads as unreachable.
  */
 internal fun friendlyCameraConnectionFailure(failure: CameraConnectionFailure?, detail: String?): String =
     when (failure) {
@@ -31,7 +32,16 @@ internal fun friendlyCameraConnectionFailure(failure: CameraConnectionFailure?, 
         // Never surface socket errors or PTP-IP packet dumps to the operator.
         CameraConnectionFailure.UNREACHABLE -> UNREACHABLE_COPY
         CameraConnectionFailure.BUSY, CameraConnectionFailure.OTHER, null ->
-            detail?.trim()?.takeIf { it.isNotEmpty() } ?: UNREACHABLE_COPY
+            detail?.trim()?.takeIf { it.isNotEmpty() && !it.looksTechnical() } ?: UNREACHABLE_COPY
     }
+
+/**
+ * An untyped failure's detail is shown only when it is operator text. A message naming a protocol
+ * frame, a hex code or a transport exception is the dump the old text sanitizer replaced (ZAB-147).
+ */
+private fun String.looksTechnical(): Boolean {
+    val lower = lowercase()
+    return listOf("0x", "ptp", "errno", "exception").any { it in lower }
+}
 
 private const val UNREACHABLE_COPY = "Couldn't reach the camera. Check Wi‑Fi and try again."
