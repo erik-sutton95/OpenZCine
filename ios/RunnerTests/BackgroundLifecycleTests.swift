@@ -23,7 +23,7 @@ struct BackgroundLifecycleTests {
         #expect(runtime.hasBackgroundPumps, "the foreground link owns both pumps")
 
         model.enterBackground()
-        #expect(!runtime.hasBackgroundPumps, "backgrounding must leave no keepalive or event reader")
+        #expect(!runtime.hasBackgroundPumps, "backgrounding leaves no keepalive or event reader")
     }
 }
 
