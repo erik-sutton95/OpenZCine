@@ -1,6 +1,6 @@
 New and changed
 
-- DISP 3 (the command dashboard) is back in the live view's style: the REC chip and a large timecode head it, with larger tiles. Tap a tile to change it; hold and drag to reorder.
+- DISP 3 (the command dashboard) is back in the live view's style: the REC chip heads it, with a large timecode when the camera runs timecode, and the tiles are larger. Tap a tile to change it; hold and drag to reorder.
 - Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
 - In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
 - Connecting to a saved Wi-Fi camera that the camera list cannot see now wakes it first, and reports that it is not on the network if it stays silent.
