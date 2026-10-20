@@ -106,6 +106,16 @@ class MonitorCameraStatusTest {
     }
 
     @Test
+    fun `the plate carries the reading notice while the first property read holds live view`() {
+        // CodeRabbit #462: a connected session already has a picture source while live view waits.
+        val notice = com.opencapture.opencine.cameracontrols.MonitorOperatorPictureNotice(
+            "Reading camera settings…", progress = true)
+        assertEquals(notice, monitorPictureNotice(pictureSourcePresent = true, initialPropertiesReady = false, notice))
+        assertEquals(null, monitorPictureNotice(pictureSourcePresent = true, initialPropertiesReady = true, notice))
+        assertEquals(notice, monitorPictureNotice(pictureSourcePresent = false, initialPropertiesReady = true, notice))
+    }
+
+    @Test
     fun `connected while the first property read runs says it is reading camera settings`() {
         // ZAA-349: baseline held live view behind a spinner and "Reading camera settings…".
         val identity = CameraIdentity(name = "ZR", model = "ZR", serialNumber = "1")

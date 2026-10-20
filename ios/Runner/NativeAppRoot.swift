@@ -12334,6 +12334,16 @@ final class NativeAppModel {
         }
     }
 
+    /// Whether a press on the strip cell may open its quick drum: a movie SHUTTER adjusts only a
+    /// known, unlocked circuit, and a camera-owned (dimmed) value has nothing to adjust.
+    func readoutQuickEnabled(for picker: CameraPicker) -> Bool {
+        (picker != .shutter
+            || (cameraPropertySnapshot.shutterLocked == false
+                && cameraPropertySnapshot.shutterMode != nil
+                && !lockedControls.contains(.shutter)))
+            && stillProgramAllows(picker) && !readoutCue(for: picker).dimmed
+    }
+
     /// Whether the exposure program leaves this stills value to the operator.
     func stillProgramAllows(_ picker: CameraPicker) -> Bool {
         switch picker {

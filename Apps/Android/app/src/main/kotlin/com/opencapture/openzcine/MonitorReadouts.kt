@@ -103,6 +103,20 @@ internal fun nikonReadoutCue(setting: MonitorCaptureSettingPresentation, photogr
         holdTogglesShutterLock = setting.kind == MonitorPickerKind.SHUTTER && !photography,
     )
 
+/**
+ * Whether a press on a strip cell may open its quick drum: a movie SHUTTER adjusts only a known,
+ * unlocked circuit, and a camera-owned (dimmed) value has nothing to adjust.
+ */
+internal fun nikonReadoutQuickEnabled(
+    kind: MonitorPickerKind,
+    photography: Boolean,
+    shutterLocked: Boolean?,
+    shutterModeKnown: Boolean,
+    cue: NikonReadoutCue,
+): Boolean =
+    (kind != MonitorPickerKind.SHUTTER || photography || (shutterLocked == false && shutterModeKnown)) &&
+        !cue.dimmed
+
 /** A movie strip value from the common seam; `null` is unreported. */
 internal fun nikonCommonReadoutLabel(value: SettingValue?, properties: CameraPropertySnapshot): String? =
     when ((value as? SettingValue.Iso)?.value) {

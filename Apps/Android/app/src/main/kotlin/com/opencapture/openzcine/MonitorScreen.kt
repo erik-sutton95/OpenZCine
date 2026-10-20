@@ -1864,9 +1864,8 @@ internal fun MonitorScreen(
             val cue = nikonReadoutCue(setting, isPhotographyMode)
             MonitorOperatorLiveReadout(setting.kind.name, field?.title ?: setting.label,
                 value, field = field,
-                quickEnabled = (setting.kind != MonitorPickerKind.SHUTTER || isPhotographyMode ||
-                    (effectiveShutterLocked == false && cameraProperties.shutterMode != null)) &&
-                    !(isPhotographyMode && cue.dimmed),
+                quickEnabled = nikonReadoutQuickEnabled(setting.kind, isPhotographyMode, effectiveShutterLocked,
+                    cameraProperties.shutterMode != null, cue),
                 badgeIcon = cue.badge, dimmed = cue.dimmed,
                 // Where no quick adjust owns the hold, holding SHUTTER toggles the camera lock.
                 holdAction = if (cue.holdTogglesShutterLock && relayedState == null) shutterLongPressToggle else null,
@@ -2070,7 +2069,8 @@ internal fun MonitorScreen(
                 recovering = (recoveryStateOverride ?: sessionRecoveryState) != SessionRecoveryUi.Idle,
                 // Hop-aware status: after a RED / Frame.io internet hop the session is Disconnected
                 // while Wi-Fi rejoins, so the plate says so instead of a bare "No camera".
-                notice = if (pictureFrameSource == null) cameraFeedNotice else null),
+                notice = monitorPictureNotice(pictureFrameSource != null, initialMonitorPropertiesReady,
+                    cameraFeedNotice)),
             status = MonitorOperatorLiveStatus({ commonControl.statusPresentation() },
                 !isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE),
                 !isPhotographyMode && mounted(MonitorDisplaySection.REC_READOUT), statusStorage, headerReadouts,

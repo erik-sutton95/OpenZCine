@@ -3748,6 +3748,18 @@ struct NikonExposureProvenanceTests {
         #expect(model.readoutCue(for: .shutter).badge == nil)
     }
 
+    @Test("A camera-locked strip value opens no quick drum")
+    func lockedReadoutHasNoQuickDrum() {
+        // CodeRabbit #462: the R3D NE ISO lock while recording dims ISO; a press must not open it.
+        let model = NativeAppModel()
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        model.cameraState = model.cameraState.updating(codec: "R3D NE")
+        #expect(model.readoutQuickEnabled(for: .iso))
+        model.isRecording = true
+        #expect(model.readoutCue(for: .iso).dimmed)
+        #expect(!model.readoutQuickEnabled(for: .iso))
+    }
+
     @Test("Movie Auto ISO shows the working ISO on the strip, not Auto")
     func autoISOReadoutShowsWorkingISO() {
         // ZIA-112 / ZAA-142: baseline strip read "A1250" while movie Auto ISO was on.

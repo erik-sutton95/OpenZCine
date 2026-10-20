@@ -269,12 +269,7 @@ struct NikonMonitorShell: View {
             // A held shutter adjusts its reported circuit; where it cannot, the hold toggles the
             // camera lock (baseline). A program-owned stills value has nothing to adjust.
             let cue = model.readoutCue(for: picker)
-            let quickEnabled =
-                (picker != .shutter
-                    || (model.cameraPropertySnapshot.shutterLocked == false
-                        && model.cameraPropertySnapshot.shutterMode != nil
-                        && !model.lockedControls.contains(.shutter)))
-                && model.stillProgramAllows(picker)
+            let quickEnabled = model.readoutQuickEnabled(for: picker)
             let field =
                 quickEnabled
                 ? picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }

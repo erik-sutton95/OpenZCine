@@ -146,3 +146,13 @@ internal fun monitorCameraStatusNotice(status: MonitorCameraStatus): MonitorOper
 
     return MonitorOperatorPictureNotice(title, detail, status.showsProgress())
 }
+
+/**
+ * The waiting plate's words: the camera status while no picture source runs, and while the first
+ * property read still holds live view back ("Reading camera settings…", ZAA-349).
+ */
+internal fun monitorPictureNotice(
+    pictureSourcePresent: Boolean,
+    initialPropertiesReady: Boolean,
+    notice: MonitorOperatorPictureNotice,
+): MonitorOperatorPictureNotice? = if (!pictureSourcePresent || !initialPropertiesReady) notice else null

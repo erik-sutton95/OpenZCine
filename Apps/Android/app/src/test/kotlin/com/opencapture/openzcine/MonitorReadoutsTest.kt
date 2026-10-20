@@ -46,6 +46,19 @@ class MonitorReadoutsTest {
     }
 
     @Test
+    fun `a camera-owned strip value has no quick drum`() {
+        // CodeRabbit #462: the R3D NE ISO lock while recording dims ISO; a press must not open its drum.
+        val locked = NikonReadoutCue(dimmed = true, badge = com.opencapture.monitorui.MonitorIcon.LOCK,
+            holdTogglesShutterLock = false)
+        val free = NikonReadoutCue(dimmed = false, badge = null, holdTogglesShutterLock = false)
+        assertFalse(nikonReadoutQuickEnabled(MonitorPickerKind.ISO, false, false, true, locked))
+        assertTrue(nikonReadoutQuickEnabled(MonitorPickerKind.ISO, false, false, true, free))
+        assertFalse(nikonReadoutQuickEnabled(MonitorPickerKind.SHUTTER, true, null, false, locked))
+        assertTrue(nikonReadoutQuickEnabled(MonitorPickerKind.SHUTTER, false, false, true, free))
+        assertFalse(nikonReadoutQuickEnabled(MonitorPickerKind.SHUTTER, false, null, true, free))
+    }
+
+    @Test
     fun `movie auto ISO shows the working ISO on the strip`() {
         // ZAA-142: baseline strip read "A3200" while movie Auto ISO is on, "Auto" only unreported.
         val auto = SettingValue.Iso(ISOValue.Auto)
