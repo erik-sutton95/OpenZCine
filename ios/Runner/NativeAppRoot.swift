@@ -12321,7 +12321,9 @@ final class NativeAppModel {
     /// outside M/S and IRIS outside M/A belong to the program; a camera shutter lock and the
     /// R3D NE ISO lock while recording are locks. A hold on the movie SHUTTER cell toggles the
     /// camera lock wherever no quick adjust owns the hold.
-    func readoutCue(for picker: CameraPicker) -> (dimmed: Bool, badge: MonitorIcon?, holdsShutterLock: Bool) {
+    func readoutCue(for picker: CameraPicker) -> (
+        dimmed: Bool, badge: MonitorIcon?, holdsShutterLock: Bool
+    ) {
         switch picker {
         case .stillShutter: (!stillAllowsShutterControl, nil, false)
         case .stillIris: (!stillAllowsIrisControl, nil, false)
