@@ -15,7 +15,8 @@ let nikonAssistUsageSeed = MonitorToolUsage.fieldMonitorSeed.merging(["PLAY": 8,
 
 extension NativeAppModel {
     /// The live palette for this camera: every display tool, plus PLAY and the camera EV meter
-    /// in photography, minus the LUT there. Display tools never depend on the capture mode (A1-19).
+    /// in photography, minus the video tools there (the LUT and the cinema analysis tools).
+    /// Display tools never depend on the capture mode (A1-19).
     var liveAssistPaletteTools: [MonitorAssistTool] {
         let photography = StillCapturePolicy.prefersPhotographyChrome(
             selector: cameraPropertySnapshot.captureSelector)
