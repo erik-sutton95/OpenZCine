@@ -720,6 +720,44 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         return points
     }
 
+    /// Owner report 2026-10-19: after a Quality Bias change the restarted feed showed "--" in the
+    /// readouts and the timecode lost its frame field. That restart skips the property burst, so
+    /// it must keep the readings; only a restart that re-reads the body holds back to the mode.
+    func testAWarmLiveViewRestartKeepsTheReadingsThatDriveTheReadouts() {
+        let live = PTPCameraPropertySnapshot(
+            iso: 800, shutterSpeed: "1/50", fNumber: "f/2.8", wbKelvin: 5600, resolution: "4K",
+            fps: 25, fileType: "N-RAW", captureSelector: .video)
+
+        let warm = NativeAppModel.heldPropertySnapshot(
+            live, keepingCaptureMode: true, keepingReadings: true)
+        XCTAssertEqual(warm, live)
+        // The frame rate sets the timecode's frame precision in the shared session.
+        XCTAssertEqual(warm.fps, 25)
+
+        let reread = NativeAppModel.heldPropertySnapshot(
+            live, keepingCaptureMode: true, keepingReadings: false)
+        XCTAssertEqual(reread, PTPCameraPropertySnapshot(captureSelector: .video))
+    }
+
+    /// The restart also drops writes that were queued but never sent, so a kept display must show
+    /// what the camera confirmed, not a picker's optimistic value it will never receive.
+    func testAWarmLiveViewRestartShowsTheConfirmedReadingsNotADroppedWrite() {
+        let reported = PTPCameraPropertySnapshot(iso: 800, fps: 25, captureSelector: .video)
+        let optimistic = PTPCameraPropertySnapshot(iso: 1600, fps: 25, captureSelector: .video)
+
+        let warm = NativeAppModel.heldPropertySnapshots(
+            display: optimistic, reported: reported, keepingCaptureMode: true,
+            keepingReadings: true)
+        XCTAssertEqual(warm.display, reported)
+        XCTAssertEqual(warm.reported, reported)
+
+        let reread = NativeAppModel.heldPropertySnapshots(
+            display: optimistic, reported: reported, keepingCaptureMode: true,
+            keepingReadings: false)
+        XCTAssertEqual(reread.display, PTPCameraPropertySnapshot(captureSelector: .video))
+        XCTAssertEqual(reread.reported, PTPCameraPropertySnapshot(captureSelector: .video))
+    }
+
     /// The camera status shows on the shared waiting plate with Android's words: no camera,
     /// connecting, coming back from an internet hop; a connected camera keeps the waiting plate.
     func testCameraStatusShowsOnTheSharedWaitingPlate() {
