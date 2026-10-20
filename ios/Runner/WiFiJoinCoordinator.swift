@@ -22,6 +22,9 @@ final class WiFiJoinCoordinator {
         case invalidSSID
         case timedOut
         case system(String)
+        /// The system refused the join; the shared value carries the copy and recovery actions
+        /// (Settings plus retry where a manual join can still work).
+        case refused(CameraHotspotJoinRefusal)
 
         var errorDescription: String? {
             switch self {
@@ -33,6 +36,8 @@ final class WiFiJoinCoordinator {
                 return "Timed out waiting for the camera Wi‑Fi network. Try again."
             case .system(let message):
                 return message
+            case .refused(let refusal):
+                return refusal.message
             }
         }
     }
@@ -425,7 +430,18 @@ final class WiFiJoinCoordinator {
         }
     }
 
-    private nonisolated static func mapHotspotError(_ error: Error) -> JoinError {
+    nonisolated static func mapHotspotError(_ error: Error) -> JoinError {
+        // The shared hotspot owner already typed the refusal; its own copy replaces the
+        // platform's developer text. Cancel and an unusable network name keep their own cases.
+        if let refusal = error as? CameraHotspotJoinRefusal,
+            ![
+                NEHotspotConfigurationError.userDenied.rawValue,
+                NEHotspotConfigurationError.invalid.rawValue,
+                NEHotspotConfigurationError.invalidSSID.rawValue,
+            ].contains(refusal.rawCode)
+        {
+            return .refused(refusal)
+        }
         let nsError = error as NSError
         if nsError.domain == NEHotspotConfigurationErrorDomain {
             switch nsError.code {
