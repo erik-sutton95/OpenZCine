@@ -176,19 +176,5 @@ struct LadderPickerPanel: View {
         }
     }
 
-    private func holdShutter() {
-        let locked = model.lockedControls.contains(.shutter)
-        if model.preferences.hapticsEnabled {
-            if locked {
-                OperatorSettingsHaptics.unlockConfirm()
-            } else {
-                OperatorSettingsHaptics.lockConfirm()
-            }
-        }
-        if locked {
-            model.unlockShutterControlOnCamera()
-        } else {
-            model.lockShutterControlOnCamera()
-        }
-    }
+    private func holdShutter() { model.toggleShutterLockOnCamera() }
 }
