@@ -10,6 +10,7 @@ import com.opencapture.monitorui.MonitorCommandDashboard
 import com.opencapture.monitorui.MonitorCommandHealth
 import com.opencapture.monitorui.MonitorCommandSection
 import com.opencapture.monitorui.MonitorCommandTile
+import com.opencapture.monitorui.MonitorStatusPresentation
 import com.opencapture.monitorui.monitorCommandTileOrder
 import com.opencapture.monitorui.moveMonitorCommandTile
 import com.opencapture.opencine.appkit.MonitorCommandTileOrderPreferences
@@ -1032,6 +1033,7 @@ internal fun CommandDashboard(
     onMoveTile: (CommandTileKind, Int) -> Unit,
     liveFps: String,
     signalBars: Int,
+    hero: MonitorStatusPresentation? = null,
 ) {
     MonitorCommandDashboard(
         presentation.panelTiles, presentation.panelSections, presentation.health, portrait, controlsEnabled,
@@ -1042,6 +1044,7 @@ internal fun CommandDashboard(
         } },
         onOpenControl = onOpenControl,
         onMoveTile = onMoveTile,
+        hero = hero,
     ) {
         // The link gauge every app's status bar draws (tap toggles bars and fps).
         com.opencapture.monitorui.MonitorTelemetry(signalBars, liveFps, emptyList(), horizontal = true, showsPower = false)

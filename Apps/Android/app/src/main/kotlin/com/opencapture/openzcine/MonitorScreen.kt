@@ -2124,9 +2124,14 @@ internal fun MonitorScreen(
                     fitted = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList()),
                 MonitorOperatorBodyViews(
                     dashboard = { accepts ->
+                        // DISP 3 hero: the header's status, with no hero digits when nothing feeds
+                        // timecode (iOS `commandHeroPresentation`).
+                        val hero = commonControl.statusPresentation().let {
+                            if (MonitorDisplaySection.TIMECODE in available) it else it.copy(timecode = null)
+                        }
                         CommandDashboard(commandPresentation, isPortrait, commandControlsEnabled && accepts,
                             pendingCommandControl, openCommandControl, moveCommandTileTo,
-                            link.label, link.bars)
+                            link.label, link.bars, hero)
                     },
                     focusDrive = if (
                         // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`), default OFF; off
