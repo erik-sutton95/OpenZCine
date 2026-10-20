@@ -932,16 +932,20 @@ final class LiveSurfaceScreens: XCTestCase {
 final class NikonPhotoReleaseAccessibilityTests: XCTestCase {
     func testOpenExposureIsSpokenAsEndExposure() {
         XCTAssertEqual(
-            NikonPhotoReleaseAccessibility.label(openShutter: true, capturing: true, timerRunning: false),
+            NikonPhotoReleaseAccessibility.label(
+                openShutter: true, capturing: true, timerRunning: false),
             "End exposure")
         XCTAssertEqual(
-            NikonPhotoReleaseAccessibility.label(openShutter: false, capturing: true, timerRunning: false),
+            NikonPhotoReleaseAccessibility.label(
+                openShutter: false, capturing: true, timerRunning: false),
             "Capturing")
         XCTAssertEqual(
-            NikonPhotoReleaseAccessibility.label(openShutter: false, capturing: false, timerRunning: true),
+            NikonPhotoReleaseAccessibility.label(
+                openShutter: false, capturing: false, timerRunning: true),
             "Timer running")
         XCTAssertEqual(
-            NikonPhotoReleaseAccessibility.label(openShutter: false, capturing: false, timerRunning: false),
+            NikonPhotoReleaseAccessibility.label(
+                openShutter: false, capturing: false, timerRunning: false),
             "Shutter")
     }
 
