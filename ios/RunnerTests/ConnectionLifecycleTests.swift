@@ -556,6 +556,51 @@ struct USBCameraTransportDetachTests {
                 .saved(host: "SIMULATED-gone", path: .infrastructure), takingOverConfirmed: false)
         }
     }
+
+    /// CodeRabbit on #440: observation never reports a deallocation, so a model torn down while a
+    /// connect waited left the shared flow's attempt suspended for good. Releasing the model must
+    /// end the attempt with `CancellationError`. The staged `connecting` outcome holds the attempt
+    /// without dialling anything.
+    @MainActor
+    @Test("Releasing the model ends a pending Nikon connect")
+    func releasingTheModelEndsAPendingConnect() async throws {
+        var owner: NativeAppModel? = NativeAppModel()
+        weak let released = owner
+        let port = NativeNikonPort(model: try #require(owner))
+        port.demoOutcome = "connecting"
+        var handshaking = false
+        port.onPhase = { phase, _ in if phase == .handshaking { handshaking = true } }
+        let attempt = Task { @MainActor in
+            try await port.connect(
+                .saved(host: "SIMULATED-pending", path: .infrastructure),
+                takingOverConfirmed: false)
+        }
+        for _ in 0..<200 where !handshaking { await Task.yield() }
+        try #require(handshaking, "the staged connect must be pending before the release")
+        owner = nil
+        try #require(released == nil, "the model must be released for this check to mean anything")
+        // A watchdog unblocks an attempt still suspended after two seconds, so a regression fails
+        // here instead of hanging the suite.
+        let watchdog = Watchdog()
+        let timer = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            watchdog.fired = true
+            attempt.cancel()
+        }
+        let result = await attempt.result
+        timer.cancel()
+        #expect(!watchdog.fired, "the attempt stayed suspended after its model was released")
+        switch result {
+        case .success: Issue.record("a released model's attempt connected")
+        case .failure(let error): #expect(error is CancellationError)
+        }
+    }
+
+    @MainActor
+    private final class Watchdog {
+        var fired = false
+    }
 }
 
 /// FINAL-Z3-08: Cancel on the iOS "Wants to Join" alert is a "no" for the automatic re-offers
