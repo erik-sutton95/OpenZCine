@@ -7,6 +7,7 @@ import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -666,8 +667,16 @@ extension NikonPlaybackOwnerAdoptionTests {
         native.play(rate: 1, token: token)
         var sample = NikonGrowingMovieFixture.PixelSample()
         var largestClockLead = 0.0
-        let heldEnd = ContinuousClock.now.advanced(by: .seconds(5))
-        while ContinuousClock.now < heldEnd {
+        // Hold at least 5 s, then until the prefix has played and the player stalls at its end.
+        // A loaded hosted runner can need longer than 5 s to get there (0.4 s played, still
+        // playing at 1.9 s); sampling longer only gives the stall checks more chances to fail.
+        let heldStart = ContinuousClock.now
+        let heldEnd = heldStart.advanced(by: .seconds(5))
+        let heldLimit = heldStart.advanced(by: .seconds(30))
+        while ContinuousClock.now < heldEnd
+            || (ContinuousClock.now < heldLimit
+                && (transport != .waiting || sample.changedTime <= 0.5))
+        {
             sample.read(native.player, output)
             if sample.changedTime >= 0 {
                 largestClockLead = max(
@@ -969,12 +978,10 @@ extension NikonPlaybackOwnerAdoptionTests {
         await library.dispose()
     }
 
+    /// Readiness only, so the shared hang guard: 48 cached clips can take longer than 5 s to
+    /// settle on a loaded hosted runner.
     private func cachedCatalogSettled(_ predicate: () -> Bool) async throws -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !predicate(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        return predicate()
+        await HostedCondition.wait(until: predicate)
     }
 }
 
