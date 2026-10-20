@@ -6,7 +6,6 @@
 extend-exclude = [
     "vendor/**",
     "ref/**",
-    "graphify-out/**",
     "CHANGELOG.md",
     "*.lock",
     "**/*.storyboard",

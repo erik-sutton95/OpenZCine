@@ -5,14 +5,21 @@ import com.opencapture.opencine.nikon.CameraConnectionProgress
 import com.opencapture.opencine.nikon.CameraIdentity
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.opencine.nikon.FakeCameraSession
+import com.opencapture.opencine.nikon.HostProbeVerdict
+import com.opencapture.opencine.nikon.NikonBodyWake
+import com.opencapture.opencine.nikon.NikonDialer
+import com.opencapture.opencine.nikon.NikonLocalInterface
+import com.opencapture.opencine.nikon.NikonPresence
 import com.opencapture.opencine.nikon.SavedCameraRecord
 import com.opencapture.opencine.nikon.SavedCameraTransport
 import com.opencapture.openzcine.R
+import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -63,6 +70,23 @@ class PostConfirmReconnectTest {
             hosts += host
             return sessions.removeAt(0).also { opened += it }
         }
+    }
+
+    /** List discovery whose liveness dial answers from dial [answerOn] on (never, when null). */
+    private class Liveness(private val answerOn: Int?) {
+        var dials = 0
+        val discovery =
+            CameraListDiscovery(
+                object : NikonDialer {
+                    override suspend fun presence(host: String): NikonPresence? = null
+
+                    override suspend fun isAlive(host: String): Boolean = ++dials >= (answerOn ?: Int.MAX_VALUE)
+
+                    override suspend fun scanControlPort(host: String, timeoutMillis: Int): HostProbeVerdict =
+                        error("the connector never dials a control port to wake a body")
+                },
+                { listOf(NikonLocalInterface("wlan0", "192.168.1.42")) },
+            )
     }
 
     private fun environment(dials: Dials, joins: MutableList<String> = mutableListOf()) =
@@ -146,10 +170,58 @@ class PostConfirmReconnectTest {
 
         val unreachable = ScriptedSession(emptyList(), identity, FakeCameraSession(discoverable = null))
         val router = SavedCameraRecord("192.168.1.30", "ZR_3001234", SavedCameraTransport.INFRASTRUCTURE, 1_000, null)
-        val online = SavedCameraConnector(environment(Dials(mutableListOf(unreachable))), { true }, { false }, backgroundScope, copy)
+        val online =
+            SavedCameraConnector(
+                environment(Dials(mutableListOf(unreachable))), { true }, { false }, backgroundScope, copy,
+                Liveness(answerOn = 1).discovery,
+            )
         assertEquals(
             "${R.string.conn_unreachable_detail} ${router.displayTitle} ${R.string.conn_wrong_network_hint}",
             assertFailsWith<SavedCameraConnectException> { online.connect(router) }.message,
         )
+    }
+
+    /** A router setup the list does not see, after the body slept (physical run 2026-10-18). */
+    @Test
+    fun anUnseenRouterSetupThatStaysSilentNeverStartsAHandshake() = runTest {
+        val dials = Dials(mutableListOf())
+        val liveness = Liveness(answerOn = null)
+        val router = SavedCameraRecord("192.168.1.30", "ZR_3001234", SavedCameraTransport.INFRASTRUCTURE, 1_000, null)
+        val connector = SavedCameraConnector(environment(dials), { true }, { false }, backgroundScope, copy, liveness.discovery)
+
+        val failure = assertFailsWith<SavedCameraConnectException> { connector.connect(router) }
+
+        assertEquals(NikonBodyWake.silentMessage(router.displayTitle), failure.message)
+        assertEquals(NikonBodyWake.DIALS, liveness.dials)
+        assertTrue(dials.hosts.isEmpty(), "no PTP/IP Init goes to a body that never answered")
+    }
+
+    @Test
+    fun anUnseenRouterSetupThatWakesConnectsOnTheSameAttempt() = runTest {
+        val dials = Dials(mutableListOf(ScriptedSession(emptyList(), identity)))
+        val liveness = Liveness(answerOn = 3)
+        val router = SavedCameraRecord("192.168.1.30", "ZR_3001234", SavedCameraTransport.INFRASTRUCTURE, 1_000, null)
+        val connector = SavedCameraConnector(environment(dials), { true }, { false }, backgroundScope, copy, liveness.discovery)
+
+        val paired = connector.connect(router)
+
+        assertEquals("192.168.1.30", paired.savedCamera.host)
+        assertEquals(listOf("192.168.1.30"), dials.hosts)
+        assertEquals(3, liveness.dials)
+        assertTrue(currentTime >= 2 * NikonBodyWake.INTERVAL_MILLIS)
+    }
+
+    @Test
+    fun aRouterSetupTheListAlreadySeesSkipsTheWake() = runTest {
+        val dials = Dials(mutableListOf(ScriptedSession(emptyList(), identity)))
+        val liveness = Liveness(answerOn = null)
+        val router = SavedCameraRecord("192.168.1.30", "ZR_3001234", SavedCameraTransport.INFRASTRUCTURE, 1_000, null)
+        val connector = SavedCameraConnector(environment(dials), { true }, { false }, backgroundScope, copy, liveness.discovery)
+        connector.aliveHosts.value = setOf("192.168.1.30")
+
+        connector.connect(router)
+
+        assertEquals(0, liveness.dials)
+        assertEquals(listOf("192.168.1.30"), dials.hosts)
     }
 }

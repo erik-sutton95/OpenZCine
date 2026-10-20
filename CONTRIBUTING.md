@@ -38,20 +38,21 @@ committed to this repo**.
   `feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `build:`, `test:`, `refactor:`.
 - Run `just check` before pushing. For native production changes to Swift/iOS code, run
   `just native-check`.
-- Open a pull request into `main`. CI must pass and the PR template must be filled in.
+- Open a pull request into `main`. The required check **CI gate** (the fast PR tier) must pass and
+  the PR template must be filled in. The full suite runs nightly ([`docs/ci.md`](docs/ci.md)).
+  CodeRabbit reviews are advisory: address every finding, but it never blocks a merge.
 - When native iOS changes merge to `main`, CI uploads a TestFlight build automatically (maintainers
   only — see [`docs/testflight-ci.md`](docs/testflight-ci.md)).
 - When Android-relevant changes merge to `main`, CI uploads signed phone + Wear bundles to Google
   Play **internal testing** (maintainers only — see
   [`docs/android-distribution.md`](docs/android-distribution.md)). Gated by
   `PLAY_UPLOAD_ENABLED=true`.
-- Any PR that can trigger a TestFlight build must replace
+- Tester notes are replaced once per release, not in feature pull requests:
   [`ios/TestFlight/WhatToTest.en-US.txt`](ios/TestFlight/WhatToTest.en-US.txt) with concise copy for
-  non-developer camera operators. Describe visible outcomes, exclude implementation details, and
-  give concrete steps under **Please test**. CI rejects stale or developer-centric notes.
-- Any PR that can trigger a Play internal upload must refresh
+  non-developer camera operators (visible outcomes, concrete steps under **Please test**) and
   [`Apps/Android/distribution/whatsnew/whatsnew-en-US`](Apps/Android/distribution/whatsnew/whatsnew-en-US)
-  with plain-language tester notes (1–5 bullets).
+  with plain-language notes (1 to 5 bullets). Releases fail while they are stale or
+  developer-centric.
 
 ## Documentation
 

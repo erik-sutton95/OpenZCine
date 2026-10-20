@@ -276,9 +276,13 @@ struct NikonMonitorShell: View {
                 quickEnabled
                 ? picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
                 : nil
-            let common = !model.isPhotographyMode && !model.isDemoSession && model.videoSource != .relay
-                ? picker.nikonControlSetting.map { model.shell.control.captureValue($0.key, selection: .pending) } : nil
-            let label = common.map { $0.map(MonitorCapturePresentation.label) ?? "--" } ?? value.value
+            let common =
+                !model.isPhotographyMode && !model.isDemoSession && model.videoSource != .relay
+                ? picker.nikonControlSetting.map {
+                    model.shell.control.captureValue($0.key, selection: .pending)
+                } : nil
+            let label =
+                common.map { $0.map(MonitorCapturePresentation.label) ?? "--" } ?? value.value
             return Readout(
                 id: .picker(picker), title: value.label, value: label, field: field,
                 quickEnabled: quickEnabled,
@@ -293,9 +297,12 @@ struct NikonMonitorShell: View {
     private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, Section> {
         let photo = model.isPhotographyMode
         let portrait = live.viewport.height > live.viewport.width
-        let recordingFormat = model.shell.control.snapshot.map(MonitorCapturePresentation.recordingFormat)
+        let recordingFormat = model.shell.control.snapshot.map(
+            MonitorCapturePresentation.recordingFormat)
         let recordingLabel = recordingFormat.flatMap(MonitorCapturePresentation.recordingLabel)
-        let imageArea = model.recordingFormatPresentations.first { $0.token == model.cameraState.resolutionFrameRate }?.imageArea
+        let imageArea = model.recordingFormatPresentations.first {
+            $0.token == model.cameraState.resolutionFrameRate
+        }?.imageArea
         let formatLabel = nikonRecordingFormatLabel(recordingLabel, imageArea: imageArea)
         // The common session publishes the header timecode at frame precision (A5-04).
         let recording =
@@ -312,7 +319,8 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillSize : .resolution), title: "Format",
                     value: photo
                         ? model.stillSizeAreaDisplay ?? "--"
-                        : model.isDemoSession || model.videoSource == .relay ? model.cameraState.resolutionFrameRate : formatLabel ?? "--",
+                        : model.isDemoSession || model.videoSource == .relay
+                            ? model.cameraState.resolutionFrameRate : formatLabel ?? "--",
                     section: .format))
         }
         if model.chromeSectionMounts(.codec) {
@@ -321,18 +329,27 @@ struct NikonMonitorShell: View {
                     id: .picker(photo ? .stillQuality : .codec), title: "Codec",
                     value: photo
                         ? model.cameraPropertySnapshot.stillQualityCompactLabel ?? "--"
-                        : model.isDemoSession || model.videoSource == .relay ? MonitorTextFormat.codecCompactLabel(model.cameraState.codec)
-                            : recordingFormat?.codec.map(MonitorTextFormat.codecCompactLabel) ?? "--",
+                        : model.isDemoSession || model.videoSource == .relay
+                            ? MonitorTextFormat.codecCompactLabel(model.cameraState.codec)
+                            : recordingFormat?.codec.map(MonitorTextFormat.codecCompactLabel)
+                                ?? "--",
                     section: .codec))
         }
         let storage: Readout?
         if photo && model.chromeSectionMounts(.timecode) {
+            // Remaining shots read as a picture glyph and the count, which keeps the portrait
+            // header's telemetry clear of the Dynamic Island; the storage flip keeps the card.
+            let flipped = model.photoPillShowsStorage
+            let shots = flipped ? nil : model.cameraPropertySnapshot.shotsRemaining
+            let spoken = shots.map(MonitorTextFormat.shotsRemainingAccessibilityLabel)
             storage = .init(
                 id: .storage, title: "Storage",
-                value: model.photoPillShowsStorage
+                value: flipped
                     ? model.liveMediaReadout(portrait: portrait)
-                    : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
-                section: .timecode, action: { model.photoPillShowsStorage.toggle() })
+                    : shots.map(MonitorTextFormat.shotsRemainingCompactLabel) ?? "--",
+                section: .timecode, action: { model.photoPillShowsStorage.toggle() },
+                valueIcon: flipped ? nil : .image,
+                accessibilityLabel: flipped ? nil : spoken ?? "Shots remaining unknown")
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
                 id: .storage, title: "Storage", value: model.liveMediaReadout(portrait: portrait),
@@ -353,10 +370,12 @@ struct NikonMonitorShell: View {
             showsRecording: !photo && model.chromeSectionMounts(.recReadout), storage: storage,
             format: format, fps: fps ? model.liveFPS : nil,
             signalBars: fps ? model.liveSignalBars : nil, fpsSection: .fps,
-            portraitFormat: !photo && model.chromeSectionMounts(.format) ? .init(
-                id: .picker(.resolution), title: "Format",
-                value: model.isDemoSession || model.videoSource == .relay
-                    ? model.cameraState.resolutionFrameRate : recordingLabel ?? "--", section: .format) : nil,
+            portraitFormat: !photo && model.chromeSectionMounts(.format)
+                ? .init(
+                    id: .picker(.resolution), title: "Format",
+                    value: model.isDemoSession || model.videoSource == .relay
+                        ? model.cameraState.resolutionFrameRate : recordingLabel ?? "--",
+                    section: .format) : nil,
             color: color)
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
@@ -432,7 +451,8 @@ struct NikonMonitorShell: View {
             record: { record },
             // The body's exposure indicator feeds the shared EV meter in photography, the only
             // mode that offers it. The Nikon level remains a native instrument until A1-31.
-            exposure: model.isPhotographyMode ? { model.cameraPropertySnapshot.exposureMeter } : nil,
+            exposure: model.isPhotographyMode
+                ? { model.cameraPropertySnapshot.exposureMeter } : nil,
             level: nil,
             audio: {
                 model.monitorAvailability.audioMeters
@@ -549,14 +569,14 @@ struct NikonMonitorShell: View {
             },
             lookMenu: { NikonLUTPicker() }
         )
-        .overlay(alignment: .topLeading) {
+        .overlay {
             if model.activePanel == nil,
                 model.displayMode != .clean || model.gyroCapture.statusIsFailure
                     || model.gyroCapture.hasGapWarning
             {
+                // The shared badge slot keeps the pill and its touch target off the lock (ZT-06).
                 GyroMonitorStatus(coordinator: model.gyroCapture)
-                    .padding(.leading, max(16, context.feedSafeArea.leading + 12))
-                    .padding(.top, context.feedSafeArea.top + 48)
+                    .liveModuleFrame(layout.appBadge.cgRect, alignment: .leading)
             }
         }
         .overlay { MonitorRecoveryOverlay() }
@@ -607,7 +627,8 @@ private struct NikonCommandDashboard: View {
             onOpenControl: { model.showPicker($0.picker, mode: $0.mode) },
             onMoveTile: { model.moveCommandTile($0, to: $1) },
             healthTrailing: {
-                MonitorOperatorLinkGauge<LiveDesign>(fps: model.liveFPS, signalBars: model.liveSignalBars)
+                MonitorOperatorLinkGauge<LiveDesign>(
+                    fps: model.liveFPS, signalBars: model.liveSignalBars)
             }
         )
     }

@@ -20,7 +20,8 @@ import XCTest
         _ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line
     ) async {
         let reached = await HostedCondition.wait(until: condition)
-        XCTAssertTrue(reached, "Captured cleanup did not reach its manual boundary", file: file, line: line)
+        XCTAssertTrue(
+            reached, "Captured cleanup did not reach its manual boundary", file: file, line: line)
     }
     private func caching(_ caching: Bool) -> MonitorDeliveryBatchProgress {
         .init(
@@ -62,7 +63,8 @@ import XCTest
         // The order itself is the oracle: any item the player gets while the delivery still
         // caches is recorded when it is installed, however slow or fast the machine is.
         let native = try XCTUnwrap(context.native)
-        let installation = native.player.observe(\.currentItem, options: [.initial, .new]) { player, _ in
+        let installation = native.player.observe(\.currentItem, options: [.initial, .new]) {
+            player, _ in
             let installed = player.currentItem != nil
             MainActor.assumeIsolated { barrier.noteInstallation(installed) }
         }

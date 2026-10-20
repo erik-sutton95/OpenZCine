@@ -58,10 +58,6 @@ ios/xcodemake*.log
 .local/
 .codex/
 
-# ── Generated knowledge-graph output (graphify CLI) ───────────────────────────
-# Regenerated locally; never commit the ~200k-line artifacts.
-graphify-out/
-
 # ── OS / editor junk ──────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
