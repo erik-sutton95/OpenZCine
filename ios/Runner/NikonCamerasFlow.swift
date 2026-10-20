@@ -124,12 +124,10 @@ final class NativeNikonPort: NikonConnectPort {
                     finish(.failure(CancellationError()))
                     return
                 }
-                // The model holds this watch for the attempt: a model torn down mid-connect ends
-                // it, as no observed property reports a deallocation.
-                model?.nikonConnectReleaseWatch = NikonConnectReleaseWatch { [weak self] in
-                    Task { @MainActor in self?.modelReleased(during: token) }
-                }
                 if let demoOutcome {
+                    model?.nikonConnectReleaseWatch = NikonConnectReleaseWatch { [weak self] in
+                        Task { @MainActor in self?.modelReleased(during: token) }
+                    }
                     stage(demoOutcome)
                     return
                 }
@@ -142,6 +140,9 @@ final class NativeNikonPort: NikonConnectPort {
                 model.lastConnectFailureReason = nil
                 do {
                     try model.runSharedConnect(request, takingOverConfirmed: takingOverConfirmed)
+                    model.watchNikonConnectRelease { [weak self] in
+                        Task { @MainActor in self?.modelReleased(during: token) }
+                    }
                     track()
                 } catch {
                     model.connectionProgressUsesCard = false

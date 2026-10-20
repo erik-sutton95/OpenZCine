@@ -597,6 +597,80 @@ struct USBCameraTransportDetachTests {
         }
     }
 
+    /// The real saved-camera path is paused at its existing join adapter. Unlike demo staging,
+    /// this starts establishment work and catches that work retaining the model across an await.
+    @MainActor
+    @Test("Releasing the model cancels a native Nikon connect waiting for its network join")
+    func releasingTheModelEndsAPendingNativeConnect() async throws {
+        let join = PendingNativeJoin()
+        var owner: NativeAppModel? = NativeAppModel()
+        weak var released = owner
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.1", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: "NIKON_ZR_TEST"),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "NIKON_ZR_TEST"))
+        owner?.savedCameras = [setup]
+        owner?.connectedWiFiSSID = nil
+        owner?.cameraNetworkJoinPeers = .init(
+            join: { _ in try await join.wait() }, isAlive: { _ in true },
+            dial: { _ in Issue.record("a pending join must not reach a camera dial") })
+        let port = NativeNikonPort(model: try #require(owner))
+        let attempt = Task { @MainActor in
+            try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer {
+            attempt.cancel()
+            join.cancel()
+            owner?.cancelConnectionAttempt()
+        }
+        for _ in 0..<200 where !join.entered { await Task.yield() }
+        try #require(join.entered, "the native connection must reach its pending join")
+        owner = nil
+        #expect(released == nil, "native establishment retained its externally released model")
+        let watchdog = Watchdog()
+        let timer = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            watchdog.fired = true
+            attempt.cancel()
+        }
+        let result = await attempt.result
+        timer.cancel()
+        #expect(!watchdog.fired, "the native connect stayed suspended after owner release")
+        switch result {
+        case .success: Issue.record("a released native model's attempt connected")
+        case .failure(let error): #expect(error is CancellationError)
+        }
+        for _ in 0..<200 where !join.cancelled { await Task.yield() }
+        #expect(join.cancelled, "owner release must also cancel the pending native operation")
+    }
+
+    @MainActor
+    private final class PendingNativeJoin {
+        var entered = false
+        var cancelled = false
+        private var continuation: CheckedContinuation<Void, Error>?
+
+        func wait() async throws {
+            entered = true
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    self.continuation = continuation
+                    if Task.isCancelled { cancel() }
+                }
+            } onCancel: {
+                Task { @MainActor in self.cancel() }
+            }
+        }
+
+        func cancel() {
+            cancelled = true
+            let waiter = continuation
+            continuation = nil
+            waiter?.resume(throwing: CancellationError())
+        }
+    }
+
     @MainActor
     private final class Watchdog {
         var fired = false
