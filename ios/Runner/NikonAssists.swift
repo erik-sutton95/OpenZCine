@@ -47,11 +47,20 @@ extension MonitorFalseColorSelection {
 extension MonitorAssistCapabilities {
     /// What a Nikon body adds to the shared list: PLAY and the body's EV needle are stills tools,
     /// the level draws as a horizon or a gauge, and there is no ND source. The stills live view is
-    /// already display referred, so the LUT is a video tool: it leaves Photo and returns on the
-    /// flip back (ZT-01).
+    /// already display referred and carries no movie audio, so the LUT (ZT-01) and the cinema
+    /// analysis tools (ZIA-011..013) are video tools: they leave Photo and return on the flip
+    /// back. Android Z reads the same set (`nikonAssistCapabilities`).
     static let nikon = MonitorAssistCapabilities(
         photographyOnly: [.instantReview, .evMeter], levelStyles: [.horizon, .gauge],
-        unavailable: [.ndMeter], videoOnly: [.lut])
+        unavailable: [.ndMeter],
+        videoOnly: [.lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters])
+}
+
+extension MonitorAssistDefaults {
+    /// Z's own fresh and Reset values, on both platforms: 100 IRE highlight zebras and a quarter
+    /// stop of crush/clip tolerance (ZAA-227, ZAA-228). The shared 99 IRE and zero are Pocket's.
+    static let nikon = MonitorAssistDefaults(
+        zebraHighlightIRE: 100, crushClipCompensation: .quarter)
 }
 
 extension MonitorAssistTool {
@@ -77,12 +86,12 @@ extension MonitorAssistState where Looks == NikonMonitorLooks {
     static let legacyConfigurationKey = "assistConfiguration.v1"
 
     /// The app's assist state. A first launch on the shared state seeds it from the Nikon blobs;
-    /// a fresh install takes the shared defaults with the LUT off.
+    /// a fresh install takes the shared defaults (Nikon's zebra and compensation) with the LUT off.
     static func restore(storage: UserDefaults = .standard) -> NikonAssistState {
         let firstRun = storage.data(forKey: nikonKeys.assist) == nil
         let state = NikonAssistState(
             looks: NikonMonitorLooks(), storage: storage, keys: nikonKeys,
-            cleanPinCases: MonitorAssistTool.nikonCleanPinCases)
+            cleanPinCases: MonitorAssistTool.nikonCleanPinCases, defaults: .nikon)
         if firstRun { state.migrateNikonAssists(from: storage) }
         return state
     }
@@ -165,7 +174,7 @@ extension MonitorAssistState where Looks == NikonMonitorLooks {
         desqueezeFactor = desqueezeCustomFactor
     }
 
-    /// Restores one tool's shared options to the shared defaults (View Assist resets).
+    /// Restores one tool's shared options to this state's defaults (View Assist resets).
     func resetOptions(_ tool: MonitorAssistTool) {
         switch tool {
         case .falseColor:
@@ -174,12 +183,12 @@ extension MonitorAssistState where Looks == NikonMonitorLooks {
         case .zebra:
             zebraHighlight = true
             zebraMidtone = true
-            zebraHighlightIRE = LiveZebra.highlightIRE
+            zebraHighlightIRE = defaults.zebraHighlightIRE
             zebraMidtoneIRE = LiveZebra.midtoneIRE
             zebraHighlightColor = .white
             zebraMidtoneColor = .amber
         case .histogram, .trafficLights:
-            crushClipCompensation = .zero
+            crushClipCompensation = defaults.crushClipCompensation
         case .peaking:
             peakingColor = .red
             peakingSensitivity = .medium
