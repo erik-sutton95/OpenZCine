@@ -434,8 +434,11 @@ final class WiFiJoinCoordinator {
         // The shared hotspot owner already typed the refusal; its own copy replaces the
         // platform's developer text. Cancel and an unusable network name keep their own cases.
         if let refusal = error as? CameraHotspotJoinRefusal,
-            ![NEHotspotConfigurationError.userDenied.rawValue, NEHotspotConfigurationError.invalid.rawValue,
-                NEHotspotConfigurationError.invalidSSID.rawValue].contains(refusal.rawCode)
+            ![
+                NEHotspotConfigurationError.userDenied.rawValue,
+                NEHotspotConfigurationError.invalid.rawValue,
+                NEHotspotConfigurationError.invalidSSID.rawValue,
+            ].contains(refusal.rawCode)
         {
             return .refused(refusal)
         }

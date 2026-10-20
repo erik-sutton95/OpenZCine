@@ -708,14 +708,16 @@ struct RefusedCameraWiFiJoinTests {
 
     @Test("Cancel and an unusable network name keep their own cases")
     func declineAndInvalidNameKeepTheirCases() {
-        guard case .userDenied = WiFiJoinCoordinator.mapHotspotError(
-            CameraHotspotJoinRefusal(code: 7, network: "Z_6002199"))
+        guard
+            case .userDenied = WiFiJoinCoordinator.mapHotspotError(
+                CameraHotspotJoinRefusal(code: 7, network: "Z_6002199"))
         else {
             Issue.record("a declined join stays userDenied")
             return
         }
-        guard case .invalidSSID = WiFiJoinCoordinator.mapHotspotError(
-            CameraHotspotJoinRefusal(code: 1, network: ""))
+        guard
+            case .invalidSSID = WiFiJoinCoordinator.mapHotspotError(
+                CameraHotspotJoinRefusal(code: 1, network: ""))
         else {
             Issue.record("an invalid SSID stays invalidSSID")
             return
