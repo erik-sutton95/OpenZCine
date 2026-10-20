@@ -910,6 +910,7 @@ final class NativeAppModel {
     /// The watch owns the task handle, rather than the task owning this model across native waits.
     func watchNikonConnectRelease(_ onRelease: @escaping @Sendable () -> Void) {
         let task = establishmentTask
+        nikonConnectReleaseWatch?.disarm()
         nikonConnectReleaseWatch = NikonConnectReleaseWatch {
             task?.cancel()
             onRelease()

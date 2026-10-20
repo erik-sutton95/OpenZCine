@@ -647,6 +647,68 @@ struct USBCameraTransportDetachTests {
     }
 
     @MainActor
+    @Test("An overlapping Nikon connect preserves native work until its model is released")
+    func overlappingNativeConnectKeepsTheEstablishmentAlive() async throws {
+        let join = PendingNativeJoin()
+        var owner: NativeAppModel? = NativeAppModel()
+        weak var released = owner
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.246", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: "NIKON_ZR_TEST"),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "NIKON_ZR_TEST"))
+        owner?.savedCameras = [setup]
+        owner?.connectedWiFiSSID = nil
+        owner?.cameraNetworkJoinPeers = .init(
+            join: { _ in try await join.wait() }, isAlive: { _ in true },
+            dial: { _ in Issue.record("the held native join must not dial a camera") })
+        let port = NativeNikonPort(model: try #require(owner))
+        let first = Task { @MainActor in
+            try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer {
+            first.cancel()
+            join.cancel()
+            owner?.cancelConnectionAttempt()
+        }
+        for _ in 0..<200 where !join.entered { await Task.yield() }
+        try #require(join.entered, "the real native join must be pending before the overlap")
+        let generation = owner?.debugConnectionGeneration
+        var secondFinished = false
+        let second = Task { @MainActor in
+            defer { secondFinished = true }
+            return try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer { second.cancel() }
+        // The newest port waiter replaces the old waiter, while the native funnel coalesces
+        // their shared establishment. Replacing its release watch must not cancel that work.
+        await #expect(throws: CancellationError.self) { _ = try await first.value }
+        for _ in 0..<200 { await Task.yield() }
+        #expect(owner?.debugConnectionGeneration == generation)
+        #expect(owner?.debugIsEstablishingConnection == true)
+        #expect(!join.cancelled, "replacing a watch cancelled the shared native establishment")
+        #expect(!secondFinished, "the replacement waiter must keep waiting for the native join")
+
+        owner = nil
+        #expect(released == nil)
+        let watchdog = Watchdog()
+        let timer = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            watchdog.fired = true
+            second.cancel()
+        }
+        let result = await second.result
+        timer.cancel()
+        #expect(!watchdog.fired, "the replacement watch failed to cancel work on owner release")
+        switch result {
+        case .success: Issue.record("the released model's replacement waiter connected")
+        case .failure(let error): #expect(error is CancellationError)
+        }
+        for _ in 0..<200 where !join.cancelled { await Task.yield() }
+        #expect(join.cancelled, "the active replacement watch must still cancel native work")
+    }
+
+    @MainActor
     private final class PendingNativeJoin {
         var entered = false
         var cancelled = false

@@ -5,6 +5,7 @@ import OpenCineApple
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
+import os
 
 /// OpenZCine on the shared connection flow (SHELL-02): the saved-camera document with this app's
 /// own records mirrored, and the `NikonConnectPort` over the app's discovery loop and connect
@@ -253,15 +254,19 @@ final class NativeNikonPort: NikonConnectPort {
     }
 }
 
-/// Runs `onRelease` when its holder lets it go. `NativeAppModel` holds one for the Nikon port's
-/// connect in flight, so a model torn down mid-connect ends the attempt instead of leaving it
-/// suspended. Replacing it with the next attempt's watch fires it too; the port ignores a stale one.
+/// Ends a pending Nikon connect when its model releases the active watch.
+/// Disarm a superseded watch before replacement so shared native work keeps running.
 final class NikonConnectReleaseWatch: Sendable {
-    private let onRelease: @Sendable () -> Void
+    private let onRelease: OSAllocatedUnfairLock<(@Sendable () -> Void)?>
 
-    init(_ onRelease: @escaping @Sendable () -> Void) { self.onRelease = onRelease }
+    init(_ onRelease: @escaping @Sendable () -> Void) {
+        self.onRelease = .init(initialState: onRelease)
+    }
 
-    deinit { onRelease() }
+    /// Retires this watch without cancelling work owned by its replacement.
+    func disarm() { onRelease.withLock { $0 = nil } }
+
+    deinit { onRelease.withLock { $0 }?() }
 }
 
 /// Host setup capabilities, live reachability and actions for the shared typed chooser.
