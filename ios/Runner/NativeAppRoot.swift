@@ -5214,15 +5214,41 @@ final class NativeAppModel {
             stillsCardShots: snapshot.stillsCardShots)
     }
 
+    /// The readings a property reset leaves standing until a re-read replaces them.
+    static func heldPropertySnapshot(
+        _ snapshot: PTPCameraPropertySnapshot, keepingCaptureMode: Bool, keepingReadings: Bool
+    ) -> PTPCameraPropertySnapshot {
+        keepingReadings ? snapshot : heldCaptureMode(snapshot, keeping: keepingCaptureMode)
+    }
+
+    /// The display and reported snapshots a property reset leaves standing.
+    static func heldPropertySnapshots(
+        display: PTPCameraPropertySnapshot, reported: PTPCameraPropertySnapshot,
+        keepingCaptureMode: Bool, keepingReadings: Bool
+    ) -> (display: PTPCameraPropertySnapshot, reported: PTPCameraPropertySnapshot) {
+        let reported = heldPropertySnapshot(
+            reported, keepingCaptureMode: keepingCaptureMode, keepingReadings: keepingReadings)
+        // The reset drops writes that were queued but never sent, so a kept display falls back to
+        // what the camera confirmed instead of a picker's optimistic value.
+        guard !keepingReadings else { return (reported, reported) }
+        return (heldCaptureMode(display, keeping: keepingCaptureMode), reported)
+    }
+
     /// `keepingCaptureMode` is a restart or same-host recovery: the held body stays in stills or
     /// video (and keeps its shot count) until a re-read replaces them, so its chrome never falls
     /// back to the other mode meanwhile.
-    private func resetCameraPropertyState(keepingCaptureMode: Bool = false) {
-        cameraPropertySnapshot = Self.heldCaptureMode(
-            cameraPropertySnapshot, keeping: keepingCaptureMode)
-        reportedPropertySnapshot = Self.heldCaptureMode(
-            reportedPropertySnapshot, keeping: keepingCaptureMode)
-        stabilizationFileTypeReadback = nil
+    ///
+    /// `keepingReadings` is a warm restart that skips the property burst (a Quality Bias change, a
+    /// picture-source switch). Nothing re-reads the body then except the slow round-robin, so
+    /// clearing the readings left the readouts at "--" and dropped the timecode's frame field
+    /// (its precision comes from the reported frame rate) for a whole poll cycle.
+    private func resetCameraPropertyState(
+        keepingCaptureMode: Bool = false, keepingReadings: Bool = false
+    ) {
+        (cameraPropertySnapshot, reportedPropertySnapshot) = Self.heldPropertySnapshots(
+            display: cameraPropertySnapshot, reported: reportedPropertySnapshot,
+            keepingCaptureMode: keepingCaptureMode, keepingReadings: keepingReadings)
+        if !keepingReadings { stabilizationFileTypeReadback = nil }
         propertyPollIndex = 0
         cameraAnnouncedPropertyChanges.removeAll()
         lastRecordingPropertyPollAt = nil
@@ -7253,7 +7279,10 @@ final class NativeAppModel {
         let incident = feedIncidentProducer?.beginPreview()
         let retiredDecodeSource = frameDecoder.retireSource()
         Task { await frameDecoder.resetProcessors(source: retiredDecodeSource) }
-        if videoSource == .cameraLiveView { resetCameraPropertyState(keepingCaptureMode: true) }
+        if videoSource == .cameraLiveView {
+            resetCameraPropertyState(
+                keepingCaptureMode: true, keepingReadings: skipPropertyBootstrap)
+        }
         var frameRate = FrameRateSampler()
         monitorRuntime?.startPreview(
             bootstrap: { [weak self] in
