@@ -736,6 +736,10 @@ final class RunnerTests: XCTestCase {
                 element.accessibilityCustomActions?.first { $0.name == "Options" })
             let handler = try XCTUnwrap(action.actionHandler)
             XCTAssertTrue(handler(action))
+            // The Options action can land after a main-actor hop on a loaded hosted runner.
+            _ = await HostedCondition.wait {
+                model.assist.configureTool == MonitorAssistTool.lut.selection
+            }
             XCTAssertEqual(model.assist.configureTool, MonitorAssistTool.lut.selection)
         }
         func settledImage() async throws -> CGImage {
