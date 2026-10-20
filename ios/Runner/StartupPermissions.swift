@@ -52,7 +52,7 @@ final class LocalNetworkAccess {
         browseType: "_ozcprobe._tcp", resultsGrant: true,
         beacon: .init(name: "OpenZCine", port: 61735), promptTrigger: "_ptp._tcp.")
 
-    private static let acknowledgedKey = "StartupPermissions.localNetworkAcknowledged"
+    private nonisolated static let acknowledgedKey = "StartupPermissions.localNetworkAcknowledged"
 
     /// The latest evidence; `requested` while a probe has no answer yet.
     private(set) var state: CameraNetworkPermissionState = .unknown
@@ -63,6 +63,13 @@ final class LocalNetworkAccess {
 
     /// What diagnostics report: the last answer, else the current evidence.
     var reported: CameraNetworkPermissionState { answer ?? state }
+
+    /// A grant remembered from this or an earlier launch, readable off the main actor. Debug
+    /// diagnostics that browse the LAN wait for it, so they never raise the system prompt
+    /// themselves.
+    nonisolated static func grantRemembered(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: acknowledgedKey)
+    }
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let record: (AppDiagnosticEvent) -> Void

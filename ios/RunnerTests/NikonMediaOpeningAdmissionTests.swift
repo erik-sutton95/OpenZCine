@@ -2,6 +2,7 @@ import Foundation
 import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -31,6 +32,10 @@ import XCTest
         _ = try await fixture.element("monitor.photo.back")
         let members = fixture.model.burstMembers(of: record.payload)
         XCTAssertEqual(members.count, 3, "The actual series cover must retain all frames")
+        // Frame identity, not the whole record: EXIF orientation can arrive after the cover opens.
+        func frames(_ clips: [MediaClip]) -> [String] {
+            clips.map { $0.cameraID + "/" + $0.filename }
+        }
         for (completed, total, selected, title, detail) in [
             (0, 1, 1, "Deleting 1 item…", "0 of 1"),
             (2, 3, 3, "Deleting 3 items…", "2 of 3"),
@@ -50,7 +55,7 @@ import XCTest
             fixture.capture(
                 self, name: "SIMULATED-Z-burst-progress-\(completed)-\(total)-\(selected)")
             XCTAssertTrue(fixture.model.mediaLibrary === fixture.library)
-            XCTAssertEqual(fixture.model.burstMembers(of: record.payload), members)
+            XCTAssertEqual(frames(fixture.model.burstMembers(of: record.payload)), frames(members))
             for member in members {
                 XCTAssertTrue(
                     fixture.model.mediaClipStore.isDownloaded(
@@ -107,33 +112,24 @@ import XCTest
     private weak var previous: UIWindow?
 
     init(photo: Bool, burst: Bool = false) async throws {
-        let active = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                MainActor.assumeIsolated {
-                    UIApplication.shared.connectedScenes.contains {
-                        $0.activationState == .foregroundActive
-                    }
-                }
-            }, object: nil)
-        let activated = await XCTWaiter.fulfillment(of: [active], timeout: 5)
-        XCTAssertEqual(activated, .completed, "The actual app host must have a foreground scene")
+        // Readiness waits here use the shared hang guard (`HostedCondition`), polled.
+        let activated = await HostedCondition.wait {
+            UIApplication.shared.connectedScenes.contains {
+                $0.activationState == .foregroundActive
+            }
+        }
+        XCTAssertTrue(activated, "The actual app host must have a foreground scene")
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
                 .first { $0.activationState == .foregroundActive })
         if burst {
             scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
-            let landscape = XCTNSPredicateExpectation(
-                predicate: NSPredicate { _, _ in
-                    MainActor.assumeIsolated {
-                        scene.interfaceOrientation.isLandscape
-                            && scene.coordinateSpace.bounds.width
-                                > scene.coordinateSpace.bounds.height
-                    }
-                }, object: nil)
-            let rotated = await XCTWaiter.fulfillment(of: [landscape], timeout: 5)
-            XCTAssertEqual(
-                rotated, .completed, "The actual burst cover is verified in landscape first")
+            let rotated = await HostedCondition.wait {
+                scene.interfaceOrientation.isLandscape
+                    && scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
+            }
+            XCTAssertTrue(rotated, "The actual burst cover is verified in landscape first")
         }
         let store = MediaClipStore(root: root)
         let model = NativeAppModel(mediaClipStore: store)
@@ -183,15 +179,14 @@ import XCTest
         host.view.frame = window.bounds
     }
 
-    func wait(_ condition: @escaping () -> Bool) async -> Bool {
-        let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate { [self] _, _ in
-                MainActor.assumeIsolated {
-                    host.view.layoutIfNeeded()
-                    return condition()
-                }
-            }, object: nil)
-        return await XCTWaiter.fulfillment(of: [ready], timeout: 5) == .completed
+    /// Readiness: the shared hang guard (`HostedCondition`), polled with a layout pass each time.
+    /// A 5 s predicate expectation samples about once a second and timed out on loaded hosted
+    /// runners (OpenCine #18).
+    func wait(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
+        await HostedCondition.wait {
+            host.view.layoutIfNeeded()
+            return condition()
+        }
     }
     func element(_ id: String) async throws -> NSObject {
         let found = await wait {

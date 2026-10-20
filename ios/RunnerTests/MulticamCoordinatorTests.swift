@@ -2,6 +2,7 @@ import MonitorUI
 import OpenCineAppKit
 import OpenCineCore
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import OpenCineMulticam
 import SwiftUI
 import UIKit
@@ -55,15 +56,8 @@ final class MulticamCoordinatorTests: XCTestCase {
             return root.children.lazy.compactMap(stageController).first
         }
         func settle(_ predicate: @escaping @MainActor () -> Bool) async {
-            let expected = XCTNSPredicateExpectation(
-                predicate: NSPredicate { _, _ in
-                    MainActor.assumeIsolated {
-                        host.view.layoutIfNeeded()
-                        return predicate()
-                    }
-                }, object: nil)
-            let result = await XCTWaiter.fulfillment(of: [expected], timeout: 5)
-            XCTAssertEqual(result, .completed)
+            let settled = await hostedStageSettled(host.view, predicate)
+            XCTAssertTrue(settled)
         }
         await settle { stageController(host) != nil }
         let original = try XCTUnwrap(stageController(host))
@@ -121,15 +115,8 @@ final class MulticamCoordinatorTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
         func settle(_ description: String, _ predicate: @escaping @MainActor () -> Bool) async {
-            let expected = XCTNSPredicateExpectation(
-                predicate: NSPredicate { _, _ in
-                    MainActor.assumeIsolated {
-                        host.view.layoutIfNeeded()
-                        return predicate()
-                    }
-                }, object: nil)
-            let result = await XCTWaiter.fulfillment(of: [expected], timeout: 5)
-            XCTAssertEqual(result, .completed, description)
+            let settled = await hostedStageSettled(host.view, predicate)
+            XCTAssertTrue(settled, description)
         }
         func stageController(_ root: UIViewController) -> MultiviewStageController? {
             if let stage = root as? MultiviewStageController { return stage }
@@ -235,15 +222,8 @@ final class MulticamCoordinatorTests: XCTestCase {
             }
         }
         func settle(_ message: String, _ predicate: @escaping @MainActor () -> Bool) async {
-            let expected = XCTNSPredicateExpectation(
-                predicate: NSPredicate { _, _ in
-                    MainActor.assumeIsolated {
-                        host.view.layoutIfNeeded()
-                        return predicate()
-                    }
-                }, object: nil)
-            let result = await XCTWaiter.fulfillment(of: [expected], timeout: 5)
-            XCTAssertEqual(result, .completed, message)
+            let settled = await hostedStageSettled(host.view, predicate)
+            XCTAssertTrue(settled, message)
         }
         await settle("Actual stage mounts") { element("multiview.recordAll") != nil }
         await settle("A live member with advertised controls offers CAMERA") {
@@ -309,13 +289,11 @@ final class MulticamCoordinatorTests: XCTestCase {
             lastSeenAt: nil, serialNumber: serial, path: path)
     }
 
-    private func waitUntil(
-        _ what: String, timeout: TimeInterval = 3, _ condition: () -> Bool
-    ) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { return XCTFail("timed out waiting for \(what)") }
-            try await Task.sleep(for: .milliseconds(20))
+    /// Readiness only: the shared hang guard (`HostedCondition`) instead of a short fixed window,
+    /// which a loaded hosted runner overran.
+    private func waitUntil(_ what: String, _ condition: @MainActor () -> Bool) async throws {
+        if !(await HostedCondition.wait(until: condition)) {
+            XCTFail("timed out waiting for \(what)")
         }
     }
 
@@ -497,4 +475,20 @@ final class MulticamCoordinatorTests: XCTestCase {
         for link in links.values { XCTAssertFalse(link.received.contains("stop")) }
         XCTAssertEqual(links["h0"]?.isRecording, true)
     }
+}
+
+/// Lays out the hosted stage and polls every 50 ms within the 5 s budget. A predicate
+/// expectation reads about once a second and captures the hierarchy after each miss, which spent
+/// the budget on hosted runners with the stage already mounted (OpenCine #18 replaced it in
+/// ReadyTap for the same reason).
+@MainActor
+private func hostedStageSettled(_ view: UIView, _ predicate: @MainActor () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    repeat {
+        view.layoutIfNeeded()
+        if predicate() { return true }
+        try? await Task.sleep(for: .milliseconds(50))
+    } while ContinuousClock.now < deadline
+    view.layoutIfNeeded()
+    return predicate()
 }

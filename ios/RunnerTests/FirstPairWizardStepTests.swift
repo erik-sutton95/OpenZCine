@@ -52,6 +52,38 @@ struct FirstPairWizardStepTests {
         #expect(shown(true, nil, false) == .allowed)
     }
 
+    @Test("SIMULATED: the wizard browses nothing before a path is chosen (Z3-05)")
+    @MainActor
+    func wizardEntryStartsNoLocalNetworkBrowse() {
+        // Any Bonjour browse raises the system Local Network prompt. On device the wizard's
+        // entry browse put that prompt over step 1 of a fresh install, before any transport
+        // choice; the prompt belongs to the permissions step's Local Network row.
+        let model = NativeAppModel()
+        model.startFirstPairWizard()
+        #expect(model.firstPairWizardStep == .chooseTransport)
+        #expect(!model.isRelayBrowsing)
+        model.prepareStartup()
+        #expect(!model.isRelayBrowsing)
+
+        // Watching stays one deliberate tap away: the shared browse starts the relay browse.
+        model.openWatcherBrowse()
+        #expect(model.isRelayBrowsing)
+        model.stopRelayBrowsing()
+        #expect(!model.isRelayBrowsing)
+    }
+
+    @Test("SIMULATED: the debug log tap waits for a remembered Local Network grant")
+    @MainActor
+    func logTapWaitsForLocalNetworkGrant() throws {
+        let suite = "w3.log-tap.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        #expect(!LocalNetworkAccess.grantRemembered(defaults: defaults))
+        let access = LocalNetworkAccess(defaults: defaults, record: { _ in })
+        access.note(.operationSucceeded, source: "camera link connected")
+        #expect(LocalNetworkAccess.grantRemembered(defaults: defaults))
+    }
+
     @Test("SIMULATED: the wizard step reads the app's one Local Network owner (Z8)")
     @MainActor
     func wizardReadsTheAppLocalNetworkOwner() throws {

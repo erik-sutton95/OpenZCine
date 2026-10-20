@@ -432,7 +432,9 @@ private struct MediaClipThumbnail: View {
                 return present(image)
             }
         }
-        guard isCurrent(), !Task.isCancelled, isDownloaded, !isPhoto, let localURL else { return nil }
+        guard isCurrent(), !Task.isCancelled, isDownloaded, !isPhoto, let localURL else {
+            return nil
+        }
         let asset = AVURLAsset(url: localURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -447,10 +449,12 @@ private struct MediaClipThumbnail: View {
 
     private func loadDuration() async {
         guard isCurrent(), !Task.isCancelled, !isPhoto, needsDuration, isDownloaded,
-            let localURL else { return }
+            let localURL
+        else { return }
         let asset = AVURLAsset(url: localURL)
         if let duration = try? await asset.load(.duration), isCurrent(), !Task.isCancelled,
-            duration.isValid, duration.seconds > 0 {
+            duration.isValid, duration.seconds > 0
+        {
             onDuration(MediaClipFormatting.durationLabel(seconds: Int(duration.seconds)))
         }
     }

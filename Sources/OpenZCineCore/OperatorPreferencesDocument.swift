@@ -12,7 +12,8 @@ public struct OperatorPreferencesDocument: Sendable {
         (try? JSONDecoder().decode(OperatorPreferences.self, from: data)) ?? .defaults
     }
 
-    public func updating(_ next: OperatorPreferences, previous: OperatorPreferences) throws -> Data {
+    public func updating(_ next: OperatorPreferences, previous: OperatorPreferences) throws -> Data
+    {
         guard next != previous else { return data }
         guard let original = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw UpdateError.malformedDocument
@@ -27,7 +28,8 @@ public struct OperatorPreferencesDocument: Sendable {
             desired[key] = value
         }
         return try JSONSerialization.data(
-            withJSONObject: Self.retainingInheritedChoices(in: merged, desired: desired), options: [.sortedKeys])
+            withJSONObject: Self.retainingInheritedChoices(in: merged, desired: desired),
+            options: [.sortedKeys])
     }
 
     private enum UpdateError: Error {
@@ -43,7 +45,9 @@ public struct OperatorPreferencesDocument: Sendable {
     }
 
     private static func equal(_ first: Any?, _ second: Any?, key: String) -> Bool {
-        if key == "enabledDispModes", let first = first as? [String], let second = second as? [String] {
+        if key == "enabledDispModes", let first = first as? [String],
+            let second = second as? [String]
+        {
             return Set(first) == Set(second)
         }
         return NSDictionary(dictionary: ["value": first ?? NSNull()])
@@ -59,7 +63,8 @@ public struct OperatorPreferencesDocument: Sendable {
         for _ in 0..<4 {
             let data = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
             let reloaded = try object(JSONDecoder().decode(OperatorPreferences.self, from: data))
-            let next = preservingInheritedChoices(in: document, reloaded: reloaded, desired: desired)
+            let next = preservingInheritedChoices(
+                in: document, reloaded: reloaded, desired: desired)
             if NSDictionary(dictionary: next).isEqual(to: document) { break }
             document = next
         }
@@ -77,8 +82,10 @@ public struct OperatorPreferencesDocument: Sendable {
             // their unknown raw members.
             let stored = original[key]
             if let raw = stored as? [String: Any], let current = reloaded[key] as? [String: Any],
-                let target = value as? [String: Any] {
-                result[key] = preservingInheritedChoices(in: raw, reloaded: current, desired: target)
+                let target = value as? [String: Any]
+            {
+                result[key] = preservingInheritedChoices(
+                    in: raw, reloaded: current, desired: target)
             } else if stored == nil || stored is NSNull || !(value is [Any]) || !(stored is [Any]) {
                 result[key] = value
             }
@@ -86,13 +93,17 @@ public struct OperatorPreferencesDocument: Sendable {
         return result
     }
 
-    private static func merge(original: [String: Any], previous: [String: Any], next: [String: Any]) -> [String: Any] {
+    private static func merge(original: [String: Any], previous: [String: Any], next: [String: Any])
+        -> [String: Any]
+    {
         var result = original
         for (key, value) in next where !equal(previous[key], value, key: key) {
             if let before = previous[key] as? [String: Any], let after = value as? [String: Any] {
-                result[key] = merge(original: original[key] as? [String: Any] ?? [:], previous: before, next: after)
+                result[key] = merge(
+                    original: original[key] as? [String: Any] ?? [:], previous: before, next: after)
             } else if let before = previous[key] as? [String], let after = value as? [String],
-                let raw = original[key] as? [String] {
+                let raw = original[key] as? [String]
+            {
                 // Unknown and retired raw values stay in place beside edited known values.
                 let known = Set(before)
                 var remaining = after.makeIterator()

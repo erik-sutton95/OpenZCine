@@ -26,7 +26,9 @@ import Testing
 
     @Test func independentlySeedsValidLegacyFieldsAndKeepsExistingDestinations() throws {
         try withStorage { storage in
-            let data = Data(#"{"keepScreenAwake":false,"recordConfirmationEnabled":false,"hapticsEnabled":false,"futureChoice":{"mode":"unknown"}}"#.utf8)
+            let data = Data(
+                #"{"keepScreenAwake":false,"recordConfirmationEnabled":false,"hapticsEnabled":false,"futureChoice":{"mode":"unknown"}}"#
+                    .utf8)
             storage.set(data, forKey: legacy)
             storage.set(true, forKey: record)
             let loaded = PreferencesStore.loadPreferences(storage: storage)
@@ -47,7 +49,10 @@ import Testing
 
     @Test func malformedKnownValuesDoNotPreventOtherFieldsOrOverwriteExplicitFalse() throws {
         try withStorage { storage in
-            storage.set(Data(#"{"keepScreenAwake":1,"hapticsEnabled":false,"recordConfirmationEnabled":"future","recordHoldEnabled":false}"#.utf8), forKey: legacy)
+            storage.set(
+                Data(
+                    #"{"keepScreenAwake":1,"hapticsEnabled":false,"recordConfirmationEnabled":"future","recordHoldEnabled":false}"#
+                        .utf8), forKey: legacy)
             storage.set(false, forKey: awake)
             let loaded = PreferencesStore.loadPreferences(storage: storage)
             #expect(!loaded.keepScreenAwake)
@@ -64,7 +69,9 @@ import Testing
 
     @Test func commonOnlyEditsPersistSharedKeysWithoutChangingTheLegacyBytes() throws {
         try withStorage { storage in
-            let data = Data(#"{ "keepScreenAwake": false, "hapticsEnabled": false, "streamPreset": "future-stream", "future": [1,2,3] }"#.utf8)
+            let data = Data(
+                #"{ "keepScreenAwake": false, "hapticsEnabled": false, "streamPreset": "future-stream", "future": [1,2,3] }"#
+                    .utf8)
             storage.set(data, forKey: legacy)
             let before = PreferencesStore.loadPreferences(storage: storage)
             var next = before
@@ -82,7 +89,9 @@ import Testing
 
     @Test func nikonEditsRetainUnknownLegacyFieldsAndExistingCommonOwnership() throws {
         try withStorage { storage in
-            let data = Data(#"{"keepScreenAwake":false,"streamPreset":"future-stream","scopeActivationOrder":["PLAY","FUTURE","MAG"],"displayChrome":{"futureStyle":{"gain":7},"statusBarVisible":false},"future":[1,2,3]}"#.utf8)
+            let data = Data(
+                #"{"keepScreenAwake":false,"streamPreset":"future-stream","scopeActivationOrder":["PLAY","FUTURE","MAG"],"displayChrome":{"futureStyle":{"gain":7},"statusBarVisible":false},"future":[1,2,3]}"#
+                    .utf8)
             storage.set(data, forKey: legacy)
             storage.set(true, forKey: awake)
             let before = PreferencesStore.loadPreferences(storage: storage)

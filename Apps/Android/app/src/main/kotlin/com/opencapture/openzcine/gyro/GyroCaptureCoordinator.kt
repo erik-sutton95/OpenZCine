@@ -20,7 +20,6 @@ import com.opencapture.opencine.nikon.metadataOnly
 import com.opencapture.openzcine.bridge.SwiftCore
 import com.opencapture.monitorui.MonitorTiltVector
 import com.opencapture.monitorui.MonitorDeviceTiltMath
-import com.opencapture.openzcine.prefersPhotographyChrome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +50,14 @@ internal data class GyroCaptureState(
 )
 
 private val gyroCaptureDispatcher = Dispatchers.IO.limitedParallelism(1)
+
+/**
+ * Gyro logs movie takes only, so the body must positively report the video selector. An unread
+ * or unreported selector waits like photo mode instead of arming (ZT-06); each property update
+ * re-evaluates it. iOS twin: `GyroCaptureCoordinator.selectorArms`.
+ */
+internal fun gyroSelectorArms(captureSelector: String?): Boolean =
+    captureSelector.equals("video", ignoreCase = true)
 
 /** Keeps replacement recovery behind prior activity writes without sharing cancellation. */
 internal fun gyroCaptureScope(): CoroutineScope =
@@ -255,7 +262,7 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
     private fun calibrationEligible(): Boolean = foreground && calibrationSourceAvailable &&
         session is SwiftCoreCameraSession && session?.state?.value is CameraSessionState.Connected &&
         session?.reportedRecording?.value == false &&
-        session?.cameraProperties?.value?.let { !prefersPhotographyChrome(it) } == true
+        gyroSelectorArms(session?.cameraProperties?.value?.captureSelector)
 
     private fun calibrationSensorListener(generation: Long, accelerometer: Boolean): SensorEventListener =
         object : SensorEventListener {
@@ -321,7 +328,7 @@ internal class GyroCaptureCoordinator(context: Context, private val native: Gyro
     private fun reconcile(reason: String) {
         val eligible = mutableState.value.enabled && foreground &&
             session?.state?.value is CameraSessionState.Connected &&
-            session?.cameraProperties?.value?.let { !prefersPhotographyChrome(it) } == true
+            gyroSelectorArms(session?.cameraProperties?.value?.captureSelector)
         if (!eligible) {
             stop(reason)
             mutableState.value = mutableState.value.copy(status = when {
