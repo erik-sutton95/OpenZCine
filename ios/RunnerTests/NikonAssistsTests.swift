@@ -564,11 +564,12 @@ final class NikonAssistsTests: XCTestCase {
             forKey: NikonAssistState.legacyConfigurationKey)
         let state = relaunch()
         XCTAssertTrue(state.liveTools.isEmpty)
-        XCTAssertEqual(state.zebraHighlightIRE, LiveZebra.highlightIRE)
+        // Unreadable values fall back to Z's own defaults (ZAA-227, ZAA-228), as on Android.
+        XCTAssertEqual(state.zebraHighlightIRE, 100)
         XCTAssertEqual(state.zebraHighlightColor, .white)
         XCTAssertEqual(state.falseColorScale, .sceneStops)
         XCTAssertEqual(state.desqueezeFactor, 1.33)
-        XCTAssertEqual(state.crushClipCompensation, .zero)
+        XCTAssertEqual(state.crushClipCompensation, .quarter)
     }
 
     // MARK: - Crush / clip from every era of the Nikon blob
