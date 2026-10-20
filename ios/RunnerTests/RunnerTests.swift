@@ -3155,6 +3155,19 @@ extension RunnerTests {
         XCTAssertEqual(model.activeCodecMode?.raw, 0x0001_0A00)
     }
 
+    /// ZIA-148: the DISP 3 Tone tile reads the codec's real tone (baseline "N-Log"), not a dash.
+    @MainActor
+    func testCommandToneTileReadsTheActiveCodecTone() {
+        let model = NativeAppModel()
+        model.cameraFileTypeModes = PTPCameraPropertyDecoders.fileTypeModes(fromEnum: [0x0002_0C02])
+        model.cameraMovieTones[.movieNRawToneMode] = [.nLog]
+        model.applyDemoProperty(
+            .movieFileType, data: PTPCameraPropertyWrite.fileType(raw: 0x0002_0C02).data)
+        model.applyDemoProperty(.movieNRawToneMode, data: Data([1]))
+        XCTAssertEqual(model.movieToneReadout, "N-Log")
+        XCTAssertEqual(model.commandToneLabel, "N-Log")
+    }
+
     /// A depth the body is on but does not advertise for the codec being selected must not be
     /// carried across — the row falls back to that family's lowest advertised depth instead of
     /// writing a combination the body never offered.
@@ -3696,6 +3709,88 @@ struct NikonExposureProvenanceTests {
         model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
         #expect(model.nikonControlFacts.apertureLabels.isEmpty)
         #expect(model.advertisedExposureOptions.isEmpty)
+    }
+
+    @Test("The camera mode read at connect declares DISP 3, not only a later photo/video flip")
+    func connectSelectorDeclaresDisplayModes() {
+        // ZIA-004: baseline computed the DISP cycle from the mode; a connect in video offered
+        // command, a connect in photo did not.
+        let model = NativeAppModel()
+        model.isDemoSession = true
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        #expect(model.operatorSession.modes == [.live, .clean, .command])
+        let reconnect = NativeAppModel()
+        reconnect.isDemoSession = true
+        reconnect.operatorSession.declare(modes: [.live, .clean, .command])
+        reconnect.applyBootstrapObservation(.property(.liveViewSelector, Data([0])))
+        #expect(reconnect.operatorSession.modes == [.live, .clean])
+    }
+
+    @Test("Camera-owned strip values read dimmed; a locked shutter carries the padlock and hold")
+    func cameraOwnedReadoutCues() throws {
+        // ZIA-031 / ZAA-141 / ZAA-113: baseline dimmed program-owned stills tiles (no drum),
+        // drew the lock glyph and toggled MovieTVLock on a SHUTTER hold.
+        let model = NativeAppModel()
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([0])))
+        let aperturePriority = try #require(PTPCameraPropertyDecoders.exposureProgramCode(for: "A"))
+        model.applyBootstrapObservation(
+            .property(.exposureProgramMode, Data(ByteCoding.uint16LE(aperturePriority))))
+        #expect(model.readoutCue(for: .stillShutter).dimmed)
+        #expect(!model.readoutCue(for: .stillIris).dimmed)
+        model.showPicker(.stillShutter)
+        #expect(model.activePanel == nil)
+        model.lockedControls = [.shutter]
+        let locked = model.readoutCue(for: .shutter)
+        #expect(locked.dimmed && locked.badge == .lock && locked.holdsShutterLock)
+        model.lockedControls = []
+        #expect(model.readoutCue(for: .shutter).holdsShutterLock)
+        #expect(model.readoutCue(for: .shutter).badge == nil)
+    }
+
+    @Test("A camera-locked strip value opens no quick drum")
+    func lockedReadoutHasNoQuickDrum() {
+        // CodeRabbit #462: the R3D NE ISO lock while recording dims ISO; a press must not open it.
+        let model = NativeAppModel()
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        model.cameraState = model.cameraState.updating(codec: "R3D NE")
+        #expect(model.readoutQuickEnabled(for: .iso))
+        model.isRecording = true
+        #expect(model.readoutCue(for: .iso).dimmed)
+        #expect(!model.readoutQuickEnabled(for: .iso))
+    }
+
+    @Test("Movie Auto ISO shows the working ISO on the strip, not Auto")
+    func autoISOReadoutShowsWorkingISO() {
+        // ZIA-112 / ZAA-142: baseline strip read "A1250" while movie Auto ISO was on.
+        let model = NativeAppModel()
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        model.applyBootstrapObservation(.property(.movieISOAutoControl, Data([1])))
+        #expect(model.commonReadoutLabel(.iso(.auto)) == "Auto")
+        model.applyBootstrapObservation(
+            .property(.isoControlSensitivity, Data(ByteCoding.uint32LE(1250))))
+        #expect(model.commonReadoutLabel(.iso(.auto)) == "A1250")
+        #expect(model.commonReadoutLabel(.iso(.manual(800))) == "800")
+    }
+
+    @Test("A body without MovieShutterMode keeps movie SHUTTER readable and writable")
+    func unknownShutterModeStaysWritable() throws {
+        // Z6III-class bodies never report MovieShutterMode; baseline wrote by label shape.
+        let model = NativeAppModel()
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        model.applyBootstrapObservation(
+            .property(
+                .movieShutterSpeed,
+                try #require(PTPCameraPropertyWrite.request(control: .shutter, label: "1/50")).data
+            ))
+        let ladder = try #require(
+            NikonCameraSession.descriptors(model.nikonControlFacts).first { $0.key == .shutter })
+        #expect(ladder.availability == .available)
+        #expect(ladder.accepts(.shutter(.duration(Rational(1, 100)))))
+        #expect(
+            NikonExposureSettings.reported(model.nikonControlFacts.reported)[.shutter]
+                == .shutter(.duration(Rational(1, 50))))
+        model.applyBootstrapObservation(.options(.movieShutterSpeed, ["1/50", "1/100"]))
+        #expect(model.nikonControlFacts.shutterLabels == ["1/50", "1/100"])
     }
 }
 

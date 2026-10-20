@@ -266,12 +266,10 @@ struct NikonMonitorShell: View {
                 let picker = CameraPicker.forValueLabel(
                     value.label, photography: model.isPhotographyMode)
             else { return nil }
-            // A held shutter adjusts its reported circuit. Lock controls stay in the full sheet.
-            let quickEnabled =
-                picker != .shutter
-                || (model.cameraPropertySnapshot.shutterLocked == false
-                    && model.cameraPropertySnapshot.shutterMode != nil
-                    && !model.lockedControls.contains(.shutter))
+            // A held shutter adjusts its reported circuit; where it cannot, the hold toggles the
+            // camera lock (baseline). A program-owned stills value has nothing to adjust.
+            let cue = model.readoutCue(for: picker)
+            let quickEnabled = model.readoutQuickEnabled(for: picker)
             let field =
                 quickEnabled
                 ? picker.nikonControlSetting.flatMap { model.shell.control.captureField($0.key) }
@@ -282,12 +280,15 @@ struct NikonMonitorShell: View {
                     model.shell.control.captureValue($0.key, selection: .pending)
                 } : nil
             let label =
-                common.map { $0.map(MonitorCapturePresentation.label) ?? "--" } ?? value.value
+                common.map { $0.map(model.commonReadoutLabel) ?? "--" } ?? value.value
             return Readout(
                 id: .picker(picker), title: value.label, value: label, field: field,
-                quickEnabled: quickEnabled,
+                badgeIcon: cue.badge, quickEnabled: quickEnabled,
                 accessibilityIdentifier: "monitor.capture."
-                    + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue))
+                    + (picker.nikonControlSetting.map(\.key.rawValue) ?? picker.rawValue),
+                dimmed: cue.dimmed,
+                holdAction: cue.holdsShutterLock && model.videoSource != .relay
+                    ? { model.toggleShutterLockOnCamera() } : nil)
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
@@ -751,7 +752,10 @@ func nikonCameraStatusNotice(
             title: "Reconnecting to camera…",
             detail: "Returning from the internet hop and looking for the camera network.",
             progress: true)
-    case .pairing, .reconnecting, .preparingLiveView:
+    case .preparingLiveView:
+        // The post-connect property read holds live view back (baseline and Android wording).
+        return MonitorOperatorPictureNotice(title: "Reading camera settings…", progress: true)
+    case .pairing, .reconnecting:
         return MonitorOperatorPictureNotice(
             title: "Connecting…", detail: "Searching for the camera and restoring live view.",
             progress: true)
