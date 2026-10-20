@@ -11493,7 +11493,8 @@ final class NativeAppModel {
     /// The live assist tools that actually render right now. The single funnel every live overlay,
     /// scope, image effect and sampler reads, which is what makes clean view genuinely clean
     /// (#256). Photography keeps the display tools, as on every app (A1-19), but drops the video
-    /// ones (the LUT): the saved switch is untouched, so the flip back to video restores it.
+    /// ones (the LUT and the cinema analysis tools): the saved switches are untouched, so the flip
+    /// back to video restores them.
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
         guard displayMode != .command else { return [] }
         let photography = isPhotographyMode
@@ -11506,6 +11507,13 @@ final class NativeAppModel {
         // the meter leaves rather than holding its last reading, which would look live.
         if !monitorAvailability.audioMeters { tools.remove(.audioMeters) }
         return tools
+    }
+
+    /// The portrait fit/fill choice the live surface lays out and offers. Fit or fill is a cinema
+    /// choice: a stills body lays out its whole image area and offers no key, while the saved choice
+    /// waits for video (ZIA-039, as Android Z does).
+    var livePortraitAspect: PortraitFeedAspect? {
+        isPhotographyMode ? nil : preferences.portraitFeedAspect
     }
 
     /// Whether the monitored picture is flipped left-to-right (see `MonitorAssistTool.mirror`).

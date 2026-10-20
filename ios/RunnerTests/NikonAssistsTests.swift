@@ -104,15 +104,17 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertFalse(restored.isPlaybackVisible(.mirror))
     }
 
-    func testAFreshInstallTakesTheSharedDefaults() {
+    /// ZAA-227 / ZAA-228 twin: Z shipped 100 IRE highlight zebras and a quarter stop of crush/clip
+    /// tolerance; the shared 99 IRE and zero are Pocket's.
+    func testAFreshInstallTakesTheSharedDefaultsWithNikonZebraAndCompensation() {
         let state = relaunch()
         XCTAssertTrue(state.liveTools.isEmpty)
         XCTAssertTrue(state.playbackTools.isEmpty)
         XCTAssertFalse(state.lutEnabled)
         XCTAssertFalse(state.splitComparison)
         XCTAssertTrue(state.splitVertical)
-        XCTAssertEqual(state.zebraHighlightIRE, LiveZebra.highlightIRE)
-        XCTAssertEqual(state.crushClipCompensation, .zero)
+        XCTAssertEqual(state.zebraHighlightIRE, 100)
+        XCTAssertEqual(state.crushClipCompensation, .quarter)
         XCTAssertEqual(state.cleanViewPinnedTools, [.lut, .peaking, .desqueeze, .mirror])
     }
 
@@ -203,6 +205,25 @@ final class NikonAssistsTests: XCTestCase {
         XCTAssertEqual(reloaded.peakingColor, .green)
         XCTAssertEqual(reloaded.peakingSensitivity, .high)
         XCTAssertEqual(reloaded.crushClipCompensation, .threeQuarter)
+    }
+
+    /// Reset lands on the Nikon values, and a migrated operator who never moved them keeps them.
+    func testResetsAndUntouchedMigrationsKeepTheNikonZebraAndCompensation() throws {
+        let state = relaunch()
+        state.zebraHighlightIRE = 80
+        state.crushClipCompensation = .one
+        state.resetOptions(.zebra)
+        state.resetOptions(.histogram)
+        XCTAssertEqual(state.zebraHighlightIRE, 100)
+        XCTAssertEqual(state.crushClipCompensation, .quarter)
+        state.crushClipCompensation = .one
+        state.resetOptions(.trafficLights)
+        XCTAssertEqual(state.crushClipCompensation, .quarter)
+
+        reinstall()
+        let untouched = try migrate(configuration: ["grid": ["thirds": true]])
+        XCTAssertEqual(untouched.zebraHighlightIRE, 100)
+        XCTAssertEqual(untouched.crushClipCompensation, .quarter)
     }
 
     func testAnExplicitZeroCompensationRoundTrips() {
@@ -341,11 +362,53 @@ final class NikonAssistsTests: XCTestCase {
         let model = NativeAppModel(assist: .restore(storage: defaults))
         model.applyDemoProperty(.liveViewSelector, data: Data([0]))
         XCTAssertTrue(model.isPhotographyMode)
-        for tool in [MonitorAssistTool.waveform, .parade, .vectorscope, .guides, .crosshair] {
+        for tool in [
+            MonitorAssistTool.guides, .crosshair, .grid, .level, .desqueeze, .mirror, .peaking,
+            .falseColor, .zebra, .histogram,
+        ] {
             XCTAssertTrue(model.liveAssistPaletteTools.contains(tool), "\(tool) leaves photo mode")
         }
-        model.assist.set(.waveform, visible: true, context: .liveView)
-        XCTAssertTrue(model.renderedLiveAssistTools.contains(.waveform))
+        model.assist.set(.guides, visible: true, context: .liveView)
+        XCTAssertTrue(model.renderedLiveAssistTools.contains(.guides))
+    }
+
+    /// ZIA-011..013: the cinema analysis tools leave Photo like the LUT (baseline
+    /// `appliesToPhotography`, and Android Z), and the flip back to video restores them untouched.
+    func testPhotographyDropsTheCinemaAnalysisToolsAndVideoRestoresThem() {
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        let analysis: [MonitorAssistTool] = [
+            .waveform, .parade, .vectorscope, .trafficLights, .audioMeters,
+        ]
+        for tool in analysis { model.assist.set(tool, visible: true, context: .liveView) }
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.isPhotographyMode)
+        for tool in analysis {
+            XCTAssertFalse(model.liveAssistPaletteTools.contains(tool), "\(tool) offered in photo")
+            XCTAssertFalse(model.renderedLiveAssistTools.contains(tool), "\(tool) drawn in photo")
+            XCTAssertTrue(model.assist.isVisible(tool.selection), "the saved switch stays on")
+        }
+        XCTAssertTrue(model.renderedFitScopes.isEmpty)
+        model.applyDemoProperty(.liveViewSelector, data: Data([1]))
+        XCTAssertFalse(model.isPhotographyMode)
+        for tool in analysis {
+            XCTAssertTrue(model.liveAssistPaletteTools.contains(tool), "\(tool) missing in video")
+        }
+    }
+
+    /// ZIA-039: a Fill chosen for video never crops the stills image area, and Photo offers no
+    /// fit/fill key; the saved choice returns with video.
+    func testPhotographyLaysOutTheWholeStillAndOffersNoFitFillChoice() {
+        let model = NativeAppModel(assist: .restore(storage: defaults))
+        let saved = model.preferences.portraitFeedAspect
+        defer { model.preferences.portraitFeedAspect = saved }
+        model.preferences.portraitFeedAspect = .fill
+        XCTAssertEqual(model.livePortraitAspect, .fill)
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        XCTAssertTrue(model.isPhotographyMode)
+        XCTAssertNil(model.livePortraitAspect)
+        XCTAssertEqual(model.preferences.portraitFeedAspect, .fill)
+        model.applyDemoProperty(.liveViewSelector, data: Data([1]))
+        XCTAssertEqual(model.livePortraitAspect, .fill)
     }
 
     /// ZT-01: a LUT left on in video never grades the display-referred stills feed, and the
@@ -373,7 +436,8 @@ final class NikonAssistsTests: XCTestCase {
     func testNikonDeclaresItsOwnAssistsOnTheSharedList() {
         let nikon = MonitorAssistCapabilities.nikon
         XCTAssertEqual(nikon.photographyOnly, [.instantReview, .evMeter])
-        XCTAssertEqual(nikon.videoOnly, [.lut])
+        XCTAssertEqual(
+            nikon.videoOnly, [.lut, .waveform, .parade, .vectorscope, .trafficLights, .audioMeters])
         XCTAssertEqual(nikon.levelStyles, [.horizon, .gauge])
         XCTAssertTrue(nikon.unavailable.contains(.ndMeter))
         XCTAssertTrue(AssistConfiguration.Level.Style.self == MonitorLevelStyle.self)
@@ -500,11 +564,12 @@ final class NikonAssistsTests: XCTestCase {
             forKey: NikonAssistState.legacyConfigurationKey)
         let state = relaunch()
         XCTAssertTrue(state.liveTools.isEmpty)
-        XCTAssertEqual(state.zebraHighlightIRE, LiveZebra.highlightIRE)
+        // Unreadable values fall back to Z's own defaults (ZAA-227, ZAA-228), as on Android.
+        XCTAssertEqual(state.zebraHighlightIRE, 100)
         XCTAssertEqual(state.zebraHighlightColor, .white)
         XCTAssertEqual(state.falseColorScale, .sceneStops)
         XCTAssertEqual(state.desqueezeFactor, 1.33)
-        XCTAssertEqual(state.crushClipCompensation, .zero)
+        XCTAssertEqual(state.crushClipCompensation, .quarter)
     }
 
     // MARK: - Crush / clip from every era of the Nikon blob
@@ -545,13 +610,14 @@ final class NikonAssistsTests: XCTestCase {
             ]), .half)
     }
 
-    func testMigrationLeavesUntouchedSplitEraZerosOnTheSharedDefault() throws {
-        // Stored zeros were the old default, so "never touched" takes the shared default (zero).
+    func testMigrationLeavesUntouchedSplitEraZerosOnTheNikonDefault() throws {
+        // Stored zeros were the old default, so "never touched" takes Nikon's default (a quarter
+        // stop, as the baseline migrated a legacy zero; ZAA-228).
         XCTAssertEqual(
             try crushClip([
                 "scopes": ["histogramCrushClipCompensation": 0],
                 "trafficLights": ["scale": 1.0, "crushClipCompensation": 0],
-            ]), .zero)
+            ]), .quarter)
     }
 
     func testMigrationKeepsAnExplicitSharedZero() throws {
