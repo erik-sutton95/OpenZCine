@@ -239,6 +239,7 @@ import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
 /// progress page is shown, then deliver the fetched archive to the import exactly once.
 @MainActor final class LutPackDownloadLifetimeTests: XCTestCase {
     func testProgressCoverRetainsWebOwnerAndDeliversTheArchiveToImport() async throws {
+        let traceOrigin = ContinuousClock.now
         let runtimeReady = await HostedAccessibility.awaitRuntime()
         XCTAssertTrue(runtimeReady)
         let server = try LutPackLocalServer()
@@ -280,7 +281,29 @@ import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        try await ready {
+        let traceState: () -> String = {
+            let currentBrowser = host.viewIfLoaded.flatMap { self.webView(in: $0) }
+            let fixtureURL: String
+            if let url = currentBrowser?.url {
+                fixtureURL =
+                    url.scheme == "about" || url.host == "127.0.0.1"
+                    ? url.absoluteString : "<non-fixture-url>"
+            } else {
+                fixtureURL = "nil"
+            }
+            let browserID = currentBrowser.map { String(describing: ObjectIdentifier($0)) } ?? "nil"
+            return "sceneState=\(scene.activationState.rawValue) "
+                + "sceneBound=\(window.windowScene === scene) key=\(window.isKeyWindow) "
+                + "hidden=\(window.isHidden) hostAttached=\(host.viewIfLoaded?.window === window) "
+                + "rootMatches=\(window.rootViewController === host) browser=\(browserID) "
+                + "browserAttached=\(currentBrowser?.window === window) url=\(fixtureURL) "
+                + "loading=\(currentBrowser.map { String($0.isLoading) } ?? "nil") "
+                + "request=\(server.receivedRequest) imports=\(imports.count)"
+        }
+        defer {
+            traceLutStage("fixture", event: "exit", origin: traceOrigin, state: traceState())
+        }
+        try await tracedLutReady("continue-visible", origin: traceOrigin, state: traceState) {
             HostedAccessibility.leaves(in: host.view).contains {
                 $0.accessibilityLabel == "Continue"
             }
@@ -288,12 +311,20 @@ import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
         let button = try XCTUnwrap(
             HostedAccessibility.leaves(in: host.view).first { $0.accessibilityLabel == "Continue" })
         XCTAssertTrue(button.accessibilityActivate())
-        try await ready { self.webView(in: host.view) != nil }
+        try await tracedLutReady("browser-created", origin: traceOrigin, state: traceState) {
+            self.webView(in: host.view) != nil
+        }
         let browser = try XCTUnwrap(webView(in: host.view))
-        try await ready { !browser.isLoading }
+        try await tracedLutReady("browser-not-loading", origin: traceOrigin, state: traceState) {
+            !browser.isLoading
+        }
+        traceLutStage("window-open", event: "start", origin: traceOrigin, state: traceState())
         _ = try await browser.evaluateJavaScript("window.open('\(endpoint)'); undefined")
-        try await ready { server.receivedRequest }
-        try await ready {
+        traceLutStage("window-open", event: "complete", origin: traceOrigin, state: traceState())
+        try await tracedLutReady("loopback-request", origin: traceOrigin, state: traceState) {
+            server.receivedRequest
+        }
+        try await tracedLutReady("progress-cover", origin: traceOrigin, state: traceState) {
             HostedAccessibility.leaves(in: host.view).contains {
                 $0.accessibilityLabel == "Downloading fixture"
             }
@@ -303,9 +334,11 @@ import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
             "The progress cover removed the web owner before its download completed")
         let archive = Data([0x50, 0x4B, 0x03, 0x04, 1, 2, 3, 4])
         server.complete(with: archive)
-        try await ready { !imports.isEmpty }
+        try await tracedLutReady("import-received", origin: traceOrigin, state: traceState) {
+            !imports.isEmpty
+        }
         XCTAssertEqual(imports, [archive])
-        try await ready {
+        try await tracedLutReady("success-visible", origin: traceOrigin, state: traceState) {
             HostedAccessibility.leaves(in: host.view).contains {
                 $0.accessibilityLabel == "1 added"
             }
@@ -381,6 +414,28 @@ import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
     private func webView(in view: UIView) -> WKWebView? {
         if let web = view as? WKWebView { return web }
         return view.subviews.lazy.compactMap { self.webView(in: $0) }.first
+    }
+
+    private func traceLutStage(
+        _ stage: String, event: String, origin: ContinuousClock.Instant, state: String
+    ) {
+        print(
+            "SIMULATED-LUT stage=\(stage) event=\(event) elapsed=\(origin.duration(to: ContinuousClock.now)) \(state)"
+        )
+    }
+
+    private func tracedLutReady(
+        _ stage: String, origin: ContinuousClock.Instant, state: () -> String,
+        _ predicate: () -> Bool
+    ) async throws {
+        traceLutStage(stage, event: "start", origin: origin, state: state())
+        do {
+            try await ready(predicate)
+            traceLutStage(stage, event: "complete", origin: origin, state: state())
+        } catch {
+            traceLutStage(stage, event: "failure", origin: origin, state: state())
+            throw error
+        }
     }
 
     private func ready(_ predicate: () -> Bool) async throws {
