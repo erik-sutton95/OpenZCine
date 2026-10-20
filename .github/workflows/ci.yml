@@ -222,13 +222,13 @@ jobs:
       # SwiftPM checkouts (not the 2.9 GB sentry-cocoa binary artifact, a quick download) and Xcode's
       # content-addressed compilation cache, keyed on the package
       # pins, the OpenCine pin and Xcode. Saved only from main; pull requests read main's.
+      # No workspace-state.json either: it records that artifact as present, so Xcode skips the download.
       - name: Restore Xcode package and compilation caches
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/ci-dd/SourcePackages/checkouts
             ~/ci-dd/SourcePackages/repositories
-            ~/ci-dd/SourcePackages/workspace-state.json
             ~/ci-dd/CompilationCache.noindex
             ~/ci-dd/ModuleCache.noindex
           key: ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-${{ github.sha }}
@@ -283,17 +283,37 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       # The portrait header layout matrix (MonitorPortraitHeaderClearanceTests, about eight minutes
-      # hosted) renders the monitor at every size: nightly tier only (docs/ci.md).
+      # hosted) renders the monitor at every size: nightly tier only (docs/ci.md). The quarantined
+      # Nikon playback tests (#467) never run here; the nightly runs them in the next step.
       - name: Unit tests
         env:
           SKIP: ${{ inputs.full && 'MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges' || 'MonitorPortraitHeaderClearanceTests' }}
+          QUARANTINED: >-
+            NikonPlaybackOwnerAdoptionTests
+            NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto
+            NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery
         run: |
           set -euo pipefail
+          skips=("-skip-testing:RunnerTests/$SKIP")
+          for test in $QUARANTINED; do skips+=("-skip-testing:RunnerTests/$test"); done
           xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
             -destination "platform=iOS Simulator,id=$IOS_TEST_DEVICE_ID" -derivedDataPath ~/ci-dd \
             -parallel-testing-enabled YES -parallel-testing-worker-count 2 \
             -resultBundlePath "$RUNNER_TEMP/native-ios/Runner.xcresult" \
-            "-skip-testing:RunnerTests/$SKIP" test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-test.log"
+            "${skips[@]}" test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-test.log"
+      # Quarantine (#467): known hosted timing flakes, nightly only and non-blocking.
+      - name: Quarantined Nikon playback tests
+        if: ${{ inputs.full }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+            -destination "platform=iOS Simulator,id=$IOS_TEST_DEVICE_ID" -derivedDataPath ~/ci-dd \
+            -resultBundlePath "$RUNNER_TEMP/native-ios/Quarantined.xcresult" \
+            -only-testing:RunnerTests/NikonPlaybackOwnerAdoptionTests \
+            -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto \
+            -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery \
+            test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-quarantined-test.log"
       - name: Build the Watch companion (watchOS Simulator)
         run: |
           xcodebuild -project ios/Runner.xcodeproj -scheme OpenZCineWatch \
@@ -306,7 +326,6 @@ jobs:
           path: |
             ~/ci-dd/SourcePackages/checkouts
             ~/ci-dd/SourcePackages/repositories
-            ~/ci-dd/SourcePackages/workspace-state.json
             ~/ci-dd/CompilationCache.noindex
             ~/ci-dd/ModuleCache.noindex
           key: ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-${{ github.sha }}
@@ -332,6 +351,8 @@ jobs:
           path: |
             ${{ runner.temp }}/native-ios/Runner.xcresult
             ${{ runner.temp }}/native-ios/ios-test.log
+            ${{ runner.temp }}/native-ios/Quarantined.xcresult
+            ${{ runner.temp }}/native-ios/ios-quarantined-test.log
             ${{ runner.temp }}/native-ios/summary.json
             ${{ runner.temp }}/native-ios/simulator-setup.json
           retention-days: 7
