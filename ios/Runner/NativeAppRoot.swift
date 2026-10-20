@@ -5221,6 +5221,19 @@ final class NativeAppModel {
         keepingReadings ? snapshot : heldCaptureMode(snapshot, keeping: keepingCaptureMode)
     }
 
+    /// The display and reported snapshots a property reset leaves standing.
+    static func heldPropertySnapshots(
+        display: PTPCameraPropertySnapshot, reported: PTPCameraPropertySnapshot,
+        keepingCaptureMode: Bool, keepingReadings: Bool
+    ) -> (display: PTPCameraPropertySnapshot, reported: PTPCameraPropertySnapshot) {
+        let reported = heldPropertySnapshot(
+            reported, keepingCaptureMode: keepingCaptureMode, keepingReadings: keepingReadings)
+        // The reset drops writes that were queued but never sent, so a kept display falls back to
+        // what the camera confirmed instead of a picker's optimistic value.
+        guard !keepingReadings else { return (reported, reported) }
+        return (heldCaptureMode(display, keeping: keepingCaptureMode), reported)
+    }
+
     /// `keepingCaptureMode` is a restart or same-host recovery: the held body stays in stills or
     /// video (and keeps its shot count) until a re-read replaces them, so its chrome never falls
     /// back to the other mode meanwhile.
@@ -5232,12 +5245,9 @@ final class NativeAppModel {
     private func resetCameraPropertyState(
         keepingCaptureMode: Bool = false, keepingReadings: Bool = false
     ) {
-        cameraPropertySnapshot = Self.heldPropertySnapshot(
-            cameraPropertySnapshot, keepingCaptureMode: keepingCaptureMode,
-            keepingReadings: keepingReadings)
-        reportedPropertySnapshot = Self.heldPropertySnapshot(
-            reportedPropertySnapshot, keepingCaptureMode: keepingCaptureMode,
-            keepingReadings: keepingReadings)
+        (cameraPropertySnapshot, reportedPropertySnapshot) = Self.heldPropertySnapshots(
+            display: cameraPropertySnapshot, reported: reportedPropertySnapshot,
+            keepingCaptureMode: keepingCaptureMode, keepingReadings: keepingReadings)
         if !keepingReadings { stabilizationFileTypeReadback = nil }
         propertyPollIndex = 0
         cameraAnnouncedPropertyChanges.removeAll()

@@ -739,6 +739,25 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertEqual(reread, PTPCameraPropertySnapshot(captureSelector: .video))
     }
 
+    /// The restart also drops writes that were queued but never sent, so a kept display must show
+    /// what the camera confirmed, not a picker's optimistic value it will never receive.
+    func testAWarmLiveViewRestartShowsTheConfirmedReadingsNotADroppedWrite() {
+        let reported = PTPCameraPropertySnapshot(iso: 800, fps: 25, captureSelector: .video)
+        let optimistic = PTPCameraPropertySnapshot(iso: 1600, fps: 25, captureSelector: .video)
+
+        let warm = NativeAppModel.heldPropertySnapshots(
+            display: optimistic, reported: reported, keepingCaptureMode: true,
+            keepingReadings: true)
+        XCTAssertEqual(warm.display, reported)
+        XCTAssertEqual(warm.reported, reported)
+
+        let reread = NativeAppModel.heldPropertySnapshots(
+            display: optimistic, reported: reported, keepingCaptureMode: true,
+            keepingReadings: false)
+        XCTAssertEqual(reread.display, PTPCameraPropertySnapshot(captureSelector: .video))
+        XCTAssertEqual(reread.reported, PTPCameraPropertySnapshot(captureSelector: .video))
+    }
+
     /// The camera status shows on the shared waiting plate with Android's words: no camera,
     /// connecting, coming back from an internet hop; a connected camera keeps the waiting plate.
     func testCameraStatusShowsOnTheSharedWaitingPlate() {
