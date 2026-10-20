@@ -251,7 +251,7 @@ struct NikonMonitorShell: View {
             safeArea: EdgeInsets(
                 top: safe.top, leading: safe.leading, bottom: safe.bottom, trailing: safe.trailing),
             sourceAspect: sourceAspect,
-            fill: model.preferences.portraitFeedAspect == .fill && model.liveDesqueeze.factor <= 1,
+            fill: model.livePortraitAspect == .fill && model.liveDesqueeze.factor <= 1,
             showsValues: model.chromeSectionMounts(.cameraValues),
             showsBottomBars: model.chromeSectionMounts(.toolBar)
                 || model.chromeSectionMounts(.cameraValues),
@@ -367,7 +367,9 @@ struct NikonMonitorShell: View {
                     value: model.isDemoSession || model.videoSource == .relay
                         ? model.cameraState.resolutionFrameRate : recordingLabel ?? "--",
                     section: .format) : nil,
-            color: color)
+            color: color,
+            // A Z body has no shooting-mode readout; its profile declares the codec accent.
+            headerAccent: NikonCameraSession.captureProfile.headerAccent)
     }
     /// The body's coarse gauge. An unread battery is absent, never an empty red cell.
     private var cameraBattery: MonitorOperatorPowerReading? {
@@ -523,8 +525,10 @@ struct NikonMonitorShell: View {
         if model.relayControlSurrendered { return AnyView(BroadcasterControlKey()) }
         return nil
     }
-    private var portraitAspect: Binding<PortraitFeedAspect> {
-        Binding(
+    /// Nil in Photo: the stills image area is laid out whole and offers no fit/fill key.
+    private var portraitAspect: Binding<PortraitFeedAspect>? {
+        guard model.livePortraitAspect != nil else { return nil }
+        return Binding(
             get: { model.preferences.portraitFeedAspect },
             set: { model.preferences.portraitFeedAspect = $0 })
     }

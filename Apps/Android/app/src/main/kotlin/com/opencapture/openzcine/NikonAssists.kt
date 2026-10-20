@@ -18,6 +18,7 @@ import com.opencapture.monitorui.MonitorScopeGuides
 import com.opencapture.monitorui.MonitorVectorscopeZoom
 import com.opencapture.monitorui.MonitorWaveformMode
 import com.opencapture.monitorui.MonitorZebraUnit
+import com.opencapture.opencine.appkit.MonitorAssistDefaults
 import com.opencapture.opencine.appkit.MonitorAssistState
 import com.opencapture.opencine.media.MonitorCrushClipCompensation
 import com.opencapture.opencine.media.MonitorDesqueezeDirection
@@ -71,28 +72,39 @@ class NikonAssists internal constructor(
     }
 }
 
-/** Photo toolset (iOS `appliesToPhotography`): exposure aids and the composition aids stills use. */
+/**
+ * Photo toolset: exposure aids and the composition aids stills use. The video-only tools are the
+ * shared declaration iOS reads too ([nikonAssistCapabilities]); the cinema frame guides and the
+ * crosshair also stay out of Photo here, as on the Android baseline, until the owner rules on the
+ * A1-19 extent (iOS keeps them as display tools).
+ */
 internal val MonitorAssistTool.appliesToPhotography: Boolean
-    get() = this in photographyTools
+    get() = this !in nikonAssistCapabilities.videoOnly && this !in nikonAssistCapabilities.unavailable &&
+        this !in photoHiddenFramingTools
 
-private val photographyTools =
-    setOf(
-        MonitorAssistTool.PEAK, MonitorAssistTool.FALSE, MonitorAssistTool.ZEBRA,
-        MonitorAssistTool.HISTO, MonitorAssistTool.GRID, MonitorAssistTool.LEVEL,
-        MonitorAssistTool.EV, MonitorAssistTool.DESQ, MonitorAssistTool.MIRROR,
-    )
+private val photoHiddenFramingTools = setOf(MonitorAssistTool.GUIDES, MonitorAssistTool.CROSS)
 
 /**
  * What a Nikon body adds to the shared assist list (iOS `MonitorAssistCapabilities.nikon`): the
  * body's EV needle is its stills exposure indicator, the level draws as a horizon or a gauge, and
- * there is no ND source. PLAY is this camera's own chip ([NikonAssistChip.InstantReview]).
+ * there is no ND source. PLAY is this camera's own chip ([NikonAssistChip.InstantReview]). The
+ * stills live view is display referred and carries no movie audio, so the LUT and the cinema
+ * analysis tools are video only (ZT-01, ZIA-011..013): they leave Photo and return on the flip back.
  */
 internal val nikonAssistCapabilities =
     MonitorAssistCapabilities(
         photographyOnly = setOf(MonitorAssistTool.EV),
         levelStyles = listOf(MonitorLevelStyle.HORIZON, MonitorLevelStyle.GAUGE),
         unavailable = setOf(MonitorAssistTool.ND),
+        videoOnly = setOf(
+            MonitorAssistTool.LUT, MonitorAssistTool.WAVE, MonitorAssistTool.PARADE,
+            MonitorAssistTool.VECTOR, MonitorAssistTool.LIGHTS, MonitorAssistTool.AUDIO,
+        ),
     )
+
+/** Nikon's own fresh and Reset values: 100 IRE highlight zebras, a quarter stop of crush/clip tolerance. */
+internal val nikonAssistDefaults =
+    MonitorAssistDefaults(zebraHighlightIRE = 100.0, crushClipCompensation = MonitorCrushClipCompensation.QUARTER)
 
 /** Image effects need the API 29 floor and the Swift renderer core. */
 internal val MonitorAssistTool.isImageEffect: Boolean
@@ -260,6 +272,7 @@ internal fun restoreNikonAssists(
             onPersistPins = { assist.edit().putStringSet(PINS_KEY, it).apply() },
             playbackNames = assist.getStringSet(PLAYBACK_KEY, null) ?: legacy?.playbackTools.orEmpty(),
             onPersistPlayback = { assist.edit().putStringSet(PLAYBACK_KEY, it).apply() },
+            defaults = nikonAssistDefaults,
         )
     if (legacy != null) {
         legacy.copyInto(shared)
@@ -349,7 +362,8 @@ private val droppedToolbarKeys =
 
 /**
  * The keys Nikon stored before it adopted the shared state, copied once. Only stored values move;
- * an absent key leaves the shared default, so a fresh install starts from the shared defaults.
+ * an absent key leaves the state default (the shared one, or Nikon's own zebra and compensation), so a
+ * fresh install starts from the defaults.
  */
 private class LegacyNikonAssists(
     assistStore: SharedPreferences,
