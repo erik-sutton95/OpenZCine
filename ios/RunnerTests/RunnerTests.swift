@@ -717,16 +717,12 @@ final class RunnerTests: XCTestCase {
         }
         func previewElement() -> NSObject? { renderedElement("monitor.inspector.preview") }
         func mountedElement(_ identifier: String) async throws -> NSObject {
-            let ready = XCTNSPredicateExpectation(
-                predicate: NSPredicate { _, _ in
-                    MainActor.assumeIsolated {
-                        host.view.layoutIfNeeded()
-                        return renderedElement(identifier) != nil
-                    }
-                }, object: nil)
-            let result = await XCTWaiter.fulfillment(of: [ready], timeout: 5)
-            XCTAssertEqual(
-                result, .completed, "Actual monitor control did not mount: \(identifier)")
+            // Readiness only: the shared hang guard, polled, not a 5 s predicate expectation.
+            let mounted = await HostedCondition.wait {
+                host.view.layoutIfNeeded()
+                return renderedElement(identifier) != nil
+            }
+            XCTAssertTrue(mounted, "Actual monitor control did not mount: \(identifier)")
             return try XCTUnwrap(renderedElement(identifier))
         }
         func openRenderedLUTOptions() async throws {
