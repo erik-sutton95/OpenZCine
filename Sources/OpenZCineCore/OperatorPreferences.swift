@@ -1,4 +1,5 @@
 import Foundation
+
 import enum MonitorPresentation.MonitorLevelStyle
 import enum OpenCineMedia.ScopeDisplayScale
 
@@ -272,8 +273,10 @@ public struct DisplayChromeVisibility: Codable, Equatable, Sendable {
         // Per-readout flags were added later: an older saved blob lacks them, so default to visible
         // instead of failing the decode (which would reset every preference).
         recReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .recReadoutVisible)) ?? true
-        codecReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .codecReadoutVisible)) ?? true
-        mediaReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible)) ?? true
+        codecReadoutVisible =
+            (try? c.decodeIfPresent(Bool.self, forKey: .codecReadoutVisible)) ?? true
+        mediaReadoutVisible =
+            (try? c.decodeIfPresent(Bool.self, forKey: .mediaReadoutVisible)) ?? true
         fpsReadoutVisible = (try? c.decodeIfPresent(Bool.self, forKey: .fpsReadoutVisible)) ?? true
         // Same story for the lock key and the battery cluster: added after these blobs were
         // written, so an absent key means "the operator never chose" — keep them visible.
@@ -552,16 +555,19 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let savedOrder = (try? container.decode([String].self, forKey: .dispOrder))?
+        let savedOrder =
+            (try? container.decode([String].self, forKey: .dispOrder))?
             .compactMap(DispMode.init(rawValue:)) ?? Self.defaults.dispOrder
         dispOrder = DispOrder.reconciled(savedOrder)
         if !Self.isValidDisplayOrder(dispOrder) {
             dispOrder = Self.defaults.dispOrder
         }
-        let savedEnabled = (try? container.decode([String].self, forKey: .enabledDispModes))?
+        let savedEnabled =
+            (try? container.decode([String].self, forKey: .enabledDispModes))?
             .compactMap(DispMode.init(rawValue:)) ?? DispMode.allCases
         enabledDispModes = Self.normalizedEnabledDispModes(Set(savedEnabled))
-        displayChrome = (try? container.decode(DisplayChromeVisibility.self, forKey: .displayChrome))
+        displayChrome =
+            (try? container.decode(DisplayChromeVisibility.self, forKey: .displayChrome))
             ?? Self.defaults.displayChrome
         if let confirmation = try? container.decode(
             Bool.self, forKey: .recordConfirmationEnabled)
@@ -580,21 +586,25 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         bluetoothShutterEnabled =
             (try? container.decodeIfPresent(Bool.self, forKey: .bluetoothShutterEnabled)) ?? true
         hapticsEnabled = (try? container.decode(Bool.self, forKey: .hapticsEnabled)) ?? true
-        keepScreenAwake = (try? container.decodeIfPresent(Bool.self, forKey: .keepScreenAwake)) ?? true
+        keepScreenAwake =
+            (try? container.decodeIfPresent(Bool.self, forKey: .keepScreenAwake)) ?? true
         // Predates this switch. Absent means the operator never chose, so the default-on that
         // shipped with vertical mode applies; an explicitly saved false is a real opt-out.
         autoRotateFeedEnabled =
             (try? container.decodeIfPresent(Bool.self, forKey: .autoRotateFeedEnabled)) ?? true
-        streamPreset = (try? container.decode(LiveViewStreamPreset.self, forKey: .streamPreset))
+        streamPreset =
+            (try? container.decode(LiveViewStreamPreset.self, forKey: .streamPreset))
             ?? Self.defaults.streamPreset
-        qualityBias = (try? container.decode(LiveViewQualityBias.self, forKey: .qualityBias))
+        qualityBias =
+            (try? container.decode(LiveViewQualityBias.self, forKey: .qualityBias))
             ?? Self.defaults.qualityBias
         portraitFeedAspect =
             (try? container.decodeIfPresent(PortraitFeedAspect.self, forKey: .portraitFeedAspect))
             ?? .fit16x9
         // Older saved payloads predate this preference — tolerate absence, default to empty.
         scopeActivationOrder =
-            (try? Self.decodeAssistToolArrayIfPresent(from: container, forKey: .scopeActivationOrder))
+            (try? Self.decodeAssistToolArrayIfPresent(
+                from: container, forKey: .scopeActivationOrder))
             ?? []
         // Chrome went per-DISP-mode after these blobs were written. The single stored set was the
         // global one, so it stays DISP 1's (decoded above into `displayChrome`); DISP 2 lands on
@@ -616,13 +626,15 @@ public struct OperatorPreferences: Codable, Equatable, Sendable {
         // configured carries into BOTH sides, so a DISP 1 they built for video looks identical the
         // moment the body switches to stills — until they deliberately diverge the two.
         photoDisplayChrome =
-            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoDisplayChrome))
+            (try? container.decodeIfPresent(
+                DisplayChromeVisibility.self, forKey: .photoDisplayChrome))
             ?? displayChrome
         photoCleanChrome =
             (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCleanChrome))
             ?? cleanChrome
         photoCommandChrome =
-            (try? container.decodeIfPresent(DisplayChromeVisibility.self, forKey: .photoCommandChrome))
+            (try? container.decodeIfPresent(
+                DisplayChromeVisibility.self, forKey: .photoCommandChrome))
             ?? commandChrome
         relayEncoderProfile =
             (try? container.decodeIfPresent(RelayEncoderProfile.self, forKey: .relayEncoderProfile))

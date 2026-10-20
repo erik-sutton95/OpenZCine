@@ -11,6 +11,7 @@ import OpenCineCameraControls
 import OpenCineCameraVocabulary
 import OpenCineCore
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import OpenCineMedia
 import SwiftUI
 import Testing
@@ -695,15 +696,13 @@ final class RunnerTests: XCTestCase {
         window.rootViewController = host
         window.makeKeyAndVisible()
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
-        let landscape = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                MainActor.assumeIsolated {
-                    scene.interfaceOrientation.isLandscape
-                        && scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
-                }
-            }, object: nil)
-        let landscapeResult = await XCTWaiter.fulfillment(of: [landscape], timeout: 5)
-        XCTAssertEqual(landscapeResult, .completed)
+        // Readiness only: the shared hang guard, polled, instead of a 5 s predicate expectation
+        // that samples about once a second (it timed out under hosted load).
+        let landscape = await HostedCondition.wait {
+            scene.interfaceOrientation.isLandscape
+                && scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
+        }
+        XCTAssertTrue(landscape, "The actual scene must reach landscape")
         window.frame = scene.coordinateSpace.bounds
         host.view.frame = window.bounds
         defer {
@@ -1960,7 +1959,8 @@ extension RunnerTests {
         let tab = model.operatorSettingsTab
         model.operatorSettingsTab = .system
         defer { model.operatorSettingsTab = tab }
-        try await snapshot(AnyView(OperatorSettingsPanel().environment(model)), named: "z-settings-system")
+        try await snapshot(
+            AnyView(OperatorSettingsPanel().environment(model)), named: "z-settings-system")
         for page in MonitorLegalPage.allCases {
             guard case .text(let text) = MonitorLegalDocuments.z[page] else {
                 return XCTFail("\(page.title) is bundled text")
@@ -1974,10 +1974,13 @@ extension RunnerTests {
 
     @MainActor
     @discardableResult
-    private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil) async throws -> String? {
+    private func snapshot(_ view: AnyView, named name: String, identifier: String? = nil)
+        async throws -> String?
+    {
         let host = UIHostingController(rootView: view)
         // Drawing needs a window in the app's scene; a detached window renders blank.
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
         window.rootViewController = host
@@ -1990,7 +1993,8 @@ extension RunnerTests {
         for _ in 0..<80 {
             host.view.layoutIfNeeded()
             if let identifier {
-                label = HostedAccessibility.elements(in: host.view)
+                label =
+                    HostedAccessibility.elements(in: host.view)
                     .first { HostedAccessibility.identifier($0) == identifier }?.accessibilityLabel
                 if label != nil { break }
             }
@@ -4726,10 +4730,15 @@ final class SharedLUTPickerCompatibilityTests: XCTestCase {
             context.draw(
                 cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
         }
-        return stride(from: 0, to: bytes.count, by: 4).filter {
-            Int(bytes[$0 + 1]) > 90 && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0]) * 13
-                && Int(bytes[$0 + 1]) * 10 > Int(bytes[$0 + 2]) * 13
-        }.count
+        var count = 0
+        for offset in stride(from: 0, to: bytes.count, by: 4) {
+            let red: Int = Int(bytes[offset])
+            let green: Int = Int(bytes[offset + 1])
+            let blue: Int = Int(bytes[offset + 2])
+            let greenScaled: Int = green * 10
+            if green > 90 && greenScaled > red * 13 && greenScaled > blue * 13 { count += 1 }
+        }
+        return count
     }
 }
 

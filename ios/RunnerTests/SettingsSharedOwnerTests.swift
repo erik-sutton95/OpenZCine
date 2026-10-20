@@ -15,43 +15,59 @@ import UIKit
 @MainActor @Suite(.serialized) struct SettingsSharedOwnerTests {
     @Test func camerasAndSettingsHonorTheForegroundWakePreference() {
         let storage = UserDefaults.standard
-        let commonKeys = ["OpenZCine.KeepScreenAwake", "OpenZCine.RecordConfirmation", "OpenZCine.HapticsEnabled"]
+        let commonKeys = [
+            "OpenZCine.KeepScreenAwake", "OpenZCine.RecordConfirmation", "OpenZCine.HapticsEnabled",
+        ]
         let commonSaved = commonKeys.map { storage.object(forKey: $0) }
         let saved = storage.data(forKey: "operatorPreferences.v1")
         let previous = UIApplication.shared.isIdleTimerDisabled
         defer {
             for (key, value) in zip(commonKeys, commonSaved) {
-                if let value { storage.set(value, forKey: key) }
-                else { storage.removeObject(forKey: key) }
+                if let value {
+                    storage.set(value, forKey: key)
+                } else {
+                    storage.removeObject(forKey: key)
+                }
             }
-            if let saved { storage.set(saved, forKey: "operatorPreferences.v1") }
-            else { storage.removeObject(forKey: "operatorPreferences.v1") }
+            if let saved {
+                storage.set(saved, forKey: "operatorPreferences.v1")
+            } else {
+                storage.removeObject(forKey: "operatorPreferences.v1")
+            }
             UIApplication.shared.isIdleTimerDisabled = previous
         }
         let model = NativeAppModel()
         #expect(!model.isMonitorPresented)
         model.preferences.keepScreenAwake = true
         model.syncScreenWakePolicy()
-        #expect(UIApplication.shared.isIdleTimerDisabled,
+        #expect(
+            UIApplication.shared.isIdleTimerDisabled,
             "The foreground preference also applies on cameras and settings")
     }
 }
 
-
 extension SettingsSharedOwnerTests {
     @Test func rootPhaseSeedsTheInitialForegroundAndRestoresTheCurrentPreference() {
         let storage = UserDefaults.standard
-        let commonKeys = ["OpenZCine.KeepScreenAwake", "OpenZCine.RecordConfirmation", "OpenZCine.HapticsEnabled"]
+        let commonKeys = [
+            "OpenZCine.KeepScreenAwake", "OpenZCine.RecordConfirmation", "OpenZCine.HapticsEnabled",
+        ]
         let commonSaved = commonKeys.map { storage.object(forKey: $0) }
         let saved = storage.data(forKey: "operatorPreferences.v1")
         let priorIdle = UIApplication.shared.isIdleTimerDisabled
         defer {
             for (key, value) in zip(commonKeys, commonSaved) {
-                if let value { storage.set(value, forKey: key) }
-                else { storage.removeObject(forKey: key) }
+                if let value {
+                    storage.set(value, forKey: key)
+                } else {
+                    storage.removeObject(forKey: key)
+                }
             }
-            if let saved { storage.set(saved, forKey: "operatorPreferences.v1") }
-            else { storage.removeObject(forKey: "operatorPreferences.v1") }
+            if let saved {
+                storage.set(saved, forKey: "operatorPreferences.v1")
+            } else {
+                storage.removeObject(forKey: "operatorPreferences.v1")
+            }
             UIApplication.shared.isIdleTimerDisabled = priorIdle
         }
         storage.removeObject(forKey: "operatorPreferences.v1")
@@ -108,7 +124,8 @@ extension SettingsSharedOwnerTests {
             return
         }
         #expect(privacy.hasPrefix("OpenZCine "))
-        #expect(privacy.contains("Sentry") && privacy.contains("Automatic error reports are optional"))
+        #expect(
+            privacy.contains("Sentry") && privacy.contains("Automatic error reports are optional"))
         #expect(privacy.hasSuffix(SupportLinkCatalog.privacy.absoluteString))
         // In-app privacy matches the website (2026-10-16).
         #expect(privacy.contains(MonitorSettingsCopy.reliabilityReportsPrivacy))
@@ -136,7 +153,8 @@ extension SettingsSharedOwnerTests {
         var label: String?
         for _ in 0..<200 where label == nil {
             host.view.layoutIfNeeded()
-            label = HostedAccessibility.elements(in: host.view)
+            label =
+                HostedAccessibility.elements(in: host.view)
                 .first { HostedAccessibility.identifier($0) == "legal.document.privacy" }?
                 .accessibilityLabel
             if label == nil { try await Task.sleep(for: .milliseconds(25)) }
@@ -221,7 +239,8 @@ extension SettingsSharedOwnerTests {
             model.isStandaloneSettingsPresented = false
             model.isBugReportPresented = false
         }
-        let host = UIHostingController(rootView: AnyView(OperatorSettingsPanel().environment(model)))
+        let host = UIHostingController(
+            rootView: AnyView(OperatorSettingsPanel().environment(model)))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 874, height: 2_000))
         window.rootViewController = host
         window.isHidden = false
@@ -272,7 +291,9 @@ extension SettingsSharedOwnerTests {
         model.hdrDisplay = true
         #expect(PreferencesStore.hdrDisplay)
         #expect(UserDefaults.standard.bool(forKey: "OpenZCine.HDRDisplay"))
-        #expect(LiveHDRDisplay.app.preferredEnabled && LiveHDRDisplay.app.isEnabled && model.hdrDisplayActive)
+        #expect(
+            LiveHDRDisplay.app.preferredEnabled && LiveHDRDisplay.app.isEnabled
+                && model.hdrDisplayActive)
         model.screenCaptured = true
         #expect(!LiveHDRDisplay.app.isEnabled && !model.hdrDisplayActive)
         model.screenCaptured = false

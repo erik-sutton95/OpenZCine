@@ -7,6 +7,7 @@ import OpenCineAppKit
 import OpenCineAppKitApple
 import OpenCineApple
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import OpenCineMedia
 import OpenZCineCore
 import SwiftUI
@@ -666,8 +667,16 @@ extension NikonPlaybackOwnerAdoptionTests {
         native.play(rate: 1, token: token)
         var sample = NikonGrowingMovieFixture.PixelSample()
         var largestClockLead = 0.0
-        let heldEnd = ContinuousClock.now.advanced(by: .seconds(5))
-        while ContinuousClock.now < heldEnd {
+        // Hold at least 5 s, then until the prefix has played and the player stalls at its end.
+        // A loaded hosted runner can need longer than 5 s to get there (0.4 s played, still
+        // playing at 1.9 s); sampling longer only gives the stall checks more chances to fail.
+        let heldStart = ContinuousClock.now
+        let heldEnd = heldStart.advanced(by: .seconds(5))
+        let heldLimit = heldStart.advanced(by: .seconds(30))
+        while ContinuousClock.now < heldEnd
+            || (ContinuousClock.now < heldLimit
+                && (transport != .waiting || sample.changedTime <= 0.5))
+        {
             sample.read(native.player, output)
             if sample.changedTime >= 0 {
                 largestClockLead = max(
@@ -806,13 +815,17 @@ extension NikonPlaybackOwnerAdoptionTests {
         writer.add(input)
         guard writer.startWriting() else { throw CocoaError(.fileWriteUnknown) }
         writer.startSession(atSourceTime: .zero)
+        // Fixture setup, not a playback budget: on a loaded hosted runner the encoder can hold
+        // one frame back for seconds, so the whole movie shares one deadline. A failed writer
+        // reports its own error instead of an anonymous write failure.
+        let until = ContinuousClock.now.advanced(by: .seconds(60))
         for frame in 0..<60 {
-            let until = ContinuousClock.now.advanced(by: .seconds(5))
             while !input.isReadyForMoreMediaData, writer.status == .writing,
                 ContinuousClock.now < until
             {
                 try await Task.sleep(for: .milliseconds(1))
             }
+            if writer.status == .failed { throw writer.error ?? CocoaError(.fileWriteUnknown) }
             guard input.isReadyForMoreMediaData else { throw CocoaError(.fileWriteUnknown) }
             let pool = try XCTUnwrap(adaptor.pixelBufferPool)
             var optional: CVPixelBuffer?
@@ -839,13 +852,15 @@ extension NikonPlaybackOwnerAdoptionTests {
             guard
                 adaptor.append(
                     buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 10))
-            else { throw CocoaError(.fileWriteUnknown) }
+            else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         }
         input.markAsFinished()
         await withCheckedContinuation { continuation in
             writer.finishWriting { continuation.resume() }
         }
-        guard writer.status == .completed else { throw CocoaError(.fileWriteUnknown) }
+        guard writer.status == .completed else {
+            throw writer.error ?? CocoaError(.fileWriteUnknown)
+        }
     }
     static func prefixEnd(_ data: Data) throws -> Int {
         var cursor = 0
@@ -963,12 +978,10 @@ extension NikonPlaybackOwnerAdoptionTests {
         await library.dispose()
     }
 
-    private func cachedCatalogSettled(_ predicate: () -> Bool) async throws -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !predicate(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        return predicate()
+    /// Readiness only, so the shared hang guard: 48 cached clips can take longer than 5 s to
+    /// settle on a loaded hosted runner.
+    private func cachedCatalogSettled(_ predicate: @MainActor () -> Bool) async throws -> Bool {
+        await HostedCondition.wait(until: predicate)
     }
 }
 

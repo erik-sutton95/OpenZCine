@@ -1,0 +1,62 @@
+name: Nightly
+
+# The full suite on main every night: every CI job regardless of paths, plus the simulator
+# conformance suite and the iPad storage oracle (docs/ci.md). A failure opens or updates the one
+# "Nightly CI failing on main" issue (label ci-nightly); the next passing night closes it.
+on:
+  schedule:
+    # Staggered with the other repositories so their macOS jobs do not queue behind each other.
+    - cron: "45 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    name: Full suite
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      full: true
+
+  report:
+    name: Tracking issue
+    needs: suite
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # OpenCine's scripts/ci-nightly-report.sh keeps the issue for every repository. It is CI
+      # plumbing, tested in OpenCine's Meta job, so it runs from OpenCine main rather than the pin:
+      # report fixes reach every app's next nightly without waiting for a pin bump.
+      - name: Check out OpenCine's nightly report script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: erik-sutton95/OpenCine
+          ref: main
+          path: .opencine-report
+          sparse-checkout: scripts/ci-nightly-report.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Open, update or close the nightly tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUITE_RESULT: ${{ needs.suite.result }}
+          # Whole jobs in QUARANTINE (docs/ci.md); they keep their own issues.
+          QUARANTINED_JOBS: |
+            Shared conformance scenarios, iOS
+        run: bash .opencine-report/scripts/ci-nightly-report.sh

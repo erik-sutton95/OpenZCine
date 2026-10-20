@@ -40,7 +40,8 @@ struct NikonHopNative {
     /// Leaves the AP; `current` says whether the hop still holds, so a removal still queued
     /// behind a pending camera join never reaches the OS for a hop that already ended.
     var leaveNetwork: @MainActor (String, _ current: @escaping @MainActor () -> Bool) -> Void = {
-        ssid, current in WiFiJoinCoordinator.shared.leaveCameraNetwork(ssid: ssid, isCurrent: current)
+        ssid, current in
+        WiFiJoinCoordinator.shared.leaveCameraNetwork(ssid: ssid, isCurrent: current)
     }
     var rejoin: (@MainActor (_ host: String, _ ssid: String) async -> Void)?
 }

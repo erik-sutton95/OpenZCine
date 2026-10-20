@@ -69,6 +69,13 @@ import UIKit
     static let mountPreferenceKey = "gyroMountPreset.v1"
     static let calibrationPreferenceKey = "gyroMountCalibration.v1"
 
+    /// Gyro logs movie takes only, so the body must positively report the video selector. An
+    /// unread or unreported selector waits like photo mode instead of arming (ZT-06); the
+    /// selector poll re-evaluates it. Android twin: `gyroSelectorArms`.
+    nonisolated static func selectorArms(_ selector: CameraCaptureSelector?) -> Bool {
+        selector == .video
+    }
+
     init(
         defaults: UserDefaults = .standard,
         driver: (any GyroMotionDriving)? = nil,
