@@ -980,7 +980,7 @@ extension NikonPlaybackOwnerAdoptionTests {
 
     /// Readiness only, so the shared hang guard: 48 cached clips can take longer than 5 s to
     /// settle on a loaded hosted runner.
-    private func cachedCatalogSettled(_ predicate: () -> Bool) async throws -> Bool {
+    private func cachedCatalogSettled(_ predicate: @MainActor () -> Bool) async throws -> Bool {
         await HostedCondition.wait(until: predicate)
     }
 }
