@@ -80,7 +80,8 @@ enum NikonDelivery {
     /// A still travels as its original, so the popup offers it no clip export: no Bake LUT,
     /// format or renamed movie (ZIB-469).
     static func selectionFile(_ clip: MediaClip) -> MonitorDeliveryFileFacts {
-        .init(filename: clip.filename, sizeBytes: clip.sizeBytes > 0 ? clip.sizeBytes : nil,
+        .init(
+            filename: clip.filename, sizeBytes: clip.sizeBytes > 0 ? clip.sizeBytes : nil,
             isStill: clip.mediaKind == .photo)
     }
     private static let timecodeLogger = Logger(subsystem: "OpenZCine", category: "media-timecode")
