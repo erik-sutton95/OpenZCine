@@ -1,5 +1,6 @@
 import Foundation
 import ImageCaptureCore
+import OpenCineCore
 import OpenZCineCore
 import Testing
 
@@ -682,5 +683,42 @@ struct CameraAccessPointJoinDeclineTests {
         model.connectToCamera(setup: setup)
         await settle(model)
         #expect(peers.events == ["join:\(Self.ssid)", "dial:\(Self.host)"])
+    }
+}
+
+/// A refused camera Wi-Fi join shows the shared copy and the Settings fallback, never the
+/// platform's developer text (JOIN-ERROR-COPY).
+@MainActor
+@Suite("Refused camera Wi-Fi join")
+struct RefusedCameraWiFiJoinTests {
+    @Test("A system refusal keeps the shared copy and offers Settings")
+    func systemRefusalKeepsSharedCopy() throws {
+        let refusal = CameraHotspotJoinRefusal(code: 8, network: "Z_6002199")
+        guard case .refused(let typed) = WiFiJoinCoordinator.mapHotspotError(refusal) else {
+            Issue.record("a typed refusal must stay typed")
+            return
+        }
+        #expect(typed == refusal)
+        let message = try #require(WiFiJoinCoordinator.JoinError.refused(refusal).errorDescription)
+        #expect(message == refusal.message && !message.contains("internal"))
+        let card = NativeNikonPort.failure(refusal, reason: .joinFailed, message: message)
+        #expect(Array(card.actions.prefix(2)) == [.openSettings, .retry])
+        #expect(card.message == refusal.message)
+    }
+
+    @Test("Cancel and an unusable network name keep their own cases")
+    func declineAndInvalidNameKeepTheirCases() {
+        guard case .userDenied = WiFiJoinCoordinator.mapHotspotError(
+            CameraHotspotJoinRefusal(code: 7, network: "Z_6002199"))
+        else {
+            Issue.record("a declined join stays userDenied")
+            return
+        }
+        guard case .invalidSSID = WiFiJoinCoordinator.mapHotspotError(
+            CameraHotspotJoinRefusal(code: 1, network: ""))
+        else {
+            Issue.record("an invalid SSID stays invalidSSID")
+            return
+        }
     }
 }

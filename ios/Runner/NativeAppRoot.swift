@@ -3197,8 +3197,10 @@ final class NativeAppModel {
         logConnection("join declined by operator — offers for \(ssid) muted this session")
     }
 
-    private func surfaceCameraWiFiJoinFailure(_ message: String) {
+    private func surfaceCameraWiFiJoinFailure(_ message: String, refusal: CameraHotspotJoinRefusal? = nil) {
         AppDiagnostics.shared.record(.connectionWifiJoinFailed)
+        // The connect card reads the typed refusal for its shared copy and Settings fallback.
+        if let refusal { lastConnectError = refusal }
         lastConnectFailureReason = .joinFailed
         connectionProgressShowsFailure = true
         connectionPhase = .failed
@@ -3364,17 +3366,24 @@ final class NativeAppModel {
                     presentCameraWiFiJoinProgress(deviceName: deviceName)
                 }
                 surfaceCameraWiFiJoinFailure(message)
-            case .invalidSSID, .timedOut, .system:
-                if case .system = error {
+            case .invalidSSID, .timedOut, .system, .refused:
+                switch error {
+                case .system, .refused:
                     // A stored wrong password would fail every retry with no way to re-enter
                     // it; drop it so the next attempt re-prompts.
                     // ponytail: also drops a valid password on other association failures.
                     clearStoredCameraWiFiPassword(for: target)
+                default:
+                    break
                 }
                 if !isConnectionProgressPresented {
                     presentCameraWiFiJoinProgress(deviceName: deviceName)
                 }
-                surfaceCameraWiFiJoinFailure(message)
+                if case .refused(let refusal) = error {
+                    surfaceCameraWiFiJoinFailure(message, refusal: refusal)
+                } else {
+                    surfaceCameraWiFiJoinFailure(message)
+                }
             }
         } catch {
             guard !Task.isCancelled else {
