@@ -3,4 +3,4 @@
 # sibling ../OpenCine (scripts/checkout-opencine.sh) and verify the SHA, so a moved branch
 # upstream cannot change what ships.
 # Temporary: replaced by SwiftPM url + version and Maven coordinates once published.
-OpenCine 1e5a329798c406031a9bd571f548043e96558bf5
+OpenCine 30cc86288443eb0ceb97ae139987d1d84ed841e7
