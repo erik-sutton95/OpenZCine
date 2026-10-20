@@ -236,11 +236,12 @@ jobs:
       - name: Demo isolation, swift-format and Swift package tests
         run: just check-demo-isolation swift-check
       # One build of the app and its unit tests; every test run below reuses it without building.
+      # Hosted runners are arm64: an x86_64 simulator slice only doubles the compile.
       - name: Build the app and its tests (iOS Simulator)
         run: |
           xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
             -destination 'generic/platform=iOS Simulator' -derivedDataPath ~/ci-dd \
-            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES build-for-testing
+            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build-for-testing
       - name: Wait for the private iOS test simulator
         run: |
           pid="$(cat "$RUNNER_TEMP/native-ios/simulator-setup.pid")"
