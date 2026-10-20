@@ -55,19 +55,17 @@ import OpenCineMedia
     init(
         player: AVPlayer = AVPlayer(),
         feed: MonitorPlaybackFeedSession = NikonPlaybackFeedSession(),
-        playable: @escaping @MainActor (AVURLAsset) async -> Bool = {
-            (try? await $0.load(.isPlayable)) == true
-        },
-        poll: @escaping @MainActor () async throws -> Void = {
-            try await Task.sleep(for: .milliseconds(400))
-        },
-        captureBeforePrepare: @escaping @MainActor () -> (@MainActor () async -> Void) = { {} }
+        playable: (@MainActor (AVURLAsset) async -> Bool)? = nil,
+        poll: (@MainActor () async throws -> Void)? = nil,
+        captureBeforePrepare: (@MainActor () -> (@MainActor () async -> Void))? = nil
     ) {
         self.player = player
         self.feed = feed
-        self.playable = playable
-        self.poll = poll
-        self.captureBeforePrepare = captureBeforePrepare
+        // Resolved here, not as closure-literal defaults: RunnerTests' @testable copies of an
+        // async default can disagree on context size with the app's (swiftlang/swift#92017).
+        self.playable = playable ?? { (try? await $0.load(.isPlayable)) == true }
+        self.poll = poll ?? { try await Task.sleep(for: .milliseconds(400)) }
+        self.captureBeforePrepare = captureBeforePrepare ?? { {} }
     }
 
     func candidates(

@@ -1,5 +1,5 @@
-- Instant review covers RAW-only photos and appears sooner; the GYRO pill no longer covers the screen lock.
-- Tap-to-focus no longer sticks busy while the focus dial drives; top bar readouts get their glow back.
-- With two cards, the shots counter and app photos follow the stills card.
-- A camera another phone is using asks before take-over; the other phone stops reconnecting.
-- Reconnecting keeps stills or video mode, and an unseen saved Wi-Fi camera is woken first.
+- DISP 3 is back in the live style: REC chip, timecode when the camera runs it, larger tiles.
+- Instant review covers RAW-only photos and appears sooner; the GYRO pill no longer covers the lock.
+- Tap-to-focus no longer sticks busy while the focus dial drives; top bar readouts glow again.
+- Photo mode shows shots left as a picture icon and count, following the stills card.
+- Take-over asks first and the other phone stops; reconnecting keeps stills or video and wakes an unseen saved camera.

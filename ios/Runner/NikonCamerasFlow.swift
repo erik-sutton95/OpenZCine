@@ -66,7 +66,10 @@ final class NativeNikonPort: NikonConnectPort {
     /// Screenshot staging (`ZC_DEMO_CARD`): `connecting` holds the card on its steps, `failed`
     /// fails it, without dialling anything.
     var demoOutcome: String?
-    private unowned let model: NativeAppModel
+    /// Weak: the shared integration owns this port, and its discovery and connect tasks can
+    /// outlive the model (a model torn down while a stream's termination hop is queued). A
+    /// call that arrives after the model is gone does nothing instead of trapping.
+    private weak var model: NativeAppModel?
     private var pending: CheckedContinuation<NikonConnection, Error>?
     private var attemptID = UUID()
 
@@ -76,7 +79,7 @@ final class NativeNikonPort: NikonConnectPort {
 
     func startDiscovery(_ mode: DiscoveryMode) {
         requestedMode = mode
-        model.startDiscoveryForSharedFlow()
+        model?.startDiscoveryForSharedFlow()
     }
 
     func stopDiscovery() { requestedMode = nil }
@@ -88,6 +91,7 @@ final class NativeNikonPort: NikonConnectPort {
     /// access point's address (192.168.1.1 by convention, also the commonest home router) says
     /// nothing about the camera unless this phone is on that access point, as the old list ruled.
     func found(_ cameras: [DiscoveredCamera]) {
+        guard let model else { return }
         let accessPoints =
             model.isOnCameraAccessPointNetwork ? [] : model.savedCameraAccessPointHosts
         let visible = cameras.filter { camera in
@@ -124,6 +128,10 @@ final class NativeNikonPort: NikonConnectPort {
                     stage(demoOutcome)
                     return
                 }
+                guard let model else {
+                    finish(.failure(CancellationError()))
+                    return
+                }
                 model.connectionProgressUsesCard = true
                 model.lastConnectError = nil
                 model.lastConnectFailureReason = nil
@@ -146,12 +154,12 @@ final class NativeNikonPort: NikonConnectPort {
     func cancel() {
         guard pending != nil else { return }
         finish(.failure(CancellationError()))
-        model.cancelConnectionAttempt()
-        model.connectionProgressUsesCard = false
+        model?.cancelConnectionAttempt()
+        model?.connectionProgressUsesCard = false
     }
 
     func forget(hosts: [String]) {
-        for host in hosts { model.forgetPairing(host: host) }
+        for host in hosts { model?.forgetPairing(host: host) }
     }
 
     private func finish(_ result: Result<NikonConnection, Error>) {
@@ -163,6 +171,7 @@ final class NativeNikonPort: NikonConnectPort {
     /// Follows the funnel until it connects, fails or is dismissed, reporting each phase.
     private func track() {
         guard pending != nil else { return }
+        guard let model else { return finish(.failure(CancellationError())) }
         withObservationTracking {
             _ = model.resolvedConnectionPhase
             _ = model.connectionStageDetail
@@ -176,6 +185,7 @@ final class NativeNikonPort: NikonConnectPort {
 
     private func observe() {
         guard pending != nil else { return }
+        guard let model else { return finish(.failure(CancellationError())) }
         if let connection = model.sharedConnection {
             model.connectionProgressUsesCard = false
             model.shell.endPairing()
@@ -615,12 +625,16 @@ extension NativeAppModel {
                         actions: [.retry],
                         code: "nikon.held")
                 }
-                connectToCamera(discovered, setup: record, takingOverConfirmed: approved)
+                connectToCamera(
+                    discovered, setup: record, takingOverConfirmed: approved,
+                    operatorRequested: true)
             } else {
                 connectSavedCamera(record)
             }
         case .discovered(let camera, let takeOver):
-            connectToCamera(camera, takingOverConfirmed: takeOver || takingOverConfirmed)
+            connectToCamera(
+                camera, takingOverConfirmed: takeOver || takingOverConfirmed,
+                operatorRequested: true)
         case .addSetup(let anchorHost, let anchorPath, let path):
             // Adding a setup arms the funnel's watch for the body on that path.
             guard

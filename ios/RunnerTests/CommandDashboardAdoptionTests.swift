@@ -264,6 +264,45 @@ import Testing
         #expect(health.camera == model.cameraState.cameraName)
         #expect(health.lens == model.cameraState.lens)
     }
+
+    @Test func dispCyclesThroughTheDashboardInVideoAndSkipsItInPhoto() {
+        // Baseline `displayOrder`: video offers DISP 1, 2, 3; photography hides the command
+        // dashboard (owner decision 2026-10-19: video only). The connect-time declaration is
+        // ZIA-004's `connectSelectorDeclaresDisplayModes`.
+        let model = NativeAppModel()
+        model.isDemoSession = true
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        #expect(model.displayModes == [.live, .clean, .command])
+        model.operatorSession.declare(modes: model.displayModes)
+        var seen: [MonitorDisplayMode] = [model.operatorSession.mode]
+        for _ in 0..<3 {
+            model.operatorSession.cycle()
+            seen.append(model.operatorSession.mode)
+        }
+        #expect(seen == [.live, .clean, .command, .live])
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([0])))
+        #expect(model.displayModes == [.live, .clean])
+        model.operatorSession.declare(modes: model.displayModes)
+        seen = [model.operatorSession.mode]
+        for _ in 0..<2 {
+            model.operatorSession.cycle()
+            seen.append(model.operatorSession.mode)
+        }
+        #expect(seen == [.live, .clean, .live])
+    }
+
+    @Test func theHeroReadsTheHeaderAndShowsNoTimecodeTheBodyDoesNotRun() {
+        // Baseline DISP 3 headed the dashboard with the record chip and hero timecode, and omitted
+        // the hero digits when the body runs no timecode (MonitorPanels `cameraReportsTimecode`).
+        let model = NativeAppModel()
+        let header = model.headerStatusPresentation
+        let hero = model.commandHeroPresentation
+        #expect(hero.recording == header.recording)
+        #expect(hero.recordingLabel == header.recordingLabel)
+        #expect(!model.monitorAvailableSections.contains(.timecode))
+        #expect(hero.timecode == nil)
+        #expect(hero.commandHeroTimecode == nil)
+    }
 }
 
 #if os(iOS)

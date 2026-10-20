@@ -2,6 +2,7 @@ import MonitorUI
 import OpenCineAppKit
 import OpenCineCore
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import SwiftUI
 import UIKit
 import XCTest
@@ -58,13 +59,11 @@ final class MulticamPictureTests: XCTestCase {
         return RGB(r: Int(bytes[0]), g: Int(bytes[1]), b: Int(bytes[2]))
     }
 
-    private func waitUntil(
-        _ what: String, timeout: TimeInterval = 5, _ condition: () -> Bool
-    ) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { return XCTFail("timed out waiting for \(what)") }
-            try await Task.sleep(for: .milliseconds(10))
+    /// Readiness only: the shared hang guard (`HostedCondition`) instead of a short fixed window,
+    /// which a loaded hosted runner overran.
+    private func waitUntil(_ what: String, _ condition: @MainActor () -> Bool) async throws {
+        if !(await HostedCondition.wait(until: condition)) {
+            XCTFail("timed out waiting for \(what)")
         }
     }
 
@@ -290,16 +289,13 @@ final class MulticamPictureTests: XCTestCase {
         func element(_ predicate: (NSObject) -> Bool) -> NSObject? {
             HostedAccessibility.elements(in: host.view).first(where: predicate)
         }
+        // Readiness only: the shared hang guard, polled, not a 5 s predicate expectation.
         func settle(_ message: String, _ predicate: @escaping @MainActor () -> Bool) async {
-            let expected = XCTNSPredicateExpectation(
-                predicate: NSPredicate { _, _ in
-                    MainActor.assumeIsolated {
-                        host.view.layoutIfNeeded()
-                        return predicate()
-                    }
-                }, object: nil)
-            let result = await XCTWaiter.fulfillment(of: [expected], timeout: 5)
-            XCTAssertEqual(result, .completed, message)
+            let settled = await HostedCondition.wait {
+                host.view.layoutIfNeeded()
+                return predicate()
+            }
+            XCTAssertTrue(settled, message)
         }
         let lutLabel = "Toggle LUT for all cameras"
         await settle("The LUT tool is offered from the members' renderers") {

@@ -1,5 +1,6 @@
 New and changed
 
+- DISP 3 (the command dashboard) is back in the live view's style: the REC chip heads it, with a large timecode when the camera runs timecode, and the tiles are larger. Tap a tile to change it; hold and drag to reorder.
 - Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
 - In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
 - Connecting to a saved Wi-Fi camera that the camera list cannot see now wakes it first, and reports that it is not on the network if it stays silent.
@@ -14,12 +15,13 @@ Fixes
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
 - After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver. A volume-button remote shutter is protected against a rare quit.
 - With two cards, the shots counter counts only the card the camera saves photos to, and photos taken from the app go to that card.
+- In Photo mode, shots left show as a picture icon and the count (for example 20.2k), so the signal indicator stays clear of the Dynamic Island in portrait; tapping SHOTS shows free card space and percentage. A camera on external power without a battery level shows EXT, and VoiceOver reads external power.
 - On a fresh install, the Local Network permission is asked for only at the permissions step of setup, not on the first screen.
 
 What to test
 
 - In video, turn a LUT on, switch the camera to Photo and check the preview colours match the camera, then switch back to video and check the LUT returns.
-- Turn on instant review (PLAY). Shoot RAW, JPEG and RAW+JPEG in A, S, M and P; check each review turns sharp. With photos on card 2, compare shots left and where app photos land.
+- Turn on instant review (PLAY). Shoot RAW, JPEG and RAW+JPEG in A, S, M and P; check each review turns sharp. With photos on card 2, compare shots left (picture icon and count) and where app photos land.
 - With gyro logging on, tap the GYRO pill; it opens the logs and never locks the controls. Turn the focus dial and tap a new point mid-turn; focus keeps responding.
 - Reinstall: the Local Network prompt should appear only at the permissions step. Then connect to a saved Wi-Fi camera while it is waking from power saving.
 - With two phones, connect the second to a camera the first is using. It should ask first; after Take Over, the first phone shows Camera taken over and stops reconnecting.

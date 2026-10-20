@@ -5,6 +5,7 @@ import com.opencapture.opencine.media.recordingTimeLabel
 import com.opencapture.opencine.media.storageReadout
 import com.opencapture.opencine.media.StorageReadout
 import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.MonitorTextFormat
 import java.util.concurrent.atomic.AtomicReference
 import com.opencapture.openzcine.gyro.GyroCaptureState
 import com.opencapture.openzcine.gyro.GyroStatusPill
@@ -1953,13 +1954,19 @@ internal fun MonitorScreen(
         val statusStorage = if (isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE)) {
             val storage = cameraProperties.storage
             val capacity = storage?.readout?.takeIf { photoPillShowsStorage && it.totalBytes != null }
+            // Remaining shots read as a picture glyph and the count, which keeps the portrait
+            // header's telemetry clear of the camera cutout; the storage flip keeps the card.
+            val shots = cameraProperties.shotsRemaining.takeIf { capacity == null }
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
                 if (capacity != null) {
                     val free = if (isPortrait) MonitorStorageReadoutFormat.wholeUnitCapacity(capacity.freeBytes)
                         else capacity.free
                     "$free ${capacity.percent}"
-                } else cameraProperties.shotsRemaining?.let { "${shotsRemainingCompactLabel(it)} SHOTS" },
-                MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage })
+                } else shots?.let(MonitorTextFormat::shotsRemainingCompactLabel),
+                MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage },
+                icon = if (capacity == null) MonitorIcon.IMAGE else null,
+                accessibilityLabel = if (capacity != null) null
+                    else shots?.let(MonitorTextFormat::shotsRemainingAccessibilityLabel) ?: "Shots remaining unknown")
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",
             mediaLabel(isPortrait), MonitorDisplaySection.STORAGE, action = { prefersMediaDuration = !prefersMediaDuration }) else null
         val resolutionKind = if (isPhotographyMode) MonitorPickerKind.SIZE else MonitorPickerKind.RESOLUTION
@@ -2121,9 +2128,14 @@ internal fun MonitorScreen(
                     fitted = if (scopeSource !== emptyScopes) portraitScopes.map { it.assistTool } else emptyList()),
                 MonitorOperatorBodyViews(
                     dashboard = { accepts ->
+                        // DISP 3 hero: the header's status, with no hero digits when nothing feeds
+                        // timecode (iOS `commandHeroPresentation`).
+                        val hero = commonControl.statusPresentation().let {
+                            if (MonitorDisplaySection.TIMECODE in available) it else it.copy(timecode = null)
+                        }
                         CommandDashboard(commandPresentation, isPortrait, commandControlsEnabled && accepts,
                             pendingCommandControl, openCommandControl, moveCommandTileTo,
-                            link.label, link.bars)
+                            link.label, link.bars, hero)
                     },
                     focusDrive = if (
                         // Operator preference (FOCUS popup toggle, iOS `mfDriveScrubEnabled`), default OFF; off

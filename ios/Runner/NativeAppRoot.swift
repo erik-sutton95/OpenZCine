@@ -2190,6 +2190,11 @@ final class NativeAppModel {
         return cameraPower.flatMap { $0.charging.value ?? $0.externalPower.value }
     }
 
+    /// The body reports running on external power (spoken as such, and "EXT" without a level).
+    var cameraExternalPower: Bool? {
+        videoSource == .relay ? nil : cameraPower?.externalPower.value
+    }
+
     var cameraBatteryExhausted: Bool? {
         videoSource == .relay ? relayedBatteryExhausted : cameraPower?.exhausted.value
     }
@@ -3115,9 +3120,10 @@ final class NativeAppModel {
     }
 
     /// SSIDs whose join offer the operator explicitly cancelled this session. Cancel means no:
-    /// re-offering the same alert minutes later — from a reconnect, a launch join, a retry —
+    /// re-offering the same alert minutes later from a reconnect, a launch join or a setup watch
     /// is how "very persistent" prompts happen, and no record heuristic can override a human
-    /// who just said no. Session-scoped on purpose; a fresh launch is a fresh question.
+    /// who just said no. Session-scoped on purpose; a fresh launch is a fresh question. The
+    /// operator's own Connect or Try again is that fresh question too (`forgetDeclinedJoin`).
     @ObservationIgnored private var declinedJoinSSIDs: Set<String> = []
 
     /// Whether the operator has declined joining `ssid` this session.
@@ -3128,11 +3134,25 @@ final class NativeAppModel {
         return false
     }
 
+    /// Lifts the latch for one network when the operator asks for it again. Keeping it made
+    /// their Try again skip the join and dial the camera's access-point address from whatever
+    /// network the phone was on (FINAL-Z3-08), so only a relaunch could connect.
+    private func forgetDeclinedJoin(ssid: String?, prefix: String?) {
+        if let ssid { declinedJoinSSIDs.remove(ssid) }
+        if let prefix { declinedJoinSSIDs = declinedJoinSSIDs.filter { !$0.hasPrefix(prefix) } }
+    }
+
     private func joinCameraNetwork(
         target: CameraWiFiJoinPolicy.ProactiveJoinTarget,
         credentials: CameraWiFiPasswordSubmission,
         joinStrategy: WiFiJoinCoordinator.JoinStrategy
     ) async throws {
+        #if DEBUG
+            if let peers = cameraNetworkJoinPeers {
+                try await peers.join(target)
+                return
+            }
+        #endif
         // Hotspot work still queued behind an earlier pending join runs only for this connection.
         let generation = connectionGeneration
         let isCurrent: CameraNetworkIsCurrent = { [weak self] in
@@ -3605,15 +3625,15 @@ final class NativeAppModel {
 
     func connectSelectedCamera() {
         if let selectedPairingDiscoveryCamera {
-            connectToCamera(selectedPairingDiscoveryCamera)
+            connectToCamera(selectedPairingDiscoveryCamera, operatorRequested: true)
         } else {
-            connectToCamera()
+            connectToCamera(operatorRequested: true)
         }
     }
 
     func connectSavedCamera(_ camera: PTPIPSavedCameraRecord) {
         cameraHost = camera.host
-        connectToCamera(setup: camera)
+        connectToCamera(setup: camera, operatorRequested: true)
     }
 
     /// Dismisses the connection progress sheet without tearing down an active session.
@@ -3752,12 +3772,15 @@ final class NativeAppModel {
     ///   order — and the whole path dispatch downstream (`performWiFiJoinIfNeeded`) then runs the
     ///   wrong path's machinery. Tapping the AP setup silently took the router's branch, which is
     ///   why it never offered the join. Passed down rather than stored so it cannot go stale.
+    /// - Parameter operatorRequested: the operator's own tap (Connect, Try again), as opposed to a
+    ///   reconnect, setup watch or recovery. Only such a tap may re-offer a declined join.
     func connectToCamera(
         _ discoveredCamera: DiscoveredCamera? = nil,
         preservingMonitorSurface: Bool = false,
         viaCameraAccessPointJoin: Bool = false,
         setup: PTPIPSavedCameraRecord? = nil,
-        takingOverConfirmed: Bool = false
+        takingOverConfirmed: Bool = false,
+        operatorRequested: Bool = false
     ) {
         // While the multicam stage is up its members own their links: no single-camera connect
         // starts underneath it (a lent member's Live View recovery still may).
@@ -3775,7 +3798,7 @@ final class NativeAppModel {
                         self?.connectToCamera(
                             discoveredCamera, preservingMonitorSurface: preservingMonitorSurface,
                             viaCameraAccessPointJoin: viaCameraAccessPointJoin, setup: setup,
-                            takingOverConfirmed: true)
+                            takingOverConfirmed: true, operatorRequested: operatorRequested)
                     }, cancel: {}),
                 source: "native-connect",
                 isCurrent: { [weak self] in
@@ -3905,7 +3928,8 @@ final class NativeAppModel {
                     transportKind: transportKind,
                     savedCamera: savedCamera,
                     discoveredCamera: discoveredCamera,
-                    deviceName: connectionProgressDeviceName
+                    deviceName: connectionProgressDeviceName,
+                    operatorRequested: operatorRequested
                 )
             } catch is CancellationError {
                 guard connectionGeneration == generation else { return }
@@ -4323,7 +4347,7 @@ final class NativeAppModel {
     /// backing out and tapping the camera again — without making them do it.
     func retryConnectionAttempt() {
         guard connectionProgressShowsFailure, !isEstablishingConnection else { return }
-        connectToCamera()
+        connectToCamera(operatorRequested: true)
     }
 
     private func startupConnectionMessage(
@@ -4551,6 +4575,16 @@ final class NativeAppModel {
         @ObservationIgnored var sessionRecoveryPeers: SessionRecoveryPeers? {
             didSet { recoveryEpisode = makeRecoveryEpisode() }
         }
+
+        /// SIMULATED camera access-point peers for the join gate: the iOS join alert's answer,
+        /// the camera's readiness probe and the PTP dial, so a test drives the shipped connect
+        /// without Wi-Fi or a camera. A dial is recorded, then refused.
+        struct CameraNetworkJoinPeers {
+            var join: @MainActor (CameraWiFiJoinPolicy.ProactiveJoinTarget) async throws -> Void
+            var isAlive: @MainActor (String) async -> Bool
+            var dial: @MainActor (String) -> Void
+        }
+        @ObservationIgnored var cameraNetworkJoinPeers: CameraNetworkJoinPeers?
 
         /// Connection-lifecycle inspection for the shell's lifecycle tests. Read-only apart from
         /// `debugEnqueueCameraWrite`, which seeds the queued-write path so a test can prove a
@@ -5191,15 +5225,41 @@ final class NativeAppModel {
             stillsCardShots: snapshot.stillsCardShots)
     }
 
+    /// The readings a property reset leaves standing until a re-read replaces them.
+    static func heldPropertySnapshot(
+        _ snapshot: PTPCameraPropertySnapshot, keepingCaptureMode: Bool, keepingReadings: Bool
+    ) -> PTPCameraPropertySnapshot {
+        keepingReadings ? snapshot : heldCaptureMode(snapshot, keeping: keepingCaptureMode)
+    }
+
+    /// The display and reported snapshots a property reset leaves standing.
+    static func heldPropertySnapshots(
+        display: PTPCameraPropertySnapshot, reported: PTPCameraPropertySnapshot,
+        keepingCaptureMode: Bool, keepingReadings: Bool
+    ) -> (display: PTPCameraPropertySnapshot, reported: PTPCameraPropertySnapshot) {
+        let reported = heldPropertySnapshot(
+            reported, keepingCaptureMode: keepingCaptureMode, keepingReadings: keepingReadings)
+        // The reset drops writes that were queued but never sent, so a kept display falls back to
+        // what the camera confirmed instead of a picker's optimistic value.
+        guard !keepingReadings else { return (reported, reported) }
+        return (heldCaptureMode(display, keeping: keepingCaptureMode), reported)
+    }
+
     /// `keepingCaptureMode` is a restart or same-host recovery: the held body stays in stills or
     /// video (and keeps its shot count) until a re-read replaces them, so its chrome never falls
     /// back to the other mode meanwhile.
-    private func resetCameraPropertyState(keepingCaptureMode: Bool = false) {
-        cameraPropertySnapshot = Self.heldCaptureMode(
-            cameraPropertySnapshot, keeping: keepingCaptureMode)
-        reportedPropertySnapshot = Self.heldCaptureMode(
-            reportedPropertySnapshot, keeping: keepingCaptureMode)
-        stabilizationFileTypeReadback = nil
+    ///
+    /// `keepingReadings` is a warm restart that skips the property burst (a Quality Bias change, a
+    /// picture-source switch). Nothing re-reads the body then except the slow round-robin, so
+    /// clearing the readings left the readouts at "--" and dropped the timecode's frame field
+    /// (its precision comes from the reported frame rate) for a whole poll cycle.
+    private func resetCameraPropertyState(
+        keepingCaptureMode: Bool = false, keepingReadings: Bool = false
+    ) {
+        (cameraPropertySnapshot, reportedPropertySnapshot) = Self.heldPropertySnapshots(
+            display: cameraPropertySnapshot, reported: reportedPropertySnapshot,
+            keepingCaptureMode: keepingCaptureMode, keepingReadings: keepingReadings)
+        if !keepingReadings { stabilizationFileTypeReadback = nil }
         propertyPollIndex = 0
         cameraAnnouncedPropertyChanges.removeAll()
         lastRecordingPropertyPollAt = nil
@@ -5473,7 +5533,7 @@ final class NativeAppModel {
         manualCameraHostDraft = ""
         logConnection("infra-search manual host=\(normalized)")
         let camera = DiscoveredCamera(ip: normalized, name: nil, source: .manual)
-        connectToCamera(camera)
+        connectToCamera(camera, operatorRequested: true)
     }
 
     /// Every address a discovery pass should be dialling, and where each came from.
@@ -6289,7 +6349,8 @@ final class NativeAppModel {
         transportKind: CameraTransportKind,
         savedCamera: PTPIPSavedCameraRecord?,
         discoveredCamera: DiscoveredCamera?,
-        deviceName: String
+        deviceName: String,
+        operatorRequested: Bool
     ) async throws {
         // THE dispatch: only a record DECLARED as a camera-AP setup may proceed toward the join
         // machinery. Router, hotspot and cable setups exit here — for them the code below does
@@ -6391,13 +6452,21 @@ final class NativeAppModel {
             logConnection("join skipped: target names neither an SSID nor a prefix")
             return
         }
-        guard !joinWasDeclined(ssid: joinTarget.ssid, prefix: joinTarget.ssidPrefix) else {
-            // A "no" to the iOS join alert latches so nothing re-offers the same network. That
-            // latch is invisible, so a decline made during one bad session reads later as a dead
-            // button — the operator taps Camera AP and gets silence.
+        if operatorRequested {
+            forgetDeclinedJoin(ssid: joinTarget.ssid, prefix: joinTarget.ssidPrefix)
+        }
+        if joinWasDeclined(ssid: joinTarget.ssid, prefix: joinTarget.ssidPrefix) {
+            // A "no" to the iOS join alert latches so no automatic connect re-offers the same
+            // network. Skipping the join must not mean dialing anyway: the access-point address
+            // is not on the phone's network, and the dial fails as "No PTP-IP service answered".
+            // A camera that already answers (joined in Settings, SSID unreadable) is still dialed.
             logConnection(
                 "join skipped: DECLINED latch for \(joinTarget.ssid ?? joinTarget.ssidPrefix ?? "?")"
             )
+            let host = cameraHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard await cameraAccessPointAnswers(host) else {
+                throw WiFiJoinCoordinator.JoinError.userDenied
+            }
             return
         }
         // hotspotConfigurationOnly keeps the native join alert over our sheet; the ASK
@@ -6432,7 +6501,7 @@ final class NativeAppModel {
         var dials = 0
         while Date() < deadline, !Task.isCancelled {
             dials += 1
-            if await NativeNikonDiscovery.dialer.isAlive(host) {
+            if await cameraAccessPointAnswers(host) {
                 logConnection("post-join: \(host) answered after \(dials) dial(s)")
                 return
             }
@@ -6441,6 +6510,14 @@ final class NativeAppModel {
         // Never fatal. A body that stays silent is a real failure worth surfacing through the
         // establish path's own error, not a reason to refuse to try the Init at all.
         logConnection("post-join: \(host) silent for \(Int(timeout))s — connecting anyway")
+    }
+
+    /// The camera list's readiness probe: never a PTP Init, so it cannot disturb the body.
+    private func cameraAccessPointAnswers(_ host: String) async -> Bool {
+        #if DEBUG
+            if let peers = cameraNetworkJoinPeers { return await peers.isAlive(host) }
+        #endif
+        return await NativeNikonDiscovery.dialer.isAlive(host)
     }
 
     private func transitionToSavedCameraNetworkCheck(message: String) {
@@ -6493,6 +6570,12 @@ final class NativeAppModel {
         strategy: CameraConnectionStrategy,
         allowsPairingEscalation: Bool = true
     ) async throws -> (session: NativeCameraSession, requestedPairing: Bool) {
+        #if DEBUG
+            if let peers = cameraNetworkJoinPeers {
+                peers.dial(host)
+                throw NativeCameraSessionError.noHost
+            }
+        #endif
         connectionStageDetail = ""
         let diagnosticBox = establishmentDiagnostic
         let isUSBHost = host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix)
@@ -7206,7 +7289,10 @@ final class NativeAppModel {
         let incident = feedIncidentProducer?.beginPreview()
         let retiredDecodeSource = frameDecoder.retireSource()
         Task { await frameDecoder.resetProcessors(source: retiredDecodeSource) }
-        if videoSource == .cameraLiveView { resetCameraPropertyState(keepingCaptureMode: true) }
+        if videoSource == .cameraLiveView {
+            resetCameraPropertyState(
+                keepingCaptureMode: true, keepingReadings: skipPropertyBootstrap)
+        }
         var frameRate = FrameRateSampler()
         monitorRuntime?.startPreview(
             bootstrap: { [weak self] in
@@ -12757,10 +12843,9 @@ final class NativeAppModel {
                 "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
         }
         let storage = shell.control.snapshot?.storage
-        if prefersMediaDuration { return storage?.recordingTimeLabel ?? "-- Min" }
-        guard let readout = storage?.storageReadout else { return StorageReadout.unavailable }
-        return portrait
-            ? MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: readout.freeBytes) : readout.free
+        return LiveMediaReadout.label(
+            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
+            portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {

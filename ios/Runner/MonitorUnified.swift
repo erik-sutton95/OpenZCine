@@ -291,9 +291,6 @@ struct NikonMonitorShell: View {
         }
     }
     /// A relay or demo monitor has no camera control here; it forwards the host's recording state.
-    private var forwardedRecording: Bool? {
-        model.isDemoSession || model.videoSource == .relay ? model.isRecording : nil
-    }
     private var status: MonitorOperatorLiveStatus<NikonLiveReadoutKey, Section> {
         let photo = model.isPhotographyMode
         let portrait = live.viewport.height > live.viewport.width
@@ -304,14 +301,7 @@ struct NikonMonitorShell: View {
             $0.token == model.cameraState.resolutionFrameRate
         }?.imageArea
         let formatLabel = nikonRecordingFormatLabel(recordingLabel, imageArea: imageArea)
-        // The common session publishes the header timecode at frame precision (A5-04).
-        let recording =
-            model.pictureOnlyMonitor
-            ? MonitorStatusPresentation(
-                recording: forwardedRecording,
-                timecode: model.cameraReportsTimecode ? model.liveTimecode.monitorLabel : nil,
-                timecodePlaceholder: Timecode.placeholder)
-            : model.shell.control.statusPresentation()
+        let recording = model.headerStatusPresentation
         var format: [Readout] = []
         if model.chromeSectionMounts(.format) {
             format.append(
@@ -337,12 +327,19 @@ struct NikonMonitorShell: View {
         }
         let storage: Readout?
         if photo && model.chromeSectionMounts(.timecode) {
+            // Remaining shots read as a picture glyph and the count, which keeps the portrait
+            // header's telemetry clear of the Dynamic Island; the storage flip keeps the card.
+            let flipped = model.photoPillShowsStorage
+            let shots = flipped ? nil : model.cameraPropertySnapshot.shotsRemaining
+            let spoken = shots.map(MonitorTextFormat.shotsRemainingAccessibilityLabel)
             storage = .init(
                 id: .storage, title: "Storage",
-                value: model.photoPillShowsStorage
+                value: flipped
                     ? model.liveMediaReadout(portrait: portrait)
-                    : model.cameraPropertySnapshot.shotsRemaining.map { "\($0) SHOTS" } ?? "--",
-                section: .timecode, action: { model.photoPillShowsStorage.toggle() })
+                    : shots.map(MonitorTextFormat.shotsRemainingCompactLabel) ?? "--",
+                section: .timecode, action: { model.photoPillShowsStorage.toggle() },
+                valueIcon: flipped ? nil : .image,
+                accessibilityLabel: flipped ? nil : spoken ?? "Shots remaining unknown")
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
                 id: .storage, title: "Storage", value: model.liveMediaReadout(portrait: portrait),
@@ -375,7 +372,7 @@ struct NikonMonitorShell: View {
     private var cameraBattery: MonitorOperatorPowerReading? {
         .camera(
             model.cameraBatteryReading, exhausted: model.cameraBatteryExhausted,
-            charging: model.cameraPowerCharging)
+            charging: model.cameraPowerCharging, externalPower: model.cameraExternalPower)
     }
 
     private var panel: MonitorOperatorCameraPanel<NikonLiveReadoutKey>? {
@@ -432,7 +429,8 @@ struct NikonMonitorShell: View {
             busy: false, openMode: nil,
             external: model.pictureOnlyMonitor
                 ? .init(
-                    recording: forwardedRecording, confirmation: model.pendingRecordConfirmation,
+                    recording: model.forwardedRecording,
+                    confirmation: model.pendingRecordConfirmation,
                     request: model.toggleRecording, cancel: model.cancelRecordToggle,
                     confirm: model.confirmRecordToggle) : nil)
     }
@@ -607,15 +605,41 @@ private struct NikonCameraSettingExtension: View {
     }
 }
 
-/// DISP 3: the shared command dashboard over the Nikon tiles, health and pickers. Portrait stacks
-/// the compact grid over the sections, as on Android.
+extension NativeAppModel {
+    /// A picture-only monitor's record state: what its relay or demo forwards, unknown otherwise.
+    var forwardedRecording: Bool? {
+        isDemoSession || videoSource == .relay ? isRecording : nil
+    }
+
+    /// The header's record state and timecode. The common session publishes the header timecode
+    /// at frame precision (A5-04); a picture-only monitor shows what its relay or demo forwards.
+    var headerStatusPresentation: MonitorStatusPresentation {
+        guard pictureOnlyMonitor else { return shell.control.statusPresentation() }
+        return MonitorStatusPresentation(
+            recording: forwardedRecording,
+            timecode: cameraReportsTimecode ? liveTimecode.monitorLabel : nil,
+            timecodePlaceholder: Timecode.placeholder)
+    }
+
+    /// DISP 3 hero: the header's status, with no hero digits when nothing feeds timecode (a body
+    /// that runs none), as the baseline omitted a frozen 00:00:00:00 hero.
+    var commandHeroPresentation: MonitorStatusPresentation {
+        var status = headerStatusPresentation
+        if !monitorAvailableSections.contains(.timecode) { status.timecode = nil }
+        return status
+    }
+}
+
+/// DISP 3: the shared command dashboard over the Nikon tiles, health and pickers, headed by the
+/// record chip and hero timecode. Portrait stacks the compact grid over the sections, as on Android.
 private struct NikonCommandDashboard: View {
     @Environment(NativeAppModel.self) private var model
     let layout: FieldMonitorLayout
     var body: some View {
         MonitorCommandDashboard(
             tiles: model.commandDashboardTiles, sections: model.commandDashboardSections,
-            health: model.commandDashboardHealth, portrait: layout.portrait,
+            health: model.commandDashboardHealth, hero: model.commandHeroPresentation,
+            portrait: layout.portrait,
             controlsEnabled: !model.interfaceLocked,
             onOpenControl: { model.showPicker($0.picker, mode: $0.mode) },
             onMoveTile: { model.moveCommandTile($0, to: $1) },

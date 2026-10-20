@@ -353,8 +353,10 @@ class NikonPlaybackOwnerAdoptionTest {
     }
 
     @Test fun `complete Android player scene return follows the shared play request policy`() = runTest {
-        // A4-12: the Nikon player keeps the shared scene-loss policy (Pocket, Insta and Z iOS):
-        // a playing clip resumes when the app returns, an explicit pause stays paused.
+        // A4-12: the Nikon player keeps the shared scene-loss policy (Pocket, Insta and Z iOS).
+        // Since OpenCine #120 (ZAB-502) that policy is clearRequest: leaving the app pauses and
+        // forgets the play request, returning never restarts the clip or its sound, and the
+        // first toggle back resumes.
         val f = Fixture(backgroundScope)
         try {
             val opening = MonitorMediaGalleryOpen(f.records[0], f.records, f.library.actionToken)
@@ -368,10 +370,16 @@ class NikonPlaybackOwnerAdoptionTest {
             val calls = mutableListOf<String>()
             native.attach(player("scene", calls), owner.state.value.token, {}) { _, _ -> }; runCurrent()
             assertTrue(owner.state.value.ready)
-            context.media.sceneActive(false)
-            assertTrue(owner.state.value.playRequested, "Leaving the app keeps the operator's play request")
+            assertTrue(owner.state.value.playRequested)
+            calls.clear(); context.media.sceneActive(false); runCurrent()
+            assertEquals(listOf("pause:scene"), calls, "Leaving the app pauses the native player")
+            assertFalse(owner.state.value.playRequested, "Leaving the app forgets the play request")
             calls.clear(); context.media.sceneActive(true); runCurrent()
-            assertEquals(listOf("play:scene"), calls, "Returning resumes the clip that was playing")
+            assertTrue(calls.isEmpty(), "Returning leaves the clip paused")
+            assertFalse(owner.state.value.playRequested)
+            owner.togglePlaying(); runCurrent()
+            assertEquals(listOf("play:scene"), calls, "The first toggle after returning resumes")
+            assertTrue(owner.state.value.playRequested)
             owner.setPlaying(false); context.media.sceneActive(false)
             calls.clear(); context.media.sceneActive(true); runCurrent()
             assertTrue(calls.isEmpty(), "An explicit pause stays paused across the scene")

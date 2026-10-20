@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- DISP 3 (the command dashboard) returns in the shared live view's style on iOS and Android: the
+  record chip heads it again, with the hero timecode (frames in the accent) when the body runs
+  timecode, in the live view's type and with larger tiles. DISP stays 1, 2, 3 in video and 1, 2 in photo.
+
 - Live View and Multicam preserve Nikon frame timecode when it is reported by
   the camera, including frame zero. Cameras without frame timecode keep their
   seconds display; no frame rate is guessed.
@@ -103,6 +107,10 @@ All notable changes to this project are documented here. The format is based on
   configuration.
 
 ### Fixed
+
+- Photo mode shows remaining shots as a picture glyph and the count (`20.2k` above four digits,
+  never rounded up) instead of "SHOTS", and the portrait header keeps the signal indicator clear of
+  the Dynamic Island or camera cutout (iOS + Android). VoiceOver and TalkBack read the full count.
 
 - Completed cached clips open from a fresh offline media library on iOS and Android.
 

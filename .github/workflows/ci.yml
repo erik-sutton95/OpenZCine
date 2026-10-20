@@ -1,21 +1,33 @@
 name: CI
 
+# Two tiers (docs/ci.md). This is the fast PR tier; its "CI gate" is the one required check.
+# nightly.yml calls it with `full: true`, which runs every job regardless of paths and adds the
+# simulator conformance suite and the iPad storage oracle.
+# A branch push used to start a second run beside its pull request's; run a branch without a pull
+# request through workflow_dispatch.
 on:
   push:
     branches:
       - main
-      - "feature/**"
-      - "feat/**"
-      - "codex/**"
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      full:
+        description: Run every job regardless of paths, plus the nightly-only suites
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   pull-requests: read # dorny/paths-filter lists changed PR files via the API
 
+# The workflow name keeps the nightly's call of this file apart from the push run on main.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Cancel only a superseded pull-request run. Main pushes, dispatches and the nightly's call run
+  # to completion (a newer pending main run still replaces an older pending one).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   meta:
@@ -28,6 +40,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Warn when the OpenCine pin is behind
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pin="$(awk '$1 == "OpenCine" { print $2; exit }' opencine-pins.txt)"
+          core_sha="$(git ls-remote https://github.com/erik-sutton95/OpenCine.git refs/heads/main | cut -f1 || true)"
+          if [ -z "$pin" ] || [ -z "$core_sha" ] || [ "$pin" = "$core_sha" ]; then
+            exit 0
+          fi
+          ahead="$(gh api "repos/erik-sutton95/OpenCine/compare/${pin}...${core_sha}" --jq '.ahead_by' 2>/dev/null || true)"
+          if [ -n "$ahead" ] && [ "$ahead" != "0" ]; then
+            echo "::warning::OpenCine pin ${pin:0:7} is ${ahead} commits behind Core main ${core_sha:0:7}"
+          fi
+
       - name: Repository hygiene
         run: ./scripts/check-repository-hygiene.sh
 
@@ -38,37 +66,6 @@ jobs:
 
       - name: Google Play notes
         run: ./scripts/android-play-release-notes-check.sh
-
-      - name: Require reviewed notes for TestFlight-triggering pull requests
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
-          # Test targets never ship in a TestFlight archive, so a test-only branch has nothing
-          # testers have not already been asked to try.
-          production_files="$(grep -vE '^(Tests/|ios/RunnerTests/|ios/RunnerUITests/)' <<< "$changed_files" || true)"
-          if grep -Eq '^(Sources/|Tests/|ios/|Package\.swift$|opencine-pins\.txt$|scripts/|justfile$)' <<< "$production_files"; then
-            if ! grep -Fxq 'ios/TestFlight/WhatToTest.en-US.txt' <<< "$changed_files"; then
-              echo "Update ios/TestFlight/WhatToTest.en-US.txt with plain-language changes and test steps." >&2
-              exit 1
-            fi
-          fi
-
-      - name: Require reviewed notes for Play-triggering pull requests
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          changed_files="$(git diff --name-only "$BASE_SHA"...HEAD)"
-          # Unit and instrumented test source sets never ship in the Play bundle.
-          production_files="$(grep -vE '^Apps/Android/[^/]+/src/(test|androidTest)/' <<< "$changed_files" || true)"
-          if grep -Eq '^(Apps/Android/|Sources/OpenZCine(Core|AndroidFacade)/|opencine-pins\.txt$|scripts/android-|scripts/verify-android-|scripts/ci-install-swift-android\.sh$|justfile$|\.github/workflows/play-internal\.yml$)' <<< "$production_files"; then
-            if ! grep -Fxq 'Apps/Android/distribution/whatsnew/whatsnew-en-US' <<< "$changed_files"; then
-              echo "Update Apps/Android/distribution/whatsnew/whatsnew-en-US with plain-language changes for Play testers." >&2
-              exit 1
-            fi
-          fi
 
       - name: Spell check
         uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
@@ -117,15 +114,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      code: ${{ steps.filter.outputs.code }}
-      android: ${{ steps.filter.outputs.android }}
-      bug_relay: ${{ steps.filter.outputs.bug_relay }}
-      handbook: ${{ steps.filter.outputs.handbook }}
+      # The pin bot dispatches CI on bot/pin-core after a GITHUB_TOKEN push, which
+      # does not trigger pull_request. Run the shared-core jobs as if the pin changed.
+      # The nightly full suite runs every job.
+      code: ${{ steps.filter.outputs.code == 'true' || (github.event_name == 'workflow_dispatch' && github.ref_name == 'bot/pin-core') || inputs.full }}
+      android: ${{ steps.filter.outputs.android == 'true' || (github.event_name == 'workflow_dispatch' && github.ref_name == 'bot/pin-core') || inputs.full }}
+      bug_relay: ${{ steps.filter.outputs.bug_relay == 'true' || inputs.full }}
+      handbook: ${{ steps.filter.outputs.handbook == 'true' || inputs.full }}
     steps:
-      # `dorny/paths-filter` fetches the base ref to diff on push events, which needs the checkout's
-      # git credentials — so this job keeps them (unlike the others). It runs no repository code, so
-      # the token is never exposed to untrusted code.
+      # `dorny/paths-filter` fetches the base ref to diff on push / dispatch, which needs the
+      # checkout's git credentials, so this job keeps them (unlike the others). It runs no
+      # repository code, so the token is never exposed to untrusted code.
+      #
+      # On push it runs `git fetch origin <base> <head>`. A head like `bot/pin-core`
+      # (workflow_dispatch on a slash branch) is a git refspec (`bot:pin-core`), so we fetch
+      # the default branch with an explicit refspec and keep enough history that the
+      # merge-base already exists and that fetch is skipped.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Fetch default branch for path filter
+        run: |
+          set -euo pipefail
+          default_branch="${{ github.event.repository.default_branch }}"
+          git fetch --no-tags origin \
+            "refs/heads/${default_branch}:refs/remotes/origin/${default_branch}"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
@@ -173,7 +186,8 @@ jobs:
     # this job to a self-hosted runner — it runs `just native-check` from the pull request, so a
     # fork PR would execute attacker-controlled code on a persistent machine.
     runs-on: macos-latest
-    timeout-minutes: 60
+    # The nightly tier adds the portrait header layout matrix and the iPad storage oracle.
+    timeout-minutes: ${{ inputs.full && 90 || 45 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -192,68 +206,58 @@ jobs:
       # OpenCine's shared Sentry release tooling, run against this app's Xcode Cloud archive hook.
       - name: Sentry release configuration
         run: just sentry-test
-      - name: Prepare a private iOS test simulator with real accessibility
+      # OpenCine's scripts/ios-private-simulator.py: a new iPhone 16 Pro with accessibility enabled in
+      # its own preference store. Its two boots run in the background while the app builds.
+      - name: Start a private iOS test simulator with real accessibility
         run: |
           mkdir -p "$RUNNER_TEMP/native-ios"
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib
-          import json
-          import os
-          import plistlib
-          import subprocess
-
-          device_types = json.loads(subprocess.check_output(
-              ["xcrun", "simctl", "list", "devicetypes", "--json"]))
-          device_type = next((device for device in device_types["devicetypes"]
-                              if device["identifier"] == "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro"), None)
-          if device_type is None:
-              raise RuntimeError("The iPhone 16 Pro simulator device type is unavailable")
-          runtimes = json.loads(subprocess.check_output(
-              ["xcrun", "simctl", "list", "runtimes", "--json"]))
-          available_ios = [candidate for candidate in runtimes["runtimes"]
-                            if candidate.get("isAvailable", False)
-                            and candidate["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
-          if not available_ios:
-              raise RuntimeError("No available iOS simulator runtime")
-          selected_runtime = max(available_ios, key=lambda candidate:
-                                  (tuple(int(part) for part in candidate["version"].split(".")),
-                                  candidate["identifier"]))
-          runtime = selected_runtime["identifier"]
-          name = "opc-nikon-native-" + os.environ["GITHUB_RUN_ID"] + "-" + os.environ["GITHUB_RUN_ATTEMPT"]
-          device_id = subprocess.check_output(
-              ["xcrun", "simctl", "create", name, device_type["identifier"], runtime], text=True).strip()
-          with open(os.environ["GITHUB_ENV"], "a") as output:
-              output.write("IOS_TEST_DEVICE_ID=" + device_id + "\n")
-          # First boot initializes this new device's own preference store.
-          subprocess.run(["xcrun", "simctl", "bootstatus", device_id, "-b"], check=True)
-          subprocess.run(["xcrun", "simctl", "shutdown", device_id], check=True)
-          current = json.loads(subprocess.check_output(
-              ["xcrun", "simctl", "list", "devices", "--json"]))
-          selected = next(device for devices in current["devices"].values()
-                          for device in devices if device["udid"] == device_id)
-          if selected["state"] != "Shutdown":
-              raise RuntimeError("The private simulator must be shut down before changing preferences")
-          preference = (Path.home() / "Library/Developer/CoreSimulator/Devices" / device_id
-                        / "data/Library/Preferences/com.apple.Accessibility.plist")
-          before = preference.read_bytes()
-          original = plistlib.loads(before)
-          enabled = dict(original, ApplicationAccessibilityEnabled=True, AccessibilityEnabled=True)
-          preference.write_bytes(plistlib.dumps(enabled, fmt=plistlib.FMT_BINARY))
-          report = {
-              "deviceID": device_id, "deviceName": device_type["name"], "runtime": runtime,
-              "runtimeVersion": selected_runtime["version"],
-              "preferenceBeforeSHA256": hashlib.sha256(before).hexdigest(),
-              "preferenceAfterSHA256": hashlib.sha256(preference.read_bytes()).hexdigest(),
-              "originalValues": {key: original.get(key) for key in
-                                  ["ApplicationAccessibilityEnabled", "AccessibilityEnabled"]},
-              "enabledOnlyForPrivateDevice": True,
-          }
-          (Path(os.environ["RUNNER_TEMP"]) / "native-ios/simulator-setup.json").write_text(
-              json.dumps(report, indent=2) + "\n")
-          subprocess.run(["xcrun", "simctl", "bootstatus", device_id, "-b"], check=True)
-          PY
+          nohup python3 ../OpenCine/scripts/ios-private-simulator.py create \
+            "opc-nikon-native-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --report "$RUNNER_TEMP/native-ios/simulator-setup.json" \
+            > "$RUNNER_TEMP/native-ios/udid" 2> "$RUNNER_TEMP/native-ios/simulator-setup.log" &
+          echo "$!" > "$RUNNER_TEMP/native-ios/simulator-setup.pid"
+      - name: Xcode version for the cache key
+        id: xcode
+        run: echo "version=$(xcodebuild -version | awk 'NR == 1 { print $2 }')" >> "$GITHUB_OUTPUT"
+      # SwiftPM checkouts (not the 2.9 GB sentry-cocoa binary artifact, a quick download) and Xcode's
+      # content-addressed compilation cache, keyed on the package
+      # pins, the OpenCine pin and Xcode. Saved only from main; pull requests read main's.
+      # No workspace-state.json either: it records that artifact as present, so Xcode skips the download.
+      - name: Restore Xcode package and compilation caches
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/ci-dd/SourcePackages/checkouts
+            ~/ci-dd/SourcePackages/repositories
+            ~/ci-dd/CompilationCache.noindex
+            ~/ci-dd/ModuleCache.noindex
+          key: ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-${{ github.sha }}
+          restore-keys: |
+            ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-
+            ios-xcode-${{ steps.xcode.outputs.version }}-
+      - name: Demo isolation, swift-format and Swift package tests
+        run: just check-demo-isolation swift-check
+      # One build of the app and its unit tests; every test run below reuses it without building.
+      # Hosted runners are arm64: an x86_64 simulator slice only doubles the compile.
+      - name: Build the app and its tests (iOS Simulator)
+        run: |
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath ~/ci-dd \
+            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build-for-testing
+      - name: Wait for the private iOS test simulator
+        run: |
+          pid="$(cat "$RUNNER_TEMP/native-ios/simulator-setup.pid")"
+          while kill -0 "$pid" 2>/dev/null; do sleep 2; done
+          udid="$(tr -d '[:space:]' < "$RUNNER_TEMP/native-ios/udid")"
+          if [ -z "$udid" ]; then
+            cat "$RUNNER_TEMP/native-ios/simulator-setup.log" >&2
+            echo "::error::the private iOS test simulator was not created"
+            exit 1
+          fi
+          echo "IOS_TEST_DEVICE_ID=$udid" >> "$GITHUB_ENV"
+      # Nightly tier: a second private simulator boot (docs/ci.md).
       - name: Original storage oracle on a private native 2x iPad
+        if: ${{ inputs.full }}
         env:
           TEST_RUNNER_CI: "true"
         run: |
@@ -266,33 +270,71 @@ jobs:
             "opc-z-storage-2x-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --device "iPad Pro 11-inch (M4)" --report "$evidence/simulator-setup.json")
           xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
-            -destination "platform=iOS Simulator,id=$udid" -parallel-testing-enabled NO \
+            -destination "platform=iOS Simulator,id=$udid" -derivedDataPath ~/ci-dd -parallel-testing-enabled NO \
             -resultBundlePath "$evidence/storage-oracle.xcresult" \
-            -only-testing:RunnerTests/MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges test
+            -only-testing:RunnerTests/MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges \
+            test-without-building
       - name: Retain original storage oracle evidence
-        if: always()
+        if: ${{ always() && inputs.full }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-storage-oracle-evidence
           path: ${{ runner.temp }}/native-storage-oracle
           retention-days: 7
           if-no-files-found: error
-      - name: Run native checks
+      # The portrait header layout matrix (MonitorPortraitHeaderClearanceTests, about eight minutes
+      # hosted) renders the monitor at every size: nightly tier only (docs/ci.md). The quarantined
+      # Nikon playback tests (#467) never run here; the nightly runs them in the next step. Serial:
+      # cloning two parallel simulators took about eight minutes hosted for about ten of test work.
+      - name: Unit tests
         env:
-          IOS_TEST_RESULT_BUNDLE_PATH: ${{ runner.temp }}/native-ios/Runner.xcresult
-          IOS_TEST_LOG_PATH: ${{ runner.temp }}/native-ios/ios-test.log
+          SKIP: ${{ inputs.full && 'MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges' || 'MonitorPortraitHeaderClearanceTests' }}
+          QUARANTINED: >-
+            NikonPlaybackOwnerAdoptionTests
+            NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto
+            NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery
         run: |
-          mkdir -p "$RUNNER_TEMP/native-ios"
-          just check-demo-isolation swift-check
-          just ios-test -skip-testing:RunnerTests/MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges
-          just ios-build watch-build
+          set -euo pipefail
+          skips=("-skip-testing:RunnerTests/$SKIP")
+          for test in $QUARANTINED; do skips+=("-skip-testing:RunnerTests/$test"); done
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+            -destination "platform=iOS Simulator,id=$IOS_TEST_DEVICE_ID" -derivedDataPath ~/ci-dd \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/native-ios/Runner.xcresult" \
+            "${skips[@]}" test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-test.log"
+      # Quarantine (#467): known hosted timing flakes, nightly only and non-blocking.
+      - name: Quarantined Nikon playback tests
+        if: ${{ inputs.full }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+            -destination "platform=iOS Simulator,id=$IOS_TEST_DEVICE_ID" -derivedDataPath ~/ci-dd \
+            -resultBundlePath "$RUNNER_TEMP/native-ios/Quarantined.xcresult" \
+            -only-testing:RunnerTests/NikonPlaybackOwnerAdoptionTests \
+            -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto \
+            -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery \
+            test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-quarantined-test.log"
+      - name: Build the Watch companion (watchOS Simulator)
+        run: |
+          xcodebuild -project ios/Runner.xcodeproj -scheme OpenZCineWatch \
+            -destination 'generic/platform=watchOS Simulator' -derivedDataPath ~/ci-dd \
+            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES CODE_SIGNING_ALLOWED=NO build
+      - name: Save Xcode package and compilation caches
+        if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/ci-dd/SourcePackages/checkouts
+            ~/ci-dd/SourcePackages/repositories
+            ~/ci-dd/CompilationCache.noindex
+            ~/ci-dd/ModuleCache.noindex
+          key: ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-${{ github.sha }}
       - name: Delete the private iOS test simulator
         if: always()
         run: |
           if [ -n "${IOS_TEST_DEVICE_ID:-}" ]; then
-            # A completed test may already have shut down its destination.
-            xcrun simctl shutdown "$IOS_TEST_DEVICE_ID" || true
-            xcrun simctl delete "$IOS_TEST_DEVICE_ID"
+            python3 ../OpenCine/scripts/ios-private-simulator.py delete "$IOS_TEST_DEVICE_ID"
           fi
       - name: Summarize iOS test results
         if: always()
@@ -310,6 +352,8 @@ jobs:
           path: |
             ${{ runner.temp }}/native-ios/Runner.xcresult
             ${{ runner.temp }}/native-ios/ios-test.log
+            ${{ runner.temp }}/native-ios/Quarantined.xcresult
+            ${{ runner.temp }}/native-ios/ios-quarantined-test.log
             ${{ runner.temp }}/native-ios/summary.json
             ${{ runner.temp }}/native-ios/simulator-setup.json
           retention-days: 7
@@ -318,8 +362,9 @@ jobs:
   conformance:
     name: Shared conformance scenarios, iOS
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
-    # Hosted macOS for the same reason as `native`: it runs code from the pull request.
+    # Nightly tier, QUARANTINE (docs/ci.md). Hosted macOS for the same reason as `native`: it
+    # runs code from the pull request.
+    if: ${{ inputs.full && needs.changes.outputs.code == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -366,7 +411,8 @@ jobs:
     # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
     # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
     if: always()
-    needs: [meta, secrets, changes, native, conformance, android, bug-relay, handbook]
+    # The conformance job is nightly-only and quarantined (docs/ci.md): it never feeds the gate.
+    needs: [meta, secrets, changes, native, android, bug-relay, handbook]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

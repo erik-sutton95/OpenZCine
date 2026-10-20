@@ -36,7 +36,10 @@ import androidx.compose.ui.unit.dp
 import com.opencapture.opencine.nikon.CameraSession
 import com.opencapture.openzcine.media.MediaExifOrientation
 import com.opencapture.openzcine.media.upright
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,7 +80,10 @@ internal data class InstantReviewPresentation(
  * NEF's embedded preview.
  * [verify-on-HW: card write time per body and quality]
  */
-internal class InstantReviewController(private val session: CameraSession) {
+internal class InstantReviewController(
+    private val session: CameraSession,
+    private val decode: (ByteArray) -> ImageBitmap? = ::decodeReviewBitmap,
+) {
     private val _review = MutableStateFlow<InstantReviewPresentation?>(null)
     val review: StateFlow<InstantReviewPresentation?> = _review
     private var fetchJob: Job? = null
@@ -115,9 +121,10 @@ internal class InstantReviewController(private val session: CameraSession) {
     }
 
     private suspend fun presentAndUpgrade(handle: Int, infoLine: String?, focus: LiveFocusInfo?) {
-        val thumb =
-            runCatching { session.stillThumbnail(handle) }.getOrNull()?.let(::decodeReviewBitmap)
+        val thumb = readOrNull { session.stillThumbnail(handle) }?.let(decode)
         if (thumb != null) {
+            // A dismissal or a newer run cancelled this job: never resurrect or overwrite.
+            currentCoroutineContext().ensureActive()
             _review.value =
                 InstantReviewPresentation(
                     image = thumb,
@@ -133,9 +140,8 @@ internal class InstantReviewController(private val session: CameraSession) {
         // failed read arms the countdown on the thumb so a timed review can
         // never hang on the blurred stand-in. Without a thumb the sharp image
         // is presented directly.
-        val sharp =
-            runCatching { session.stillFullImage(handle) }.getOrNull()
-                ?.let(::decodeReviewBitmap)
+        val sharp = readOrNull { session.stillFullImage(handle) }?.let(decode)
+        currentCoroutineContext().ensureActive()
         val current = _review.value
         if (thumb == null) {
             if (sharp == null) return
@@ -182,6 +188,16 @@ internal class InstantReviewController(private val session: CameraSession) {
         _review.value = null
     }
 }
+
+/** A failed read is no image; a cancelled one stays cancelled so a stale job cannot write. */
+private suspend fun <T> readOrNull(read: suspend () -> T?): T? =
+    try {
+        read()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        null
+    }
 
 /** Display-sized decode — the review never shows more pixels than the screen. */
 private fun decodeReviewBitmap(bytes: ByteArray): ImageBitmap? {
