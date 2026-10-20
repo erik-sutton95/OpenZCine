@@ -121,6 +121,8 @@ import com.opencapture.monitorui.MonitorStatusPresentation
 import com.opencapture.monitorui.MonitorStorageReadoutFormat
 import com.opencapture.openzcine.bridge.AndroidLinkHealthMonitor
 import com.opencapture.openzcine.bridge.AndroidLiveViewController
+import com.opencapture.opencine.nikon.NikonBodyCaptureFilter
+import com.opencapture.opencine.nikon.NikonBodyCaptureSync
 import com.opencapture.opencine.nikon.NikonOpenCineSession
 import com.opencapture.opencine.nikon.controlCapabilities
 import com.opencapture.openzcine.bridge.SwiftCore
@@ -946,29 +948,31 @@ internal fun MonitorScreen(
     // and suppressed while an app release is in flight (that path schedules
     // its own review). The diff baseline is maintained outside the shutter
     // path, so captures the app didn't initiate resolve the same way.
+    val bodyCaptures = remember(session) { NikonBodyCaptureFilter() }
+    stillCapture.onReleaseEnded = { bodyCaptures.appReleaseCompleted(System.nanoTime() / 1_000_000L) }
     LaunchedEffect(session) {
         // Debounce the body-capture sync: the GetEventEx poll surfaces a burst as many
         // ObjectAdded/CaptureComplete events (and the same shot can arrive on both the poll and
         // the socket), so collapse them to ONE review — iOS uses a 0.8 s window.
-        var lastBodyCaptureSyncNanos = 0L
+        // Core's filter also tells the late objects of the app's own release (a RAW+JPEG pair's
+        // second half) from a body shot: syncing them cancelled the app's review mid-read and
+        // left its blurred thumb on screen.
         session.events.collect { event ->
             if (event !is CameraSessionEvent.StillCaptureCompleted) return@collect
             val snapshot = session.cameraProperties.value
             val action =
-                bodyCaptureSyncAction(
+                bodyCaptures.action(
+                    now = System.nanoTime() / 1_000_000L,
                     isPhotography = prefersPhotographyChrome(snapshot),
                     instantReviewEnabled = assists.instantReview,
                     appReleaseInFlight = stillCapture.isCapturing.value,
                 )
-            if (action == BodyCaptureSync.IGNORE) return@collect
-            val nowNanos = System.nanoTime()
-            if (nowNanos - lastBodyCaptureSyncNanos < 800_000_000L) return@collect
-            lastBodyCaptureSyncNanos = nowNanos
+            if (action == NikonBodyCaptureSync.IGNORE) return@collect
             // A body capture reached the app: pulse the shutter button so it visibly registers
             // (iOS `bodyShutterPulse &+= 1`), then run the shots refresh / instant review.
             bodyShutterPulse++
             recordScope.launch { runCatching { session.refreshProperties() } }
-            if (action == BodyCaptureSync.REVIEW_AND_SHOTS) {
+            if (action == NikonBodyCaptureSync.REVIEW_AND_SHOTS) {
                 instantReview.onCaptureRunCompleted(
                     recordScope,
                     enabled = true,
