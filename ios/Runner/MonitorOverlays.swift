@@ -221,7 +221,7 @@ struct FeedLevelView: View {
         // Portrait fill overlays a capture strip on the visible feed's bottom edge; the roll track
         // seats above it. Fit tiles its controls below the feed band, so nothing to clear there.
         let bottomChrome =
-            model.monitorIsPortrait && model.preferences.portraitFeedAspect == .fill
+            model.monitorIsPortrait && model.livePortraitAspect == .fill
             ? CGFloat(MonitorPortraitLayout.captureBarHeight) : 0
         // Both styles are the shared level owner's; Nikon declares them both.
         MonitorLevelOverlay(

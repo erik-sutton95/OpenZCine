@@ -903,6 +903,19 @@ final class NativeAppModel {
     var lastConnectError: (any Error)?
     var lastConnectFailureReason: ConnectionFailure.Reason?
     @ObservationIgnored lazy var nikonPort = NativeNikonPort(model: self)
+    /// Held for the Nikon port's connect in flight: releasing the model releases it, which ends
+    /// that attempt (observation never reports a deallocation).
+    @ObservationIgnored var nikonConnectReleaseWatch: NikonConnectReleaseWatch?
+
+    /// The watch owns the task handle, rather than the task owning this model across native waits.
+    func watchNikonConnectRelease(_ onRelease: @escaping @Sendable () -> Void) {
+        let task = establishmentTask
+        nikonConnectReleaseWatch?.disarm()
+        nikonConnectReleaseWatch = NikonConnectReleaseWatch {
+            task?.cancel()
+            onRelease()
+        }
+    }
     @ObservationIgnored lazy var cameras = makeCamerasModel()
     /// The root (`AppShell`): the camera monitor, the shared pair page (a NEARBY camera's Pair)
     /// and the standalone Media and Settings covers.
@@ -3089,13 +3102,6 @@ final class NativeAppModel {
         }
     }
 
-    private func mirrorCameraWiFiPasswordToConnectedSSID(_ password: String) async {
-        let connectedSSID = await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
-        guard let connectedSSID, !connectedSSID.isEmpty else { return }
-        CameraWiFiCredentialStore.savePassword(password, forSSID: connectedSSID)
-        connectedWiFiSSID = connectedSSID
-    }
-
     private func resolveCameraWiFiCredentials(
         ssid: String?,
         ssidPrefix: String?
@@ -3147,10 +3153,19 @@ final class NativeAppModel {
         credentials: CameraWiFiPasswordSubmission,
         joinStrategy: WiFiJoinCoordinator.JoinStrategy
     ) async throws {
+        try await cameraNetworkJoinOperation(
+            target: target, credentials: credentials, joinStrategy: joinStrategy)()
+    }
+
+    /// Captures the join inputs without keeping the model alive while the system alert waits.
+    private func cameraNetworkJoinOperation(
+        target: CameraWiFiJoinPolicy.ProactiveJoinTarget,
+        credentials: CameraWiFiPasswordSubmission,
+        joinStrategy: WiFiJoinCoordinator.JoinStrategy
+    ) -> @MainActor () async throws -> Void {
         #if DEBUG
             if let peers = cameraNetworkJoinPeers {
-                try await peers.join(target)
-                return
+                return { try await peers.join(target) }
             }
         #endif
         // Hotspot work still queued behind an earlier pending join runs only for this connection.
@@ -3158,35 +3173,39 @@ final class NativeAppModel {
         let isCurrent: CameraNetworkIsCurrent = { [weak self] in
             self?.connectionGeneration == generation
         }
-        switch target {
-        case .specificSSID(let ssid):
-            try await WiFiJoinCoordinator.shared.joinCameraNetwork(
-                ssid: ssid,
-                password: credentials.password,
-                strategy: joinStrategy,
-                isCurrent: isCurrent
-            )
-        case .ssidPrefix(let prefix):
-            if let resolvedSSID = credentials.ssid, !resolvedSSID.isEmpty {
+        return { [weak self] in
+            switch target {
+            case .specificSSID(let ssid):
                 try await WiFiJoinCoordinator.shared.joinCameraNetwork(
-                    ssid: resolvedSSID,
+                    ssid: ssid,
                     password: credentials.password,
                     strategy: joinStrategy,
                     isCurrent: isCurrent
                 )
-            } else {
-                try await WiFiJoinCoordinator.shared.joinCameraNetwork(
-                    ssidPrefix: prefix,
-                    password: credentials.password,
-                    strategy: joinStrategy,
-                    isCurrent: isCurrent
-                )
+            case .ssidPrefix(let prefix):
+                if let resolvedSSID = credentials.ssid, !resolvedSSID.isEmpty {
+                    try await WiFiJoinCoordinator.shared.joinCameraNetwork(
+                        ssid: resolvedSSID,
+                        password: credentials.password,
+                        strategy: joinStrategy,
+                        isCurrent: isCurrent
+                    )
+                } else {
+                    try await WiFiJoinCoordinator.shared.joinCameraNetwork(
+                        ssidPrefix: prefix,
+                        password: credentials.password,
+                        strategy: joinStrategy,
+                        isCurrent: isCurrent
+                    )
+                }
             }
+            guard isCurrent() else { throw CancellationError() }
+            self?.sessionJoinedCameraAccessPoint = true
+            let connectedSSID = await NativeNetworkInterfaceSnapshot.currentWiFiSSID()
+            guard isCurrent(), let connectedSSID, !connectedSSID.isEmpty else { return }
+            CameraWiFiCredentialStore.savePassword(credentials.password, forSSID: connectedSSID)
+            self?.connectedWiFiSSID = connectedSSID
         }
-        // Reaching here means an access-point configuration actually applied — the strongest
-        // evidence this session's camera is an AP camera, independent of SSID readability.
-        sessionJoinedCameraAccessPoint = true
-        await mirrorCameraWiFiPasswordToConnectedSSID(credentials.password)
     }
 
     /// Latches a human "no" so nothing re-offers the same network this session.
@@ -3881,20 +3900,21 @@ final class NativeAppModel {
                 isUSB: host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix))
         }
         let hadPriorSession = previousSession != nil || sessionTeardownTask != nil
-        establishmentTask = Task {
+        let previousTeardown = sessionTeardownTask
+        establishmentTask = Task { [weak self] in
             // Only this generation's owner may release the latch — a stale attempt finishing late
             // must not unlatch the attempt that replaced it.
             defer {
-                if connectionGeneration == generation {
-                    isEstablishingConnection = false
+                if self?.connectionGeneration == generation {
+                    self?.isEstablishingConnection = false
                     // `enterLiveView` is this task's LAST statement, so cancelling the phase
                     // watchdog here disarmed the `.preparingLiveView` budget at the exact
                     // instant it began — "connected but never started live view" then had no
                     // bounded exit (the audit's H2). The first decoded frame cancels it via
                     // `dismissConnectionProgress`; teardown paths cancel it themselves.
-                    if connectionPhase != .preparingLiveView {
-                        connectionTimeoutTask?.cancel()
-                        connectionTimeoutTask = nil
+                    if self?.connectionPhase != .preparingLiveView {
+                        self?.connectionTimeoutTask?.cancel()
+                        self?.connectionTimeoutTask = nil
                     }
                 }
             }
@@ -3906,7 +3926,7 @@ final class NativeAppModel {
             }
             // Also await any teardown from an earlier disconnect: the camera accepts one command
             // channel per initiator, and Init over a half-closed prior channel can wedge it.
-            await sessionTeardownTask?.value
+            await previousTeardown?.value
             // Settle before opening a fresh Init on a RECONNECT: the ZR can briefly hold the PTP
             // slot after CloseSession/socket close, and a same-instant Init is what tips a fragile
             // reconnect into a wedge (the log's attempt→timeout→attempt dance). Only on reconnect —
@@ -3915,7 +3935,7 @@ final class NativeAppModel {
             if hadPriorSession {
                 try? await Task.sleep(for: .milliseconds(1200))
             }
-            guard connectionGeneration == generation else { return }
+            guard self?.connectionGeneration == generation else { return }
             let store = NativeCameraConnectionStore.shared
             let savedCameras = store.savedCameras()
             let knownPairedCameras = store.knownPairedCameras()
@@ -3934,20 +3954,24 @@ final class NativeAppModel {
             // cameras probe first (no wizard to disturb over the cable).
             let transportKind: CameraTransportKind =
                 host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) ? .usb : .ptpIP
+            let join: (@MainActor () async throws -> Void)?
             do {
-                try await performWiFiJoinIfNeeded(
+                guard let self, self.connectionGeneration == generation else { return }
+                join = prepareWiFiJoinIfNeeded(
                     transportKind: transportKind,
                     savedCamera: savedCamera,
                     discoveredCamera: discoveredCamera,
                     deviceName: connectionProgressDeviceName,
-                    operatorRequested: operatorRequested
-                )
+                    operatorRequested: operatorRequested)
+            }
+            do {
+                try await join?()
             } catch is CancellationError {
-                guard connectionGeneration == generation else { return }
+                guard let self, self.connectionGeneration == generation else { return }
                 dismissConnectionProgress()
                 return
             } catch {
-                guard connectionGeneration == generation else { return }
+                guard let self, self.connectionGeneration == generation else { return }
                 AppDiagnostics.shared.record(
                     transportKind == .usb
                         ? .connectionUsbFailed : .connectionWifiJoinFailed)
@@ -3969,25 +3993,30 @@ final class NativeAppModel {
             if transportKind == .ptpIP, discoveredCamera == nil, !preservingMonitorSurface,
                 let kind = savedCamera?.path?.kind, kind == .infrastructure || kind == .phoneHotspot
             {
-                connectionPhase = .discovering
-                connectionMessage = NikonBodyWake.wakingMessage(
-                    deviceName: connectionProgressDeviceName)
+                do {
+                    guard let self, self.connectionGeneration == generation else { return }
+                    connectionPhase = .discovering
+                    connectionMessage = NikonBodyWake.wakingMessage(
+                        deviceName: connectionProgressDeviceName)
+                }
                 let wake = await NikonBodyWake.awaitAnswer(
                     host: host, isAlive: { await NativeNikonDiscovery.dialer.isAlive($0) })
-                guard connectionGeneration == generation else { return }
-                logConnection("wake host=\(host) \(wake)")
-                if !wake.answered {
-                    AppDiagnostics.shared.record(.connectionPtpFailed)
-                    connection = .disconnected
-                    connectionPhase = .failed
-                    connectionProgressShowsFailure = true
-                    connectionMessage = NikonBodyWake.silentMessage(
-                        deviceName: connectionProgressDeviceName)
-                    connectionFailureDetail = connectionMessage
-                    startDiscoveryLoop(resetResults: false)
-                    return
+                do {
+                    guard let self, self.connectionGeneration == generation else { return }
+                    logConnection("wake host=\(host) \(wake)")
+                    if !wake.answered {
+                        AppDiagnostics.shared.record(.connectionPtpFailed)
+                        connection = .disconnected
+                        connectionPhase = .failed
+                        connectionProgressShowsFailure = true
+                        connectionMessage = NikonBodyWake.silentMessage(
+                            deviceName: connectionProgressDeviceName)
+                        connectionFailureDetail = connectionMessage
+                        startDiscoveryLoop(resetResults: false)
+                        return
+                    }
+                    connectionPhase = .handshaking
                 }
-                connectionPhase = .handshaking
             }
             AppDiagnostics.shared.record(.connectionHandshaking)
             let strategy = CameraStartupPolicy.connectionStrategy(
@@ -3996,45 +4025,51 @@ final class NativeAppModel {
                 transportKind: transportKind
             )
             let displayNameHint = discoveredCamera?.displayName ?? savedCamera?.displayName ?? ""
-            let transport =
-                transportKind == .usb
-                ? PTPIPSavedCameraRecord.usbTransportLabel
-                : transportLabel(for: discoveredCamera?.source, fallback: savedCamera?.transport)
-            pendingPairingSaveCandidate = PendingPairingSaveCandidate(
-                host: host,
-                displayName: displayNameHint,
-                transport: transport,
-                // Saved row first, then the add-setup anchor: a new setup's address is not yet
-                // saved, so only the operator's own choice of row can name the body.
-                serialNumber: savedCamera?.serialNumber
-                    ?? pendingSetupIntent?.anchor.serialNumber
-            )
-            connection = .scanning
-            connectionPhase = .handshaking
-            isDemoSession = false
-            // A recovery reconnect PROMISES the held frame stays up — blanking it here was
-            // the "black flicker for a few frames" on every fast heal. Only a fresh,
-            // operator-initiated connect starts from an empty monitor.
-            if !preservingMonitorSurface { liveFrameImage = nil }
-            acceptedPairingForCurrentAttempt = false
-            establishmentDiagnostic.withLock { $0 = "" }
-            connectionMessage = startupConnectionMessage(for: strategy, host: host)
-            logConnection(
-                "attempt host=\(host) path=\(savedCamera?.path?.kind.rawValue ?? "none")"
-                    + "\(setup == nil ? " (derived)" : " (tapped)")"
-                    + " strategy=\(strategy) saved=\(savedCameras.count)"
-                    + " knownPaired=\(knownPairedCameras.count)"
-            )
+            let transport: String
+            let establish:
+                @MainActor () async throws -> (
+                    session: NativeCameraSession, requestedPairing: Bool
+                )
             do {
-                let guid = store.guid()
+                guard let self, self.connectionGeneration == generation else { return }
+                transport =
+                    transportKind == .usb
+                    ? PTPIPSavedCameraRecord.usbTransportLabel
+                    : transportLabel(
+                        for: discoveredCamera?.source, fallback: savedCamera?.transport)
+                pendingPairingSaveCandidate = PendingPairingSaveCandidate(
+                    host: host,
+                    displayName: displayNameHint,
+                    transport: transport,
+                    // Saved row first, then the add-setup anchor: a new setup's address is not yet
+                    // saved, so only the operator's own choice of row can name the body.
+                    serialNumber: savedCamera?.serialNumber
+                        ?? pendingSetupIntent?.anchor.serialNumber
+                )
+                connection = .scanning
+                connectionPhase = .handshaking
+                isDemoSession = false
+                // A recovery reconnect PROMISES the held frame stays up - blanking it here was
+                // the "black flicker for a few frames" on every fast heal. Only a fresh,
+                // operator-initiated connect starts from an empty monitor.
+                if !preservingMonitorSurface { liveFrameImage = nil }
+                acceptedPairingForCurrentAttempt = false
+                establishmentDiagnostic.withLock { $0 = "" }
+                connectionMessage = startupConnectionMessage(for: strategy, host: host)
+                logConnection(
+                    "attempt host=\(host) path=\(savedCamera?.path?.kind.rawValue ?? "none")"
+                        + "\(setup == nil ? " (derived)" : " (tapped)")"
+                        + " strategy=\(strategy) saved=\(savedCameras.count)"
+                        + " knownPaired=\(knownPairedCameras.count)"
+                )
+                establish = establishStartupSession(
+                    host: host, guid: store.guid(), strategy: strategy,
+                    allowsPairingEscalation: !preservingMonitorSurface)
+            }
+            do {
                 let attempt: (session: NativeCameraSession, requestedPairing: Bool)
                 do {
-                    attempt = try await establishStartupSession(
-                        host: host,
-                        guid: guid,
-                        strategy: strategy,
-                        allowsPairingEscalation: !preservingMonitorSurface
-                    )
+                    attempt = try await establish()
                 } catch let error
                     where strategy == .savedProfile && !preservingMonitorSurface
                     && NativeCameraSession.isRetryableEstablishFailure(
@@ -4045,60 +4080,50 @@ final class NativeAppModel {
                     // and the manual Try again then connects almost instantly. Run that retry
                     // for the operator, once, after a short settle. Pairing flows keep manual
                     // behavior (a retry must never loop a PIN prompt).
-                    guard connectionGeneration == generation else { return }
+                    guard self?.connectionGeneration == generation else { return }
                     logConnection(
                         "first establish failed, auto-retrying host=\(host) "
                             + error.localizedDescription)
-                    connectionMessage = "The camera answered slowly — trying again…"
+                    self?.connectionMessage = "The camera answered slowly \u{2014} trying again…"
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    guard connectionGeneration == generation else { return }
-                    attempt = try await establishStartupSession(
-                        host: host,
-                        guid: guid,
-                        strategy: strategy,
-                        allowsPairingEscalation: !preservingMonitorSurface
-                    )
+                    guard self?.connectionGeneration == generation else { return }
+                    attempt = try await establish()
                 }
                 let initialSession = attempt.session
                 let requestedPairing = attempt.requestedPairing
                 // Torn down while establishing (operator disconnect, new attempt): close the fresh
                 // session instead of publishing it into cleared state. Graceful CloseSession so the
                 // camera releases the slot we just opened (bare close would strand it).
-                guard connectionGeneration == generation else {
+                guard self?.connectionGeneration == generation else {
                     await initialSession.shutdown()
                     return
                 }
 
-                let session: NativeCameraSession
-                if requestedPairing {
-                    if acceptedPairingForCurrentAttempt {
-                        savePairedCamera(
-                            host: initialSession.identity.host,
-                            displayName: initialSession.identity.displayName,
-                            transport: transport,
-                            serialNumber: initialSession.identity.serialNumber
-                        )
-                        // Pairing done → immediate auto-reconnect off the saved profile. Most
-                        // wedge-prone moment: without a graceful CloseSession the camera still
-                        // holds the pairing session when the reconnect Init lands.
-                        await initialSession.shutdown()
-                        pendingPairingSaveCandidate = nil
-                        pendingPairedReconnectHost = initialSession.identity.host
-                        pendingPairedReconnectSSID = cameraAccessPointSSID(
-                            host: initialSession.identity.host,
-                            displayName: initialSession.identity.displayName
-                        )
-                        transitionToSavedCameraNetworkCheck(
-                            message:
-                                "Pairing complete. Tap “Confirm” on the camera — we'll reconnect automatically."
-                        )
-                        return
-                    } else {
-                        session = initialSession
-                    }
-                } else {
-                    session = initialSession
+                if requestedPairing, self?.acceptedPairingForCurrentAttempt == true {
+                    self?.savePairedCamera(
+                        host: initialSession.identity.host,
+                        displayName: initialSession.identity.displayName,
+                        transport: transport,
+                        serialNumber: initialSession.identity.serialNumber)
+                    // Closing the pairing session must not retain its UI owner either.
+                    await initialSession.shutdown()
+                    guard let self, self.connectionGeneration == generation else { return }
+                    pendingPairingSaveCandidate = nil
+                    pendingPairedReconnectHost = initialSession.identity.host
+                    pendingPairedReconnectSSID = cameraAccessPointSSID(
+                        host: initialSession.identity.host,
+                        displayName: initialSession.identity.displayName)
+                    transitionToSavedCameraNetworkCheck(
+                        message:
+                            "Pairing complete. Tap “Confirm” on the camera \u{2014} we'll reconnect automatically."
+                    )
+                    return
                 }
+                guard let self, self.connectionGeneration == generation else {
+                    await initialSession.shutdown()
+                    return
+                }
+                let session = initialSession
 
                 pendingPairingSaveCandidate = nil
                 discoveredCameras = []
@@ -4196,7 +4221,7 @@ final class NativeAppModel {
             } catch {
                 // Torn down while establishing — the failure belongs to an attempt the operator
                 // already abandoned; don't overwrite the current connection state or message.
-                guard connectionGeneration == generation else { return }
+                guard let self, self.connectionGeneration == generation else { return }
                 lastConnectError = error
                 let acceptedPairing = acceptedPairingForCurrentAttempt
                 if acceptedPairing {
@@ -4236,14 +4261,14 @@ final class NativeAppModel {
                 AppDiagnostics.shared.record(
                     connectionFailureDiagnostic(
                         transportKind: transportKind,
-                        rejectedInitiator: isRejectedInitiator(error)
+                        rejectedInitiator: Self.isRejectedInitiator(error)
                     )
                 )
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
                 let baseError: String
-                if isRejectedInitiator(error) {
+                if Self.isRejectedInitiator(error) {
                     baseError =
                         "The camera didn't recognize this phone. On the camera, create or choose a Connect to PC profile for this iPhone, then try again."
                 } else {
@@ -4450,10 +4475,13 @@ final class NativeAppModel {
         guard !isStartupActionLocked, cameraSession == nil else { return }
         cameras.consent.retire()
         multicam.connect = { [weak self] record in
-            guard let self else { throw CancellationError() }
-            return try await self.establishSession(
-                host: record.host, guid: NativeCameraConnectionStore.shared.guid(),
-                requestPairing: false)
+            guard
+                let requireCurrent = self?.nativeConnectAdmission(),
+                let establish = self?.sessionEstablishmentOperation(
+                    host: record.host, guid: NativeCameraConnectionStore.shared.guid(),
+                    requireCurrent: requireCurrent)
+            else { throw CancellationError() }
+            return try await establish(false, nil)
         }
         multicam.pollInterval = { [weak self] isProgram, base in
             (self?.thermalTier ?? .nominal).multicamPollInterval(isProgram: isProgram, base: base)
@@ -4594,6 +4622,14 @@ final class NativeAppModel {
             var join: @MainActor (CameraWiFiJoinPolicy.ProactiveJoinTarget) async throws -> Void
             var isAlive: @MainActor (String) async -> Bool
             var dial: @MainActor (String) -> Void
+            /// Optional in-memory SDK boundary for native pairing and late-completion tests.
+            var establish:
+                (
+                    @MainActor (
+                        String, Data, Bool, NativePairingChallengeHandler?,
+                        (@Sendable (String) -> Void)?
+                    ) async throws -> NativeCameraSession
+                )? = nil
         }
         @ObservationIgnored var cameraNetworkJoinPeers: CameraNetworkJoinPeers?
 
@@ -6355,13 +6391,13 @@ final class NativeAppModel {
         }
     }
 
-    private func performWiFiJoinIfNeeded(
+    private func prepareWiFiJoinIfNeeded(
         transportKind: CameraTransportKind,
         savedCamera: PTPIPSavedCameraRecord?,
         discoveredCamera: DiscoveredCamera?,
         deviceName: String,
         operatorRequested: Bool
-    ) async throws {
+    ) -> (@MainActor () async throws -> Void)? {
         // THE dispatch: only a record DECLARED as a camera-AP setup may proceed toward the join
         // machinery. Router, hotspot and cable setups exit here — for them the code below does
         // not exist, which is the refactor's whole point. (A nil record is a fresh pairing; the
@@ -6381,13 +6417,13 @@ final class NativeAppModel {
             ) {
                 AppDiagnostics.shared.recordConnectTrace(line)
             }
-            return
+            return nil
         }
         // The operator picked a path that never puts this device on the camera's own access point,
         // so joining one is wrong however tempting a saved SSID makes it look.
         if shouldShowFirstPairWizard, !firstPairTransportMethod.joinsCameraAccessPoint {
             logConnection("join skipped: wizard path \(firstPairTransportMethod) never joins an AP")
-            return
+            return nil
         }
         // RECOVERY of a live monitor session: the dropped session already proved its topology.
         // A router / hotspot / cable session must never answer a drop by reconfiguring Wi-Fi
@@ -6398,7 +6434,7 @@ final class NativeAppModel {
         if isStreamRecovering || sessionRecovery != .idle {
             guard establishedSessionUsedCameraAP else {
                 logConnection("join skipped: recovering a session that did not use the camera AP")
-                return
+                return nil
             }
         }
         guard
@@ -6431,7 +6467,7 @@ final class NativeAppModel {
             ) {
                 AppDiagnostics.shared.recordConnectTrace(line)
             }
-            return
+            return nil
         }
 
         let credentials = resolveCameraWiFiCredentials(
@@ -6460,7 +6496,7 @@ final class NativeAppModel {
             }
         } else {
             logConnection("join skipped: target names neither an SSID nor a prefix")
-            return
+            return nil
         }
         if operatorRequested {
             forgetDeclinedJoin(ssid: joinTarget.ssid, prefix: joinTarget.ssidPrefix)
@@ -6474,24 +6510,26 @@ final class NativeAppModel {
                 "join skipped: DECLINED latch for \(joinTarget.ssid ?? joinTarget.ssidPrefix ?? "?")"
             )
             let host = cameraHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard await cameraAccessPointAnswers(host) else {
-                throw WiFiJoinCoordinator.JoinError.userDenied
+            let probe = cameraAccessPointProbe()
+            return {
+                guard await probe(host) else { throw WiFiJoinCoordinator.JoinError.userDenied }
             }
-            return
         }
         // hotspotConfigurationOnly keeps the native join alert over our sheet; the ASK
         // picker rarely discovers Nikon soft-APs and would replace the popup visuals.
-        do {
-            try await joinCameraNetwork(
-                target: proactiveTarget,
-                credentials: credentials,
-                joinStrategy: .hotspotConfigurationOnly
-            )
-        } catch {
-            recordDeclinedJoinIfUserSaidNo(error, ssid: joinTarget.ssid)
-            throw error
+        let join = cameraNetworkJoinOperation(
+            target: proactiveTarget, credentials: credentials,
+            joinStrategy: .hotspotConfigurationOnly)
+        let reachable = cameraAccessPointReadinessWait()
+        return { [weak self] in
+            do {
+                try await join()
+            } catch {
+                self?.recordDeclinedJoinIfUserSaidNo(error, ssid: joinTarget.ssid)
+                throw error
+            }
+            await reachable()
         }
-        await awaitCameraAccessPointReachable()
     }
 
     /// Waits for the camera to actually ANSWER after a join, before the session Init goes out.
@@ -6504,30 +6542,33 @@ final class NativeAppModel {
     ///
     /// Uses the camera list's own readiness probe, which never sends a PTP Init — so waiting here
     /// cannot disturb a body that is still bringing its network up.
-    private func awaitCameraAccessPointReachable(timeout: TimeInterval = 12) async {
+    private func cameraAccessPointReadinessWait(timeout: TimeInterval = 12)
+        -> @MainActor () async -> Void
+    {
         let host = cameraHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty else { return }
-        let deadline = Date().addingTimeInterval(timeout)
-        var dials = 0
-        while Date() < deadline, !Task.isCancelled {
-            dials += 1
-            if await cameraAccessPointAnswers(host) {
-                logConnection("post-join: \(host) answered after \(dials) dial(s)")
-                return
+        let probe = cameraAccessPointProbe()
+        return {
+            guard !host.isEmpty else { return }
+            let deadline = Date().addingTimeInterval(timeout)
+            var dials = 0
+            while Date() < deadline, !Task.isCancelled {
+                dials += 1
+                if await probe(host) {
+                    logConnection("post-join: \(host) answered after \(dials) dial(s)")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(400))
             }
-            try? await Task.sleep(for: .milliseconds(400))
+            logConnection("post-join: \(host) silent for \(Int(timeout))s; connecting anyway")
         }
-        // Never fatal. A body that stays silent is a real failure worth surfacing through the
-        // establish path's own error, not a reason to refuse to try the Init at all.
-        logConnection("post-join: \(host) silent for \(Int(timeout))s — connecting anyway")
     }
 
-    /// The camera list's readiness probe: never a PTP Init, so it cannot disturb the body.
-    private func cameraAccessPointAnswers(_ host: String) async -> Bool {
+    /// Snapshot the adapter so its asynchronous probe never owns the model.
+    private func cameraAccessPointProbe() -> @MainActor (String) async -> Bool {
         #if DEBUG
-            if let peers = cameraNetworkJoinPeers { return await peers.isAlive(host) }
+            if let peers = cameraNetworkJoinPeers { return peers.isAlive }
         #endif
-        return await NativeNikonDiscovery.dialer.isAlive(host)
+        return { await NativeNikonDiscovery.dialer.isAlive($0) }
     }
 
     private func transitionToSavedCameraNetworkCheck(message: String) {
@@ -6574,18 +6615,25 @@ final class NativeAppModel {
         }
     }
 
+    /// A short, synchronous check; the returned operation never retains its host across a wait.
+    private func nativeConnectAdmission(generation: Int? = nil)
+        -> @MainActor @Sendable () throws -> Void
+    {
+        { [weak self] in
+            try Task.checkCancellation()
+            guard let self else { throw CancellationError() }
+            if let generation, self.connectionGeneration != generation {
+                throw CancellationError()
+            }
+        }
+    }
+
     private func establishStartupSession(
         host: String,
         guid: Data,
         strategy: CameraConnectionStrategy,
         allowsPairingEscalation: Bool = true
-    ) async throws -> (session: NativeCameraSession, requestedPairing: Bool) {
-        #if DEBUG
-            if let peers = cameraNetworkJoinPeers {
-                peers.dial(host)
-                throw NativeCameraSessionError.noHost
-            }
-        #endif
+    ) -> @MainActor () async throws -> (session: NativeCameraSession, requestedPairing: Bool) {
         connectionStageDetail = ""
         let diagnosticBox = establishmentDiagnostic
         let isUSBHost = host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix)
@@ -6629,222 +6677,227 @@ final class NativeAppModel {
                 diagnosticBox.withLock { $0 = summary }
             }
         }
-        switch strategy {
-        case .savedProfile:
-            do {
-                let session = try await establishSession(
-                    host: host,
-                    guid: guid,
-                    requestPairing: false,
-                    onEstablishmentDiagnostic: recordEstablishmentDiagnostic
-                )
-                return (session, false)
-            } catch {
-                // Escalation needs BOTH: an operator-initiated connect (recovery reconnects a
-                // session that was healthy seconds ago — a failure there means wedged or
-                // rebooting, never unpaired, and a pairing barrage against a wedged body only
-                // digs it deeper), and the profile-unavailable signal. The signal includes bare
-                // connection-closed, which a wedged body emits for EVERY attempt — that
-                // combination is what deleted an operator's saved setups mid-outage.
-                guard allowsPairingEscalation, isSavedProfileUnavailable(error) else {
-                    throw error
-                }
-                // Deliberately NOT forgetting the saved records up front: success re-saves and
-                // merges them anyway, and a failed escalation must cost the operator nothing.
-                connectionMessage =
-                    "Saved camera profile was out of date. Setting up again…"
-                let session = try await establishFirstTimePairingSession(
-                    host: host,
-                    guid: guid,
-                    onEstablishmentDiagnostic: recordEstablishmentDiagnostic
-                )
-                return (session, true)
-            }
-        case .firstTimePairing:
-            let session = try await establishFirstTimePairingSession(
-                host: host,
-                guid: guid,
-                onEstablishmentDiagnostic: recordEstablishmentDiagnostic
-            )
-            return (session, true)
-        case .restoreCameraProfileBeforePairing:
-            do {
-                connectionMessage =
-                    "Checking whether this camera already knows your phone…"
-                let session = try await establishSession(
-                    host: host,
-                    guid: guid,
-                    requestPairing: CameraStartupPolicy.startsWithPairingHandshake(
-                        for: strategy
-                    ),
-                    onEstablishmentDiagnostic: recordEstablishmentDiagnostic
-                )
-                connectionMessage =
-                    "This camera already knows your phone. Restoring the connection…"
-                return (session, false)
-            } catch {
-                guard isSavedProfileUnavailable(error) else { throw error }
-                connectionMessage =
-                    "Setting up your camera for the first time…"
-                let session = try await establishFirstTimePairingSession(
-                    host: host,
-                    guid: guid,
-                    onEstablishmentDiagnostic: recordEstablishmentDiagnostic
-                )
-                return (session, true)
+        let requireCurrent = nativeConnectAdmission(generation: connectionGeneration)
+        let establish = sessionEstablishmentOperation(
+            host: host, guid: guid, onEstablishmentDiagnostic: recordEstablishmentDiagnostic,
+            requireCurrent: requireCurrent)
+        let onPairingChallenge: NativePairingChallengeHandler = { [weak self] challenge in
+            await MainActor.run { [weak self] in
+                do { try requireCurrent() } catch { return false }
+                return self?.autoAcceptPairing(challenge) ?? false
             }
         }
-    }
-
-    private func establishFirstTimePairingSession(
-        host: String,
-        guid: Data,
-        onEstablishmentDiagnostic: (@Sendable (String) -> Void)? = nil
-    ) async throws
-        -> NativeCameraSession
-    {
-        try await establishSession(
-            host: host,
-            guid: guid,
-            requestPairing: true,
-            onPairingChallenge: { [weak self] challenge in
-                await self?.autoAcceptPairing(challenge) ?? true
-            },
-            onEstablishmentDiagnostic: onEstablishmentDiagnostic
-        )
+        return { [weak self] in
+            try requireCurrent()
+            switch strategy {
+            case .savedProfile:
+                do {
+                    let session = try await establish(false, nil)
+                    return (session, false)
+                } catch {
+                    try requireCurrent()
+                    // Escalation needs BOTH: an operator-initiated connect (recovery reconnects a
+                    // session that was healthy seconds ago - a failure there means wedged or
+                    // rebooting, never unpaired, and a pairing barrage against a wedged body only
+                    // digs it deeper), and the profile-unavailable signal. The signal includes bare
+                    // connection-closed, which a wedged body emits for EVERY attempt - that
+                    // combination is what deleted an operator's saved setups mid-outage.
+                    guard allowsPairingEscalation, Self.isSavedProfileUnavailable(error) else {
+                        throw error
+                    }
+                    // Deliberately NOT forgetting the saved records up front: success re-saves and
+                    // merges them anyway, and a failed escalation must cost the operator nothing.
+                    self?.connectionMessage =
+                        "Saved camera profile was out of date. Setting up again…"
+                    let session = try await establish(true, onPairingChallenge)
+                    return (session, true)
+                }
+            case .firstTimePairing:
+                let session = try await establish(true, onPairingChallenge)
+                return (session, true)
+            case .restoreCameraProfileBeforePairing:
+                do {
+                    self?.connectionMessage =
+                        "Checking whether this camera already knows your phone…"
+                    let session = try await establish(
+                        CameraStartupPolicy.startsWithPairingHandshake(for: strategy), nil)
+                    self?.connectionMessage =
+                        "This camera already knows your phone. Restoring the connection…"
+                    return (session, false)
+                } catch {
+                    try requireCurrent()
+                    guard Self.isSavedProfileUnavailable(error) else { throw error }
+                    self?.connectionMessage =
+                        "Setting up your camera for the first time…"
+                    let session = try await establish(true, onPairingChallenge)
+                    return (session, true)
+                }
+            }
+        }
     }
 
     /// Establishes a session over the transport implied by the host key: a `usb:<device-id>` key
     /// connects through ImageCaptureCore, anything else runs the Wi-Fi PTP-IP handshake.
-    private func establishSession(
+    private func sessionEstablishmentOperation(
         host: String,
         guid: Data,
-        requestPairing: Bool,
-        onPairingChallenge: NativePairingChallengeHandler? = nil,
-        onEstablishmentDiagnostic: (@Sendable (String) -> Void)? = nil
-    ) async throws -> NativeCameraSession {
-        guard host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) else {
-            do {
-                return try await NativeCameraSession.establish(
-                    host: host,
-                    guid: guid,
-                    requestPairing: requestPairing,
-                    onPairingChallenge: onPairingChallenge,
-                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
-                    onLiveViewObject: DemoHarness.captureLiveViewObject
-                )
-            } catch let error
-                where NativeCameraSession.isBusyEstablishFailure(error) && !requestPairing
-            {
-                // "Another initiator holds me." The one case this clears by itself is the
-                // handoff: the other device just disconnected and the body is still tearing its
-                // session down. One retry after a settle long enough for any teardown — never
-                // the 1 s hammer, which lands mid-teardown and wedges the body's network stack
-                // (audit M5; two-device handoff brick). A second busy answer means the other
-                // device is genuinely still connected: surface it, with its own copy.
-                connectionLogger.info(
-                    "Body answered busy; retrying once after a handoff settle")
-                connectionStageDetail = "Camera is in use — waiting for it to free up…"
-                try await Task.sleep(for: .seconds(5))
-                return try await NativeCameraSession.establish(
-                    host: host,
-                    guid: guid,
-                    requestPairing: requestPairing,
-                    onPairingChallenge: onPairingChallenge,
-                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
-                    onLiveViewObject: DemoHarness.captureLiveViewObject
-                )
-            } catch let error
-                where NativeCameraSession.isRetryableEstablishFailure(
-                    error, requestPairing: requestPairing)
-            {
-                // Right after a camera-AP join the ZR's PTP-IP endpoint can lag the network, or
-                // the previous session slot can still read busy. One silent in-place retry after
-                // a settle beat clears the field-reported one-off connect failures; a second
-                // failure surfaces through the normal path. No Wi-Fi re-join, no pairing —
-                // isRetryableEstablishFailure only passes non-pairing attempts. The sleep throws
-                // on cancellation, so an abandoned attempt never retries.
-                connectionLogger.info(
-                    "Wi-Fi establish failed once, retrying in place: \(error.localizedDescription, privacy: .private(mask: .hash))"
-                )
-                try await Task.sleep(for: .seconds(1))
-                return try await NativeCameraSession.establish(
-                    host: host,
-                    guid: guid,
-                    requestPairing: requestPairing,
-                    onPairingChallenge: onPairingChallenge,
-                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
-                    onLiveViewObject: DemoHarness.captureLiveViewObject
-                )
-            }
-        }
-        guard let device = USBCameraDeviceBrowser.shared.device(forHostKey: host) else {
-            throw NativeCameraSessionError.connectionFailed(
-                "The camera isn't plugged in. Connect it to this device with a USB-C cable, then try again."
-            )
-        }
-        // The long pole over USB is ImageCaptureCore's card scan (pre-warmed at plug-in); show its
-        // live progress instead of a dead spinner while the session-open ack waits it out.
-        connectionStageDetail = "Reading the camera's card…"
-        let scanTicker = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                let percent = device.contentCatalogPercentCompleted
-                if percent > 0 {
-                    self?.connectionStageDetail = "Reading the camera's card… \(percent)%"
+        onEstablishmentDiagnostic: (@Sendable (String) -> Void)? = nil,
+        requireCurrent: @escaping @MainActor @Sendable () throws -> Void
+    ) -> @MainActor (Bool, NativePairingChallengeHandler?) async throws -> NativeCameraSession {
+        let logger = connectionLogger
+        #if DEBUG
+            let peers = cameraNetworkJoinPeers
+        #endif
+        return { [weak self] requestPairing, onPairingChallenge in
+            try requireCurrent()
+            #if DEBUG
+                if let peers {
+                    if let establish = peers.establish {
+                        return try await establish(
+                            host, guid, requestPairing, onPairingChallenge,
+                            onEstablishmentDiagnostic)
+                    }
+                    peers.dial(host)
+                    throw NativeCameraSessionError.noHost
                 }
-                try? await Task.sleep(for: .milliseconds(700))
+            #endif
+            guard host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) else {
+                do {
+                    return try await NativeCameraSession.establish(
+                        host: host,
+                        guid: guid,
+                        requestPairing: requestPairing,
+                        onPairingChallenge: onPairingChallenge,
+                        onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onLiveViewObject: DemoHarness.captureLiveViewObject
+                    )
+                } catch let error
+                    where NativeCameraSession.isBusyEstablishFailure(error) && !requestPairing
+                {
+                    try requireCurrent()
+                    // "Another initiator holds me." The one case this clears by itself is the
+                    // handoff: the other device just disconnected and the body is still tearing its
+                    // session down. One retry after a settle long enough for any teardown - never
+                    // the 1 s hammer, which lands mid-teardown and wedges the body's network stack
+                    // (audit M5; two-device handoff brick). A second busy answer means the other
+                    // device is genuinely still connected: surface it, with its own copy.
+                    logger.info(
+                        "Body answered busy; retrying once after a handoff settle")
+                    self?.connectionStageDetail =
+                        "Camera is in use \u{2014} waiting for it to free up…"
+                    try await Task.sleep(for: .seconds(5))
+                    try requireCurrent()
+                    return try await NativeCameraSession.establish(
+                        host: host,
+                        guid: guid,
+                        requestPairing: requestPairing,
+                        onPairingChallenge: onPairingChallenge,
+                        onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onLiveViewObject: DemoHarness.captureLiveViewObject
+                    )
+                } catch let error
+                    where NativeCameraSession.isRetryableEstablishFailure(
+                        error, requestPairing: requestPairing)
+                {
+                    try requireCurrent()
+                    // Right after a camera-AP join the ZR's PTP-IP endpoint can lag the network, or
+                    // the previous session slot can still read busy. One silent in-place retry after
+                    // a settle beat clears the field-reported one-off connect failures; a second
+                    // failure surfaces through the normal path. No Wi-Fi re-join, no pairing -
+                    // isRetryableEstablishFailure only passes non-pairing attempts. The sleep throws
+                    // on cancellation, so an abandoned attempt never retries.
+                    logger.info(
+                        "Wi-Fi establish failed once, retrying in place: \(error.localizedDescription, privacy: .private(mask: .hash))"
+                    )
+                    try await Task.sleep(for: .seconds(1))
+                    try requireCurrent()
+                    return try await NativeCameraSession.establish(
+                        host: host,
+                        guid: guid,
+                        requestPairing: requestPairing,
+                        onPairingChallenge: onPairingChallenge,
+                        onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onLiveViewObject: DemoHarness.captureLiveViewObject
+                    )
+                }
             }
-        }
-        let usbTransport = USBCameraTransport(device: device)
-        do {
-            try await usbTransport.open()
-        } catch {
-            scanTicker.cancel()
-            usbTransport.close()
-            AppDiagnostics.shared.record(.usbSessionOpen)
-            throw error
-        }
-        scanTicker.cancel()
-        do {
-            return try await NativeCameraSession.establish(
-                transport: usbTransport,
-                host: host,
-                cameraName: device.name,
-                requestPairing: requestPairing,
-                onPairingChallenge: onPairingChallenge,
-                onEstablishmentDiagnostic: onEstablishmentDiagnostic,
-                onLiveViewObject: DemoHarness.captureLiveViewObject
-            )
-        } catch {
-            // An adopted warm session can be a stale corpse (camera slept, ICC housekeeping) that
-            // fails its first command with a raw ICC error. Recycle the session once — real close,
-            // fresh open, full retry — before surfacing a failure. (establish() already closed the
-            // failed transport, which parks the device; the recycle open un-parks it cleanly.)
-            connectionStageDetail = "Refreshing the connection…"
-            connectionLogger.info(
-                "USB establish failed once, recycling session: \(error.localizedDescription, privacy: .private(mask: .hash))"
-            )
-            let retryTransport = USBCameraTransport(device: device)
+            guard let device = USBCameraDeviceBrowser.shared.device(forHostKey: host) else {
+                throw NativeCameraSessionError.connectionFailed(
+                    "The camera isn't plugged in. Connect it to this device with a USB-C cable, then try again."
+                )
+            }
+            // The long pole over USB is ImageCaptureCore's card scan (pre-warmed at plug-in); show its
+            // live progress instead of a dead spinner while the session-open ack waits it out.
+            self?.connectionStageDetail = "Reading the camera's card…"
+            let scanTicker = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    let percent = device.contentCatalogPercentCompleted
+                    if percent > 0 {
+                        self?.connectionStageDetail = "Reading the camera's card… \(percent)%"
+                    }
+                    try? await Task.sleep(for: .milliseconds(700))
+                }
+            }
+            let usbTransport = USBCameraTransport(device: device)
             do {
-                try await retryTransport.open(recycleFirst: true)
-            } catch let openError {
-                retryTransport.close()
+                try requireCurrent()
+                try await usbTransport.open()
+                try requireCurrent()
+            } catch {
+                scanTicker.cancel()
+                usbTransport.close()
                 AppDiagnostics.shared.record(.usbSessionOpen)
-                throw openError
+                throw error
             }
-            return try await NativeCameraSession.establish(
-                transport: retryTransport,
-                host: host,
-                cameraName: device.name,
-                requestPairing: requestPairing,
-                onPairingChallenge: onPairingChallenge,
-                onEstablishmentDiagnostic: onEstablishmentDiagnostic,
-                onLiveViewObject: DemoHarness.captureLiveViewObject
-            )
+            scanTicker.cancel()
+            do {
+                try requireCurrent()
+                return try await NativeCameraSession.establish(
+                    transport: usbTransport,
+                    host: host,
+                    cameraName: device.name,
+                    requestPairing: requestPairing,
+                    onPairingChallenge: onPairingChallenge,
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                    onLiveViewObject: DemoHarness.captureLiveViewObject
+                )
+            } catch {
+                do { try requireCurrent() } catch {
+                    usbTransport.close()
+                    throw error
+                }
+                // An adopted warm session can be a stale corpse (camera slept, ICC housekeeping) that
+                // fails its first command with a raw ICC error. Recycle the session once - real close,
+                // fresh open, full retry - before surfacing a failure. (establish() already closed the
+                // failed transport, which parks the device; the recycle open un-parks it cleanly.)
+                self?.connectionStageDetail = "Refreshing the connection…"
+                logger.info(
+                    "USB establish failed once, recycling session: \(error.localizedDescription, privacy: .private(mask: .hash))"
+                )
+                let retryTransport = USBCameraTransport(device: device)
+                do {
+                    try requireCurrent()
+                    try await retryTransport.open(recycleFirst: true)
+                    try requireCurrent()
+                } catch let openError {
+                    retryTransport.close()
+                    AppDiagnostics.shared.record(.usbSessionOpen)
+                    throw openError
+                }
+                return try await NativeCameraSession.establish(
+                    transport: retryTransport,
+                    host: host,
+                    cameraName: device.name,
+                    requestPairing: requestPairing,
+                    onPairingChallenge: onPairingChallenge,
+                    onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                    onLiveViewObject: DemoHarness.captureLiveViewObject
+                )
+            }
         }
     }
 
-    private func isRejectedInitiator(_ error: Error) -> Bool {
+    private static func isRejectedInitiator(_ error: Error) -> Bool {
         guard let sessionError = error as? NativeCameraSessionError else { return false }
         if case .initFailed(.rejectedInitiator) = sessionError {
             return true
@@ -6852,7 +6905,7 @@ final class NativeAppModel {
         return false
     }
 
-    private func isSavedProfileUnavailable(_ error: Error) -> Bool {
+    private static func isSavedProfileUnavailable(_ error: Error) -> Bool {
         guard let sessionError = error as? NativeCameraSessionError else { return false }
         if case .savedProfileRequired = sessionError {
             return true
@@ -6867,14 +6920,14 @@ final class NativeAppModel {
         if case .connectionClosed = sessionError {
             return true
         }
-        return isRejectedInitiator(error)
+        return Self.isRejectedInitiator(error)
     }
 
     /// Auto-accepts the pairing challenge without prompting. For a single-operator rig the code
     /// always matches, so confirming it by hand adds friction without protection. Marks the
     /// attempt as paired so that when the camera completes its wizard and drops the connection,
     /// the success/catch path saves the camera and reconnects with the new profile.
-    private func autoAcceptPairing(_ challenge: PTPIPPairingChallenge) async -> Bool {
+    private func autoAcceptPairing(_ challenge: PTPIPPairingChallenge) -> Bool {
         acceptedPairingForCurrentAttempt = true
         adoptPairingChallengeName(challenge)
         connectionPhase = .pairing
@@ -11451,7 +11504,8 @@ final class NativeAppModel {
     /// The live assist tools that actually render right now. The single funnel every live overlay,
     /// scope, image effect and sampler reads, which is what makes clean view genuinely clean
     /// (#256). Photography keeps the display tools, as on every app (A1-19), but drops the video
-    /// ones (the LUT): the saved switch is untouched, so the flip back to video restores it.
+    /// ones (the LUT and the cinema analysis tools): the saved switches are untouched, so the flip
+    /// back to video restores them.
     var renderedLiveAssistTools: Set<MonitorAssistTool> {
         guard displayMode != .command else { return [] }
         let photography = isPhotographyMode
@@ -11464,6 +11518,13 @@ final class NativeAppModel {
         // the meter leaves rather than holding its last reading, which would look live.
         if !monitorAvailability.audioMeters { tools.remove(.audioMeters) }
         return tools
+    }
+
+    /// The portrait fit/fill choice the live surface lays out and offers. Fit or fill is a cinema
+    /// choice: a stills body lays out its whole image area and offers no key, while the saved choice
+    /// waits for video (ZIA-039, as Android Z does).
+    var livePortraitAspect: PortraitFeedAspect? {
+        isPhotographyMode ? nil : preferences.portraitFeedAspect
     }
 
     /// Whether the monitored picture is flipped left-to-right (see `MonitorAssistTool.mirror`).
