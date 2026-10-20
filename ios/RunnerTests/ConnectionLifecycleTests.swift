@@ -652,8 +652,18 @@ struct CameraAccessPointJoinDeclineTests {
         await settle(model)
         #expect(peers.events == ["join:\(Self.ssid)"], "no second alert, no dial")
         #expect(model.connectionPhase == .failed)
-        #expect(
-            model.connectionMessage == WiFiJoinCoordinator.JoinError.userDenied.errorDescription)
+        // The failed attempt restarts the discovery loop, which writes its own status into the
+        // live `connectionMessage` ("Searching for cameras on Wi-Fi and USB-C..."); the failure
+        // card reads the pinned `connectionFailureDetail` for exactly that reason. Give the loop
+        // its window, then check the copy the operator actually sees.
+        let decline = WiFiJoinCoordinator.JoinError.userDenied.errorDescription
+        var waited = 0
+        while model.connectionMessage == decline, waited < 300 {
+            try? await Task.sleep(for: .milliseconds(10))
+            waited += 1
+        }
+        #expect(model.connectionFailureDetail == decline)
+        #expect(model.connectionPhase == .failed)
     }
 
     @Test("An automatic reconnect after a decline still dials a camera that already answers")
