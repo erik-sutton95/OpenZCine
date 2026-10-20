@@ -138,8 +138,11 @@ final class MediaTimecodeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let sourceURL = dir.appendingPathComponent("source.mov")
+        // Retain enough media for decoder read-ahead before the missing tail. A short
+        // H.264 fixture can reach the cut before publishing any decoded frame.
+        let sourceFrameCount = 600
         try await Self.writeMovieWithTimecode(
-            to: sourceURL, frameCount: 60, optimizeForNetworkUse: true)
+            to: sourceURL, frameCount: sourceFrameCount, optimizeForNetworkUse: true)
         let truncatedURL = dir.appendingPathComponent("truncated.mov")
         try Self.truncateMdatPayload(from: sourceURL, to: truncatedURL, keepFraction: 0.35)
         try XCTSkipUnless(
@@ -148,6 +151,8 @@ final class MediaTimecodeTests: XCTestCase {
         let fraction = try XCTUnwrap(MonitorMovieFile.mdatAvailableFraction(at: truncatedURL))
         XCTAssertGreaterThan(fraction, 0.1)
         XCTAssertLessThan(fraction, 0.9)
+        let hasReadablePrefix = try await Self.hasDecodedVideoFrame(of: truncatedURL)
+        XCTAssertTrue(hasReadablePrefix, "the fixture must retain a readable video prefix")
         let header = CMTime(seconds: 10, preferredTimescale: 25_000)
         let scaled = MonitorMovieFile.scaledProgressDuration(
             for: truncatedURL, headerDuration: header)
@@ -164,6 +169,8 @@ final class MediaTimecodeTests: XCTestCase {
         XCTAssertGreaterThan(size, 0)
         XCTAssertTrue(MonitorMovieFile.movieHasFinishedHeader(at: result.videoURL))
         XCTAssertFalse(MonitorMovieFile.mediaDataExtendsPastEndOfFile(at: result.videoURL))
+        let hasExportedPicture = try await Self.hasDecodedVideoFrame(of: result.videoURL)
+        XCTAssertTrue(hasExportedPicture)
     }
 
     func testExportReferenceProxyIfPresent() async throws {
@@ -373,6 +380,30 @@ final class MediaTimecodeTests: XCTestCase {
     }
 
     // MARK: - Readback
+
+    /// Proves a decoded picture is readable without advancing into a fixture's missing tail.
+    private static func hasDecodedVideoFrame(of url: URL) async throws -> Bool {
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ])
+        reader.add(output)
+        guard reader.startReading() else {
+            throw reader.error ?? NSError(domain: "MediaTimecodeTests", code: -8)
+        }
+        defer { reader.cancelReading() }
+        while let sample = output.copyNextSampleBuffer() {
+            if CMSampleBufferGetImageBuffer(sample) != nil {
+                return true
+            }
+        }
+        return false
+    }
 
     private struct StartTimecode {
         let frame: UInt32
