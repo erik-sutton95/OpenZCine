@@ -4,6 +4,8 @@ import com.opencapture.opencine.cameracontrols.MonitorOperatorExposureReading
 import com.opencapture.opencine.cameracontrols.cameraPowerReading
 import com.opencapture.opencine.core.ObservationOrigin
 import com.opencapture.opencine.core.ObservedValue
+import com.opencapture.opencine.core.ISOValue
+import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.nikon.NikonCameraBatteryGauge
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.CameraStorageStatus
@@ -25,6 +27,47 @@ class MonitorReadoutsTest {
         assertEquals("+1.0", MonitorOperatorExposureReading(stops(6, null)).label)
         assertNull(stops(6, false), "an unlit indicator is unknown")
         assertNull(stops(null, true))
+    }
+
+    @Test
+    fun `camera-owned strip values read dimmed and a locked shutter carries the padlock and hold`() {
+        // ZAA-141 / ZAA-113: baseline dimmed body-owned cells, drew the lock glyph, and a hold on
+        // the SHUTTER cell toggled MovieTVLock.
+        fun setting(kind: MonitorPickerKind, locked: Boolean = false, dimmed: Boolean = false) =
+            MonitorCaptureSettingPresentation(kind, kind.name, "1/50", "1/16000", null, null,
+                controlLocked = locked, dimmed = dimmed)
+        val locked = nikonReadoutCue(setting(MonitorPickerKind.SHUTTER, locked = true, dimmed = true), photography = false)
+        assertEquals(NikonReadoutCue(dimmed = true, badge = com.opencapture.monitorui.MonitorIcon.LOCK,
+            holdTogglesShutterLock = true), locked)
+        assertTrue(nikonReadoutCue(setting(MonitorPickerKind.SHUTTER), photography = false).holdTogglesShutterLock)
+        val programOwned = nikonReadoutCue(setting(MonitorPickerKind.SHUTTER, dimmed = true), photography = true)
+        assertEquals(NikonReadoutCue(dimmed = true, badge = null, holdTogglesShutterLock = false), programOwned)
+        assertEquals(NikonReadoutCue(false, null, false), nikonReadoutCue(setting(MonitorPickerKind.ISO), photography = false))
+    }
+
+    @Test
+    fun `a camera-owned strip value has no quick drum`() {
+        // CodeRabbit #462: the R3D NE ISO lock while recording dims ISO; a press must not open its drum.
+        val locked = NikonReadoutCue(dimmed = true, badge = com.opencapture.monitorui.MonitorIcon.LOCK,
+            holdTogglesShutterLock = false)
+        val free = NikonReadoutCue(dimmed = false, badge = null, holdTogglesShutterLock = false)
+        assertFalse(nikonReadoutQuickEnabled(MonitorPickerKind.ISO, false, false, true, locked))
+        assertTrue(nikonReadoutQuickEnabled(MonitorPickerKind.ISO, false, false, true, free))
+        assertFalse(nikonReadoutQuickEnabled(MonitorPickerKind.SHUTTER, true, null, false, locked))
+        assertTrue(nikonReadoutQuickEnabled(MonitorPickerKind.SHUTTER, false, false, true, free))
+        assertFalse(nikonReadoutQuickEnabled(MonitorPickerKind.SHUTTER, false, null, true, free))
+    }
+
+    @Test
+    fun `movie auto ISO shows the working ISO on the strip`() {
+        // ZAA-142: baseline strip read "A3200" while movie Auto ISO is on, "Auto" only unreported.
+        val auto = SettingValue.Iso(ISOValue.Auto)
+        val properties = CameraPropertySnapshot(iso = 3200, isoAuto = true, codec = "H.265 10-bit MOV",
+            captureSelector = "video")
+        assertEquals("A3200", nikonCommonReadoutLabel(auto, properties))
+        assertEquals("Auto", nikonCommonReadoutLabel(auto, properties.copy(iso = null)))
+        assertEquals("800", nikonCommonReadoutLabel(SettingValue.Iso(ISOValue.Manual(800)), properties))
+        assertNull(nikonCommonReadoutLabel(null, properties))
     }
 
     @Test
