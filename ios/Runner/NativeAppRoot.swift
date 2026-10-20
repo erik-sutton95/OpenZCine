@@ -12806,7 +12806,8 @@ final class NativeAppModel {
                 "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
         }
         let storage = shell.control.snapshot?.storage
-        return LiveMediaReadout.label(storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
+        return LiveMediaReadout.label(
+            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
             portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
     }
 

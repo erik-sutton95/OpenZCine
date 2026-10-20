@@ -15,8 +15,7 @@ Fixes
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
 - After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver. A volume-button remote shutter is protected against a rare quit.
 - With two cards, the shots counter counts only the card the camera saves photos to, and photos taken from the app go to that card.
-- In Photo mode, shots left show as a picture icon and the count (for example 20.2k), so the signal indicator stays clear of the Dynamic Island in portrait.
-- In Photo mode, tapping SHOTS shows free card space and percentage, never recording minutes. A camera on external power without a battery level shows EXT, and VoiceOver reads external power.
+- In Photo mode, shots left show as a picture icon and the count (for example 20.2k), so the signal indicator stays clear of the Dynamic Island in portrait; tapping SHOTS shows free card space and percentage. A camera on external power without a battery level shows EXT, and VoiceOver reads external power.
 - On a fresh install, the Local Network permission is asked for only at the permissions step of setup, not on the first screen.
 
 What to test
