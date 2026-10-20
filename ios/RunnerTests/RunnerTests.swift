@@ -11,6 +11,7 @@ import OpenCineCameraControls
 import OpenCineCameraVocabulary
 import OpenCineCore
 import OpenCineHostedAccessibility
+import OpenCineHostedTestSupport
 import OpenCineMedia
 import SwiftUI
 import Testing
@@ -695,15 +696,13 @@ final class RunnerTests: XCTestCase {
         window.rootViewController = host
         window.makeKeyAndVisible()
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
-        let landscape = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                MainActor.assumeIsolated {
-                    scene.interfaceOrientation.isLandscape
-                        && scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
-                }
-            }, object: nil)
-        let landscapeResult = await XCTWaiter.fulfillment(of: [landscape], timeout: 5)
-        XCTAssertEqual(landscapeResult, .completed)
+        // Readiness only: the shared hang guard, polled, instead of a 5 s predicate expectation
+        // that samples about once a second (it timed out under hosted load).
+        let landscape = await HostedCondition.wait {
+            scene.interfaceOrientation.isLandscape
+                && scene.coordinateSpace.bounds.width > scene.coordinateSpace.bounds.height
+        }
+        XCTAssertTrue(landscape, "The actual scene must reach landscape")
         window.frame = scene.coordinateSpace.bounds
         host.view.frame = window.bounds
         defer {
