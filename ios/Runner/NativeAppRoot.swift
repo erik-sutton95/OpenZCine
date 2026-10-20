@@ -4464,8 +4464,10 @@ final class NativeAppModel {
         cameras.consent.retire()
         multicam.connect = { [weak self] record in
             guard
+                let requireCurrent = self?.nativeConnectAdmission(),
                 let establish = self?.sessionEstablishmentOperation(
-                    host: record.host, guid: NativeCameraConnectionStore.shared.guid())
+                    host: record.host, guid: NativeCameraConnectionStore.shared.guid(),
+                    requireCurrent: requireCurrent)
             else { throw CancellationError() }
             return try await establish(false, nil)
         }
@@ -4608,6 +4610,14 @@ final class NativeAppModel {
             var join: @MainActor (CameraWiFiJoinPolicy.ProactiveJoinTarget) async throws -> Void
             var isAlive: @MainActor (String) async -> Bool
             var dial: @MainActor (String) -> Void
+            /// Optional in-memory SDK boundary for native pairing and late-completion tests.
+            var establish:
+                (
+                    @MainActor (
+                        String, Data, Bool, NativePairingChallengeHandler?,
+                        (@Sendable (String) -> Void)?
+                    ) async throws -> NativeCameraSession
+                )? = nil
         }
         @ObservationIgnored var cameraNetworkJoinPeers: CameraNetworkJoinPeers?
 
@@ -6589,20 +6599,25 @@ final class NativeAppModel {
         }
     }
 
+    /// A short, synchronous check; the returned operation never retains its host across a wait.
+    private func nativeConnectAdmission(generation: Int? = nil)
+        -> @MainActor @Sendable () throws -> Void
+    {
+        { [weak self] in
+            try Task.checkCancellation()
+            guard let self else { throw CancellationError() }
+            if let generation, self.connectionGeneration != generation {
+                throw CancellationError()
+            }
+        }
+    }
+
     private func establishStartupSession(
         host: String,
         guid: Data,
         strategy: CameraConnectionStrategy,
         allowsPairingEscalation: Bool = true
     ) -> @MainActor () async throws -> (session: NativeCameraSession, requestedPairing: Bool) {
-        #if DEBUG
-            if let peers = cameraNetworkJoinPeers {
-                return {
-                    peers.dial(host)
-                    throw NativeCameraSessionError.noHost
-                }
-            }
-        #endif
         connectionStageDetail = ""
         let diagnosticBox = establishmentDiagnostic
         let isUSBHost = host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix)
@@ -6646,18 +6661,25 @@ final class NativeAppModel {
                 diagnosticBox.withLock { $0 = summary }
             }
         }
+        let requireCurrent = nativeConnectAdmission(generation: connectionGeneration)
         let establish = sessionEstablishmentOperation(
-            host: host, guid: guid, onEstablishmentDiagnostic: recordEstablishmentDiagnostic)
+            host: host, guid: guid, onEstablishmentDiagnostic: recordEstablishmentDiagnostic,
+            requireCurrent: requireCurrent)
         let onPairingChallenge: NativePairingChallengeHandler = { [weak self] challenge in
-            await self?.autoAcceptPairing(challenge) ?? true
+            await MainActor.run { [weak self] in
+                do { try requireCurrent() } catch { return false }
+                return self?.autoAcceptPairing(challenge) ?? false
+            }
         }
         return { [weak self] in
+            try requireCurrent()
             switch strategy {
             case .savedProfile:
                 do {
                     let session = try await establish(false, nil)
                     return (session, false)
                 } catch {
+                    try requireCurrent()
                     // Escalation needs BOTH: an operator-initiated connect (recovery reconnects a
                     // session that was healthy seconds ago - a failure there means wedged or
                     // rebooting, never unpaired, and a pairing barrage against a wedged body only
@@ -6687,6 +6709,7 @@ final class NativeAppModel {
                         "This camera already knows your phone. Restoring the connection…"
                     return (session, false)
                 } catch {
+                    try requireCurrent()
                     guard Self.isSavedProfileUnavailable(error) else { throw error }
                     self?.connectionMessage =
                         "Setting up your camera for the first time…"
@@ -6702,10 +6725,26 @@ final class NativeAppModel {
     private func sessionEstablishmentOperation(
         host: String,
         guid: Data,
-        onEstablishmentDiagnostic: (@Sendable (String) -> Void)? = nil
+        onEstablishmentDiagnostic: (@Sendable (String) -> Void)? = nil,
+        requireCurrent: @escaping @MainActor @Sendable () throws -> Void
     ) -> @MainActor (Bool, NativePairingChallengeHandler?) async throws -> NativeCameraSession {
         let logger = connectionLogger
+        #if DEBUG
+            let peers = cameraNetworkJoinPeers
+        #endif
         return { [weak self] requestPairing, onPairingChallenge in
+            try requireCurrent()
+            #if DEBUG
+                if let peers {
+                    if let establish = peers.establish {
+                        return try await establish(
+                            host, guid, requestPairing, onPairingChallenge,
+                            onEstablishmentDiagnostic)
+                    }
+                    peers.dial(host)
+                    throw NativeCameraSessionError.noHost
+                }
+            #endif
             guard host.hasPrefix(DiscoveredCamera.usbHostKeyPrefix) else {
                 do {
                     return try await NativeCameraSession.establish(
@@ -6719,6 +6758,7 @@ final class NativeAppModel {
                 } catch let error
                     where NativeCameraSession.isBusyEstablishFailure(error) && !requestPairing
                 {
+                    try requireCurrent()
                     // "Another initiator holds me." The one case this clears by itself is the
                     // handoff: the other device just disconnected and the body is still tearing its
                     // session down. One retry after a settle long enough for any teardown - never
@@ -6730,6 +6770,7 @@ final class NativeAppModel {
                     self?.connectionStageDetail =
                         "Camera is in use \u{2014} waiting for it to free up…"
                     try await Task.sleep(for: .seconds(5))
+                    try requireCurrent()
                     return try await NativeCameraSession.establish(
                         host: host,
                         guid: guid,
@@ -6742,6 +6783,7 @@ final class NativeAppModel {
                     where NativeCameraSession.isRetryableEstablishFailure(
                         error, requestPairing: requestPairing)
                 {
+                    try requireCurrent()
                     // Right after a camera-AP join the ZR's PTP-IP endpoint can lag the network, or
                     // the previous session slot can still read busy. One silent in-place retry after
                     // a settle beat clears the field-reported one-off connect failures; a second
@@ -6752,6 +6794,7 @@ final class NativeAppModel {
                         "Wi-Fi establish failed once, retrying in place: \(error.localizedDescription, privacy: .private(mask: .hash))"
                     )
                     try await Task.sleep(for: .seconds(1))
+                    try requireCurrent()
                     return try await NativeCameraSession.establish(
                         host: host,
                         guid: guid,
@@ -6781,7 +6824,9 @@ final class NativeAppModel {
             }
             let usbTransport = USBCameraTransport(device: device)
             do {
+                try requireCurrent()
                 try await usbTransport.open()
+                try requireCurrent()
             } catch {
                 scanTicker.cancel()
                 usbTransport.close()
@@ -6790,6 +6835,7 @@ final class NativeAppModel {
             }
             scanTicker.cancel()
             do {
+                try requireCurrent()
                 return try await NativeCameraSession.establish(
                     transport: usbTransport,
                     host: host,
@@ -6800,6 +6846,10 @@ final class NativeAppModel {
                     onLiveViewObject: DemoHarness.captureLiveViewObject
                 )
             } catch {
+                do { try requireCurrent() } catch {
+                    usbTransport.close()
+                    throw error
+                }
                 // An adopted warm session can be a stale corpse (camera slept, ICC housekeeping) that
                 // fails its first command with a raw ICC error. Recycle the session once - real close,
                 // fresh open, full retry - before surfacing a failure. (establish() already closed the
@@ -6810,7 +6860,9 @@ final class NativeAppModel {
                 )
                 let retryTransport = USBCameraTransport(device: device)
                 do {
+                    try requireCurrent()
                     try await retryTransport.open(recycleFirst: true)
+                    try requireCurrent()
                 } catch let openError {
                     retryTransport.close()
                     AppDiagnostics.shared.record(.usbSessionOpen)
@@ -6859,7 +6911,7 @@ final class NativeAppModel {
     /// always matches, so confirming it by hand adds friction without protection. Marks the
     /// attempt as paired so that when the camera completes its wizard and drops the connection,
     /// the success/catch path saves the camera and reconnects with the new profile.
-    private func autoAcceptPairing(_ challenge: PTPIPPairingChallenge) async -> Bool {
+    private func autoAcceptPairing(_ challenge: PTPIPPairingChallenge) -> Bool {
         acceptedPairingForCurrentAttempt = true
         adoptPairingChallengeName(challenge)
         connectionPhase = .pairing
