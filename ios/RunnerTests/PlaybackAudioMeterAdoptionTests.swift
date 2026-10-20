@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import OpenCineApple
+import OpenCineHostedTestSupport
 import OpenZCineCore
 import XCTest
 
@@ -99,15 +100,12 @@ final class PlaybackAudioMeterAdoptionTests: XCTestCase {
         try file.write(from: buffer)
     }
 
-    private static func waitUntil(_ condition: () -> Bool) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(8))
-        while !condition() {
-            guard clock.now < deadline else {
-                XCTFail("SIMULATED native audio deadline expired")
-                throw NSError(domain: "PlaybackAudioMeterAdoptionTests", code: 1)
-            }
-            try await Task.sleep(for: .milliseconds(20))
+    /// Readiness only: the shared hang guard (`HostedCondition`) instead of an 8 s window,
+    /// which a loaded hosted runner overran.
+    private static func waitUntil(_ condition: @MainActor () -> Bool) async throws {
+        if !(await HostedCondition.wait(until: condition)) {
+            XCTFail("SIMULATED native audio deadline expired")
+            throw NSError(domain: "PlaybackAudioMeterAdoptionTests", code: 1)
         }
     }
 }

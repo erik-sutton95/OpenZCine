@@ -539,7 +539,7 @@ internal object PairingCopy {
 // MARK: - Wizard
 
 /** What the wizard is busy doing besides showing a step. */
-private sealed interface PairingPhase {
+internal sealed interface PairingPhase {
     data object Idle : PairingPhase
 
     /** Credentials staged in the connect pane, waiting for the operator's Connect. */
@@ -613,6 +613,18 @@ internal const val WIFI_SEARCH_PASS_INTERVAL_MILLIS: Long = 2_000L
 
 private fun PairingPhase.isBusy(): Boolean =
     this !is PairingPhase.Idle && this !is PairingPhase.Error
+
+/**
+ * The discover step's rows while they can start a connect. Once a phase owns the connect pane the
+ * rows would start a second first-time pairing underneath it (ZAB-140).
+ */
+internal fun pairingDiscoveredRows(
+    phase: PairingPhase,
+    devices: List<MonitorPairingDevice>,
+): List<MonitorPairingDevice> = if (phase is PairingPhase.Idle) devices else emptyList()
+
+/** A row tap starts nothing while a connect is in flight (a second PTP-IP initiator, ZAB-140). */
+internal fun pairingAcceptsSelection(phase: PairingPhase): Boolean = !phase.isBusy()
 
 /**
  * The first-pair wizard (iOS `StartupFirstPairWizardView`), hosted in OpenCine's shared pair
@@ -1155,6 +1167,7 @@ public fun PairingExperience(
         discoveryPane(flow.path, cameras, usbCameras, hdmiCaptureReady, wifiSearchMiss)
             .takeIf { flow.step == PairingStep.DISCOVER }
     fun selectDiscovered(id: String) {
+        if (!pairingAcceptsSelection(phase)) return
         when {
             id == HDMI_DEVICE_ID -> onStartHdmiMonitor()
             id.startsWith(USB_DEVICE_PREFIX) ->
@@ -1204,7 +1217,7 @@ public fun PairingExperience(
                         else -> ""
                     },
                     target = "Nikon Z", hint = "",
-                    devices = discovery?.devices.orEmpty(),
+                    devices = pairingDiscoveredRows(phase, discovery?.devices.orEmpty()),
                     progress = discovery?.waiting,
                     instructions = if (flow.step == PairingStep.NETWORK) networkInstructions(flow.path) else emptyList(),
                     checks = if (flow.step == PairingStep.PERMISSIONS) listOf(networkPermissionCheck(network)) else emptyList(),

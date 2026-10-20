@@ -1,5 +1,6 @@
 New and changed
 
+- DISP 3 (the command dashboard) is back in the live view's style: the REC chip heads it, with a large timecode when the camera runs timecode, and the tiles are larger. Tap a tile to change it; hold and drag to reorder.
 - Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
 - In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
 - Connecting to a saved Wi-Fi camera that the camera list cannot see now wakes it first, and reports that it is not on the network if it stays silent.
@@ -14,7 +15,7 @@ Fixes
 - Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
 - After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver. A volume-button remote shutter is protected against a rare quit.
 - With two cards, the shots counter counts only the card the camera saves photos to, and photos taken from the app go to that card.
-- In Photo mode, shots left show as a picture icon and the count (for example 20.2k), so the signal indicator stays clear of the Dynamic Island in portrait.
+- In Photo mode, shots left show as a picture icon and the count (for example 20.2k), so the signal indicator stays clear of the Dynamic Island in portrait; tapping SHOTS shows free card space and percentage. A camera on external power without a battery level shows EXT, and VoiceOver reads external power.
 - On a fresh install, the Local Network permission is asked for only at the permissions step of setup, not on the first screen.
 
 What to test
