@@ -184,7 +184,8 @@ jobs:
     # this job to a self-hosted runner — it runs `just native-check` from the pull request, so a
     # fork PR would execute attacker-controlled code on a persistent machine.
     runs-on: macos-latest
-    timeout-minutes: 45
+    # The nightly tier adds the portrait header layout matrix and the iPad storage oracle.
+    timeout-minutes: ${{ inputs.full && 90 || 45 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -235,11 +236,12 @@ jobs:
       - name: Demo isolation, swift-format and Swift package tests
         run: just check-demo-isolation swift-check
       # One build of the app and its unit tests; every test run below reuses it without building.
+      # Hosted runners are arm64: an x86_64 simulator slice only doubles the compile.
       - name: Build the app and its tests (iOS Simulator)
         run: |
           xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
             -destination 'generic/platform=iOS Simulator' -derivedDataPath ~/ci-dd \
-            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES build-for-testing
+            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build-for-testing
       - name: Wait for the private iOS test simulator
         run: |
           pid="$(cat "$RUNNER_TEMP/native-ios/simulator-setup.pid")"
@@ -385,7 +387,8 @@ jobs:
     # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
     # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
     if: always()
-    needs: [meta, secrets, changes, native, conformance, android, bug-relay, handbook]
+    # The conformance job is nightly-only and quarantined (docs/ci.md): it never feeds the gate.
+    needs: [meta, secrets, changes, native, android, bug-relay, handbook]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
