@@ -691,6 +691,29 @@ struct CameraAccessPointJoinDeclineTests {
 @MainActor
 @Suite("Refused camera Wi-Fi join")
 struct RefusedCameraWiFiJoinTests {
+    @Test("A non-refusal failure replaces the previous refusal card and Settings action")
+    func nonRefusalFailureReplacesPreviousRefusalCard() throws {
+        let model = NativeAppModel()
+        defer { model.cancelConnectionAttempt() }
+        let refusal = CameraHotspotJoinRefusal(code: 8, network: "SIMULATED camera")
+        model.surfaceCameraWiFiJoinFailure(refusal.message, refusal: refusal)
+        let initialCard = NativeNikonPort.failure(
+            model.lastConnectError, reason: model.lastConnectFailureReason,
+            message: model.connectionFailureDetail)
+        #expect(initialCard.message == refusal.message)
+        #expect(initialCard.actions.contains(.openSettings))
+
+        let message = "Joined the camera network but couldn't find the camera. Try again."
+        model.surfaceCameraWiFiJoinFailure(message)
+        let replacementCard = NativeNikonPort.failure(
+            model.lastConnectError, reason: model.lastConnectFailureReason,
+            message: model.connectionFailureDetail)
+        #expect(model.lastConnectError == nil)
+        #expect(replacementCard.message == message)
+        #expect(!replacementCard.actions.contains(.openSettings))
+        #expect(replacementCard.actions.contains(.retry))
+    }
+
     @Test("A system refusal keeps the shared copy and offers Settings")
     func systemRefusalKeepsSharedCopy() throws {
         let refusal = CameraHotspotJoinRefusal(code: 8, network: "Z_6002199")

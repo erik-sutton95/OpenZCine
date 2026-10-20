@@ -3197,12 +3197,12 @@ final class NativeAppModel {
         logConnection("join declined by operator — offers for \(ssid) muted this session")
     }
 
-    private func surfaceCameraWiFiJoinFailure(
+    func surfaceCameraWiFiJoinFailure(
         _ message: String, refusal: CameraHotspotJoinRefusal? = nil
     ) {
         AppDiagnostics.shared.record(.connectionWifiJoinFailed)
         // The connect card reads the typed refusal for its shared copy and Settings fallback.
-        if let refusal { lastConnectError = refusal }
+        lastConnectError = refusal
         lastConnectFailureReason = .joinFailed
         connectionProgressShowsFailure = true
         connectionPhase = .failed
