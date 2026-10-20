@@ -681,6 +681,25 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         }
     }
 
+    /// Owner report 2026-10-19: after a Quality Bias change the restarted feed showed "--" in the
+    /// readouts and the timecode lost its frame field. That restart skips the property burst, so
+    /// it must keep the readings; only a restart that re-reads the body holds back to the mode.
+    func testAWarmLiveViewRestartKeepsTheReadingsThatDriveTheReadouts() {
+        let live = PTPCameraPropertySnapshot(
+            iso: 800, shutterSpeed: "1/50", fNumber: "f/2.8", wbKelvin: 5600, resolution: "4K",
+            fps: 25, fileType: "N-RAW", captureSelector: .video)
+
+        let warm = NativeAppModel.heldPropertySnapshot(
+            live, keepingCaptureMode: true, keepingReadings: true)
+        XCTAssertEqual(warm, live)
+        // The frame rate sets the timecode's frame precision in the shared session.
+        XCTAssertEqual(warm.fps, 25)
+
+        let reread = NativeAppModel.heldPropertySnapshot(
+            live, keepingCaptureMode: true, keepingReadings: false)
+        XCTAssertEqual(reread, PTPCameraPropertySnapshot(captureSelector: .video))
+    }
+
     /// The camera status shows on the shared waiting plate with Android's words: no camera,
     /// connecting, coming back from an internet hop; a connected camera keeps the waiting plate.
     func testCameraStatusShowsOnTheSharedWaitingPlate() {
