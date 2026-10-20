@@ -12,7 +12,7 @@ platforms it touches; a skipped job counts as passed in the gate.
 | Job | Checks |
 | --- | --- |
 | Meta checks, Secret scan | pin drift warning, hygiene, tester notes format, typos, Markdown, offline links, EditorConfig, actionlint; gitleaks |
-| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; parallel, two workers), Watch build; SwiftPM and compilation caches from main |
+| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; parallel, two workers; quarantined tests skipped), Watch build; SwiftPM and compilation caches from main |
 | Android | `assembleDebug`, UI test compile, `test lint`, release native library and Wear checks |
 | Anonymous bug relay, Handbook | relay `npm run check`; static site build |
 
@@ -39,6 +39,7 @@ the test here with its issue in the same pull request.
 | Test | Job | Issue |
 | --- | --- | --- |
 | Shared conformance scenarios, iOS (never passed hosted; `simctl list` timeouts) | `conformance` | [#450](https://github.com/erik-sutton95/OpenZCine/issues/450), [OpenCine#111](https://github.com/erik-sutton95/OpenCine/issues/111) |
+| `NikonPlaybackOwnerAdoptionTests` and two `NikonMediaOpeningAdmissionTests` (burst cover, retired video close); hosted timing | `native`, step "Quarantined Nikon playback tests" (nightly, non-blocking) | [#467](https://github.com/erik-sutton95/OpenZCine/issues/467) |
 
 A test leaves quarantine after its issue is fixed and several consecutive nightlies pass.
 

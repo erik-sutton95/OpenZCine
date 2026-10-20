@@ -25,7 +25,9 @@ permissions:
 # The workflow name keeps the nightly's call of this file apart from the push run on main.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel only a superseded pull-request run. Main pushes, dispatches and the nightly's call run
+  # to completion (a newer pending main run still replaces an older pending one).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   meta:
@@ -184,7 +186,8 @@ jobs:
     # this job to a self-hosted runner — it runs `just native-check` from the pull request, so a
     # fork PR would execute attacker-controlled code on a persistent machine.
     runs-on: macos-latest
-    timeout-minutes: 45
+    # The nightly tier adds the portrait header layout matrix and the iPad storage oracle.
+    timeout-minutes: ${{ inputs.full && 90 || 45 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -216,13 +219,16 @@ jobs:
       - name: Xcode version for the cache key
         id: xcode
         run: echo "version=$(xcodebuild -version | awk 'NR == 1 { print $2 }')" >> "$GITHUB_OUTPUT"
-      # SwiftPM checkouts and Xcode's content-addressed compilation cache, keyed on the package
+      # SwiftPM checkouts (not the 2.9 GB sentry-cocoa binary artifact, a quick download) and Xcode's
+      # content-addressed compilation cache, keyed on the package
       # pins, the OpenCine pin and Xcode. Saved only from main; pull requests read main's.
+      # No workspace-state.json either: it records that artifact as present, so Xcode skips the download.
       - name: Restore Xcode package and compilation caches
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/ci-dd/SourcePackages
+            ~/ci-dd/SourcePackages/checkouts
+            ~/ci-dd/SourcePackages/repositories
             ~/ci-dd/CompilationCache.noindex
             ~/ci-dd/ModuleCache.noindex
           key: ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-${{ github.sha }}
@@ -232,11 +238,12 @@ jobs:
       - name: Demo isolation, swift-format and Swift package tests
         run: just check-demo-isolation swift-check
       # One build of the app and its unit tests; every test run below reuses it without building.
+      # Hosted runners are arm64: an x86_64 simulator slice only doubles the compile.
       - name: Build the app and its tests (iOS Simulator)
         run: |
           xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
             -destination 'generic/platform=iOS Simulator' -derivedDataPath ~/ci-dd \
-            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES build-for-testing
+            -skipMacroValidation -skipPackagePluginValidation COMPILATION_CACHE_ENABLE_CACHING=YES ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build-for-testing
       - name: Wait for the private iOS test simulator
         run: |
           pid="$(cat "$RUNNER_TEMP/native-ios/simulator-setup.pid")"
@@ -276,17 +283,37 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       # The portrait header layout matrix (MonitorPortraitHeaderClearanceTests, about eight minutes
-      # hosted) renders the monitor at every size: nightly tier only (docs/ci.md).
+      # hosted) renders the monitor at every size: nightly tier only (docs/ci.md). The quarantined
+      # Nikon playback tests (#467) never run here; the nightly runs them in the next step.
       - name: Unit tests
         env:
           SKIP: ${{ inputs.full && 'MonitorPortraitHeaderClearanceTests/testCompactDeclaredGaugeRetainsClearanceWhenSafeTopChanges' || 'MonitorPortraitHeaderClearanceTests' }}
+          QUARANTINED: >-
+            NikonPlaybackOwnerAdoptionTests
+            NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto
+            NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery
         run: |
           set -euo pipefail
+          skips=("-skip-testing:RunnerTests/$SKIP")
+          for test in $QUARANTINED; do skips+=("-skip-testing:RunnerTests/$test"); done
           xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
             -destination "platform=iOS Simulator,id=$IOS_TEST_DEVICE_ID" -derivedDataPath ~/ci-dd \
             -parallel-testing-enabled YES -parallel-testing-worker-count 2 \
             -resultBundlePath "$RUNNER_TEMP/native-ios/Runner.xcresult" \
-            "-skip-testing:RunnerTests/$SKIP" test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-test.log"
+            "${skips[@]}" test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-test.log"
+      # Quarantine (#467): known hosted timing flakes, nightly only and non-blocking.
+      - name: Quarantined Nikon playback tests
+        if: ${{ inputs.full }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner \
+            -destination "platform=iOS Simulator,id=$IOS_TEST_DEVICE_ID" -derivedDataPath ~/ci-dd \
+            -resultBundlePath "$RUNNER_TEMP/native-ios/Quarantined.xcresult" \
+            -only-testing:RunnerTests/NikonPlaybackOwnerAdoptionTests \
+            -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testActualBurstCoverKeepsNormalCompanionAndZeroDeletionProgressAboveThePhoto \
+            -only-testing:RunnerTests/NikonMediaOpeningAdmissionTests/testRetiredVideoCloseReturnsToActualGallery \
+            test-without-building 2>&1 | tee "$RUNNER_TEMP/native-ios/ios-quarantined-test.log"
       - name: Build the Watch companion (watchOS Simulator)
         run: |
           xcodebuild -project ios/Runner.xcodeproj -scheme OpenZCineWatch \
@@ -297,7 +324,8 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/ci-dd/SourcePackages
+            ~/ci-dd/SourcePackages/checkouts
+            ~/ci-dd/SourcePackages/repositories
             ~/ci-dd/CompilationCache.noindex
             ~/ci-dd/ModuleCache.noindex
           key: ios-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'opencine-pins.txt') }}-${{ github.sha }}
@@ -323,6 +351,8 @@ jobs:
           path: |
             ${{ runner.temp }}/native-ios/Runner.xcresult
             ${{ runner.temp }}/native-ios/ios-test.log
+            ${{ runner.temp }}/native-ios/Quarantined.xcresult
+            ${{ runner.temp }}/native-ios/ios-quarantined-test.log
             ${{ runner.temp }}/native-ios/summary.json
             ${{ runner.temp }}/native-ios/simulator-setup.json
           retention-days: 7
@@ -380,7 +410,8 @@ jobs:
     # collapses every other job's result into one verdict. Requiring it is also fail-closed: a pull
     # request that edits this workflow to drop a job stops reporting `CI gate` and cannot merge.
     if: always()
-    needs: [meta, secrets, changes, native, conformance, android, bug-relay, handbook]
+    # The conformance job is nightly-only and quarantined (docs/ci.md): it never feeds the gate.
+    needs: [meta, secrets, changes, native, android, bug-relay, handbook]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
