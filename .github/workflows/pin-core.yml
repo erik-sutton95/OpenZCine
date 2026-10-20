@@ -52,40 +52,59 @@ jobs:
             merge_base="$(git merge-base origin/bot/pin-core origin/main || true)"
             if [ "$bot_pin" = "$core_sha" ] && [ "$merge_base" = "$main_sha" ]; then
               branch_current=true
-              echo "bot/pin-core already pins ${core_short} on current main; leaving it alone."
+              echo "bot/pin-core already pins ${core_short} on current main; keeping its commit."
             fi
           fi
-          if [ "$branch_current" = true ]; then
-            exit 0
+          # A current branch skips the commit but still repairs what a failed run left behind:
+          # a push that landed before PR creation, a PR edit or the CI dispatch failed.
+          if [ "$branch_current" != true ]; then
+            git checkout -B bot/pin-core origin/main
+            sed -i -E "s/^OpenCine .*/OpenCine ${core_sha}/" opencine-pins.txt
+            git add opencine-pins.txt
+
+            export GIT_AUTHOR_NAME="github-actions[bot]"
+            export GIT_AUTHOR_EMAIL="41898283+github-actions[bot]@users.noreply.github.com"
+            export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+            export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+            git commit -m "build: pin OpenCine to main ${core_short}"
+            git push --force-with-lease origin bot/pin-core
+            head_sha="$(git rev-parse HEAD)"
+          else
+            head_sha="$(git rev-parse origin/bot/pin-core)"
           fi
-
-          git checkout -B bot/pin-core origin/main
-          sed -i -E "s/^OpenCine .*/OpenCine ${core_sha}/" opencine-pins.txt
-          git add opencine-pins.txt
-
-          export GIT_AUTHOR_NAME="github-actions[bot]"
-          export GIT_AUTHOR_EMAIL="41898283+github-actions[bot]@users.noreply.github.com"
-          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
-          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-          git commit -m "build: pin OpenCine to main ${core_short}"
-          git push --force-with-lease origin bot/pin-core
-
-          body="$RUNNER_TEMP/pin-core-pr.md"
-          {
-            echo "Moves \`opencine-pins.txt\` from \`${pin_short}\` to Core main \`${core_short}\`."
-            echo
-            echo "Core commits since the previous pin:"
-            echo
-            gh api "repos/erik-sutton95/OpenCine/compare/${pin}...${core_sha}" \
-              --jq '.commits[].commit.message | split("\n")[0]' | sed 's/^/- /'
-          } > "$body"
 
           title="build: pin OpenCine to main ${core_short}"
           pr="$(gh pr list --head bot/pin-core --state open --json number --jq '.[0].number // empty')"
-          if [ -n "$pr" ]; then
-            gh pr edit "$pr" --title "$title" --body-file "$body"
-          else
-            gh pr create --base main --head bot/pin-core --title "$title" --body-file "$body"
+          # A pull request closed unmerged on this very commit was turned down; do not reopen it.
+          declined="$(gh pr list --head bot/pin-core --state closed --json headRefOid,mergedAt \
+            --jq "[.[] | select(.headRefOid == \"${head_sha}\" and .mergedAt == null)] | length")"
+          if [ -z "$pr" ] && [ "$declined" != 0 ]; then
+            echo "A pull request for ${head_sha:0:7} was closed unmerged; leaving it closed."
+            exit 0
           fi
-          # GITHUB_TOKEN pull requests do not trigger pull_request workflows.
-          gh workflow run ci.yml --ref bot/pin-core
+          if [ "$branch_current" != true ] || [ -z "$pr" ]; then
+            body="$RUNNER_TEMP/pin-core-pr.md"
+            {
+              echo "Moves \`opencine-pins.txt\` from \`${pin_short}\` to Core main \`${core_short}\`."
+              echo
+              echo "Core commits since the previous pin:"
+              echo
+              gh api "repos/erik-sutton95/OpenCine/compare/${pin}...${core_sha}" \
+                --jq '.commits[].commit.message | split("\n")[0]' | sed 's/^/- /'
+            } > "$body"
+            if [ -n "$pr" ]; then
+              gh pr edit "$pr" --title "$title" --body-file "$body"
+            else
+              gh pr create --base main --head bot/pin-core --title "$title" --body-file "$body"
+            fi
+          fi
+
+          # GITHUB_TOKEN pull requests do not trigger pull_request workflows, so CI is dispatched,
+          # once per branch commit: a run of any outcome on this SHA means the dispatch landed.
+          runs="$(gh run list --workflow ci.yml --branch bot/pin-core --commit "$head_sha" \
+            --json databaseId --jq 'length')"
+          if [ "$runs" = 0 ]; then
+            gh workflow run ci.yml --ref bot/pin-core
+          else
+            echo "CI already ran on bot/pin-core ${head_sha:0:7}."
+          fi

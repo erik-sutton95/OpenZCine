@@ -5,6 +5,7 @@ import OpenCineApple
 import OpenCineCore
 import OpenZCineCore
 import SwiftUI
+import os
 
 /// OpenZCine on the shared connection flow (SHELL-02): the saved-camera document with this app's
 /// own records mirrored, and the `NikonConnectPort` over the app's discovery loop and connect
@@ -125,6 +126,9 @@ final class NativeNikonPort: NikonConnectPort {
                     return
                 }
                 if let demoOutcome {
+                    model?.nikonConnectReleaseWatch = NikonConnectReleaseWatch { [weak self] in
+                        Task { @MainActor in self?.modelReleased(during: token) }
+                    }
                     stage(demoOutcome)
                     return
                 }
@@ -137,6 +141,9 @@ final class NativeNikonPort: NikonConnectPort {
                 model.lastConnectFailureReason = nil
                 do {
                     try model.runSharedConnect(request, takingOverConfirmed: takingOverConfirmed)
+                    model.watchNikonConnectRelease { [weak self] in
+                        Task { @MainActor in self?.modelReleased(during: token) }
+                    }
                     track()
                 } catch {
                     model.connectionProgressUsesCard = false
@@ -160,6 +167,12 @@ final class NativeNikonPort: NikonConnectPort {
 
     func forget(hosts: [String]) {
         for host in hosts { model?.forgetPairing(host: host) }
+    }
+
+    /// The model went away while attempt `token` waited: nothing is left to cancel but the wait.
+    private func modelReleased(during token: UUID) {
+        guard attemptID == token else { return }
+        finish(.failure(CancellationError()))
     }
 
     private func finish(_ result: Result<NikonConnection, Error>) {
@@ -239,6 +252,21 @@ final class NativeNikonPort: NikonConnectPort {
                         "The camera didn't answer in time. Check it is on and on this network, then try again."
                 )))
     }
+}
+
+/// Ends a pending Nikon connect when its model releases the active watch.
+/// Disarm a superseded watch before replacement so shared native work keeps running.
+final class NikonConnectReleaseWatch: Sendable {
+    private let onRelease: OSAllocatedUnfairLock<(@Sendable () -> Void)?>
+
+    init(_ onRelease: @escaping @Sendable () -> Void) {
+        self.onRelease = .init(initialState: onRelease)
+    }
+
+    /// Retires this watch without cancelling work owned by its replacement.
+    func disarm() { onRelease.withLock { $0 = nil } }
+
+    deinit { onRelease.withLock { $0 }?() }
 }
 
 /// Host setup capabilities, live reachability and actions for the shared typed chooser.
