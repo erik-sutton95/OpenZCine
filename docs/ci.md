@@ -12,7 +12,7 @@ platforms it touches; a skipped job counts as passed in the gate.
 | Job | Checks |
 | --- | --- |
 | Meta checks, Secret scan | pin drift warning, hygiene, tester notes format, typos, Markdown, offline links, EditorConfig, actionlint; gitleaks |
-| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; parallel, two workers; quarantined tests skipped), Watch build; SwiftPM and compilation caches from main |
+| Native Swift/iOS | Sentry configuration, demo isolation, Swift checks, one `build-for-testing`, unit tests without rebuilding on a private iPhone simulator (created during the build; serial, no simulator clones; quarantined tests skipped), Watch build; SwiftPM and compilation caches from main |
 | Android | `assembleDebug`, UI test compile, `test lint`, release native library and Wear checks |
 | Anonymous bug relay, Handbook | relay `npm run check`; static site build |
 
