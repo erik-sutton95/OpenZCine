@@ -330,9 +330,11 @@ internal fun MonitorScreen(
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val sessionState by session.state.collectAsState()
     val internetHopState = frameioController?.internetHopState
+    // Held live view while the post-connect property burst runs reads "Reading camera settings…" (ZAA-349).
+    val initialMonitorPropertiesReady by session.initialMonitorPropertiesReady.collectAsState()
     val cameraFeedStatus =
-        remember(sessionState, internetHopState) {
-            resolveMonitorCameraStatus(sessionState, internetHopState)
+        remember(sessionState, internetHopState, initialMonitorPropertiesReady) {
+            resolveMonitorCameraStatus(sessionState, internetHopState, initialMonitorPropertiesReady)
         }
     val monitorAccessibilityState = monitorCameraStatusAccessibility(cameraFeedStatus)
     val cameraFeedNotice = monitorCameraStatusNotice(cameraFeedStatus)
@@ -355,7 +357,6 @@ internal fun MonitorScreen(
     // Hold live view until the full post-connect property burst finishes so
     // AF mode / lens / subject / audio land in ~1–3 s instead of ~30 s of
     // interleaved one-property-per-1.5 s polls against the LV pump.
-    val initialMonitorPropertiesReady by session.initialMonitorPropertiesReady.collectAsState()
     val commandRoundTripMilliseconds by
         session.latestCommandRoundTripMilliseconds.collectAsState()
     val cameraReadouts =
@@ -1861,12 +1862,17 @@ internal fun MonitorScreen(
             val field = fieldFor(setting.kind)
             val key = setting.kind.commonSettingKey
             val value = if (!isPhotographyMode && !isDemoSession && relayedState == null && key != null)
-                commonControl.captureValue(key, com.opencapture.opencine.appkit.MonitorCaptureSelection.PENDING)
-                    ?.let(MonitorCapturePresentation::label) ?: "--" else setting.value
+                nikonCommonReadoutLabel(commonControl.captureValue(key,
+                    com.opencapture.opencine.appkit.MonitorCaptureSelection.PENDING), cameraProperties) ?: "--"
+                else setting.value
+            val cue = nikonReadoutCue(setting, isPhotographyMode)
             MonitorOperatorLiveReadout(setting.kind.name, field?.title ?: setting.label,
                 value, field = field,
-                quickEnabled = setting.kind != MonitorPickerKind.SHUTTER || isPhotographyMode ||
-                    (effectiveShutterLocked == false && cameraProperties.shutterMode != null),
+                quickEnabled = nikonReadoutQuickEnabled(setting.kind, isPhotographyMode, effectiveShutterLocked,
+                    cameraProperties.shutterMode != null, cue),
+                badgeIcon = cue.badge, dimmed = cue.dimmed,
+                // Where no quick adjust owns the hold, holding SHUTTER toggles the camera lock.
+                holdAction = if (cue.holdTogglesShutterLock && relayedState == null) shutterLongPressToggle else null,
             )
         }
         val scopes = scopesShown { assists.shared.rendersLive(it, effectiveDisplayMode, isPhotographyMode) }
@@ -2067,7 +2073,8 @@ internal fun MonitorScreen(
                 recovering = (recoveryStateOverride ?: sessionRecoveryState) != SessionRecoveryUi.Idle,
                 // Hop-aware status: after a RED / Frame.io internet hop the session is Disconnected
                 // while Wi-Fi rejoins, so the plate says so instead of a bare "No camera".
-                notice = if (pictureFrameSource == null) cameraFeedNotice else null),
+                notice = monitorPictureNotice(pictureFrameSource != null, initialMonitorPropertiesReady,
+                    cameraFeedNotice)),
             status = MonitorOperatorLiveStatus({ commonControl.statusPresentation() },
                 !isPhotographyMode && mounted(MonitorDisplaySection.TIMECODE),
                 !isPhotographyMode && mounted(MonitorDisplaySection.REC_READOUT), statusStorage, headerReadouts,
