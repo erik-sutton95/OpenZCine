@@ -1,5 +1,6 @@
 import Foundation
 import ImageCaptureCore
+import OpenCineCore
 import OpenZCineCore
 import Testing
 
@@ -556,6 +557,379 @@ struct USBCameraTransportDetachTests {
                 .saved(host: "SIMULATED-gone", path: .infrastructure), takingOverConfirmed: false)
         }
     }
+
+    /// CodeRabbit on #440: observation never reports a deallocation, so a model torn down while a
+    /// connect waited left the shared flow's attempt suspended for good. Releasing the model must
+    /// end the attempt with `CancellationError`. The staged `connecting` outcome holds the attempt
+    /// without dialling anything.
+    @MainActor
+    @Test("Releasing the model ends a pending Nikon connect")
+    func releasingTheModelEndsAPendingConnect() async throws {
+        var owner: NativeAppModel? = NativeAppModel()
+        weak let released = owner
+        let port = NativeNikonPort(model: try #require(owner))
+        port.demoOutcome = "connecting"
+        var handshaking = false
+        port.onPhase = { phase, _ in if phase == .handshaking { handshaking = true } }
+        let attempt = Task { @MainActor in
+            try await port.connect(
+                .saved(host: "SIMULATED-pending", path: .infrastructure),
+                takingOverConfirmed: false)
+        }
+        for _ in 0..<200 where !handshaking { await Task.yield() }
+        try #require(handshaking, "the staged connect must be pending before the release")
+        owner = nil
+        try #require(released == nil, "the model must be released for this check to mean anything")
+        // A watchdog unblocks an attempt still suspended after two seconds, so a regression fails
+        // here instead of hanging the suite.
+        let watchdog = Watchdog()
+        let timer = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            watchdog.fired = true
+            attempt.cancel()
+        }
+        let result = await attempt.result
+        timer.cancel()
+        #expect(!watchdog.fired, "the attempt stayed suspended after its model was released")
+        switch result {
+        case .success: Issue.record("a released model's attempt connected")
+        case .failure(let error): #expect(error is CancellationError)
+        }
+    }
+
+    /// The real saved-camera path is paused at its existing join adapter. Unlike demo staging,
+    /// this starts establishment work and catches that work retaining the model across an await.
+    @MainActor
+    @Test("Releasing the model cancels a native Nikon connect waiting for its network join")
+    func releasingTheModelEndsAPendingNativeConnect() async throws {
+        let join = PendingNativeJoin()
+        var owner: NativeAppModel? = NativeAppModel()
+        weak var released = owner
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.1", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: "NIKON_ZR_TEST"),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "NIKON_ZR_TEST"))
+        owner?.savedCameras = [setup]
+        owner?.connectedWiFiSSID = nil
+        owner?.cameraNetworkJoinPeers = .init(
+            join: { _ in try await join.wait() }, isAlive: { _ in true },
+            dial: { _ in Issue.record("a pending join must not reach a camera dial") })
+        let port = NativeNikonPort(model: try #require(owner))
+        let attempt = Task { @MainActor in
+            try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer {
+            attempt.cancel()
+            join.cancel()
+            owner?.cancelConnectionAttempt()
+        }
+        for _ in 0..<200 where !join.entered { await Task.yield() }
+        try #require(join.entered, "the native connection must reach its pending join")
+        owner = nil
+        #expect(released == nil, "native establishment retained its externally released model")
+        let watchdog = Watchdog()
+        let timer = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            watchdog.fired = true
+            attempt.cancel()
+        }
+        let result = await attempt.result
+        timer.cancel()
+        #expect(!watchdog.fired, "the native connect stayed suspended after owner release")
+        switch result {
+        case .success: Issue.record("a released native model's attempt connected")
+        case .failure(let error): #expect(error is CancellationError)
+        }
+        for _ in 0..<200 where !join.cancelled { await Task.yield() }
+        #expect(join.cancelled, "owner release must also cancel the pending native operation")
+    }
+
+    @MainActor
+    @Test("An overlapping Nikon connect preserves native work until its model is released")
+    func overlappingNativeConnectKeepsTheEstablishmentAlive() async throws {
+        let join = PendingNativeJoin()
+        var owner: NativeAppModel? = NativeAppModel()
+        weak var released = owner
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.246", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: "NIKON_ZR_TEST"),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "NIKON_ZR_TEST"))
+        owner?.savedCameras = [setup]
+        owner?.connectedWiFiSSID = nil
+        owner?.cameraNetworkJoinPeers = .init(
+            join: { _ in try await join.wait() }, isAlive: { _ in true },
+            dial: { _ in Issue.record("the held native join must not dial a camera") })
+        let port = NativeNikonPort(model: try #require(owner))
+        let first = Task { @MainActor in
+            try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer {
+            first.cancel()
+            join.cancel()
+            owner?.cancelConnectionAttempt()
+        }
+        for _ in 0..<200 where !join.entered { await Task.yield() }
+        try #require(join.entered, "the real native join must be pending before the overlap")
+        let generation = owner?.debugConnectionGeneration
+        var secondFinished = false
+        let second = Task { @MainActor in
+            defer { secondFinished = true }
+            return try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer { second.cancel() }
+        // The newest port waiter replaces the old waiter, while the native funnel coalesces
+        // their shared establishment. Replacing its release watch must not cancel that work.
+        await #expect(throws: CancellationError.self) { _ = try await first.value }
+        for _ in 0..<200 { await Task.yield() }
+        #expect(owner?.debugConnectionGeneration == generation)
+        #expect(owner?.debugIsEstablishingConnection == true)
+        #expect(!join.cancelled, "replacing a watch cancelled the shared native establishment")
+        #expect(!secondFinished, "the replacement waiter must keep waiting for the native join")
+
+        owner = nil
+        #expect(released == nil)
+        let watchdog = Watchdog()
+        let timer = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            watchdog.fired = true
+            second.cancel()
+        }
+        let result = await second.result
+        timer.cancel()
+        #expect(!watchdog.fired, "the replacement watch failed to cancel work on owner release")
+        switch result {
+        case .success: Issue.record("the released model's replacement waiter connected")
+        case .failure(let error): #expect(error is CancellationError)
+        }
+        for _ in 0..<200 where !join.cancelled { await Task.yield() }
+        #expect(join.cancelled, "the active replacement watch must still cancel native work")
+    }
+
+    @MainActor
+    private final class PendingNativeJoin {
+        var entered = false
+        var cancelled = false
+        private var continuation: CheckedContinuation<Void, Error>?
+
+        func wait() async throws {
+            entered = true
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    self.continuation = continuation
+                    if Task.isCancelled { cancel() }
+                }
+            } onCancel: {
+                Task { @MainActor in self.cancel() }
+            }
+        }
+
+        func cancel() {
+            cancelled = true
+            let waiter = continuation
+            continuation = nil
+            waiter?.resume(throwing: CancellationError())
+        }
+    }
+
+    @MainActor
+    private final class Watchdog {
+        var fired = false
+    }
+}
+
+/// SIMULATED SDK completion that ignores cancellation until a pending native read returns.
+@MainActor
+@Suite("Native Nikon connection admission")
+struct NativeNikonConnectionAdmissionTests {
+    @Test("The current native connection can still approve its pairing challenge")
+    func currentOwnerCanApprovePairing() async throws {
+        let handshake = PendingPairingHandshake(holdAfterDecision: true)
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.247", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: "NIKON_ZR_TEST"),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "NIKON_ZR_TEST"))
+        var owner: NativeAppModel? = NativeAppModel()
+        weak var released = owner
+        owner?.savedCameras = [setup]
+        owner?.connectedWiFiSSID = nil
+        owner?.cameraNetworkJoinPeers = .init(
+            join: { _ in }, isAlive: { _ in true },
+            dial: { _ in Issue.record("the simulated SDK owns this establishment") },
+            establish: { _, _, _, challenge, _ in
+                try await handshake.establish(onPairingChallenge: challenge)
+            })
+        let port = NativeNikonPort(model: try #require(owner))
+        let attempt = Task { @MainActor in
+            try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer {
+            handshake.completeNativeRead()
+            handshake.completeDecision()
+            attempt.cancel()
+            owner?.cancelConnectionAttempt()
+        }
+        for _ in 0..<200 where !handshake.entered { await Task.yield() }
+        try #require(handshake.entered)
+        try #require(handshake.hasPairingHandler)
+        handshake.completeNativeRead()
+        for _ in 0..<200 where handshake.accepted == nil { await Task.yield() }
+        #expect(handshake.accepted == true, "the active owner's pairing policy is preserved")
+        owner = nil
+        #expect(released == nil)
+        await #expect(throws: CancellationError.self) { _ = try await attempt.value }
+        handshake.completeDecision()
+    }
+
+    @Test("A late native pairing challenge is rejected after its model is released")
+    func latePairingAfterOwnerReleaseIsRejected() async throws {
+        let handshake = PendingPairingHandshake()
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.251", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: "NIKON_ZR_TEST"),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "NIKON_ZR_TEST"))
+        var owner: NativeAppModel? = NativeAppModel()
+        weak var released = owner
+        owner?.savedCameras = [setup]
+        owner?.connectedWiFiSSID = nil
+        owner?.cameraNetworkJoinPeers = .init(
+            join: { _ in }, isAlive: { _ in true },
+            dial: { _ in Issue.record("the simulated SDK owns this establishment") },
+            establish: { _, _, _, challenge, _ in
+                try await handshake.establish(onPairingChallenge: challenge)
+            })
+        let port = NativeNikonPort(model: try #require(owner))
+        let attempt = Task { @MainActor in
+            try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer {
+            handshake.completeNativeRead()
+            attempt.cancel()
+            owner?.cancelConnectionAttempt()
+        }
+        for _ in 0..<200 where !handshake.entered { await Task.yield() }
+        try #require(handshake.entered, "the real connection must reach the SDK boundary")
+        try #require(handshake.hasPairingHandler, "the real startup policy must supply pairing")
+        owner = nil
+        try #require(released == nil)
+        await #expect(throws: CancellationError.self) { _ = try await attempt.value }
+
+        // A native read can finish after Task.cancel. Deliver its actual callback from that
+        // cancelled establishment task, rather than testing a detached policy helper.
+        handshake.completeNativeRead()
+        for _ in 0..<200 where handshake.accepted == nil { await Task.yield() }
+        #expect(handshake.accepted == false, "a released model cannot approve late pairing")
+    }
+
+    @Test("A late saved-profile failure cannot start pairing after its model is released")
+    func lateProfileFailureCannotEscalateAfterOwnerRelease() async throws {
+        let handshake = PendingProfileFailure()
+        let setup = PTPIPSavedCameraRecord(
+            host: "192.0.2.248", displayName: "SIMULATED ZR", transport: "Wi-Fi", lastSeenAt: nil,
+            presentation: .init(customName: nil, wifiSSID: "NIKON_ZR_TEST"),
+            pairedViaCameraAccessPoint: true, path: .cameraAccessPoint(ssid: "NIKON_ZR_TEST"))
+        let store = NativeCameraConnectionStore.shared
+        try #require(!store.savedCameras().contains { $0.host == setup.host })
+        try #require(!store.knownPairedCameras().contains { $0.host == setup.host })
+        store.upsertSavedCamera(
+            host: setup.host, displayName: setup.displayName, transport: setup.transport,
+            onCameraAccessPoint: true, path: setup.path)
+        defer { store.forgetKnownPairing(host: setup.host) }
+        var owner: NativeAppModel? = NativeAppModel()
+        weak var released = owner
+        owner?.savedCameras = [setup]
+        owner?.connectedWiFiSSID = nil
+        owner?.cameraNetworkJoinPeers = .init(
+            join: { _ in }, isAlive: { _ in true },
+            dial: { _ in Issue.record("the simulated SDK owns this establishment") },
+            establish: { _, _, pairing, _, _ in
+                try await handshake.establish(requestPairing: pairing)
+            })
+        let port = NativeNikonPort(model: try #require(owner))
+        let attempt = Task { @MainActor in
+            try await port.connect(.saved(host: setup.host, path: .cameraAccessPoint))
+        }
+        defer {
+            handshake.completeNativeRead()
+            attempt.cancel()
+            owner?.cancelConnectionAttempt()
+        }
+        for _ in 0..<200 where handshake.attempts == 0 { await Task.yield() }
+        try #require(handshake.attempts == 1)
+        try #require(handshake.firstRequestedPairing == false, "exercise the real saved profile")
+        owner = nil
+        try #require(released == nil)
+        await #expect(throws: CancellationError.self) { _ = try await attempt.value }
+        handshake.completeNativeRead()
+        for _ in 0..<200 { await Task.yield() }
+        #expect(handshake.readCompleted)
+        #expect(handshake.attempts == 1, "an abandoned profile failure must not start pairing")
+    }
+
+    @MainActor
+    private final class PendingProfileFailure {
+        var attempts = 0
+        var firstRequestedPairing: Bool?
+        var readCompleted = false
+        private var nativeRead: CheckedContinuation<Void, Never>?
+
+        func establish(requestPairing: Bool) async throws -> NativeCameraSession {
+            attempts += 1
+            if attempts > 1 { throw CancellationError() }
+            firstRequestedPairing = requestPairing
+            // Native work already admitted can report an ordinary error after cancellation.
+            await withCheckedContinuation { nativeRead = $0 }
+            readCompleted = true
+            throw NativeCameraSessionError.savedProfileRequired
+        }
+
+        func completeNativeRead() {
+            let waiter = nativeRead
+            nativeRead = nil
+            waiter?.resume()
+        }
+    }
+
+    @MainActor
+    private final class PendingPairingHandshake {
+        var entered = false
+        var hasPairingHandler = false
+        var accepted: Bool?
+        private var nativeRead: CheckedContinuation<Void, Never>?
+        private let holdAfterDecision: Bool
+        private var decision: CheckedContinuation<Void, Never>?
+
+        init(holdAfterDecision: Bool = false) {
+            self.holdAfterDecision = holdAfterDecision
+        }
+
+        func establish(onPairingChallenge: NativePairingChallengeHandler?) async throws
+            -> NativeCameraSession
+        {
+            entered = true
+            hasPairingHandler = onPairingChallenge != nil
+            // Intentionally not cancellation-aware, like a native read already in progress.
+            await withCheckedContinuation { nativeRead = $0 }
+            accepted = await onPairingChallenge?(
+                PTPIPPairingChallenge(data: Data(), cameraName: "SIMULATED ZR"))
+            if holdAfterDecision { await withCheckedContinuation { decision = $0 } }
+            throw CancellationError()
+        }
+
+        func completeNativeRead() {
+            let waiter = nativeRead
+            nativeRead = nil
+            waiter?.resume()
+        }
+
+        func completeDecision() {
+            let waiter = decision
+            decision = nil
+            waiter?.resume()
+        }
+    }
 }
 
 /// FINAL-Z3-08: Cancel on the iOS "Wants to Join" alert is a "no" for the automatic re-offers
@@ -682,5 +1056,67 @@ struct CameraAccessPointJoinDeclineTests {
         model.connectToCamera(setup: setup)
         await settle(model)
         #expect(peers.events == ["join:\(Self.ssid)", "dial:\(Self.host)"])
+    }
+}
+
+/// A refused camera Wi-Fi join shows the shared copy and the Settings fallback, never the
+/// platform's developer text (JOIN-ERROR-COPY).
+@MainActor
+@Suite("Refused camera Wi-Fi join")
+struct RefusedCameraWiFiJoinTests {
+    @Test("A non-refusal failure replaces the previous refusal card and Settings action")
+    func nonRefusalFailureReplacesPreviousRefusalCard() throws {
+        let model = NativeAppModel()
+        defer { model.cancelConnectionAttempt() }
+        let refusal = CameraHotspotJoinRefusal(code: 8, network: "SIMULATED camera")
+        model.surfaceCameraWiFiJoinFailure(refusal.message, refusal: refusal)
+        let initialCard = NativeNikonPort.failure(
+            model.lastConnectError, reason: model.lastConnectFailureReason,
+            message: model.connectionFailureDetail)
+        #expect(initialCard.message == refusal.message)
+        #expect(initialCard.actions.contains(.openSettings))
+
+        let message = "Joined the camera network but couldn't find the camera. Try again."
+        model.surfaceCameraWiFiJoinFailure(message)
+        let replacementCard = NativeNikonPort.failure(
+            model.lastConnectError, reason: model.lastConnectFailureReason,
+            message: model.connectionFailureDetail)
+        #expect(model.lastConnectError == nil)
+        #expect(replacementCard.message == message)
+        #expect(!replacementCard.actions.contains(.openSettings))
+        #expect(replacementCard.actions.contains(.retry))
+    }
+
+    @Test("A system refusal keeps the shared copy and offers Settings")
+    func systemRefusalKeepsSharedCopy() throws {
+        let refusal = CameraHotspotJoinRefusal(code: 8, network: "Z_6002199")
+        guard case .refused(let typed) = WiFiJoinCoordinator.mapHotspotError(refusal) else {
+            Issue.record("a typed refusal must stay typed")
+            return
+        }
+        #expect(typed == refusal)
+        let message = try #require(WiFiJoinCoordinator.JoinError.refused(refusal).errorDescription)
+        #expect(message == refusal.message && !message.contains("internal"))
+        let card = NativeNikonPort.failure(refusal, reason: .joinFailed, message: message)
+        #expect(Array(card.actions.prefix(2)) == [.openSettings, .retry])
+        #expect(card.message == refusal.message)
+    }
+
+    @Test("Cancel and an unusable network name keep their own cases")
+    func declineAndInvalidNameKeepTheirCases() {
+        guard
+            case .userDenied = WiFiJoinCoordinator.mapHotspotError(
+                CameraHotspotJoinRefusal(code: 7, network: "Z_6002199"))
+        else {
+            Issue.record("a declined join stays userDenied")
+            return
+        }
+        guard
+            case .invalidSSID = WiFiJoinCoordinator.mapHotspotError(
+                CameraHotspotJoinRefusal(code: 1, network: ""))
+        else {
+            Issue.record("an invalid SSID stays invalidSSID")
+            return
+        }
     }
 }
