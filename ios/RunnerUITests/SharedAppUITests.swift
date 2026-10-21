@@ -1406,3 +1406,467 @@ final class GyroNativeInputUITests: XCTestCase {
             Data("GYRO_NATIVE_INPUT_OUTCOME:\(String(decoding: data, as: UTF8.self))\n".utf8))
     }
 }
+
+/// SIMULATED product UI. Every fixture is driver-free and cannot operate a camera.
+final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        continueAfterFailure = false
+    }
+
+    func testExplicitActionsKeepTimingAndPanelMovementVisible() {
+        let app = launch("ready")
+        for id in ["A", "B"] {
+            let go = app.buttons["focusRack.go.\(id)"]
+            XCTAssertTrue(go.isHittable)
+            XCTAssertEqual(go.value as? String, "Fast reposition")
+            XCTAssertGreaterThanOrEqual(go.frame.height + 0.5, 44)
+        }
+        scrollTo(app.buttons["focusRack.duration.value"], in: app)
+        app.buttons["focusRack.duration.value"].tap()
+        let input = app.alerts.textFields.firstMatch
+        input.tap()
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12) + "10")
+        app.alerts.buttons["Apply"].tap()
+        let detail = expectation(
+            for: NSPredicate(format: "value == %@", "10 s pull"),
+            evaluatedWith: app.buttons["focusRack.pull.aToB"])
+        wait(for: [detail], timeout: 5)
+        let panel = app.otherElements["focusRack.expanded"]
+        let before = panel.frame
+        let handle = app.buttons["focusRack.dragHandle"]
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = start.withOffset(CGVector(dx: -240, dy: 0))
+        start.press(forDuration: 0.1, thenDragTo: end)
+        XCTAssertLessThan(panel.frame.minX, before.minX - 100)
+        assertTransport(app)
+        screenshot("focus-rack-explicit-actions-moved-landscape")
+        app.terminate()
+        let blocked = launch("timing")
+        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isHittable)
+        XCTAssertFalse(blocked.buttons["focusRack.pull.aToB"].isEnabled)
+        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isEnabled)
+        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isHittable)
+        assertTransport(blocked)
+        screenshot("focus-rack-invalid-timing-keeps-positioning")
+        blocked.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(blocked.otherElements["focusRack.compact"].exists)
+        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isHittable)
+        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isEnabled)
+        XCTAssertFalse(blocked.buttons["focusRack.pull.aToB"].exists)
+        assertTransport(blocked)
+        screenshot("focus-rack-invalid-timing-compact-positioning")
+    }
+
+    func testDirectTimedDirectionsKeepSetupAndTransportVisible() {
+        let app = launch("ready")
+        let positions = app.staticTexts["focusRack.positions"]
+        XCTAssertTrue(positions.waitForExistence(timeout: 5))
+        XCTAssertTrue(positions.label.contains("A 0"))
+        XCTAssertTrue(positions.label.contains("B 20"))
+        XCTAssertTrue(positions.label.contains("Now 0"))
+        scrollTo(positions, in: app)
+        XCTAssertTrue(positions.isHittable)
+        XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
+        XCTAssertFalse(app.buttons["focusRack.pull.bToA"].isEnabled)
+        XCTAssertEqual(app.buttons["focusRack.pull.aToB"].value as? String, "3 s pull")
+        XCTAssertEqual(app.buttons["focusRack.pull.bToA"].value as? String, "3 s pull")
+        XCTAssertFalse(app.buttons["focusRack.mode.fastest"].exists)
+        scrollTo(app.buttons["focusRack.duration.value"], in: app)
+        XCTAssertTrue(app.buttons["focusRack.duration.value"].isHittable)
+        assertTransport(app)
+        screenshot("focus-rack-direct-actions-landscape")
+        XCUIDevice.shared.orientation = .portrait
+        let portrait = expectation(
+            for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+        wait(for: [portrait], timeout: 8)
+        scrollTo(app.buttons["focusRack.delay.value"], in: app)
+        scrollTo(positions, in: app)
+        XCTAssertTrue(positions.isHittable)
+        assertTransport(app)
+        screenshot("focus-rack-direct-actions-portrait")
+        app.terminate()
+        let atB = launch("atB")
+        XCTAssertFalse(atB.buttons["focusRack.pull.aToB"].isEnabled)
+        XCTAssertTrue(atB.buttons["focusRack.pull.bToA"].isEnabled)
+        XCTAssertEqual(atB.buttons["focusRack.pull.bToA"].label, "Rehearse B→A")
+        assertTransport(atB)
+        screenshot("focus-rack-direct-reverse-landscape")
+    }
+
+    func testFocusEntryAndScrollingSetupKeepTransportVisible() {
+        let app = launch(
+            "entry", extra: ["ZC_DEMO_FOCUS_RACK_AUTOOPEN": "0"])
+        let entry = app.buttons["focusRack.open"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 15))
+        entry.tap()
+        assertTransport(app)
+        screenshot("focus-rack-marks-empty")
+        XCTAssertGreaterThanOrEqual(app.buttons["focusRack.far"].frame.height + 0.5, 44)
+        XCTAssertFalse(app.otherElements["focusRack.dial"].exists)
+        assertTransport(app)
+        screenshot("focus-rack-marks-dial")
+        scrollTo(app.buttons["focusRack.duration.value"], in: app)
+        app.buttons["focusRack.duration.value"].tap()
+        XCTAssertTrue(app.alerts["Duration in seconds"].waitForExistence(timeout: 5))
+        screenshot("focus-rack-duration-modal-landscape")
+        app.alerts.buttons["Cancel"].tap()
+        assertTransport(app)
+        openOptions(in: app)
+        scrollTo(app.buttons["focusRack.templates"], in: app)
+        XCTAssertTrue(app.buttons["focusRack.templates"].isHittable)
+        assertTransport(app)
+        screenshot("focus-rack-move-timing")
+        app.buttons["focusRack.templates"].tap()
+        app.buttons["Save current timing…"].tap()
+        let nameAlert = app.alerts["Save timing template"]
+        XCTAssertTrue(nameAlert.waitForExistence(timeout: 5))
+        nameAlert.textFields.firstMatch.tap()
+        nameAlert.textFields.firstMatch.typeText("Fixture timing")
+        screenshot("focus-rack-template-name-modal-landscape")
+        nameAlert.buttons["Save"].tap()
+        assertTransport(app)
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(app.otherElements["focusRack.compact"].exists)
+        assertTransport(app)
+        screenshot("focus-rack-operator-collapsed")
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertGreaterThanOrEqual(app.buttons["focusRack.close"].frame.height + 0.5, 44)
+        app.buttons["focusRack.close"].tap()
+        XCTAssertTrue(app.buttons["Close and discard marks"].waitForExistence(timeout: 5))
+        screenshot("focus-rack-close-confirmation")
+        app.buttons["Close and discard marks"].tap()
+        let closed = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: app.otherElements["focusRack.expanded"])
+        wait(for: [closed], timeout: 5)
+    }
+
+    func testTenStepSetupControlsForwardCountsAndKeepStopVisible() {
+        let app = launch("empty")
+        for (id, label, direction) in [
+            ("near10", "Near −10", "Near"), ("far10", "Far +10", "Far"),
+        ] {
+            let button = app.buttons["focusRack.\(id)"]
+            scrollTo(button, in: app)
+            XCTAssertEqual(button.label, label)
+            XCTAssertGreaterThanOrEqual(button.frame.height + 0.5, 44)
+            XCTAssertTrue(app.frame.contains(button.frame))
+            button.tap()
+            let positions = app.staticTexts["focusRack.positions"]
+            scrollTo(positions, in: app)
+            XCTAssertTrue((positions.value as? String)?.contains("Last \(direction) 10") == true)
+            assertTransport(app)
+        }
+        scrollTo(app.buttons["focusRack.near10"], in: app)
+        screenshot("focus-rack-ten-step-landscape")
+        XCUIDevice.shared.orientation = .portrait
+        let portrait = expectation(
+            for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+        wait(for: [portrait], timeout: 8)
+        scrollTo(app.buttons["focusRack.near10"], in: app)
+        assertTransport(app)
+        screenshot("focus-rack-ten-step-portrait")
+        app.terminate()
+        let moving = launch("moving")
+        scrollTo(moving.buttons["focusRack.near10"], in: moving)
+        XCTAssertFalse(moving.buttons["focusRack.near10"].isEnabled)
+        XCTAssertFalse(moving.buttons["focusRack.far10"].isEnabled)
+        assertTransport(moving)
+    }
+
+    func testReopeningMoveKeepsCloseReachable() {
+        let app = launch(
+            "entry", extra: ["ZC_DEMO_FOCUS_RACK_AUTOOPEN": "0"])
+        app.buttons["focusRack.open"].tap()
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(app.otherElements["focusRack.compact"].exists)
+        app.buttons["focusRack.expand"].tap()
+        assertTransport(app)
+        screenshot("focus-rack-reopened-move-close-visible")
+        app.buttons["focusRack.close"].tap()
+        XCTAssertTrue(app.buttons["Close and discard marks"].waitForExistence(timeout: 5))
+        app.buttons["Close and discard marks"].tap()
+        let closed = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: app.otherElements["focusRack.expanded"])
+        wait(for: [closed], timeout: 5)
+    }
+
+    func testFocusSettingsRemainAccessibleWhileRackIsOpen() {
+        let app = launch("ready")
+        app.buttons["FOCUS"].tap()
+        let entry = app.buttons["focusRack.open"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.otherElements["focusRack.expanded"].exists)
+        XCTAssertFalse(app.otherElements["focusRack.compact"].exists)
+        screenshot("focus-rack-focus-settings-route")
+        XCTAssertTrue(entry.isHittable)
+        let close = app.buttons["monitor.capture.close"]
+        XCTAssertTrue(close.isHittable)
+        close.tap()
+        let dismissed = expectation(
+            for: NSPredicate(format: "exists == false"), evaluatedWith: entry)
+        wait(for: [dismissed], timeout: 5)
+        assertTransport(app)
+        XCTAssertEqual(app.buttons["focusRack.pull.aToB"].label, "Rehearse A→B")
+        app.terminate()
+
+        let moving = launch("moving")
+        moving.buttons["FOCUS"].tap()
+        XCTAssertTrue(moving.buttons["focusRack.open"].waitForExistence(timeout: 5))
+        assertTransport(moving)
+        screenshot("focus-rack-focus-settings-active-safety")
+    }
+
+    func testGroupedSetupHasNoWheelAndOnlyOneClose() {
+        let app = launch("ready")
+        XCTAssertFalse(app.otherElements["focusRack.dial"].exists)
+        XCTAssertFalse(app.segmentedControls["focusRack.tabs"].exists)
+        XCTAssertFalse(app.buttons["focusRack.stop"].exists)
+        XCTAssertEqual(app.buttons.matching(identifier: "focusRack.close").count, 1)
+        XCTAssertTrue(app.buttons["focusRack.close"].isHittable)
+        let positions = app.staticTexts["focusRack.positions"]
+        XCTAssertTrue(positions.label.contains("A 0"))
+        XCTAssertTrue(positions.label.contains("B 20"))
+        XCTAssertTrue(positions.isHittable)
+        for id in ["A", "B"] {
+            XCTAssertEqual(app.buttons["focusRack.go.\(id)"].value as? String, "Fast reposition")
+        }
+        openOptions(in: app)
+        let easing = app.otherElements["focusRack.easing"]
+        scrollTo(easing, in: app)
+        easing.buttons["Ease in-out"].tap()
+        XCTAssertTrue(easing.buttons["Ease in-out"].isSelected)
+        XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("B 20"))
+        assertTransport(app)
+        screenshot("focus-rack-unified-options-landscape")
+    }
+
+    func testPrimaryActionsAreExplicitInEachSharedState() {
+        for (fixture, title) in [
+            ("ready", "Rehearse A→B"), ("elsewhere", "Rehearse A→B"),
+            ("recording", "Run A→B"), ("moving", "Pause"), ("paused", "Resume"),
+        ] {
+            let app = launch(fixture)
+            let action = app.buttons[
+                fixture == "moving" || fixture == "paused"
+                    ? "focusRack.primary" : "focusRack.pull.aToB"]
+            XCTAssertEqual(action.label, title)
+            XCTAssertEqual(action.isEnabled, fixture != "elsewhere")
+            assertTransport(app)
+            screenshot("focus-rack-\(fixture)-landscape")
+            app.terminate()
+        }
+    }
+
+    func testRecoveryAndStopStayVisibleWhileLongFeedbackScrolls() {
+        let app = launch("uncertain")
+        scrollTo(app.staticTexts["focusRack.positions"], in: app)
+        XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("Positions unknown"))
+        let recovery = app.staticTexts["focusRack.recovery"]
+        XCTAssertEqual(recovery.label, "Reconnect camera, then reset marks.")
+        XCTAssertTrue(app.frame.contains(recovery.frame))
+        openOptions(in: app)
+        scrollTo(app.buttons["focusRack.templates"], in: app)
+        XCTAssertTrue(app.frame.contains(recovery.frame))
+        XCTAssertFalse(app.buttons["focusRack.primary"].isEnabled)
+        assertTransport(app)
+        screenshot("focus-rack-recovery-scrolled")
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(app.frame.contains(recovery.frame))
+        assertTransport(app)
+        screenshot("focus-rack-recovery-compact")
+    }
+
+    func testDisabledRunExplainsHowToFindTheSharedAdmissionReason() {
+        let app = launch("timing")
+        let attention = app.buttons["focusRack.moveAttention"]
+        XCTAssertTrue(attention.isHittable)
+        XCTAssertGreaterThanOrEqual(attention.frame.height, 44)
+        XCTAssertFalse(app.buttons["focusRack.pull.aToB"].isEnabled)
+        assertTransport(app)
+        screenshot("focus-rack-admission-hint-landscape")
+        attention.tap()
+        let reason = app.staticTexts["focusRack.admission"]
+        XCTAssertEqual(reason.label, "Increase duration to at least 16.61s for these marks.")
+        XCTAssertTrue(app.scrollViews["focusRack.setup"].frame.contains(reason.frame))
+        assertTransport(app)
+        screenshot("focus-rack-admission-reason-landscape")
+    }
+
+    func testCleanLockedRecoveryNamesTheUnconfirmedState() {
+        for (fixture, phase, instruction) in [
+            ("uncertain", "Stop unconfirmed", "Reconnect camera, then reset marks."),
+            ("reference", "Reference uncertain", "Reset marks before moving focus."),
+        ] {
+            let app = launch(fixture, extra: ["ZC_DEMO_DISP": "clean", "ZC_DEMO_LOCK": "1"])
+            XCTAssertTrue(app.otherElements["focusRack.compact"].exists)
+            XCTAssertEqual(app.staticTexts["focusRack.phase"].label, "FOCUS RACK · \(phase)")
+            let recovery = app.staticTexts["focusRack.recovery"]
+            XCTAssertEqual(recovery.label, instruction)
+            XCTAssertTrue(app.frame.contains(recovery.frame))
+            assertTransport(app)
+            screenshot("focus-rack-\(fixture)-clean-locked-landscape")
+            app.terminate()
+        }
+    }
+
+    func testPortraitOffersUsableMarksAndMoveSetup() {
+        let app = launch("ready")
+        XCUIDevice.shared.orientation = .portrait
+        let portrait = expectation(
+            for: NSPredicate { _, _ in
+                app.frame.height > app.frame.width
+            }, evaluatedWith: app)
+        wait(for: [portrait], timeout: 8)
+        assertTransport(app)
+        screenshot("focus-rack-portrait-setup-admission")
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "focus-rack-portrait-layout"
+        tree.lifetime = .keepAlways
+        add(tree)
+        XCTAssertTrue(
+            app.otherElements["focusRack.expanded"].exists,
+            "Portrait must provide usable setup rather than an unopenable compact transport.")
+        if app.otherElements["focusRack.expanded"].exists {
+            openOptions(in: app)
+            scrollTo(app.buttons["focusRack.templates"], in: app)
+            assertTransport(app)
+            screenshot("focus-rack-portrait-move")
+        }
+        app.terminate()
+        XCUIDevice.shared.orientation = .landscapeLeft
+    }
+
+    func testCleanLockedTransportAndPortraitRemainInsideTheDisplay() {
+        let app = launch("moving", extra: ["ZC_DEMO_DISP": "clean", "ZC_DEMO_LOCK": "1"])
+        XCTAssertTrue(app.otherElements["focusRack.compact"].exists)
+        XCTAssertEqual(app.buttons["focusRack.primary"].label, "Pause")
+        assertTransport(app)
+        screenshot("focus-rack-clean-locked-landscape")
+        XCUIDevice.shared.orientation = .portrait
+        let portrait = expectation(
+            for: NSPredicate { _, _ in
+                app.frame.height > app.frame.width && app.buttons["focusRack.stop"].isHittable
+            }, evaluatedWith: app)
+        wait(for: [portrait], timeout: 8)
+        assertTransport(app)
+        screenshot("focus-rack-clean-locked-portrait")
+        app.buttons["focusRack.stop"].tap()
+        XCTAssertEqual(app.buttons["focusRack.primary"].label, "Stopping…")
+        XCTAssertFalse(app.buttons["focusRack.primary"].isEnabled)
+        assertTransport(app)
+        screenshot("focus-rack-stop-ack-portrait")
+        app.terminate()
+        XCUIDevice.shared.orientation = .landscapeLeft
+    }
+
+    private func launch(_ fixture: String, extra: [String: String] = [:]) -> XCUIApplication {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchEnvironment["ZC_DEMO_AUTOSTART"] = "1"
+        app.launchEnvironment["ZC_DEMO_FOCUS_RACK"] = fixture
+        for (key, value) in extra { app.launchEnvironment[key] = value }
+        app.launch()
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if alert.waitForExistence(timeout: 1), alert.buttons["Allow"].exists {
+            alert.buttons["Allow"].tap()
+        }
+        if fixture == "entry" {
+            let focus = app.buttons["FOCUS"]
+            let visible = expectation(
+                for: NSPredicate(format: "exists == true AND hittable == true AND enabled == true"),
+                evaluatedWith: focus)
+            wait(for: [visible], timeout: 15)
+            focus.tap()
+        }
+        let expected =
+            fixture == "entry"
+            ? app.buttons["focusRack.open"]
+            : app.otherElements.matching(
+                NSPredicate(
+                    format: "identifier == %@ OR identifier == %@", "focusRack.expanded",
+                    "focusRack.compact")
+            ).firstMatch
+        XCTAssertTrue(expected.waitForExistence(timeout: 20))
+        return app
+    }
+
+    private func assertTransport(_ app: XCUIApplication) {
+        let stop = app.buttons["focusRack.stop"]
+        if stop.exists {
+            XCTAssertTrue(stop.isHittable)
+            XCTAssertTrue(
+                app.frame.contains(stop.frame), "All four transport edges must fit the display.")
+            XCTAssertGreaterThanOrEqual(stop.frame.height, 44)
+        }
+        if app.buttons["focusRack.primary"].exists {
+            XCTAssertTrue(app.frame.contains(app.buttons["focusRack.primary"].frame))
+        } else {
+            let ids =
+                app.buttons["focusRack.pull.aToB"].exists
+                ? ["focusRack.pull.aToB", "focusRack.pull.bToA"]
+                : ["focusRack.go.A", "focusRack.go.B"]
+            for id in ids {
+                let button = app.buttons[id]
+                XCTAssertTrue(button.isHittable)
+                XCTAssertTrue(app.frame.contains(button.frame))
+                XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+            }
+        }
+    }
+
+    private func openOptions(in app: XCUIApplication) {
+        guard !app.otherElements["focusRack.easing"].exists else { return }
+        let options = app.buttons["focusRack.options"]
+        scrollTo(options, in: app)
+        options.tap()
+    }
+
+    private func scrollTo(_ target: XCUIElement, in app: XCUIApplication) {
+        let scroll = app.scrollViews["focusRack.setup"]
+        for _ in 0..<20 {
+            let visible = scroll.frame.insetBy(dx: -0.5, dy: -0.5)
+            let fixed =
+                target.identifier == "focusRack.positions"
+                || target.identifier.hasPrefix("focusRack.go.")
+                || (target.identifier.hasPrefix("focusRack.capture.")
+                    && !scroll.frame.intersects(target.frame))
+            if target.isHittable && (fixed || visible.contains(target.frame)) { return }
+            let upward = target.frame.isEmpty || target.frame.maxY > visible.maxY
+            let overflow =
+                upward ? target.frame.maxY - visible.maxY : visible.minY - target.frame.minY
+            if !target.frame.isEmpty && overflow < scroll.frame.height * 0.4 {
+                // Finish with a pan, avoiding a flick past a nearly visible control.
+                let travel = max(20, overflow + 4)
+                let start = scroll.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: upward ? 0.8 : 0.2))
+                start.press(
+                    forDuration: 0.05,
+                    thenDragTo: start.withOffset(CGVector(dx: 0, dy: upward ? -travel : travel)),
+                    withVelocity: XCUIGestureVelocity(rawValue: 100), thenHoldForDuration: 0.4)
+            } else {
+                let velocity = XCUIGestureVelocity(rawValue: 60)
+                if upward {
+                    scroll.swipeUp(velocity: velocity)
+                } else {
+                    scroll.swipeDown(velocity: velocity)
+                }
+            }
+            assertTransport(app)
+        }
+        screenshot("focus-rack-scroll-target-not-visible")
+        XCTAssertTrue(target.isHittable, "Target \(target.frame), viewport \(scroll.frame)")
+        XCTAssertTrue(
+            scroll.frame.insetBy(dx: -0.5, dy: -0.5).contains(target.frame),
+            "Target \(target.frame), viewport \(scroll.frame)")
+    }
+
+    private func screenshot(_ name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}

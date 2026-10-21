@@ -15,6 +15,13 @@ import java.util.TimeZone
  * `Sources/OpenZCineAndroidFacade/SwiftCoreJNI.swift`.
  */
 object SwiftCore {
+    /** Creates a shared Swift rack runner bound to one current native connection owner. */
+    external fun focusRackCreate(connectionOwner: Long, templatesJSON: String): String?
+    /** Sends observations and semantic intents; returns state, never camera commands. */
+    external fun focusRackStep(owner: String, requestJSON: String): String?
+    /** Requests native cancellation before releasing a session-local rack owner. */
+    external fun focusRackClose(owner: String)
+
     /** Shared mount descriptions and validated GCSV axis mappings. */
     external fun gyroMountPresets(naturalPortrait: Boolean): String
     /** Creates one shared-core three-pose mount calibration. */

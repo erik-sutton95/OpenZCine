@@ -51,6 +51,7 @@ struct NikonLadderFooter: View {
                     get: { model.mfDriveScrubEnabled }, set: { model.mfDriveScrubEnabled = $0 })
             )
         }
+        if picker == .focus { FocusRackEntryRow() }
         if picker == .codec { NikonCodecColorFooter() }
         if picker == .stillDrive, case .value(let mode) = tab, mode == 1 || mode == 2 {
             let disabled = model.pickerModeDisabled(.stillDrive, mode: mode)

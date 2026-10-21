@@ -587,7 +587,11 @@ class MainActivity : ComponentActivity() {
                         }
                 }
                 val sceneState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-                LaunchedEffect(sceneState) { shell.setSceneActive(sceneState.isAtLeast(Lifecycle.State.RESUMED)) }
+                LaunchedEffect(sceneState, nikonPort) {
+                    val active = sceneState.isAtLeast(Lifecycle.State.RESUMED)
+                    shell.setSceneActive(active)
+                    nikonPort.sceneActive = active
+                }
                 LaunchedEffect(monitorSession, activeSavedCamera) {
                     val native = monitorSession ?: return@LaunchedEffect
                     val borrowed = multicam.lentMember(native)

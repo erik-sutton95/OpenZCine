@@ -132,6 +132,13 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   stay in Gyroflow.
   See [the workflow and hardware validation requirements](gyro-logging.md).
 
+- **Programmable A/B focus racks** (local implementation, discussion #11): shared timing,
+  session-local acknowledged marks, Pause/Resume and timing templates for iOS and Android.
+  The coarse profile failed source smoothness; finer iPhone USB trials passed isolated source
+  checks and four repeated round trips. Further physical testing ended at the operator's request;
+  the remaining qualification matrix is explicitly open.
+  See [the local workflow](focus-racks.md) and
+  [qualification result](investigations/focus-rack-qualification.md).
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
   false color, 3D monitor LUT display, live audio meters.
 - **Android live focus and virtual-horizon parity** (OPE-58, in review) — carry camera-origin

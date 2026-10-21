@@ -19,6 +19,10 @@ import os
 /// `applyLaunchEnvironment(to:)` for launch-time staging) and call it from the feature — no
 /// `ProcessInfo` reads and no raw `ZC_` strings at call sites.
 enum DemoHarness {
+    /// SIMULATED product layouts, never connected to a camera driver.
+    static let focusRackFixture = value("ZC_DEMO_FOCUS_RACK")
+    static let opensFocusRackFixture = value("ZC_DEMO_FOCUS_RACK_AUTOOPEN") != "0"
+
     // MARK: Hook registry — every env toggle, one place.
 
     /// `ZC_DEMO_OPEN_MEDIA` opens the Media browser on launch; the value `play` also starts the
@@ -120,6 +124,90 @@ enum DemoHarness {
     #if !DEBUG
         /// Release stub — the launch harness does not exist outside Debug builds.
         @MainActor static func applyLaunchEnvironment(to model: NativeAppModel) async {}
+    #endif
+
+    #if DEBUG
+        @MainActor static var focusRackFixtureState: FocusRackState? {
+            guard let fixture = focusRackFixture else { return nil }
+            var state = FocusRackState.initial
+            state.message = "SIMULATED layout. No camera driver is attached."
+            state.capabilities.canEditTiming = true
+            state.capabilities.canReset = true
+            if fixture == "empty" || fixture == "entry" {
+                state.capabilities.canCaptureA = true
+                state.capabilities.canCaptureB = true
+                state.capabilities.canNudge = true
+                state.capabilities.canAutofocus = true
+                return state
+            }
+            state.program = .init(
+                marks: [.init(id: "A", stepPosition: 0), .init(id: "B", stepPosition: 20)],
+                transitions: [state.transition])
+            state.captures = [
+                .init(markID: "A", revision: 1, sessionID: "SIMULATED", frameSequence: 1),
+                .init(markID: "B", revision: 2, sessionID: "SIMULATED", frameSequence: 2),
+            ]
+            state.stepPosition = 0
+            state.referenceValid = true
+            state.phase = .ready
+            state.capabilities.canCaptureA = true
+            state.capabilities.canCaptureB = true
+            state.capabilities.canGoToA = true
+            state.capabilities.canGoToB = true
+            state.capabilities.canNudge = true
+            state.primary = .init(
+                kind: "rehearse", title: "Rehearse A→B", enabled: true,
+                detail: state.transition.playbackDetail)
+            if fixture == "timing" {
+                state.admissionMessage = "Increase duration to at least 16.61s for these marks."
+                state.minimumDuration = 16.61
+                state.primary.enabled = false
+                state.primary.disabledReason = "Adjust timing"
+            } else if fixture == "elsewhere" {
+                state.stepPosition = 10
+                state.primary = .init(
+                    kind: "rehearse", title: "Rehearse A→B", enabled: false,
+                    detail: state.transition.playbackDetail, disabledReason: "Go to A first")
+            } else if fixture == "recording" {
+                state.primary = .init(
+                    kind: "run", title: "Run A→B", enabled: true,
+                    detail: state.transition.playbackDetail)
+            } else if fixture == "moving" || fixture == "paused" {
+                state.phase = fixture == "moving" ? .moving : .paused
+                state.busy = true
+                state.completedSteps = 8
+                state.totalSteps = 20
+                state.stepPosition = 8
+                state.capabilities.canCaptureA = false
+                state.capabilities.canCaptureB = false
+                state.capabilities.canNudge = false
+                state.capabilities.canEditTiming = false
+                state.capabilities.canGoToA = false
+                state.capabilities.canGoToB = false
+                state.capabilities.canPause = fixture == "moving"
+                state.capabilities.canResume = fixture == "paused"
+                state.capabilities.canStop = true
+                state.primary = .init(
+                    kind: fixture == "moving" ? "pause" : "resume",
+                    title: fixture == "moving" ? "Pause" : "Resume", enabled: true)
+            } else if fixture == "uncertain" || fixture == "reference" {
+                state.phase = fixture == "uncertain" ? .stopUnconfirmed : .uncertain
+                state.stepPosition = nil
+                state.referenceValid = false
+                state.recoveryInstruction =
+                    fixture == "uncertain"
+                    ? "Reconnect camera, then reset marks." : "Reset marks before moving focus."
+                state.message =
+                    "SIMULATED: Camera readiness is unconfirmed. Reconnect the camera before resetting marks. "
+                    + String(
+                        repeating: "The full diagnostic feedback remains scrollable. ", count: 8)
+                state.primary = .init(kind: "reset", title: "Reset marks", enabled: false)
+                state.capabilities = .init()
+            }
+            if fixture == "atB" { state.stepPosition = 20 }
+            state.updateTimedActions(recording: fixture == "recording", ready: state.referenceValid)
+            return state
+        }
     #endif
 
     #if DEBUG
@@ -340,6 +428,9 @@ enum DemoHarness {
                 environment: env, fallbackDirectoryPath: localDemoFallback)
             if env["ZC_DEMO_AUTOSTART"] == "1" {
                 model.startDemoSession()
+                if focusRackFixture != nil, env["ZC_DEMO_FOCUS_RACK_AUTOOPEN"] != "0" {
+                    model.openFocusRack()
+                }
                 if env["ZC_DEMO_GRAPHICAL_REVIEW"] == "1" {
                     model.seedGraphicalReviewTimecode()
                 }

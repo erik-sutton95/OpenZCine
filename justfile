@@ -182,6 +182,10 @@ lint: swift-lint
 # Run production Swift tests.
 test: swift-test
 
+# Run the focus-rack engine, production controller and wire regression tests.
+focus-rack-test:
+    swift test --filter 'rack|FocusRack'
+
 # Explain how to run the native production app without invoking prototype tooling.
 run:
     #!/usr/bin/env bash

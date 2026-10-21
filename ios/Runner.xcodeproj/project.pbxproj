@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F0C05AAB0000000000000021 /* FocusRackAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C05AAB0000000000000022 /* FocusRackAdapterTests.swift */; };
+		F0C05AAB0000000000000015 /* FocusRackTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C05AAB0000000000000016 /* FocusRackTemplateStore.swift */; };
+		F0C05AAB0000000000000013 /* FocusRackModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C05AAB0000000000000014 /* FocusRackModel.swift */; };
+		F0C05AAB0000000000000011 /* FocusRackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C05AAB0000000000000012 /* FocusRackView.swift */; };
 		C0DE000000000000000006B2 /* MulticamCameraSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000006B1 /* MulticamCameraSettings.swift */; };
 		C0DE000000000000000006B4 /* MulticamPicture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE000000000000000006B3 /* MulticamPicture.swift */; };
 		E43BB78DABFEC65A2C255590 /* MonitorPortraitHeaderClearanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */; };
@@ -207,6 +211,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F0C05AAB0000000000000022 /* FocusRackAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusRackAdapterTests.swift; sourceTree = "<group>"; };
+		F0C05AAB0000000000000016 /* FocusRackTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusRackTemplateStore.swift; sourceTree = "<group>"; };
+		F0C05AAB0000000000000014 /* FocusRackModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusRackModel.swift; sourceTree = "<group>"; };
+		F0C05AAB0000000000000012 /* FocusRackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusRackView.swift; sourceTree = "<group>"; };
 		C0DE000000000000000006B1 /* MulticamCameraSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamCameraSettings.swift; sourceTree = "<group>"; };
 		C0DE000000000000000006B3 /* MulticamPicture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MulticamPicture.swift; sourceTree = "<group>"; };
 		2B07FDAC3EBF1FB05CFD6FE1 /* MonitorPortraitHeaderClearanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MonitorPortraitHeaderClearanceTests.swift; path = "../../OpenCine/Tests/MonitorUITests/MonitorPortraitHeaderClearanceTests.swift"; sourceTree = SOURCE_ROOT; };
@@ -416,6 +424,7 @@
 				C0DE000000000000000006B5 /* MulticamPictureTests.swift */,
 				B50000000000000000000002 /* MonitorPortraitHeaderNativeTests.swift */,
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
+				F0C05AAB0000000000000022 /* FocusRackAdapterTests.swift */,
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
@@ -517,6 +526,9 @@
 				DZ105000000000000000031B /* NikonCapturePopupParts.swift */,
 				DZ105000000000000000021B /* NikonFocusMarks.swift */,
 				C0DE000000000000000000C7 /* DemoHarness.swift */,
+				F0C05AAB0000000000000016 /* FocusRackTemplateStore.swift */,
+				F0C05AAB0000000000000014 /* FocusRackModel.swift */,
+				F0C05AAB0000000000000012 /* FocusRackView.swift */,
 				C0DE0000000000000000002D /* MonitorOverlays.swift */,
 				3D34B9609E1E31026A5C74AD /* PhoneMotionDriver.swift */,
 				E27525E25D8C3B049C9B1909 /* GyroLogsView.swift */,
@@ -814,6 +826,7 @@
 				C0DE000000000000000006B6 /* MulticamPictureTests.swift in Sources */,
 				B50000000000000000000001 /* MonitorPortraitHeaderNativeTests.swift in Sources */,
 				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
+				F0C05AAB0000000000000021 /* FocusRackAdapterTests.swift in Sources */,
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
@@ -880,6 +893,9 @@
 				DZ105000000000000000031A /* NikonCapturePopupParts.swift in Sources */,
 				DZ105000000000000000021A /* NikonFocusMarks.swift in Sources */,
 				C0DE000000000000000000C6 /* DemoHarness.swift in Sources */,
+				F0C05AAB0000000000000015 /* FocusRackTemplateStore.swift in Sources */,
+				F0C05AAB0000000000000013 /* FocusRackModel.swift in Sources */,
+				F0C05AAB0000000000000011 /* FocusRackView.swift in Sources */,
 				C0DE0000000000000000002C /* MonitorOverlays.swift in Sources */,
 				3271ACF11DA7DF3350753C17 /* PhoneMotionDriver.swift in Sources */,
 				074A86DAB1B8D28E46443C2C /* GyroLogsView.swift in Sources */,

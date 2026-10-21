@@ -14,8 +14,13 @@ import com.opencapture.opencine.nikon.NikonPresence
 import com.opencapture.opencine.nikon.NikonConnectException
 import com.opencapture.opencine.nikon.NikonConnectRequest
 import com.opencapture.opencine.nikon.NikonSighting
+import com.opencapture.opencine.nikon.UsbPtpOpenResult
 import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
+import com.opencapture.openzcine.transport.UsbPtpCamera
+import com.opencapture.openzcine.transport.UsbPtpCameraAccess
+import com.opencapture.openzcine.transport.UsbPtpCameraSource
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -36,13 +41,13 @@ class AppNikonConnectPortTest {
 
     private val connectCopy = PortCopy { id, args -> "$id ${args.joinToString()}".trim() }
 
-    private fun environment() =
+    private fun environment(usb: UsbPtpCameraSource? = null) =
         PairingEnvironment(
             joinCameraAp = { _, _ -> true },
             releaseCameraAp = {},
             hotspotCameras = emptyFlow(),
             createSession = { FakeCameraSession(CameraIdentity("ZR_3001234", "ZR", "3001234")) },
-            usbCameraSource = null,
+            usbCameraSource = usb,
             createUsbSession = { error("no USB here") },
             credentials =
                 object : PairingCredentials {
@@ -145,6 +150,7 @@ class AppNikonConnectPortTest {
                 onExplicitUsbReconnect = {}, scope = backgroundScope, offersDiagnostics = false,
             )
         port.pageVisible = true
+        port.sceneActive = true
         port.startDiscovery(DiscoveryMode.PASSIVE)
         advanceTimeBy(25_000)
         runCurrent()
@@ -182,6 +188,64 @@ class AppNikonConnectPortTest {
         assertEquals("Phone B", port.currentHolder("192.168.1.30"))
         assertEquals(null, port.currentHolder("192.168.1.31"))
         assertTrue(NikonDialPurpose.CAMERA_CONTROL !in dials)
+    }
+
+    @Test
+    fun usbPermissionDiscoveryFollowsTheForegroundOwnerAndPublishesOnlyReadyIdentity() = runTest {
+        val pending = UsbPtpCamera("SIMULATED", "Nikon ZR", UsbPtpCameraAccess.NEEDS_PERMISSION, null)
+        val usb = object : UsbPtpCameraSource {
+            override val cameras = MutableStateFlow(emptyList<UsbPtpCamera>())
+            var attached = emptyList<UsbPtpCamera>()
+            var refreshes = 0
+            val permissionRequests = mutableListOf<UsbPtpCamera>()
+            override fun refresh() { refreshes++; cameras.value = attached }
+            override fun requestPermission(camera: UsbPtpCamera) { permissionRequests += camera }
+            override fun open(camera: UsbPtpCamera): UsbPtpOpenResult = error("Discovery must not open a camera")
+            override fun close() = Unit
+        }
+        val connector = SavedCameraConnector(environment(usb), { true }, { false }, backgroundScope, connectCopy)
+        val port = AppNikonConnectPort(
+            { id, _ -> "$id" }, connector, { emptyList() }, { null }, onPaired = {}, onForget = {},
+            onExplicitUsbReconnect = {}, scope = backgroundScope, offersDiagnostics = false,
+        )
+        port.pageVisible = true
+        port.startDiscovery(DiscoveryMode.ACTIVE)
+        runCurrent()
+        assertEquals(0, usb.refreshes, "no USB polling before the activity resumes")
+        port.sceneActive = true
+        runCurrent()
+        assertEquals(1, usb.refreshes)
+        usb.attached = listOf(pending) // A missed attach broadcast is recovered by enumeration.
+        advanceTimeBy(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+        runCurrent()
+        assertEquals(listOf(pending), connector.usbCameras.value)
+        assertTrue(port.sightings.value.isEmpty(), "no synthetic saved identity before permission")
+        assertTrue(usb.permissionRequests.isEmpty(), "discovery never asks for consent automatically")
+
+        connector.requestUsbPermission(pending)
+        assertEquals(listOf(pending), usb.permissionRequests)
+        val ready = pending.copy(access = UsbPtpCameraAccess.READY, hostKey = "usb:SIMULATED")
+        usb.attached = listOf(ready)
+        advanceTimeBy(USB_DISCOVER_POLL_INTERVAL_MILLIS)
+        runCurrent()
+        assertEquals(listOf(NikonSighting("usb:SIMULATED", "Nikon ZR", NikonSighting.Source.USB)), port.sightings.value)
+
+        port.sceneActive = false
+        runCurrent()
+        val stoppedAt = usb.refreshes
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(stoppedAt, usb.refreshes, "backgrounding cancels the discovery poll")
+        usb.attached = emptyList()
+        port.sceneActive = true
+        runCurrent()
+        assertTrue(port.sightings.value.isEmpty(), "resume immediately refreshes detached devices")
+        port.stopDiscovery()
+        runCurrent()
+        val retiredAt = usb.refreshes
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(retiredAt, usb.refreshes, "retiring the shared discovery owner stops enumeration")
     }
 
     @Test

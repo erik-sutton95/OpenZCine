@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,6 +44,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
@@ -988,6 +990,7 @@ internal fun MonitorControlPickerPanel(
      * the body offers for the active codec. Null or colourless leaves the codec ladder alone.
      */
     codecColor: CaptureCodecColorChoices? = null,
+    onOpenFocusRack: (() -> Unit)? = null,
 ) {
     val writeEnabled = controlsEnabled && com.opencapture.opencine.appkit.LocalMonitorCaptureCommandEnabled.current
     if (picker.kind == MonitorPickerKind.QUALITY) {
@@ -1029,6 +1032,9 @@ internal fun MonitorControlPickerPanel(
             if (picker.kind == MonitorPickerKind.FOCUS && onToggleMfScrub != null) {
                 MfScrubToggleRow(enabled = mfScrubEnabled, onToggle = onToggleMfScrub)
             }
+            if (picker.kind == MonitorPickerKind.FOCUS) {
+                onOpenFocusRack?.let { FocusRackEntryRow(it) }
+            }
             if (picker.kind == MonitorPickerKind.CODEC && codecColor?.showsColor == true) {
                 CaptureCodecColorSectionView(CaptureCodecColorSection.COLOR) {
                     CaptureCodecColorTabs(
@@ -1044,6 +1050,19 @@ internal fun MonitorControlPickerPanel(
         },
     )
 }
+
+/** Focus Rack is an accessory entry, independent of the selected AF mode. */
+@Composable
+private fun FocusRackEntryRow(onOpen: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+        .chromeClickable(onClick = onOpen).testTag("focusRack.open")
+        .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Focus Rack", color = LiveDesign.text, style = chromeStyle(12f, FontWeight.SemiBold),
+            modifier = Modifier.weight(1f))
+        Text("Open", color = LiveDesign.text, style = chromeStyle(12f, FontWeight.Medium))
+    }
+}
+
 
 /** The typed write for a tone pick: Swift validates it against the active codec's offered tones. */
 internal fun movieToneRequest(choices: CaptureCodecColorChoices): CommandControlRequest =

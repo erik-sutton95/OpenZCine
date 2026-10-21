@@ -504,19 +504,61 @@ struct NikonMonitorShell: View {
     }
     private func bodyViews(_ layout: FieldMonitorLayout) -> MonitorOperatorBodyViews {
         .init(
-            focusDrive: model.showsMFDriveScrub ? AnyView(MFDriveVerticalScrub()) : nil,
+            focusDrive: model.showsMFDriveScrub
+                ? AnyView(MFDriveVerticalScrub()) : nil,
             dashboard: AnyView(NikonCommandDashboard(layout: layout)),
             connection: connectionControl,
             comparison: LUTResolution.showsSplitComparisonKey(
                 visibleTools: model.renderedLiveAssistTools, enabled: model.assist.splitComparison)
                 ? AnyView(SplitComparisonKey()) : nil,
             resetFocus: model.chromeSectionMounts(.focusBox) && model.isFocusResetAvailable
+                && model.focusRack?.allowsAutofocus != false
                 ? (model.resetFocusPoint as () -> Void) : nil,
             // Framing marks ride the picture in the camera's own orientation (FeedAlignedAssists).
             feedMarks: AnyView(EmptyView()),
             waiting: model.videoSource == .relay && model.relayFailureReason != nil
-                ? AnyView(RelayJoinRecovery()) : nil)
+                ? AnyView(RelayJoinRecovery()) : nil,
+            focusAccessory: focusAccessory(layout))
     }
+    private func focusAccessory(_ layout: FieldMonitorLayout) -> MonitorOperatorFocusAccessoryViews?
+    {
+        guard let rack = model.focusRack, rack.isActive else {
+            return nil
+        }
+        // The existing centered drawer owns its controls; an active move keeps its safety transport.
+        if case .picker = model.activePanel, rack.state?.busy != true, !rack.stopPending {
+            return nil
+        }
+        return .init(
+            isExpanded: rack.isExpanded, active: true,
+            expanded: { height in
+                AnyView(
+                    FocusRackView(
+                        rack: rack, maximumHeight: height, allowsSetup: !model.interfaceLocked,
+                        onMovePanel: { moveRack(rack, by: $0, layout: layout) },
+                        onResetPanel: { if !model.interfaceLocked { rack.panelPosition = nil } }))
+            },
+            compact: AnyView(
+                FocusRackView(
+                    rack: rack, maximumHeight: 112, compact: true,
+                    allowsExpansion: !model.interfaceLocked && model.displayMode != .clean,
+                    allowsSetup: !model.interfaceLocked,
+                    onMovePanel: { moveRack(rack, by: $0, layout: layout) },
+                    onResetPanel: { if !model.interfaceLocked { rack.panelPosition = nil } })),
+            position: rack.panelPosition)
+    }
+
+    private func moveRack(_ rack: FocusRackModel, by delta: CGSize, layout: FieldMonitorLayout) {
+        guard !model.interfaceLocked else { return }
+        let placement = MonitorFocusAccessoryLayout(
+            layout: layout,
+            safeArea: .init(
+                top: context.feedSafeArea.top, leading: context.feedSafeArea.leading,
+                bottom: context.feedSafeArea.bottom, trailing: context.feedSafeArea.trailing),
+            expanded: rack.isExpanded && model.displayMode != .clean, position: rack.panelPosition)
+        rack.panelPosition = placement.movedBy(x: delta.width, y: delta.height)
+    }
+
     private var connectionControl: AnyView? {
         if model.videoSource == .relay, model.relayHoldsControl || model.relayAllowsControlRequests
         {

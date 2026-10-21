@@ -92,6 +92,22 @@ private val feedBlitPaint: android.graphics.Paint by lazy {
  */
 @Stable
 public class LiveFeedPresentationState {
+    /** Monotonic acceptance time for the opt-in probe; this does not recompose chrome per frame. */
+    internal var acceptedAtSeconds: Double? = null
+        private set
+    internal var rackFrameAccepted: (() -> Unit)? = null
+    /** Session-local real frame identity; polling it does not subscribe chrome to feed rate. */
+    internal var acceptedFrameSequence: Long = 0
+        private set
+    internal fun rackThumbnail(): Pair<Long, Bitmap>? {
+        if (acceptedAtSeconds == null) return null
+        val source = latestBitmap ?: return null
+        val width = 240
+        val height = (source.height.toFloat() / source.width * width).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(source, width, height, true)
+        val copy = scaled.copy(Bitmap.Config.ARGB_8888, false) ?: return null
+        return acceptedFrameSequence to copy
+    }
     /** Bumped when the feed Canvas should redraw; feed Canvas is the only intended reader. */
     private var frameEpoch by mutableLongStateOf(0L)
     private var latestBitmap: Bitmap? = null
@@ -160,6 +176,9 @@ public class LiveFeedPresentationState {
         if (retainedFocus != frame.focus) retainedFocus = frame.focus
         if (retainedLevel != frame.level) retainedLevel = frame.level
         latestBitmap = bitmap
+        acceptedAtSeconds = android.os.SystemClock.elapsedRealtimeNanos() / 1e9
+        acceptedFrameSequence += 1
+        rackFrameAccepted?.invoke()
         // Every delivered frame is drawn. The camera's pull rate is the only limiter, which is
         // what makes the feed as smooth as the body allows.
         //
@@ -177,6 +196,7 @@ public class LiveFeedPresentationState {
             focusGestureGeometryGeneration += 1
         }
         latestBitmap = null
+        acceptedAtSeconds = null
         frameEpoch += 1
         if (retainedSourceWidth != 0) retainedSourceWidth = 0
         if (retainedSourceHeight != 0) retainedSourceHeight = 0
