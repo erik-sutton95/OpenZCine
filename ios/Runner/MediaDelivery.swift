@@ -76,6 +76,14 @@ struct MediaClipDeliveryMetadata: Codable, Sendable {
 
 enum NikonDelivery {
     static let logger = Logger(subsystem: "OpenZCine", category: "media-export")
+
+    /// A still travels as its original, so the popup offers it no clip export: no Bake LUT,
+    /// format or renamed movie (ZIB-469).
+    static func selectionFile(_ clip: MediaClip) -> MonitorDeliveryFileFacts {
+        .init(
+            filename: clip.filename, sizeBytes: clip.sizeBytes > 0 ? clip.sizeBytes : nil,
+            isStill: clip.mediaKind == .photo)
+    }
     private static let timecodeLogger = Logger(subsystem: "OpenZCine", category: "media-timecode")
 
     @Sendable static func traceTimecode(_ diagnostic: MonitorMovieTimecode.Diagnostic) {
@@ -126,10 +134,7 @@ extension NativeAppModel {
         let model = NikonDeliveryPopup.Preparation(
             selection: { [weak self] in
                 .init(
-                    files: capture.clips.map {
-                        .init(
-                            filename: $0.filename, sizeBytes: $0.sizeBytes > 0 ? $0.sizeBytes : nil)
-                    },
+                    files: capture.clips.map(NikonDelivery.selectionFile),
                     cachedCount: capture.clips.filter(capture.isCached).count,
                     connected: capture.action.sourceIsCurrent && self?.isConnected == true)
             }, configuration: configuration,

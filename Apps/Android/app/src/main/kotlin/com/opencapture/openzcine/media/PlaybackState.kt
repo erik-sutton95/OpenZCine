@@ -36,3 +36,13 @@ internal fun canDeliverMedia(
     clipCount: Int,
     cameraConnected: Boolean,
 ): Boolean = clipCount > 0 && (readyCount > 0 || cameraConnected)
+
+/**
+ * Why Share waits while the clip is still caching (ZAB-524): the camera finishes the copy when
+ * it can still transfer, else delivery waits for the private cache.
+ */
+internal fun playbackShareNotice(state: PlaybackShareState, cameraTransferAvailable: Boolean): String? = when {
+    state != PlaybackShareState.BUFFERING -> null
+    cameraTransferAvailable -> "Still caching from the camera. Share will finish the copy first."
+    else -> "Buffering camera proxy. Delivery unlocks after the private cache completes."
+}
