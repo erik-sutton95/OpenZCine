@@ -4643,6 +4643,10 @@ final class NativeAppModel {
         func debugAdoptEstablishedMediaSession(_ session: NativeCameraSession?) {
             cameraSession = session
         }
+        /// Attaches a scripted monitor runtime for the background-pump lifecycle test.
+        func debugAttachMonitorRuntime(_ runtime: NikonMonitorRuntime?) {
+            monitorRuntime = runtime
+        }
         var debugHoldsReportingCameraPath: Bool { reportingCameraPath != nil }
         var debugConnectionGeneration: Int { connectionGeneration }
         var debugHasSessionRecoveryTask: Bool { recoveryEpisode.isRunning }
@@ -8005,8 +8009,12 @@ final class NativeAppModel {
         // kept opening PTP sessions until iOS suspended the app mid-handshake — leaving the
         // body holding a slot with no CloseSession.
         cancelSessionRecovery()
+        // The keepalive and event drain are this link's pumps, not the screen's, and they outlive a
+        // dropped session: retire them above the session guard, with the preview reader, so a
+        // backgrounded phone stops pinging the camera and a stale pending read cannot delay the
+        // first post-foreground one. `retirePumps` also stops preview.
+        let pumpRetirement = monitorRuntime?.retirePumps()
         guard let session = cameraSession else { return }
-        monitorRuntime?.stopPreview()
         linkHealthUpdateTask?.cancel()
         linkHealthUpdateTask = nil
         // Media PTP traffic (clip download, listing, thumbnail sweep) must pause with the screen
@@ -8019,7 +8027,10 @@ final class NativeAppModel {
         // Best-effort: also tell the camera to drop live view (saves its battery/thermal). Tracked so
         // a quick foreground return waits for it before restarting; iOS may suspend us before it
         // completes, which is harmless.
-        backgroundStopTask = Task { await session.stopLiveView() }
+        backgroundStopTask = Task {
+            await pumpRetirement?.value
+            await session.stopLiveView()
+        }
     }
 
     /// Pauses both an admitted cursor and an open request that has not returned a binding yet.

@@ -656,6 +656,33 @@ private struct NikonCommandDashboard: View {
     }
 }
 
+/// VoiceOver for the Nikon still release (behavior audit ZIA-052, ZIA-360).
+enum NikonPhotoReleaseAccessibility {
+    /// An open bulb or time exposure ends on the next release, so it is spoken as such.
+    static func label(openShutter: Bool, capturing: Bool, timerRunning: Bool) -> String {
+        if openShutter { return "End exposure" }
+        return timerRunning ? "Timer running" : capturing ? "Capturing" : "Shutter"
+    }
+
+    /// The release is a button, as in the baseline.
+    static let traits: AccessibilityTraits = .isButton
+
+    /// A VoiceOver release takes the admission a touch takes: the shared surface stops touches
+    /// under the interface lock and while another phone holds the controls.
+    static func admits(locked: Bool, surrendered: Bool) -> Bool { !locked && !surrendered }
+
+    /// The VoiceOver activation: captures only when admitted and the release still belongs to
+    /// the live camera. Returns whether it captured.
+    @discardableResult
+    static func activate(
+        locked: Bool, surrendered: Bool, isLiveSource: Bool, capture: () -> Void
+    ) -> Bool {
+        guard admits(locked: locked, surrendered: surrendered), isLiveSource else { return false }
+        capture()
+        return true
+    }
+}
+
 /// Nikon still release keeps finger-down/finger-up, burst/timer and body-trigger feedback.
 /// A remote relay or SIMULATED demo has its own bounded command adapter during migration.
 private struct NikonPhotoRelease: View {
@@ -703,8 +730,19 @@ private struct NikonPhotoRelease: View {
                         bodyShutterFlash = false
                     }
                 }
+                .accessibilityLabel(
+                    NikonPhotoReleaseAccessibility.label(
+                        openShutter: model.stillReleaseIsOpenShutter,
+                        capturing: model.isStillCapturing,
+                        timerRunning: model.stillTimerRemaining != nil)
+                )
+                .accessibilityAddTraits(NikonPhotoReleaseAccessibility.traits)
                 .accessibilityAction {
-                    if model.operatorLiveIdentity == source { model.captureStill() }
+                    NikonPhotoReleaseAccessibility.activate(
+                        locked: model.interfaceLocked,
+                        surrendered: model.relayControlSurrendered,
+                        isLiveSource: model.operatorLiveIdentity == source
+                    ) { model.captureStill() }
                 }
                 .accessibilityIdentifier("monitor.system.shutter")
             }

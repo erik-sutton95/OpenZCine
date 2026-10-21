@@ -101,6 +101,7 @@
 		MFFB00000000000000000002 /* MetalFeedFrameBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */; };
 		TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */; };
 		TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000091 /* ConnectionLifecycleTests.swift */; };
+		TEST00000000000000000120 /* BackgroundLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000121 /* BackgroundLifecycleTests.swift */; };
 		TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000105 /* ShellAdoptionTests.swift */; };
 		TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TEST00000000000000000093 /* RelayRecordControlTests.swift */; };
 		D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */; };
@@ -299,6 +300,7 @@
 		MFFB00000000000000000001 /* MetalFeedFrameBaker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalFeedFrameBaker.swift; sourceTree = "<group>"; };
 		TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalBetaReadinessTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000091 /* ConnectionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLifecycleTests.swift; sourceTree = "<group>"; };
+		TEST00000000000000000121 /* BackgroundLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundLifecycleTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000105 /* ShellAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellAdoptionTests.swift; sourceTree = "<group>"; };
 		TEST00000000000000000093 /* RelayRecordControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRecordControlTests.swift; sourceTree = "<group>"; };
 		EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroLogStoreTests.swift; sourceTree = "<group>"; };
@@ -426,6 +428,7 @@
 				7C31B2E6A90D4F11B3C05A23 /* MediaTimecodeTests.swift */,
 				TEST00000000000000000001 /* ExternalBetaReadinessTests.swift */,
 				TEST00000000000000000091 /* ConnectionLifecycleTests.swift */,
+				TEST00000000000000000121 /* BackgroundLifecycleTests.swift */,
 				TEST00000000000000000105 /* ShellAdoptionTests.swift */,
 				TEST00000000000000000093 /* RelayRecordControlTests.swift */,
 				EE6C156E5FACAA561AF5EF0B /* GyroLogStoreTests.swift */,
@@ -823,6 +826,7 @@
 				7C31B2E7A90D4F11B3C05A24 /* MediaTimecodeTests.swift in Sources */,
 				TEST00000000000000000002 /* ExternalBetaReadinessTests.swift in Sources */,
 				TEST00000000000000000090 /* ConnectionLifecycleTests.swift in Sources */,
+				TEST00000000000000000120 /* BackgroundLifecycleTests.swift in Sources */,
 				TEST00000000000000000104 /* ShellAdoptionTests.swift in Sources */,
 				TEST00000000000000000092 /* RelayRecordControlTests.swift in Sources */,
 				D49FBC7350F0390B66570AC1 /* GyroLogStoreTests.swift in Sources */,
