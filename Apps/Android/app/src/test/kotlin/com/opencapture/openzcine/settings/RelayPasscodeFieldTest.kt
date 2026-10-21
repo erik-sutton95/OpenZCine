@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 /** ZAB-352: standalone Settings reads and writes the broadcast passcode without a controller. */
 class RelayPasscodeFieldTest {
     @Test
-    fun standaloneSettingsShowsAndStoresTheBroadcastPasscode() {
+    fun standaloneSettingsShowsAndStoresTheBroadcastPasscode(): Unit {
         var stored: String? = "4821"
         val field = RelayPasscodeField(
             controller = null,
@@ -23,7 +23,7 @@ class RelayPasscodeFieldTest {
     }
 
     @Test
-    fun theSharedRuleRefusesATooShortEntryAndKeepsTheStoredCode() {
+    fun theSharedRuleRefusesATooShortEntryAndKeepsTheStoredCode(): Unit {
         var stored: String? = "4821"
         val field = RelayPasscodeField(
             controller = null,
@@ -35,7 +35,7 @@ class RelayPasscodeFieldTest {
     }
 
     @Test
-    fun aRefusedStoreKeepsThePreviousCode() {
+    fun aRefusedStoreKeepsThePreviousCode(): Unit {
         var stored: String? = "4821"
         val field = RelayPasscodeField(
             controller = null,
@@ -47,7 +47,7 @@ class RelayPasscodeFieldTest {
     }
 
     @Test
-    fun theStandaloneCodeIsComposeStateSoAStoredCodeRedraws() {
+    fun theStandaloneCodeIsComposeStateSoAStoredCodeRedraws(): Unit {
         var lookups = 0
         var stored: String? = "4821"
         val field = RelayPasscodeField(
