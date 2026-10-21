@@ -16,7 +16,7 @@ class NikonStillDeliveryTest {
     private fun clip(name: String, kind: NikonMediaContentKind) =
         NikonMediaClipRecord(1, 1, 4, "20261007T120000", 1920, 1080, name, kind, null)
 
-    @Test fun stillsAndMoviesAreToldApartForThePopup() {
+    @Test fun stillsAndMoviesAreToldApartForThePopup(): Unit {
         assertEquals(true, nikonDeliveryFileFacts(clip("DSC_0001.JPG", NikonMediaContentKind.STILL_PHOTO)).isStill)
         assertEquals(false, nikonDeliveryFileFacts(clip("DSC_0002.MOV", NikonMediaContentKind.PLAYABLE_PROXY)).isStill)
         assertEquals(false, nikonDeliveryFileFacts(clip("DSC_0003.R3D", NikonMediaContentKind.R3D_MASTER)).isStill)
