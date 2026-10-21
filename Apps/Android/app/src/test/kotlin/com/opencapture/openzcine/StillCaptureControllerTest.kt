@@ -36,6 +36,7 @@ class StillCaptureControllerTest {
         var refreshes = 0
         var polls: ArrayDeque<StillReleasePoll> = ArrayDeque()
         var failInitiate = false
+        var failFromInitiate = Int.MAX_VALUE
         var failBracket = false
         var refreshDelayMillis = 0L
 
@@ -46,7 +47,7 @@ class StillCaptureControllerTest {
         override suspend fun disconnect() = Unit
 
         override suspend fun initiateStillCapture(preserveFocus: Boolean) {
-            if (failInitiate) {
+            if (failInitiate || initiates >= failFromInitiate) {
                 throw CameraControlException.CommandRejected
             }
             initiates += 1
@@ -137,11 +138,13 @@ class StillCaptureControllerTest {
     }
 
     @Test
-    fun `release before completion stops the chain and terminates the run`() = runTest {
+    fun `finger-up during a chained burst run terminates it and closes the bracket`() = runTest {
         val session = FakeSession()
         val controller = StillCaptureController(session, pollDelayMillis = 50)
+        // The first frame completes while held, so a burst run chains; the finger lifts mid-run.
         session.polls.addAll(
             listOf(
+                StillReleasePoll.COMPLETE,
                 StillReleasePoll.IN_PROGRESS,
                 StillReleasePoll.IN_PROGRESS,
                 StillReleasePoll.COMPLETE,
@@ -153,10 +156,47 @@ class StillCaptureControllerTest {
         controller.released(this)
         advanceUntilIdle()
 
-        // Terminate was sent for the in-flight run; no second initiate chained.
-        assertEquals(1, session.initiates)
+        // Terminate was sent for the in-flight burst run; no third initiate chained.
+        assertEquals(2, session.initiates)
         assertEquals(1, session.terminates)
         assertEquals(listOf(true, false), session.bracketCalls)
+        assertFalse(controller.isCapturing.value)
+    }
+
+    @Test
+    fun `a quick tap in continuous drive takes its one frame`() = runTest {
+        // The ZR in CH took no photo for a tap or a 0.3 to 0.5 s press: the finger-up terminated
+        // the release before the body exposed anything. A tap takes one frame, as on the body.
+        val session = FakeSession()
+        val controller = StillCaptureController(session, pollDelayMillis = 50)
+        session.polls.addAll(
+            listOf(StillReleasePoll.IN_PROGRESS, StillReleasePoll.IN_PROGRESS, StillReleasePoll.COMPLETE),
+        )
+
+        controller.pressed(this, continuousDrive = true)
+        testScheduler.advanceTimeBy(60)
+        controller.released(this)
+        advanceUntilIdle()
+
+        assertEquals(1, session.initiates)
+        assertEquals(0, session.terminates)
+        assertTrue(session.bracketCalls.isEmpty())
+        assertFalse(controller.isCapturing.value)
+    }
+
+    @Test
+    fun `a finger-up before the release is sent still takes the frame`() = runTest {
+        val session = FakeSession()
+        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        session.polls.add(StillReleasePoll.COMPLETE)
+
+        controller.pressed(this, continuousDrive = true)
+        controller.released(this)
+        advanceUntilIdle()
+
+        assertEquals(1, session.initiates)
+        assertEquals(0, session.terminates)
+        assertTrue(session.bracketCalls.isEmpty())
     }
 
     @Test
@@ -182,7 +222,9 @@ class StillCaptureControllerTest {
     @Test
     fun `failed initiate closes the bracket and clears capturing`() = runTest {
         val session = FakeSession()
-        session.failInitiate = true
+        // The first frame fires; the chained burst run is refused inside the open bracket.
+        session.failFromInitiate = 1
+        session.polls.add(StillReleasePoll.COMPLETE)
         val controller = StillCaptureController(session, pollDelayMillis = 1)
 
         controller.pressed(this, continuousDrive = true)
@@ -221,17 +263,20 @@ class StillCaptureControllerTest {
     fun `a refused bracket still fires the release without a failure toast`() = runTest {
         val session = FakeSession()
         session.failBracket = true
-        val controller = StillCaptureController(session, pollDelayMillis = 1)
+        val controller = StillCaptureController(session, pollDelayMillis = 50)
         val failures = mutableListOf<String>()
         controller.onFailure = { failures += it }
-        session.polls.add(StillReleasePoll.COMPLETE)
+        session.polls.addAll(
+            listOf(StillReleasePoll.COMPLETE, StillReleasePoll.IN_PROGRESS, StillReleasePoll.COMPLETE),
+        )
 
         controller.pressed(this, continuousDrive = true)
+        testScheduler.advanceTimeBy(60)
         controller.released(this)
         advanceUntilIdle()
 
-        // The best-effort bracket is quiet; the plain release still fired.
-        assertEquals(1, session.initiates)
+        // The best-effort bracket is quiet; the burst run still fired after the first frame.
+        assertEquals(2, session.initiates)
         assertTrue(failures.isEmpty())
         assertFalse(controller.isCapturing.value)
     }

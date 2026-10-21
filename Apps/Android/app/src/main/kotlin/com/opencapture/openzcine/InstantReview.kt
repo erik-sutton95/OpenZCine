@@ -47,36 +47,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import com.opencapture.opencine.cameracontrols.chromeClickable
 
-/** How the shell reacts to a body-fired capture-complete event. */
-internal enum class BodyCaptureSync {
-    /** Movie mode, or an app release is in flight (that path syncs itself). */
-    IGNORE,
-
-    /** Photo mode without the PLAY tool: refresh the shots readout only. */
-    SHOTS_ONLY,
-
-    /** Photo mode with PLAY armed: instant playback plus the shots refresh. */
-    REVIEW_AND_SHOTS,
-}
-
-/**
- * iOS event-drain guards for a body-fired shutter: react only in photo mode
- * and never while an app-initiated release is in flight — the app path
- * schedules its own review on completion. Nikon surfaces a body-fired still
- * through the GetEventEx poll as ObjectAdded and/or CaptureComplete; the
- * MonitorScreen collector debounces that burst to one review per body run.
- */
-internal fun bodyCaptureSyncAction(
-    isPhotography: Boolean,
-    instantReviewEnabled: Boolean,
-    appReleaseInFlight: Boolean,
-): BodyCaptureSync =
-    when {
-        !isPhotography || appReleaseInFlight -> BodyCaptureSync.IGNORE
-        instantReviewEnabled -> BodyCaptureSync.REVIEW_AND_SHOTS
-        else -> BodyCaptureSync.SHOTS_ONLY
-    }
-
 /** One presented instant review (iOS `InstantReviewState`). */
 internal data class InstantReviewPresentation(
     val image: ImageBitmap,
@@ -144,6 +114,9 @@ internal class InstantReviewController(
                 }
                 delay(INSTANT_REVIEW_OBJECT_POLL_MILLIS)
             }
+            // The window closed without a new object while an earlier lookup's stand-in thumb
+            // is up: arm its countdown so the blurred thumb can never stay on screen.
+            _review.value?.let { if (!it.countdownArmed) _review.value = it.copy(countdownArmed = true) }
         }
     }
 

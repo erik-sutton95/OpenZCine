@@ -51,8 +51,8 @@ class GroupedStabilizationTest {
             codec	H.265
             vibrationReduction	ON
             electronicVr	OFF
-            options.vibrationReduction	SPORTOFFON
-            options.electronicVr	OFFON
+            options.vibrationReduction	SPORT${'\u001F'}OFF${'\u001F'}ON
+            options.electronicVr	OFF${'\u001F'}ON
             descriptor.vibrationReduction.outcome	described
             descriptor.vibrationReduction.support	supported
             descriptor.vibrationReduction.access	readOnly
@@ -66,7 +66,7 @@ class GroupedStabilizationTest {
             descriptor.electronicVr.support	supported
             descriptor.electronicVr.access	readWrite
             descriptor.electronicVr.form	enumeration
-            descriptor.electronicVr.choices	ONOFF
+            descriptor.electronicVr.choices	ON${'\u001F'}OFF
             descriptor.electronicVr.origin	descriptor
             descriptor.electronicVr.latestOutcome	described
             descriptor.electronicVr.latestSupport	supported
