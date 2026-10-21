@@ -5039,9 +5039,15 @@ final class NativeAppModel {
     /// Single-flight camera property poll (live view and command mode). Polls must never stack
     /// behind the transaction gate: a slow poll burst would delay the next frame fetch.
     @ObservationIgnored private var propertyPollTask: Task<Void, Never>?
-    /// Debounces the body-fired capture sync so a burst's many ObjectAdded events trigger one
-    /// instant playback, not one per frame.
-    @ObservationIgnored private var lastBodyCaptureSyncAt: Date?
+    /// Tells a shot fired on the body from the late card objects of the app's own release (the
+    /// second half of a RAW+JPEG pair), and debounces a body burst to one sync (Core
+    /// `NikonBodyCaptureFilter`).
+    @ObservationIgnored private var stillReviewBodyCaptures = NikonBodyCaptureFilter()
+
+    /// The monotonic clock `stillReviewBodyCaptures` runs on.
+    private static func captureClockMilliseconds() -> Int64 {
+        Int64(ProcessInfo.processInfo.systemUptime * 1_000)
+    }
     /// Single-flight drain of queued property writes while live view is down.
     @ObservationIgnored private var pendingWriteDrainTask: Task<Void, Never>?
     @ObservationIgnored private var measuredLiveViewFPS: Double = 0
@@ -5322,14 +5328,13 @@ final class NativeAppModel {
         advertisedExposureOptions = [:]
         // Still-capture state must never survive a stream (re)start — a stale chained
         // release re-firing after a reconnect loops the whole connection.
-        shutterPressLatchedBurst = false
+        shutterHold = nil
         pendingStillCapture = false
         pendingStillTerminate = false
         pendingStillTerminateQuiet = false
         stillReleaseAwaitingReady = false
         stillReleaseIsOpenShutter = false
         isStillCapturing = false
-        chainedBurstFrames = 0
         remoteModeHeldForBurst = false
         cancelStillTimer()
         instantReviewFetchTask?.cancel()
@@ -7969,13 +7974,15 @@ final class NativeAppModel {
         if isStandaloneMediaLibraryPresented, mediaBrowserSource == .camera {
             scheduleDebouncedGalleryRelist()
         }
-        guard !isStillCapturing, !pendingStillCapture,
-            StillCapturePolicy.prefersPhotographyChrome(
-                selector: cameraPropertySnapshot.captureSelector)
-        else { return }
-        let now = Date()
-        if let last = lastBodyCaptureSyncAt, now.timeIntervalSince(last) < 0.8 { return }
-        lastBodyCaptureSyncAt = now
+        // The late objects of the app's own release (a RAW+JPEG pair's second half) are not a
+        // body shot: syncing them cancelled the app's review mid-read and left its blurred thumb.
+        let action = stillReviewBodyCaptures.action(
+            at: Self.captureClockMilliseconds(),
+            isPhotography: StillCapturePolicy.prefersPhotographyChrome(
+                selector: cameraPropertySnapshot.captureSelector),
+            instantReviewEnabled: assist.instantReview,
+            appReleaseInFlight: isStillCapturing || pendingStillCapture)
+        guard action != .ignore else { return }
         // Pulse the app's shutter button so a body-fired shutter visibly registers, then review.
         bodyShutterPulse &+= 1
         // Freeze the focus box at detection time — the review reads this, not the live value the
@@ -10156,11 +10163,9 @@ final class NativeAppModel {
 
     // MARK: - Still capture (photography mode)
 
-    /// Whether the current shutter press latched a continuous burst that finger-up must end.
-    @ObservationIgnored private var shutterPressLatchedBurst = false
-    /// Frames chained in the current hold — a hard cap backstops a finger-up the system
-    /// swallowed (gesture-gate timeouts strand the latch otherwise).
-    @ObservationIgnored private var chainedBurstFrames = 0
+    /// The current shutter press: its first release is always one frame, and only a hold in a
+    /// continuous drive chains burst runs (Core `StillShutterHold`). Nil outside a press's run.
+    @ObservationIgnored private var shutterHold: StillShutterHold?
     /// Whether the remote-mode bracket is open for the current burst hold.
     @ObservationIgnored private var remoteModeHeldForBurst = false
 
@@ -10411,19 +10416,19 @@ final class NativeAppModel {
         captureStill()
         guard !wasCapturing, isStillCapturing, !isDemoSession else { return }
         let drive = cameraPropertySnapshot.stillCaptureMode.flatMap(StillDriveMode.mode(forLabel:))
-        shutterPressLatchedBurst = drive?.isContinuous == true
-        chainedBurstFrames = 0
+        shutterHold = StillShutterHold(continuousDrive: drive?.isContinuous == true)
     }
 
-    /// Finger-up: ends a latched continuous burst — cancelling a chained-but-unsent release,
-    /// or terminating whatever run is still in flight. No-op for single/timer/bulb presses.
+    /// Finger-up: ends a chained burst. The press's first release always finishes on its own, so
+    /// a quick tap in a continuous drive takes its frame (it used to cancel or terminate it). A
+    /// chained run not sent yet is dropped and the run completes through the readiness poll
+    /// (bracket exit, shots, review); one in flight is terminated. No-op for single/timer/bulb.
     func shutterButtonReleased() {
-        guard shutterPressLatchedBurst else { return }
-        shutterPressLatchedBurst = false
-        chainedBurstFrames = 0
+        guard shutterHold?.fingerUp() == .endBurst else { return }
         if pendingStillCapture {
             pendingStillCapture = false
-            finishStillRelease(message: nil)
+            stillReleaseAwaitingReady = true
+            lastStillReadyPollAt = nil
         } else if isStillCapturing {
             // Expected to be refused when the run already ended on its own — stay quiet.
             pendingStillTerminateQuiet = true
@@ -10548,6 +10553,10 @@ final class NativeAppModel {
                 try? await Task.sleep(
                     for: .milliseconds(NikonStillReviewPolicy.objectPollIntervalMilliseconds))
             }
+            // The window closed without a new object while an earlier lookup's stand-in thumb is
+            // up: start its countdown so the blurred thumb can never stay on screen.
+            guard let self, !Task.isCancelled else { return }
+            if self.instantReview?.isFullResolution == false { self.startInstantReviewCountdown() }
         }
     }
 
@@ -11357,7 +11366,7 @@ final class NativeAppModel {
             pendingStillCaptureWork = nil
             do {
                 try work.admission?.require(owner: session.commandOwner)
-                if shutterPressLatchedBurst, !remoteModeHeldForBurst {
+                if shutterHold?.nextRelease == .burstRun, !remoteModeHeldForBurst {
                     // A continuous hold needs the remote-mode bracket: host-set session
                     // values (the burst ceiling) only persist while remote mode is held -
                     // without it every release snaps back to a single frame. The body's
@@ -11423,20 +11432,19 @@ final class NativeAppModel {
         do {
             switch try await session.pollStillReleaseReadiness() {
             case .complete:
-                if shutterPressLatchedBurst, !pendingStillTerminate, chainedBurstFrames < 30 {
+                if !pendingStillTerminate, shutterHold?.releaseCompleted() == true {
                     // Finger still down in a continuous drive: chain the next release right
                     // away — one command release delivers a bounded run of frames no matter
-                    // the ceiling, so the hold itself drives the burst. The frame cap
+                    // the ceiling, so the hold itself drives the burst. Core's run cap
                     // backstops a swallowed finger-up. [verify-on-HW]
-                    chainedBurstFrames += 1
                     pendingStillCapture = true
                     stillReleaseAwaitingReady = false
                     return
                 }
-                shutterPressLatchedBurst = false
-                chainedBurstFrames = 0
+                shutterHold = nil
                 await exitBurstRemoteModeIfNeeded(session: session)
                 finishStillRelease(message: nil)
+                stillReviewBodyCaptures.appReleaseCompleted(at: Self.captureClockMilliseconds())
                 // The SHOTS pill reflects the frame immediately (a burst consumes more — the
                 // read-back right after corrects the estimate rather than waiting for the
                 // slow poll round-robin to reach ExposureRemaining).
@@ -11459,8 +11467,7 @@ final class NativeAppModel {
             case .openShutterInProgress:
                 stillReleaseIsOpenShutter = true
             case .failed(let code):
-                shutterPressLatchedBurst = false
-                chainedBurstFrames = 0
+                shutterHold = nil
                 await exitBurstRemoteModeIfNeeded(session: session)
                 finishStillRelease(
                     message: code == .outOfFocus
@@ -11477,6 +11484,7 @@ final class NativeAppModel {
     }
 
     private func finishStillRelease(message: String?) {
+        shutterHold = nil
         stillReleaseAwaitingReady = false
         stillReleaseIsOpenShutter = false
         stillReleaseStartedAt = nil
