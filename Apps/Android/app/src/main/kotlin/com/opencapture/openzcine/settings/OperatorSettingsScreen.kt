@@ -161,6 +161,8 @@ internal fun OperatorSettingsScreen(
      */
     initialTab: MonitorSettingsTab? = null,
     relaySharing: com.opencapture.openzcine.relay.RelayBroadcastController? = null,
+    /** Standalone Settings (no camera) reads and writes the broadcast passcode here (ZAB-352). */
+    standalonePasscodes: com.opencapture.openzcine.relay.RelayPasscodes? = null,
     relaySharingEnabled: Boolean = false,
     onRelayShareToggle: ((Boolean) -> Unit)? = null,
     /** Watch-session state, for the Link tab's "Held By" readout (iOS `linkRows`). */
@@ -325,7 +327,7 @@ internal fun OperatorSettingsScreen(
     }
     val configuration = MonitorOperatorSettingsConfiguration("OpenZCine", linked, phase,
         closeOwned, onDisconnect?.let { disconnect -> { retainedAccount.retire(); disconnect() } }, emitHaptic, link,
-        sharingSource(session, relaySharing, settings, relaySharingEnabled, onRelayShareToggle, emitHaptic),
+        sharingSource(session, relaySharing, standalonePasscodes, settings, relaySharingEnabled, onRelayShareToggle, emitHaptic),
         stringResource(R.string.settings_subtitle_sharing), "Broadcast & watchers", controls,
         cache = MonitorSettingsCachePresentation(cacheSource, formatBytes = { cacheSizeLabel(context, it) },
             checking = stringResource(R.string.status_calculating), readFailure = stringResource(R.string.cache_read_failed),
@@ -352,8 +354,16 @@ internal fun OperatorSettingsScreen(
 /** Actual broadcast service observations and admitted native actions. */
 @Composable
 private fun sharingSource(session: CameraSession?, sharing: com.opencapture.openzcine.relay.RelayBroadcastController?,
+    standalonePasscodes: com.opencapture.openzcine.relay.RelayPasscodes?,
     settings: OperatorSettings, enabled: Boolean, onShareToggle: ((Boolean) -> Unit)?,
     feedback: () -> Unit): MonitorSettingsSharingSource {
+    val passcodeField = remember(sharing, standalonePasscodes) {
+        RelayPasscodeField(
+            controller = sharing,
+            readStored = { standalonePasscodes?.hostPasscodeLookup()?.usableValue },
+            storeStored = { code -> standalonePasscodes?.storeHostPasscode(code) ?: false },
+        )
+    }
     val state = if (session is RelayCameraSession) session.state.collectAsState().value else null
     val ui = sharing?.ui?.collectAsState()?.value
     val pendingRequest = ui?.pendingControlRequest
@@ -376,7 +386,7 @@ private fun sharingSource(session: CameraSession?, sharing: com.opencapture.open
                 }
             }, segmented = true),
         passcodeTitle = stringResource(R.string.sharing_watcher_passcode), passcodeHelp = stringResource(R.string.help_sharing_passcode),
-        passcode = sharing?.savedPasscode.orEmpty(), setPasscode = { sharing?.savePasscode(it) },
+        passcode = passcodeField.value, setPasscode = passcodeField::store,
         controlRequestsTitle = stringResource(R.string.sharing_control_requests),
         controlRequestsHelp = stringResource(R.string.help_sharing_control_requests),
         controlRequests = settings.relayAllowsControlRequests.value, setControlRequests = {
