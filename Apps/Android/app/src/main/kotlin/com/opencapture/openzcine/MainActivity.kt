@@ -1110,7 +1110,7 @@ class MainActivity : ComponentActivity() {
                                 linkHealth = monitorLinkHealth,
                                 incidentProducer = incidentProducer,
                                 activeTransportIsUsb =
-                                    activeSavedCamera?.transport == SavedCameraTransport.USB_C,
+                                    activeSavedCamera?.transport?.let { it == SavedCameraTransport.USB_C },
                                 isDemoSession = pairingScript != null || demo?.second != null,
                                 onOpenSettings = {
                                     mediaRemoteShutter.disarm()
