@@ -68,8 +68,14 @@ The local production controller opts into 5ms early Busy polling, with no extra 
 native Ready confirmation. Ordinary camera focus and other SDK consumers retain their existing
 cadence. A full safety preflight finishes before timed playback starts its delay/pull clock.
 Periodic reads may be deferred only when the complete remaining trajectory fits within the existing
-2-second safety freshness limit, including a measured-read margin. Longer pulls, countdowns and
-paused runs retain periodic checks; a slow safety read can still halt a late trajectory.
+2-second safety freshness limit, measured from the oldest preflight evidence. Longer pulls reserve
+the latest accepted read duration, with a 100ms floor; the reservation can grow during that run.
+This replaces admission based on the all-time slowest read, which could permanently disable pulls
+after an unrelated idle stall. Historical read costs remain in the trace. The fixed plan is checked
+again after preflight, without replanning or relaxing native command costs. A maintenance read
+must drain before another focus command; if it misses that command's deadline, the run fails
+without catch-up movement. Stop remains immediate while a read is outstanding. Countdown and
+paused runs retain periodic checks, and acknowledged pauses extend the same timing epoch.
 
 A later Mac USB trial at 70mm/f2.8 used twelve 80-pulse commands over the same 60-unit span:
 1-second Linear host spans were 0.972s/0.973s. The operator preferred its source-recorded smoothness

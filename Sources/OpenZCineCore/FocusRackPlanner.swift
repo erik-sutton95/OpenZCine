@@ -119,8 +119,9 @@ enum FocusRackPlanner {
         // Unmeasured sizes use the session's worst observed command as an estimate, not a
         // measurement of that size. Every completed command updates its own budget; late runs halt.
         let fallback = timings.values.map(\.longest).max() ?? 0
-        // Long pulls need an idle slot for complete fresh camera evidence between commands.
-        let maintenance = duration + 2 * safetyReadBudget >= 2 ? safetyReadBudget : 0
+        // Long pulls reserve a qualified read window. Short pulls are checked against their
+        // actual post-preflight evidence age before activation, without a future idle read.
+        let maintenance = duration >= 2 ? safetyReadBudget : 0
         let candidates = quanta.compactMap { quantum -> TimedCandidate? in
             var chunks = Array(repeating: sign * quantum, count: count / quantum)
             if count % quantum != 0 { chunks.append(sign * (count % quantum)) }

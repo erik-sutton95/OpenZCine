@@ -182,6 +182,8 @@ public struct FocusRackEngine: Sendable {
     private var calibrationOrigin: String?
     private var activeCalibration: (trip: Int, configuration: Int, capture: Int64)?
     private(set) var safetyReadBudget = 0.0
+    private var longestSafetyRead = 0.0
+    private var runSafetyReadBudget = 0.0
     private var startedAt = 0.0
     private var enforcesTiming = false
     private var nextStep = 0
@@ -453,12 +455,7 @@ public struct FocusRackEngine: Sendable {
                     waitSeconds: min(0.1, due - timestamp))
             }
             if !maintenanceFits(at: timestamp) {
-                self.trajectory = nil
-                finishedAt = timestamp
-                phase = "failed"
-                message =
-                    "Fresh camera readings cannot fit this cadence. Adjust duration and try again."
-                append("maintenanceBudgetExceeded", at: timestamp)
+                failMaintenance(at: timestamp)
                 return idle
             }
             if enforcesTiming, timestamp - due > max(0.2, trajectory.duration * 0.05) {
@@ -691,6 +688,7 @@ public struct FocusRackEngine: Sendable {
         activeNudge = nil
         activeCalibration = nil
         trajectory = planned
+        runSafetyReadBudget = safetyReadBudget
         if marks.isEmpty { referenceContext = context }
         startedAt = timestamp
         pauseRequested = false
@@ -740,16 +738,16 @@ public struct FocusRackEngine: Sendable {
     }
 
     private func maintenanceFits(at timestamp: Double) -> Bool {
-        guard enforcesTiming, safetyReadBudget > 0, let trajectory,
+        guard enforcesTiming, runSafetyReadBudget > 0, let trajectory,
             let safetyAt = context?.safetyTimestamp
         else { return true }
         let finish = startedAt + accumulatedPause + trajectory.delay + trajectory.duration
-        if max(timestamp, finish) + safetyReadBudget < safetyAt + 2 { return true }
+        if max(timestamp, finish) < safetyAt + 2 { return true }
         let fallback = commandTimings.values.map(\.longest).max() ?? 0
         for index in nextStep..<max(nextStep, trajectory.offsets.count - 1) {
             let cost = commandTimings[abs(trajectory.chunks[index])]?.longest ?? fallback
             let gap = trajectory.offsets[index + 1] - trajectory.offsets[index]
-            if cost + configuration.commandInterval + safetyReadBudget > gap + 1e-9 {
+            if cost + configuration.commandInterval + runSafetyReadBudget > gap + 1e-9 {
                 return false
             }
         }
@@ -764,11 +762,40 @@ public struct FocusRackEngine: Sendable {
         return startedAt + accumulatedPause + trajectory.offsets[nextStep]
     }
 
+    // The read drains before this check. Pause/Resume may deliberately extend the same run's epoch.
+    mutating func finishMaintenanceRead(runID expected: Int64, at timestamp: Double) {
+        guard expected == runID, let deadline = nextCommandDeadline,
+            timestamp > deadline + 1e-9
+        else { return }
+        failMaintenance(at: timestamp)
+    }
+
+    private mutating func failMaintenance(at timestamp: Double) {
+        trajectory = nil
+        finishedAt = timestamp
+        phase = "failed"
+        message = "Fresh camera readings cannot fit this cadence. Adjust duration and try again."
+        append("maintenanceBudgetExceeded", at: timestamp)
+    }
+
+    var maintenanceReadBudget: Double {
+        max(0.1, isTimedRun ? runSafetyReadBudget : safetyReadBudget)
+    }
+
     mutating func recordSafetyRead(startedAt: Double, finishedAt: Double, accepted: Bool) {
-        safetyReadBudget = max(0.1, safetyReadBudget, finishedAt - startedAt)
+        let elapsed = finishedAt - startedAt
+        longestSafetyRead = max(longestSafetyRead, elapsed)
+        // Qualification is per run, not a permanent prediction from an unrelated idle stall.
+        // Every active read must still finish before the next command; no late continuation.
+        if accepted {
+            safetyReadBudget = max(0.1, elapsed)
+            if isTimedRun { runSafetyReadBudget = max(runSafetyReadBudget, safetyReadBudget) }
+        }
         append(
             "safetyRead", at: finishedAt, scheduledAt: startedAt,
-            note: "elapsed=\(finishedAt - startedAt) accepted=\(accepted)")
+            note:
+                "elapsed=\(elapsed) accepted=\(accepted) worst=\(longestSafetyRead) window=\(safetyReadBudget)"
+        )
     }
 
     /// Updates the entire idle transition atomically, preserving session marks.

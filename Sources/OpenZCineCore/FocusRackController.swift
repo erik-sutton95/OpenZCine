@@ -440,7 +440,8 @@ public actor FocusRackController {
                 observation.foregroundOwner,
                 observation.externalFocusIdle, driver.isCurrent(), shouldRefreshSafety
             {
-                await readSafety(observation)
+                await readSafety(
+                    observation, maintenanceRun: engine.isTimedRun ? pending.runID : nil)
                 synchronizeControl()
                 refreshEngineContext()
             }
@@ -499,24 +500,27 @@ public actor FocusRackController {
         let now = clock.now()
         guard now >= nextSafetyAt else { return false }
         if let safetyAt, let finish = engine.scheduledFinish,
-            max(now, finish) + max(0.1, engine.safetyReadBudget) < safetyAt + 2
+            max(now, finish) < safetyAt + 2
         {
             return false
         }
         if let deadline = engine.nextCommandDeadline {
-            return now + max(0.1, engine.safetyReadBudget) <= deadline
+            return now + engine.maintenanceReadBudget <= deadline
         }
         return true
     }
 
-    private func readSafety(_ initial: FocusRackObservation) async {
+    private func readSafety(_ initial: FocusRackObservation, maintenanceRun: Int64? = nil) async {
         let started = clock.now()
+        let generation = gate.snapshot().generation
         defer {
             let finished = clock.now()
             engine.recordSafetyRead(
                 startedAt: started, finishedAt: finished, accepted: safetyAt == started)
+            if let maintenanceRun, gate.snapshot().generation == generation {
+                engine.finishMaintenanceRead(runID: maintenanceRun, at: finished)
+            }
         }
-        let generation = gate.snapshot().generation
         do {
             let fresh = try await driver.refreshSafety()
             // A superseded read cannot erase still-valid evidence after Stop before movement.

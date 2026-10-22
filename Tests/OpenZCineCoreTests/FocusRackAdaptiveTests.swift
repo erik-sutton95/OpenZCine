@@ -798,3 +798,82 @@ func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) 
     #expect(pulses.reduce(0, +) == 1_600)
     #expect(engine.state(at: now).phase == .complete)
 }
+
+@Test func rackFreshQualificationRecoversFromAHistoricalSlowIdleRead() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    for _ in 0..<10 {
+        try engine.calibrate(at: now)
+        try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+    }
+    let marks = engine.currentProgram.marks
+    engine.recordSafetyRead(startedAt: now - 1.328, finishedAt: now, accepted: true)
+    // A short pull still needs actual preflight qualification, not a future idle-read slot.
+    try engine.setTransition(.init(duration: 1), at: now)
+    #expect(engine.state(at: now).admissionMessage == nil)
+    try engine.setTransition(.init(duration: 3), at: now)
+    #expect(engine.state(at: now).admissionMessage != nil)
+    engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
+    #expect(engine.safetyReadBudget == 0.1)
+    for duration in [1.0, 3.0, 5.0] {
+        try engine.setTransition(.init(duration: duration), at: now)
+        #expect(engine.state(at: now).admissionMessage == nil)
+    }
+    #expect(engine.currentProgram.marks == marks)
+    #expect(engine.state(at: now).calibration?.title == "Calibration measured")
+    let read = try #require(
+        engine.snapshot(at: now, includeEvents: true).events.last { $0.kind == "safetyRead" })
+    let worst = try #require(
+        read.note?.split(separator: " ").first { $0.hasPrefix("worst=") })
+    #expect(abs(try #require(Double(worst.dropFirst(6))) - 1.328) < 1e-9)
+    try engine.setTransition(.init(duration: 1), at: now)
+    try engine.run(direction: .aToB, at: now)
+    let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+    #expect(pulses == Array(repeating: 128, count: 12) + [64])
+    #expect(engine.state(at: now).phase == .complete)
+}
+
+@Test func rackActualSlowPreflightRefusesAShortPullBeforeActivation() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
+    try engine.setTransition(.init(duration: 1), at: now)
+    try engine.run(direction: .aToB, at: now)
+    let run = engine.state(at: now).runID
+    let readStart = now
+    now += 1.328
+    engine.recordSafetyRead(startedAt: readStart, finishedAt: now, accepted: true)
+    var context = adaptiveContext(now)
+    context.safetyTimestamp = readStart
+    engine.observe(context, at: now)
+    engine.finishPreflight(runID: run, at: now)
+    #expect(engine.nextAction(at: now).kind == "idle")
+    #expect(engine.state(at: now).phase == .failed)
+    #expect(engine.state(at: now).stepPosition == 0)
+    #expect(engine.state(at: now).referenceValid)
+    #expect(
+        !engine.snapshot(at: now, includeEvents: true).events.contains {
+            $0.runID == run && $0.kind == "commandStarted"
+        })
+}
+
+@Test func rackMaintenanceDeadlineHonorsPauseAndCannotAffectAnotherRun() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100)
+    engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
+    try engine.setTransition(.init(duration: 3, delay: 1), at: now)
+    try engine.run(direction: .aToB, at: now)
+    let run = engine.state(at: now).runID
+    let deadline = try #require(engine.nextCommandDeadline)
+    engine.requestPause(at: now + 0.1)
+    engine.finishMaintenanceRead(runID: run, at: deadline + 0.1)
+    #expect(engine.state(at: deadline + 0.1).phase == .paused)
+    now = deadline + 0.2
+    engine.observe(adaptiveContext(now), at: now)
+    try engine.resume(at: now)
+    engine.finishMaintenanceRead(runID: run, at: now)
+    #expect(engine.state(at: now).busy)
+    #expect(try #require(engine.nextCommandDeadline) > now)
+    engine.requestStop(at: now)
+    try engine.run(direction: .aToB, at: now)
+    engine.finishMaintenanceRead(runID: run, at: now + 100)
+    #expect(engine.state(at: now).busy)
+    #expect(engine.state(at: now).runID != run)
+}

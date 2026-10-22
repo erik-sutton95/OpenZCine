@@ -843,6 +843,63 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
     #expect(FocusRackError.samePosition.localizedDescription.contains("Near/Far"))
 }
 
+@Test(arguments: [false, true])
+func rackHeldMaintenanceReadCannotSendLateCommands(stopDuringRead: Bool) async throws {
+    let camera = RackFakeCamera()
+    let controller = FocusRackController(driver: camera.access, clock: camera.clock)
+    await controller.observe(cameraObservation(1))
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    try await controller.handle(
+        .capture(markID: "A", expectedFrameSequence: 2), observation: cameraObservation(2))
+    for sequence in 3...4 {
+        try await controller.handle(.nudge(towardNear: false, steps: 10))
+        try await waitForRack { !(await controller.snapshot()).busy }
+        await controller.observe(cameraObservation(Int64(sequence)))
+    }
+    try await controller.handle(
+        .capture(markID: "B", expectedFrameSequence: 5), observation: cameraObservation(5))
+    try await controller.handle(.updateTiming(.init(duration: 3)))
+    let reads = camera.readCount
+    try await controller.handle(.run(direction: .bToA))
+    try await waitForRack { camera.readCount > reads && camera.driveCount > 20 }
+    camera.holdNextSafetyRead(latency: 0.3)
+    defer { camera.releaseSafetyRead() }
+    let preflightReads = camera.readCount
+    var sequence: Int64 = 6
+    for _ in 0..<50 {
+        if camera.readCount > preflightReads { break }
+        let sleep = camera.advanceClockBeforeNextSleep(0.02)
+        await controller.observe(cameraObservation(sequence))
+        sequence += 1
+        try await waitForRack {
+            camera.slept(after: sleep) || camera.readCount > preflightReads
+        }
+    }
+    #expect(camera.readCount > preflightReads)
+    let before = await controller.snapshot()
+    let drives = camera.driveCount
+    #expect(before.busy)
+    if stopDuringRead {
+        let stops = camera.stopCount
+        controller.requestStop()
+        #expect(camera.stopCount > stops)
+        try await waitForRack { (await controller.snapshot()).phase == .stopped }
+    }
+    camera.releaseSafetyRead()
+    try await waitForRack { !(await controller.snapshot()).busy }
+    let after = await controller.snapshot()
+    #expect(camera.driveCount == drives)
+    #expect(after.stepPosition == before.stepPosition)
+    #expect(after.program.marks == before.program.marks)
+    #expect(after.referenceValid)
+    #expect(after.phase == (stopDuringRead ? .stopped : .failed))
+    let events = await controller.diagnostics().events
+    #expect(
+        events.contains { $0.runID == before.runID && $0.kind == "maintenanceBudgetExceeded" }
+            == !stopDuringRead)
+    await controller.close()
+}
+
 private func progressNudge(towardNear: Bool = false) throws -> FocusRackEngine {
     var engine = try FocusRackEngine(
         configuration: FocusRackEngine.productionConfiguration, adaptive: true,
