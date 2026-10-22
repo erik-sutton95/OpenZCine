@@ -501,6 +501,52 @@ class FocusRackPanelComposeTest {
         assertEquals(1, actions.resets)
     }
 
+    @Test fun calibrationProjectsSharedStagesAndKeepsStopReachableInLandscape() {
+        val state = mutableStateOf(ready())
+        val setup = mutableStateOf(true)
+        val actions = Actions()
+        mount(state, actions, setupEnabled = { setup.value })
+        openOptions()
+        compose.onNodeWithTag("focusRack.calibrate").assertDoesNotExist()
+        val next = FocusRackActionViewState("Calibrate to B", "32-pulse increments · 1/10", true)
+        compose.runOnIdle { state.value = state.value.copy(calibration = next) }
+        compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsEnabled()
+            .assertTextContains(next.title).assertTextContains(requireNotNull(next.detail)).insideFrame()
+        assertTouchTarget("focusRack.calibrate")
+        compose.onNodeWithTag("focusRack.calibrate").performClick()
+        assertEquals(1, actions.calibrations)
+        assertTransportInsideFrame()
+        compose.saveLandscapeEvidence("focus-rack-calibration-next-landscape")
+
+        compose.runOnIdle { state.value = state.value.copy(calibration =
+            FocusRackActionViewState("Calibrate to A", "32-pulse increments · 2/10", true)) }
+        compose.onNodeWithTag("focusRack.calibrate").assertTextContains("Calibrate to A")
+            .assertTextContains("32-pulse increments · 2/10").assertIsEnabled()
+        compose.runOnIdle { setup.value = false }
+        compose.onNodeWithTag("focusRack.calibrate").assertIsNotEnabled()
+        compose.runOnIdle { setup.value = true; state.value = state.value.copy(active = true, phase = "moving",
+            canStop = true, primaryTitle = "Pause", canPause = true, primaryEnabled = true, completed = 30, total = 100) }
+        compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsNotEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.stop").assertIsEnabled().performClick()
+        assertEquals(1, actions.stops)
+        assertTransportInsideFrame()
+        compose.saveLandscapeEvidence("focus-rack-calibration-moving-landscape")
+
+        compose.runOnIdle { state.value = state.value.copy(phase = "stopping", canStop = false, primaryEnabled = false) }
+        compose.onNodeWithTag("focusRack.calibrate").assertIsNotEnabled()
+        compose.onNodeWithTag("focusRack.stop").assertIsNotEnabled()
+        assertTransportInsideFrame()
+        compose.saveLandscapeEvidence("focus-rack-calibration-stopping-landscape")
+        compose.runOnIdle { state.value = ready().copy(calibration =
+            FocusRackActionViewState("Calibration complete", "Fine timing measured", false)) }
+        compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsNotEnabled()
+            .assertTextContains("Calibration complete").assertTextContains("Fine timing measured").insideFrame()
+        compose.onNodeWithTag("focusRack.stop").assertDoesNotExist()
+        assertEquals(1, actions.calibrations)
+        assertTransportInsideFrame()
+        compose.saveLandscapeEvidence("focus-rack-calibration-complete-landscape")
+    }
+
     private fun waitForKeyboardDismissed() {
         compose.waitUntil(5_000) {
             InstrumentationRegistry.getInstrumentation().uiAutomation.windows.none {
@@ -541,7 +587,8 @@ class FocusRackPanelComposeTest {
                             onReset = { actions.resets++ }, onSave = { actions.saved += it },
                             onLoad = { actions.loaded += it }, onDelete = { actions.deleted += it },
                             onFocusSettings = { actions.focusSettings++ }, setupEnabled = setupEnabled(), onClose = { actions.closes++ },
-                            onGoTo = { actions.goes += it }, onRun = { actions.runs += it }, onMovePanel = { actions.moves += it })
+                            onGoTo = { actions.goes += it }, onRun = { actions.runs += it },
+                            onCalibrate = { actions.calibrations++ }, onMovePanel = { actions.moves += it })
                     }
                 }
             }
@@ -603,6 +650,7 @@ class FocusRackPanelComposeTest {
         val deleted = mutableListOf<FocusRackTimingViewState>()
         val expansions = mutableListOf<Boolean>()
         var primary = 0
+        var calibrations = 0
         var stops = 0
         var resets = 0
         var focusSettings = 0

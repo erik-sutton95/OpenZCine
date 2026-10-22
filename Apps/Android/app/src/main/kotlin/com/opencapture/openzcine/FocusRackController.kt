@@ -78,6 +78,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     fun primary() = send("primary")
     fun run(direction: String) = send("run", JSONObject().put("direction", direction))
     fun goTo(mark: String) = send("goTo", JSONObject().put("markID", mark))
+    fun calibrate() = send("calibrate")
     fun stop() {
         stopPending = state.value.active
         if (stopPending) mutableState.value = state.value.copy(phase = "stopping", primaryEnabled = false)
@@ -137,7 +138,8 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             // Cancellation remains a synchronous JNI intent even if state decoding failed.
             runCatching { wire.step(handle, "{\"kind\":\"stop\"}") }
             mutableState.value = state.value.copy(error = "Focus Rack is unavailable; stop requested.", primaryEnabled = false,
-                pullAToB = state.value.pullAToB?.copy(enabled = false), pullBToA = state.value.pullBToA?.copy(enabled = false))
+                pullAToB = state.value.pullAToB?.copy(enabled = false), pullBToA = state.value.pullBToA?.copy(enabled = false),
+                calibration = state.value.calibration?.copy(enabled = false))
             return
         }
         reply.optJSONObject("state")?.let { snapshot ->
@@ -179,6 +181,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 primaryDisabledReason = primary.nullableString("disabledReason"),
                 pullAToB = snapshot.optJSONObject("pullAToB")?.action(),
                 pullBToA = snapshot.optJSONObject("pullBToA")?.action(),
+                calibration = snapshot.optJSONObject("calibration")?.action(),
                 playbackInstruction = snapshot.nullableString("playbackInstruction"),
                 canGoToA = caps.optBoolean("canGoToA"), canGoToB = caps.optBoolean("canGoToB"), primaryEnabled = primary.getBoolean("enabled") && !stopPending,
                 canCaptureA = caps.getBoolean("canCaptureA"), canCaptureB = caps.getBoolean("canCaptureB"),

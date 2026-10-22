@@ -1800,6 +1800,7 @@ internal fun MonitorScreen(
                 },
                 onGoTo = { id -> focusRack.observe(rackObservation()); focusRack.goTo(id) },
                 onRun = { direction -> focusRack.observe(rackObservation()); focusRack.run(direction) },
+                onCalibrate = { focusRack.observe(rackObservation()); focusRack.calibrate() },
                 onMovePanel = { delta -> if (!locked) {
                     val placement = com.opencapture.monitorui.MonitorFocusAccessoryLayout.resolve(
                         fieldLayout, safeLeading, safeTrailing, safeBottom,

@@ -49,6 +49,7 @@ internal data class FocusRackViewState(
     val primaryTitle: String = "Set A and B", val primaryEnabled: Boolean = false,
     val primaryDetail: String? = null, val primaryDisabledReason: String? = null,
     val pullAToB: FocusRackActionViewState? = null, val pullBToA: FocusRackActionViewState? = null,
+    val calibration: FocusRackActionViewState? = null,
     val playbackInstruction: String? = null,
     val canGoToA: Boolean = false, val canGoToB: Boolean = false,
     val canCaptureA: Boolean = false, val canCaptureB: Boolean = false, val canNudge: Boolean = false, val canEdit: Boolean = false,
@@ -80,6 +81,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     onDelete: (FocusRackTimingViewState) -> Unit, onFocusSettings: () -> Unit,
     setupEnabled: Boolean = true, onClose: () -> Unit = {},
     onGoTo: (String) -> Unit = {}, onRun: (String) -> Unit = {}, onMovePanel: (Offset) -> Unit = {}, onResetPanel: () -> Unit = {},
+    onCalibrate: () -> Unit = {},
 ) {
     var optionsExpanded by remember { mutableStateOf(false) }
     val nudging = state.nudgeProgress != null
@@ -220,6 +222,18 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 if (optionsExpanded) {
                     Text("Set A, adjust with Near/Far, then set B. Keep zoom and the focus ring fixed.",
                         color = Color.LightGray, fontSize = 11.sp)
+                    state.calibration?.let { action ->
+                        OutlinedButton(onClick = onCalibrate,
+                            enabled = action.enabled && !state.active && !nudging && setupEnabled,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("focusRack.calibrate"),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(action.title, fontSize = 12.sp, lineHeight = 16.sp)
+                                action.detail?.let { Text(it, fontSize = 10.sp, lineHeight = 14.sp,
+                                    modifier = Modifier.testTag("focusRack.calibrate.detail")) }
+                            }
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         state.marks.forEach { mark ->
                             TextButton(onClick = { onCapture(mark.id) },

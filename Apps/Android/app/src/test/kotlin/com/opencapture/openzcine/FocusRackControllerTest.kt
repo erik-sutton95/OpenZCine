@@ -44,6 +44,8 @@ class FocusRackControllerTest {
         var createdTemplates: String? = null
         var traceJSON: String? = null
         var nudgeProgress: JSONObject? = null
+        var calibration: JSONObject? = null
+        var unavailable = false
         override fun create(connectionOwner: Long, templates: String): String {
             assertEquals(42L, connectionOwner)
             createdTemplates = templates
@@ -52,6 +54,7 @@ class FocusRackControllerTest {
         override fun close(owner: String) { closed = true }
         override fun step(owner: String, request: String): String {
             requests += JSONObject(request)
+            if (unavailable) return "invalid JSON"
             val caps = JSONObject().put("canCaptureA", false).put("canCaptureB", false)
                 .put("canNudge", false).put("canEditTiming", !busy).put("canReset", !busy)
                 .put("canPause", busy).put("canStop", busy)
@@ -64,9 +67,51 @@ class FocusRackControllerTest {
                 .put("capabilities", caps).put("primary", JSONObject().put("title", "Pause")
                     .put("enabled", busy)).put("minimumDuration", 16.6)
             nudgeProgress?.let { state.put("nudgeProgress", it) }
+            calibration?.let { state.put("calibration", it) }
             return JSONObject().put("state", state).put("templates", JSONArray(templates))
                 .put("templatesJSON", templates).put("traceJSON", traceJSON).toString()
         }
+    }
+
+    @Test fun `calibration renders shared action and forwards only the semantic intent`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        rack.observe(JSONObject())
+        assertNull(rack.state.value.calibration) // Older shared payloads omit the action.
+        wire.calibration = JSONObject().put("kind", "calibrate").put("title", "Calibrate to B")
+            .put("detail", "32-pulse increments · 1/10").put("enabled", true).put("markID", "B")
+        rack.observe(JSONObject())
+        assertEquals(FocusRackActionViewState("Calibrate to B", "32-pulse increments · 1/10", true),
+            rack.state.value.calibration)
+        val before = wire.requests.size
+        rack.calibrate()
+        assertEquals(before + 1, wire.requests.size)
+        assertEquals("calibrate", wire.requests.last().getString("kind"))
+        assertFalse(wire.requests.last().has("markID"))
+        assertFalse(wire.requests.last().has("timingUpdate"))
+        wire.busy = true
+        rack.observe(JSONObject())
+        rack.stop()
+        assertFalse(requireNotNull(rack.state.value.calibration).enabled)
+        wire.busy = false
+        wire.calibration = JSONObject().put("title", "Calibration complete")
+            .put("detail", "Fine timing measured").put("enabled", false)
+        rack.observe(JSONObject())
+        assertEquals(FocusRackActionViewState("Calibration complete", "Fine timing measured", false),
+            rack.state.value.calibration)
+        wire.calibration?.put("enabled", true)
+        rack.observe(JSONObject())
+        wire.unavailable = true
+        rack.calibrate()
+        assertFalse(requireNotNull(rack.state.value.calibration).enabled)
+        assertEquals("stop", wire.requests.last().getString("kind"))
+        wire.unavailable = false
+        wire.calibration = null
+        rack.observe(JSONObject())
+        assertNull(rack.state.value.calibration)
+        rack.close()
     }
 
     @Test fun `interrupt keeps cached ownership suspended until a new observation`() = runTest {
