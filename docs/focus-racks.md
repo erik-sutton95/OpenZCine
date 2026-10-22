@@ -1,7 +1,7 @@
 # Local A/B focus racks
 
 Focus Rack sets two session-relative marks and pulls between them with a chosen duration,
-start delay and easing. It uses the same Swift execution controller on iOS and Android.
+start delay and Linear timing. It uses the same Swift execution controller on iOS and Android.
 This local implementation is experimental: the remaining physical qualification is recorded
 in [the qualification log](investigations/focus-rack-qualification.md).
 
@@ -13,7 +13,10 @@ in [the qualification log](investigations/focus-rack-qualification.md).
    frame arrives, choose **Set A**.
 4. Use **Near −1 / Far +1** to focus the second subject. **Near −10**
    and **Far +10** each run ten separately confirmed steps for quicker setup; **Stop** discards
-   the remaining steps. Choose **Set B** after movement settles. The thumbnails identify the
+   the remaining steps. The mark cards and Near/Far controls stay in place during a nudge. The
+   pressed button shows the percentage of acknowledged steps; the other setup controls are disabled
+   until movement settles, and Stop remains available. Choose **Set B** after movement settles.
+   The thumbnails identify the
    accepted frames for each mark. These shortcuts do not change the step size or minimum pull time.
 
 The rack counts acknowledged increments, independently of the ordinary focus dial. Marks do
@@ -34,8 +37,9 @@ changes invalidate the reference automatically; the app cannot detect every phys
 Set **Duration** and **Start delay** in the same panel, then use **Rehearse A→B** or
 **Rehearse B→A**. While recording the same controls read **Run A→B/B→A**. Both directions
 remain visible and show the selected pull duration. There is no separate direction or
-Fastest/Timed selector. Defaults are three seconds, zero delay and Linear. **Options** contains the optional **Ease in-out** curve, which may require more time because its peak
-movement rate is higher. The Options label always names the selected curve.
+Fastest/Timed selector. Defaults are three seconds, zero delay and Linear. The panel currently offers
+Linear only. Ease in-out remains readable in old templates, but loading them uses Linear while
+retaining their duration and delay. The timing and command-spacing checks remain enforced.
 
 The selected start mark must match the current position. **Go to A / Go to B**, labelled
 **Fast reposition**, are separate actions that ignore Duration and Delay. They remain available
@@ -92,8 +96,10 @@ The current local, unqualified phone trial selects ten equal 160-pulse commands 
 100-unit, one-second Linear timed pull. It requires measured 160-pulse timing first: explicit
 Go to A/B over that span uses the same ten confirmed commands, while setup nudges remain fine.
 Timed playback refuses until that size is measured or when its worst observed cost does not fit;
-it never substitutes a larger profile for this trial. Other spans, durations and easing retain
-the adaptive policy. Source smoothness and repeatability remain unqualified.
+it never substitutes a larger profile for this trial. Other spans and durations retain
+the adaptive policy. In one iPhone USB round trip at 70mm/f2.8, the operator reported sharp
+endpoints and preferred the source-recorded smoothness over the baseline. Repeated returns and
+other lens/transport combinations remain unqualified.
 
 Old timing templates still decode. The new direct playback actions always use the displayed duration
 and delay, including when a template retains the legacy Fastest mode internally. Fast repositioning
@@ -105,13 +111,16 @@ never uses that timing. Paused time is excluded; movement starts only from an ex
 - **Stop** appears only while a countdown, focus movement or paused move can be cancelled. It discards future movement and requests native cancellation. **Stopping…** remains
   until the camera's outcome is known. Focus stays where it stops; recording is not stopped by this control. Focus never returns automatically.
 
-After completion, the endpoint status and opposite pull button allow an explicit timed return;
+After completion, the current-position row and opposite pull button allow an explicit timed return;
 Go to A/B remains the fast alternative. Stopping recording also cancels further rack movement.
 
 ## Save timing and manage the panel
 
-Save a named timing template under **Options**. Reset marks and Focus settings are also available there. Templates retain duration, delay and easing, plus legacy
-mode/direction fields for compatibility, only. Existing templates without a mode restore as Timed. Loading one requires fresh marks and starts no movement. Marks, thumbnails, position and
+Save a named timing template under **Options**. Reset marks and Focus settings are also available there.
+Templates retain duration and delay with Linear timing, plus legacy mode/direction fields for
+compatibility. Older Ease in-out values still decode; production playback uses Linear. Existing
+templates without a mode restore as Timed. Loading one requires fresh marks and starts no movement.
+Marks, thumbnails, position and
 armed state are never restored from storage.
 
 Collapse preserves a compact transport strip. Clean mode and interface lock retain Pause and

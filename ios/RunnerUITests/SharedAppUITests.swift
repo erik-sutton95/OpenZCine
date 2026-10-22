@@ -1575,6 +1575,58 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         assertTransport(moving)
     }
 
+    func testNudgeProgressKeepsSetupInPlaceUntilStopSettles() throws {
+        let ids = [
+            "go.A", "go.B", "near10", "near", "far", "far10", "duration.value",
+            "delay.value", "options",
+        ]
+        let ready = launch("ready")
+        let frames = Dictionary(
+            uniqueKeysWithValues: ids.map {
+                ($0, ready.buttons["focusRack." + $0].frame)
+            })
+        screenshot("focus-rack-nudge-ready-landscape")
+        ready.terminate()
+        for (fixture, pressed) in [("nudgeNear", "near10"), ("nudgeFar", "far10")] {
+            let app = launch(fixture)
+            for id in ids {
+                let control = app.buttons["focusRack." + id]
+                XCTAssertTrue(control.exists)
+                XCTAssertFalse(control.isEnabled)
+                XCTAssertEqual(control.frame.minX, try XCTUnwrap(frames[id]).minX, accuracy: 1)
+                XCTAssertEqual(control.frame.minY, try XCTUnwrap(frames[id]).minY, accuracy: 1)
+                XCTAssertEqual(control.frame.width, try XCTUnwrap(frames[id]).width, accuracy: 1)
+                XCTAssertEqual(control.frame.height, try XCTUnwrap(frames[id]).height, accuracy: 1)
+            }
+            let active = app.buttons["focusRack." + pressed]
+            XCTAssertEqual(active.value as? String, "30%")
+            XCTAssertEqual(active.label, pressed == "near10" ? "Near −10" : "Far +10")
+            XCTAssertFalse(app.staticTexts["focusRack.stopHint"].exists)
+            XCTAssertFalse(app.buttons["focusRack.expand"].isEnabled)
+            XCTAssertFalse(app.buttons["focusRack.close"].isEnabled)
+            assertTransport(app)
+            screenshot("focus-rack-\(fixture)-30-percent-landscape")
+            app.buttons["focusRack.stop"].tap()
+            XCTAssertEqual(app.buttons["focusRack.stop"].label, "Stop focus movement")
+            XCTAssertFalse(app.buttons["focusRack.stop"].isEnabled)
+            XCTAssertEqual(active.value as? String, "30%")
+            for id in ids {
+                XCTAssertEqual(
+                    app.buttons["focusRack." + id].frame.minY, try XCTUnwrap(frames[id]).minY,
+                    accuracy: 1)
+            }
+            assertTransport(app)
+            screenshot("focus-rack-\(fixture)-stop-pending-landscape")
+            app.terminate()
+        }
+        let settled = launch("atB")
+        XCTAssertFalse(settled.staticTexts["focusRack.message"].exists)
+        XCTAssertFalse(settled.buttons["focusRack.stop"].exists)
+        XCTAssertEqual(settled.buttons["focusRack.far10"].value as? String, "")
+        assertTransport(settled)
+        screenshot("focus-rack-complete-position-only-landscape")
+    }
+
     func testReopeningMoveKeepsCloseReachable() {
         let app = launch(
             "entry", extra: ["ZC_DEMO_FOCUS_RACK_AUTOOPEN": "0"])
@@ -1634,10 +1686,9 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             XCTAssertEqual(app.buttons["focusRack.go.\(id)"].value as? String, "Fast reposition")
         }
         openOptions(in: app)
-        let easing = app.otherElements["focusRack.easing"]
-        scrollTo(easing, in: app)
-        easing.buttons["Ease in-out"].tap()
-        XCTAssertTrue(easing.buttons["Ease in-out"].isSelected)
+        XCTAssertTrue(app.buttons["focusRack.options"].label.contains("Options · Linear"))
+        XCTAssertFalse(app.otherElements["focusRack.easing"].exists)
+        XCTAssertFalse(app.buttons["Ease in-out"].exists)
         XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("B 20"))
         assertTransport(app)
         screenshot("focus-rack-unified-options-landscape")
@@ -1687,7 +1738,9 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         XCTAssertFalse(app.buttons["focusRack.pull.aToB"].isEnabled)
         assertTransport(app)
         screenshot("focus-rack-admission-hint-landscape")
-        attention.tap()
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(app.otherElements["focusRack.compact"].exists)
+        app.buttons["focusRack.moveAttention"].tap()
         let reason = app.staticTexts["focusRack.admission"]
         XCTAssertEqual(reason.label, "Increase duration to at least 16.61s for these marks.")
         XCTAssertTrue(app.scrollViews["focusRack.setup"].frame.contains(reason.frame))
@@ -1818,8 +1871,8 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
     }
 
     private func openOptions(in app: XCUIApplication) {
-        guard !app.otherElements["focusRack.easing"].exists else { return }
         let options = app.buttons["focusRack.options"]
+        guard options.value as? String != "Expanded" else { return }
         scrollTo(options, in: app)
         options.tap()
     }

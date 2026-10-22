@@ -204,7 +204,27 @@ enum DemoHarness {
                 state.primary = .init(kind: "reset", title: "Reset marks", enabled: false)
                 state.capabilities = .init()
             }
-            if fixture == "atB" { state.stepPosition = 20 }
+            if fixture == "nudgeNear" || fixture == "nudgeFar" {
+                let near = fixture == "nudgeNear"
+                state.phase = .moving
+                state.busy = true
+                state.completedSteps = 3
+                state.totalSteps = 10
+                state.stepPosition = near ? -3 : 3
+                state.nudgeProgress = .init(towardNear: near, steps: 10, percent: 30)
+                if !near {
+                    state.admissionMessage =
+                        "This move needs at least 4.00 seconds at the current camera cadence."
+                }
+                state.capabilities = .init()
+                state.capabilities.canStop = true
+                state.primary = .init(kind: "pause", title: "Pause", enabled: true)
+            }
+            if fixture == "atB" {
+                state.stepPosition = 20
+                state.phase = .complete
+                state.message = ""
+            }
             state.updateTimedActions(recording: fixture == "recording", ready: state.referenceValid)
             return state
         }

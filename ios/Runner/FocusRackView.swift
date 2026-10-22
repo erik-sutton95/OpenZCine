@@ -63,52 +63,61 @@ struct FocusRackView: View {
                 if let instruction = rack.state?.recoveryInstruction {
                     recovery(instruction)
                 }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let state = rack.state {
-                            if let reason = state.admissionMessage {
-                                Text(reason).font(.system(size: 12)).foregroundStyle(.orange)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let state = rack.state {
+                                HStack(spacing: 4) {
+                                    nudge(
+                                        "Near", amount: "−10", id: "near10", state: state,
+                                        near: true,
+                                        steps: 10)
+                                    nudge(
+                                        "Near", amount: "−1", id: "near", state: state, near: true,
+                                        steps: 1)
+                                    nudge(
+                                        "Far", amount: "+1", id: "far", state: state, near: false,
+                                        steps: 1)
+                                    nudge(
+                                        "Far", amount: "+10", id: "far10", state: state,
+                                        near: false,
+                                        steps: 10)
+                                }
+                                move(state)
+                                if let reason = state.admissionMessage {
+                                    Text(reason).font(.system(size: 12)).foregroundStyle(.orange)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .id("focusRack.admission")
+                                        .accessibilityIdentifier("focusRack.admission")
+                                }
+                                if !state.message.isEmpty {
+                                    Text(state.message)
+                                        .font(.system(size: 12)).fixedSize(
+                                            horizontal: false, vertical: true
+                                        )
+                                        .accessibilityIdentifier("focusRack.message")
+                                }
+                            } else {
+                                Text("Connect a camera in movie AF-S mode to set focus marks.")
+                                    .font(.system(size: 12))
                                     .fixedSize(horizontal: false, vertical: true)
-                                    .accessibilityIdentifier("focusRack.admission")
                             }
-                            HStack(spacing: 4) {
-                                nudge(
-                                    "Near", amount: "−10", id: "near10", state: state, near: true,
-                                    steps: 10)
-                                nudge(
-                                    "Near", amount: "−1", id: "near", state: state, near: true,
-                                    steps: 1)
-                                nudge(
-                                    "Far", amount: "+1", id: "far", state: state, near: false,
-                                    steps: 1)
-                                nudge(
-                                    "Far", amount: "+10", id: "far10", state: state, near: false,
-                                    steps: 10)
+                            if let notice = rack.notice {
+                                Text(notice).font(.system(size: 12))
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("focusRack.notice")
                             }
-                            move(state)
-                            Text(state.message)
-                                .font(.system(size: 12)).fixedSize(
-                                    horizontal: false, vertical: true
-                                )
-                                .accessibilityIdentifier("focusRack.message")
-                        } else {
-                            Text("Connect a camera in movie AF-S mode to set focus marks.")
-                                .font(.system(size: 12))
-                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        if let notice = rack.notice {
-                            Text(notice).font(.system(size: 12))
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityIdentifier("focusRack.notice")
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 4)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 4)
+                    .onChange(of: setupScrollRevision, initial: true) { _, revision in
+                        if revision > 0 { proxy.scrollTo("focusRack.admission", anchor: .top) }
+                    }
+                    .disabled(rack.stopPending)
+                    .accessibilityIdentifier("focusRack.setup")
                 }
-                .id(setupScrollRevision)
-                .disabled(rack.stopPending)
-                .accessibilityIdentifier("focusRack.setup")
             }
             transport
         }
@@ -233,6 +242,7 @@ struct FocusRackView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(compact ? "Open focus rack setup" : "Hide focus rack setup")
+                .disabled(rack.state?.nudgeProgress != nil)
                 .accessibilityIdentifier("focusRack.expand")
             }
             Button {
@@ -298,7 +308,7 @@ struct FocusRackView: View {
 
     private var transport: some View {
         VStack(spacing: 4) {
-            if showsStop && !compact {
+            if showsStop && !compact && rack.state?.nudgeProgress == nil {
                 Text("Stop cancels focus movement only.")
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
                     .accessibilityIdentifier("focusRack.stopHint")
@@ -329,7 +339,8 @@ struct FocusRackView: View {
                     .buttonStyle(.plain)
                     .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
                     .disabled(
-                        rack.stopPending || rack.state?.primary.enabled != true
+                        rack.stopPending || rack.state?.nudgeProgress != nil
+                            || rack.state?.primary.enabled != true
                             || (!allowsSetup && rack.state?.primary.kind != "pause")
                     )
                     .accessibilityLabel(
@@ -374,7 +385,9 @@ struct FocusRackView: View {
 
     private var showsTimedPulls: Bool {
         guard let state = rack.state else { return false }
-        return !rack.stopPending && !state.busy && state.referenceValid
+        return
+            (state.nudgeProgress != nil
+            || (!rack.stopPending && !state.busy && state.referenceValid))
             && state.program.marks.count == 2
     }
 
@@ -444,7 +457,9 @@ struct FocusRackView: View {
 
     private func marks(_ state: FocusRackState) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if state.stepPosition != nil && !state.busy && !rack.stopPending {
+            if state.nudgeProgress != nil
+                || (state.stepPosition != nil && !state.busy && !rack.stopPending)
+            {
                 HStack(spacing: 8) {
                     mark("A", state: state, enabled: state.capabilities.canCaptureA)
                     mark("B", state: state, enabled: state.capabilities.canCaptureB)
@@ -505,12 +520,16 @@ struct FocusRackView: View {
     private func nudge(
         _ title: String, amount: String, id: String, state: FocusRackState, near: Bool, steps: Int
     ) -> some View {
-        Button {
+        let progress = state.nudgeProgress.flatMap {
+            $0.towardNear == near && $0.steps == steps ? $0.percent : nil
+        }
+        return Button {
             rack.nudge(near: near, steps: steps)
         } label: {
             VStack(spacing: 1) {
                 Text(title).font(.system(size: 11))
-                Text(amount).font(.system(size: 13, weight: .semibold, design: .monospaced))
+                Text(progress.map { "\($0)%" } ?? amount)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
             }
             .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
         }
@@ -518,6 +537,7 @@ struct FocusRackView: View {
         .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
         .disabled(!state.capabilities.canNudge)
         .accessibilityLabel("\(title) \(amount)")
+        .accessibilityValue(progress.map { "\($0)%" } ?? "")
         .accessibilityIdentifier("focusRack.\(id)")
     }
 
@@ -531,9 +551,7 @@ struct FocusRackView: View {
                 optionsExpanded.toggle()
             } label: {
                 HStack {
-                    Text(
-                        "Options · "
-                            + (state.transition.easing == .linear ? "Linear" : "Ease in-out"))
+                    Text("Options · Linear")
                     Spacer(minLength: 0)
                     Image(systemName: optionsExpanded ? "chevron.up" : "chevron.down")
                 }
@@ -542,35 +560,11 @@ struct FocusRackView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(state.nudgeProgress != nil)
             .accessibilityValue(optionsExpanded ? "Expanded" : "Collapsed")
             .accessibilityIdentifier("focusRack.options")
             if optionsExpanded {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        ForEach([FocusRackEasing.linear, .easeInOut], id: \.self) { curve in
-                            Button {
-                                rack.updateTiming(.init(easing: curve))
-                            } label: {
-                                Text(curve == .linear ? "Linear" : "Ease in-out")
-                                    .font(.system(size: 12))
-                                    .frame(maxWidth: .infinity, minHeight: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .background(
-                                .white.opacity(state.transition.easing == curve ? 0.25 : 0.08),
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
-                            .disabled(!state.capabilities.canEditTiming)
-                            .accessibilityAddTraits(
-                                state.transition.easing == curve ? .isSelected : [])
-                        }
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("focusRack.easing")
-                    Text("Ease in-out starts and finishes gently; it may need a longer duration.")
-                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
-                        .fixedSize(horizontal: false, vertical: true)
                     Text(
                         "Set A, adjust with Near/Far, then set B. Keep zoom and the focus ring fixed."
                     )
