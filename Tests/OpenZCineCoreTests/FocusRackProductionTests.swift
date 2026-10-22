@@ -215,6 +215,7 @@ private final class RackFakeCamera: @unchecked Sendable {
     private var safetyLatency = 0.0
     private var holdsSafety = false
     private var safetyContinuation: CheckedContinuation<Void, Never>?
+    private var sleeps = 0
 
     var readCount: Int { lock.withLock { reads } }
     var driveCount: Int { lock.withLock { drives.count } }
@@ -230,7 +231,10 @@ private final class RackFakeCamera: @unchecked Sendable {
                     return instant
                 }
             },
-            sleep: { _ in try await Task.sleep(for: .milliseconds(1)) })
+            sleep: { [self] _ in
+                lock.withLock { sleeps += 1 }
+                try await Task.sleep(for: .milliseconds(1))
+            })
     }
 
     func holdNextSafetyRead(latency: Double = 0) {
@@ -249,7 +253,13 @@ private final class RackFakeCamera: @unchecked Sendable {
         pending?.resume()
     }
     func setSafetyLatency(_ seconds: Double) { lock.withLock { safetyLatency = seconds } }
-    func advanceClock(_ seconds: Double) { lock.withLock { instant += seconds } }
+    func advanceClockBeforeNextSleep(_ seconds: Double) -> Int {
+        lock.withLock {
+            instant += seconds
+            return sleeps
+        }
+    }
+    func slept(after count: Int) -> Bool { lock.withLock { sleeps > count } }
     private func waitForSafety() async {
         await withCheckedContinuation { pending in
             let waiting = lock.withLock {
@@ -794,10 +804,14 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
     try await waitForRack { camera.readCount > reads }
     for _ in 0..<250 {
         if !(await controller.snapshot()).busy { break }
-        camera.advanceClock(0.05)
+        let sleep = camera.advanceClockBeforeNextSleep(0.05)
         sequence += 1
         await controller.observe(cameraObservation(sequence))
-        try await Task.sleep(for: .milliseconds(3))
+        // Advance again only after the pump has settled the current fake command/read.
+        try await waitForRack {
+            if camera.slept(after: sleep) { return true }
+            return !(await controller.snapshot()).busy
+        }
     }
     let state = await controller.snapshot()
     #expect(state.phase == .complete)

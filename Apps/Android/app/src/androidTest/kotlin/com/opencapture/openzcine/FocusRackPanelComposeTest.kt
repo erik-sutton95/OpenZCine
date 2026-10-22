@@ -538,9 +538,9 @@ class FocusRackPanelComposeTest {
         assertTransportInsideFrame()
         compose.saveLandscapeEvidence("focus-rack-calibration-stopping-landscape")
         compose.runOnIdle { state.value = ready().copy(calibration =
-            FocusRackActionViewState("Calibration complete", "Fine timing measured", false)) }
+            FocusRackActionViewState("Calibration measured", "All 5 sizes in both directions", false)) }
         compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsNotEnabled()
-            .assertTextContains("Calibration complete").assertTextContains("Fine timing measured").insideFrame()
+            .assertTextContains("Calibration measured").assertTextContains("All 5 sizes in both directions").insideFrame()
         compose.onNodeWithTag("focusRack.stop").assertDoesNotExist()
         assertEquals(1, actions.calibrations)
         assertTransportInsideFrame()
