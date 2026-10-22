@@ -42,7 +42,6 @@ struct FocusRackView: View {
     @State private var templateToLoad: FocusRackTemplate?
     @State private var panelTranslation = CGSize.zero
     @GestureState private var draggingPanel = false
-    @State private var setupScrollRevision = 0
 
     private enum Editor {
         case template, duration, delay
@@ -112,8 +111,11 @@ struct FocusRackView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.bottom, 4)
                     }
-                    .onChange(of: setupScrollRevision, initial: true) { _, revision in
-                        if revision > 0 { proxy.scrollTo("focusRack.admission", anchor: .top) }
+                    .onChange(of: rack.revealAdmission, initial: true) { _, requested in
+                        if requested {
+                            proxy.scrollTo("focusRack.admission", anchor: .top)
+                            rack.revealAdmission = false
+                        }
                     }
                     .disabled(rack.stopPending)
                     .accessibilityIdentifier("focusRack.setup")
@@ -194,7 +196,7 @@ struct FocusRackView: View {
             Button {
                 if needsMoveAttention {
                     rack.isExpanded = true
-                    setupScrollRevision += 1
+                    rack.revealAdmission = true
                 }
             } label: {
                 headerText.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)

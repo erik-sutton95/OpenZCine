@@ -218,6 +218,7 @@ enum DemoHarness {
                 }
                 state.capabilities = .init()
                 state.capabilities.canStop = true
+                state.capabilities.canEditTiming = false
                 state.primary = .init(kind: "pause", title: "Pause", enabled: true)
             }
             if fixture == "atB" {

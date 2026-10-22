@@ -70,6 +70,8 @@ struct FocusRackPendingCapture {
     private(set) var stopPending = false
     private(set) var capturingMark: String?
     var isExpanded = true
+    /// Preserves an attention request while compact and expanded views are exchanged.
+    var revealAdmission = false
     var panelPosition: MonitorScopePoint?
     private(set) var isActive = true
     @ObservationIgnored private weak var model: NativeAppModel?
