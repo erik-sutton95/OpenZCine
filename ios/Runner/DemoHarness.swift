@@ -158,6 +158,17 @@ enum DemoHarness {
             state.primary = .init(
                 kind: "rehearse", title: "Rehearse A→B", enabled: true,
                 detail: state.transition.playbackDetail)
+            if fixture == "calibration" || fixture == "calibrationMeasured" {
+                state.program.marks = [
+                    .init(id: "A", stepPosition: 0), .init(id: "B", stepPosition: 100),
+                ]
+                state.calibration = .init(
+                    kind: "calibrate",
+                    title: fixture == "calibration" ? "Calibrate to B" : "Calibration measured",
+                    enabled: fixture == "calibration",
+                    detail: fixture == "calibration"
+                        ? "32-pulse increments · 1/10" : "All 5 sizes in both directions")
+            }
             if fixture == "setupChanged" {
                 state.message = "Camera setup changed. Check A and B; reset marks if needed."
             } else if fixture == "timing" {

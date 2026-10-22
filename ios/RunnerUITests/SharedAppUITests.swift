@@ -1414,6 +1414,29 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         continueAfterFailure = false
     }
 
+    func testExplicitCalibrationIsVisibleInLandscapeOptions() {
+        let app = launch("calibration")
+        scrollTo(app.buttons["focusRack.options"], in: app)
+        app.buttons["focusRack.options"].tap()
+        let action = app.buttons["focusRack.calibrate"]
+        scrollTo(action, in: app)
+        XCTAssertTrue(action.isEnabled)
+        XCTAssertTrue(action.label.contains("Calibrate to B"))
+        XCTAssertTrue(action.label.contains("32-pulse increments"))
+        assertTransport(app)
+        screenshot("focus-rack-finer-calibration-landscape")
+        app.terminate()
+        let measured = launch("calibrationMeasured")
+        scrollTo(measured.buttons["focusRack.options"], in: measured)
+        measured.buttons["focusRack.options"].tap()
+        let complete = measured.buttons["focusRack.calibrate"]
+        scrollTo(complete, in: measured)
+        XCTAssertFalse(complete.isEnabled)
+        XCTAssertTrue(complete.label.contains("Calibration measured"))
+        assertTransport(measured)
+        screenshot("focus-rack-finer-calibration-measured-landscape")
+    }
+
     func testSetupChangeAdvisesWithoutRequiringReset() {
         let app = launch("setupChanged")
         XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)

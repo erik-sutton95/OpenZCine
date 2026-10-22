@@ -31,6 +31,8 @@ public enum FocusRackProfile: String, Sendable {
     case adaptive
     /// Local, unqualified ten-command trial for a 100-unit, one-second Linear move.
     case tenBy160Experiment
+    /// Local measured-size comparison with explicit bidirectional finer-increment calibration.
+    case calibratedFineExperiment
 }
 
 /// One session-relative mark, expressed in completed base focus units.
@@ -130,6 +132,8 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
     case noSmoothTiming
     /// Timed experimental playback requires a completed command of its selected size.
     case calibrationRequired
+    /// The local measured-size profile requires all explicit bidirectional calibration stages.
+    case fineCalibrationRequired
     case marksTooClose
     case reconnectRequired
     case invalidTemplateName
@@ -151,6 +155,8 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
         case .templateStorageFull: "Remove a saved timing template before saving another."
         case .calibrationRequired:
             "Use Go to A or Go to B once to measure this move before timed playback."
+        case .fineCalibrationRequired:
+            "Open Options and calibrate finer increments before timed playback."
         case .noSmoothTiming:
             "This duration is not supported for these marks at the current camera cadence. Try another duration or Linear. Go to A/B remains available for fast positioning."
         case .durationTooLong(let maximum):

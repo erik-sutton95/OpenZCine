@@ -123,7 +123,6 @@ public actor FocusRackController {
     private var safety: NikonFocusRackSafetySnapshot?
     private var safetyAt: Double?
     private var nextSafetyAt = 0.0
-    private var longestSafetyRead = 0.0
     private var needsReadinessFrameBarrier = true
     private var nativeRun: Int64?
     private var preparedRun: Int64?
@@ -273,6 +272,7 @@ public actor FocusRackController {
             try engine.capture(markID: markID, at: now)
         case .nudge(let near, let steps): try engine.nudge(towardNear: near, steps: steps, at: now)
         case .goTo(let mark): try engine.seek(markID: mark, at: now)
+        case .calibrate: try engine.calibrate(at: now)
         case .run(let direction): try engine.run(direction: direction, at: now)
         case .setTransition(let transition):
             try engine.setTransition(Self.linearTransition(transition), at: now)
@@ -499,9 +499,12 @@ public actor FocusRackController {
         let now = clock.now()
         guard now >= nextSafetyAt else { return false }
         if let safetyAt, let finish = engine.scheduledFinish,
-            max(now, finish) + max(0.1, longestSafetyRead) < safetyAt + 2
+            max(now, finish) + max(0.1, engine.safetyReadBudget) < safetyAt + 2
         {
             return false
+        }
+        if let deadline = engine.nextCommandDeadline {
+            return now + max(0.1, engine.safetyReadBudget) <= deadline
         }
         return true
     }
@@ -510,7 +513,6 @@ public actor FocusRackController {
         let started = clock.now()
         defer {
             let finished = clock.now()
-            longestSafetyRead = max(longestSafetyRead, finished - started)
             engine.recordSafetyRead(
                 startedAt: started, finishedAt: finished, accepted: safetyAt == started)
         }

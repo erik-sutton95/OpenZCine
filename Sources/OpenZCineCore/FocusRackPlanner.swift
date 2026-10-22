@@ -30,6 +30,7 @@ struct FocusRackMovementPlan: Sendable {
 /// Keeps fine setup units while selecting bounded command sizes for the requested timing.
 /// Scheduling estimates cannot establish optical smoothness; rehearse the selected lens and span.
 enum FocusRackPlanner {
+    static let calibrationQuanta = [2, 3, 4, 6, 8]
     // The fine source trial used 94 increments over 24 seconds. This conservative spacing envelope
     // rejects sparse long moves; it is not a guarantee of optical smoothness on another lens.
     static let maximumFineSpacing = 24.0 / 93.0
@@ -37,18 +38,26 @@ enum FocusRackPlanner {
     static func make(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
         quiet: Double, timings: [Int: FocusRackCommandTiming], adaptive: Bool,
-        timed: Bool, grouped: Bool, profile: FocusRackProfile = .adaptive
+        timed: Bool, grouped: Bool, profile: FocusRackProfile = .adaptive,
+        safetyReadBudget: Double = 0, calibrationComplete: Bool = false,
+        calibrationQuantum: Int? = nil
     ) throws -> FocusRackMovementPlan {
         guard signedSteps != 0, signedSteps != .min, abs(signedSteps) <= 10_000,
             duration.isFinite, duration > 0, delay.isFinite, delay >= 0,
-            quiet.isFinite, quiet >= 0
+            quiet.isFinite, quiet >= 0, safetyReadBudget.isFinite, safetyReadBudget >= 0
         else { throw FocusRackError.invalidConfiguration }
         let sign = signedSteps < 0 ? -1 : 1
         let count = abs(signedSteps)
+        if let calibrationQuantum {
+            guard !timed, grouped, profile == .calibratedFineExperiment, count == 100,
+                calibrationQuanta.contains(calibrationQuantum)
+            else { throw FocusRackError.invalidConfiguration }
+        }
         if !timed {
             let quantum =
-                adaptive && grouped
-                ? (profile == .tenBy160Experiment && count == 100 ? 10 : 12) : 1
+                calibrationQuantum
+                ?? (adaptive && grouped
+                    ? (profile != .adaptive && count == 100 ? 10 : 12) : 1)
             var chunks = Array(repeating: sign * quantum, count: count / quantum)
             if count % quantum != 0 { chunks.append(sign * (count % quantum)) }
             let known = chunks.allSatisfy { timings[abs($0)]?.count ?? 0 > 0 }
@@ -64,7 +73,12 @@ enum FocusRackPlanner {
         }
         if adaptive, grouped, count > 1 {
             let quanta: [Int]
-            if profile == .tenBy160Experiment, count == 100, duration == 1, easing == .linear {
+            if profile == .calibratedFineExperiment, count == 100, easing == .linear {
+                guard calibrationComplete else { throw FocusRackError.fineCalibrationRequired }
+                guard timings[10]?.count ?? 0 > 0 else { throw FocusRackError.calibrationRequired }
+                quanta = [1] + calibrationQuanta + [10]
+            } else if profile == .tenBy160Experiment, count == 100, duration == 1, easing == .linear
+            {
                 guard timings[10]?.count ?? 0 > 0 else {
                     throw FocusRackError.calibrationRequired
                 }
@@ -74,7 +88,9 @@ enum FocusRackPlanner {
             }
             return try adaptiveTimed(
                 signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
-                quiet: quiet, timings: timings, quanta: quanta)
+                quiet: quiet, timings: timings, quanta: quanta, safetyReadBudget: safetyReadBudget,
+                requireMeasured: profile == .calibratedFineExperiment && count == 100
+                    && easing == .linear)
         }
         let cost = timings[1]?.longest ?? 0
         let trajectory = try FocusRackTrajectory(
@@ -97,17 +113,25 @@ enum FocusRackPlanner {
 
     private static func adaptiveTimed(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
-        quiet: Double, timings: [Int: FocusRackCommandTiming], quanta: [Int]
+        quiet: Double, timings: [Int: FocusRackCommandTiming], quanta: [Int],
+        safetyReadBudget: Double, requireMeasured: Bool
     ) throws -> FocusRackMovementPlan {
         let count = abs(signedSteps)
         let sign = signedSteps < 0 ? -1 : 1
         // Unmeasured sizes use the session's worst observed command as an estimate, not a
         // measurement of that size. Every completed command updates its own budget; late runs halt.
         let fallback = timings.values.map(\.longest).max() ?? 0
+        // Long pulls need an idle slot for complete fresh camera evidence between commands.
+        let maintenance = duration + 2 * safetyReadBudget >= 2 ? safetyReadBudget : 0
         let candidates = quanta.compactMap { quantum -> TimedCandidate? in
             var chunks = Array(repeating: sign * quantum, count: count / quantum)
             if count % quantum != 0 { chunks.append(sign * (count % quantum)) }
             guard chunks.count > 1 else { return nil }
+            if requireMeasured,
+                !chunks.allSatisfy({ timings[abs($0)]?.count ?? 0 > 0 })
+            {
+                return nil
+            }
             let costs = chunks.map { timings[abs($0)]?.longest ?? fallback }
             var position = 0
             let span = count - abs(chunks[chunks.count - 1])
@@ -118,7 +142,7 @@ enum FocusRackPlanner {
             }
             let gaps = zip(fractions, fractions.dropFirst()).map { $1 - $0 }
             let finalCost = costs[costs.count - 1]
-            let minimum = zip(costs, gaps).map { ($0 + quiet) / $1 }.max() ?? 0
+            let minimum = zip(costs, gaps).map { ($0 + quiet + maintenance) / $1 }.max() ?? 0
             // Coarse commands must not be stretched into sparse schedules: earlier source
             // recordings showed stepping there. Keep the same start-gap cap at every size.
             let maximum = gaps.map { maximumFineSpacing / $0 }.min() ?? 0

@@ -178,6 +178,10 @@ public struct FocusRackEngine: Sendable {
     private var completedUnits = 0
     private var totalUnits = 0
     private var activeNudge: (towardNear: Bool, steps: Int)?
+    private var calibrationTrips = 0
+    private var calibrationOrigin: String?
+    private var activeCalibration: (trip: Int, configuration: Int, capture: Int64)?
+    private(set) var safetyReadBudget = 0.0
     private var startedAt = 0.0
     private var enforcesTiming = false
     private var nextStep = 0
@@ -248,6 +252,7 @@ public struct FocusRackEngine: Sendable {
                     return old != new
                 })
         {
+            clearCalibration()
             configurationChanged = true
             configurationRevision += 1
             referenceContext = observation
@@ -278,6 +283,7 @@ public struct FocusRackEngine: Sendable {
             throw FocusRackError.reconnectRequired
         }
         position = 0
+        clearCalibration()
         activeNudge = nil
         commandTimings = [:]
         marks = []
@@ -309,6 +315,7 @@ public struct FocusRackEngine: Sendable {
         if let other = marks.first(where: { $0.id != markID }), other.stepPosition == position {
             throw FocusRackError.samePosition
         }
+        clearCalibration()
         if marks.isEmpty { referenceContext = context }
         marks.removeAll { $0.id == markID }
         captureRevision += 1
@@ -346,6 +353,39 @@ public struct FocusRackEngine: Sendable {
             duration: 1,
             delay: 0,
             easing: .linear, enforcesTiming: false, grouped: true, at: timestamp)
+    }
+
+    /// Measures one full mark-to-mark traversal with the next finer command size.
+    /// Each tap starts one move; cancellation never credits an incomplete stage.
+    public mutating func calibrate(at timestamp: Double) throws {
+        try requireReady(at: timestamp)
+        guard profile == .calibratedFineExperiment, marks.count == 2,
+            abs(marks[1].stepPosition - marks[0].stepPosition) == 100,
+            calibrationTrips < FocusRackPlanner.calibrationQuanta.count * 2,
+            let current = marks.first(where: { $0.stepPosition == position })
+        else { throw FocusRackError.referenceUnavailable }
+        let origin = calibrationOrigin ?? current.id
+        let expected = calibrationTrips % 2 == 0 ? origin : (origin == "A" ? "B" : "A")
+        guard current.id == expected else { throw FocusRackError.notAtStart }
+        guard let target = marks.first(where: { $0.id != current.id }), let position else {
+            throw FocusRackError.marksRequired
+        }
+        let quantum = FocusRackPlanner.calibrationQuanta[calibrationTrips / 2]
+        try begin(
+            signedSteps: target.stepPosition - position, duration: 1, delay: 0,
+            easing: .linear, enforcesTiming: false, grouped: true,
+            calibrationQuantum: quantum, at: timestamp)
+        calibrationOrigin = origin
+        activeCalibration = (calibrationTrips, configurationRevision, captureRevision)
+        append(
+            "calibrationStarted", at: timestamp,
+            note: "trip=\(calibrationTrips + 1) quantum=\(quantum)")
+    }
+
+    private mutating func clearCalibration() {
+        calibrationTrips = 0
+        calibrationOrigin = nil
+        activeCalibration = nil
     }
 
     /// Changes diagnostic timing while idle without changing the pulse quantum or session marks.
@@ -411,6 +451,15 @@ public struct FocusRackEngine: Sendable {
                 return .init(
                     kind: "wait", runID: runID, commandID: nil, signedPulses: nil,
                     waitSeconds: min(0.1, due - timestamp))
+            }
+            if !maintenanceFits(at: timestamp) {
+                self.trajectory = nil
+                finishedAt = timestamp
+                phase = "failed"
+                message =
+                    "Fresh camera readings cannot fit this cadence. Adjust duration and try again."
+                append("maintenanceBudgetExceeded", at: timestamp)
+                return idle
             }
             if enforcesTiming, timestamp - due > max(0.2, trajectory.duration * 0.05) {
                 self.trajectory = nil
@@ -487,6 +536,15 @@ public struct FocusRackEngine: Sendable {
                     phase = "complete"
                     message = "Complete. Inspect the source recording for sharpness and smoothness."
                     append("runCompleted", at: timestamp)
+                    if let activeCalibration, activeCalibration.trip == calibrationTrips,
+                        activeCalibration.configuration == configurationRevision,
+                        activeCalibration.capture == captureRevision
+                    {
+                        calibrationTrips += 1
+                        append(
+                            "calibrationCompleted", at: timestamp, note: "trip=\(calibrationTrips)")
+                    }
+                    activeCalibration = nil
                 }
             } else if pauseRequested {
                 pausedAt = timestamp
@@ -619,16 +677,20 @@ public struct FocusRackEngine: Sendable {
 
     private mutating func begin(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
-        enforcesTiming: Bool, grouped: Bool = false,
+        enforcesTiming: Bool, grouped: Bool = false, calibrationQuantum: Int? = nil,
         at timestamp: Double
     ) throws {
         try requireReady(at: timestamp)
         let planned = try FocusRackPlanner.make(
             signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
             quiet: configuration.commandInterval, timings: commandTimings, adaptive: adaptive,
-            timed: enforcesTiming, grouped: grouped, profile: profile)
+            timed: enforcesTiming, grouped: grouped, profile: profile,
+            safetyReadBudget: safetyReadBudget,
+            calibrationComplete: calibrationTrips == FocusRackPlanner.calibrationQuanta.count * 2,
+            calibrationQuantum: calibrationQuantum)
         runID += 1
         activeNudge = nil
+        activeCalibration = nil
         trajectory = planned
         if marks.isEmpty { referenceContext = context }
         startedAt = timestamp
@@ -678,7 +740,33 @@ public struct FocusRackEngine: Sendable {
         return startedAt + accumulatedPause + trajectory.delay + trajectory.duration
     }
 
+    private func maintenanceFits(at timestamp: Double) -> Bool {
+        guard enforcesTiming, safetyReadBudget > 0, let trajectory,
+            let safetyAt = context?.safetyTimestamp
+        else { return true }
+        let finish = startedAt + accumulatedPause + trajectory.delay + trajectory.duration
+        if max(timestamp, finish) + safetyReadBudget < safetyAt + 2 { return true }
+        let fallback = commandTimings.values.map(\.longest).max() ?? 0
+        for index in nextStep..<max(nextStep, trajectory.offsets.count - 1) {
+            let cost = commandTimings[abs(trajectory.chunks[index])]?.longest ?? fallback
+            let gap = trajectory.offsets[index + 1] - trajectory.offsets[index]
+            if cost + configuration.commandInterval + safetyReadBudget > gap + 1e-9 {
+                return false
+            }
+        }
+        return true
+    }
+
+    // This deadline stays in the original epoch across polling and acknowledged pauses.
+    var nextCommandDeadline: Double? {
+        guard enforcesTiming, let trajectory, !pauseRequested, pausedAt == nil,
+            !stopRequested, inFlight == nil
+        else { return nil }
+        return startedAt + accumulatedPause + trajectory.offsets[nextStep]
+    }
+
     mutating func recordSafetyRead(startedAt: Double, finishedAt: Double, accepted: Bool) {
+        safetyReadBudget = max(0.1, safetyReadBudget, finishedAt - startedAt)
         append(
             "safetyRead", at: finishedAt, scheduledAt: startedAt,
             note: "elapsed=\(finishedAt - startedAt) accepted=\(accepted)")
@@ -716,6 +804,7 @@ public struct FocusRackEngine: Sendable {
     }
 
     private mutating func clearMarks(at timestamp: Double) {
+        clearCalibration()
         activeNudge = nil
         marks = []
         nextStep = 0
@@ -813,6 +902,7 @@ public struct FocusRackEngine: Sendable {
         caps.canGoToB =
             idle && ready && marks.contains { $0.id == "B" && $0.stepPosition != position }
         state.capabilities = caps
+        state.calibration = calibrationAction(ready: ready, idle: idle)
         var admissionInstruction: String?
         if let from = marks.first(where: { $0.id == state.transition.fromMark }),
             let to = marks.first(where: { $0.id == state.transition.toMark })
@@ -823,9 +913,15 @@ public struct FocusRackEngine: Sendable {
                     duration: state.transition.duration, delay: state.transition.delay,
                     easing: state.transition.easing, quiet: configuration.commandInterval,
                     timings: commandTimings, adaptive: adaptive,
-                    timed: true, grouped: true, profile: profile)
+                    timed: true, grouped: true, profile: profile,
+                    safetyReadBudget: safetyReadBudget,
+                    calibrationComplete: calibrationTrips == FocusRackPlanner.calibrationQuanta
+                        .count * 2)
                 state.minimumDuration = focusRackMinimumForDisplay(plan.minimumDuration)
                 state.maximumDuration = plan.maximumDuration
+            } catch FocusRackError.fineCalibrationRequired {
+                state.admissionMessage = FocusRackError.fineCalibrationRequired.localizedDescription
+                admissionInstruction = "Calibrate in Options"
             } catch FocusRackError.calibrationRequired {
                 state.admissionMessage = FocusRackError.calibrationRequired.localizedDescription
                 admissionInstruction = "Go to A or B first"
@@ -911,6 +1007,29 @@ public struct FocusRackEngine: Sendable {
         state.message = state.message.replacingOccurrences(
             of: "before testing.", with: "to use Focus Rack.")
         return state
+    }
+
+    private func calibrationAction(ready: Bool, idle: Bool) -> FocusRackPrimaryAction? {
+        guard profile == .calibratedFineExperiment, marks.count == 2,
+            abs(marks[1].stepPosition - marks[0].stepPosition) == 100
+        else { return nil }
+        let total = FocusRackPlanner.calibrationQuanta.count * 2
+        guard calibrationTrips < total else {
+            return .init(title: "Calibration measured", detail: "All 5 sizes in both directions")
+        }
+        let origin = calibrationOrigin ?? marks.first(where: { $0.stepPosition == position })?.id
+        let expected = calibrationTrips % 2 == 0 ? origin : (origin == "A" ? "B" : "A")
+        let target = expected.map { $0 == "A" ? "B" : "A" }
+        let atStart = marks.contains { $0.id == expected && $0.stepPosition == position }
+        let pulses =
+            FocusRackPlanner.calibrationQuanta[calibrationTrips / 2] * configuration.pulsesPerStep
+        return .init(
+            kind: "calibrate", title: target.map { "Calibrate to " + $0 } ?? "Calibrate increments",
+            enabled: ready && idle && atStart,
+            detail: "\(pulses)-pulse increments · \(calibrationTrips + 1)/\(total)",
+            disabledReason: !atStart
+                ? expected.map { "Go to " + $0 + " first" } ?? "Go to A or B first"
+                : !ready ? "Camera not ready" : nil)
     }
 
     private var currentConfiguration: FocusRackConfiguration {

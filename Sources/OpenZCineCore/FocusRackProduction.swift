@@ -121,6 +121,8 @@ public struct FocusRackState: Codable, Sendable {
     public var busy = false
     /// Active setup progress; absent for other moves, settled nudges and older state snapshots.
     public var nudgeProgress: FocusRackNudgeProgress?
+    /// Next explicit calibration traversal; absent outside the local measured-size trial.
+    public var calibration: FocusRackPrimaryAction?
     public var referenceValid = true
     public var minimumDuration: Double?
     public var maximumDuration: Double?
@@ -273,6 +275,8 @@ public enum FocusRackIntent: Codable, Sendable {
     case capture(markID: String, expectedFrameSequence: Int64)
     case nudge(towardNear: Bool, steps: Int)
     case goTo(markID: String)
+    /// Starts exactly one explicitly requested finer-increment calibration traversal.
+    case calibrate
     /// Starts a duration-based pull in one atomic intent, without implicit repositioning.
     case run(direction: FocusRackDirection)
     case setTransition(FocusRackTransition)

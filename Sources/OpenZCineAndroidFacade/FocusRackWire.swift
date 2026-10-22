@@ -20,7 +20,7 @@ public final class FocusRackWire: @unchecked Sendable {
         if let access { driver = access } else { driver = UnavailableDriver() }
         return register(
             driver: driver, authority: authority, templatesJSON: templatesJSON,
-            profile: .tenBy160Experiment)
+            profile: .calibratedFineExperiment)
     }
 
     // A fake driver exercises the actual wire and runner in host tests without a camera or JNI.
@@ -205,6 +205,7 @@ public final class FocusRackWire: @unchecked Sendable {
             case "nudge":
                 intent = .nudge(towardNear: request.towardNear ?? false, steps: request.steps ?? 1)
             case "goTo": intent = .goTo(markID: request.markID ?? "")
+            case "calibrate": intent = .calibrate
             case "run":
                 guard let direction = request.direction else {
                     throw FocusRackError.invalidConfiguration

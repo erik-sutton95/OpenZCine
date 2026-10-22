@@ -134,7 +134,7 @@ struct FocusRackPendingCapture {
         else { return }
         let controller = FocusRackController(
             driver: access, transition: state?.transition ?? .init(),
-            profile: .tenBy160Experiment)
+            profile: .calibratedFineExperiment)
         self.controller = controller
         stateTask = Task { [weak self] in
             let states = await controller.states()
@@ -284,6 +284,7 @@ struct FocusRackPendingCapture {
     }
     func openFocusSettings() { model?.showPicker(.focus) }
     func goTo(_ mark: String) { send(.goTo(markID: mark)) }
+    func calibrate() { send(.calibrate) }
     func reset() {
         clearPendingCapture()
         send(.reset)

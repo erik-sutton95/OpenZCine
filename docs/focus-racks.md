@@ -92,14 +92,24 @@ with matching focus in native-size source crops. This is one diagnostic result; 
 covered by deterministic tests, and production-phone timing, repeatability and other setups remain
 unqualified. Rehearse the actual lens, zoom and marks before recording a take.
 
-The current local, unqualified phone trial selects ten equal 160-pulse commands only for a
-100-unit, one-second Linear timed pull. It requires measured 160-pulse timing first: explicit
-Go to A/B over that span uses the same ten confirmed commands, while setup nudges remain fine.
-Timed playback refuses until that size is measured or when its worst observed cost does not fit;
-it never substitutes a larger profile for this trial. Other spans and durations retain
-the adaptive policy. In one iPhone USB round trip at 70mm/f2.8, the operator reported sharp
-endpoints and preferred the source-recorded smoothness over the baseline. Repeated returns and
-other lens/transport combinations remain unqualified.
+The earlier local ten160 trial remains a preserved checkpoint. A later source recording showed
+visible stepping despite regular one-second command timing, and periodic camera reads delayed
+longer pulls. It is not qualified as optically smooth.
+
+The current local comparison uses explicit finer-increment calibration under **Options** for
+A/B marks exactly 100 units apart. First use Go to A/B to measure the 160-pulse baseline. Then
+tap **Calibrate to A/B** once per traversal: 32, 48, 64, 96 and 128 pulses, each in both directions.
+Each tap moves only to the other mark; a partial, stopped or failed traversal does not complete
+that stage. Reset, mark replacement and a confirmed setup change restart calibration. Idle
+inactivity preserves completed stages. Calibration and marks are not persisted across sessions.
+
+After calibration, Linear playback selects the finest measured size that fits the duration.
+Measured worst command costs are retained. Longer pulls also reserve the worst measured camera
+read cost between commands; periodic reads start only when that budget fits before the next
+command deadline. The two-second evidence freshness limit, native completion, no-overlap and
+Stop priority remain in force. Preflight or later timing growth can refuse/stop a plan; it never
+replans into a catch-up burst. Admission and regular host timing do not establish optical smoothness.
+Other spans and timing modes keep the existing adaptive policy.
 
 Old timing templates still decode. The new direct playback actions always use the displayed duration
 and delay, including when a template retains the legacy Fastest mode internally. Fast repositioning

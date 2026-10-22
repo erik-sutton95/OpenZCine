@@ -810,6 +810,10 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
         $0.kind == "safetyRead" && ($0.scheduledAt ?? 0) > start && $0.timestamp < end
     }
     #expect(duration == 1 ? midPullReads.isEmpty : !midPullReads.isEmpty)
+    for read in midPullReads {
+        let next = try #require(commands.first { ($0.scheduledAt ?? 0) > (read.scheduledAt ?? 0) })
+        #expect(read.timestamp <= (next.scheduledAt ?? 0) + 1e-9)
+    }
     #expect(!trace.events.contains { $0.kind == "invalidated" || $0.kind == "missedDeadline" })
     await controller.close()
 }

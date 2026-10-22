@@ -572,6 +572,26 @@ struct FocusRackView: View {
                     )
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
                     .fixedSize(horizontal: false, vertical: true)
+                    if let calibration = state.calibration {
+                        Button {
+                            rack.calibrate()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(calibration.title).font(.system(size: 12, weight: .semibold))
+                                if let detail = calibration.detail {
+                                    Text(detail).font(.system(size: 11))
+                                }
+                            }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!calibration.enabled || state.busy)
+                        .accessibilityIdentifier("focusRack.calibrate")
+                        Text("Each tap measures one move between A and B.")
+                            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     HStack(spacing: 8) {
                         ForEach(state.program.marks, id: \.id) { mark in
                             Button("Replace " + mark.id) { rack.capture(mark.id) }

@@ -631,3 +631,147 @@ func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome:
     engine.complete(runID: action.runID, commandID: 0, outcome: 0, at: now + 0.01)
     #expect(engine.state(at: now).stepPosition == (outcome == 0 ? 10 : nil))
 }
+
+@Test func rackFineCalibrationMeasuresExactTripsBeforeTimedPlayback() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    let marks = engine.currentProgram.marks
+    #expect(throws: FocusRackError.fineCalibrationRequired) {
+        try engine.run(direction: .aToB, at: now)
+    }
+    engine.recordSafetyRead(startedAt: now - 0.08, finishedAt: now, accepted: true)
+    for (stage, quantum) in [2, 2, 3, 3, 4, 4, 6, 6, 8, 8].enumerated() {
+        let state = engine.state(at: now)
+        #expect(state.calibration?.enabled == true)
+        #expect(state.calibration?.detail == "\(quantum * 16)-pulse increments · \(stage + 1)/10")
+        try engine.calibrate(at: now)
+        #expect(engine.state(at: now).calibration?.enabled == false)
+        let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+        let sign = stage.isMultiple(of: 2) ? 1 : -1
+        let expected =
+            Array(repeating: sign * quantum * 16, count: 100 / quantum)
+            + (100 % quantum == 0 ? [] : [sign * (100 % quantum) * 16])
+        #expect(pulses == expected)
+        #expect(pulses.reduce(0, +) == sign * 1_600)
+        #expect(engine.state(at: now).stepPosition == (sign == 1 ? 100 : 0))
+        #expect(engine.currentProgram.marks == marks)
+    }
+    #expect(engine.state(at: now).calibration?.title == "Calibration measured")
+    #expect(engine.state(at: now).calibration?.enabled == false)
+    for (duration, quantum) in [(1.0, 8), (3.0, 6), (5.0, 4)] {
+        try engine.setTransition(.init(duration: duration), at: now)
+        try engine.run(direction: .aToB, at: now)
+        let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+        #expect(pulses.first == quantum * 16)
+        #expect(pulses.reduce(0, +) == 1_600)
+        #expect(engine.state(at: now).phase == .complete)
+        try engine.seek(markID: "A", at: now)
+        #expect(try settleAdaptive(&engine, now: &now).allSatisfy { $0 == -160 })
+    }
+}
+
+@Test func rackFineCalibrationDoesNotCreditCancelledOrWrongDirectionTrips() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    try engine.calibrate(at: now)
+    let first = engine.nextAction(at: now)
+    engine.requestStop(at: now + 0.001)
+    now += 0.06
+    engine.complete(runID: first.runID, commandID: 0, outcome: 0, at: now)
+    #expect(engine.state(at: now).stepPosition == 2)
+    #expect(engine.state(at: now).calibration?.detail == "32-pulse increments · 1/10")
+    #expect(engine.state(at: now).calibration?.enabled == false)
+    engine.observe(adaptiveContext(now), at: now)
+    try engine.seek(markID: "A", at: now)
+    try settleAdaptive(&engine, now: &now)
+    try engine.calibrate(at: now)
+    try settleAdaptive(&engine, now: &now)
+    #expect(engine.state(at: now).calibration?.detail == "32-pulse increments · 2/10")
+    try engine.seek(markID: "A", at: now)
+    try settleAdaptive(&engine, now: &now)
+    #expect(engine.state(at: now).calibration?.enabled == false)
+    #expect(throws: FocusRackError.notAtStart) { try engine.calibrate(at: now) }
+    try engine.seek(markID: "B", at: now)
+    try settleAdaptive(&engine, now: &now)
+    try engine.calibrate(at: now)
+    try settleAdaptive(&engine, now: &now)
+    #expect(engine.state(at: now).calibration?.detail == "48-pulse increments · 3/10")
+    try engine.capture(markID: "A", at: now)
+    #expect(engine.state(at: now).calibration?.detail == "32-pulse increments · 1/10")
+}
+
+@Test(arguments: [1.0, 3.0, 5.0])
+func rackMeasuredFinePlanningRetainsWorstCostsAndReservesSafetySlots(duration: Double) throws {
+    let timings = [
+        1: timing(0.210), 2: timing(0.06), 3: timing(0.06), 4: timing(0.06),
+        6: timing(0.06), 8: timing(0.06), 10: timing(0.09),
+    ]
+    for sign in [-1, 1] {
+        let plan = try FocusRackPlanner.make(
+            signedSteps: sign * 100, duration: duration, delay: 0, easing: .linear,
+            quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
+            profile: .calibratedFineExperiment, safetyReadBudget: 0.1,
+            calibrationComplete: true)
+        #expect(plan.chunks.reduce(0, +) == sign * 100)
+        let maintenance = duration == 1 ? 0.0 : 0.1
+        for index in 0..<(plan.chunks.count - 1) {
+            let gap = plan.offsets[index + 1] - plan.offsets[index]
+            #expect(gap + 1e-9 >= (timings[abs(plan.chunks[index])]?.longest ?? 0) + maintenance)
+            #expect(gap <= FocusRackPlanner.maximumFineSpacing + 1e-9)
+        }
+        #expect(
+            (plan.offsets.last ?? 0) + (timings[abs(plan.chunks.last ?? 0)]?.longest ?? 0)
+                == duration)
+    }
+    #expect(timings[1]?.longest == 0.210)
+}
+
+@Test(arguments: [false, true])
+func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100)
+    engine.recordSafetyRead(startedAt: now - 0.05, finishedAt: now, accepted: true)
+    try engine.setTransition(.init(duration: 3), at: now)
+    try engine.run(direction: .aToB, at: now)
+    if afterFirstCommand {
+        let first = engine.nextAction(at: now)
+        #expect(first.kind == "drive")
+        now += 0.02
+        engine.complete(runID: first.runID, commandID: 0, outcome: 0, at: now)
+    } else {
+        engine.finishPreflight(runID: engine.state(at: now).runID, at: now)
+    }
+    let acknowledged = engine.state(at: now).stepPosition
+    engine.recordSafetyRead(startedAt: now - 0.3, finishedAt: now, accepted: true)
+    if afterFirstCommand { now += 0.25 }
+    engine.observe(adaptiveContext(now), at: now)
+    #expect(engine.nextAction(at: now).kind == "idle")
+    #expect(engine.state(at: now).phase == .failed)
+    #expect(engine.state(at: now).stepPosition == acknowledged)
+    #expect(engine.state(at: now).referenceValid)
+    #expect(
+        engine.snapshot(at: now, includeEvents: true).events.last?.kind
+            == "maintenanceBudgetExceeded")
+}
+
+@Test func rackCountdownRefreshCanKeepAOneSecondFinePullWithinFreshEvidence() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
+    for _ in 0..<10 {
+        try engine.calibrate(at: now)
+        try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+    }
+    engine.recordSafetyRead(startedAt: now - 0.05, finishedAt: now, accepted: true)
+    try engine.setTransition(.init(duration: 1, delay: 2), at: now)
+    try engine.run(direction: .aToB, at: now)
+    let started = now
+    #expect(engine.nextAction(at: now).kind == "wait")
+    for elapsed in [1.0, 1.9] {
+        now = started + elapsed
+        engine.recordSafetyRead(startedAt: now - 0.05, finishedAt: now, accepted: true)
+        engine.observe(adaptiveContext(now), at: now)
+        #expect(engine.nextAction(at: now).kind == "wait")
+        #expect(engine.state(at: now).stepPosition == 0)
+    }
+    now = started + 2
+    engine.observe(adaptiveContext(now), at: now)
+    let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+    #expect(pulses.reduce(0, +) == 1_600)
+    #expect(engine.state(at: now).phase == .complete)
+}
