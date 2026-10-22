@@ -216,10 +216,13 @@ private final class RackFakeCamera: @unchecked Sendable {
     private var holdsSafety = false
     private var safetyContinuation: CheckedContinuation<Void, Never>?
     private var sleeps = 0
+    private var manualSleeps = false
+    private var sleepContinuation: CheckedContinuation<Void, Never>?
 
     var readCount: Int { lock.withLock { reads } }
     var driveCount: Int { lock.withLock { drives.count } }
     var stopCount: Int { lock.withLock { stops.count } }
+    var isSleeping: Bool { lock.withLock { sleepContinuation != nil } }
     var isPreparing: Bool { prepareCondition.withLock { insidePrepare } }
 
     // Unrelated CPU-heavy tests must not age this synthetic camera's accepted frames.
@@ -232,9 +235,32 @@ private final class RackFakeCamera: @unchecked Sendable {
                 }
             },
             sleep: { [self] _ in
-                lock.withLock { sleeps += 1 }
-                try await Task.sleep(for: .milliseconds(1))
+                if lock.withLock({ manualSleeps }) {
+                    await withCheckedContinuation { pending in
+                        let held = lock.withLock {
+                            sleeps += 1
+                            if manualSleeps { sleepContinuation = pending }
+                            return manualSleeps
+                        }
+                        if !held { pending.resume() }
+                    }
+                    try Task.checkCancellation()
+                } else {
+                    lock.withLock { sleeps += 1 }
+                    try await Task.sleep(for: .milliseconds(1))
+                }
             })
+    }
+
+    func useManualSleeps() { lock.withLock { manualSleeps = true } }
+    func finishManualSleeps() {
+        let pending = lock.withLock {
+            manualSleeps = false
+            let pending = sleepContinuation
+            sleepContinuation = nil
+            return pending
+        }
+        pending?.resume()
     }
 
     func holdNextSafetyRead(latency: Double = 0) {
@@ -254,10 +280,14 @@ private final class RackFakeCamera: @unchecked Sendable {
     }
     func setSafetyLatency(_ seconds: Double) { lock.withLock { safetyLatency = seconds } }
     func advanceClockBeforeNextSleep(_ seconds: Double) -> Int {
-        lock.withLock {
+        let (count, pending) = lock.withLock {
             instant += seconds
-            return sleeps
+            let pending = sleepContinuation
+            sleepContinuation = nil
+            return (sleeps, pending)
         }
+        pending?.resume()
+        return count
     }
     func slept(after count: Int) -> Bool { lock.withLock { sleeps > count } }
     private func waitForSafety() async {
@@ -799,9 +829,16 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
         observation: cameraObservation(sequence))
     try await controller.handle(.updateTiming(.init(duration: duration, delay: 0, easing: .linear)))
     camera.setSafetyLatency(0.05)
+    camera.useManualSleeps()
+    defer { camera.finishManualSleeps() }
+    try await waitForRack { camera.isSleeping }
     let reads = camera.readCount
+    let drives = camera.driveCount
     try await controller.handle(.run(direction: .bToA))
-    try await waitForRack { camera.readCount > reads }
+    _ = camera.advanceClockBeforeNextSleep(0)
+    try await waitForRack {
+        camera.readCount > reads && camera.driveCount > drives && camera.isSleeping
+    }
     for _ in 0..<250 {
         if !(await controller.snapshot()).busy { break }
         let sleep = camera.advanceClockBeforeNextSleep(0.05)
@@ -829,6 +866,7 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
         #expect(read.timestamp <= (next.scheduledAt ?? 0) + 1e-9)
     }
     #expect(!trace.events.contains { $0.kind == "invalidated" || $0.kind == "missedDeadline" })
+    camera.finishManualSleeps()
     await controller.close()
 }
 
