@@ -877,3 +877,60 @@ func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) 
     #expect(engine.state(at: now).busy)
     #expect(engine.state(at: now).runID != run)
 }
+
+@Test(arguments: [8, 106])
+func rackFineCalibrationUsesTheActualSharpMarkSpan(span: Int) throws {
+    var (engine, now) = try adaptiveEngineWithMarks(
+        span, profile: .calibratedFineExperiment, seekToA: false)
+    let marks = engine.currentProgram.marks
+    engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
+    for (stage, quantum) in [2, 2, 3, 3, 4, 4, 6, 6, 8, 8].enumerated() {
+        #expect(engine.state(at: now).calibration?.enabled == true)
+        try engine.calibrate(at: now)
+        let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+        let sign = stage.isMultiple(of: 2) ? -1 : 1
+        let expected =
+            Array(repeating: sign * quantum * 16, count: span / quantum)
+            + (span % quantum == 0 ? [] : [sign * (span % quantum) * 16])
+        #expect(pulses == expected)
+        #expect(pulses.contains(sign * quantum * 16))
+        #expect(pulses.reduce(0, +) == sign * span * 16)
+        #expect(engine.state(at: now).stepPosition == (sign == 1 ? span : 0))
+        #expect(engine.currentProgram.marks == marks)
+    }
+    #expect(engine.state(at: now).calibration?.title == "Calibration measured")
+    guard span == 106 else { return }
+    for (duration, quantum) in [(1.0, 8), (3.0, 6), (5.0, 4)] {
+        try engine.setTransition(.init(duration: duration), at: now)
+        for direction in [FocusRackDirection.bToA, .aToB] {
+            try engine.run(direction: direction, at: now)
+            let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
+            let sign = direction == .aToB ? 1 : -1
+            #expect(pulses.first == sign * quantum * 16)
+            #expect(pulses.reduce(0, +) == sign * 1_696)
+            #expect(engine.state(at: now).phase == .complete)
+            #expect(engine.currentProgram.marks == marks)
+        }
+    }
+}
+
+@Test func rackCalibrationCannotClaimAQuantumLargerThanItsMarkSpan() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(7, profile: .calibratedFineExperiment)
+    #expect(engine.state(at: now).calibration == nil)
+    #expect(throws: FocusRackError.referenceUnavailable) { try engine.calibrate(at: now) }
+}
+
+@Test func rackNonHundredUnitPlansStillRequireMeasuredResidualCommands() throws {
+    var timings = [1: timing(0.06), 8: timing(0.068), 10: timing(0.06)]
+    func plan() throws -> FocusRackMovementPlan {
+        try FocusRackPlanner.make(
+            signedSteps: 106, duration: 1, delay: 0, easing: .linear,
+            quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
+            profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+    }
+    #expect(throws: FocusRackError.self) { try plan() }
+    timings[2] = timing(0.06)
+    #expect(try plan().chunks == Array(repeating: 8, count: 13) + [2])
+    timings[2] = timing(0.128)
+    #expect(throws: FocusRackError.self) { try plan() }
+}

@@ -362,7 +362,8 @@ public struct FocusRackEngine: Sendable {
     public mutating func calibrate(at timestamp: Double) throws {
         try requireReady(at: timestamp)
         guard profile == .calibratedFineExperiment, marks.count == 2,
-            abs(marks[1].stepPosition - marks[0].stepPosition) == 100,
+            FocusRackPlanner.supportsCalibration(
+                span: abs(marks[1].stepPosition - marks[0].stepPosition)),
             calibrationTrips < FocusRackPlanner.calibrationQuanta.count * 2,
             let current = marks.first(where: { $0.stepPosition == position })
         else { throw FocusRackError.referenceUnavailable }
@@ -1032,7 +1033,8 @@ public struct FocusRackEngine: Sendable {
 
     private func calibrationAction(ready: Bool, idle: Bool) -> FocusRackPrimaryAction? {
         guard profile == .calibratedFineExperiment, marks.count == 2,
-            abs(marks[1].stepPosition - marks[0].stepPosition) == 100
+            FocusRackPlanner.supportsCalibration(
+                span: abs(marks[1].stepPosition - marks[0].stepPosition))
         else { return nil }
         let total = FocusRackPlanner.calibrationQuanta.count * 2
         guard calibrationTrips < total else {

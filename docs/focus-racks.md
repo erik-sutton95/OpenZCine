@@ -64,6 +64,12 @@ in source recordings. Some durations can remain unsupported between the availabl
 It is an experimental scheduling policy, not a measured lens encoder or a guarantee of optical
 smoothness. Very close marks may still require finer movement than the tested base increment.
 
+The local finer-increment trial offers optional **Calibrate increments** under Options. It measures
+all five finer sizes in both directions over the actual A/B span, including exact residual commands.
+Marks need enough separation for every calibration size: at least eight mark units. They do not
+need to be exactly 100 units apart. Timed playback still requires measured costs for every command
+size and residual it selects, and calibration does not guarantee that a requested duration will fit.
+
 The local production controller opts into 5ms early Busy polling, with no extra quiet time after
 native Ready confirmation. Ordinary camera focus and other SDK consumers retain their existing
 cadence. A full safety preflight finishes before timed playback starts its delay/pull clock.

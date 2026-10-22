@@ -35,6 +35,11 @@ enum FocusRackPlanner {
     // rejects sparse long moves; it is not a guarantee of optical smoothness on another lens.
     static let maximumFineSpacing = 24.0 / 93.0
 
+    // Every stage must deliver its actual quantum inside the bounded mark-to-mark move.
+    static func supportsCalibration(span: Int) -> Bool {
+        span <= 10_000 && calibrationQuanta.allSatisfy { $0 <= span }
+    }
+
     static func make(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
         quiet: Double, timings: [Int: FocusRackCommandTiming], adaptive: Bool,
@@ -49,7 +54,8 @@ enum FocusRackPlanner {
         let sign = signedSteps < 0 ? -1 : 1
         let count = abs(signedSteps)
         if let calibrationQuantum {
-            guard !timed, grouped, profile == .calibratedFineExperiment, count == 100,
+            guard !timed, grouped, profile == .calibratedFineExperiment,
+                supportsCalibration(span: count),
                 calibrationQuanta.contains(calibrationQuantum)
             else { throw FocusRackError.invalidConfiguration }
         }
@@ -73,7 +79,7 @@ enum FocusRackPlanner {
         }
         if adaptive, grouped, count > 1 {
             let quanta: [Int]
-            if profile == .calibratedFineExperiment, count == 100, easing == .linear {
+            if profile == .calibratedFineExperiment, easing == .linear {
                 quanta = [1] + calibrationQuanta + [10]
             } else if profile == .tenBy160Experiment, count == 100, duration == 1, easing == .linear
             {
@@ -87,7 +93,7 @@ enum FocusRackPlanner {
             return try adaptiveTimed(
                 signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
                 quiet: quiet, timings: timings, quanta: quanta, safetyReadBudget: safetyReadBudget,
-                requireMeasured: profile == .calibratedFineExperiment && count == 100
+                requireMeasured: profile == .calibratedFineExperiment
                     && easing == .linear)
         }
         let cost = timings[1]?.longest ?? 0
