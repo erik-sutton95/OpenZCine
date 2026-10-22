@@ -18,7 +18,7 @@ Fixes
 
 What to test
 
-- Rotate while connected and inspect DISP 3, the codec colour accent, portrait shots and storage, timecode frames and all camera readouts.
+- In video mode, rotate and inspect DISP 3, codec accent, timecode frames and camera readouts. Switch to Photo and check portrait shots, storage and cutout clearance.
 - Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
 - Change Quality Bias, visit Media and return, then background and return. Check the live picture and camera settings remain usable.
 - Cancel a camera Wi-Fi join and retry. With two phones, verify Take Over asks first and the first phone stops reconnecting afterward.
