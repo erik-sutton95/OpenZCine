@@ -89,6 +89,23 @@ public struct FocusRackCapabilities: Codable, Equatable, Sendable {
     public init() {}
 }
 
+/// A setup nudge identified by the operator's original intent and acknowledged movement only.
+public struct FocusRackNudgeProgress: Codable, Equatable, Sendable {
+    /// Whether the active setup control moves focus toward near.
+    public let towardNear: Bool
+    /// Number of fine increments requested by the pressed control.
+    public let steps: Int
+    /// Whole-number percentage of acknowledged increments, independent of elapsed time.
+    public let percent: Int
+
+    /// Creates presentation metadata from the shared completed-movement ledger.
+    public init(towardNear: Bool, steps: Int, percent: Int) {
+        self.towardNear = towardNear
+        self.steps = steps
+        self.percent = percent
+    }
+}
+
 /// Codable production state. Marks, captures and position remain session-local.
 public struct FocusRackState: Codable, Sendable {
     public var phase: FocusRackPhase = .idle
@@ -102,6 +119,8 @@ public struct FocusRackState: Codable, Sendable {
     public var completedSteps = 0
     public var totalSteps = 0
     public var busy = false
+    /// Active setup progress; absent for other moves, settled nudges and older state snapshots.
+    public var nudgeProgress: FocusRackNudgeProgress?
     public var referenceValid = true
     public var minimumDuration: Double?
     public var maximumDuration: Double?

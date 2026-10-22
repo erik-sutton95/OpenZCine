@@ -122,7 +122,7 @@ public actor FocusRackController {
         self.stopNative = driver.requestStop
         self.clock = clock
         var configuration = FocusRackEngine.productionConfiguration
-        configuration.transition = transition
+        configuration.transition = Self.linearTransition(transition)
         // The fixed quantum and quiet interval satisfy the engine constructor's invariants.
         guard
             let engine = try? FocusRackEngine(
@@ -247,10 +247,11 @@ public actor FocusRackController {
         case .nudge(let near, let steps): try engine.nudge(towardNear: near, steps: steps, at: now)
         case .goTo(let mark): try engine.seek(markID: mark, at: now)
         case .run(let direction): try engine.run(direction: direction, at: now)
-        case .setTransition(let transition): try engine.setTransition(transition, at: now)
+        case .setTransition(let transition):
+            try engine.setTransition(Self.linearTransition(transition), at: now)
         case .updateTiming(let update):
             let transition = try engine.currentProgram.transitions[0].applying(update)
-            try engine.setTransition(transition, at: now)
+            try engine.setTransition(Self.linearTransition(transition), at: now)
         case .setDirection(let direction):
             var transition = engine.currentProgram.transitions[0]
             transition.fromMark = direction == .aToB ? "A" : "B"
@@ -262,7 +263,10 @@ public actor FocusRackController {
         case .stop: engine.requestStop(at: now)
         case .reset: try engine.reset(at: now)
         case .discardMarks: try engine.discardMarks(at: now)
-        case .applyTemplate(let template): try engine.applyTemplate(template, at: now)
+        case .applyTemplate(let template):
+            try engine.applyTemplate(
+                .init(name: template.name, transition: Self.linearTransition(template.transition)),
+                at: now)
         case .externalFocusAction:
             safety = nil
             safetyAt = nil
@@ -281,6 +285,12 @@ public actor FocusRackController {
             default: throw FocusRackError.invalidConfiguration
             }
         }
+    }
+
+    private static func linearTransition(_ transition: FocusRackTransition) -> FocusRackTransition {
+        var transition = transition
+        transition.easing = .linear
+        return transition
     }
 
     private func accept(_ value: FocusRackObservation) {
