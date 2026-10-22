@@ -6,6 +6,42 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+This beta is a parity and reliability update built on the shared OpenCine
+foundation. Camera setup, monitor chrome, settings, View Assist, media and
+playback share more components and behavior across the OpenCapture apps while
+retaining Nikon's stills, video and Multicam controls.
+
+### Parity and reliability update
+
+- Shared setup, settings, assist and media components keep iOS and Android
+  behavior aligned. Landscape groups colour with codec and puts the accent on
+  codec; portrait keeps shots, storage and link indicators clear of the cutout.
+- DISP 3 uses the live surface's REC chip, hero timecode and setting tiles, with
+  tap-to-edit and hold-to-reorder controls. It is available in video mode.
+- Instant review uses embedded RAW previews, appears sooner across exposure
+  modes and turns RAW+JPEG previews sharp. A tap in continuous drive takes one
+  frame; a hold starts the burst.
+- Photo mode disables the video LUT and video mode restores it. Shots remaining
+  and app-triggered captures follow the stills card.
+- The GYRO pill does not cover the lock, logging starts only in video mode, and
+  tap-to-focus during a focus drive no longer leaves the camera busy.
+- iOS readouts and frame timecode survive warm Live View restarts and Quality
+  Bias changes. Recovery preserves the camera's photo/video mode.
+- Saved-camera connections can wake an unseen body. Take-over asks first,
+  explicit Wi-Fi retries ask again, and abandoned setup work is cancelled.
+- Media sharing keeps photo options separate from video export and completes
+  pending copies before sharing. Playback stays paused after app return.
+- iOS improves shutter VoiceOver wording, hides collapsed assist controls from
+  accessibility and requests Local Network access at the setup permission step.
+- Android restores pairing guards and can save the watcher passcode without a
+  connected camera. Phone and Wear OS remain part of the same release train.
+- Shared diagnostics distinguish transport, decoding and display incidents for
+  investigating dropouts without claiming every dropout has been eliminated.
+
+The final camera/device walkthrough, including stills review, continuous drive,
+connection recovery and supported cable/capture paths, remains required before
+the next external beta.
+
 ### Added
 
 - DISP 3 (the command dashboard) returns in the shared live view's style on iOS and Android: the

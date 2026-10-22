@@ -1,27 +1,25 @@
 New and changed
 
-- DISP 3 (the command dashboard) is back in the live view's style: the REC chip heads it, with a large timecode when the camera runs timecode, and the tiles are larger. Tap a tile to change it; hold and drag to reorder.
-- Instant review of a RAW photo shows the preview the camera stores inside the file, without downloading the whole RAW.
-- In portrait, the large format readout now lines up exactly with the clock at the top of the screen.
-- Connecting to a saved Wi-Fi camera that the camera list cannot see now wakes it first, and reports that it is not on the network if it stays silent.
-- Connecting to a camera another phone is using now asks before taking it over; the other phone then shows Camera taken over instead of reconnecting.
-- If the live picture's decoder fails, the picture recovers at the next keyframe instead of staying frozen.
+- A more consistent OpenCine interface brings camera setup, settings, View Assist and media controls closer together across the apps.
+- DISP 3 returns with a REC chip, large camera timecode and larger setting tiles. Tap to change a setting; hold and drag to reorder.
+- In landscape, the colour profile sits beside the codec. Portrait readouts keep their rounded card-space values clear of the screen cutout.
+- Instant review reads the preview stored inside RAW photos. Connection diagnostics distinguish incoming video, decoding and display interruptions.
 
 Fixes
 
-- In Photo mode the LUT turns off again, so the stills preview shows the camera's colours. Switching back to video brings your LUT back.
-- Instant review now works for RAW-only photos, appears sooner for JPEG and RAW+JPEG in every exposure mode, and a RAW+JPEG review turns sharp instead of staying blurred. In Continuous drive (CL, CH), a quick shutter tap takes one photo, as on the camera; hold it for a burst.
-- The GYRO status pill no longer sits on the screen lock, so tapping it cannot grey out the controls. Gyro logging only arms once the camera reports video mode.
-- Tapping to focus while the focus dial is driving no longer leaves focus stuck with a camera busy message.
-- After the landscape assist palette collapses, its hidden buttons are no longer reachable with VoiceOver. A volume-button remote shutter is protected against a rare quit.
-- With two cards, the shots counter counts only the card the camera saves photos to, and photos taken from the app go to that card.
-- In Photo mode, shots left show as a picture icon and the count (for example 20.2k), so the signal indicator stays clear of the Dynamic Island in portrait; tapping SHOTS shows free card space and percentage. A camera on external power without a battery level shows EXT, and VoiceOver reads external power.
-- On a fresh install, the Local Network permission is asked for only at the permissions step of setup, not on the first screen.
+- Instant review appears sooner for RAW, JPEG and RAW+JPEG across exposure modes, and RAW+JPEG reviews turn sharp. In CL/CH, tap for one photo or hold for a burst.
+- Photo mode turns the LUT off; video restores it. Shots left follow the stills card, and app-triggered photos use that card.
+- The GYRO pill no longer covers the screen lock. Gyro logging waits for video mode, and tapping to focus during a focus pull no longer leaves it busy.
+- Live View keeps camera readouts through a warm restart or Quality Bias change. Timecode retains its frames when the camera supplies them.
+- An explicit retry asks again after a refused camera Wi-Fi join. Saved-camera connections can wake the camera and ask before taking over another phone.
+- Background recovery preserves the camera mode. An abandoned connection no longer carries on behind the setup screen.
+- Media sharing treats photos as photos and finishes a clip's copy before sharing it. Playback stays paused after leaving and returning to the app.
+- Collapsed assist controls stay hidden from VoiceOver, shutter labels describe the available action, and setup requests Local Network permission at its own step.
 
 What to test
 
-- In video, turn a LUT on, switch the camera to Photo and check the preview colours match the camera, then switch back to video and check the LUT returns.
-- Turn on instant review (PLAY). Shoot RAW, JPEG and RAW+JPEG in A, S, M and P; check each review turns sharp. In DRIVE CH, tap the shutter once (one photo) and hold it (a burst). With photos on card 2, compare shots left (picture icon and count) and where app photos land.
-- With gyro logging on, tap the GYRO pill; it opens the logs and never locks the controls. Turn the focus dial and tap a new point mid-turn; focus keeps responding.
-- Reinstall: the Local Network prompt should appear only at the permissions step. Then connect to a saved Wi-Fi camera while it is waking from power saving.
-- With two phones, connect the second to a camera the first is using. It should ask first; after Take Over, the first phone shows Camera taken over and stops reconnecting.
+- Rotate while connected and inspect DISP 3, the codec colour accent, portrait shots and storage, timecode frames and all camera readouts.
+- Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
+- Change Quality Bias, visit Media and return, then background and return. Check the live picture and camera settings remain usable.
+- Cancel a camera Wi-Fi join and retry. With two phones, verify Take Over asks first and the first phone stops reconnecting afterward.
+- If the live picture drops out, use Share Diagnostics and report the time, what you were doing and whether camera controls still responded.
