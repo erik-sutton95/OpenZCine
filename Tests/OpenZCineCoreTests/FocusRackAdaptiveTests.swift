@@ -713,7 +713,8 @@ func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome:
             profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
     }
     #expect(try plan(1).chunks == Array(repeating: 10, count: 10))
-    #expect(throws: FocusRackError.self) { try plan(3) }  // The 6-unit size needs a measured 4-unit tail.
+    // The 6-unit size needs a measured 4-unit tail.
+    #expect(throws: FocusRackError.self) { try plan(3) }
     timings[4] = timing(0.06)
     #expect(try plan(3).chunks == Array(repeating: 6, count: 16) + [4])
     #expect(try plan(5).chunks == Array(repeating: 4, count: 25))
