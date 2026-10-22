@@ -4974,7 +4974,9 @@ final class NativeAppModel {
             frameAgeSeconds: focusRackAcceptedFrameAt.map {
                 max(0, ProcessInfo.processInfo.systemUptime - $0)
             } ?? 0,
-            focusResult: liveViewFocus.map { String(describing: $0.focusResult) })
+            focusResult: liveViewFocus.map { String(describing: $0.focusResult) },
+            cameraID: cameraSession?.identity.serialNumber,
+            transport: cameraSession?.transportKind.rawValue)
     }
 
     func focusRackFrame() -> FocusRackAcceptedFrame? {

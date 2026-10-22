@@ -109,11 +109,17 @@ visible stepping despite regular one-second command timing, and periodic camera 
 longer pulls. It is not qualified as optically smooth.
 
 The current local comparison offers optional finer-increment calibration under **Options** for
-A/B marks exactly 100 units apart. Go to A/B measures the 160-pulse baseline. To measure finer sizes,
+A/B spans from 8 to 10,000 units. For a 100-unit span, Go to A/B measures the 160-pulse baseline.
+To measure finer sizes,
 tap **Calibrate to A/B** once per traversal: 32, 48, 64, 96 and 128 pulses, each in both directions.
 Each tap moves only to the other mark; a partial, stopped or failed traversal does not complete
 that stage. Reset, mark replacement and a confirmed setup change restart calibration. Idle
-inactivity preserves completed stages. Calibration and marks are not persisted across sessions.
+inactivity preserves completed stages. Marks and stage credit remain session-local. Both apps
+save acknowledged command timing maxima separately and recover them after reconnecting when the
+reported camera identity, USB/Wi-Fi transport, lens, zoom and focus configuration match fresh
+camera evidence. Recovery never restores positions, marks, readiness timestamps or control authority.
+Larger new-session command costs take precedence. Missing or incompatible identity/configuration
+keeps the saved measurements inactive; it does not authorize an unmeasured command size.
 
 Linear playback selects the finest measured size that fits the duration using currently available
 evidence, including before or during optional calibration. Completing all stages is not required.
@@ -122,7 +128,7 @@ read cost between commands; periodic reads start only when that budget fits befo
 command deadline. The two-second evidence freshness limit, native completion, no-overlap and
 Stop priority remain in force. Preflight or later timing growth can refuse/stop a plan; it never
 replans into a catch-up burst. Admission and regular host timing do not establish optical smoothness.
-Other spans and timing modes keep the existing adaptive policy.
+Other timing modes keep the existing adaptive policy.
 
 Old timing templates still decode. The new direct playback actions always use the displayed duration
 and delay, including when a template retains the legacy Fastest mode internally. Fast repositioning
@@ -166,8 +172,11 @@ Backgrounding, Command mode, loss of local control, or stale/incompatible camera
 stops scheduling without discarding acknowledged position or marks. Returning requires fresh
 camera readiness and a later real frame; movement resumes only from another explicit action.
 A confirmed lens, zoom or focus-configuration change advises you to check A and B and reset
-marks if needed. Resetting is the operator's decision. Timing measurements from the old setup
-are discarded, so timed playback may need an explicit Go to A/B calibration again.
+marks if needed. Resetting is the operator's decision. Timing measurements from an incompatible setup
+are detached from playback. Compatible saved timings can recover after a fresh readiness read,
+including after resetting or recapturing marks; calibration traversal credit is never fabricated.
+The normal preflight, two-second freshness, Stop, uncertainty and fixed-plan deadline checks still
+apply. Diagnostics include restored maxima and restoration events without camera serial numbers.
 
 An interrupted increment may have moved only part of its requested travel. If the native
 outcome cannot account for that displacement, follow the displayed Reset or Reconnect

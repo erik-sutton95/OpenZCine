@@ -86,6 +86,7 @@ struct FocusRackPendingCapture {
     @ObservationIgnored private var pendingCapture: FocusRackPendingCapture?
     @ObservationIgnored private var presentationRevision: UInt64 = 0
     @ObservationIgnored private var storesTemplates = true
+    @ObservationIgnored private var persistedCalibration: FocusRackCalibration?
     private var thumbnails: [String: Thumbnail] = [:]
     #if DEBUG
         /// Driver-free fixture evidence; real sessions never populate this list.
@@ -136,7 +137,14 @@ struct FocusRackPendingCapture {
             driver: access, transition: state?.transition ?? .init(),
             profile: .calibratedFineExperiment)
         self.controller = controller
+        let savedCalibration: FocusRackCalibration?
+        do { savedCalibration = try FocusRackCalibrationStore.load() } catch {
+            savedCalibration = nil
+            notice = "Saved focus timing measurements could not be loaded."
+        }
+        persistedCalibration = savedCalibration
         stateTask = Task { [weak self] in
+            if let savedCalibration { try? await controller.loadCalibration(savedCalibration) }
             let states = await controller.states()
             for await state in states {
                 guard let self, self.controller === controller, !Task.isCancelled else { return }
@@ -157,6 +165,17 @@ struct FocusRackPendingCapture {
                 #else
                     self.present(state)
                 #endif
+                if !state.busy, let checkpoint = await controller.calibrationCheckpoint() {
+                    guard self.controller === controller, !Task.isCancelled else { return }
+                    if checkpoint != self.persistedCalibration {
+                        do {
+                            try FocusRackCalibrationStore.save(checkpoint)
+                            self.persistedCalibration = checkpoint
+                        } catch {
+                            self.notice = "Focus timing measurements could not be saved."
+                        }
+                    }
+                }
             }
         }
         let channel = AsyncStream<FocusRackObservationDelivery>.makeStream(

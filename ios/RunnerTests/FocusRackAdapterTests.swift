@@ -98,6 +98,34 @@ struct FocusRackAdapterTests {
         #expect(!json.contains("marks"))
     }
 
+    @Test("Calibration survives storage without marks and rejects a corrupt replacement")
+    func calibrationCheckpointRoundTrip() throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("calibration.json")
+        #expect(try FocusRackCalibrationStore.load(from: url) == nil)
+        let saved = FocusRackCalibration(
+            key: .init(
+                cameraID: "synthetic-body", transport: "usb", lens: "synthetic lens",
+                focalLength: "70", focusMode: "AF-S", focusArea: "Auto", focusSubject: "Off"),
+            commandDurations: [64: 0.117, 128: 0.08])
+        try FocusRackCalibrationStore.save(saved, to: url)
+        #expect(try FocusRackCalibrationStore.load(from: url) == saved)
+        let data = try Data(contentsOf: url)
+        let json = String(decoding: data, as: UTF8.self)
+        for field in ["marks", "stepPosition", "sessionID", "frameSequence", "safetyTimestamp"] {
+            #expect(!json.contains(field))
+        }
+        let invalid = FocusRackCalibration(key: saved.key, commandDurations: [128: -1])
+        #expect(throws: (any Error).self) {
+            try FocusRackCalibrationStore.save(invalid, to: url)
+        }
+        #expect(try Data(contentsOf: url) == data)
+        try Data("invalid".utf8).write(to: url)
+        #expect(throws: (any Error).self) { try FocusRackCalibrationStore.load(from: url) }
+    }
+
     @Test("Corrupt saved timing is surfaced instead of silently replacing it")
     func corruptTimingIsReported() throws {
         let suite = "SIMULATED-focus-rack-\(UUID().uuidString)"

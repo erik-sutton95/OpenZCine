@@ -15,3 +15,19 @@ import OpenZCineCore
         defaults.set(try FocusRackTemplateCodec.encode(templates), forKey: key)
     }
 }
+
+/// Local timing evidence, stored separately from timing templates and session-local marks.
+@MainActor enum FocusRackCalibrationStore {
+    static var fileURL: URL {
+        URL.documentsDirectory.appendingPathComponent("focus-rack-calibration.json")
+    }
+
+    static func load(from url: URL = fileURL) throws -> FocusRackCalibration? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try FocusRackCalibrationCodec.decode(Data(contentsOf: url))
+    }
+
+    static func save(_ calibration: FocusRackCalibration, to url: URL = fileURL) throws {
+        try FocusRackCalibrationCodec.encode(calibration).write(to: url, options: .atomic)
+    }
+}
