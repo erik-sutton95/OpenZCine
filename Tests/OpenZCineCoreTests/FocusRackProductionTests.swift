@@ -185,7 +185,7 @@ private func productionWithMarks(delay: Double = 0) throws -> FocusRackEngine {
     #expect(engine.nextAction(at: 0.4).kind == "idle")
 }
 
-@Test func rackObservedFocusSettingChangesInvalidateArmedMarks() throws {
+@Test func rackObservedFocusSettingChangesLeaveResetToTheOperator() throws {
     for changesArea in [true, false] {
         var engine = try productionWithMarks()
         var observation = productionContext(0.5, sequence: 9)
@@ -195,8 +195,9 @@ private func productionWithMarks(delay: Double = 0) throws -> FocusRackEngine {
             observation.focusSubject = "People"
         }
         engine.observe(observation, at: 0.5)
-        #expect(!engine.state(at: 0.5).referenceValid)
-        #expect(engine.state(at: 0.5).primary.kind == "reset")
+        #expect(engine.state(at: 0.5).referenceValid)
+        #expect(engine.state(at: 0.5).capabilities.canNudge)
+        #expect(engine.state(at: 0.5).message.contains("reset marks if needed"))
     }
 }
 
@@ -441,7 +442,8 @@ func rackControllerCloseWaitsForTheNativeOutcomeWithoutLosingUncertainty(
     #expect((await controller.snapshot()).referenceValid)
     old.frameSequence = 3
     await controller.observe(old)
-    #expect(!(await controller.snapshot()).referenceValid)
+    #expect((await controller.snapshot()).referenceValid)
+    #expect(!(await controller.snapshot()).capabilities.canNudge)
     let reads = camera.readCount
     try await Task.sleep(for: .milliseconds(70))
     #expect(camera.readCount == reads)
@@ -757,8 +759,8 @@ func rackStopOrControlLossDuringHeldPreflightCannotActivateTheLens(controlLoss: 
     #expect(camera.driveCount == 2)
     #expect(camera.stopCount >= 1)
     let state = await controller.snapshot()
-    #expect(state.referenceValid == !controlLoss)
-    if !controlLoss { #expect(state.stepPosition == 2) }
+    #expect(state.referenceValid)
+    #expect(state.stepPosition == 2)
     let trace = await controller.diagnostics()
     #expect(!trace.events.contains { $0.runID == state.runID && $0.kind == "commandStarted" })
     await controller.close()
@@ -965,5 +967,102 @@ func rackNudgeProgressRemainsDuringStopSettlementWithoutCreditingUnknownMovement
     #expect(loaded.transition.duration == 6 && loaded.transition.delay == 1)
     #expect(legacy.transition.easing == .easeInOut)
     #expect(camera.driveCount == 0)
+    await controller.close()
+}
+
+@Test func rackIdleSuspensionKeepsMarksAndRevokesQueuedMovementUntilFreshResume() async throws {
+    let camera = RackFakeCamera()
+    let controller = try await controllerWithTwoMarks(camera)
+    let before = await controller.snapshot()
+    let queued = controller.makeIntentTicket()
+    controller.suspend()
+    controller.requestStop()
+    await #expect(throws: FocusRackError.referenceUnavailable) {
+        try await controller.handle(.nudge(towardNear: true, steps: 1), ticket: queued)
+    }
+    var hidden = cameraObservation(4)
+    hidden.foregroundOwner = false
+    await controller.observe(hidden)
+    let suspended = await controller.snapshot()
+    #expect(suspended.referenceValid)
+    #expect(suspended.program.marks == before.program.marks)
+    #expect(suspended.stepPosition == before.stepPosition)
+    #expect(!suspended.capabilities.canNudge)
+    let reads = camera.readCount
+    await controller.observe(cameraObservation(4))
+    try await waitForRack { camera.readCount > reads }
+    #expect(!(await controller.snapshot()).capabilities.canNudge)
+    await controller.observe(cameraObservation(5))
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    let resumed = await controller.snapshot()
+    #expect(resumed.program.marks == before.program.marks)
+    #expect(resumed.stepPosition == before.stepPosition)
+    #expect(!resumed.busy)
+    #expect(camera.driveCount == 2)
+    #expect(!resumed.message.contains("setup changed"))
+    await controller.close()
+}
+
+@Test(arguments: [NikonFocusRackDriveOutcome.complete, .cancelledReady, .cancelledUnconfirmed])
+func rackContextLossCancelsNativeMovementAndAccountsForItsActualOutcome(
+    outcome: NikonFocusRackDriveOutcome
+) async throws {
+    let camera = RackFakeCamera()
+    let controller = try await controllerWithTwoMarks(camera)
+    camera.holdNextDrive()
+    defer { camera.finish(.uncertain) }
+    try await controller.handle(.nudge(towardNear: false, steps: 10))
+    try await waitForRack { camera.driveCount == 3 }
+    let stops = camera.stopCount
+    await controller.observe(cameraObservation(5, age: 3))
+    #expect(camera.stopCount > stops)
+    #expect((await controller.snapshot()).phase == .stopping)
+    camera.finish(outcome)
+    try await waitForRack { !(await controller.snapshot()).busy }
+    let settled = await controller.snapshot()
+    #expect(settled.referenceValid == (outcome == .complete))
+    #expect(settled.stepPosition == (outcome == .complete ? 3 : nil))
+    #expect(camera.driveCount == 3)
+    await controller.close()
+}
+
+@Test func rackUnavailableObservationRevokesTicketsWithoutErasingIdleMarks() async throws {
+    let camera = RackFakeCamera()
+    let controller = try await controllerWithTwoMarks(camera)
+    let queued = controller.makeIntentTicket()
+    await controller.observe(cameraObservation(4, age: 3))
+    #expect((await controller.snapshot()).referenceValid)
+    let reads = camera.readCount
+    await controller.observe(cameraObservation(5))
+    try await waitForRack { camera.readCount > reads }
+    #expect(!(await controller.snapshot()).capabilities.canNudge)
+    await controller.observe(cameraObservation(6))
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    await #expect(throws: FocusRackError.referenceUnavailable) {
+        try await controller.handle(.nudge(towardNear: true, steps: 1), ticket: queued)
+    }
+    #expect(camera.driveCount == 2)
+    await controller.close()
+}
+
+@Test func rackPendingRevalidationCannotAdmitANewIntentBeforeTheReadReturns() async throws {
+    let camera = RackFakeCamera()
+    let controller = try await controllerWithTwoMarks(camera)
+    camera.holdNextSafetyRead()
+    let reads = camera.readCount
+    await controller.observe(cameraObservation(4, age: 3))
+    try await waitForRack { camera.readCount > reads }
+    await controller.observe(cameraObservation(5))
+    await #expect(throws: FocusRackError.referenceUnavailable) {
+        try await controller.handle(.nudge(towardNear: true, steps: 1))
+    }
+    #expect(camera.driveCount == 2)
+    camera.releaseSafetyRead()
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(!(await controller.snapshot()).capabilities.canNudge)
+    await controller.observe(cameraObservation(6))
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    #expect(!(await controller.snapshot()).busy)
+    #expect(camera.driveCount == 2)
     await controller.close()
 }

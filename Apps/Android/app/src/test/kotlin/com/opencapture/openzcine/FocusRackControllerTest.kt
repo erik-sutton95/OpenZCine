@@ -69,6 +69,22 @@ class FocusRackControllerTest {
         }
     }
 
+    @Test fun `interrupt keeps cached ownership suspended until a new observation`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        rack.observe(JSONObject().put("foregroundOwner", true))
+        rack.interrupt()
+        assertFalse(wire.requests.last().getJSONObject("observation").getBoolean("foregroundOwner"))
+        testScheduler.runCurrent()
+        val poll = wire.requests.last { it.getString("kind") == "poll" }
+        assertFalse(poll.getJSONObject("observation").getBoolean("foregroundOwner"))
+        rack.observe(JSONObject().put("foregroundOwner", true))
+        assertTrue(wire.requests.last().getJSONObject("observation").getBoolean("foregroundOwner"))
+        rack.close()
+    }
+
     @Test fun `debug completion requests and forwards the private native trace`() = runTest {
         val wire = Wire()
         val traces = mutableListOf<String>()

@@ -85,7 +85,10 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     }
     fun reset() = send("reset")
     fun externalFocus() = send("externalFocus")
-    fun interrupt() = send("interrupt")
+    fun interrupt() {
+        observation?.put("foregroundOwner", false)
+        send("interrupt")
+    }
     fun closePanel() {
         observation?.put("foregroundOwner", false)
         pendingCapture = null

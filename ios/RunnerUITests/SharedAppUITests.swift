@@ -1414,6 +1414,20 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         continueAfterFailure = false
     }
 
+    func testSetupChangeAdvisesWithoutRequiringReset() {
+        let app = launch("setupChanged")
+        XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
+        XCTAssertTrue(app.buttons["focusRack.far10"].isEnabled)
+        XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("A 0"))
+        XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("B 20"))
+        let message = app.staticTexts["focusRack.message"]
+        scrollTo(message, in: app)
+        XCTAssertTrue(message.isHittable)
+        XCTAssertEqual(message.label, "Camera setup changed. Check A and B; reset marks if needed.")
+        assertTransport(app)
+        screenshot("focus-rack-operator-owned-reset-landscape")
+    }
+
     func testExplicitActionsKeepTimingAndPanelMovementVisible() {
         let app = launch("ready")
         for id in ["A", "B"] {

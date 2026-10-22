@@ -204,8 +204,9 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
     changed.connected = false
     probe.observe(changed, at: 1.6)
     let interruptedAgain = probe.snapshot(at: 1.6, includeEvents: true)
-    #expect(interruptedAgain.stepPosition == nil)
-    #expect(interruptedAgain.events.filter { $0.kind == "invalidated" }.count == 2)
+    #expect(interruptedAgain.stepPosition == 0)
+    #expect(!interruptedAgain.canCapture)
+    #expect(interruptedAgain.events.filter { $0.kind == "invalidated" }.count == 1)
 }
 
 @Test func rackRepeatedInflightInvalidationStopsOnceAndCannotRestorePosition() throws {
@@ -343,7 +344,7 @@ func rackRepeatedInvalidationPreservesUnconfirmedNativeRecovery(outcome: Int) th
     #expect(probe.snapshot(at: 0.6).stepPosition == 3)
 }
 
-@Test func rackInvalidatesOnZoomTrackingOwnershipAndStaleFrames() throws {
+@Test func rackRetainsIdleMarksWhileUnavailableAndWarnsForKnownSetupChanges() throws {
     for kind in [
         "zoom", "tracking", "metadata", "ownership", "session", "stale", "safety", "settling",
     ] {
@@ -360,8 +361,14 @@ func rackRepeatedInvalidationPreservesUnconfirmedNativeRecovery(outcome: Int) th
         default: context.frameTimestamp = -10
         }
         probe.observe(context, at: 0.4)
-        #expect(probe.snapshot(at: 0.4).stepPosition == nil)
-        #expect(!probe.snapshot(at: 0.4).canCapture)
+        #expect(probe.snapshot(at: 0.4).marks.map(\.stepPosition) == [0, 3])
+        #expect(probe.snapshot(at: 0.4).stepPosition == (kind == "session" ? nil : 3))
+        #expect(probe.state(at: 0.4).capabilities.canNudge == (kind == "zoom"))
+        if kind == "zoom" {
+            #expect(probe.state(at: 0.4).message.contains("reset marks if needed"))
+        } else {
+            #expect(!probe.snapshot(at: 0.4).canCapture)
+        }
     }
 }
 
@@ -725,4 +732,61 @@ func rackTimingRejectsInvalidDurationsAtomically(duration: Double) throws {
     #expect(probe.snapshot(at: 0).marks.isEmpty)
     #expect(probe.nextAction(at: 0).kind == "idle")
     #expect(throws: FocusRackError.invalidConfiguration) { try probe.setTiming(at: 0) }
+}
+
+@Test func rackConfigurationWarningSurvivesExplicitMovesUntilOperatorReset() throws {
+    var engine = try probeWithMarks()
+    let original = engine.currentProgram.marks
+    var changed = rackContext(at: 0.4)
+    changed.focalLength = "100"
+    engine.observe(changed, at: 0.4)
+    #expect(engine.state(at: 0.4).capabilities.canNudge)
+    try engine.nudge(towardNear: false, at: 0.4)
+    let drive = engine.nextAction(at: 0.4)
+    #expect(drive.kind == "drive")
+    engine.complete(runID: drive.runID, commandID: 0, outcome: 0, at: 0.41)
+    changed.frameTimestamp = 0.5
+    changed.safetyTimestamp = 0.5
+    engine.observe(changed, at: 0.5)
+    try engine.capture(markID: "B", at: 0.5)
+    #expect(engine.state(at: 0.5).message.contains("reset marks if needed"))
+    #expect(engine.currentProgram.marks.first == original.first)
+    #expect(engine.state(at: 0.5).stepPosition == 4)
+    try engine.reset(at: 0.5)
+    #expect(engine.currentProgram.marks.isEmpty)
+    #expect(!engine.state(at: 0.5).message.contains("setup changed"))
+}
+
+@Test func rackMissingEvidenceDoesNotPretendThatTheSetupChanged() throws {
+    var engine = try probeWithMarks()
+    var missing = rackContext(at: 0.4)
+    missing.lens = nil
+    missing.focalLength = nil
+    missing.focusArea = nil
+    missing.focusSubject = nil
+    missing.safetyTimestamp = nil
+    engine.observe(missing, at: 0.4)
+    #expect(engine.state(at: 0.4).referenceValid)
+    #expect(!engine.state(at: 0.4).capabilities.canNudge)
+    engine.observe(rackContext(at: 0.5), at: 0.5)
+    #expect(engine.state(at: 0.5).capabilities.canNudge)
+    #expect(!engine.state(at: 0.5).message.contains("setup changed"))
+}
+
+@Test func rackReadinessBarrierGatesAllMovementWithoutDiscardingMarks() throws {
+    var engine = try probeWithMarks()
+    engine.requireReadinessFrame(at: 0.4)
+    engine.observe(rackContext(at: 0.4), at: 0.4)
+    let waiting = engine.state(at: 0.4)
+    #expect(waiting.referenceValid)
+    #expect(!waiting.capabilities.canNudge)
+    #expect(!waiting.capabilities.canGoToA)
+    #expect(!waiting.capabilities.canCaptureA)
+    #expect(waiting.pullBToA?.enabled == false)
+    #expect(throws: FocusRackError.referenceUnavailable) {
+        try engine.nudge(towardNear: true, at: 0.4)
+    }
+    engine.observe(rackContext(at: 0.5), at: 0.5)
+    #expect(engine.state(at: 0.5).capabilities.canGoToA)
+    #expect(engine.currentProgram.marks.count == 2)
 }

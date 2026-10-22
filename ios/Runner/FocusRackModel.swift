@@ -219,11 +219,11 @@ struct FocusRackPendingCapture {
         publishObservation()
     }
 
-    private func publishObservation() {
+    private func publishObservation(suspended: Bool = false) {
         guard let model else { return }
         let receivedAt = ProcessInfo.processInfo.systemUptime
         var observation = model.focusRackObservation()
-        observation.foregroundOwner = observation.foregroundOwner && isActive
+        observation.foregroundOwner = observation.foregroundOwner && isActive && !suspended
         authority.update(
             observation.connected && observation.foregroundOwner && observation.externalFocusIdle)
         observations?.yield(.init(observation: observation, receivedAt: receivedAt))
@@ -254,7 +254,8 @@ struct FocusRackPendingCapture {
         retirePresentation()
         authority.update(false)
         if state?.busy == true { stopPending = true }
-        controller?.invalidate(reason: reason)
+        controller?.suspend()
+        publishObservation(suspended: true)
     }
 
     func recordingWillStop() { stop() }

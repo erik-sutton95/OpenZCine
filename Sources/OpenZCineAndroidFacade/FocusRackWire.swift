@@ -140,8 +140,7 @@ public final class FocusRackWire: @unchecked Sendable {
                     }
                     wasRecording = observation.recording
                     if wasAdmitted && !admitted {
-                        controller.invalidate(
-                            reason: "Camera control or the live monitor is unavailable.")
+                        controller.suspend()
                     }
                 }
                 if request.kind == "stop" || request.kind == "externalFocus" {
@@ -151,8 +150,7 @@ public final class FocusRackWire: @unchecked Sendable {
                 if request.kind == "interrupt" || request.kind == "closePanel" {
                     authority.set(false)
                     authority.cancelPending()
-                    controller.invalidate(
-                        reason: "The camera monitor was interrupted. Reset marks.")
+                    controller.suspend()
                 }
                 let generation = authority.generation
                 let ticket = controller.makeIntentTicket()

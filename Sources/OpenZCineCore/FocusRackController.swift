@@ -44,12 +44,26 @@ public struct FocusRackIntentTicket: Sendable {
     fileprivate let generation: UInt64
 }
 
+private enum FocusRackControlAction {
+    case stop, suspend
+    case invalidate(String)
+
+    var priority: Int {
+        switch self {
+        case .stop: 0
+        case .suspend: 1
+        case .invalidate: 2
+        }
+    }
+}
+
 private final class FocusRackControlGate: @unchecked Sendable {
     private let lock = NSLock()
     private let identity = UUID()
     private var generation: UInt64 = 0
     private var runID: Int64?
-    private var reason: String?
+    private var action = FocusRackControlAction.stop
+    private var cancellationRequested = false
 
     func makeIntentTicket() -> FocusRackIntentTicket {
         lock.withLock { .init(controllerID: identity, generation: generation) }
@@ -59,14 +73,18 @@ private final class FocusRackControlGate: @unchecked Sendable {
         lock.withLock { ticket.controllerID == identity && ticket.generation == generation }
     }
 
-    func snapshot() -> (generation: UInt64, runID: Int64?, reason: String?) {
-        lock.withLock { (generation, runID, reason) }
+    func snapshot() -> (
+        generation: UInt64, runID: Int64?, action: FocusRackControlAction,
+        cancellationRequested: Bool
+    ) {
+        lock.withLock { (generation, runID, action, cancellationRequested) }
     }
 
-    func stop(reason: String?) -> (generation: UInt64, runID: Int64?) {
+    func stop(_ action: FocusRackControlAction = .stop) -> (generation: UInt64, runID: Int64?) {
         lock.withLock {
             generation &+= 1
-            if let reason { self.reason = reason }
+            if action.priority >= self.action.priority { self.action = action }
+            cancellationRequested = true
             return (generation, runID)
         }
     }
@@ -75,12 +93,13 @@ private final class FocusRackControlGate: @unchecked Sendable {
         lock.withLock {
             guard generation == expected else { return false }
             self.runID = runID
+            cancellationRequested = false
             return true
         }
     }
 
     func acknowledge(_ expected: UInt64) {
-        lock.withLock { if generation == expected { reason = nil } }
+        lock.withLock { if generation == expected { action = .stop } }
     }
 
     func retire(_ runID: Int64) {
@@ -111,6 +130,7 @@ public actor FocusRackController {
     private var pumpTask: Task<Void, Never>?
     private var closed = false
     private var referenceWasValid = true
+    private var contextWasAvailable = false
     private var subscribers: [UUID: AsyncStream<FocusRackState>.Continuation] = [:]
 
     /// Creates an inert runner with fine 16-pulse mark units and adaptive bounded playback.
@@ -156,14 +176,21 @@ public actor FocusRackController {
 
     /// Publishes native Stop immediately, before an actor, sleep, or command queue can wait.
     public nonisolated func requestStop() {
-        let stopped = gate.stop(reason: nil)
+        let stopped = gate.stop()
         if let runID = stopped.runID { stopNative(runID) }
         Task { await self.drainControlAndPublish() }
     }
 
-    /// Revokes queued movement and invalidates its reference immediately on lifecycle/control loss.
+    /// Revokes queued movement immediately while retaining acknowledged position and marks.
+    public nonisolated func suspend() {
+        let stopped = gate.stop(.suspend)
+        if let runID = stopped.runID { stopNative(runID) }
+        Task { await self.drainControlAndPublish() }
+    }
+
+    /// Revokes queued movement and invalidates its reference after an unknown external change.
     public nonisolated func invalidate(reason: String) {
-        let stopped = gate.stop(reason: reason)
+        let stopped = gate.stop(.invalidate(reason))
         if let runID = stopped.runID { stopNative(runID) }
         Task { await self.drainControlAndPublish() }
     }
@@ -342,9 +369,11 @@ public actor FocusRackController {
         if !value.connected || !value.foregroundOwner {
             safety = nil
             safetyAt = nil
+            nextSafetyAt = 0
+            needsReadinessFrameBarrier = true
         }
         if previous?.recording == true, !value.recording {
-            let stopped = gate.stop(reason: nil)
+            let stopped = gate.stop()
             if let run = stopped.runID { stopNative(run) }
             synchronizeControl()
         }
@@ -352,18 +381,40 @@ public actor FocusRackController {
 
     private func refreshEngineContext() {
         guard let observation else { return }
-        engine.observe(
-            .init(
-                sessionID: observation.sessionID,
-                connected: observation.connected && driver.isCurrent(),
-                movieMode: safety?.movieMode ?? false,
-                foregroundOwner: observation.foregroundOwner, focusMode: safety?.focusMode,
-                focus: acceptedFocus, frameTimestamp: acceptedAt, safetyTimestamp: safetyAt,
-                focusSettled: safety != nil && observation.externalFocusIdle,
-                lens: safety?.lens, focalLength: safety?.focalLength,
-                recording: observation.recording,
-                frameSequence: acceptedSequence, focusArea: safety?.focusArea,
-                focusSubject: safety?.focusSubject), at: clock.now())
+        let now = clock.now()
+        let context = FocusRackContext(
+            sessionID: observation.sessionID,
+            connected: observation.connected && driver.isCurrent(),
+            movieMode: safety?.movieMode ?? false,
+            foregroundOwner: observation.foregroundOwner, focusMode: safety?.focusMode,
+            focus: acceptedFocus, frameTimestamp: acceptedAt, safetyTimestamp: safetyAt,
+            focusSettled: safety != nil && observation.externalFocusIdle,
+            lens: safety?.lens, focalLength: safety?.focalLength,
+            recording: observation.recording,
+            frameSequence: acceptedSequence, focusArea: safety?.focusArea,
+            focusSubject: safety?.focusSubject)
+        let available = context.unavailableReason(at: now) == nil
+        let previousRevision = engine.configurationRevision
+        engine.observe(context, at: now)
+        if (contextWasAvailable && !available)
+            || engine.configurationRevision != previousRevision
+        {
+            safety = nil
+            safetyAt = nil
+            needsReadinessFrameBarrier = true
+            nextSafetyAt = 0
+            let alreadyCancelled = gate.snapshot().cancellationRequested
+            let stopped = gate.stop()
+            if !alreadyCancelled, let runID = stopped.runID { stopNative(runID) }
+            synchronizeControl()
+            var pending = context
+            pending.safetyTimestamp = nil
+            pending.focusSettled = false
+            engine.observe(pending, at: now)
+            contextWasAvailable = false
+            return
+        }
+        contextWasAvailable = available
     }
 
     private func ensurePump() {
@@ -481,7 +532,7 @@ public actor FocusRackController {
             safety = fresh
             safetyAt = started
             if needsReadinessFrameBarrier {
-                engine.externalFocusAction(at: clock.now())
+                engine.requireReadinessFrame(at: clock.now())
                 needsReadinessFrameBarrier = false
             }
         } catch {
@@ -496,13 +547,20 @@ public actor FocusRackController {
         let value = gate.snapshot()
         guard value.generation != handledGeneration else { return }
         handledGeneration = value.generation
-        if let reason = value.reason {
+        switch value.action {
+        case .invalidate(let reason):
             safety = nil
             safetyAt = nil
             needsReadinessFrameBarrier = true
             engine.interrupt(reason: reason, at: clock.now())
             referenceWasValid = false
-        } else {
+        case .suspend:
+            safety = nil
+            safetyAt = nil
+            nextSafetyAt = 0
+            needsReadinessFrameBarrier = true
+            engine.requestStop(at: clock.now())
+        case .stop:
             engine.requestStop(at: clock.now())
         }
         gate.acknowledge(value.generation)
@@ -510,13 +568,20 @@ public actor FocusRackController {
 
     private func drainControlAndPublish() {
         synchronizeControl()
+        refreshEngineContext()
         publish()
     }
     private func publish() {
         let raw = engine.snapshot(at: clock.now())
         if referenceWasValid, raw.stepPosition == nil {
-            let stopped = gate.stop(reason: raw.message)
-            if let run = stopped.runID { stopNative(run) }
+            let alreadyCancelled = gate.snapshot().cancellationRequested
+            let stopped = gate.stop(.invalidate(raw.message))
+            if !alreadyCancelled, let run = stopped.runID { stopNative(run) }
+            synchronizeControl()
+        }
+        if raw.phase == "stopping", !gate.snapshot().cancellationRequested {
+            let stopped = gate.stop()
+            if let runID = stopped.runID { stopNative(runID) }
             synchronizeControl()
         }
         referenceWasValid = raw.stepPosition != nil

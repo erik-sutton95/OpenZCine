@@ -139,11 +139,17 @@ belongs to the camera session. The ordinary focus controls return when the panel
 
 ## Recover from interruption
 
-Backgrounding, Command mode, monitor/source replacement, loss of local control, disconnect or
-incompatible focus evidence stops the rack. An interrupted increment may have moved only part
-of its requested travel, so its position cannot be counted. Follow the displayed Reset or
-Reconnect instruction. A fresh live image alone does not establish readiness or recover the
-old marks.
+Backgrounding, Command mode, loss of local control, or stale/incompatible camera evidence
+stops scheduling without discarding acknowledged position or marks. Returning requires fresh
+camera readiness and a later real frame; movement resumes only from another explicit action.
+A confirmed lens, zoom or focus-configuration change advises you to check A and B and reset
+marks if needed. Resetting is the operator's decision. Timing measurements from the old setup
+are discarded, so timed playback may need an explicit Go to A/B calibration again.
+
+An interrupted increment may have moved only part of its requested travel. If the native
+outcome cannot account for that displacement, follow the displayed Reset or Reconnect
+instruction. A new camera session or an observed external focus move also invalidates the
+relative position. A fresh image alone cannot recover an unknown position.
 
 On a slow or failed connection, native cancellation can take longer than the healthy-link
 qualification target. Keep the stopped state visible until readiness is confirmed; never infer

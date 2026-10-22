@@ -129,9 +129,9 @@ private func waitForRackWire(
     #expect(camera.log.isEmpty)
 }
 
-@Test(arguments: [false, true])
-func rackProductionWireStopDiscardsQueuedMovementBeforeItCanRearm(recordingStop: Bool) async throws
-{
+@Test(arguments: ["stop", "recordingStop", "interrupt", "ownershipLoss"])
+func rackProductionWireStopDiscardsQueuedMovementBeforeItCanRearm(kind: String) async throws {
+    let recordingStop = kind == "recordingStop"
     let camera = RackWireCamera()
     let wire = FocusRackWire()
     let owner = try #require(
@@ -161,8 +161,12 @@ func rackProductionWireStopDiscardsQueuedMovementBeforeItCanRearm(recordingStop:
         observation["recording"] = false
         observation["frameSequence"] = 21
         _ = try rackWireReply(wire, owner, kind: "observe", fields: ["observation": observation])
+    } else if kind == "ownershipLoss" {
+        observation["foregroundOwner"] = false
+        observation["frameSequence"] = 21
+        _ = try rackWireReply(wire, owner, kind: "observe", fields: ["observation": observation])
     } else {
-        _ = try rackWireReply(wire, owner, kind: "stop")
+        _ = try rackWireReply(wire, owner, kind: kind)
     }
     _ = try await waitForRackWire(wire, owner) { $0.state?.busy == false }
     try await Task.sleep(for: .milliseconds(100))

@@ -159,6 +159,9 @@ public struct FocusRackEngine: Sendable {
     private var configuration: FocusRackConfiguration
     private var context: FocusRackContext?
     private var referenceContext: FocusRackContext?
+    private var configurationChanged = false
+    private(set) var configurationRevision = 0
+    private var readinessFrameAfter: Double?
     private var program = FocusRackProgram(marks: [], transitions: [.init()])
     private var marks: [FocusRackMark] {
         get { program.marks }
@@ -178,7 +181,11 @@ public struct FocusRackEngine: Sendable {
     private var startedAt = 0.0
     private var enforcesTiming = false
     private var nextStep = 0
-    private var inFlight: (id: Int, signedStep: Int, sessionID: String, startedAt: Double)?
+    private var inFlight:
+        (
+            id: Int, signedStep: Int, sessionID: String, startedAt: Double,
+            configurationRevision: Int
+        )?
     private var commandTimings: [Int: FocusRackCommandTiming] = [:]
     private var lastMovementAt: Double?
     private var lastCommandSettledAt: Double?
@@ -212,7 +219,7 @@ public struct FocusRackEngine: Sendable {
         runID = initialRunID
     }
 
-    /// Updates safety evidence; a known external change cannot silently preserve captured marks.
+    /// Updates motion admission without discarding idle marks when evidence is unavailable.
     public mutating func observe(_ observation: FocusRackContext, at timestamp: Double) {
         let previous = context
         context = observation
@@ -220,25 +227,45 @@ public struct FocusRackEngine: Sendable {
             lastMovementAt = timestamp
             awaitingExternalFocus = false
         }
-        let identityChanged =
-            referenceContext.map {
-                $0.sessionID != observation.sessionID || $0.lens != observation.lens
-                    || $0.focalLength != observation.focalLength
-                    || $0.focusArea != observation.focusArea
-                    || $0.focusSubject != observation.focusSubject
-            } ?? false
-        let recordingStopped = previous?.recording == true && !observation.recording
-        if identityChanged, !marks.isEmpty || trajectory != nil || inFlight != nil {
-            interrupt(
-                reason: "Session, lens, zoom, or focus settings changed. Reset both marks.",
-                at: timestamp)
-        } else if let reason = observation.unavailableReason(at: timestamp),
+        if let reference = referenceContext, reference.sessionID != observation.sessionID,
             !marks.isEmpty || trajectory != nil || inFlight != nil
         {
-            interrupt(reason: reason, at: timestamp)
-        } else if recordingStopped, trajectory != nil {
+            interrupt(reason: "Camera session changed. Reset both marks.", at: timestamp)
+            return
+        }
+        if let reference = referenceContext, !marks.isEmpty,
+            let safetyAt = observation.safetyTimestamp,
+            safetyAt.isFinite, timestamp >= safetyAt, timestamp - safetyAt <= 2,
+            reference.movieMode != observation.movieMode
+                || [
+                    (reference.lens, observation.lens),
+                    (reference.focalLength, observation.focalLength),
+                    (reference.focusMode, observation.focusMode),
+                    (reference.focusArea, observation.focusArea),
+                    (reference.focusSubject, observation.focusSubject),
+                ].contains(where: { old, new in
+                    guard let old, let new else { return false }
+                    return old != new
+                })
+        {
+            configurationChanged = true
+            configurationRevision += 1
+            referenceContext = observation
+            commandTimings = [:]
+            append("configurationChanged", at: timestamp)
             requestStop(at: timestamp)
         }
+        if observation.unavailableReason(at: timestamp) != nil {
+            requestStop(at: timestamp)
+        } else if previous?.recording == true, !observation.recording, trajectory != nil {
+            requestStop(at: timestamp)
+        }
+    }
+
+    // Fresh readiness requires a later accepted image, without implying that focus moved.
+    mutating func requireReadinessFrame(at timestamp: Double) {
+        lastMovementAt = timestamp
+        if !marks.isEmpty { readinessFrameAfter = timestamp }
     }
 
     /// Discards the old relative reference. An unsettled transaction must finish first.
@@ -257,6 +284,8 @@ public struct FocusRackEngine: Sendable {
         pauseRequested = false
         pausedAt = nil
         referenceContext = context
+        configurationChanged = false
+        readinessFrameAfter = nil
         lastMovementAt = timestamp
         unconfirmedSession = nil
         awaitingExternalFocus = false
@@ -280,7 +309,7 @@ public struct FocusRackEngine: Sendable {
         if let other = marks.first(where: { $0.id != markID }), other.stepPosition == position {
             throw FocusRackError.samePosition
         }
-        referenceContext = context
+        if marks.isEmpty { referenceContext = context }
         marks.removeAll { $0.id == markID }
         captureRevision += 1
         let identity = context?.frameSequence.map {
@@ -373,7 +402,10 @@ public struct FocusRackEngine: Sendable {
             return .init(
                 kind: "wait", runID: runID, commandID: nil, signedPulses: nil, waitSeconds: 0.1)
         }
-        guard let reason = context?.unavailableReason(at: timestamp) else {
+        let unavailable =
+            context?.unavailableReason(at: timestamp)
+            ?? (hasReadinessFrame ? nil : "Wait for a fresh real camera frame.")
+        guard let reason = unavailable else {
             let due = startedAt + accumulatedPause + trajectory.offsets[nextStep]
             if timestamp < due {
                 return .init(
@@ -399,7 +431,9 @@ public struct FocusRackEngine: Sendable {
                         0.1, lastCommandSettledAt + configuration.commandInterval - timestamp))
             }
             let signedUnits = trajectory.chunks[nextStep]
-            inFlight = (nextStep, signedUnits, context?.sessionID ?? "", timestamp)
+            inFlight = (
+                nextStep, signedUnits, context?.sessionID ?? "", timestamp, configurationRevision
+            )
             phase = "moving"
             append(
                 "commandStarted", at: timestamp, commandID: nextStep,
@@ -408,7 +442,8 @@ public struct FocusRackEngine: Sendable {
                 kind: "drive", runID: runID, commandID: nextStep,
                 signedPulses: signedUnits * configuration.pulsesPerStep, waitSeconds: nil)
         }
-        interrupt(reason: reason, at: timestamp)
+        requestStop(at: timestamp)
+        message = reason
         return idle
     }
 
@@ -421,8 +456,10 @@ public struct FocusRackEngine: Sendable {
         inFlight = nil
         lastCommandSettledAt = timestamp
         if outcome == 0 {
-            commandTimings[abs(command.signedStep), default: .init()].record(
-                max(0, timestamp - command.startedAt))
+            if command.configurationRevision == configurationRevision {
+                commandTimings[abs(command.signedStep), default: .init()].record(
+                    max(0, timestamp - command.startedAt))
+            }
             completedUnits += abs(command.signedStep)
             if let position { self.position = position + command.signedStep }
             lastMovementAt = timestamp
@@ -560,6 +597,11 @@ public struct FocusRackEngine: Sendable {
         return "Reset marks before moving focus."
     }
 
+    private var hasReadinessFrame: Bool {
+        guard let readinessFrameAfter else { return true }
+        return (context?.frameTimestamp ?? -.infinity) > readinessFrameAfter
+    }
+
     private var isFrameAfterMovement: Bool {
         guard !awaitingExternalFocus else { return false }
         guard let lastMovementAt else { return true }
@@ -568,7 +610,9 @@ public struct FocusRackEngine: Sendable {
 
     private func requireReady(at timestamp: Double) throws {
         guard trajectory == nil, inFlight == nil else { throw FocusRackError.movementPending }
-        guard position != nil, let context, context.unavailableReason(at: timestamp) == nil else {
+        guard position != nil, let context, context.unavailableReason(at: timestamp) == nil,
+            hasReadinessFrame
+        else {
             throw FocusRackError.referenceUnavailable
         }
     }
@@ -586,7 +630,7 @@ public struct FocusRackEngine: Sendable {
         runID += 1
         activeNudge = nil
         trajectory = planned
-        referenceContext = context
+        if marks.isEmpty { referenceContext = context }
         startedAt = timestamp
         pauseRequested = false
         pausedAt = nil
@@ -683,6 +727,8 @@ public struct FocusRackEngine: Sendable {
         commandTimings = [:]
         lastMovementAt = timestamp
         referenceContext = context
+        configurationChanged = false
+        readinessFrameAfter = nil
         if position != nil { phase = "idle" }
     }
 
@@ -703,7 +749,7 @@ public struct FocusRackEngine: Sendable {
     /// Continues the same trajectory and run identity, excluding paused wall time.
     public mutating func resume(at timestamp: Double) throws {
         guard let pausedAt, phase == "paused", trajectory != nil, inFlight == nil,
-            position != nil, context?.unavailableReason(at: timestamp) == nil
+            position != nil, context?.unavailableReason(at: timestamp) == nil, hasReadinessFrame
         else { throw FocusRackError.referenceUnavailable }
         accumulatedPause += timestamp - pausedAt
         self.pausedAt = nil
@@ -746,6 +792,7 @@ public struct FocusRackEngine: Sendable {
             0, expectedDuration - max(0, state.activeElapsed - state.transition.delay))
         let ready =
             context?.unavailableReason(at: timestamp) == nil && context != nil && position != nil
+            && hasReadinessFrame
         let idle = trajectory == nil && inFlight == nil
         var caps = FocusRackCapabilities()
         caps.canCaptureA =
@@ -850,6 +897,15 @@ public struct FocusRackEngine: Sendable {
                 state.message =
                     "The camera refused the focus move. Wait until it is ready, then try again."
             case .uncertain, .stopUnconfirmed: break
+            }
+        }
+        if context?.unavailableReason(at: timestamp) == nil, position != nil {
+            if !hasReadinessFrame {
+                state.message = "Wait for a fresh real camera frame."
+            } else if configurationChanged,
+                [.idle, .ready, .stopped, .complete].contains(state.phase)
+            {
+                state.message = "Camera setup changed. Check A and B; reset marks if needed."
             }
         }
         state.message = state.message.replacingOccurrences(

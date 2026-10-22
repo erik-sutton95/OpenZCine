@@ -158,7 +158,9 @@ enum DemoHarness {
             state.primary = .init(
                 kind: "rehearse", title: "Rehearse A→B", enabled: true,
                 detail: state.transition.playbackDetail)
-            if fixture == "timing" {
+            if fixture == "setupChanged" {
+                state.message = "Camera setup changed. Check A and B; reset marks if needed."
+            } else if fixture == "timing" {
                 state.admissionMessage = "Increase duration to at least 16.61s for these marks."
                 state.minimumDuration = 16.61
                 state.primary.enabled = false

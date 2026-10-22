@@ -485,6 +485,22 @@ class FocusRackPanelComposeTest {
         compose.savePortraitEvidence("focus-rack-production-tight-portrait")
     }
 
+    @Test fun setupChangeAdvisesWithoutRequiringReset() {
+        val advisory = "Camera setup changed. Check A and B; reset marks if needed."
+        val actions = Actions()
+        val state = mutableStateOf(ready().copy(message = advisory))
+        mount(state, actions)
+        compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled()
+        compose.onNodeWithTag("focusRack.far10").assertIsEnabled()
+        compose.onNodeWithTag("focusRack.message").performScrollTo().assertTextEquals(advisory).assertIsDisplayed()
+        assertTransportInsideFrame()
+        compose.saveLandscapeEvidence("focus-rack-operator-owned-reset-landscape")
+        assertEquals(0, actions.resets)
+        openOptions()
+        compose.onNodeWithTag("focusRack.reset").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, actions.resets)
+    }
+
     private fun waitForKeyboardDismissed() {
         compose.waitUntil(5_000) {
             InstrumentationRegistry.getInstrumentation().uiAutomation.windows.none {
