@@ -822,3 +822,148 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
     #expect(state.capabilities.canNudge)
     #expect(FocusRackError.samePosition.localizedDescription.contains("Near/Far"))
 }
+
+private func progressNudge(towardNear: Bool = false) throws -> FocusRackEngine {
+    var engine = try FocusRackEngine(
+        configuration: FocusRackEngine.productionConfiguration, adaptive: true,
+        profile: .tenBy160Experiment)
+    engine.observe(productionContext(0), at: 0)
+    try engine.nudge(towardNear: towardNear, steps: 10, at: 0)
+    return engine
+}
+
+@Test(arguments: [true, false])
+func rackNudgeProgressCountsAcknowledgedFineStepsAndIgnoresElapsedTime(towardNear: Bool) throws {
+    var engine = try progressNudge(towardNear: towardNear)
+    var now = 0.0
+    #expect(
+        engine.state(at: now).nudgeProgress == .init(towardNear: towardNear, steps: 10, percent: 0))
+    for index in 0..<10 {
+        let action = engine.nextAction(at: now)
+        #expect(action.signedPulses == (towardNear ? -16 : 16))
+        if index == 3 {
+            engine.complete(runID: action.runID - 1, commandID: index, outcome: 0, at: now)
+            engine.complete(runID: action.runID, commandID: index - 1, outcome: 0, at: now)
+            #expect(engine.state(at: now + 1).nudgeProgress?.percent == 30)
+        }
+        now += 0.02
+        engine.complete(runID: action.runID, commandID: index, outcome: 0, at: now)
+        if index < 9 {
+            #expect(engine.state(at: now).nudgeProgress?.percent == (index + 1) * 10)
+            #expect(engine.state(at: now).capabilities.canStop)
+            #expect(!engine.state(at: now).capabilities.canNudge)
+        }
+    }
+    let completed = engine.state(at: now)
+    #expect(completed.nudgeProgress == nil)
+    #expect(completed.completedSteps == 10)
+    #expect(completed.stepPosition == (towardNear ? -10 : 10))
+    #expect(completed.phase == .complete)
+    #expect(completed.message.isEmpty)
+}
+
+@Test(arguments: [0, 3, 4])
+func rackNudgeProgressRemainsDuringStopSettlementWithoutCreditingUnknownMovement(outcome: Int)
+    throws
+{
+    var engine = try progressNudge()
+    var now = 0.0
+    for index in 0..<3 {
+        let action = engine.nextAction(at: now)
+        now += 0.02
+        engine.complete(runID: action.runID, commandID: index, outcome: 0, at: now)
+    }
+    let held = engine.nextAction(at: now)
+    engine.requestStop(at: now + 0.001)
+    #expect(engine.state(at: now).phase == .stopping)
+    #expect(engine.state(at: now).nudgeProgress?.percent == 30)
+    #expect(engine.state(at: now).capabilities.canStop)
+    engine.complete(runID: held.runID, commandID: 3, outcome: outcome, at: now + 0.02)
+    let settled = engine.state(at: now + 0.02)
+    #expect(settled.nudgeProgress == nil)
+    #expect(settled.completedSteps == (outcome == 0 ? 4 : 3))
+    #expect(settled.stepPosition == (outcome == 0 ? 4 : nil))
+    if outcome != 0 { #expect(!settled.message.isEmpty) }
+    engine.complete(runID: held.runID, commandID: 3, outcome: 0, at: now + 0.03)
+    #expect(engine.state(at: now + 0.03).nudgeProgress == nil)
+    #expect(engine.state(at: now + 0.03).stepPosition == settled.stepPosition)
+}
+
+@Test func rackNudgeProgressClearsOnReferenceLossAndDoesNotDescribeOtherMoves() throws {
+    var interrupted = try progressNudge()
+    for index in 0..<3 {
+        let time = Double(index) * 0.02
+        let action = interrupted.nextAction(at: time)
+        interrupted.complete(runID: action.runID, commandID: index, outcome: 0, at: time + 0.02)
+    }
+    let held = interrupted.nextAction(at: 0.06)
+    interrupted.interrupt(reason: "Synthetic reference lost.", at: 0.061)
+    #expect(interrupted.state(at: 0.061).busy)
+    #expect(interrupted.state(at: 0.061).nudgeProgress?.percent == 30)
+    #expect(!interrupted.state(at: 0.061).referenceValid)
+    interrupted.complete(runID: held.runID, commandID: 3, outcome: 0, at: 0.08)
+    #expect(interrupted.state(at: 0.08).nudgeProgress == nil)
+    #expect(!interrupted.state(at: 0.08).referenceValid)
+
+    var engine = try productionWithMarks()
+    try engine.seek(markID: "B", at: 0.4)
+    #expect(engine.state(at: 0.4).busy)
+    #expect(engine.state(at: 0.4).totalSteps == 4)
+    #expect(engine.state(at: 0.4).nudgeProgress == nil)
+    for index in 0..<4 {
+        let time = 0.4 + Double(index) * 0.03
+        engine.observe(productionContext(time), at: time)
+        let action = engine.nextAction(at: time)
+        engine.complete(runID: action.runID, commandID: index, outcome: 0, at: time + 0.02)
+    }
+    #expect(engine.state(at: 0.51).message.isEmpty)
+    try engine.run(reverse: true, at: 0.51)
+    #expect(engine.state(at: 0.51).busy)
+    #expect(engine.state(at: 0.51).nudgeProgress == nil)
+    engine.requestStop(at: 0.52)
+    try engine.reset(at: 0.53)
+    #expect(engine.state(at: 0.53).nudgeProgress == nil)
+}
+
+@Test func rackNudgeProgressRoundTripsAndOldStateWithoutMetadataStillDecodes() throws {
+    var state = FocusRackState.initial
+    state.nudgeProgress = .init(towardNear: true, steps: 10, percent: 30)
+    let data = try JSONEncoder().encode(state)
+    #expect(
+        try JSONDecoder().decode(FocusRackState.self, from: data).nudgeProgress
+            == state.nudgeProgress)
+    var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let progress = try #require(object.removeValue(forKey: "nudgeProgress") as? [String: Any])
+    #expect(Set(progress.keys) == ["towardNear", "steps", "percent"])
+    let oldData = try JSONSerialization.data(withJSONObject: object)
+    #expect(try JSONDecoder().decode(FocusRackState.self, from: oldData).nudgeProgress == nil)
+}
+
+@Test func rackControllerNormalizesProductionEasingWithoutChangingLegacyTemplateDecode()
+    async throws
+{
+    let camera = RackFakeCamera()
+    let controller = FocusRackController(
+        driver: camera.access, transition: .init(duration: 3, easing: .easeInOut),
+        clock: camera.clock)
+    #expect((await controller.snapshot()).transition.easing == .linear)
+    try await controller.handle(.setTransition(.init(duration: 4, delay: 2, easing: .easeInOut)))
+    #expect((await controller.snapshot()).transition.easing == .linear)
+    try await controller.handle(.updateTiming(.init(duration: 5, easing: .easeInOut)))
+    let edited = await controller.snapshot()
+    #expect(edited.transition.easing == .linear)
+    #expect(edited.transition.duration == 5 && edited.transition.delay == 2)
+    let saved =
+        #"[{"name":"Saved ease","transition":{"fromMark":"A","toMark":"B","duration":6,"delay":1,"easing":"easeInOut"}}]"#
+    let templates = try FocusRackTemplateCodec.decode(Data(saved.utf8))
+    let legacy = try #require(templates.first)
+    #expect(legacy.transition.easing == .easeInOut)
+    try await controller.handle(.applyTemplate(legacy))
+    let loaded = await controller.snapshot()
+    #expect(loaded.transition.easing == .linear)
+    #expect(loaded.program.transitions.first?.easing == .linear)
+    #expect(loaded.transition.duration == 6 && loaded.transition.delay == 1)
+    #expect(legacy.transition.easing == .easeInOut)
+    #expect(camera.driveCount == 0)
+    await controller.close()
+}

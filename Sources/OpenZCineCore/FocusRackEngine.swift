@@ -174,6 +174,7 @@ public struct FocusRackEngine: Sendable {
     private let profile: FocusRackProfile
     private var completedUnits = 0
     private var totalUnits = 0
+    private var activeNudge: (towardNear: Bool, steps: Int)?
     private var startedAt = 0.0
     private var enforcesTiming = false
     private var nextStep = 0
@@ -250,6 +251,7 @@ public struct FocusRackEngine: Sendable {
             throw FocusRackError.reconnectRequired
         }
         position = 0
+        activeNudge = nil
         commandTimings = [:]
         marks = []
         pauseRequested = false
@@ -300,6 +302,7 @@ public struct FocusRackEngine: Sendable {
             signedSteps: towardNear ? -steps : steps,
             duration: 1,
             delay: 0, easing: .linear, enforcesTiming: false, at: timestamp)
+        activeNudge = (towardNear, steps)
     }
 
     /// Explicitly repositions using bounded chunks while retaining the original mark units.
@@ -425,12 +428,14 @@ public struct FocusRackEngine: Sendable {
             lastMovementAt = timestamp
             nextStep += 1
             if stopRequested {
+                activeNudge = nil
                 trajectory = nil
                 finishedAt = timestamp
                 phase = position == nil ? "uncertain" : "stopped"
                 return
             }
             if let trajectory, nextStep == trajectory.offsets.count {
+                activeNudge = nil
                 self.trajectory = nil
                 finishedAt = timestamp
                 let durationError = abs(
@@ -453,6 +458,7 @@ public struct FocusRackEngine: Sendable {
                 append("paused", at: timestamp)
             }
         } else {
+            activeNudge = nil
             trajectory = nil
             finishedAt = timestamp
             switch outcome {
@@ -493,6 +499,7 @@ public struct FocusRackEngine: Sendable {
         finishedAt = timestamp
         append("stopRequested", at: timestamp)
         if inFlight == nil {
+            activeNudge = nil
             trajectory = nil
             phase = "stopped"
             message = "Stopped. Focus will not return automatically."
@@ -577,6 +584,7 @@ public struct FocusRackEngine: Sendable {
             quiet: configuration.commandInterval, timings: commandTimings, adaptive: adaptive,
             timed: enforcesTiming, grouped: grouped, profile: profile)
         runID += 1
+        activeNudge = nil
         trajectory = planned
         referenceContext = context
         startedAt = timestamp
@@ -664,6 +672,7 @@ public struct FocusRackEngine: Sendable {
     }
 
     private mutating func clearMarks(at timestamp: Double) {
+        activeNudge = nil
         marks = []
         nextStep = 0
         completedUnits = 0
@@ -719,6 +728,11 @@ public struct FocusRackEngine: Sendable {
         state.completedSteps = raw.completedSteps
         state.totalSteps = raw.totalSteps
         state.busy = raw.busy
+        if let activeNudge, state.busy {
+            state.nudgeProgress = .init(
+                towardNear: activeNudge.towardNear, steps: activeNudge.steps,
+                percent: completedUnits * 100 / totalUnits)
+        }
         state.referenceValid = position != nil
         state.captures = marks.compactMap(\.captureIdentity)
         state.activeElapsed =
@@ -827,9 +841,7 @@ public struct FocusRackEngine: Sendable {
             case .paused: state.message = "Paused. Resume continues the remaining move."
             case .stopping: state.message = "Stopping. Waiting for the camera."
             case .stopped: state.message = "Stopped. Focus stays where it stopped."
-            case .complete:
-                let endpoint = marks.first { $0.stepPosition == position }?.id
-                state.message = endpoint.map { "At " + $0 + "." } ?? "Focus move complete."
+            case .complete: state.message = ""
             case .failed:
                 state.message =
                     "The requested timing could not be maintained. Adjust the duration and try again."
