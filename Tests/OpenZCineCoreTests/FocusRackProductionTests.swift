@@ -1179,3 +1179,58 @@ func rackContextLossCancelsNativeMovementAndAccountsForItsActualOutcome(
     #expect(camera.driveCount == 2)
     await controller.close()
 }
+
+@Test(arguments: ["camera", "transport", "unknown"])
+func rackRecoveredTimingsStayBoundToTheReportedCameraAndLink(change: String) async throws {
+    let camera = RackFakeCamera()
+    let controller = FocusRackController(
+        driver: camera.access, clock: camera.clock, profile: .calibratedFineExperiment)
+    var observation = cameraObservation(1)
+    observation.cameraID = "synthetic-body"
+    observation.transport = "usb"
+    await controller.observe(observation)
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    observation.frameSequence = 2
+    await controller.observe(observation)
+    let context = try #require(await controller.diagnostics().context)
+    let key = try #require(
+        FocusRackCalibrationKey(
+            cameraID: observation.cameraID, transport: observation.transport, context: context))
+    let saved = FocusRackCalibration(key: key, commandDurations: [64: 0.117, 128: 0.08])
+    try await controller.loadCalibration(saved)
+    #expect(await controller.diagnostics().timingEvidence == saved.commandDurations)
+    try await controller.handle(.capture(markID: "A", expectedFrameSequence: 2))
+    switch change {
+    case "camera": observation.cameraID = "other-body"
+    case "transport": observation.transport = "ptpIP"
+    default: observation.cameraID = nil
+    }
+    observation.frameSequence = 3
+    await controller.observe(observation)
+    #expect(await controller.diagnostics().timingEvidence?.isEmpty == true)
+    #expect(await controller.snapshot().stepPosition == nil)
+    #expect(await controller.calibrationCheckpoint()?.key == key)
+    #expect(camera.driveCount == 0)
+    await controller.close()
+}
+
+@Test func rackOldScopeSafetyReadCannotRestoreTimingsForANewCamera() async throws {
+    let camera = RackFakeCamera()
+    camera.holdNextSafetyRead()
+    let controller = FocusRackController(
+        driver: camera.access, clock: camera.clock, profile: .calibratedFineExperiment)
+    var observation = cameraObservation(1)
+    observation.cameraID = "first-body"
+    observation.transport = "usb"
+    await controller.observe(observation)
+    try await waitForRack { camera.readCount == 1 }
+    observation.cameraID = "second-body"
+    observation.frameSequence = 2
+    await controller.observe(observation)
+    camera.releaseSafetyRead()
+    try await waitForRack { camera.readCount >= 2 }
+    let reads = await controller.diagnostics().events.filter { $0.kind == "safetyRead" }
+    #expect(try #require(reads.first?.note).contains("accepted=false"))
+    #expect(camera.driveCount == 0)
+    await controller.close()
+}

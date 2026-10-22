@@ -194,6 +194,9 @@ public struct FocusRackState: Codable, Sendable {
 
 /// OS-owned facts. Frame ages are durations; no platform clock epoch crosses this boundary.
 public struct FocusRackObservation: Codable, Sendable {
+    /// Reported stable body identity and link, used only to match locally saved timing evidence.
+    public var cameraID: String?
+    public var transport: String?
     public var sessionID: String
     public var connected: Bool
     public var foregroundOwner: Bool
@@ -210,8 +213,11 @@ public struct FocusRackObservation: Codable, Sendable {
         sessionID: String, connected: Bool, foregroundOwner: Bool, recording: Bool,
         frameSequence: Int64?, focus: FocusRackFocusObservation?,
         externalFocusRevision: Int64 = 0, externalFocusIdle: Bool = true,
-        frameAgeSeconds: Double = 0, focusResult: String? = nil
+        frameAgeSeconds: Double = 0, focusResult: String? = nil,
+        cameraID: String? = nil, transport: String? = nil
     ) {
+        self.cameraID = cameraID
+        self.transport = transport
         self.sessionID = sessionID
         self.connected = connected
         self.foregroundOwner = foregroundOwner

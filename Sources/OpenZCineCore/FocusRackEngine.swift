@@ -152,6 +152,8 @@ public struct FocusRackDiagnostics: Codable, Sendable {
     public let context: FocusRackContext?
     public let events: [FocusRackDiagnosticEvent]
     public let omittedEvents: Int
+    /// Current per-pulse maxima, including restored history; no camera identity is exported.
+    public let timingEvidence: [Int: Double]?
 }
 
 /// Deterministic session-local rack state machine, advanced by the production controller.
@@ -193,6 +195,7 @@ public struct FocusRackEngine: Sendable {
             configurationRevision: Int
         )?
     private var commandTimings: [Int: FocusRackCommandTiming] = [:]
+    private var calibrationKey: FocusRackCalibrationKey?
     private var lastMovementAt: Double?
     private var lastCommandSettledAt: Double?
     private var unconfirmedSession: String?
@@ -640,7 +643,59 @@ public struct FocusRackEngine: Sendable {
             canCapture: unavailable == nil && position != nil && trajectory == nil
                 && inFlight == nil && isFrameAfterMovement,
             busy: trajectory != nil || inFlight != nil, configuration: currentConfiguration,
-            context: context, events: includeEvents ? events : [], omittedEvents: omittedEvents)
+            context: context, events: includeEvents ? events : [], omittedEvents: omittedEvents,
+            timingEvidence: calibrationTimings)
+    }
+
+    var calibrationTimings: [Int: Double] {
+        Dictionary(
+            uniqueKeysWithValues: commandTimings.map {
+                ($0.key * configuration.pulsesPerStep, $0.value.longest)
+            }.filter { $0.1 > 0 })
+    }
+
+    mutating func detachCalibrationKey(at timestamp: Double) {
+        guard calibrationKey != nil else { return }
+        calibrationKey = nil
+        commandTimings = [:]
+        clearCalibration()
+        configurationRevision += 1
+        interrupt(reason: "Camera control path changed. Reset marks.", at: timestamp)
+        append("timingContextChanged", at: timestamp)
+    }
+
+    mutating func bindCalibrationKey(_ key: FocusRackCalibrationKey, at timestamp: Double) {
+        guard calibrationKey != key else { return }
+        let previous = calibrationKey
+        calibrationKey = key
+        commandTimings = [:]
+        clearCalibration()
+        configurationRevision += 1
+        if let previous, previous.cameraID != key.cameraID || previous.transport != key.transport {
+            interrupt(reason: "Camera control path changed. Reset marks.", at: timestamp)
+        } else if trajectory != nil || inFlight != nil {
+            requestStop(at: timestamp)
+        }
+        append("timingContextChanged", at: timestamp)
+    }
+
+    func canRestoreCalibration(at timestamp: Double) -> Bool {
+        profile == .calibratedFineExperiment && trajectory == nil && inFlight == nil
+            && position != nil && context?.unavailableReason(at: timestamp) == nil
+            && hasReadinessFrame
+    }
+
+    mutating func restoreCalibration(_ calibration: FocusRackCalibration, at timestamp: Double) {
+        guard canRestoreCalibration(at: timestamp), let context, calibration.key.matches(context)
+        else { return }
+        for (pulses, seconds) in calibration.commandDurations.sorted(by: { $0.key < $1.key }) {
+            let units = pulses / configuration.pulsesPerStep
+            guard seconds > commandTimings[units, default: .init()].longest else { continue }
+            commandTimings[units, default: .init()].record(seconds)
+            append(
+                "timingRestored", at: timestamp, signedPulses: pulses,
+                note: "longest=\(seconds) source=savedCalibration")
+        }
     }
 
     private var recoveryInstruction: String? {

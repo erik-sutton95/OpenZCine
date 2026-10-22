@@ -111,6 +111,8 @@ private final class FocusRackControlGate: @unchecked Sendable {
 public actor FocusRackController {
     private let driver: any FocusRackDriver
     private let clock: FocusRackClock
+    private let profile: FocusRackProfile
+    private var calibration: FocusRackCalibration?
     private nonisolated let gate = FocusRackControlGate()
     private nonisolated let stopNative: @Sendable (Int64) -> Void
     private var handledGeneration: UInt64 = 0
@@ -140,6 +142,7 @@ public actor FocusRackController {
         self.driver = driver
         self.stopNative = driver.requestStop
         self.clock = clock
+        self.profile = profile
         var configuration = FocusRackEngine.productionConfiguration
         configuration.transition = Self.linearTransition(transition)
         // The fixed quantum and quiet interval satisfy the engine constructor's invariants.
@@ -219,6 +222,20 @@ public actor FocusRackController {
     public func diagnostics() -> FocusRackDiagnostics {
         engine.snapshot(at: clock.now(), includeEvents: true)
     }
+
+    /// Loads historical timing evidence without restoring marks or starting camera work.
+    public func loadCalibration(_ saved: FocusRackCalibration) throws {
+        try FocusRackCalibrationCodec.validate(saved)
+        guard !closed, !engine.snapshot(at: clock.now()).busy else {
+            throw FocusRackError.movementPending
+        }
+        calibration = saved
+        refreshEngineContext()
+        publish()
+    }
+
+    /// Latest validated checkpoint for platform-owned persistence, including larger new costs.
+    public func calibrationCheckpoint() -> FocusRackCalibration? { calibration }
 
     /// Subscribes to state, including an immediate initial value; subscription starts no movement.
     public func states() -> AsyncStream<FocusRackState> {
@@ -328,7 +345,10 @@ public actor FocusRackController {
             return
         }
         let now = clock.now()
-        if previous?.sessionID != value.sessionID {
+        let changedScope =
+            previous?.cameraID != value.cameraID || previous?.transport != value.transport
+        if changedScope { engine.detachCalibrationKey(at: now) }
+        if previous?.sessionID != value.sessionID || changedScope {
             acceptedSequence = nil
             acceptedAt = nil
             acceptedFocus = nil
@@ -415,6 +435,22 @@ public actor FocusRackController {
             return
         }
         contextWasAvailable = available
+        if available { synchronizeCalibration(context, at: now) }
+    }
+
+    private func synchronizeCalibration(_ context: FocusRackContext, at timestamp: Double) {
+        guard profile == .calibratedFineExperiment,
+            let key = FocusRackCalibrationKey(
+                cameraID: observation?.cameraID, transport: observation?.transport, context: context
+            )
+        else { return }
+        engine.bindCalibrationKey(key, at: timestamp)
+        guard engine.canRestoreCalibration(at: timestamp) else { return }
+        if let calibration, calibration.key == key {
+            engine.restoreCalibration(calibration, at: timestamp)
+        }
+        let saved = FocusRackCalibration(key: key, commandDurations: engine.calibrationTimings)
+        if (try? FocusRackCalibrationCodec.validate(saved)) != nil { calibration = saved }
     }
 
     private func ensurePump() {
@@ -527,6 +563,8 @@ public actor FocusRackController {
             guard gate.snapshot().generation == generation else { return }
             guard !closed, !Task.isCancelled, driver.isCurrent(),
                 observation?.sessionID == initial.sessionID,
+                observation?.cameraID == initial.cameraID,
+                observation?.transport == initial.transport,
                 observation?.externalFocusRevision == initial.externalFocusRevision,
                 observation?.externalFocusIdle == true, observation?.foregroundOwner == true,
                 clock.now() - started <= 2
