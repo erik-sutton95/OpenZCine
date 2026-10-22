@@ -131,7 +131,8 @@ struct FocusRackPendingCapture {
             let access = model.focusRackAccess(authority: authority)
         else { return }
         let controller = FocusRackController(
-            driver: access, transition: state?.transition ?? .init())
+            driver: access, transition: state?.transition ?? .init(),
+            profile: .tenBy160Experiment)
         self.controller = controller
         stateTask = Task { [weak self] in
             let states = await controller.states()

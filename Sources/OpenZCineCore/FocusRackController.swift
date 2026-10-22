@@ -116,7 +116,7 @@ public actor FocusRackController {
     /// Creates an inert runner with fine 16-pulse mark units and adaptive bounded playback.
     public init(
         driver: any FocusRackDriver, transition: FocusRackTransition = .init(),
-        clock: FocusRackClock = .monotonic
+        clock: FocusRackClock = .monotonic, profile: FocusRackProfile = .adaptive
     ) {
         self.driver = driver
         self.stopNative = driver.requestStop
@@ -127,7 +127,8 @@ public actor FocusRackController {
         guard
             let engine = try? FocusRackEngine(
                 configuration: configuration,
-                initialRunID: max(1, Int64(clock.now() * 1_000_000)), adaptive: true)
+                initialRunID: max(1, Int64(clock.now() * 1_000_000)), adaptive: true,
+                profile: profile)
         else {
             preconditionFailure("Invalid fixed focus-rack configuration")
         }

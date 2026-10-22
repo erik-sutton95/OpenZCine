@@ -119,9 +119,11 @@ private func adaptiveContext(_ now: Double) -> FocusRackContext {
     throw FocusRackError.movementPending
 }
 
-private func adaptiveEngineWithMarks(_ steps: Int) throws -> (FocusRackEngine, Double) {
+private func adaptiveEngineWithMarks(
+    _ steps: Int, profile: FocusRackProfile = .adaptive, seekToA: Bool = true
+) throws -> (FocusRackEngine, Double) {
     var engine = try FocusRackEngine(
-        configuration: FocusRackEngine.productionConfiguration, adaptive: true)
+        configuration: FocusRackEngine.productionConfiguration, adaptive: true, profile: profile)
     var now = 0.0
     engine.observe(adaptiveContext(now), at: now)
     try engine.capture(markID: "A", at: now)
@@ -134,6 +136,7 @@ private func adaptiveEngineWithMarks(_ steps: Int) throws -> (FocusRackEngine, D
         remaining -= count
     }
     try engine.capture(markID: "B", at: now)
+    guard seekToA else { return (engine, now) }
     try engine.seek(markID: "A", at: now)
     let seek = try settleAdaptive(&engine, now: &now)
     #expect(seek.reduce(0, +) == -steps * 16)
@@ -502,4 +505,129 @@ func preflightRebaseExcludesPausesBeforeItsCompletion(resumeDuringPreflight: Boo
         engine.snapshot(at: now, includeEvents: true).events.contains {
             $0.kind == "timingChanged" && $0.note?.contains("duration=1.0") == true
         })
+}
+
+@Test func rackTenBy160PlanRequiresItsOwnMeasuredBudgetAndKeepsExactSignedMovement() throws {
+    for sign in [-1, 1] {
+        func plan(_ costs: [Int: FocusRackCommandTiming]) throws -> FocusRackMovementPlan {
+            try FocusRackPlanner.make(
+                signedSteps: sign * 100, duration: 1, delay: 2, easing: .linear,
+                quiet: 0, timings: costs, adaptive: true, timed: true, grouped: true,
+                profile: .tenBy160Experiment)
+        }
+        #expect(throws: FocusRackError.calibrationRequired) {
+            try plan([1: timing(0.001), 12: timing(0.001)])
+        }
+        #expect(throws: FocusRackError.self) { try plan([10: timing(0.1001), 12: timing(0.001)]) }
+        var measured = timing(0.04)
+        measured.record(0.08)
+        let selected = try plan([1: timing(0.001), 10: measured, 12: timing(0.001)])
+        #expect(selected.chunks == Array(repeating: sign * 10, count: 10))
+        #expect(selected.chunks.reduce(0, +) * 16 == sign * 1600)
+        #expect(abs(selected.minimumDuration - 0.8) < 1e-9)
+        #expect(abs((selected.offsets.last ?? 0) + 0.08 - 3) < 1e-9)
+    }
+}
+
+@Test func rackTenBy160LeavesDefaultPlanningAndOtherMovesUnchanged() throws {
+    let costs = [1: timing(0.12), 4: timing(0.05), 10: timing(0.06), 12: timing(0.08)]
+    let baseline = try FocusRackPlanner.make(
+        signedSteps: 100, duration: 1, delay: 0, easing: .linear,
+        quiet: 0, timings: costs, adaptive: true, timed: true, grouped: true)
+    #expect(baseline.chunks == Array(repeating: 12, count: 8) + [4])
+    for (steps, duration, easing, adaptive, grouped, timed) in [
+        (99, 1.0, FocusRackEasing.linear, true, true, true),
+        (101, 1.0, .linear, true, true, true),
+        (100, 1.05, .linear, true, true, true),
+        (100, 1.0, .easeInOut, true, true, true),
+        (100, 1.0, .linear, false, true, true),
+        (100, 1.0, .linear, true, false, true),
+        (99, 1.0, .linear, true, true, false),
+        (10, 1.0, .linear, true, false, false),
+    ] {
+        func plan(_ profile: FocusRackProfile) throws -> FocusRackMovementPlan {
+            try FocusRackPlanner.make(
+                signedSteps: steps, duration: duration, delay: 0, easing: easing,
+                quiet: 0, timings: [1: timing(0.005)], adaptive: adaptive,
+                timed: timed, grouped: grouped, profile: profile)
+        }
+        let standard = try plan(.adaptive)
+        let experiment = try plan(.tenBy160Experiment)
+        #expect(experiment.chunks == standard.chunks)
+        #expect(experiment.offsets == standard.offsets)
+        #expect(experiment.minimumDuration == standard.minimumDuration)
+    }
+}
+
+@Test func rackTenBy160CalibrationAdmissionAndExecutionUseTheSameProfile() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(
+        100, profile: .tenBy160Experiment, seekToA: false)
+    let marks = engine.currentProgram.marks
+    try engine.setTransition(.init(duration: 1, delay: 0, easing: .linear), at: now)
+    let before = engine.state(at: now)
+    #expect(before.admissionMessage == FocusRackError.calibrationRequired.localizedDescription)
+    #expect(before.primary.disabledReason == "Go to A or B first")
+    #expect(before.playbackInstruction == "Go to A or B first")
+    #expect(before.pullAToB?.enabled == false && before.pullBToA?.enabled == false)
+    #expect(before.capabilities.canGoToA)
+    #expect(throws: FocusRackError.calibrationRequired) {
+        try engine.run(direction: .bToA, at: now)
+    }
+    #expect(!engine.state(at: now).busy)
+    #expect(engine.currentProgram.marks == marks)
+    try engine.seek(markID: "A", at: now)
+    #expect(
+        try settleAdaptive(&engine, now: &now, commandDuration: 0.08)
+            == Array(repeating: -160, count: 10))
+    #expect(engine.state(at: now).admissionMessage == nil)
+    #expect(engine.state(at: now).pullAToB?.enabled == true)
+    try engine.run(direction: .aToB, at: now)
+    #expect(
+        try settleAdaptive(&engine, now: &now, commandDuration: 0.08)
+            == Array(repeating: 160, count: 10))
+    #expect(engine.state(at: now).stepPosition == 100)
+    #expect(engine.state(at: now).pullBToA?.enabled == true)
+    try engine.run(direction: .bToA, at: now)
+    #expect(
+        try settleAdaptive(&engine, now: &now, commandDuration: 0.08)
+            == Array(repeating: -160, count: 10))
+    #expect(engine.state(at: now).stepPosition == 0)
+    #expect(engine.state(at: now).phase == .complete)
+    #expect(engine.currentProgram.marks == marks)
+    #expect(
+        engine.snapshot(at: now, includeEvents: true).events.filter { $0.kind == "runStarted" }
+            .allSatisfy { $0.note?.contains("profile=tenBy160Experiment") == true })
+}
+
+@Test func rackTenBy160SlowCalibrationDoesNotFallBackOrChangeMarks() throws {
+    var (engine, now) = try adaptiveEngineWithMarks(
+        100, profile: .tenBy160Experiment, seekToA: false)
+    let marks = engine.currentProgram.marks
+    try engine.seek(markID: "A", at: now)
+    try settleAdaptive(&engine, now: &now, commandDuration: 0.1001)
+    try engine.setTransition(.init(duration: 1, delay: 0, easing: .linear), at: now)
+    #expect(engine.state(at: now).minimumDuration == 1.01)
+    #expect(engine.state(at: now).pullAToB?.enabled == false)
+    #expect(throws: FocusRackError.self) { try engine.run(direction: .aToB, at: now) }
+    #expect(!engine.state(at: now).busy)
+    #expect(engine.state(at: now).stepPosition == 0)
+    #expect(engine.currentProgram.marks == marks)
+    #expect(engine.state(at: now).capabilities.canGoToB)
+}
+
+@Test(arguments: [0, 3, 4])
+func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome: Int) throws {
+    var (engine, now) = try adaptiveEngineWithMarks(100, profile: .tenBy160Experiment)
+    try engine.setTransition(.init(duration: 1, delay: 0, easing: .linear), at: now)
+    try engine.run(direction: .aToB, at: now)
+    let action = engine.nextAction(at: now)
+    #expect(action.signedPulses == 160)
+    engine.requestStop(at: now + 0.001)
+    now += 0.02
+    engine.complete(runID: action.runID, commandID: 0, outcome: outcome, at: now)
+    #expect(engine.state(at: now).referenceValid == (outcome == 0))
+    #expect(engine.state(at: now).stepPosition == (outcome == 0 ? 10 : nil))
+    #expect(engine.nextAction(at: now + 1).kind == "idle")
+    engine.complete(runID: action.runID, commandID: 0, outcome: 0, at: now + 0.01)
+    #expect(engine.state(at: now).stepPosition == (outcome == 0 ? 10 : nil))
 }

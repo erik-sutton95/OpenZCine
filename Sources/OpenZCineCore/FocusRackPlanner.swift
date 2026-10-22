@@ -37,7 +37,7 @@ enum FocusRackPlanner {
     static func make(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
         quiet: Double, timings: [Int: FocusRackCommandTiming], adaptive: Bool,
-        timed: Bool, grouped: Bool
+        timed: Bool, grouped: Bool, profile: FocusRackProfile = .adaptive
     ) throws -> FocusRackMovementPlan {
         guard signedSteps != 0, signedSteps != .min, abs(signedSteps) <= 10_000,
             duration.isFinite, duration > 0, delay.isFinite, delay >= 0,
@@ -46,7 +46,9 @@ enum FocusRackPlanner {
         let sign = signedSteps < 0 ? -1 : 1
         let count = abs(signedSteps)
         if !timed {
-            let quantum = adaptive && grouped ? 12 : 1
+            let quantum =
+                adaptive && grouped
+                ? (profile == .tenBy160Experiment && count == 100 ? 10 : 12) : 1
             var chunks = Array(repeating: sign * quantum, count: count / quantum)
             if count % quantum != 0 { chunks.append(sign * (count % quantum)) }
             let known = chunks.allSatisfy { timings[abs($0)]?.count ?? 0 > 0 }
@@ -61,9 +63,18 @@ enum FocusRackPlanner {
                 maximumDuration: nil, estimatedDuration: estimate)
         }
         if adaptive, grouped, count > 1 {
+            let quanta: [Int]
+            if profile == .tenBy160Experiment, count == 100, duration == 1, easing == .linear {
+                guard timings[10]?.count ?? 0 > 0 else {
+                    throw FocusRackError.calibrationRequired
+                }
+                quanta = [10]
+            } else {
+                quanta = [1, 2, 3, 4, 5, 9, 12]
+            }
             return try adaptiveTimed(
                 signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
-                quiet: quiet, timings: timings)
+                quiet: quiet, timings: timings, quanta: quanta)
         }
         let cost = timings[1]?.longest ?? 0
         let trajectory = try FocusRackTrajectory(
@@ -86,15 +97,14 @@ enum FocusRackPlanner {
 
     private static func adaptiveTimed(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
-        quiet: Double, timings: [Int: FocusRackCommandTiming]
+        quiet: Double, timings: [Int: FocusRackCommandTiming], quanta: [Int]
     ) throws -> FocusRackMovementPlan {
         let count = abs(signedSteps)
         let sign = signedSteps < 0 ? -1 : 1
         // Unmeasured sizes use the session's worst observed command as an estimate, not a
         // measurement of that size. Every completed command updates its own budget; late runs halt.
         let fallback = timings.values.map(\.longest).max() ?? 0
-        // Retain fine profiles, then the two larger groups compared in the wide-span source trial.
-        let candidates = [1, 2, 3, 4, 5, 9, 12].compactMap { quantum -> TimedCandidate? in
+        let candidates = quanta.compactMap { quantum -> TimedCandidate? in
             var chunks = Array(repeating: sign * quantum, count: count / quantum)
             if count % quantum != 0 { chunks.append(sign * (count % quantum)) }
             guard chunks.count > 1 else { return nil }

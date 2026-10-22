@@ -25,6 +25,14 @@ public enum FocusRackEasing: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Immutable command-planning policy selected when a controller is created.
+public enum FocusRackProfile: String, Sendable {
+    /// Selects the finest feasible profile from the existing adaptive command sizes.
+    case adaptive
+    /// Local, unqualified ten-command trial for a 100-unit, one-second Linear move.
+    case tenBy160Experiment
+}
+
 /// One session-relative mark, expressed in completed base focus units.
 public struct FocusRackMark: Codable, Equatable, Sendable {
     public let id: String
@@ -120,6 +128,8 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
     case durationTooShort(minimum: Double)
     case durationTooLong(maximum: Double)
     case noSmoothTiming
+    /// Timed experimental playback requires a completed command of its selected size.
+    case calibrationRequired
     case marksTooClose
     case reconnectRequired
     case invalidTemplateName
@@ -139,6 +149,8 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
         case .reconnectRequired: "The camera stop is unconfirmed. Reconnect before resetting marks."
         case .invalidTemplateName: "Use a unique template name of 1–60 characters."
         case .templateStorageFull: "Remove a saved timing template before saving another."
+        case .calibrationRequired:
+            "Use Go to A or Go to B once to measure this move before timed playback."
         case .noSmoothTiming:
             "This duration is not supported for these marks at the current camera cadence. Try another duration or Linear. Go to A/B remains available for fast positioning."
         case .durationTooLong(let maximum):

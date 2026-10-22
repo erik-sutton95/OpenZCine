@@ -124,10 +124,14 @@ public struct FocusRackState: Codable, Sendable {
     public init() {}
 
     /// Projects both timed actions from the same marks, readiness and admission result.
-    /// Fast positioning remains governed independently by canGoToA/B.
-    public mutating func updateTimedActions(recording: Bool, ready: Bool) {
+    /// Fast positioning remains governed independently by canGoToA/B. An optional admission
+    /// instruction describes preparation that cannot be resolved by changing timing.
+    public mutating func updateTimedActions(
+        recording: Bool, ready: Bool, admissionInstruction: String? = nil
+    ) {
         var timed = transition
         timed.durationMode = .timed
+        let admissionReason = admissionInstruction ?? "Adjust timing"
         func action(from: String, to: String) -> FocusRackPrimaryAction {
             let start = program.marks.first { $0.id == from }
             let hasMarks = start != nil && program.marks.contains { $0.id == to }
@@ -139,7 +143,7 @@ public struct FocusRackState: Codable, Sendable {
                     : busy
                         ? "Wait for movement"
                         : admissionMessage != nil
-                            ? "Adjust timing"
+                            ? admissionReason
                             : !ready
                                 ? "Camera not ready"
                                 : stepPosition != start?.stepPosition
@@ -159,7 +163,7 @@ public struct FocusRackState: Codable, Sendable {
                 : !referenceValid
                     ? "Reset marks"
                     : admissionMessage != nil
-                        ? "Adjust timing"
+                        ? admissionReason
                         : !ready ? "Camera not ready" : "Go to A or B first"
     }
 

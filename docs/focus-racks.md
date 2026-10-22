@@ -88,6 +88,13 @@ with matching focus in native-size source crops. This is one diagnostic result; 
 covered by deterministic tests, and production-phone timing, repeatability and other setups remain
 unqualified. Rehearse the actual lens, zoom and marks before recording a take.
 
+The current local, unqualified phone trial selects ten equal 160-pulse commands only for a
+100-unit, one-second Linear timed pull. It requires measured 160-pulse timing first: explicit
+Go to A/B over that span uses the same ten confirmed commands, while setup nudges remain fine.
+Timed playback refuses until that size is measured or when its worst observed cost does not fit;
+it never substitutes a larger profile for this trial. Other spans, durations and easing retain
+the adaptive policy. Source smoothness and repeatability remain unqualified.
+
 Old timing templates still decode. The new direct playback actions always use the displayed duration
 and delay, including when a template retains the legacy Fastest mode internally. Fast repositioning
 never uses that timing. Paused time is excluded; movement starts only from an explicit action.

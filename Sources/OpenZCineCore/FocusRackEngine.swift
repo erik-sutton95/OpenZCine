@@ -171,6 +171,7 @@ public struct FocusRackEngine: Sendable {
     private var runID: Int64
     private var trajectory: FocusRackMovementPlan?
     private let adaptive: Bool
+    private let profile: FocusRackProfile
     private var completedUnits = 0
     private var totalUnits = 0
     private var startedAt = 0.0
@@ -194,7 +195,7 @@ public struct FocusRackEngine: Sendable {
     /// Creates an inert state machine; the controller seeds run IDs from monotonic microseconds.
     public init(
         configuration: FocusRackConfiguration = .init(), initialRunID: Int64 = 0,
-        adaptive: Bool = false
+        adaptive: Bool = false, profile: FocusRackProfile = .adaptive
     )
         throws
     {
@@ -205,6 +206,7 @@ public struct FocusRackEngine: Sendable {
         else { throw FocusRackError.invalidConfiguration }
         self.configuration = configuration
         self.adaptive = adaptive
+        self.profile = profile
         program.transitions = [configuration.transition]
         runID = initialRunID
     }
@@ -573,7 +575,7 @@ public struct FocusRackEngine: Sendable {
         let planned = try FocusRackPlanner.make(
             signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
             quiet: configuration.commandInterval, timings: commandTimings, adaptive: adaptive,
-            timed: enforcesTiming, grouped: grouped)
+            timed: enforcesTiming, grouped: grouped, profile: profile)
         runID += 1
         trajectory = planned
         referenceContext = context
@@ -593,7 +595,7 @@ public struct FocusRackEngine: Sendable {
         append(
             "runStarted", at: timestamp,
             note:
-                "timed=\(enforcesTiming) duration=\(duration) delay=\(delay) easing=\(easing.rawValue)"
+                "timed=\(enforcesTiming) duration=\(duration) delay=\(delay) easing=\(easing.rawValue) profile=\(profile.rawValue)"
         )
     }
 
@@ -750,6 +752,7 @@ public struct FocusRackEngine: Sendable {
         caps.canGoToB =
             idle && ready && marks.contains { $0.id == "B" && $0.stepPosition != position }
         state.capabilities = caps
+        var admissionInstruction: String?
         if let from = marks.first(where: { $0.id == state.transition.fromMark }),
             let to = marks.first(where: { $0.id == state.transition.toMark })
         {
@@ -759,9 +762,12 @@ public struct FocusRackEngine: Sendable {
                     duration: state.transition.duration, delay: state.transition.delay,
                     easing: state.transition.easing, quiet: configuration.commandInterval,
                     timings: commandTimings, adaptive: adaptive,
-                    timed: true, grouped: true)
+                    timed: true, grouped: true, profile: profile)
                 state.minimumDuration = focusRackMinimumForDisplay(plan.minimumDuration)
                 state.maximumDuration = plan.maximumDuration
+            } catch FocusRackError.calibrationRequired {
+                state.admissionMessage = FocusRackError.calibrationRequired.localizedDescription
+                admissionInstruction = "Go to A or B first"
             } catch FocusRackError.durationTooShort(let minimum) {
                 state.minimumDuration = focusRackMinimumForDisplay(minimum)
                 state.admissionMessage =
@@ -786,9 +792,10 @@ public struct FocusRackEngine: Sendable {
             let recording = context?.recording == true
             let direction = state.transition.fromMark + "→" + state.transition.toMark
             let atStart = position == start.stepPosition
+            let admissionReason = admissionInstruction ?? "Adjust timing"
             let reason: String? =
                 state.admissionMessage != nil
-                ? "Adjust timing"
+                ? admissionReason
                 : !atStart
                     ? "Go to " + start.id + " first"
                     : !ready ? "Camera not ready" : nil
@@ -798,7 +805,9 @@ public struct FocusRackEngine: Sendable {
                 enabled: ready && atStart && state.admissionMessage == nil,
                 detail: state.transition.playbackDetail, disabledReason: reason)
         }
-        state.updateTimedActions(recording: context?.recording == true, ready: ready)
+        state.updateTimedActions(
+            recording: context?.recording == true, ready: ready,
+            admissionInstruction: admissionInstruction)
         state.admissionMessage = state.admissionMessage?.replacingOccurrences(
             of: "test cadence", with: "current camera cadence")
         if context?.unavailableReason(at: timestamp) == nil, position != nil {
