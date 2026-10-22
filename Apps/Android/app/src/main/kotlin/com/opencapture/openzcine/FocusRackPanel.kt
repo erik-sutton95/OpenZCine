@@ -7,6 +7,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
@@ -30,11 +32,11 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
 
 /** Display-only projection of the shared Swift controller. No position or timing policy lives here. */
 internal data class FocusRackViewState(
@@ -53,7 +55,10 @@ internal data class FocusRackViewState(
     val canReset: Boolean = false, val canAutofocus: Boolean = false, val canPause: Boolean = false, val canStop: Boolean = false, val active: Boolean = false,
     val completed: Int = 0, val total: Int = 0, val minimumDuration: Double? = null,
     val captureRevision: Long = 0, val remainingDelay: Double = 0.0,
+    val nudgeProgress: FocusRackNudgeProgressViewState? = null,
 )
+/** Acknowledged setup progress supplied by Swift, never estimated by the shell. */
+internal data class FocusRackNudgeProgressViewState(val towardNear: Boolean, val steps: Int, val percent: Int)
 internal data class FocusRackActionViewState(val title: String, val detail: String?, val enabled: Boolean,
     val disabledReason: String? = null)
 internal data class FocusRackMarkViewState(val id: String, val position: Int, val revision: Long,
@@ -77,6 +82,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     onGoTo: (String) -> Unit = {}, onRun: (String) -> Unit = {}, onMovePanel: (Offset) -> Unit = {}, onResetPanel: () -> Unit = {},
 ) {
     var optionsExpanded by remember { mutableStateOf(false) }
+    val nudging = state.nudgeProgress != null
     val directPulls = !state.active && state.position != null && state.marks.size == 2 &&
         state.pullAToB != null && state.pullBToA != null
     val compactPositioning = compact && directPulls && setupEnabled &&
@@ -85,7 +91,8 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     var editText by remember { mutableStateOf("") }
     var confirmClose by remember { mutableStateOf(false) }
     val setupScroll = rememberScrollState()
-    val panelScope = rememberCoroutineScope()
+    val admissionAttention = remember { BringIntoViewRequester() }
+    var showAdmission by remember { mutableStateOf(false) }
     val panelDensity = LocalDensity.current.density
     val movePanel by rememberUpdatedState(onMovePanel)
     val shape = RoundedCornerShape(12.dp)
@@ -97,10 +104,10 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).heightIn(min = 48.dp)
-                .clickable(enabled = setupEnabled) {
+                .clickable(enabled = setupEnabled && !nudging) {
                     if (state.admissionMessage != null) {
                         onExpanded(true)
-                        panelScope.launch { setupScroll.scrollTo(0) }
+                        showAdmission = true
                     }
                 }
                 .pointerInput(setupEnabled, panelDensity) {
@@ -136,7 +143,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 if (!compact && state.admissionMessage == null) Text(state.playbackInstruction ?: "Drag to move",
                     color = Color.LightGray, fontSize = 10.sp)
             }
-            TextButton(onClick = { onExpanded(!expanded) }, enabled = setupEnabled,
+            TextButton(onClick = { onExpanded(!expanded) }, enabled = setupEnabled && !nudging,
                 modifier = Modifier.width(48.dp).heightIn(min = 48.dp).testTag("focusRack.expand")
                     .semantics { contentDescription = if (expanded && !compact) "Collapse focus rack" else "Open focus rack setup" },
                 contentPadding = PaddingValues(0.dp)) {
@@ -150,7 +157,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
         if (!compact) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("focusRack.marks"),
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (state.position != null && !state.active) {
+                    if ((state.position != null && !state.active) || nudging) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf("A", "B").forEach { id ->
                             val mark = state.marks.firstOrNull { it.id == id }
@@ -158,7 +165,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                                 if (id == "A") state.canCaptureA else state.canCaptureB
                             } else if (id == "A") state.canGoToA else state.canGoToB
                             OutlinedButton(onClick = { if (mark == null) onCapture(id) else onGoTo(id) },
-                                enabled = setupEnabled && canUse,
+                                enabled = setupEnabled && canUse && !nudging,
                                 modifier = Modifier.weight(1f).heightIn(min = 56.dp)
                                     .testTag("focusRack.${if (mark == null) "capture" else "go"}.$id"),
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)) {
@@ -190,14 +197,12 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 }
             Column(Modifier.weight(1f, fill = false).verticalScroll(setupScroll)
                 .testTag("focusRack.setup").semantics { contentDescription = "Focus rack setup" }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.admissionMessage?.let { Text(it, color = Color(0xFFFFCE9B), fontSize = 12.sp,
-                    modifier = Modifier.testTag("focusRack.admission")) }
-                FocusRackNudgeControls(state.canNudge, onNudge)
+                FocusRackNudgeControls(state.canNudge && !nudging, state.nudgeProgress, onNudge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("duration" to "Duration", "delay" to "Start delay").forEach { (field, label) ->
                         OutlinedButton(onClick = { editingField = field
                             editText = (if (field == "duration") state.duration else state.delay).toString() },
-                            enabled = state.canEdit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                            enabled = state.canEdit && !nudging, modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                 .testTag("focusRack.$field"), contentPadding = PaddingValues(4.dp)) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(label, fontSize = 11.sp, lineHeight = 14.sp)
@@ -206,42 +211,32 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                         }
                     }
                 }
-                TextButton(onClick = { optionsExpanded = !optionsExpanded },
+                TextButton(onClick = { optionsExpanded = !optionsExpanded }, enabled = !nudging,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.options")) {
-                    Text("Options · ${if (state.easing == "linear") "Linear" else "Ease in-out"}")
+                    Text("Options · Linear")
                     Spacer(Modifier.weight(1f))
                     Text(if (optionsExpanded) "⌃" else "⌄")
                 }
                 if (optionsExpanded) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("linear" to "Linear", "easeInOut" to "Ease in-out").forEach { (value, label) ->
-                            FilterChip(selected = state.easing == value,
-                                onClick = { onTiming(FocusRackTimingEdit(easing = value)) },
-                                enabled = state.canEdit, label = { Text(label, fontSize = 12.sp) },
-                                modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-                        }
-                    }
-                    Text("Ease in-out starts and finishes gently; it may need a longer duration.",
-                        color = Color.LightGray, fontSize = 11.sp)
                     Text("Set A, adjust with Near/Far, then set B. Keep zoom and the focus ring fixed.",
                         color = Color.LightGray, fontSize = 11.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         state.marks.forEach { mark ->
                             TextButton(onClick = { onCapture(mark.id) },
-                                enabled = if (mark.id == "A") state.canCaptureA else state.canCaptureB,
+                                enabled = !nudging && if (mark.id == "A") state.canCaptureA else state.canCaptureB,
                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     .testTag("focusRack.capture.${mark.id}")) { Text("Replace ${mark.id}") }
                         }
                     }
                     Text("Timing templates require fresh marks when loaded.", color = Color.LightGray, fontSize = 11.sp)
-                    OutlinedButton(onClick = { editingField = "template"; editText = "" }, enabled = state.canEdit,
+                    OutlinedButton(onClick = { editingField = "template"; editText = "" }, enabled = state.canEdit && !nudging,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                             .testTag("focusRack.saveTemplate")) { Text("Save timing…") }
                     templates.forEach { template ->
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { onLoad(template) }, enabled = state.canEdit,
+                            TextButton(onClick = { onLoad(template) }, enabled = state.canEdit && !nudging,
                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text(template.name) }
-                            TextButton(onClick = { onDelete(template) }, enabled = state.canEdit,
+                            TextButton(onClick = { onDelete(template) }, enabled = state.canEdit && !nudging,
                                 modifier = Modifier.heightIn(min = 48.dp).semantics {
                                     contentDescription = "Delete ${template.name} timing template"
                                 }) { Text("Delete") }
@@ -252,21 +247,25 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(4.dp)) {
                             Text("Focus settings", fontSize = 12.sp)
                         }
-                        OutlinedButton(onClick = onReset, enabled = state.canReset,
+                        OutlinedButton(onClick = onReset, enabled = state.canReset && !nudging,
                             modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("focusRack.reset"),
                             contentPadding = PaddingValues(4.dp)) { Text("Reset marks", fontSize = 12.sp) }
                     }
                 }
-                Text(state.error ?: state.message, color = if (state.error != null) Color(0xFFFFBE9E) else Color.LightGray,
+                state.admissionMessage?.let { Text(it, color = Color(0xFFFFCE9B), fontSize = 12.sp,
+                    modifier = Modifier.bringIntoViewRequester(admissionAttention).testTag("focusRack.admission")) }
+                val message = state.error ?: state.message
+                if (message.isNotBlank()) Text(message, color = if (state.error != null) Color(0xFFFFBE9E) else Color.LightGray,
                     fontSize = 12.sp, modifier = Modifier.testTag("focusRack.message"))
             }
             state.recovery?.let { Text(it, color = Color(0xFFFFCE9B), fontSize = 12.sp,
                 modifier = Modifier.testTag("focusRack.recovery")) }
-            if (state.active && state.total > 0) LinearProgressIndicator(
-                progress = { state.completed.toFloat() / state.total }, modifier = Modifier.fillMaxWidth())
+            if (state.active && state.total > 0 && !nudging) LinearProgressIndicator(
+                progress = { state.completed.toFloat() / state.total }, modifier = Modifier.fillMaxWidth()
+                    .testTag("focusRack.progress"))
         }
         val showsStop = state.canStop || state.phase == "stopping"
-        if (showsStop && !compact) Text("Stop cancels focus movement only.", color = Color.LightGray,
+        if (showsStop && !compact && !nudging) Text("Stop cancels focus movement only.", color = Color.LightGray,
             fontSize = 11.sp, modifier = Modifier.testTag("focusRack.stopHint"))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (compactPositioning) {
@@ -286,7 +285,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                     }
                 }
             } else {
-            Button(onClick = onPrimary, enabled = state.primaryEnabled && (setupEnabled || state.canPause),
+            Button(onClick = onPrimary, enabled = state.primaryEnabled && !nudging && (setupEnabled || state.canPause),
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("focusRack.primary"),
                 contentPadding = PaddingValues(horizontal = 6.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -302,6 +301,15 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 contentPadding = PaddingValues(horizontal = 12.dp)) {
                 Text(if (state.phase == "stopping") "Stopping…" else "Stop", color = Color(0xFFFFAA9B), fontSize = 12.sp)
             }
+        }
+    }
+    LaunchedEffect(showAdmission, compact, state.admissionMessage) {
+        if (showAdmission && !compact) {
+            if (state.admissionMessage != null) {
+                withFrameNanos { }
+                admissionAttention.bringIntoView()
+            }
+            showAdmission = false
         }
     }
     LaunchedEffect(state.active) { if (state.active) editingField = null }
@@ -350,19 +358,26 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
 }
 
 @Composable
-private fun FocusRackNudgeControls(enabled: Boolean, onNudge: (Boolean, Int) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+private fun FocusRackNudgeControls(enabled: Boolean, progress: FocusRackNudgeProgressViewState?,
+    onNudge: (Boolean, Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().testTag("focusRack.nudges"), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         listOf(Triple(true, 10, "near10"), Triple(true, 1, "near"),
             Triple(false, 1, "far"), Triple(false, 10, "far10")).forEach { (near, steps, id) ->
             val direction = if (near) "Near" else "Far"
             val amount = if (near) "−$steps" else "+$steps"
+            val percent = progress?.takeIf { it.towardNear == near && it.steps == steps }?.percent
             OutlinedButton(onClick = { onNudge(near, steps) }, enabled = enabled,
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("focusRack.$id")
-                    .semantics { contentDescription = "$direction $amount" },
+                    .semantics {
+                        contentDescription = "$direction $amount"
+                        if (percent != null) stateDescription = "$percent percent"
+                    },
                 contentPadding = PaddingValues(2.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(direction, fontSize = 11.sp, lineHeight = 14.sp)
-                    Text(amount, fontSize = 13.sp, lineHeight = 16.sp)
+                    Text(if (percent == null) amount else "$percent%", fontSize = 13.sp, lineHeight = 16.sp,
+                        color = if (percent == null) Color.Unspecified else Color.White,
+                        modifier = if (percent == null) Modifier else Modifier.testTag("focusRack.nudgeProgress.$id"))
                 }
             }
         }

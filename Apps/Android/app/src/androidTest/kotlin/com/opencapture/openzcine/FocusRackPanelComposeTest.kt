@@ -19,6 +19,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -90,6 +91,66 @@ class FocusRackPanelComposeTest {
         compose.runOnIdle { state.value = state.value.copy(canNudge = false) }
         compose.onNodeWithTag("focusRack.near10").performScrollTo().assertIsNotEnabled()
         compose.onNodeWithTag("focusRack.far10").assertIsNotEnabled()
+    }
+
+    @Test fun setupNudgesKeepBoundsAndIdentityThroughProgressStopAndSettlement() {
+        val resting = ready().copy(message = "")
+        val state = mutableStateOf(resting)
+        val actions = Actions()
+        mount(state, actions)
+        val tags = listOf("focusRack.panel", "focusRack.marks", "focusRack.positions", "focusRack.nudges",
+            "focusRack.go.A", "focusRack.go.B", "focusRack.near10", "focusRack.near", "focusRack.far", "focusRack.far10",
+            "focusRack.duration", "focusRack.delay", "focusRack.options")
+        val restingBounds = tags.associateWith { compose.onNodeWithTag(it).fetchSemanticsNode().boundsInRoot }
+        fun assertStableSetup() {
+            for (tag in tags) assertEquals("Setup bounds changed for $tag", restingBounds[tag],
+                compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot)
+            for (id in listOf("near10", "near", "far", "far10")) {
+                compose.onNodeWithTag("focusRack.$id").assertIsDisplayed().assertIsNotEnabled().insideFrame()
+            }
+            for (id in listOf("A", "B")) compose.onNodeWithTag("focusRack.go.$id")
+                .assertIsDisplayed().assertIsNotEnabled().insideFrame()
+            compose.onNodeWithTag("focusRack.duration").assertIsNotEnabled()
+            compose.onNodeWithTag("focusRack.delay").assertIsNotEnabled()
+            compose.onNodeWithTag("focusRack.options").assertIsNotEnabled()
+            compose.onNodeWithTag("focusRack.primary").assertIsNotEnabled()
+            compose.onNodeWithTag("focusRack.stopHint").assertDoesNotExist()
+            compose.onNodeWithTag("focusRack.progress").assertDoesNotExist()
+            compose.onNodeWithTag("focusRack.message").assertDoesNotExist()
+            assertTransportInsideFrame()
+        }
+        for ((near, id, label) in listOf(Triple(true, "near10", "Near −10"), Triple(false, "far10", "Far +10"))) {
+            compose.onNodeWithTag("focusRack.$id").assertIsEnabled().performClick()
+            assertEquals(near to 10, actions.nudges.last())
+            compose.runOnIdle { state.value = resting.copy(active = true, phase = "moving", canPause = true,
+                canStop = true, primaryTitle = "Pause", primaryEnabled = true, completed = 3, total = 10,
+                canNudge = false, canCaptureA = false, canCaptureB = false, canEdit = false,
+                canGoToA = false, canGoToB = false, canReset = false,
+                admissionMessage = "This move needs at least 4 seconds. Adjust the duration before the next timed pull.",
+                nudgeProgress = FocusRackNudgeProgressViewState(near, 10, 30)) }
+            compose.onNodeWithContentDescription(label).assertIsDisplayed().assertIsNotEnabled()
+            compose.onNodeWithTag("focusRack.nudgeProgress.$id", useUnmergedTree = true).assertTextEquals("30%")
+            for (other in listOf("near10", "near", "far", "far10").filter { it != id }) {
+                compose.onAllNodesWithTag("focusRack.nudgeProgress.$other", useUnmergedTree = true).assertCountEquals(0)
+            }
+            assertStableSetup()
+            compose.onNodeWithTag("focusRack.stop").assertIsEnabled().performClick()
+            compose.saveLandscapeEvidence("focus-rack-nudge-$id-moving-landscape")
+            compose.runOnIdle { state.value = state.value.copy(phase = "stopping", position = null,
+                canStop = false, primaryEnabled = false) }
+            assertStableSetup()
+            compose.onNodeWithTag("focusRack.stop").assertIsNotEnabled()
+            compose.onNodeWithTag("focusRack.nudgeProgress.$id", useUnmergedTree = true).assertTextEquals("30%")
+            compose.saveLandscapeEvidence("focus-rack-nudge-$id-stopping-landscape")
+            compose.runOnIdle { state.value = resting }
+            for (tag in tags) assertEquals(restingBounds[tag], compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot)
+            compose.onNodeWithTag("focusRack.near10").assertTextContains("−10").assertIsEnabled()
+            compose.onNodeWithTag("focusRack.far10").assertTextContains("+10").assertIsEnabled()
+            compose.onNodeWithTag("focusRack.stop").assertDoesNotExist()
+        }
+        assertEquals(2, actions.stops)
+        assertEquals(0, actions.primary)
+        compose.saveLandscapeEvidence("focus-rack-nudge-settled-landscape")
     }
 
     @Test fun explicitPositioningRemainsReachableAfterTimingChanges() {
@@ -172,7 +233,7 @@ class FocusRackPanelComposeTest {
         compose.savePortraitEvidence("focus-rack-direct-actions-portrait")
     }
 
-    @Test fun moveEditorForwardsDurationDelayDirectionAndEasing() {
+    @Test fun moveEditorForwardsDurationDelayAndKeepsLinearOptions() {
         val state = mutableStateOf(ready())
         val actions = Actions()
         mount(state, actions, updateTiming = true)
@@ -188,9 +249,9 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.applyEdit").assertDoesNotExist()
         waitForKeyboardDismissed()
         openOptions()
-        compose.onNodeWithText("Ease in-out").performScrollTo().performClick()
-        assertEquals("easeInOut", actions.timings.last().easing)
-        compose.onNodeWithText("Linear").performScrollTo().performClick()
+        compose.onNodeWithText("Options · Linear").assertIsDisplayed()
+        compose.onNodeWithText("Ease in-out").assertDoesNotExist()
+        compose.onNodeWithText("Ease in-out starts and finishes gently; it may need a longer duration.").assertDoesNotExist()
         assertEquals(32.0, actions.timings.last().duration.toDouble(), 0.0)
         assertEquals(3.0, actions.timings.last().delay.toDouble(), 0.0)
         assertEquals("linear", actions.timings.last().easing)
@@ -202,7 +263,7 @@ class FocusRackPanelComposeTest {
         compose.runOnIdle { state.value = state.value.copy(canEdit = false) }
         compose.onNodeWithTag("focusRack.duration").performScrollTo().assertIsNotEnabled()
         compose.onNodeWithTag("focusRack.delay").assertIsNotEnabled()
-        compose.onNodeWithText("Linear").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("Ease in-out").assertDoesNotExist()
     }
 
     @Test fun sharedTransportLabelsAndCallbacksCoverRehearseRunPauseResumeAndStop() {
