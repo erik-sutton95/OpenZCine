@@ -176,3 +176,22 @@ private func settleCalibrationTest(
     #expect(engine.calibrationTimings.isEmpty)
     #expect(engine.snapshot(at: 1.02).stepPosition == nil)
 }
+
+@Test func rackOldScopeCompletionCannotPopulateTheNewTimingBank() throws {
+    var engine = try recoveredEngine()
+    engine.bindCalibrationKey(calibrationKey, at: 1)
+    engine.restoreCalibration(savedCalibration, at: 1)
+    try engine.nudge(towardNear: true, steps: 1, at: 1)
+    let action = engine.nextAction(at: 1)
+    #expect(action.kind == "drive")
+    engine.detachCalibrationKey(at: 1.01)
+    let newKey = FocusRackCalibrationKey(
+        cameraID: "other-body", transport: "usb", lens: calibrationKey.lens,
+        focalLength: calibrationKey.focalLength, focusMode: calibrationKey.focusMode,
+        focusArea: calibrationKey.focusArea, focusSubject: calibrationKey.focusSubject)
+    engine.bindCalibrationKey(newKey, at: 1.01)
+    engine.complete(runID: action.runID, commandID: 0, outcome: 0, at: 1.02)
+    #expect(engine.calibrationTimings.isEmpty)
+    #expect(engine.snapshot(at: 1.02).stepPosition == nil)
+    #expect(!engine.snapshot(at: 1.02).busy)
+}
