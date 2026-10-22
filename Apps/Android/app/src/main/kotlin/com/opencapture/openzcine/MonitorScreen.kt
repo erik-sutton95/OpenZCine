@@ -284,7 +284,7 @@ internal fun MonitorScreen(
     /** The device holding this camera now; recovery stops with Camera taken over instead. */
     currentCameraHolder: suspend () -> String? = { null },
     linkHealth: AndroidLinkHealthMonitor? = null,
-    activeTransportIsUsb: Boolean = false,
+    activeTransportIsUsb: Boolean? = null,
     isDemoSession: Boolean = false,
     /**
      * What the monitor can truthfully display given who owns the camera — the iOS
@@ -1536,7 +1536,7 @@ internal fun MonitorScreen(
             actualLinkHealth.updateSession(
                 state = sessionState,
                 streamRequested = healthFrameSource != null,
-                transportIsUsb = activeTransportIsUsb,
+                transportIsUsb = activeTransportIsUsb == true,
                 targetFramesPerSecond = healthTargetFramesPerSecond,
                 isDemoSession = isDemoSession || frameSource != null,
                 connectionOwner = (session as? SwiftCoreCameraSession)?.connectionOwner,
@@ -1741,6 +1741,9 @@ internal fun MonitorScreen(
             val now = android.os.SystemClock.elapsedRealtimeNanos() / 1e9
             org.json.JSONObject()
                 .put("sessionID", (session as? SwiftCoreCameraSession)?.connectionOwner?.toString() ?: "unavailable")
+                .put("cameraID", (session.state.value as? CameraSessionState.Connected)?.identity?.serialNumber
+                    ?.takeIf(String::isNotBlank) ?: org.json.JSONObject.NULL)
+                .put("transport", activeTransportIsUsb?.let { if (it) "usb" else "ptpIP" } ?: org.json.JSONObject.NULL)
                 .put("connected", connected)
                 .put("foregroundOwner", focusRackVisible && rackForeground)
                 .put("recording", session.recordingState.value in setOf(CameraRecordingState.RECORDING, CameraRecordingState.STARTING))

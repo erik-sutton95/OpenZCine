@@ -74,6 +74,7 @@ public final class FocusRackWire: @unchecked Sendable {
         let timingUpdate: FocusRackTimingUpdate?
         let template: FocusRackTemplate?
         let name: String?
+        let calibrationJSON: String?
     }
 
     private final class Authority: @unchecked Sendable {
@@ -100,6 +101,7 @@ public final class FocusRackWire: @unchecked Sendable {
         private var state: FocusRackState?
         private var error: String?
         private var traceJSON: String?
+        private var calibrationJSON: String?
         private var templates: [FocusRackTemplate] = []
         private var tail: Task<Void, Never>?
         private var observer: Task<Void, Never>?
@@ -120,9 +122,21 @@ public final class FocusRackWire: @unchecked Sendable {
 
         func start() {
             observer = Task { [weak self, controller] in
+                var previousCalibration: FocusRackCalibration?
                 for await state in await controller.states() {
                     guard let self, !Task.isCancelled else { return }
-                    self.lock.withLock { self.state = state }
+                    var saved: String?
+                    if !state.busy, let checkpoint = await controller.calibrationCheckpoint(),
+                        checkpoint != previousCalibration
+                    {
+                        saved = (try? FocusRackCalibrationCodec.encode(checkpoint))
+                            .flatMap { String(data: $0, encoding: .utf8) }
+                        if saved != nil { previousCalibration = checkpoint }
+                    }
+                    self.lock.withLock {
+                        self.state = state
+                        if let saved { self.calibrationJSON = saved }
+                    }
                 }
             }
         }
@@ -190,6 +204,13 @@ public final class FocusRackWire: @unchecked Sendable {
             }
             let intent: FocusRackIntent
             switch request.kind {
+            case "loadCalibration":
+                guard let json = request.calibrationJSON else {
+                    throw FocusRackError.invalidConfiguration
+                }
+                try await controller.loadCalibration(
+                    FocusRackCalibrationCodec.decode(Data(json.utf8)))
+                return
             case "diagnostics":
                 let data = try JSONEncoder().encode(await controller.diagnostics())
                 lock.withLock { traceJSON = String(data: data, encoding: .utf8) }
@@ -261,13 +282,15 @@ public final class FocusRackWire: @unchecked Sendable {
                     let templates: [FocusRackTemplate]
                     let templatesJSON: String
                     let traceJSON: String?
+                    let calibrationJSON: String?
                 }
                 guard let saved = try? FocusRackTemplateCodec.encode(templates),
                     let json = String(data: saved, encoding: .utf8),
                     let data = try? JSONEncoder().encode(
                         Reply(
                             state: state, error: error,
-                            templates: templates, templatesJSON: json, traceJSON: traceJSON))
+                            templates: templates, templatesJSON: json, traceJSON: traceJSON,
+                            calibrationJSON: calibrationJSON))
                 else { return nil }
                 traceJSON = nil
                 return String(data: data, encoding: .utf8)

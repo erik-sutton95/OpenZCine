@@ -50,6 +50,7 @@ private struct RackWireReply: Decodable {
     let templates: [FocusRackTemplate]
     let templatesJSON: String
     let traceJSON: String?
+    let calibrationJSON: String?
 }
 
 private func rackWireReply(
@@ -223,5 +224,57 @@ func rackProductionWireStopDiscardsQueuedMovementBeforeItCanRearm(kind: String) 
     let trace = try JSONDecoder().decode(FocusRackDiagnostics.self, from: data)
     #expect(trace.events.isEmpty)
     #expect(try rackWireReply(wire, owner).traceJSON == nil)
+    #expect(camera.log.isEmpty)
+}
+
+@Test func rackWireRestoresValidatedCalibrationAcrossOwnersWithoutMarksOrMovement() async throws {
+    let camera = RackWireCamera()
+    let wire = FocusRackWire()
+    let calibration = FocusRackCalibration(
+        key: .init(
+            cameraID: "fixture-body", transport: "usb", lens: "35-100mm f/2.8",
+            focalLength: "70", focusMode: "AF-S", focusArea: "Single-point AF", focusSubject: "Off"),
+        commandDurations: [64: 0.12, 128: 0.08])
+    let encoded = try #require(
+        String(data: FocusRackCalibrationCodec.encode(calibration), encoding: .utf8))
+    var checkpoint = encoded
+    for _ in 0..<2 {
+        let owner = try #require(wire.create(driver: camera.driver))
+        _ = try rackWireReply(
+            wire, owner, kind: "loadCalibration", fields: ["calibrationJSON": checkpoint])
+        let reply = try await waitForRackWire(wire, owner) { $0.calibrationJSON != nil }
+        checkpoint = try #require(reply.calibrationJSON)
+        #expect(try FocusRackCalibrationCodec.decode(Data(checkpoint.utf8)) == calibration)
+        #expect(reply.state?.program.marks.isEmpty == true)
+        #expect(reply.state?.captures.isEmpty == true)
+        #expect(reply.state?.busy == false)
+        #expect(!checkpoint.contains("stepPosition"))
+        #expect(!checkpoint.contains("sessionID"))
+        #expect(camera.log.isEmpty)
+        wire.close(owner: owner)
+    }
+}
+
+@Test func rackWireRejectsInvalidCalibrationWithoutReplacingTheSavedCheckpoint() async throws {
+    let camera = RackWireCamera()
+    let wire = FocusRackWire()
+    let owner = try #require(wire.create(driver: camera.driver))
+    defer { wire.close(owner: owner) }
+    let calibration = FocusRackCalibration(
+        key: .init(
+            cameraID: "fixture-body", transport: "usb", lens: "35-100mm f/2.8",
+            focalLength: "70", focusMode: "AF-S", focusArea: "Single-point AF", focusSubject: "Off"),
+        commandDurations: [128: 0.08])
+    let encoded = try #require(
+        String(data: FocusRackCalibrationCodec.encode(calibration), encoding: .utf8))
+    _ = try rackWireReply(
+        wire, owner, kind: "loadCalibration", fields: ["calibrationJSON": encoded])
+    _ = try await waitForRackWire(wire, owner) { $0.calibrationJSON != nil }
+    _ = try rackWireReply(
+        wire, owner, kind: "loadCalibration", fields: ["calibrationJSON": "{\"version\":999}"])
+    let reply = try await waitForRackWire(wire, owner) { $0.error != nil }
+    let retained = try #require(reply.calibrationJSON)
+    #expect(try FocusRackCalibrationCodec.decode(Data(retained.utf8)) == calibration)
+    #expect(reply.state?.program.marks.isEmpty == true)
     #expect(camera.log.isEmpty)
 }

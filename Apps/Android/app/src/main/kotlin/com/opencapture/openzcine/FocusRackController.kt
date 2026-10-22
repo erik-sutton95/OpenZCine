@@ -50,6 +50,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     private var closed = false
     private var poller: Job? = null
     private var persistedTemplates: String? = null
+    private var persistedCalibration: String? = null
     private var pendingCapture: Triple<String, Long, Bitmap>? = null
     private var captures: Map<String, Long> = emptyMap()
     private var stopPending = false
@@ -57,8 +58,14 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     /** Allocates the inert native owner only when the operator first opens Focus Rack. */
     fun activate() {
         if (closed) return
-        if (owner == null) owner = runCatching { wire.create(connectionOwner,
-            preferences.getString(TEMPLATES_KEY, "[]") ?: "[]") }.getOrNull()
+        if (owner == null) {
+            owner = runCatching { wire.create(connectionOwner,
+                preferences.getString(TEMPLATES_KEY, "[]") ?: "[]") }.getOrNull()
+            if (owner != null) preferences.getString(CALIBRATION_KEY, null)?.let {
+                persistedCalibration = it
+                send("loadCalibration", JSONObject().put("calibrationJSON", it))
+            }
+        }
         if (owner == null) {
             mutableState.value = state.value.copy(error = "Focus Rack is unavailable in this build.")
             return
@@ -204,6 +211,13 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             preferences.edit().putString(TEMPLATES_KEY, saved).apply()
             persistedTemplates = saved
         }
+        reply.nullableString("calibrationJSON")?.let { checkpoint ->
+            if (checkpoint != persistedCalibration) {
+                // Swift validates and scopes timing evidence; Kotlin stores its bytes unchanged.
+                preferences.edit().putString(CALIBRATION_KEY, checkpoint).apply()
+                persistedCalibration = checkpoint
+            }
+        }
         reply.optJSONArray("templates")?.let { values ->
             mutableTemplates.value = (0 until values.length()).map { index ->
                 values.getJSONObject(index).let { FocusRackTimingViewState(it.getString("name"), it.toString()) }
@@ -214,5 +228,8 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         getString("title"), nullableString("detail"), getBoolean("enabled") && !stopPending,
         nullableString("disabledReason"))
     private fun JSONObject.nullableString(key: String): String? = if (!has(key) || isNull(key)) null else getString(key)
-    private companion object { const val TEMPLATES_KEY = "focusRack.timingTemplates.v1" }
+    private companion object {
+        const val TEMPLATES_KEY = "focusRack.timingTemplates.v1"
+        const val CALIBRATION_KEY = "focusRack.calibration.v1"
+    }
 }

@@ -43,6 +43,7 @@ class FocusRackControllerTest {
         var templates = "[]"
         var createdTemplates: String? = null
         var traceJSON: String? = null
+        var calibrationJSON: String? = null
         var nudgeProgress: JSONObject? = null
         var calibration: JSONObject? = null
         var unavailable = false
@@ -69,8 +70,40 @@ class FocusRackControllerTest {
             nudgeProgress?.let { state.put("nudgeProgress", it) }
             calibration?.let { state.put("calibration", it) }
             return JSONObject().put("state", state).put("templates", JSONArray(templates))
-                .put("templatesJSON", templates).put("traceJSON", traceJSON).toString()
+                .put("templatesJSON", templates).put("traceJSON", traceJSON)
+                .put("calibrationJSON", calibrationJSON).toString()
         }
+    }
+
+    @Test fun `saved calibration loads once before observations and survives owner replacement`() = runTest {
+        val saved = """{"version":1,"key":{"cameraID":"fixture-body"},"commandDurations":{"128":0.08}}"""
+        val updated = """{"version":1,"key":{"cameraID":"fixture-body"},"commandDurations":{"128":0.11}}"""
+        val preferences = TestSharedPreferences()
+        preferences.edit().putString("focusRack.calibration.v1", saved).apply()
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, preferences,
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        assertEquals("loadCalibration", wire.requests.single().getString("kind"))
+        assertEquals(saved, wire.requests.single().getString("calibrationJSON"))
+        assertFalse(wire.requests.single().has("observation"))
+        rack.activate()
+        assertEquals(1, wire.requests.count { it.getString("kind") == "loadCalibration" })
+        wire.calibrationJSON = updated
+        rack.observe(JSONObject().put("cameraID", "fixture-body").put("transport", "usb"))
+        assertEquals(updated, preferences.getString("focusRack.calibration.v1", null))
+        val raw = wire.requests.last().getJSONObject("observation")
+        assertEquals("fixture-body", raw.getString("cameraID"))
+        assertEquals("usb", raw.getString("transport"))
+        rack.close()
+
+        val replacementWire = Wire().apply { busy = false }
+        val replacement = FocusRackController(42, preferences,
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), replacementWire)
+        replacement.activate()
+        assertEquals(updated, replacementWire.requests.single().getString("calibrationJSON"))
+        assertFalse(replacementWire.requests.any { it.getString("kind") in setOf("run", "goTo", "calibrate", "nudge") })
+        replacement.close()
     }
 
     @Test fun `calibration renders shared action and forwards only the semantic intent`() = runTest {
