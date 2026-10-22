@@ -96,14 +96,15 @@ The earlier local ten160 trial remains a preserved checkpoint. A later source re
 visible stepping despite regular one-second command timing, and periodic camera reads delayed
 longer pulls. It is not qualified as optically smooth.
 
-The current local comparison uses explicit finer-increment calibration under **Options** for
-A/B marks exactly 100 units apart. First use Go to A/B to measure the 160-pulse baseline. Then
+The current local comparison offers optional finer-increment calibration under **Options** for
+A/B marks exactly 100 units apart. Go to A/B measures the 160-pulse baseline. To measure finer sizes,
 tap **Calibrate to A/B** once per traversal: 32, 48, 64, 96 and 128 pulses, each in both directions.
 Each tap moves only to the other mark; a partial, stopped or failed traversal does not complete
 that stage. Reset, mark replacement and a confirmed setup change restart calibration. Idle
 inactivity preserves completed stages. Calibration and marks are not persisted across sessions.
 
-After calibration, Linear playback selects the finest measured size that fits the duration.
+Linear playback selects the finest measured size that fits the duration using currently available
+evidence, including before or during optional calibration. Completing all stages is not required.
 Measured worst command costs are retained. Longer pulls also reserve the worst measured camera
 read cost between commands; periodic reads start only when that budget fits before the next
 command deadline. The two-second evidence freshness limit, native completion, no-overlap and

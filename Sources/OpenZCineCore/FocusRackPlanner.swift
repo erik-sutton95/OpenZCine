@@ -39,7 +39,7 @@ enum FocusRackPlanner {
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
         quiet: Double, timings: [Int: FocusRackCommandTiming], adaptive: Bool,
         timed: Bool, grouped: Bool, profile: FocusRackProfile = .adaptive,
-        safetyReadBudget: Double = 0, calibrationComplete: Bool = false,
+        safetyReadBudget: Double = 0,
         calibrationQuantum: Int? = nil
     ) throws -> FocusRackMovementPlan {
         guard signedSteps != 0, signedSteps != .min, abs(signedSteps) <= 10_000,
@@ -74,8 +74,6 @@ enum FocusRackPlanner {
         if adaptive, grouped, count > 1 {
             let quanta: [Int]
             if profile == .calibratedFineExperiment, count == 100, easing == .linear {
-                guard calibrationComplete else { throw FocusRackError.fineCalibrationRequired }
-                guard timings[10]?.count ?? 0 > 0 else { throw FocusRackError.calibrationRequired }
                 quanta = [1] + calibrationQuanta + [10]
             } else if profile == .tenBy160Experiment, count == 100, duration == 1, easing == .linear
             {

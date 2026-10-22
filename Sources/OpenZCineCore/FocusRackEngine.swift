@@ -686,7 +686,6 @@ public struct FocusRackEngine: Sendable {
             quiet: configuration.commandInterval, timings: commandTimings, adaptive: adaptive,
             timed: enforcesTiming, grouped: grouped, profile: profile,
             safetyReadBudget: safetyReadBudget,
-            calibrationComplete: calibrationTrips == FocusRackPlanner.calibrationQuanta.count * 2,
             calibrationQuantum: calibrationQuantum)
         runID += 1
         activeNudge = nil
@@ -914,14 +913,9 @@ public struct FocusRackEngine: Sendable {
                     easing: state.transition.easing, quiet: configuration.commandInterval,
                     timings: commandTimings, adaptive: adaptive,
                     timed: true, grouped: true, profile: profile,
-                    safetyReadBudget: safetyReadBudget,
-                    calibrationComplete: calibrationTrips == FocusRackPlanner.calibrationQuanta
-                        .count * 2)
+                    safetyReadBudget: safetyReadBudget)
                 state.minimumDuration = focusRackMinimumForDisplay(plan.minimumDuration)
                 state.maximumDuration = plan.maximumDuration
-            } catch FocusRackError.fineCalibrationRequired {
-                state.admissionMessage = FocusRackError.fineCalibrationRequired.localizedDescription
-                admissionInstruction = "Calibrate in Options"
             } catch FocusRackError.calibrationRequired {
                 state.admissionMessage = FocusRackError.calibrationRequired.localizedDescription
                 admissionInstruction = "Go to A or B first"

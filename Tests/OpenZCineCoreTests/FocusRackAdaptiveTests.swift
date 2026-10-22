@@ -632,13 +632,19 @@ func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome:
     #expect(engine.state(at: now).stepPosition == (outcome == 0 ? 10 : nil))
 }
 
-@Test func rackFineCalibrationMeasuresExactTripsBeforeTimedPlayback() throws {
+@Test func rackOptionalFineCalibrationMeasuresExactTripsWithoutGatingPlayback() throws {
     var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
     let marks = engine.currentProgram.marks
-    #expect(throws: FocusRackError.fineCalibrationRequired) {
-        try engine.run(direction: .aToB, at: now)
-    }
     engine.recordSafetyRead(startedAt: now - 0.08, finishedAt: now, accepted: true)
+    try engine.setTransition(.init(duration: 1), at: now)
+    #expect(engine.state(at: now).admissionMessage == nil)
+    #expect(engine.state(at: now).pullAToB?.enabled == true)
+    #expect(engine.state(at: now).pullBToA?.enabled == false)
+    try engine.run(direction: .aToB, at: now)
+    #expect(try settleAdaptive(&engine, now: &now) == Array(repeating: 160, count: 10))
+    #expect(engine.state(at: now).pullBToA?.enabled == true)
+    try engine.run(direction: .bToA, at: now)
+    #expect(try settleAdaptive(&engine, now: &now) == Array(repeating: -160, count: 10))
     for (stage, quantum) in [2, 2, 3, 3, 4, 4, 6, 6, 8, 8].enumerated() {
         let state = engine.state(at: now)
         #expect(state.calibration?.enabled == true)
@@ -698,6 +704,23 @@ func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome:
     #expect(engine.state(at: now).calibration?.detail == "32-pulse increments · 1/10")
 }
 
+@Test func rackPartialCalibrationAddsMeasuredChoicesWithoutAssumingResidualTiming() throws {
+    var timings = [6: timing(0.06), 10: timing(0.08)]
+    func plan(_ duration: Double) throws -> FocusRackMovementPlan {
+        try FocusRackPlanner.make(
+            signedSteps: 100, duration: duration, delay: 0, easing: .linear,
+            quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
+            profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
+    }
+    #expect(try plan(1).chunks == Array(repeating: 10, count: 10))
+    #expect(throws: FocusRackError.self) { try plan(3) }  // The 6-unit size needs a measured 4-unit tail.
+    timings[4] = timing(0.06)
+    #expect(try plan(3).chunks == Array(repeating: 6, count: 16) + [4])
+    #expect(try plan(5).chunks == Array(repeating: 4, count: 25))
+    timings[6] = timing(0.4)
+    #expect(throws: FocusRackError.self) { try plan(3) }
+}
+
 @Test(arguments: [1.0, 3.0, 5.0])
 func rackMeasuredFinePlanningRetainsWorstCostsAndReservesSafetySlots(duration: Double) throws {
     let timings = [
@@ -708,8 +731,7 @@ func rackMeasuredFinePlanningRetainsWorstCostsAndReservesSafetySlots(duration: D
         let plan = try FocusRackPlanner.make(
             signedSteps: sign * 100, duration: duration, delay: 0, easing: .linear,
             quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
-            profile: .calibratedFineExperiment, safetyReadBudget: 0.1,
-            calibrationComplete: true)
+            profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
         #expect(plan.chunks.reduce(0, +) == sign * 100)
         let maintenance = duration == 1 ? 0.0 : 0.1
         for index in 0..<(plan.chunks.count - 1) {
