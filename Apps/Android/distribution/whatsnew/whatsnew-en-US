@@ -1,5 +1,5 @@
-- DISP 3 is back in the live style: REC chip, timecode, larger tiles.
-- Instant review covers RAW-only, turns sharp for RAW+JPEG and appears sooner.
-- A shutter tap in CL/CH takes one photo; hold for a burst. Tap-to-focus no longer sticks busy.
-- The GYRO pill no longer covers the lock. Shots left show as a picture icon and count, following the stills card.
-- Take-over asks first; reconnecting keeps stills or video and wakes an unseen saved camera.
+- Shared OpenCine setup, monitor, View Assist and media controls; clearer portrait/landscape readouts.
+- DISP 3 restores REC, timecode and larger tiles; codec uses the accent colour.
+- RAW/JPEG instant review is faster; tap once in CL/CH for one photo, hold for a burst.
+- Photo LUT, stills-card counts, focus, GYRO lock overlap and Media sharing fixes.
+- Clearer connection recovery and take-over; better dropout diagnostics.
