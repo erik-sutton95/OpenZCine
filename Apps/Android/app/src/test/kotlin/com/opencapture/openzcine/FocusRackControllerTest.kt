@@ -43,6 +43,7 @@ class FocusRackControllerTest {
         var templates = "[]"
         var createdTemplates: String? = null
         var traceJSON: String? = null
+        var nudgeProgress: JSONObject? = null
         override fun create(connectionOwner: Long, templates: String): String {
             assertEquals(42L, connectionOwner)
             createdTemplates = templates
@@ -62,6 +63,7 @@ class FocusRackControllerTest {
                 .put("completedSteps", 4).put("totalSteps", 94).put("busy", busy)
                 .put("capabilities", caps).put("primary", JSONObject().put("title", "Pause")
                     .put("enabled", busy)).put("minimumDuration", 16.6)
+            nudgeProgress?.let { state.put("nudgeProgress", it) }
             return JSONObject().put("state", state).put("templates", JSONArray(templates))
                 .put("templatesJSON", templates).put("traceJSON", traceJSON).toString()
         }
@@ -122,6 +124,30 @@ class FocusRackControllerTest {
         assertEquals("uncertain", rack.state.value.phase)
         rack.close()
         assertTrue(wire.closed)
+    }
+
+    @Test fun `nudge progress uses shared percent and survives pending stop until settlement`() = runTest {
+        val wire = Wire()
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        rack.observe(JSONObject())
+        assertNull(rack.state.value.nudgeProgress) // Older shared payloads omit the field.
+        for (near in listOf(true, false)) {
+            wire.nudgeProgress = JSONObject().put("towardNear", near).put("steps", 10).put("percent", 37)
+            rack.observe(JSONObject())
+            assertEquals(FocusRackNudgeProgressViewState(near, 10, 37), rack.state.value.nudgeProgress)
+        }
+        rack.stop()
+        assertEquals("stopping", rack.state.value.phase)
+        assertEquals(FocusRackNudgeProgressViewState(false, 10, 37), rack.state.value.nudgeProgress)
+        wire.busy = false
+        wire.phase = "stopped"
+        wire.nudgeProgress = null
+        rack.observe(JSONObject())
+        assertNull(rack.state.value.nudgeProgress)
+        assertFalse(rack.state.value.active)
+        rack.close()
     }
 
     @Test fun `only validated timing bytes are persisted and restored`() = runTest {

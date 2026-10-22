@@ -183,7 +183,10 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 canReset = caps.getBoolean("canReset"), canAutofocus = caps.optBoolean("canAutofocus"), canPause = caps.getBoolean("canPause"), canStop = caps.getBoolean("canStop"), active = snapshot.getBoolean("busy"),
                 completed = snapshot.getInt("completedSteps"), total = snapshot.getInt("totalSteps"),
                 minimumDuration = if (snapshot.isNull("minimumDuration")) null else snapshot.getDouble("minimumDuration"),
-                remainingDelay = snapshot.optDouble("remainingDelay", 0.0))
+                remainingDelay = snapshot.optDouble("remainingDelay", 0.0),
+                nudgeProgress = snapshot.optJSONObject("nudgeProgress")?.let {
+                    FocusRackNudgeProgressViewState(it.getBoolean("towardNear"), it.getInt("steps"), it.getInt("percent"))
+                })
         }
         if (BuildConfig.DEBUG) {
             reply.nullableString("traceJSON")?.let { trace -> runCatching { traceSink(trace) } }
