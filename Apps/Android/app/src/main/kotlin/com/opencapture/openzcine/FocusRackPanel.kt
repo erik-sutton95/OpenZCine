@@ -45,6 +45,7 @@ internal data class FocusRackViewState(
     val afSettingsPending: Boolean = false, val afSettingsRestoring: Boolean = false,
     val afSettingsReady: Boolean = false, val afSettingsFailure: String? = null,
     val nativeAFConfigured: Boolean = false, val canNativeAutofocus: Boolean = false,
+    val nativeAFDisabledReason: String? = null, val nativeAF: NativeAFRackViewState = NativeAFRackViewState(),
     val phase: String = "idle", val message: String = "Connect a camera to set focus marks.",
     val recovery: String? = null, val error: String? = null, val admissionMessage: String? = null,
     val position: Int? = null, val marks: List<FocusRackMarkViewState> = emptyList(),
@@ -60,9 +61,18 @@ internal data class FocusRackViewState(
     val canCaptureA: Boolean = false, val canCaptureB: Boolean = false, val canNudge: Boolean = false, val canEdit: Boolean = false,
     val canReset: Boolean = false, val canAutofocus: Boolean = false, val canPause: Boolean = false, val canStop: Boolean = false, val active: Boolean = false,
     val completed: Int = 0, val total: Int = 0, val minimumDuration: Double? = null,
-    val captureRevision: Long = 0, val remainingDelay: Double = 0.0,
+    val captureRevision: Long = 0, val remainingDelay: Double = 0.0, val recording: Boolean = false,
     val nudgeProgress: FocusRackNudgeProgressViewState? = null,
 )
+/** Native target state projected by the shared Swift value; coordinates never become lens marks. */
+internal data class NativeAFRackViewState(
+    val hasA: Boolean = false, val hasB: Boolean = false, val selectingMark: String? = null,
+    val startDelay: Double = 0.0, val remainingDelay: Double = 0.0, val busy: Boolean = false,
+    val dispatching: Boolean = false, val canSet: Boolean = false, val canGoToA: Boolean = false,
+    val canGoToB: Boolean = false, val canRun: Boolean = false, val canCancel: Boolean = false,
+    val message: String = "Set A and B by tapping subjects in the picture.", val failure: String? = null,
+)
+
 /** Acknowledged setup progress supplied by Swift, never estimated by the shell. */
 internal data class FocusRackNudgeProgressViewState(val towardNear: Boolean, val steps: Int, val percent: Int)
 internal data class FocusRackActionViewState(val title: String, val detail: String?, val enabled: Boolean,
@@ -87,6 +97,8 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     setupEnabled: Boolean = true, onClose: () -> Unit = {},
     onGoTo: (String) -> Unit = {}, onRun: (String) -> Unit = {}, onMovePanel: (Offset) -> Unit = {}, onResetPanel: () -> Unit = {},
     onCalibrate: () -> Unit = {}, onFocusMode: (String) -> Unit = {},
+    onNativeSet: (String) -> Unit = {}, onNativeGo: (String) -> Unit = {},
+    onNativeRun: (String) -> Unit = {}, onNativeCancel: () -> Unit = {}, onNativeDelay: (String) -> Unit = {},
 ) {
     var optionsExpanded by remember { mutableStateOf(false) }
     val nudging = state.nudgeProgress != null
@@ -141,7 +153,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                             modifier = Modifier.weight(1f).testTag("focusRack.mode.$mode"))
                     }
                 }
-                else Text(if (state.focusMode == "nativeAF") "Native AF" else when (state.phase) {
+                else Text(if (state.focusMode == "nativeAF") state.nativeAF.message else when (state.phase) {
                     "countdown" -> "Starts in ${"%.1f".format(state.remainingDelay)} s"
                     "pausing" -> "Pausing…"
                     "paused" -> "Paused"
@@ -162,25 +174,56 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 contentPadding = PaddingValues(0.dp)) {
                 Text(if (expanded && !compact) "⌄" else "⌃", fontSize = 22.sp)
             }
-            TextButton(onClick = { confirmClose = true }, enabled = !state.active && !state.focusModeSwitchPending && setupEnabled,
+            TextButton(onClick = { confirmClose = true }, enabled = !state.active && !state.nativeAF.busy && !state.focusModeSwitchPending && setupEnabled,
                 modifier = Modifier.width(48.dp).heightIn(min = 48.dp).testTag("focusRack.close")
                     .semantics { contentDescription = "Close Focus Rack" },
                 contentPadding = PaddingValues(0.dp)) { Text("×", fontSize = 24.sp) }
         }
         if (state.focusMode == "nativeAF") {
+            val native = state.nativeAF
             if (!compact) {
-            Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()).testTag("focusRack.nativeAF"),
-                verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Tap a subject in the live view. The camera controls the transition.", color = Color.LightGray, fontSize = 13.sp)
-                if (state.afSettingsPending) Text("Setting up camera AF…", color = Color(0xFFFFB869), fontSize = 12.sp)
-                if (!state.nativeAFConfigured && !state.afSettingsPending) Text("Movie AF-F is required before tapping.",
-                    color = Color(0xFFFFB869), fontSize = 12.sp)
-                Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.", color = Color.LightGray, fontSize = 12.sp)
-                Text("Set movie AF speed on the camera.", color = Color.LightGray, fontSize = 12.sp)
-                (state.afSettingsFailure ?: state.error)?.let { Text(it, color = Color(0xFFFFB869), fontSize = 12.sp) }
+                Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
+                    .testTag("focusRack.nativeAF"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(native.failure ?: state.afSettingsFailure ?: native.message,
+                        color = if (native.failure != null || state.nativeAFDisabledReason != null) Color(0xFFFFB869) else Color.LightGray,
+                        fontSize = 12.sp, modifier = Modifier.testTag("focusRack.nativeAF.message"))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for ((mark, hasTarget) in listOf("A" to native.hasA, "B" to native.hasB)) {
+                            Column(Modifier.weight(1f)) {
+                                OutlinedButton(onClick = { onNativeSet(mark); onExpanded(false) },
+                                    enabled = setupEnabled && native.canSet,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.nativeAF.set.$mark"),
+                                    contentPadding = PaddingValues(4.dp)) { Text(if (hasTarget) "Replace $mark" else "Set $mark", fontSize = 12.sp) }
+                                if (hasTarget) TextButton(onClick = { onNativeGo(mark) },
+                                    enabled = setupEnabled && if (mark == "A") native.canGoToA else native.canGoToB,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.nativeAF.go.$mark"),
+                                    contentPadding = PaddingValues(4.dp)) { Text("Go to $mark", fontSize = 12.sp) }
+                            }
+                        }
+                    }
+                    OutlinedButton(onClick = { editingField = "nativeDelay"; editText = native.startDelay.toString().removeSuffix(".0") },
+                        enabled = setupEnabled && native.canSet,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.nativeAF.delay"),
+                        contentPadding = PaddingValues(4.dp)) { Text("Start delay  ${native.startDelay.toString().removeSuffix(".0")} s", fontSize = 12.sp) }
+                    Text("Transition speed: camera setting", color = Color.LightGray, fontSize = 12.sp)
+                    Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.", color = Color.LightGray, fontSize = 11.sp)
+                    TextButton(onClick = onFocusSettings, enabled = setupEnabled && !native.busy,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.nativeAF.settings")) { Text("Focus settings", fontSize = 12.sp) }
+                }
             }
-            TextButton(onClick = onFocusSettings, enabled = setupEnabled,
-                modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.nativeAF.settings")) { Text("Focus settings") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (native.canCancel) {
+                    OutlinedButton(onClick = onNativeCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .testTag("focusRack.nativeAF.cancel")) { Text(if (native.selectingMark != null) "Cancel selection" else "Cancel delay") }
+                } else if (native.selectingMark == null) {
+                    for ((direction, target) in listOf("aToB" to "B", "bToA" to "A")) {
+                        Button(onClick = { onNativeRun(target) }, enabled = setupEnabled && native.canRun,
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("focusRack.nativeAF.run.$direction"),
+                            contentPadding = PaddingValues(4.dp)) {
+                            Text("${if (state.recording) "Run" else "Rehearse"} ${if (target == "B") "A→B" else "B→A"}", fontSize = 12.sp)
+                        }
+                    }
+                }
             }
         } else if (!compact) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("focusRack.marks"),
@@ -292,6 +335,10 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                             contentPadding = PaddingValues(4.dp)) { Text("Reset marks", fontSize = 12.sp) }
                     }
                 }
+                state.estimatedDuration?.takeIf { state.durationMode == "timed" && it > state.duration + 0.0005 }?.let {
+                    Text("${state.duration.toString().removeSuffix(".0")} s target · ~${"%.2f".format(it)} s estimated",
+                        color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.testTag("focusRack.estimate"))
+                }
                 state.admissionMessage?.let { Text(it, color = Color(0xFFFFCE9B), fontSize = 12.sp,
                     modifier = Modifier.bringIntoViewRequester(admissionAttention).testTag("focusRack.admission")) }
                 val message = state.afSettingsFailure ?: if (state.afSettingsPending)
@@ -360,6 +407,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
         when (editingField) {
             "duration" -> onTiming(FocusRackTimingEdit(duration = editText))
             "delay" -> onTiming(FocusRackTimingEdit(delay = editText))
+            "nativeDelay" -> onNativeDelay(editText)
             "template" -> onSave(editText)
         }
         editingField = null
@@ -377,7 +425,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                         OutlinedTextField(editText, { editText = it }, singleLine = true,
                             label = { Text(when (field) {
                                 "duration" -> "Duration (seconds)"
-                                "delay" -> "Start delay (seconds)"
+                                "delay", "nativeDelay" -> "Start delay (seconds)"
                                 else -> "Template name"
                             }) }, modifier = Modifier.weight(1f).focusRequester(editorFocus)
                                 .testTag("focusRack.editInput"),
@@ -394,8 +442,9 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     }
     if (confirmClose) AlertDialog(onDismissRequest = { confirmClose = false },
         title = { Text("Close Focus Rack?") },
-        text = { Text("Session marks will be discarded. Saved timing templates remain available.") },
-        confirmButton = { TextButton(onClick = { confirmClose = false; onClose() }) { Text("Discard marks and close") } },
+        text = { Text(if (state.focusMode == "nativeAF") "Previous camera AF settings restore after recording and focus movement stop."
+            else "Session marks will be discarded. Saved timing templates remain available.") },
+        confirmButton = { TextButton(onClick = { confirmClose = false; onClose() }) { Text(if (state.focusMode == "nativeAF") "Close" else "Discard marks and close") } },
         dismissButton = { TextButton(onClick = { confirmClose = false }) { Text("Keep open") } })
     }
 }

@@ -61,6 +61,29 @@ private struct RackWireReply: Decodable {
     let afSettingsRestoring: Bool
     let afSettingsReady: Bool
     let afSettingsFailure: String?
+    let nativeAF: NativeRackWireProjection
+    let nativeAFChange: NativeRackWireChange?
+    let nativeAFDisabledReason: String?
+    let nativeAFCheckpointJSON: String?
+}
+
+private struct NativeRackWireProjection: Decodable {
+    let a: NativeAFPoint?
+    let b: NativeAFPoint?
+    let selectingMark: NativeAFMark?
+    let startDelay: Double
+    let busy: Bool
+    let canSet: Bool
+    let canRun: Bool
+    let canCancel: Bool
+    let message: String
+    let failure: String?
+}
+
+private struct NativeRackWireChange: Decodable {
+    let id: UInt64
+    let mark: NativeAFMark
+    let point: NativeAFPoint
 }
 
 private func rackWireReply(
@@ -313,7 +336,9 @@ func rackProductionWireStopDiscardsQueuedMovementBeforeItCanRearm(kind: String) 
         let reply = try await waitForRackWire(wire, owner) {
             $0.nativeAFConfigured && !$0.focusModeSwitchPending
         }
-        #expect(reply.canNativeAutofocus)
+        #expect(
+            !reply.canNativeAutofocus,
+            "Readbacks alone cannot admit a closed panel without AF setup")
     }
     for kind in ["nudge", "run", "capture", "calibrate", "primary", "goTo", "updateTiming"] {
         _ = try rackWireReply(wire, owner, kind: kind)
@@ -382,7 +407,7 @@ func rackWireModeReservationSurvivesImmediateControlCancellation(kind: String) a
     let settled = try await waitForRackWire(wire, owner) {
         $0.focusMode == .nativeAF && !$0.focusModeSwitchPending
     }
-    #expect(settled.canNativeAutofocus)
+    #expect(!settled.canNativeAutofocus, "Mode reservation is independent of live panel admission")
     #expect(!camera.log.contains("prepare"))
     #expect(!camera.log.contains("drive"))
 }
@@ -461,7 +486,7 @@ func rackWireModeReservationSurvivesImmediateControlCancellation(kind: String) a
     _ = try await waitForRackWire(wire, owner) { $0.state?.busy == false }
     _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "nativeAF"])
     _ = try await waitForRackWire(wire, owner) {
-        $0.focusMode == .nativeAF && $0.canNativeAutofocus
+        $0.focusMode == .nativeAF && !$0.focusModeSwitchPending
     }
 }
 
@@ -979,4 +1004,190 @@ func rackWireRestorationWaitsForANewFocusedFrameAfterSettingOrTapCompletion(tapp
     #expect(ready.afSettingsChange?.restoring == true)
     #expect(ready.afSettingsChange?.value == "AF-S")
     #expect(camera.drives == 0)
+}
+
+private final class NativeRackWireFixture: @unchecked Sendable {
+    let camera = AFSettingsWireCamera(values: .target(.timedRack))
+    let wire = FocusRackWire()
+    let owner: String
+
+    init() throws { owner = try #require(wire.create(driver: camera.driver)) }
+    deinit { wire.close(owner: owner) }
+
+    func fields() -> [String: Any] {
+        var values = afWireFields(camera, restorationFocusSettled: false)
+        values["movieFocusMode"] = camera.values.mode
+        values["photography"] = false
+        values["nativeAFCoordinateSpaceAvailable"] = true
+        values["nativeAFUnrelatedCommandPending"] = false
+        values["observation"] = [
+            "sessionID": "af-settings-owner", "connected": true, "foregroundOwner": true,
+            "recording": false, "frameSequence": 20, "frameAgeSeconds": 0,
+            "externalFocusRevision": 0, "externalFocusIdle": true,
+            "focusResult": "notFocused",
+            "focus": ["trackingAFActive": false, "subjectDetectionActive": false, "boxCount": 0],
+        ]
+        return values
+    }
+
+    func step(_ kind: String = "poll", _ additions: [String: Any] = [:]) throws -> RackWireReply {
+        if kind == "poll", additions.isEmpty { return try rackWireReply(wire, owner) }
+        return try rackWireReply(
+            wire, owner, kind: kind, fields: fields().merging(additions) { _, new in new })
+    }
+
+    func start() async throws {
+        _ = try step("openPanel")
+        _ = try await waitForRackWire(wire, owner) { $0.afSettingsReady }
+        _ = try step("selectFocusMode", ["focusMode": "nativeAF"])
+        let setting = try #require(
+            try await waitForRackWire(wire, owner) { $0.afSettingsChange != nil }.afSettingsChange)
+        camera.apply(setting)
+        _ = try step(
+            "afSettingsComplete",
+            ["afChange": try JSONSerialization.jsonObject(with: JSONEncoder().encode(setting))])
+        _ = try await waitForRackWire(wire, owner) { $0.afSettingsReady && !$0.afSettingsPending }
+        _ = try step("observe")
+    }
+
+    func capture(_ mark: String, x: Double) throws -> NativeRackWireChange {
+        _ = try step("nativeAFArm", ["nativeAFMark": mark])
+        return try #require(
+            step("nativeAFCapture", ["nativeAFPoint": ["x": x, "y": 0.5]]).nativeAFChange)
+    }
+
+    func go(_ mark: String = "A") throws -> NativeRackWireChange {
+        try #require(step("nativeAFGo", ["nativeAFMark": mark]).nativeAFChange)
+    }
+
+    func admit(_ change: NativeRackWireChange, _ additions: [String: Any] = [:]) throws -> Bool {
+        var request = fields().merging(additions) { _, new in new }
+        request["kind"] = "nativeAFAdmission"
+        request["nativeAFRequestID"] = change.id
+        let data = try JSONSerialization.data(withJSONObject: request)
+        return wire.step(owner: owner, requestJSON: String(decoding: data, as: UTF8.self))
+            == "{\"allowed\":true}"
+    }
+
+    func finish(_ change: NativeRackWireChange, _ additions: [String: Any] = [:]) throws
+        -> RackWireReply
+    {
+        try step(
+            "nativeAFComplete",
+            additions.merging(["nativeAFRequestID": change.id]) { _, new in new })
+    }
+
+    func setTargets() throws {
+        for (mark, x) in [("A", 0.25), ("B", 0.75)] {
+            let change = try capture(mark, x: x)
+            #expect(try admit(change))
+            _ = try finish(change)
+        }
+    }
+}
+
+@Test func nativeRackWireTargetsDelayAndCheckpointKeepMFMarksAndOpticalClaimsSeparate() async throws
+{
+    let fixture = try NativeRackWireFixture()
+    try await fixture.start()
+    #expect(try fixture.step().canNativeAutofocus)
+    for (mark, x) in [("A", 0.25), ("B", 0.75)] {
+        let change = try fixture.capture(mark, x: x)
+        #expect(change.mark.rawValue == mark && change.point.x == x)
+        #expect(try fixture.admit(change))
+        let duplicate = try fixture.step("nativeAFArm", ["nativeAFMark": "A"])
+        #expect(duplicate.nativeAF.failure != nil)
+        let acknowledged = try fixture.finish(change)
+        #expect(acknowledged.nativeAF.message == "Target \(mark) selected")
+        #expect(acknowledged.nativeAF.failure == nil)
+        #expect(acknowledged.state?.program.marks.isEmpty == true)
+    }
+    _ = try fixture.step("nativeAFDelay", ["nativeAFStartDelay": 5.0])
+    let waiting = try fixture.step("nativeAFRun", ["nativeAFMark": "B"])
+    #expect(waiting.nativeAF.canCancel && waiting.nativeAFChange == nil)
+    #expect(waiting.canNativeAutofocus, "A valid manual tap may replace an unsent delay")
+    let manual = try fixture.step("externalFocus")
+    #expect(!manual.nativeAF.busy && manual.nativeAFChange == nil)
+    _ = try fixture.step("nativeAFRun", ["nativeAFMark": "B"])
+    #expect(try fixture.step("nativeAFCancel").nativeAF.canRun)
+    let blocked = try fixture.step("observe", ["nativeAFPointLocked": true])
+    #expect(!blocked.canNativeAutofocus && !blocked.nativeAF.canSet && !blocked.nativeAF.canRun)
+    #expect(blocked.nativeAFDisabledReason == blocked.nativeAF.message)
+    let checkpoint = try #require(blocked.nativeAFCheckpointJSON)
+    let replacement = try #require(fixture.wire.create(driver: fixture.camera.driver))
+    defer { fixture.wire.close(owner: replacement) }
+    let restored = try rackWireReply(
+        fixture.wire, replacement, kind: "nativeAFRestoreCheckpoint",
+        fields: [
+            "nativeAFCheckpointJSON": checkpoint, "focusMode": "nativeAF",
+        ])
+    #expect(restored.focusMode == .nativeAF && restored.nativeAF.startDelay == 5)
+    #expect(restored.nativeAF.a?.x == 0.25 && restored.nativeAF.b?.x == 0.75)
+    #expect(
+        !restored.nativeAF.busy && restored.nativeAFChange == nil && !restored.canNativeAutofocus)
+    #expect(fixture.camera.drives == 0)
+}
+
+@Test func nativeRackWireReceiptBypassesOnlyItsOwnSlotAndCannotReviveAfterManualSupersession()
+    async throws
+{
+    let fixture = try NativeRackWireFixture()
+    try await fixture.start()
+    try fixture.setTargets()
+    let own = try fixture.go()
+    #expect(try fixture.admit(own))
+    var input = try #require(fixture.fields()["afSettings"] as? [String: Any])
+    input["commandsIdle"] = false
+    var observation = try #require(fixture.fields()["observation"] as? [String: Any])
+    observation["externalFocusIdle"] = false
+    let ownSlot: [String: Any] = ["afSettings": input, "observation": observation]
+    _ = try fixture.step("nativeTargetFocus", ownSlot)
+    #expect(try fixture.admit(own, ownSlot))
+    #expect(try !fixture.admit(own, ["nativeAFUnrelatedCommandPending": true]))
+    #expect(try fixture.admit(own))
+    _ = try fixture.finish(own)
+    for lock in ["nativeAFInterfaceLocked", "nativeAFPointLocked"] {
+        let old = try fixture.go()
+        #expect(try fixture.admit(old))
+        _ = try fixture.step("observe", [lock: true])
+        _ = try fixture.step("observe", [lock: false])
+        #expect(try !fixture.admit(old), "Unlocking cannot revive the earlier queued receipt")
+        #expect(try fixture.finish(old).nativeAF.message != "Target A selected")
+    }
+    let manual = try fixture.go()
+    #expect(try fixture.admit(manual))
+    _ = try fixture.step("manualAFSetting", ["afProperty": "area"])
+    #expect(try !fixture.admit(manual))
+    #expect(try fixture.finish(manual).nativeAF.message != "Target A selected")
+    #expect(fixture.camera.drives == 0)
+}
+
+@Test func nativeRackWireRestorationWaitsForNativeOwnershipAndAFreshSettledCompletionFrame()
+    async throws
+{
+    let fixture = try NativeRackWireFixture()
+    try await fixture.start()
+    try fixture.setTargets()
+    let active = try fixture.go()
+    #expect(try fixture.admit(active))
+    var input = try #require(fixture.fields()["afSettings"] as? [String: Any])
+    input["restorationFocusSettled"] = true
+    input["frameSequence"] = 20
+    _ = try fixture.step("closePanel", ["afSettings": input])
+    try await Task.sleep(for: .milliseconds(30))
+    let closed = try fixture.step()
+    #expect(closed.nativeAF.busy && closed.afSettingsChange == nil)
+    #expect(closed.nativeAF.a?.x == 0.25 && closed.nativeAF.b?.x == 0.75)
+    input["focusAfterSequence"] = 20
+    _ = try fixture.finish(active, ["afSettings": input])
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(try fixture.step().afSettingsChange == nil)
+    input["frameSequence"] = 21
+    _ = try fixture.step("observe", ["afSettings": input])
+    let restoring = try await waitForRackWire(fixture.wire, fixture.owner) {
+        $0.afSettingsChange != nil
+    }
+    #expect(restoring.afSettingsChange?.restoring == true)
+    #expect(restoring.afSettingsChange?.value == "AF-S")
+    #expect(fixture.camera.drives == 0)
 }

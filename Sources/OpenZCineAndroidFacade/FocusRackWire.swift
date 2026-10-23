@@ -54,6 +54,8 @@ public final class FocusRackWire: @unchecked Sendable {
             let entry = lock.withLock({ entries[owner] })
         else { return nil }
         if request.kind == "afSettingsAdmission" { return entry.admissionReply(request) }
+        if request.kind == "nativeAFAdmission" { return entry.nativeAdmissionReply(request) }
+        if request.kind.hasPrefix("nativeAF") { return entry.nativeStep(request) }
         entry.submit(request)
         return entry.reply()
     }
@@ -83,6 +85,16 @@ public final class FocusRackWire: @unchecked Sendable {
         let afProperty: FocusAFProperty?
         let afChange: FocusAFSettingChange?
         let afFailure: String?
+        let nativeAFMark: NativeAFMark?
+        let nativeAFPoint: NativeAFPoint?
+        let nativeAFRequestID: UInt64?
+        let nativeAFStartDelay: Double?
+        let nativeAFFailure: String?
+        let nativeAFInterfaceLocked: Bool?
+        let nativeAFPointLocked: Bool?
+        let nativeAFCoordinateSpaceAvailable: Bool?
+        let nativeAFUnrelatedCommandPending: Bool?
+        let nativeAFCheckpointJSON: String?
     }
 
     private struct SettingsInput: Decodable, Equatable, Sendable {
@@ -174,6 +186,16 @@ public final class FocusRackWire: @unchecked Sendable {
         private var afSetupRequested = false
         private var afManualBeforeCapture: Set<FocusAFProperty> = []
         private var panelOpen = false
+        private var nativeRack = NativeAFRack()
+        private var nativeObservation: FocusRackObservation?
+        private var nativeObservedAt: Double = 0
+        private var nativeInterfaceLocked = false
+        private var nativePointLocked = false
+        private var nativeCoordinateSpaceAvailable = false
+        private var nativeUnrelatedCommandPending = false
+        private var nativeAuthorityRevision = 0
+        private var nativeDispatchRevision: Int?
+        private var nativeFailure: String?
 
         init(controller: FocusRackController, driver: any FocusRackDriver, authority: Authority) {
             self.controller = controller
@@ -214,6 +236,16 @@ public final class FocusRackWire: @unchecked Sendable {
             lock.withLock {
                 guard !closed else { return }
                 acceptSettingsInput(request.afSettings)
+                acceptNativeInput(request, receivedAt: receivedAt)
+                if [
+                    "nativeAFCancel", "interrupt", "closePanel", "selectFocusMode",
+                    "manualAFSetting", "stop", "externalFocus",
+                ].contains(
+                    request.kind)
+                {
+                    revokeNativeWork()
+                    authority.cancelPending()
+                }
                 if request.kind == "manualAFSetting", let property = request.afProperty {
                     if afSetupRequested { afManualBeforeCapture.insert(property) }
                     afLease.manualChange(property)
@@ -231,6 +263,7 @@ public final class FocusRackWire: @unchecked Sendable {
                         && (!panelOpen || afSetupReady) && !afLease.needsService
                     let wasAdmitted = authority.set(admitted)
                     if wasRecording && !observation.recording {
+                        revokeNativeWork()
                         authority.cancelPending()
                         controller.requestStop()
                     }
@@ -248,6 +281,7 @@ public final class FocusRackWire: @unchecked Sendable {
                     authority.setSettingsRead(false)
                 }
                 if request.kind == "openPanel" {
+                    nativeFailure = nil
                     afSetupRequested = true
                     afManualBeforeCapture.removeAll()
                     afSuspended = false
@@ -260,6 +294,7 @@ public final class FocusRackWire: @unchecked Sendable {
                 if request.kind == "selectFocusMode" {
                     guard request.focusMode != nil else { return }
                     guard !modeSwitchPending, afLease.pending == nil,
+                        nativeRack.dispatchedRequest == nil, nativeRack.pendingRequest == nil,
                         FocusControlModePolicy.canChange(
                             rack: state, externalFocusIdle: externalFocusIdle)
                     else {
@@ -270,6 +305,7 @@ public final class FocusRackWire: @unchecked Sendable {
                     afManualBeforeCapture.removeAll()
                     afSuspended = false
                     modeSwitchPending = true
+                    nativeFailure = nil
                     afSetupReady = false
                     afEffectReady = false
                     afRevision += 1
@@ -278,7 +314,7 @@ public final class FocusRackWire: @unchecked Sendable {
                     authority.cancelPending()
                     authority.set(false)
                 }
-                if request.kind == "stop" || request.kind == "externalFocus" {
+                if ["stop", "externalFocus", "nativeTargetFocus"].contains(request.kind) {
                     authority.cancelPending()
                     controller.requestStop()
                 }
@@ -351,6 +387,7 @@ public final class FocusRackWire: @unchecked Sendable {
                         rack: current, externalFocusIdle: lock.withLock { externalFocusIdle })
                 else { throw FocusRackError.movementPending }
                 lock.withLock {
+                    nativeRack.cancel()
                     focusMode = selected
                     modeSwitchPending = true
                     error = nil
@@ -426,7 +463,7 @@ public final class FocusRackWire: @unchecked Sendable {
             }
             let timedIntent = ![
                 "poll", "observe", "diagnostics", "loadCalibration", "stop", "interrupt",
-                "closePanel", "externalFocus",
+                "closePanel", "externalFocus", "nativeTargetFocus",
             ].contains(request.kind)
             if timedIntent
                 && lock.withLock({
@@ -488,7 +525,7 @@ public final class FocusRackWire: @unchecked Sendable {
             case "resume": intent = .resume
             case "stop": return  // Already published synchronously at request receipt.
             case "reset": intent = .reset
-            case "externalFocus": intent = .externalFocusAction
+            case "externalFocus", "nativeTargetFocus": intent = .externalFocusAction
             case "interrupt": return
             case "closePanel":
                 lock.withLock {
@@ -524,6 +561,9 @@ public final class FocusRackWire: @unchecked Sendable {
         // All ownership mutation and comparisons share the entry lock; I/O stays outside it.
         private func acceptSettingsInput(_ input: SettingsInput?) {
             guard let input else { return }
+            if let previous = afInput, previous.values != input.values {
+                revokeNativeWork()
+            }
             if afInput?.sessionID != input.sessionID {
                 afSetupRequested = false
                 afManualBeforeCapture.removeAll()
@@ -572,6 +612,7 @@ public final class FocusRackWire: @unchecked Sendable {
             let start: (SettingsInput, Int)? = lock.withLock {
                 state = current
                 guard !closed, !afSuspended, !afSetupRequested, !modeSwitchPending,
+                    nativeRack.dispatchedRequest == nil,
                     afLease.needsService, afLease.pending == nil,
                     afFailure == nil, let input = afInput
                 else { return nil }
@@ -593,7 +634,9 @@ public final class FocusRackWire: @unchecked Sendable {
                 let safety = try await driver.refreshSafety()
                 let change: FocusAFSettingChange? = lock.withLock {
                     authority.setSettingsRead(false)
-                    guard !closed, revision == afRevision, afInput == input else { return nil }
+                    guard !closed, revision == afRevision, afInput == input,
+                        nativeRack.dispatchedRequest == nil
+                    else { return nil }
                     let values = FocusAFSettingsValues(
                         mode: safety.focusMode, area: safety.focusArea,
                         subject: safety.focusSubject)
@@ -630,12 +673,253 @@ public final class FocusRackWire: @unchecked Sendable {
             }
         }
 
+        private struct NativeChange: Encodable {
+            let id: UInt64
+            let mark: NativeAFMark
+            let point: NativeAFPoint
+        }
+
+        private struct NativeProjection: Encodable {
+            let a: NativeAFPoint?
+            let b: NativeAFPoint?
+            let selectingMark: NativeAFMark?
+            let startDelay: Double
+            let remainingDelay: Double
+            let busy: Bool
+            let dispatching: Bool
+            let canSet: Bool
+            let canGoToA: Bool
+            let canGoToB: Bool
+            let canRun: Bool
+            let canCancel: Bool
+            let message: String
+            let failure: String?
+        }
+
+        private func acceptNativeInput(_ request: Request, receivedAt: Double) {
+            if let observation = request.observation {
+                if let previous = nativeObservation, previous.sessionID != observation.sessionID {
+                    revokeNativeWork(retireDispatched: true)
+                }
+                if !observation.connected {
+                    revokeNativeWork(retireDispatched: true)
+                } else if !observation.foregroundOwner {
+                    revokeNativeWork()
+                }
+                nativeObservation = observation
+                nativeObservedAt = receivedAt
+                movieFocusMode = observation.connected ? request.movieFocusMode : nil
+                photography = request.photography ?? false
+            }
+            if let locked = request.nativeAFInterfaceLocked {
+                if locked && !nativeInterfaceLocked { revokeNativeWork() }
+                nativeInterfaceLocked = locked
+            }
+            if let locked = request.nativeAFPointLocked {
+                if locked && !nativePointLocked { revokeNativeWork() }
+                nativePointLocked = locked
+            }
+            if let available = request.nativeAFCoordinateSpaceAvailable {
+                nativeCoordinateSpaceAvailable = available
+            }
+            if let pending = request.nativeAFUnrelatedCommandPending {
+                nativeUnrelatedCommandPending = pending
+            }
+        }
+
+        private func revokeNativeWork(retireDispatched: Bool = false) {
+            nativeAuthorityRevision += 1
+            nativeRack.cancel()
+            if retireDispatched, let active = nativeRack.dispatchedRequest {
+                _ = nativeRack.fail(id: active.id)
+                nativeDispatchRevision = nil
+            }
+        }
+
+        private func nativeDisabledReason(dispatching: Bool = false) -> String? {
+            let observation = nativeObservation
+            let age =
+                (observation?.frameAgeSeconds ?? 999)
+                + max(0, ProcessInfo.processInfo.systemUptime - nativeObservedAt)
+            return NativeAFAdmission(
+                connected: observation?.connected == true,
+                foreground: panelOpen && !afSuspended && observation?.foregroundOwner == true,
+                interfaceLocked: nativeInterfaceLocked, focusPointLocked: nativePointLocked,
+                liveViewFresh: nativeCoordinateSpaceAvailable && observation?.frameSequence != nil
+                    && age >= 0 && age <= 0.5,
+                commandIdle: (dispatching
+                    || (observation?.externalFocusIdle == true
+                        && afInput?.commandsIdle == true))
+                    && state?.phase != .stopUnconfirmed
+                    && state?.busy != true && state?.capabilities.canStop != true
+                    && afInput?.recordingPending != true && !nativeUnrelatedCommandPending,
+                settingsPending: modeSwitchPending || afLease.needsService || !afSetupReady,
+                settingsFailure: afFailure ?? afLease.failure,
+                configured: focusMode == .nativeAF
+                    && FocusControlModePolicy.nativeAFConfigured(
+                        movieFocusMode: movieFocusMode, photography: photography),
+                movieMode: !photography
+            ).disabledReason
+        }
+
+        private func nativeProjection() -> NativeProjection {
+            let available = nativeDisabledReason() == nil
+            let idle = nativeRack.pendingRequest == nil && nativeRack.dispatchedRequest == nil
+            let remaining = nativeRack.remainingDelay(at: ProcessInfo.processInfo.systemUptime)
+            let message: String
+            if nativeRack.dispatchedRequest != nil {
+                message = "Selecting target…"
+            } else if let blocker = nativeDisabledReason() {
+                message = blocker
+            } else if let selecting = nativeRack.selectingMark {
+                message = "Tap subject \(selecting.rawValue) in the picture."
+            } else if nativeRack.pendingRequest != nil {
+                message = "Starts in \(String(format: "%.1f", remaining)) s"
+            } else if let selected = nativeRack.lastSelectedMark {
+                message = "Target \(selected.rawValue) selected"
+            } else {
+                message = "Set A and B by tapping subjects in the picture."
+            }
+            return NativeProjection(
+                a: nativeRack.target(for: .a), b: nativeRack.target(for: .b),
+                selectingMark: nativeRack.selectingMark, startDelay: nativeRack.startDelay,
+                remainingDelay: remaining, busy: !idle,
+                dispatching: nativeRack.dispatchedRequest != nil,
+                canSet: available && idle,
+                canGoToA: available && idle && nativeRack.target(for: .a) != nil,
+                canGoToB: available && idle && nativeRack.target(for: .b) != nil,
+                canRun: available && idle && nativeRack.target(for: .a) != nil
+                    && nativeRack.target(for: .b) != nil,
+                canCancel: nativeRack.pendingRequest != nil || nativeRack.selectingMark != nil,
+                message: message, failure: nativeFailure)
+        }
+
+        private func nativeChange() -> NativeChange? {
+            guard nativeDisabledReason() == nil,
+                let request = nativeRack.dueRequest(at: ProcessInfo.processInfo.systemUptime)
+            else { return nil }
+            return NativeChange(id: request.id, mark: request.mark, point: request.point)
+        }
+
+        private func applyNative(_ request: Request) throws {
+            let now = ProcessInfo.processInfo.systemUptime
+            if request.kind == "nativeAFCancel" {
+                nativeRack.cancel()
+                return
+            }
+            if request.kind == "nativeAFComplete", let id = request.nativeAFRequestID {
+                if nativeRack.dispatchedRequest?.id == id,
+                    nativeDispatchRevision != nativeAuthorityRevision
+                {
+                    _ = nativeRack.fail(id: id)
+                    nativeDispatchRevision = nil
+                    nativeFailure = nil
+                    return
+                }
+                if let failure = request.nativeAFFailure {
+                    if nativeRack.fail(id: id) {
+                        nativeFailure = failure
+                        nativeDispatchRevision = nil
+                    } else if nativeRack.pendingRequest?.id == id {
+                        nativeRack.cancel()
+                        nativeFailure = failure
+                    }
+                } else {
+                    if nativeRack.complete(id: id) {
+                        nativeFailure = nil
+                        nativeDispatchRevision = nil
+                    }
+                }
+                return
+            }
+            if request.kind == "nativeAFRestoreCheckpoint" {
+                guard let checkpoint = request.nativeAFCheckpointJSON else {
+                    throw FocusRackError.invalidConfiguration
+                }
+                guard !panelOpen, !afLease.needsService, !modeSwitchPending else {
+                    throw FocusRackError.movementPending
+                }
+                try nativeRack.restoreCheckpointJSON(checkpoint)
+                if let selected = request.focusMode { focusMode = selected }
+                nativeFailure = nil
+                return
+            }
+            if let blocker = nativeDisabledReason() {
+                nativeFailure = blocker
+                throw FocusRackError.referenceUnavailable
+            }
+            nativeFailure = nil
+            switch request.kind {
+            case "nativeAFArm":
+                guard let mark = request.nativeAFMark else {
+                    throw FocusRackError.invalidConfiguration
+                }
+                try nativeRack.arm(mark)
+            case "nativeAFCapture":
+                guard let point = request.nativeAFPoint else {
+                    throw FocusRackError.invalidConfiguration
+                }
+                _ = try nativeRack.capture(point, now: now)
+            case "nativeAFGo", "nativeAFRun":
+                guard let mark = request.nativeAFMark else {
+                    throw FocusRackError.invalidConfiguration
+                }
+                _ = try nativeRack.request(mark, now: now, delayed: request.kind == "nativeAFRun")
+            case "nativeAFDelay":
+                guard let delay = request.nativeAFStartDelay else {
+                    throw FocusRackError.invalidConfiguration
+                }
+                try nativeRack.setStartDelay(delay)
+            default: throw FocusRackError.invalidConfiguration
+            }
+        }
+
+        // These intents only mutate the shared value. Accept them synchronously so Set A/B
+        // arms the very next picture tap, rather than waiting for the observation poll.
+        func nativeStep(_ request: Request) -> String? {
+            lock.withLock {
+                guard !closed else { return }
+                acceptSettingsInput(request.afSettings)
+                acceptNativeInput(request, receivedAt: ProcessInfo.processInfo.systemUptime)
+                do {
+                    try applyNative(request)
+                    error = nil
+                } catch {
+                    self.error = error.localizedDescription
+                    nativeFailure = error.localizedDescription
+                }
+            }
+            return reply()
+        }
+
+        func nativeAdmissionReply(_ request: Request) -> String? {
+            lock.withLock {
+                acceptSettingsInput(request.afSettings)
+                acceptNativeInput(request, receivedAt: ProcessInfo.processInfo.systemUptime)
+                guard let id = request.nativeAFRequestID else { return "{\"allowed\":false}" }
+                let dispatching = nativeRack.dispatchedRequest?.id == id
+                if dispatching && nativeDispatchRevision != nativeAuthorityRevision {
+                    return "{\"allowed\":false}"
+                }
+                guard nativeDisabledReason(dispatching: dispatching) == nil else {
+                    return "{\"allowed\":false}"
+                }
+                if dispatching { return "{\"allowed\":true}" }
+                do {
+                    _ = try nativeRack.beginDispatch(
+                        id: id, at: ProcessInfo.processInfo.systemUptime)
+                    nativeDispatchRevision = nativeAuthorityRevision
+                    return "{\"allowed\":true}"
+                } catch { return "{\"allowed\":false}" }
+            }
+        }
+
         func admissionReply(_ request: Request) -> String? {
             lock.withLock {
                 acceptSettingsInput(request.afSettings)
                 let allowed =
                     request.afChange.map { change in
-                        afEffectReady && !afSuspended
+                        afEffectReady && !afSuspended && nativeRack.dispatchedRequest == nil
                             && afInput.map {
                                 afLease.allows(
                                     change, observation: $0.observation(rack: state, ready: true))
@@ -665,6 +949,10 @@ public final class FocusRackWire: @unchecked Sendable {
                     let afSettingsRestoring: Bool
                     let afSettingsReady: Bool
                     let afSettingsFailure: String?
+                    let nativeAF: NativeProjection
+                    let nativeAFChange: NativeChange?
+                    let nativeAFDisabledReason: String?
+                    let nativeAFCheckpointJSON: String?
                 }
                 var projectedState = state
                 let settingsBlocked = afLease.needsService || (panelOpen && !afSetupReady)
@@ -689,21 +977,23 @@ public final class FocusRackWire: @unchecked Sendable {
                             calibrationJSON: calibrationJSON, focusMode: focusMode,
                             focusModeSwitchPending: modeSwitchPending,
                             canChangeFocusMode: !modeSwitchPending && afLease.pending == nil
+                                && nativeRack.dispatchedRequest == nil
+                                && nativeRack.pendingRequest == nil
                                 && FocusControlModePolicy.canChange(
                                     rack: state, externalFocusIdle: externalFocusIdle),
                             nativeAFConfigured: FocusControlModePolicy.nativeAFConfigured(
                                 movieFocusMode: movieFocusMode, photography: photography),
-                            canNativeAutofocus: !modeSwitchPending && !settingsBlocked
-                                && FocusControlModePolicy.allowsNativeAutofocus(
-                                    mode: focusMode, rack: state)
-                                && FocusControlModePolicy.nativeAFConfigured(
-                                    movieFocusMode: movieFocusMode, photography: photography),
+                            canNativeAutofocus: nativeDisabledReason() == nil
+                                && nativeRack.dispatchedRequest == nil,
                             afSettingsChange: afEffectReady ? afLease.pending : nil,
                             afSettingsExpectedValues: afEffectReady ? afInput?.values : nil,
                             afSettingsPending: afLease.needsService,
                             afSettingsRestoring: afLease.restoring,
                             afSettingsReady: afSetupReady,
-                            afSettingsFailure: afFailure ?? afLease.failure
+                            afSettingsFailure: afFailure ?? afLease.failure,
+                            nativeAF: nativeProjection(), nativeAFChange: nativeChange(),
+                            nativeAFDisabledReason: nativeDisabledReason(),
+                            nativeAFCheckpointJSON: try? nativeRack.checkpointJSON()
                         ))
                 else { return nil }
                 if afEffectReady && afLease.pending != nil { afEffectOffered = true }
