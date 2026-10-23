@@ -10,6 +10,9 @@ final class PhysicalReferenceAppTests: OpenCineAppUITesting.PhysicalReferenceApp
 final class PhysicalMigrationQualificationTests: OpenCineAppUITesting
         .PhysicalMigrationQualificationTests
 {}
+final class PhysicalCameraNetworkTests: OpenCineAppUITesting.PhysicalCameraNetworkTests {}
+/// The first-pair wizard cases (Z3 items 1, 2, 3 and 5) drive this app's wizard.
+final class PhysicalCameraPairingTests: OpenCineAppUITesting.PhysicalCameraPairingTests {}
 
 // The UI tests every app shares, run against this app through the demo harness's `ReviewLaunch`
 // staging. Motion records a capability skip: a Nikon body has no gimbal.
