@@ -57,71 +57,90 @@ struct FocusRackView: View {
     var body: some View {
         VStack(spacing: 6) {
             header
-            if !compact {
-                if let state = rack.state { marks(state) }
-                if let instruction = rack.state?.recoveryInstruction {
-                    recovery(instruction)
-                }
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if let state = rack.state {
-                                HStack(spacing: 4) {
-                                    nudge(
-                                        "Near", amount: "−10", id: "near10", state: state,
-                                        near: true,
-                                        steps: 10)
-                                    nudge(
-                                        "Near", amount: "−1", id: "near", state: state, near: true,
-                                        steps: 1)
-                                    nudge(
-                                        "Far", amount: "+1", id: "far", state: state, near: false,
-                                        steps: 1)
-                                    nudge(
-                                        "Far", amount: "+10", id: "far10", state: state,
-                                        near: false,
-                                        steps: 10)
+            if rack.mode == .nativeAF {
+                nativeAF
+            } else {
+                if !compact {
+                    if let state = rack.state {
+                        marks(state).disabled(
+                            rack.afSettingsPending || rack.afSettingsFailure != nil)
+                    }
+                    if let instruction = rack.state?.recoveryInstruction {
+                        recovery(instruction)
+                    }
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 6) {
+                                if let status = rack.afSettingsStatus {
+                                    Text(status).font(.system(size: 12)).foregroundStyle(.orange)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .accessibilityIdentifier("focusControl.setupStatus")
                                 }
-                                move(state)
-                                if let reason = state.admissionMessage {
-                                    Text(reason).font(.system(size: 12)).foregroundStyle(.orange)
+                                if let state = rack.state {
+                                    HStack(spacing: 4) {
+                                        nudge(
+                                            "Near", amount: "−10", id: "near10", state: state,
+                                            near: true,
+                                            steps: 10)
+                                        nudge(
+                                            "Near", amount: "−1", id: "near", state: state,
+                                            near: true,
+                                            steps: 1)
+                                        nudge(
+                                            "Far", amount: "+1", id: "far", state: state,
+                                            near: false,
+                                            steps: 1)
+                                        nudge(
+                                            "Far", amount: "+10", id: "far10", state: state,
+                                            near: false,
+                                            steps: 10)
+                                    }
+                                    move(state)
+                                    if let reason = state.admissionMessage {
+                                        Text(reason).font(.system(size: 12)).foregroundStyle(
+                                            .orange
+                                        )
                                         .fixedSize(horizontal: false, vertical: true)
                                         .id("focusRack.admission")
                                         .accessibilityIdentifier("focusRack.admission")
+                                    }
+                                    if !state.message.isEmpty {
+                                        Text(state.message)
+                                            .font(.system(size: 12)).fixedSize(
+                                                horizontal: false, vertical: true
+                                            )
+                                            .accessibilityIdentifier("focusRack.message")
+                                    }
+                                } else {
+                                    Text("Connect a camera in movie AF-S mode to set focus marks.")
+                                        .font(.system(size: 12))
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
-                                if !state.message.isEmpty {
-                                    Text(state.message)
-                                        .font(.system(size: 12)).fixedSize(
-                                            horizontal: false, vertical: true
-                                        )
-                                        .accessibilityIdentifier("focusRack.message")
+                                if let notice = rack.notice {
+                                    Text(notice).font(.system(size: 12))
+                                        .foregroundStyle(.orange)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .accessibilityIdentifier("focusRack.notice")
                                 }
-                            } else {
-                                Text("Connect a camera in movie AF-S mode to set focus marks.")
-                                    .font(.system(size: 12))
-                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            if let notice = rack.notice {
-                                Text(notice).font(.system(size: 12))
-                                    .foregroundStyle(.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .accessibilityIdentifier("focusRack.notice")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 4)
+                        }
+                        .onChange(of: rack.revealAdmission, initial: true) { _, requested in
+                            if requested {
+                                proxy.scrollTo("focusRack.admission", anchor: .top)
+                                rack.revealAdmission = false
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, 4)
+                        .disabled(
+                            rack.stopPending || rack.afSettingsPending
+                                || rack.afSettingsFailure != nil
+                        )
+                        .accessibilityIdentifier("focusRack.setup")
                     }
-                    .onChange(of: rack.revealAdmission, initial: true) { _, requested in
-                        if requested {
-                            proxy.scrollTo("focusRack.admission", anchor: .top)
-                            rack.revealAdmission = false
-                        }
-                    }
-                    .disabled(rack.stopPending)
-                    .accessibilityIdentifier("focusRack.setup")
                 }
+                transport
             }
-            transport
         }
         .padding(8)
         .frame(maxWidth: .infinity)
@@ -179,10 +198,73 @@ struct FocusRackView: View {
             Button("Close and discard marks", role: .destructive) { rack.closePanel() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Session marks will be discarded. Timing templates remain saved.")
+            Text(
+                "Session marks will be discarded. Previous AF settings restore after recording and focus stop. Manual changes are kept."
+            )
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(compact ? "focusRack.compact" : "focusRack.expanded")
+    }
+
+    private var modeSelector: some View {
+        Menu {
+            ForEach(FocusControlMode.allCases, id: \.self) { mode in
+                Button {
+                    rack.selectMode(mode)
+                } label: {
+                    Label(mode.title, systemImage: rack.mode == mode ? "checkmark" : "circle")
+                }
+                .accessibilityIdentifier("focusControl.mode." + mode.rawValue)
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(rack.mode.title).font(.system(size: 12, weight: .semibold))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .frame(width: 90, height: 44)
+            .contentShape(Rectangle())
+        }
+        .disabled(!allowsSetup || !rack.canChangeMode)
+        .accessibilityLabel("Focus mode")
+        .accessibilityValue(rack.mode.title)
+        .accessibilityIdentifier("focusControl.modePicker")
+    }
+
+    private var nativeAF: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(rack.nativeAFInstruction)
+                .font(.system(size: compact ? 11 : 13, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("focusControl.nativeAF.instruction")
+            if !compact {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let failure = rack.afSettingsFailure {
+                            Text(failure).foregroundStyle(.orange)
+                        }
+                        Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.")
+                        Text(
+                            "Set g6 AF speed on the camera. The camera controls transition duration."
+                        )
+                        Button {
+                            rack.openFocusSettings()
+                        } label: {
+                            Text("Focus settings").frame(minHeight: 44)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(
+                            !allowsSetup || rack.modeSwitchPending || rack.state?.busy == true
+                        )
+                        .accessibilityIdentifier("focusControl.nativeAF.settings")
+                    }
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("focusControl.nativeAF")
     }
 
     private func dismissEditors() {
@@ -235,6 +317,7 @@ struct FocusRackView: View {
                                 height: value.translation.height - panelTranslation.height))
                         panelTranslation = value.translation
                     })
+            modeSelector
             if !compact || (!rack.isExpanded && allowsExpansion) {
                 Button {
                     rack.isExpanded.toggle()
@@ -254,7 +337,10 @@ struct FocusRackView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!allowsSetup || rack.state?.busy == true || rack.stopPending)
+            .disabled(
+                !allowsSetup || rack.state?.busy == true || rack.stopPending
+                    || rack.modeSwitchPending
+            )
             .accessibilityLabel("Close Focus Rack")
             .accessibilityHint("Discards session marks after confirmation.")
             .accessibilityIdentifier("focusRack.close")
@@ -263,16 +349,27 @@ struct FocusRackView: View {
     }
 
     private var needsMoveAttention: Bool {
-        rack.state?.admissionMessage != nil && rack.state?.capabilities.canEditTiming == true
+        rack.mode == .timedRack && rack.state?.admissionMessage != nil
+            && rack.state?.capabilities.canEditTiming == true
             && !rack.stopPending
     }
 
     private var headerText: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(compactPhase.map { "FOCUS RACK · \($0)" } ?? "⠿ FOCUS RACK")
-                .font(.system(size: 11, weight: .bold))
-                .accessibilityIdentifier("focusRack.phase")
-            if compact, let instruction = rack.state?.recoveryInstruction {
+            Text(
+                rack.mode == .nativeAF
+                    ? "⠿ FOCUS"
+                    : compactPhase.map { "FOCUS RACK · \($0)" } ?? "⠿ FOCUS RACK"
+            )
+            .font(.system(size: 11, weight: .bold))
+            .accessibilityIdentifier("focusRack.phase")
+            if rack.mode == .nativeAF {
+                EmptyView()
+            } else if rack.afSettingsStatus != nil {
+                Text(rack.afSettingsFailure == nil ? "Waiting for AF setup…" : "AF setup failed")
+                    .font(.system(size: 11, weight: .medium))
+                    .accessibilityIdentifier("focusRack.status")
+            } else if compact, let instruction = rack.state?.recoveryInstruction {
                 Text(instruction).font(.system(size: 11, weight: .medium))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("focusRack.recovery")
@@ -407,7 +504,10 @@ struct FocusRackView: View {
         }
         .buttonStyle(.plain)
         .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
-        .disabled(!allowsSetup || action?.enabled != true)
+        .disabled(
+            !allowsSetup || action?.enabled != true || rack.afSettingsPending
+                || rack.afSettingsFailure != nil
+        )
         .accessibilityLabel(action?.title ?? "Set A and B")
         .accessibilityValue(action?.detail ?? "")
         .accessibilityHint(action?.disabledReason ?? "Uses the selected duration and delay.")
@@ -426,7 +526,9 @@ struct FocusRackView: View {
         }
         .buttonStyle(.plain)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
-        .disabled(!enabled || rack.stopPending)
+        .disabled(
+            !enabled || rack.stopPending || rack.afSettingsPending || rack.afSettingsFailure != nil
+        )
         .accessibilityLabel("Go to \(id)").accessibilityValue("Fast reposition")
         .accessibilityIdentifier("focusRack.go.\(id)")
     }

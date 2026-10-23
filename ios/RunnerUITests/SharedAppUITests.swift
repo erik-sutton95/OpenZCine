@@ -1414,6 +1414,48 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         continueAfterFailure = false
     }
 
+    func testNativeAFAndTimedRackModesInLandscape() {
+        let app = launch("ready")
+        let native = app.buttons["Native AF"]
+        let timed = app.buttons["Timed Rack"]
+        app.buttons["focusControl.modePicker"].tap()
+        XCTAssertTrue(native.waitForExistence(timeout: 5))
+        XCTAssertTrue(native.isHittable)
+        native.tap()
+        XCTAssertTrue(app.staticTexts["focusControl.nativeAF.instruction"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.settings"].isHittable)
+        XCTAssertTrue(
+            app.staticTexts["Automatic setup: AF-F · Auto-area AF · Subject detection Off."].exists)
+        XCTAssertFalse(app.staticTexts["focusRack.positions"].exists)
+        XCTAssertFalse(app.buttons["focusRack.pull.aToB"].exists)
+        screenshot("focus-modes-native-af-landscape")
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
+        screenshot("focus-modes-native-af-compact-landscape")
+        app.buttons["focusRack.expand"].tap()
+        app.buttons["focusControl.modePicker"].tap()
+        XCTAssertTrue(timed.waitForExistence(timeout: 3))
+        timed.tap()
+        let positions = app.staticTexts["focusRack.positions"]
+        XCTAssertTrue(positions.waitForExistence(timeout: 3))
+        XCTAssertTrue(positions.label.contains("A 0"))
+        XCTAssertTrue(positions.label.contains("B 20"))
+        XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
+        XCTAssertEqual(app.buttons["focusRack.pull.aToB"].value as? String, "3 s pull")
+        assertTransport(app)
+        screenshot("focus-modes-timed-rack-landscape")
+        app.buttons["focusRack.close"].tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(
+                    format: "label CONTAINS %@",
+                    "Previous AF settings restore after recording and focus stop.")
+            ).firstMatch.waitForExistence(timeout: 3))
+        screenshot("focus-modes-close-restore-landscape")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["focusControl.modePicker"].exists)
+    }
+
     func testExplicitCalibrationIsVisibleInLandscapeOptions() {
         let app = launch("calibration")
         scrollTo(app.buttons["focusRack.options"], in: app)

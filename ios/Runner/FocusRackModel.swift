@@ -69,6 +69,13 @@ struct FocusRackPendingCapture {
     private(set) var notice: String?
     private(set) var stopPending = false
     private(set) var capturingMark: String?
+    private(set) var mode: FocusControlMode = .timedRack
+    private(set) var modeSwitchPending = false
+    private(set) var afSettings = FocusAFSettingsLease()
+    private(set) var afSetupRequested = false
+    private(set) var afSetupFailure: String?
+    @ObservationIgnored private var afWriteAuthority: FocusRackAuthority?
+    @ObservationIgnored private var afReadinessPolls = 0
     var isExpanded = true
     /// Preserves an attention request while compact and expanded views are exchanged.
     var revealAdmission = false
@@ -78,6 +85,7 @@ struct FocusRackPendingCapture {
     @ObservationIgnored private var controller: FocusRackController?
     @ObservationIgnored private var authority = FocusRackAuthority()
     @ObservationIgnored private var stateTask: Task<Void, Never>?
+    @ObservationIgnored private var modeSwitchTask: Task<Void, Never>?
     @ObservationIgnored private var diagnosticTask: Task<Void, Never>?
     @ObservationIgnored private var observationTask: Task<Void, Never>?
     @ObservationIgnored private var contextTask: Task<Void, Never>?
@@ -98,7 +106,100 @@ struct FocusRackPendingCapture {
         let image: UIImage
     }
 
-    var allowsAutofocus: Bool { !isActive || (state?.capabilities.canAutofocus ?? true) }
+    var afSettingsPending: Bool { afSetupRequested || afSettings.needsService }
+    var afSettingsFailure: String? {
+        afSetupFailure ?? (afSetupRequested ? nil : afSettings.failure)
+    }
+    var afSettingsStatus: String? {
+        if let afSettingsFailure { return afSettingsFailure }
+        if afSettingsPending {
+            return afSettings.restoring
+                ? "Waiting to restore AF settings…"
+                : "Waiting for recording and focus to stop before AF setup…"
+        }
+        return nil
+    }
+
+    var canChangeMode: Bool {
+        capturingMark == nil && !afSettingsPending
+            && FocusControlModePolicy.canChange(
+                rack: state, stopPending: stopPending || modeSwitchPending,
+                externalFocusIdle: model?.focusControlExternalFocusIdle ?? true)
+    }
+
+    var nativeAFConfigured: Bool {
+        model?.nativeAFConfigured ?? !storesTemplates
+    }
+
+    var nativeAFInstruction: String {
+        if modeSwitchPending { return "Waiting for focus movement to stop…" }
+        if afSettingsFailure != nil {
+            return "AF setup failed. Open Focus settings or select the mode again."
+        }
+        if let afSettingsStatus { return afSettingsStatus }
+        if state?.phase == .stopUnconfirmed { return "Reconnect the camera before moving focus." }
+        guard model?.isPhotographyMode != true else { return "Switch the camera to movie mode." }
+        return nativeAFConfigured
+            ? "Tap a subject in the picture."
+            : "Select AF-F in Focus settings before tapping a subject."
+    }
+
+    var allowsAutofocus: Bool {
+        guard !afSettingsPending, !modeSwitchPending else { return false }
+        guard isActive else { return true }
+        guard afSettingsFailure == nil else { return false }
+        if mode == .nativeAF {
+            return nativeAFConfigured
+                && FocusControlModePolicy.allowsNativeAutofocus(
+                    mode: mode, rack: state, stopPending: stopPending || modeSwitchPending)
+        }
+        return state?.capabilities.canAutofocus ?? true
+    }
+
+    var autofocusDisabledReason: String {
+        mode == .nativeAF
+            ? nativeAFInstruction : "Use the rack dial, or reset marks before autofocus."
+    }
+
+    func selectMode(_ selected: FocusControlMode) {
+        guard canChangeMode else { return }
+        retirePresentation()
+        authority.update(false)
+        controller?.suspend()
+        mode = selected
+        notice = nil
+        waitForFocusStop(setupAfterStop: true)
+        publishObservation()
+    }
+
+    /// Dismissal and mode changes both wait for a fresh acknowledgement of native cleanup.
+    private func waitForFocusStop(setupAfterStop: Bool) {
+        guard let controller, let model else {
+            if setupAfterStop { requestAFSetup() }
+            return
+        }
+        modeSwitchTask?.cancel()
+        modeSwitchPending = true
+        let receivedAt = ProcessInfo.processInfo.systemUptime
+        var observation = model.focusRackObservation()
+        observation.foregroundOwner = false
+        let delivery = FocusRackObservationDelivery(
+            observation: observation, receivedAt: receivedAt)
+        modeSwitchTask = Task { [weak self] in
+            await controller.observe(delivery.aged(at: ProcessInfo.processInfo.systemUptime))
+            // Subscribe after the stop gate is consumed. An older displayed idle snapshot cannot
+            // acknowledge cancellation of a chunk that has already entered the native driver.
+            for await state in await controller.states() {
+                guard let self, self.controller === controller, !Task.isCancelled else { return }
+                guard !state.busy, !state.capabilities.canStop, state.phase != .stopUnconfirmed
+                else { continue }
+                self.modeSwitchPending = false
+                if setupAfterStop, self.isActive { self.requestAFSetup() }
+                self.publishObservation()
+                return
+            }
+        }
+    }
 
     init(model: NativeAppModel) {
         self.model = model
@@ -108,6 +209,9 @@ struct FocusRackPendingCapture {
     }
 
     #if DEBUG
+        /// Injects a SIMULATED held driver without starting a camera observer.
+        func debugBindController(_ controller: FocusRackController) { self.controller = controller }
+
         /// SIMULATED UI-only state. It has no camera driver and can never move a lens.
         init(fixture: FocusRackState) {
             state = fixture
@@ -218,16 +322,30 @@ struct FocusRackPendingCapture {
     func open() {
         isActive = true
         isExpanded = true
+        requestAFSetup()
+        authority.update(false)
+        controller?.suspend()
         startObserving()
+        waitForFocusStop(setupAfterStop: true)
         publishObservation()
     }
 
     func closePanel() {
+        guard !modeSwitchPending else { return }
         retirePresentation()
         authority.update(false)
         controller?.invalidate(reason: "Focus Rack closed. Reset marks before moving focus.")
         isActive = false
+        afSetupRequested = false
+        afSetupFailure = nil
+        revokeAFWrite()
+        afSettings.requestRestore()
+        if afSettings.needsService {
+            model?.showFocusAFNotice(
+                "AF settings will be restored after recording and focus movement stop.")
+        }
         thumbnails.removeAll()
+        waitForFocusStop(setupAfterStop: false)
         publishObservation()
         send(.discardMarks)
     }
@@ -242,13 +360,24 @@ struct FocusRackPendingCapture {
         guard let model else { return }
         let receivedAt = ProcessInfo.processInfo.systemUptime
         var observation = model.focusRackObservation()
-        observation.foregroundOwner = observation.foregroundOwner && isActive && !suspended
+        observation.foregroundOwner =
+            observation.foregroundOwner && isActive && !suspended
+            && mode == .timedRack && !modeSwitchPending && !afSettingsPending
+            && afSettingsFailure == nil
         authority.update(
             observation.connected && observation.foregroundOwner && observation.externalFocusIdle)
         observations?.yield(.init(observation: observation, receivedAt: receivedAt))
     }
 
     func sessionChanged() {
+        revokeAFWrite()
+        afSettings.abandon()
+        afSetupRequested = isActive && storesTemplates
+        afSetupFailure = nil
+        afReadinessPolls = 0
+        modeSwitchTask?.cancel()
+        modeSwitchTask = nil
+        modeSwitchPending = false
         retirePresentation()
         authority.update(false)
         let previous = controller
@@ -270,6 +399,7 @@ struct FocusRackPendingCapture {
     }
 
     func interrupt(_ reason: String) {
+        revokeAFWrite()
         retirePresentation()
         authority.update(false)
         if state?.busy == true { stopPending = true }
@@ -292,6 +422,8 @@ struct FocusRackPendingCapture {
         send(.externalFocusAction)
     }
     func nudge(near: Bool, steps: Int = 1) {
+        guard mode == .timedRack, !modeSwitchPending, !afSettingsPending, afSettingsFailure == nil
+        else { return }
         let intent = FocusRackIntent.nudge(towardNear: near, steps: steps)
         #if DEBUG
             if !storesTemplates {
@@ -365,7 +497,9 @@ struct FocusRackPendingCapture {
     }
 
     func capture(_ mark: String) {
-        guard pendingCapture == nil, let controller, let model,
+        guard mode == .timedRack, !modeSwitchPending, !afSettingsPending, afSettingsFailure == nil,
+            pendingCapture == nil, let controller,
+            let model,
             let frame = model.focusRackFrame()
         else { return }
         let ticket = controller.makeIntentTicket()
@@ -463,6 +597,110 @@ struct FocusRackPendingCapture {
         persist(updated)
     }
 
+    private func requestAFSetup() {
+        guard storesTemplates else { return }
+        revokeAFWrite()
+        afSetupRequested = true
+        afSetupFailure = nil
+        afReadinessPolls = 0
+    }
+
+    /// Consumes only fresh same-session reads from the existing camera safe point.
+    func nextAFChange(_ observation: FocusAFSettingsObservation) -> FocusAFSettingChange? {
+        if afSetupRequested {
+            do {
+                guard let sessionID = observation.sessionID else { return nil }
+                try afSettings.requestMode(mode, sessionID: sessionID, values: observation.values)
+                afSetupRequested = false
+            } catch {
+                afSetupRequested = false
+                afSetupFailure = error.localizedDescription
+                return nil
+            }
+        }
+        let wasRestoring = afSettings.restoring
+        let change = afSettings.nextChange(observation)
+        if wasRestoring, !afSettings.needsService, afSettings.failure == nil {
+            model?.showFocusAFNotice("Previous AF settings restored. Manual changes were kept.")
+        }
+        return change
+    }
+
+    func observesAFSettings(_ values: FocusAFSettingsValues) {
+        let previous = afSettings.pending
+        afSettings.observe(values)
+        if previous != nil, afSettings.pending != previous { revokeAFWrite() }
+    }
+
+    func manualAFChange(_ property: FocusAFProperty) {
+        revokeAFWrite()
+        afSettings.manualChange(property)
+    }
+
+    func revokeAFWrite() { afWriteAuthority?.update(false) }
+
+    func admitAFChange(
+        _ change: FocusAFSettingChange, observation: FocusAFSettingsObservation
+    ) -> FocusRackAuthority? {
+        guard !modeSwitchPending, afSettings.allows(change, observation: observation) else {
+            return nil
+        }
+        let authority = FocusRackAuthority()
+        authority.update(true)
+        afWriteAuthority = authority
+        return authority
+    }
+
+    func confirmsAFChange(
+        _ change: FocusAFSettingChange, sessionID: String, values: FocusAFSettingsValues
+    ) {
+        afSettings.confirm(change, sessionID: sessionID, values: values)
+        afWriteAuthority = nil
+        afReadinessPolls = 0
+        if let failure = afSettings.failure { model?.showFocusAFNotice(failure) }
+        publishObservation()
+    }
+
+    func defersAFChange(_ change: FocusAFSettingChange) {
+        revokeAFWrite()
+        afWriteAuthority = nil
+        afSettings.deferChange(change)
+    }
+
+    func failsAFChange(_ change: FocusAFSettingChange, message: String) {
+        revokeAFWrite()
+        afWriteAuthority = nil
+        afSettings.fail(change, message: message)
+        model?.showFocusAFNotice(message)
+        publishObservation()
+    }
+
+    func failsAFPreparation(_ message: String) {
+        revokeAFWrite()
+        afSettings.failPreparation(message: message)
+        afSetupRequested = false
+        afSetupFailure = message
+        model?.showFocusAFNotice(message)
+    }
+
+    /// Bounded readiness attempts never turn DeviceBusy or a failed read into permission.
+    func observesAFReadiness(_ readiness: StillReleaseReadiness) -> Bool {
+        switch readiness {
+        case .complete:
+            afReadinessPolls = 0
+            return true
+        case .inProgress, .openShutterInProgress:
+            afReadinessPolls += 1
+            if afReadinessPolls >= 8 {
+                failsAFPreparation(
+                    "Camera focus is still busy. Select the focus mode again when it stops.")
+            }
+        case .failed:
+            failsAFPreparation("The camera could not confirm that focus movement stopped.")
+        }
+        return false
+    }
+
     private func persist(_ updated: [FocusRackTemplate]) {
         do {
             if storesTemplates {
@@ -476,6 +714,12 @@ struct FocusRackPendingCapture {
     }
 
     private func send(_ intent: FocusRackIntent) {
+        if mode == .nativeAF || modeSwitchPending || afSettingsPending || afSettingsFailure != nil {
+            switch intent {
+            case .externalFocusAction, .discardMarks: break
+            default: return
+            }
+        }
         guard let controller else { return }
         let ticket = controller.makeIntentTicket()
         let revision = presentationRevision

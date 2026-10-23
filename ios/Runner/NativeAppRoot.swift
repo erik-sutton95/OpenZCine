@@ -1142,7 +1142,10 @@ final class NativeAppModel {
     /// changes by accident on set, record included. It lasts one monitor lifetime.
     var interfaceLocked: Bool {
         get { operatorSession.locked }
-        set { operatorSession.locked = newValue }
+        set {
+            if newValue { focusRack?.revokeAFWrite() }
+            operatorSession.locked = newValue
+        }
     }
     /// App-only lock on the live-view focus point (long-press the AF box). Stops a stray tap from
     /// moving it; the camera remains the source of truth, this just suppresses our ChangeAfArea
@@ -2537,6 +2540,7 @@ final class NativeAppModel {
     var isRecording = false {
         didSet {
             guard oldValue != isRecording else { return }
+            if isRecording { focusRack?.revokeAFWrite() }
             AppDiagnostics.shared.record(isRecording ? .recordingStarted : .recordingStopped)
         }
     }
@@ -4682,6 +4686,23 @@ final class NativeAppModel {
             guard let cameraSession else { return false }
             return await performNextPendingCameraWrite(session: cameraSession)
         }
+        /// SIMULATED accepted focus header and recording readback for the real AF safe-point tests.
+        func debugSeedFocusAF(recording: Bool?, result: PTPLiveViewFocusInfo.FocusResult = .focused)
+        {
+            reportedRecording = recording
+            isRecording = recording == true
+            focusRackAcceptedFrameAt = ProcessInfo.processInfo.systemUptime
+            focusRackAcceptedFrameRevision &+= 1
+            liveViewFocus = .init(
+                coordinateWidth: 1000, coordinateHeight: 562, focusResult: result,
+                subjectDetectionActive: false, selectedBoxIndex: 0, boxes: [])
+        }
+        /// SIMULATED completion of the same native AF work that fences accepted real frames.
+        func debugFenceFocusAFHeader() { fenceFocusAFHeader() }
+        func debugServiceFocusAFSettings() async -> Bool {
+            guard let cameraSession else { return false }
+            return await serviceFocusAFSettings(session: cameraSession)
+        }
         func debugEnqueueCameraWrite(_ property: PTPPropertyCode, picker: CameraPicker = .iso) {
             enqueueCameraWrite(
                 PendingCameraWrite(
@@ -4905,6 +4926,8 @@ final class NativeAppModel {
             if oldValue !== cameraSession {
                 retireMediaProducer()
                 focusRackAcceptedFrameAt = nil
+                focusAFReadyAt = nil
+                focusAFFrameFence = nil
                 focusRackAcceptedFrameRevision &+= 1
                 focusRackFocusRevision &+= 1
                 focusRack?.sessionChanged()
@@ -4919,6 +4942,136 @@ final class NativeAppModel {
     @ObservationIgnored private var focusRackFocusRevision = 0
     @ObservationIgnored private var focusRackFocusCommandsInFlight = 0
 
+    var focusControlExternalFocusIdle: Bool { focusRackExternalFocusIdle }
+
+    private var focusAFSessionID: String? {
+        guard let cameraSession else { return nil }
+        return "\(connectionGeneration):\(ObjectIdentifier(cameraSession).hashValue)"
+    }
+
+    private var reportedFocusAFSettings: FocusAFSettingsValues {
+        .init(
+            mode: reportedPropertySnapshot.focusMode,
+            area: reportedPropertySnapshot.focusArea, subject: reportedPropertySnapshot.focusSubject
+        )
+    }
+
+    @ObservationIgnored private var focusAFReadyAt: Double?
+    @ObservationIgnored private var focusAFFrameFence: UInt64?
+
+    /// A pre-action focused frame cannot acknowledge autonomous AF movement after that action.
+    private func fenceFocusAFHeader() {
+        focusAFReadyAt = nil
+        focusAFFrameFence = focusRackAcceptedFrameRevision
+    }
+
+    private var focusAFHasSettledHeader: Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard focusRackAcceptedFrameAt.map({ now >= $0 && now - $0 <= 2 }) == true,
+            focusAFFrameFence.map({ focusRackAcceptedFrameRevision > $0 }) != false,
+            let liveViewFocus
+        else { return false }
+        return reportedPropertySnapshot.focusMode == "AF-F"
+            ? liveViewFocus.focusResult == .focused : liveViewFocus.focusResult != .unknown
+    }
+
+    func showFocusAFNotice(_ message: String) { showMonitorNotice(message) }
+
+    private func focusAFObservation(executingWrite: Bool = false) -> FocusAFSettingsObservation {
+        let context = focusRackObservation()
+        let now = ProcessInfo.processInfo.systemUptime
+        let commandsIdle =
+            pendingFocusPoint == nil && focusResetStep == nil
+            && focusAFSettlePolls == 0 && mfDriveTask == nil
+            && focusRackFocusCommandsInFlight == (executingWrite ? 1 : 0)
+            && focusRack?.modeSwitchPending != true
+            && shell.control.pending[.focusMode] == nil
+            && !pendingCameraWrites.contains(where: { $0.picker == .focus })
+        let ready = focusAFReadyAt.map { now >= $0 && now - $0 <= 0.5 } == true
+        return .init(
+            sessionID: isConnected ? focusAFSessionID : nil, values: reportedFocusAFSettings,
+            recording: reportedRecording,
+            recordingPending: pendingRecordToggle || shell.control.recordPending,
+            movie: reportedPropertySnapshot.captureSelector == .video,
+            foreground: context.foregroundOwner && !interfaceLocked,
+            focusIdle: focusAFHasSettledHeader && ready && commandsIdle,
+            commandsIdle: commandsIdle, rack: focusRack?.state)
+    }
+
+    /// Performs one bounded preparation at the same safe point as existing picker writes.
+    private func serviceFocusAFSettings(session: NativeCameraSession) async -> Bool {
+        guard let rack = focusRack, rack.afSettingsPending, rack.afSettingsFailure == nil,
+            !rack.modeSwitchPending, rack.afSettings.pending == nil
+        else { return false }
+        var eligibility = focusAFObservation()
+        if !rack.afSetupRequested {
+            var noWrite = eligibility
+            noWrite.focusIdle = false
+            _ = rack.nextAFChange(noWrite)
+            if !rack.afSettingsPending { return false }
+        }
+        if rack.afSetupRequested, eligibility.sessionID != nil,
+            eligibility.values == .target(rack.mode)
+        {
+            _ = rack.nextAFChange(eligibility)
+            return false
+        }
+        // DeviceReady is evidence collected below, never inferred from an idle UI snapshot.
+        eligibility.focusIdle = eligibility.commandsIdle && focusAFHasSettledHeader
+        guard eligibility.permitsWrite else { return false }
+        let sourceID = focusAFSessionID
+        do {
+            for property: PTPPropertyCode in [
+                .liveViewSelector, .movieFocusMode, .movieFocusMeteringMode,
+                .movieAFSubjectDetection,
+            ] {
+                let data = try await session.readCameraProperty(property)
+                guard cameraSession === session, focusAFSessionID == sourceID else { return true }
+                guard data.count >= (property == .movieFocusMeteringMode ? 2 : 1),
+                    property != .liveViewSelector
+                        || data.first.map({ CameraCaptureSelector.decode(raw: $0) != nil }) == true
+                else { throw FocusAFSettingsError.unavailable }
+                applyCameraRead(property, data)
+            }
+            let readiness = try await session.pollStillReleaseReadiness()
+            guard cameraSession === session, focusAFSessionID == sourceID else { return true }
+            guard rack.observesAFReadiness(readiness) else { return true }
+            focusAFReadyAt = ProcessInfo.processInfo.systemUptime
+            let observation = focusAFObservation()
+            guard observation.permitsWrite,
+                let change = rack.nextAFChange(observation),
+                let write = change.property.write(change.value)
+            else { return true }
+            focusRackExternalFocusAction()
+            focusAFReadyAt = ProcessInfo.processInfo.systemUptime
+            guard let authority = rack.admitAFChange(change, observation: observation) else {
+                rack.defersAFChange(change)
+                return true
+            }
+            guard let commandOwner = session.commandOwner else {
+                rack.failsAFPreparation("The camera session cannot authorize AF settings.")
+                return true
+            }
+            let admission = NikonCommandAdmission(owner: commandOwner) {
+                authority.isAdmitted
+            }
+            enqueueCameraWrite(
+                .init(
+                    picker: .focus, value: change.value, write: write, admission: admission,
+                    focusAFChange: change))
+        } catch {
+            guard cameraSession === session, focusAFSessionID == sourceID else { return true }
+            rack.failsAFPreparation(
+                "Could not read camera AF settings: \(error.localizedDescription)")
+        }
+        return true
+    }
+
+    var nativeAFConfigured: Bool {
+        FocusControlModePolicy.nativeAFConfigured(
+            movieFocusMode: reportedPropertySnapshot.focusMode, photography: isPhotographyMode)
+    }
+
     private var focusRackExternalFocusIdle: Bool {
         pendingFocusPoint == nil && focusResetStep == nil && focusAFSettlePolls == 0
             && mfDriveTask == nil && focusRackFocusCommandsInFlight == 0
@@ -4927,6 +5080,8 @@ final class NativeAppModel {
     }
 
     private func focusRackExternalFocusAction() {
+        focusRack?.revokeAFWrite()
+        focusAFReadyAt = nil
         focusRackFocusRevision &+= 1
         focusRack?.externalFocusAction()
     }
@@ -5167,6 +5322,10 @@ final class NativeAppModel {
     @ObservationIgnored private var recentKeepaliveFailures = 0
     @ObservationIgnored private var isStreamRecovering = false
     @ObservationIgnored private var signalBarsFilter = LinkSignalBars()
+    #if DEBUG
+        @ObservationIgnored private var nativeAFTraceFocus: PTPLiveViewFocusInfo?
+        @ObservationIgnored private var nativeAFTraceProperties: [PTPPropertyCode: Data] = [:]
+    #endif
     /// The fire-and-forget `stopLiveView()` started on background, tracked so a quick return to the
     /// foreground awaits it before restarting the stream (otherwise the stop can land after the
     /// restart and shut the resumed feed back down).
@@ -5329,14 +5488,16 @@ final class NativeAppModel {
         let value: String
         let write: PTPCameraPropertyWrite
         let admission: NikonCommandAdmission?
+        let focusAFChange: FocusAFSettingChange?
         init(
             picker: CameraPicker, value: String, write: PTPCameraPropertyWrite,
-            admission: NikonCommandAdmission? = nil
+            admission: NikonCommandAdmission? = nil, focusAFChange: FocusAFSettingChange? = nil
         ) {
             self.picker = picker
             self.value = value
             self.write = write
             self.admission = admission
+            self.focusAFChange = focusAFChange
         }
     }
 
@@ -5353,6 +5514,9 @@ final class NativeAppModel {
     private func dropPendingCameraWrites(
         where shouldDrop: (PendingCameraWrite) -> Bool = { _ in true }
     ) {
+        for pending in pendingCameraWrites where shouldDrop(pending) {
+            if let change = pending.focusAFChange { focusRack?.defersAFChange(change) }
+        }
         pendingCameraWrites.removeAll(where: shouldDrop)
     }
 
@@ -8318,7 +8482,10 @@ final class NativeAppModel {
         // AF-point taps are interactive — service them first so focus follows the finger promptly.
         if let point = pendingFocusPoint {
             focusRackFocusCommandsInFlight += 1
-            defer { focusRackFocusCommandsInFlight -= 1 }
+            defer {
+                focusRackFocusCommandsInFlight -= 1
+                if cameraSession === session { fenceFocusAFHeader() }
+            }
             pendingFocusPoint = nil
             let sourceGeneration = connectionGeneration
             guard cameraSession === session else { return }
@@ -8328,11 +8495,22 @@ final class NativeAppModel {
                     try admission.require(owner: session.commandOwner)
                 }
                 focusManuallyDialed = false
+                #if DEBUG
+                    logConnection(
+                        "native-af target begin uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration) x=\(point.x) y=\(point.y) movieFocus=\(reportedPropertySnapshot.activeFocusMode(photography: false) ?? "nil") area=\(focusArea) subject=\(focusSubject)"
+                    )
+                #endif
                 if let admission = point.admission {
                     try await session.changeAfArea(x: point.x, y: point.y, admission: admission)
                 } else {
                     try await session.changeAfArea(x: point.x, y: point.y)
                 }
+                #if DEBUG
+                    // Method completion can include retries; it is not optical arrival.
+                    logConnection(
+                        "native-af target returned uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration) x=\(point.x) y=\(point.y)"
+                    )
+                #endif
                 guard cameraSession === session, connectionGeneration == sourceGeneration else {
                     return
                 }
@@ -8353,6 +8531,11 @@ final class NativeAppModel {
                     focusMode: cameraPropertySnapshot.activeFocusMode(photography: photography),
                     photography: photography)
                 {
+                    #if DEBUG
+                        logConnection(
+                            "native-af oneShotAFDrive uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration)"
+                        )
+                    #endif
                     if let admission = point.admission {
                         try await session.afDrive(admission: admission)
                     } else {
@@ -8367,6 +8550,11 @@ final class NativeAppModel {
                     focusAFSettlePolls = 4
                 }
             } catch {
+                #if DEBUG
+                    logConnection(
+                        "native-af target error uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration) x=\(point.x) y=\(point.y) error=\(error)"
+                    )
+                #endif
                 guard cameraSession === session, connectionGeneration == sourceGeneration else {
                     return
                 }
@@ -8402,6 +8590,7 @@ final class NativeAppModel {
             return
         }
         if await monitorRuntime?.serviceControlSafePoint() == true { return }
+        if await serviceFocusAFSettings(session: session) { return }
         if await performNextPendingCameraWrite(session: session) {
             return
         }
@@ -8650,6 +8839,9 @@ final class NativeAppModel {
     }
 
     private func runFocusResetStep(_ step: FocusResetStep, session: NativeCameraSession) async {
+        defer {
+            if cameraSession === session, focusResetStep == nil { fenceFocusAFHeader() }
+        }
         switch step {
         case .endTracking(let context):
             // EndTracking (0x9425) must run while TargetTracking/Subject AF-area
@@ -8831,6 +9023,14 @@ final class NativeAppModel {
     /// source of truth for each (no property polling, no extra traffic; all decoded from the
     /// header the app already reads).
     private func applyLiveViewHeaderState(_ frame: PTPLiveViewFrame) {
+        #if DEBUG
+            if nativeAFTraceFocus != frame.focus {
+                nativeAFTraceFocus = frame.focus
+                logConnection(
+                    "native-af focusHeader uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(connectionGeneration) recording=\(frame.isRecording) focus=\(String(describing: frame.focus))"
+                )
+            }
+        #endif
         // Body rotation (byte 839) → vertical mode. Guarded write: this runs per frame and an
         // unconditional set would invalidate the whole feed layout 30×/s.
         if liveFeedRotation != frame.rotation { liveFeedRotation = frame.rotation }
@@ -8860,10 +9060,16 @@ final class NativeAppModel {
     private func applyCameraRecordState(
         isRecording recording: Bool, force: Bool = false, observeGyro: Bool = true
     ) {
+        if recording { focusRack?.revokeAFWrite() }
         if observeGyro { reconcileGyroCapture(recording: recording) }
         // The camera's report is recorded even while the button defers to an app command below:
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
+            #if DEBUG
+                logConnection(
+                    "native-af cameraRecording uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(connectionGeneration) recording=\(recording)"
+                )
+            #endif
             retireOperatorQuickPresentation()
             reportedRecording = recording
             refreshCommonControlFacts()
@@ -8910,7 +9116,12 @@ final class NativeAppModel {
         guard cameraSession === session else { return true }
         let externalFocusWrite = pending.picker == .focus
         if externalFocusWrite { focusRackFocusCommandsInFlight += 1 }
-        defer { if externalFocusWrite { focusRackFocusCommandsInFlight -= 1 } }
+        defer {
+            if externalFocusWrite {
+                focusRackFocusCommandsInFlight -= 1
+                if cameraSession === session { fenceFocusAFHeader() }
+            }
+        }
         let isShutterModeWrite = pending.write.property == .movieShutterMode
         let isBaseISOWrite = pending.write.property == .movieBaseISO
         let isISOAutoWrite =
@@ -8920,6 +9131,30 @@ final class NativeAppModel {
         let isShutterLockWrite = pending.write.property == .movieTVLockSetting
         do {
             let writeStarted = ContinuousClock.now
+            if let change = pending.focusAFChange {
+                guard let rack = focusRack,
+                    rack.afSettings.allows(
+                        change, observation: focusAFObservation(executingWrite: true))
+                else {
+                    focusRack?.defersAFChange(change)
+                    return true
+                }
+                let actual = try await session.readCameraProperty(pending.write.property)
+                guard cameraSession === session, connectionGeneration == sourceGeneration else {
+                    return true
+                }
+                guard actual.count >= pending.write.data.count else {
+                    throw FocusAFSettingsError.unavailable
+                }
+                applyCameraRead(pending.write.property, actual)
+                guard
+                    rack.afSettings.allows(
+                        change, observation: focusAFObservation(executingWrite: true))
+                else {
+                    rack.defersAFChange(change)
+                    return true
+                }
+            }
             if let admission = pending.admission {
                 try await session.writeCameraProperty(pending.write, admission: admission)
             } else {
@@ -8957,6 +9192,17 @@ final class NativeAppModel {
                     property: pending.write.property,
                     data: pending.write.data
                 )
+            }
+            if let change = pending.focusAFChange {
+                if let readback, readback.count >= pending.write.data.count,
+                    let sessionID = focusAFSessionID
+                {
+                    focusRack?.confirmsAFChange(
+                        change, sessionID: sessionID, values: reportedFocusAFSettings)
+                } else {
+                    focusRack?.failsAFChange(
+                        change, message: "The camera did not confirm its AF setting.")
+                }
             }
             // A confirmed write supersedes any queued re-read of the same property.
             cameraAnnouncedPropertyChanges.cancel(pending.write.property)
@@ -9018,6 +9264,14 @@ final class NativeAppModel {
         } catch {
             guard cameraSession === session, connectionGeneration == sourceGeneration else {
                 return true
+            }
+            if let change = pending.focusAFChange {
+                if case NativeCameraSessionError.commandAuthorityExpired = error {
+                    focusRack?.defersAFChange(change)
+                } else {
+                    focusRack?.failsAFChange(
+                        change, message: "Camera AF setup failed: \(error.localizedDescription)")
+                }
             }
             if case NativeCameraSessionError.commandAuthorityExpired = error {
                 // Refused before the first send, not a camera lock. Keep any valid successor target.
@@ -9343,9 +9597,46 @@ final class NativeAppModel {
 
     /// A value the camera returned, applied to the display snapshot and the reported one.
     private func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
+        #if DEBUG
+            switch property {
+            case .movieFocusMode, .movieFocusMeteringMode, .movieAFSubjectDetection,
+                .focalLength, .movieFNumber, .movieRecordScreenSize, .movieFileType:
+                if nativeAFTraceProperties[property] != data {
+                    nativeAFTraceProperties[property] = data
+                    let hex = data.map { String(format: "%02x", $0) }.joined()
+                    logConnection(
+                        "native-af property uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(connectionGeneration) property=\(property) raw=\(hex)"
+                    )
+                }
+            default: break
+            }
+        #endif
         let previous = reportedPropertySnapshot
         cameraPropertySnapshot = cameraPropertySnapshot.applying(property: property, data: data)
         reportedPropertySnapshot = reportedPropertySnapshot.applying(property: property, data: data)
+        if property == .liveViewSelector, reportedPropertySnapshot.captureSelector != .video {
+            focusRack?.revokeAFWrite()
+        }
+        if [.movieFocusMode, .movieFocusMeteringMode, .movieAFSubjectDetection].contains(property) {
+            let changed: FocusAFProperty =
+                switch property {
+                case .movieFocusMode: .mode
+                case .movieFocusMeteringMode: .area
+                default: .subject
+                }
+            let previousValues = FocusAFSettingsValues(
+                mode: previous.focusMode, area: previous.focusArea, subject: previous.focusSubject)
+            let actual = reportedFocusAFSettings[changed]
+            let ownReadback =
+                focusRack?.afSettings.pending.map {
+                    $0.property == changed && ($0.value == actual || $0.expectedValue == actual)
+                } == true
+            if previousValues[changed] != actual, !ownReadback {
+                focusRack?.revokeAFWrite()
+                fenceFocusAFHeader()
+            }
+            focusRack?.observesAFSettings(reportedFocusAFSettings)
+        }
         if property == .movieFileType {
             stabilizationFileTypeReadback = reportedPropertySnapshot.fileType
         }
@@ -10072,7 +10363,7 @@ final class NativeAppModel {
     func setFocusPoint(at point: CGPoint, feedSize: CGSize) {
         guard !interfaceLocked, !focusPointLocked else { return }
         if let focusRack, !focusRack.allowsAutofocus {
-            showMonitorNotice("Use the rack dial, or reset marks before autofocus.")
+            showMonitorNotice(focusRack.autofocusDisabledReason)
             return
         }
         focusRackExternalFocusAction()
@@ -10166,7 +10457,7 @@ final class NativeAppModel {
     func resetFocusPoint() {
         guard !interfaceLocked, !focusPointLocked else { return }
         if let focusRack, !focusRack.allowsAutofocus {
-            showMonitorNotice("Use the rack dial, or reset marks before autofocus.")
+            showMonitorNotice(focusRack.autofocusDisabledReason)
             return
         }
         focusRackExternalFocusAction()
@@ -10842,7 +11133,10 @@ final class NativeAppModel {
     /// and the strip is never hidden. [verify-on-HW: per-lens pulse feel + which codes a given
     /// lens answers]
     func driveManualFocus(pulses: Int) {
-        guard focusRack?.isActive != true, pulses != 0, !isDemoSession, cameraSession != nil else {
+        guard focusRack?.isActive != true, focusRack?.afSettingsPending != true,
+            focusRack?.modeSwitchPending != true,
+            pulses != 0, !isDemoSession, cameraSession != nil
+        else {
             return
         }
         focusRackExternalFocusAction()
@@ -12279,6 +12573,13 @@ final class NativeAppModel {
     /// Queues a movie-AF control write (focus mode / AF-area / subject detection). No-op in the
     /// demo (the optimistic local update stands).
     private func applyFocusControl(_ control: PTPCameraControl, value: String) {
+        let property: FocusAFProperty =
+            switch control {
+            case .focusArea: .area
+            case .focusSubject: .subject
+            default: .mode
+            }
+        focusRack?.manualAFChange(property)
         guard !isDemoSession else { return }
         guard let write = PTPCameraPropertyWrite.request(control: control, label: value) else {
             connectionMessage = "FOCUS value \(value) could not be encoded."
@@ -13552,7 +13853,10 @@ extension NativeAppModel {
         }
         shell.control.onNote = { [weak self] in self?.showMonitorNotice($0) }
         shell.control.onSettingQueued = { [weak self] key in
-            if key == .focusMode { self?.focusRackExternalFocusAction() }
+            if key == .focusMode {
+                self?.focusRack?.manualAFChange(.mode)
+                self?.focusRackExternalFocusAction()
+            }
         }
         shell.control.onRecordingStopRequested = { [weak self] in
             self?.focusRack?.recordingWillStop()
@@ -13604,10 +13908,17 @@ extension NativeAppModel {
             runtime.onReadback = { [weak self, weak runtime] write, readback in
                 guard let self, monitorRuntime === runtime else { return }
                 if let readback { applyCameraRead(write.property, readback) }
+                if write.property == .movieFocusMode { fenceFocusAFHeader() }
                 publishCameraDisplayState()
             }
             runtime.onRecordQueued = { [weak self, weak runtime] start in
                 guard let self, monitorRuntime === runtime else { return }
+                #if DEBUG
+                    logConnection(
+                        "native-af recordQueued uptime=\(ProcessInfo.processInfo.systemUptime) start=\(start)"
+                    )
+                #endif
+                focusRack?.revokeAFWrite()
                 isRecording = start
                 if !start { focusRack?.recordingWillStop() }
                 pendingRecordToggle = true
@@ -13615,8 +13926,13 @@ extension NativeAppModel {
                 cameraState = cameraState.updating(recordState: start ? .recording : .standby)
                 publishWatchState()
             }
-            runtime.onRecordCommand = { [weak self, weak runtime] _, accepted in
+            runtime.onRecordCommand = { [weak self, weak runtime] start, accepted in
                 guard let self, monitorRuntime === runtime else { return }
+                #if DEBUG
+                    logConnection(
+                        "native-af recordCommand uptime=\(ProcessInfo.processInfo.systemUptime) start=\(start) accepted=\(accepted)"
+                    )
+                #endif
                 pendingRecordToggle = false
                 appRecordCommandAt = Date()
                 if accepted {
