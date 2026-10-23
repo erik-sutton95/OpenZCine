@@ -95,7 +95,9 @@ final class AssistEngineAdoptionTests: XCTestCase {
     private func published(after revision: UInt64, _ model: NativeAppModel) async throws
         -> ScopeAssistBundle
     {
-        for _ in 0..<150 where model.scopeAssist.revision <= revision {
+        // Bounded at 10 s: a hosted runner under load once took longer than 3 s to publish
+        // (PR #484, first run); the loop still returns as soon as the bundle lands.
+        for _ in 0..<500 where model.scopeAssist.revision <= revision {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertGreaterThan(model.scopeAssist.revision, revision, "no scope bundle published")
