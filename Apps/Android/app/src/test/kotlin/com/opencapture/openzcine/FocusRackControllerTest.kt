@@ -1,6 +1,7 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.LiveFocusBox
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +35,19 @@ class FocusRackControllerTest {
         assertNull(focusRackFocusJSON(focus.copy(isDebugFixture = true)))
     }
 
+    @Test fun `prepared setting receipt rejects live property drift before the serialized send`() {
+        val expected = JSONObject().put("mode", "AF-S").put("area", "Auto").put("subject", "Off")
+        val reported = CameraPropertySnapshot(focusMode = "AF-S", focusArea = "Auto",
+            focusSubject = "Off", captureSelector = "video")
+        assertTrue(focusAFSettingsReadbacksMatch(expected, reported))
+        assertTrue(focusAFSettingsReadbacksMatch(expected, reported.copy(stillFocusMode = "AF-F")))
+        assertFalse(focusAFSettingsReadbacksMatch(expected, reported.copy(focusMode = "AF-F")))
+        assertFalse(focusAFSettingsReadbacksMatch(expected, reported.copy(focusArea = "Wide-L")))
+        assertFalse(focusAFSettingsReadbacksMatch(expected, reported.copy(focusSubject = "People")))
+        assertFalse(focusAFSettingsReadbacksMatch(expected, reported.copy(captureSelector = "photo")))
+        assertFalse(focusAFSettingsReadbacksMatch(expected, reported.copy(focusArea = null)))
+    }
+
     private class Wire : FocusRackWirePort {
         val requests = mutableListOf<JSONObject>()
         var closed = false
@@ -52,6 +66,12 @@ class FocusRackControllerTest {
         var canChangeFocusMode = true
         var nativeAFConfigured = false
         var canNativeAutofocus = false
+        var afSettingsChange: JSONObject? = null
+        var afSettingsPending = false
+        var afSettingsRestoring = false
+        var afSettingsReady = false
+        var afSettingsFailure: String? = null
+        var afAdmission = true
         override fun create(connectionOwner: Long, templates: String): String {
             assertEquals(42L, connectionOwner)
             createdTemplates = templates
@@ -61,6 +81,9 @@ class FocusRackControllerTest {
         override fun step(owner: String, request: String): String {
             requests += JSONObject(request)
             if (unavailable) return "invalid JSON"
+            if (JSONObject(request).optString("kind") == "afSettingsAdmission")
+                return JSONObject().put("allowed", afAdmission).toString()
+            if (JSONObject(request).optString("kind") == "manualAFSetting") afAdmission = false
             val caps = JSONObject().put("canCaptureA", false).put("canCaptureB", false)
                 .put("canNudge", false).put("canEditTiming", !busy).put("canReset", !busy)
                 .put("canAutofocus", !busy)
@@ -80,7 +103,10 @@ class FocusRackControllerTest {
                 .put("calibrationJSON", calibrationJSON).put("focusMode", focusMode)
                 .put("focusModeSwitchPending", focusModeSwitchPending)
                 .put("canChangeFocusMode", canChangeFocusMode).put("nativeAFConfigured", nativeAFConfigured)
-                .put("canNativeAutofocus", canNativeAutofocus).toString()
+                .put("canNativeAutofocus", canNativeAutofocus)
+                .put("afSettingsChange", afSettingsChange).put("afSettingsPending", afSettingsPending)
+                .put("afSettingsRestoring", afSettingsRestoring).put("afSettingsReady", afSettingsReady)
+                .put("afSettingsFailure", afSettingsFailure).toString()
         }
     }
 
@@ -380,4 +406,102 @@ class FocusRackControllerTest {
         assertFalse(wire.requests.last().has("timingUpdate"))
         rack.close()
     }
+
+    @Test fun `AF effects use the admitted existing writer once and preserve reported confirmations`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        var writes = 0
+        val reported = JSONObject().put("sessionID", "camera-owner")
+            .put("values", JSONObject().put("mode", "AF-S").put("area", "Auto").put("subject", "Off"))
+        rack.configureAFSettings { change, admitted ->
+            assertTrue(admitted())
+            assertEquals("mode", change.getString("property"))
+            assertEquals("AF-F", change.getString("value"))
+            writes += 1
+            JSONObject(reported.toString()).put("values",
+                JSONObject().put("mode", "AF-F").put("area", "Auto").put("subject", "Off"))
+        }
+        rack.activate()
+        rack.observe(JSONObject().put("afSettings", reported))
+        rack.openPanel()
+        wire.afSettingsPending = true
+        wire.afSettingsChange = JSONObject().put("id", 1).put("sessionID", "camera-owner")
+            .put("property", "mode").put("expectedValue", "AF-S").put("value", "AF-F").put("restoring", false)
+        rack.observe(JSONObject().put("afSettings", reported))
+        rack.observe(JSONObject().put("afSettings", reported))
+        testScheduler.runCurrent()
+        assertEquals(1, writes)
+        val complete = wire.requests.last { it.optString("kind") == "afSettingsComplete" }
+        assertEquals("AF-F", complete.getJSONObject("afSettings").getJSONObject("values").getString("mode"))
+        assertFalse(complete.has("afFailure"))
+        assertTrue(rack.state.value.afSettingsPending)
+        assertTrue(rack.closePanel())
+        rack.observe(JSONObject().put("afSettings", reported))
+        assertTrue(wire.requests.any { it.optString("kind") == "observe" })
+        rack.close()
+    }
+
+    @Test fun `same value manual AF choice revokes an unsent automatic effect`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        var writes = 0
+        rack.configureAFSettings { _, _ -> writes += 1; JSONObject() }
+        rack.activate()
+        val input = JSONObject().put("afSettings", JSONObject().put("sessionID", "camera-owner"))
+        rack.observe(input)
+        wire.afSettingsPending = true
+        wire.afSettingsChange = JSONObject().put("id", 1).put("sessionID", "camera-owner")
+            .put("property", "mode").put("expectedValue", "AF-S").put("value", "AF-F").put("restoring", false)
+        rack.observe(input)
+        rack.manualAFSetting("mode")
+        testScheduler.runCurrent()
+        assertEquals(0, writes)
+        assertTrue(wire.requests.any { it.optString("kind") == "afSettingsDeferred" })
+        assertFalse(wire.requests.any { it.optString("kind") == "afSettingsComplete" })
+        rack.close()
+    }
+
+
+    @Test fun `stale producer observations cannot admit an automatic AF write`() = runTest {
+        val wire = Wire().apply { busy = false }
+        var now = 1L
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire,
+            observationNanos = { now })
+        var writes = 0
+        rack.configureAFSettings { _, _ -> writes += 1; JSONObject() }
+        rack.activate()
+        wire.afSettingsChange = JSONObject().put("id", 1).put("sessionID", "camera-owner")
+            .put("property", "mode").put("expectedValue", "AF-S").put("value", "AF-F").put("restoring", false)
+        rack.observe(JSONObject().put("afSettings", JSONObject().put("sessionID", "camera-owner")))
+        now += 600_000_000
+        testScheduler.runCurrent()
+        assertEquals(0, writes)
+        assertTrue(wire.requests.any { it.optString("kind") == "afSettingsDeferred" })
+        rack.close()
+    }
+
+
+    @Test fun `interruption synchronously revokes automatic settings before the next coroutine hop`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        var writes = 0
+        rack.configureAFSettings { _, _ -> writes += 1; JSONObject() }
+        rack.activate()
+        wire.afSettingsChange = JSONObject().put("id", 1).put("sessionID", "camera-owner")
+            .put("property", "mode").put("expectedValue", "AF-S").put("value", "AF-F").put("restoring", false)
+        rack.observe(JSONObject().put("afSettings", JSONObject().put("foreground", true)))
+        rack.interrupt()
+        assertFalse(wire.requests.last().getJSONObject("afSettings").getBoolean("foreground"))
+        testScheduler.runCurrent()
+        assertEquals(0, writes)
+        assertTrue(wire.requests.any { it.optString("kind") == "afSettingsDeferred" })
+        rack.resumeAFSettings()
+        assertEquals("resumeAFSettings", wire.requests.last().getString("kind"))
+        rack.close()
+    }
+
 }

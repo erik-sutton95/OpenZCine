@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.sp
 internal data class FocusRackViewState(
     val focusMode: String = "timedRack", val canChangeFocusMode: Boolean = false,
     val focusModeSwitchPending: Boolean = false,
+    val afSettingsPending: Boolean = false, val afSettingsRestoring: Boolean = false,
+    val afSettingsReady: Boolean = false, val afSettingsFailure: String? = null,
     val nativeAFConfigured: Boolean = false, val canNativeAutofocus: Boolean = false,
     val phase: String = "idle", val message: String = "Connect a camera to set focus marks.",
     val recovery: String? = null, val error: String? = null, val admissionMessage: String? = null,
@@ -166,16 +168,19 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 contentPadding = PaddingValues(0.dp)) { Text("×", fontSize = 24.sp) }
         }
         if (state.focusMode == "nativeAF") {
-            if (!compact) Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("focusRack.nativeAF"),
+            if (!compact) {
+            Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()).testTag("focusRack.nativeAF"),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Tap a subject in the live view. The camera controls the transition.", color = Color.LightGray, fontSize = 13.sp)
-                if (!state.nativeAFConfigured) Text("Use movie AF-F before tapping.",
+                if (state.afSettingsPending) Text("Applying camera AF setup…", color = Color(0xFFFFB869), fontSize = 12.sp)
+                if (!state.nativeAFConfigured && !state.afSettingsPending) Text("Movie AF-F is required before tapping.",
                     color = Color(0xFFFFB869), fontSize = 12.sp)
-                Text("AF-area: Auto-area AF. Subject detection: Off.", color = Color.LightGray, fontSize = 12.sp)
+                Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.", color = Color.LightGray, fontSize = 12.sp)
                 Text("Set movie AF speed on the camera.", color = Color.LightGray, fontSize = 12.sp)
-                state.error?.let { Text(it, color = Color(0xFFFFB869), fontSize = 12.sp) }
-                TextButton(onClick = onFocusSettings, enabled = setupEnabled,
-                    modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.nativeAF.settings")) { Text("Focus settings") }
+                (state.afSettingsFailure ?: state.error)?.let { Text(it, color = Color(0xFFFFB869), fontSize = 12.sp) }
+            }
+            TextButton(onClick = onFocusSettings, enabled = setupEnabled,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.nativeAF.settings")) { Text("Focus settings") }
             }
         } else if (!compact) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("focusRack.marks"),
@@ -289,7 +294,8 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 }
                 state.admissionMessage?.let { Text(it, color = Color(0xFFFFCE9B), fontSize = 12.sp,
                     modifier = Modifier.bringIntoViewRequester(admissionAttention).testTag("focusRack.admission")) }
-                val message = state.error ?: state.message
+                val message = state.afSettingsFailure ?: if (state.afSettingsPending)
+                    "Applying camera AF setup…" else state.error ?: state.message
                 if (message.isNotBlank()) Text(message, color = if (state.error != null) Color(0xFFFFBE9E) else Color.LightGray,
                     fontSize = 12.sp, modifier = Modifier.testTag("focusRack.message"))
             }
