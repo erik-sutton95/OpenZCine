@@ -6,7 +6,7 @@ name: Nightly
 on:
   schedule:
     # Staggered with the other repositories so their macOS jobs do not queue behind each other.
-    - cron: "45 4 * * *"
+    - cron: "20 19 * * *"
   workflow_dispatch:
 
 permissions:
@@ -18,8 +18,9 @@ concurrency:
 
 jobs:
   # GitHub can start a scheduled run hours late (2026-10-20: 07:50 to 09:38 UTC for 02:30 to 04:45
-  # crons). A late nightly would take the daytime macOS runners from pull requests, so a scheduled
-  # run that starts at 07:00 UTC or later skips; manual dispatch always runs.
+  # crons). A late nightly would take the daytime macOS runners from pull requests, so the cron is in the
+  # evening (UTC) and a scheduled run that starts between 07:00 and 18:59 UTC skips; manual dispatch
+  # always runs. (A 02:30 cron started 5 to 7 hours late every day and always skipped.)
   window:
     name: Night window
     runs-on: ubuntu-latest
@@ -32,8 +33,8 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           hour=$(date -u +%H)
-          if [ "$EVENT" = schedule ] && [ "$hour" -ge 7 ]; then
-            echo "::notice::scheduled nightly started at ${hour}:xx UTC, after the night window; skipped"
+          if [ "$EVENT" = schedule ] && [ "$hour" -ge 7 ] && [ "$hour" -lt 19 ]; then
+            echo "::notice::scheduled nightly started at ${hour}:xx UTC, outside the 19:00-07:00 UTC window; skipped"
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
