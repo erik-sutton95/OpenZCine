@@ -414,6 +414,7 @@ class FocusRackControllerTest {
         var writes = 0
         val reported = JSONObject().put("sessionID", "camera-owner")
             .put("values", JSONObject().put("mode", "AF-S").put("area", "Auto").put("subject", "Off"))
+            .put("focusIdle", true).put("restorationFocusSettled", false)
         rack.configureAFSettings { change, admitted ->
             assertTrue(admitted())
             assertEquals("mode", change.getString("property"))
@@ -434,6 +435,8 @@ class FocusRackControllerTest {
         assertEquals(1, writes)
         val complete = wire.requests.last { it.optString("kind") == "afSettingsComplete" }
         assertEquals("AF-F", complete.getJSONObject("afSettings").getJSONObject("values").getString("mode"))
+        assertTrue(complete.getJSONObject("afSettings").getBoolean("focusIdle"))
+        assertFalse(complete.getJSONObject("afSettings").getBoolean("restorationFocusSettled"))
         assertFalse(complete.has("afFailure"))
         assertTrue(rack.state.value.afSettingsPending)
         assertTrue(rack.closePanel())

@@ -93,6 +93,7 @@ public final class FocusRackWire: @unchecked Sendable {
         let movie: Bool
         var foreground: Bool
         let focusIdle: Bool
+        let restorationFocusSettled: Bool
         let commandsIdle: Bool
         let frameSequence: Int64?
         let focusAfterSequence: Int64?
@@ -109,6 +110,7 @@ public final class FocusRackWire: @unchecked Sendable {
                 && lhs.recording == rhs.recording && lhs.recordingPending == rhs.recordingPending
                 && lhs.movie == rhs.movie && lhs.foreground == rhs.foreground
                 && lhs.postActionFocusIdle == rhs.postActionFocusIdle
+                && lhs.restorationFocusSettled == rhs.restorationFocusSettled
                 && lhs.commandsIdle == rhs.commandsIdle
         }
 
@@ -116,7 +118,9 @@ public final class FocusRackWire: @unchecked Sendable {
             .init(
                 sessionID: sessionID, values: values, recording: recording,
                 recordingPending: recordingPending, movie: movie, foreground: foreground,
-                focusIdle: postActionFocusIdle && ready, commandsIdle: commandsIdle, rack: rack)
+                focusIdle: postActionFocusIdle && ready,
+                restorationFocusSettled: restorationFocusSettled,
+                commandsIdle: commandsIdle, rack: rack)
         }
     }
 
@@ -167,6 +171,8 @@ public final class FocusRackWire: @unchecked Sendable {
         private var afSuspended = false
         private var afFailure: String?
         private var afSetupReady = false
+        private var afSetupRequested = false
+        private var afManualBeforeCapture: Set<FocusAFProperty> = []
         private var panelOpen = false
 
         init(controller: FocusRackController, driver: any FocusRackDriver, authority: Authority) {
@@ -209,6 +215,7 @@ public final class FocusRackWire: @unchecked Sendable {
                 guard !closed else { return }
                 acceptSettingsInput(request.afSettings)
                 if request.kind == "manualAFSetting", let property = request.afProperty {
+                    if afSetupRequested { afManualBeforeCapture.insert(property) }
                     afLease.manualChange(property)
                     afRevision += 1
                     afEffectReady = false
@@ -241,6 +248,8 @@ public final class FocusRackWire: @unchecked Sendable {
                     authority.setSettingsRead(false)
                 }
                 if request.kind == "openPanel" {
+                    afSetupRequested = true
+                    afManualBeforeCapture.removeAll()
                     afSuspended = false
                     panelOpen = true
                     afSetupReady = false
@@ -257,6 +266,8 @@ public final class FocusRackWire: @unchecked Sendable {
                         error = FocusRackError.movementPending.localizedDescription
                         return
                     }
+                    afSetupRequested = true
+                    afManualBeforeCapture.removeAll()
                     afSuspended = false
                     modeSwitchPending = true
                     afSetupReady = false
@@ -272,6 +283,8 @@ public final class FocusRackWire: @unchecked Sendable {
                     controller.requestStop()
                 }
                 if request.kind == "closePanel" {
+                    afSetupRequested = false
+                    afManualBeforeCapture.removeAll()
                     panelOpen = false
                     afSetupReady = false
                     afEffectReady = false
@@ -511,6 +524,10 @@ public final class FocusRackWire: @unchecked Sendable {
         // All ownership mutation and comparisons share the entry lock; I/O stays outside it.
         private func acceptSettingsInput(_ input: SettingsInput?) {
             guard let input else { return }
+            if afInput?.sessionID != input.sessionID {
+                afSetupRequested = false
+                afManualBeforeCapture.removeAll()
+            }
             if input != afInput {
                 afRevision += 1
                 afEffectReady = false
@@ -528,6 +545,11 @@ public final class FocusRackWire: @unchecked Sendable {
         }
 
         private func requestSettings(_ mode: FocusControlMode) throws {
+            guard afSetupRequested else { return }
+            defer {
+                afSetupRequested = false
+                afManualBeforeCapture.removeAll()
+            }
             afSetupReady = false
             afFailure = nil
             afEffectReady = false
@@ -535,7 +557,10 @@ public final class FocusRackWire: @unchecked Sendable {
                 afFailure = FocusAFSettingsError.unavailable.localizedDescription
                 throw FocusAFSettingsError.unavailable
             }
-            do { try afLease.requestMode(mode, sessionID: sessionID, values: input.values) } catch {
+            do {
+                try afLease.requestMode(mode, sessionID: sessionID, values: input.values)
+                for property in afManualBeforeCapture { afLease.manualChange(property) }
+            } catch {
                 afFailure = error.localizedDescription
                 throw error
             }
@@ -546,7 +571,8 @@ public final class FocusRackWire: @unchecked Sendable {
             let current = await controller.snapshot()
             let start: (SettingsInput, Int)? = lock.withLock {
                 state = current
-                guard !closed, !afSuspended, afLease.needsService, afLease.pending == nil,
+                guard !closed, !afSuspended, !afSetupRequested, !modeSwitchPending,
+                    afLease.needsService, afLease.pending == nil,
                     afFailure == nil, let input = afInput
                 else { return nil }
                 _ = afLease.nextChange(input.observation(rack: current, ready: false))
@@ -555,7 +581,8 @@ public final class FocusRackWire: @unchecked Sendable {
                     return nil
                 }
                 guard
-                    input.observation(rack: current, ready: true).permitsWrite
+                    input.observation(rack: current, ready: true).permitsWrite(
+                        restoring: afLease.restoring)
                 else { return nil }
                 authority.set(false)
                 authority.setSettingsRead(true)
@@ -688,6 +715,8 @@ public final class FocusRackWire: @unchecked Sendable {
         func close() {
             let previous: Task<Void, Never>? = lock.withLock {
                 closed = true
+                afSetupRequested = false
+                afManualBeforeCapture.removeAll()
                 afLease.abandon()
                 authority.setSettingsRead(false)
                 authority.set(false)

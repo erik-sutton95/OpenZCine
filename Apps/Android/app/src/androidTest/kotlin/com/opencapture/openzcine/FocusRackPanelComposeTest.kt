@@ -90,7 +90,7 @@ class FocusRackPanelComposeTest {
         val actions = Actions()
         mount(state, actions)
         compose.onNodeWithTag("focusRack.message").performScrollTo()
-            .assertTextEquals("Applying camera AF setup…").assertIsDisplayed().insideFrame()
+            .assertTextEquals("Setting up camera AF…").assertIsDisplayed().insideFrame()
         compose.onNodeWithTag("focusRack.close").assertIsEnabled()
         openOptions()
         compose.onNodeWithText("Focus settings").performScrollTo().assertIsEnabled().performClick()
@@ -100,7 +100,7 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.nativeAF.settings").assertIsDisplayed().assertIsEnabled().insideFrame()
         compose.onNodeWithTag("focusRack.nativeAF.settings").performClick()
         assertEquals(2, actions.focusSettings)
-        compose.onNodeWithText("Applying camera AF setup…").performScrollTo().assertIsDisplayed().insideFrame()
+        compose.onNodeWithText("Setting up camera AF…").performScrollTo().assertIsDisplayed().insideFrame()
         compose.saveLandscapeEvidence("auto-af-native-setup-pending-landscape")
         compose.runOnIdle { state.value = state.value.copy(afSettingsPending = false,
             afSettingsFailure = "Camera AF settings are unavailable; automatic setup could not start.") }

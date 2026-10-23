@@ -470,6 +470,30 @@ private final class AFSettingsWireCamera: @unchecked Sendable {
     private var current = FocusAFSettingsValues(mode: "AF-C", area: "Wide-L", subject: "People")
     private var driveCount = 0
     private var safetyFails = false
+    private var holdRead = false
+    private var heldRead: CheckedContinuation<Void, Never>?
+    var safetyReadHeld: Bool { lock.withLock { heldRead != nil } }
+    func holdNextSafetyRead() { lock.withLock { holdRead = true } }
+    func releaseSafetyRead() {
+        let held = lock.withLock {
+            let held = heldRead
+            heldRead = nil
+            return held
+        }
+        held?.resume()
+    }
+    private func waitForSafetyRead() async {
+        let hold = lock.withLock {
+            let hold = holdRead
+            holdRead = false
+            return hold
+        }
+        if hold {
+            await withCheckedContinuation { continuation in
+                lock.withLock { heldRead = continuation }
+            }
+        }
+    }
     var failSafety: Bool {
         get { lock.withLock { safetyFails } }
         set { lock.withLock { safetyFails = newValue } }
@@ -497,6 +521,7 @@ private final class AFSettingsWireCamera: @unchecked Sendable {
                 return .complete
             },
             refreshSafety: { [self] in
+                await waitForSafetyRead()
                 if failSafety { throw NikonFocusRackAccessError.safetyUnavailable }
                 let values = values
                 return try .init(
@@ -509,9 +534,68 @@ private final class AFSettingsWireCamera: @unchecked Sendable {
     }
 }
 
+@Test(arguments: ["Wide-L", "Wide-S"])
+func rackWireManualChoiceBeforeDeferredSetupCaptureRemainsReleased(area: String) async throws {
+    let camera = AFSettingsWireCamera()
+    camera.holdNextSafetyRead()
+    let wire = FocusRackWire()
+    let owner = try #require(wire.create(driver: camera.driver))
+    defer {
+        camera.releaseSafetyRead()
+        wire.close(owner: owner)
+    }
+    _ = try rackWireReply(wire, owner, kind: "openPanel", fields: afWireFields(camera))
+    _ = try await waitForRackWire(wire, owner) { _ in camera.safetyReadHeld }
+    var fields = afWireFields(camera)
+    fields["focusMode"] = "nativeAF"
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: fields)
+    camera.manualArea(area)
+    fields = afWireFields(camera)
+    fields["afProperty"] = "area"
+    _ = try rackWireReply(wire, owner, kind: "manualAFSetting", fields: fields)
+    camera.releaseSafetyRead()
+    for _ in 0..<3 {
+        let reply = try await waitForRackWire(wire, owner) {
+            $0.afSettingsChange != nil || (!$0.focusModeSwitchPending && !$0.afSettingsPending)
+        }
+        guard let change = reply.afSettingsChange else { break }
+        #expect(change.property != .area)
+        try completeAFWireChange(change, camera: camera, wire: wire, owner: owner)
+        _ = try await waitForRackWire(wire, owner) { $0.afSettingsChange?.id != change.id }
+    }
+    _ = try await waitForRackWire(wire, owner) { $0.afSettingsReady && !$0.afSettingsPending }
+    #expect(camera.values.area == area)
+    #expect(camera.drives == 0)
+}
+
+@Test func rackWireCloseRetiresSetupBeforeDeferredCapture() async throws {
+    let camera = AFSettingsWireCamera()
+    camera.holdNextSafetyRead()
+    let wire = FocusRackWire()
+    let owner = try #require(wire.create(driver: camera.driver))
+    defer {
+        camera.releaseSafetyRead()
+        wire.close(owner: owner)
+    }
+    _ = try rackWireReply(wire, owner, kind: "openPanel", fields: afWireFields(camera))
+    _ = try await waitForRackWire(wire, owner) { _ in camera.safetyReadHeld }
+    var fields = afWireFields(camera)
+    fields["focusMode"] = "nativeAF"
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: fields)
+    _ = try rackWireReply(wire, owner, kind: "closePanel", fields: afWireFields(camera))
+    camera.releaseSafetyRead()
+    let closed = try await waitForRackWire(wire, owner) {
+        !$0.focusModeSwitchPending && !$0.afSettingsPending
+    }
+    #expect(closed.afSettingsChange == nil)
+    #expect(camera.values == .init(mode: "AF-C", area: "Wide-L", subject: "People"))
+    #expect(camera.drives == 0)
+}
+
 private func afWireFields(
     _ camera: AFSettingsWireCamera, recording: Bool? = false,
     foreground: Bool = true, focusIdle: Bool = true,
+    restorationFocusSettled: Bool = true,
     session: String = "af-settings-owner"
 ) -> [String: Any] {
     let values = camera.values
@@ -524,8 +608,67 @@ private func afWireFields(
             ],
             "recording": recording as Any? ?? NSNull(), "recordingPending": false,
             "movie": true, "foreground": foreground, "focusIdle": focusIdle, "commandsIdle": true,
+            "restorationFocusSettled": restorationFocusSettled,
         ]
     ]
+}
+
+@Test func rackWireUnacquiredAFAllowsSetupWithUnknownPositionButNotDeferredRestoration()
+    async throws
+{
+    let camera = AFSettingsWireCamera(values: .target(.timedRack))
+    let wire = FocusRackWire()
+    let owner = try #require(wire.create(driver: camera.driver))
+    defer { wire.close(owner: owner) }
+    var fields = afWireFields(camera)
+    for sequence in 1...20 {
+        fields["observation"] = [
+            "sessionID": "af-settings-owner", "connected": true,
+            "foregroundOwner": true, "recording": false, "frameSequence": sequence,
+            "frameAgeSeconds": 0, "externalFocusRevision": 0, "externalFocusIdle": true,
+            "focusResult": "notFocused",
+            "focus": ["trackingAFActive": false, "subjectDetectionActive": false, "boxCount": 0],
+        ]
+        _ = try rackWireReply(wire, owner, kind: "observe", fields: fields)
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    _ = try await waitForRackWire(wire, owner) { $0.state?.capabilities.canCaptureA == true }
+    fields["markID"] = "A"
+    fields["expectedFrameSequence"] = 20
+    _ = try rackWireReply(wire, owner, kind: "capture", fields: fields)
+    _ = try await waitForRackWire(wire, owner) { $0.state?.program.marks.count == 1 }
+    _ = try rackWireReply(wire, owner, kind: "openPanel", fields: fields)
+    _ = try await waitForRackWire(wire, owner) { $0.afSettingsReady }
+    fields["focusMode"] = "nativeAF"
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: fields)
+    let native = try await waitForRackWire(wire, owner) { $0.afSettingsChange != nil }
+    let setup = try #require(native.afSettingsChange)
+    #expect(native.state?.stepPosition == nil)
+    camera.apply(setup)
+    fields = afWireFields(camera, restorationFocusSettled: false)
+    var input = try #require(fields["afSettings"] as? [String: Any])
+    input["frameSequence"] = 100
+    input["focusAfterSequence"] = 100
+    fields["afSettings"] = input
+    fields["afChange"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(setup))
+    _ = try rackWireReply(wire, owner, kind: "afSettingsComplete", fields: fields)
+    _ = try await waitForRackWire(wire, owner) { $0.afSettingsReady && !$0.afSettingsPending }
+    _ = try rackWireReply(wire, owner, kind: "closePanel", fields: fields)
+    _ = try await waitForRackWire(wire, owner) { $0.afSettingsRestoring }
+    input["frameSequence"] = 101
+    fields["afSettings"] = input
+    _ = try rackWireReply(wire, owner, kind: "observe", fields: fields)
+    try await Task.sleep(for: .milliseconds(40))
+    let parked = try rackWireReply(wire, owner)
+    #expect(parked.afSettingsRestoring && parked.afSettingsChange == nil)
+    #expect(parked.state?.stepPosition == nil)
+    fields["focusMode"] = "timedRack"
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: fields)
+    let timed = try await waitForRackWire(wire, owner) { $0.afSettingsChange != nil }
+    #expect(timed.afSettingsChange?.value == "AF-S")
+    #expect(timed.afSettingsChange?.restoring == false)
+    #expect(timed.state?.stepPosition == nil)
+    #expect(camera.drives == 0)
 }
 
 private func completeAFWireChange(
@@ -693,6 +836,27 @@ func rackWireManualOrCloseIntentSynchronouslyRevokesAReservedSettingAndOldSessio
     let request = try #require(
         String(data: JSONSerialization.data(withJSONObject: fields), encoding: .utf8))
     #expect(wire.step(owner: owner, requestJSON: request) == "{\"allowed\":false}")
+    #expect(camera.drives == 0)
+}
+
+@Test func rackWireAcquisitionChangeRevokesPreparedReadinessEvenIfAcquisitionReturns()
+    async throws
+{
+    let camera = AFSettingsWireCamera()
+    let wire = FocusRackWire()
+    let owner = try #require(wire.create(driver: camera.driver))
+    defer { wire.close(owner: owner) }
+    _ = try rackWireReply(wire, owner, kind: "openPanel", fields: afWireFields(camera))
+    let prepared = try await waitForRackWire(wire, owner) { $0.afSettingsChange != nil }
+    let change = try #require(prepared.afSettingsChange)
+    for settled in [false, true] {
+        var fields = afWireFields(camera, restorationFocusSettled: settled)
+        fields["afChange"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(change))
+        fields["kind"] = "afSettingsAdmission"
+        let request = try #require(
+            String(data: JSONSerialization.data(withJSONObject: fields), encoding: .utf8))
+        #expect(wire.step(owner: owner, requestJSON: request) == "{\"allowed\":false}")
+    }
     #expect(camera.drives == 0)
 }
 

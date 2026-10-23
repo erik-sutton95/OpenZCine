@@ -1769,7 +1769,8 @@ internal fun MonitorScreen(
                 .put("recordingPending", recordCommandPending)
                 .put("movie", reported.captureSelector == "video")
                 .put("foreground", rackForeground && !locked)
-                .put("focusIdle", age <= 0.5 && focusSettled && rackFocusIdle())
+                .put("focusIdle", age >= 0 && age <= 0.5 && focus != null && rackFocusIdle())
+                .put("restorationFocusSettled", focusSettled)
                 .put("commandsIdle", rackFocusIdle() && pendingCommandControl == null && !recordCommandPending)
                 .put("frameSequence", liveFeedPresentation.acceptedFrameSequence)
                 .put("focusAfterSequence", focusAFCompletedSequence ?: org.json.JSONObject.NULL)
@@ -1990,7 +1991,9 @@ internal fun MonitorScreen(
                         return@handleFocusFeedAction
                     }
                     if (focusRack.state.value.afSettingsPending || (focusRackVisible && !(focusRack.state.value.let { if (it.focusMode == "nativeAF") it.canNativeAutofocus else it.canAutofocus }))) {
-                        Toast.makeText(appContext, if (rackState.focusMode == "nativeAF") {
+                        Toast.makeText(appContext, if (focusRack.state.value.afSettingsPending) {
+                            "Setting up camera AF…"
+                        } else if (rackState.focusMode == "nativeAF") {
                             if (rackState.nativeAFConfigured) "Wait for focus movement to finish." else "Set movie focus mode to AF-F before tapping."
                         } else "Use the rack dial, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
                         return@handleFocusFeedAction
