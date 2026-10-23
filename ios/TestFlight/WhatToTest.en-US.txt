@@ -3,6 +3,7 @@ New and changed
 - A more consistent OpenCine interface brings camera setup, settings, View Assist and media controls closer together across the apps.
 - DISP 3 returns with a REC chip, large camera timecode and larger setting tiles. Tap to change a setting; hold and drag to reorder.
 - In landscape, the colour profile sits beside the codec. Portrait readouts keep their rounded card-space values clear of the screen cutout.
+- The FPS chip uses the same words as the other apps: LINK until the first picture arrives, then the frame rate. It no longer shows READY or BUSY.
 - Instant review reads the preview stored inside RAW photos. Connection diagnostics distinguish incoming video, decoding and display interruptions.
 
 Fixes
@@ -10,16 +11,16 @@ Fixes
 - Instant review appears sooner for RAW, JPEG and RAW+JPEG across exposure modes, and RAW+JPEG reviews turn sharp. In CL/CH, tap for one photo or hold for a burst.
 - Photo mode turns the LUT off; video restores it. Shots left follow the stills card, and app-triggered photos use that card.
 - The GYRO pill no longer covers the screen lock. Gyro logging waits for video mode, and tapping to focus during a focus pull no longer leaves it busy.
-- Live View keeps camera readouts through a warm restart or Quality Bias change. Timecode retains its frames when the camera supplies them.
-- An explicit retry asks again after a refused camera Wi-Fi join. Saved-camera connections can wake the camera and ask before taking over another phone.
-- Background recovery preserves the camera mode. An abandoned connection no longer carries on behind the setup screen.
-- Media sharing treats photos as photos and finishes a clip's copy before sharing it. Playback stays paused after leaving and returning to the app.
-- Collapsed assist controls stay hidden from VoiceOver, shutter labels describe the available action, and setup requests Local Network permission at its own step.
+- Live View keeps camera readouts and timecode frames through a warm restart or Quality Bias change. Background recovery preserves the camera mode.
+- A dozing camera is woken and dialled once more instead of failing as unreachable. Saved-camera connections can wake the camera and ask before taking over.
+- An explicit retry asks again after a refused camera Wi-Fi join. An abandoned connection no longer carries on behind the setup screen.
+- Media opens large cards without freezing. Sharing treats photos as photos, finishes a clip's copy first, and playback stays paused after Share or app return.
+- VoiceOver skips collapsed assist controls and live controls under a covering screen. Shutter labels describe the action; setup asks for Local Network at its own step.
 
 What to test
 
-- In video mode, rotate and inspect DISP 3, codec accent, timecode frames and camera readouts. Switch to Photo and check portrait shots, storage and cutout clearance.
+- In video mode, rotate and inspect DISP 3, the FPS chip (LINK, then the frame rate), timecode frames and camera readouts. Switch to Photo and check shots and storage.
 - Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
-- Change Quality Bias, visit Media and return, then background and return. Check the live picture and camera settings remain usable.
-- Cancel a camera Wi-Fi join and retry. With two phones, verify Take Over asks first and the first phone stops reconnecting afterward.
+- Open Media on a full card and scroll. Share a clip and check playback stays paused. Change Quality Bias, background and return; Live View stays usable.
+- Let the camera doze, then connect: it should wake and connect. Cancel a camera Wi-Fi join and retry. With two phones, verify Take Over asks first.
 - If the live picture drops out, use Share Diagnostics and report the time, what you were doing and whether camera controls still responded.

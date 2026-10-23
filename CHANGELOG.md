@@ -35,6 +35,14 @@ retaining Nikon's stills, video and Multicam controls.
   accessibility and requests Local Network access at the setup permission step.
 - Android restores pairing guards and can save the watcher passcode without a
   connected camera. Phone and Wear OS remain part of the same release train.
+- A dozing body that drops off the network is woken and dialled once more on
+  iOS and Android; a silent body still ends with the asleep-or-off-network copy.
+- The iOS FPS chip uses the shared link words (LINK until the first picture,
+  then the frame rate) and no longer shows READY or BUSY.
+- Media on large cards no longer freezes iOS, playback stays paused after Share,
+  and VoiceOver no longer reaches live controls under a covering screen.
+- Android no longer freezes while the live picture rebuilds after rotating or
+  returning to the app.
 - Shared diagnostics distinguish transport, decoding and display incidents for
   investigating dropouts without claiming every dropout has been eliminated.
 
