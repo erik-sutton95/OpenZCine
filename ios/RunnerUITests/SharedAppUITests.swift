@@ -1452,8 +1452,8 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
                     "Previous AF settings restore after recording and focus stop.")
             ).firstMatch.waitForExistence(timeout: 3))
         screenshot("focus-modes-close-restore-landscape")
-        app.buttons["Cancel"].tap()
-        XCTAssertTrue(app.buttons["focusControl.modePicker"].exists)
+        app.buttons["Close and discard marks"].tap()
+        XCTAssertFalse(app.buttons["focusControl.modePicker"].waitForExistence(timeout: 1))
     }
 
     func testExplicitCalibrationIsVisibleInLandscapeOptions() {
