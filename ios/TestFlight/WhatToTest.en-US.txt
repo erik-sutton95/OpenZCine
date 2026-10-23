@@ -22,5 +22,5 @@ What to test
 - In video mode, rotate and inspect DISP 3, the FPS chip (LINK, then the frame rate), timecode frames and camera readouts. Switch to Photo and check shots and storage.
 - Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
 - Open Media on a full card and scroll. Share a clip and check playback stays paused. Change Quality Bias, background and return; Live View stays usable.
-- Let the camera doze, then connect: it should wake and connect. Cancel a camera Wi-Fi join and retry. With two phones, verify Take Over asks first.
+- Let the camera doze, then connect: it wakes and connects, or shows the asleep or off-network message if it stays silent. Retry a cancelled Wi-Fi join; Take Over asks first.
 - If the live picture drops out, use Share Diagnostics and report the time, what you were doing and whether camera controls still responded.
