@@ -1422,13 +1422,15 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         XCTAssertTrue(native.waitForExistence(timeout: 5))
         XCTAssertTrue(native.isHittable)
         native.tap()
-        XCTAssertTrue(app.staticTexts["focusControl.nativeAF.instruction"].waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.staticTexts["focusControl.nativeAF.instruction"].waitForExistence(timeout: 3))
+        scrollTo(app.buttons["focusControl.nativeAF.settings"], in: app)
         XCTAssertTrue(app.buttons["focusControl.nativeAF.settings"].isHittable)
         XCTAssertTrue(
             app.staticTexts["Automatic setup: AF-F · Auto-area AF · Subject detection Off."].exists)
         XCTAssertFalse(app.staticTexts["focusRack.positions"].exists)
         XCTAssertFalse(app.buttons["focusRack.pull.aToB"].exists)
-        screenshot("focus-modes-native-af-landscape")
+        screenshot("focus-modes-native-af-settings-landscape")
         app.buttons["focusRack.expand"].tap()
         XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
         screenshot("focus-modes-native-af-compact-landscape")
@@ -1454,6 +1456,52 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         screenshot("focus-modes-close-restore-landscape")
         app.buttons["Close and discard marks"].tap()
         XCTAssertFalse(app.buttons["focusControl.modePicker"].waitForExistence(timeout: 1))
+    }
+
+    func testNativeTargetsUsePictureTapsAndCancelableDelayInLandscape() {
+        let app = launch("ready")
+        app.buttons["focusControl.modePicker"].tap()
+        app.buttons["Native AF"].tap()
+        let setA = app.buttons["focusControl.nativeAF.set.A"]
+        XCTAssertTrue(setA.waitForExistence(timeout: 5))
+        XCTAssertTrue(setA.isHittable)
+        screenshot("native-af-empty-targets-landscape")
+        setA.tap()
+        XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.cancelSelection"].isHittable)
+        screenshot("native-af-picture-target-selection-landscape")
+        app.coordinate(withNormalizedOffset: .init(dx: 0.25, dy: 0.55)).tap()
+        let instruction = app.staticTexts["focusControl.nativeAF.instruction"]
+        let selectedA = expectation(
+            for: NSPredicate(format: "label == %@", "Target A selected."),
+            evaluatedWith: instruction)
+        wait(for: [selectedA], timeout: 5)
+        app.buttons["focusControl.nativeAF.set.B"].tap()
+        app.coordinate(withNormalizedOffset: .init(dx: 0.65, dy: 0.65)).tap()
+        let selectedB = expectation(
+            for: NSPredicate(format: "label == %@", "Target B selected."),
+            evaluatedWith: instruction)
+        wait(for: [selectedB], timeout: 5)
+        let forward = app.buttons["focusControl.nativeAF.pull.aToB"]
+        scrollTo(forward, in: app)
+        XCTAssertTrue(forward.isEnabled)
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.pull.bToA"].isEnabled)
+        screenshot("native-af-saved-targets-landscape")
+        let delay = app.buttons["focusControl.nativeAF.delay"]
+        scrollTo(delay, in: app)
+        delay.tap()
+        let input = app.alerts.textFields.firstMatch
+        input.tap()
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12) + "5")
+        app.alerts.buttons["Apply"].tap()
+        app.buttons["focusControl.nativeAF.pull.bToA"].tap()
+        let cancel = app.buttons["focusControl.nativeAF.cancelDelay"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+        screenshot("native-af-cancelable-delay-landscape")
+        cancel.tap()
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.pull.aToB"].waitForExistence(timeout: 3))
+        XCTAssertTrue(instruction.label == "Choose a target or run an A/B transition.")
+        assertTransport(app)
     }
 
     func testExplicitCalibrationIsVisibleInLandscapeOptions() {
@@ -1937,9 +1985,11 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             XCTAssertTrue(app.frame.contains(app.buttons["focusRack.primary"].frame))
         } else {
             let ids =
-                app.buttons["focusRack.pull.aToB"].exists
-                ? ["focusRack.pull.aToB", "focusRack.pull.bToA"]
-                : ["focusRack.go.A", "focusRack.go.B"]
+                app.buttons["focusControl.nativeAF.pull.aToB"].exists
+                ? ["focusControl.nativeAF.pull.aToB", "focusControl.nativeAF.pull.bToA"]
+                : app.buttons["focusRack.pull.aToB"].exists
+                    ? ["focusRack.pull.aToB", "focusRack.pull.bToA"]
+                    : ["focusRack.go.A", "focusRack.go.B"]
             for id in ids {
                 let button = app.buttons[id]
                 XCTAssertTrue(button.isHittable)
@@ -1963,6 +2013,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             let fixed =
                 target.identifier == "focusRack.positions"
                 || target.identifier.hasPrefix("focusRack.go.")
+                || target.identifier.hasPrefix("focusControl.nativeAF.pull.")
                 || (target.identifier.hasPrefix("focusRack.capture.")
                     && !scroll.frame.intersects(target.frame))
             if target.isHittable && (fixed || visible.contains(target.frame)) { return }
