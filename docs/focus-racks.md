@@ -17,11 +17,21 @@ still owns control. Setup waits for confirmed recording stop, a fresh post-actio
 focus commands and bounded DeviceReady confirmation. It can switch AF-F to AF-S without first
 acquiring a subject. Restoration retains the stricter focus-settlement checks below.
 
-**Native AF** uses the normal live-picture tap target through the existing serialized camera-control
-path. After automatic setup completes, set **g6 AF speed** on the camera. Tap the subject in the
-live picture to request a transition, including while recording. Native AF has no duration, delay, calibration or A/B lens
-marks: the camera determines the transition and whether it acquires the subject. A completed target
-request does not prove that focus arrived. The local test at speed −5 produced smooth transitions
+**Native AF** saves two picture targets independently of Timed Rack's relative lens marks.
+Choose **Set A** or **Set B**, then tap the subject in the live picture. The panel collapses during
+selection so it does not cover the subject. Saving a target also selects it for a focus preview.
+**Go to A/B** selects a saved target immediately. **Rehearse A→B/B→A**, labelled **Run** while
+recording, waits for **Start delay** before selecting the destination. It never repositions to
+the source or changes recording automatically. **Cancel delay** discards unsent targeting; it
+does not promise to stop the camera's continuous AF after a target request has been sent.
+Target coordinates use the camera picture, so rotating or mirroring the monitor does not reverse
+them. A mode or lifecycle interruption cancels unsent work while retaining the saved targets.
+
+Native AF uses the camera's existing **g6 AF speed**. It has no exact-duration selector or MF
+calibration requirement: the camera determines the transition and whether it acquires the subject.
+AF-F, Auto-area and subject detection Off are configured automatically; g6 has no control in the
+current protocol implementation. **Focus settings** remains an optional secondary control.
+“Target A/B selected” acknowledges targeting, not optical sharpness. The local test at speed −5 produced smooth transitions
 of roughly five seconds; the near bedpost needed retries. This does not promise exact 1/3/6-second
 moves or reliable acquisition of every subject.
 
@@ -84,9 +94,15 @@ fast positioning when neither timed direction is available; expand it to edit ti
 retain both marks. Recording remains independently
 controlled by the normal record button; a rack never starts recording automatically.
 
-The shared planner chooses the finest feasible command size for the requested duration, delay and
-easing: 16/32/48/64/80 pulses, then the larger 144/192-pulse profiles. Short pulls can use larger commands; long pulls retain fine
-steps. Each plan preserves the exact signed sum of the original 16-pulse mark units, including one
+Duration is a requested target, separate from the estimated fixed execution schedule. If measured
+command costs need longer, the controls remain available and show the longer estimate without
+overwriting the requested value. Small estimate growth, such as 1.007 seconds for a 1-second
+target, does not disable playback. The planner leaves dispatch headroom when extending a move.
+The 3-second target preserves the accepted 64-pulse ordinary family, with measured smaller tails
+and safety-read bridges no larger than 128 pulses. Measured smaller ordinary moves can be used
+when 64-pulse measurements are unavailable; larger ordinary moves are not silently substituted.
+The existing 1-second and 6-second families remain separate. Each plan preserves the exact signed
+sum of the original 16-pulse mark units, including one
 bounded residual command. Setup ±1/±10 retains its fine increment; explicit fast positioning keeps
 its bounded camera-speed path using 192-pulse groups and one exact residual. Repositioning also
 collects timing for the largest playback group and its exact residual without hidden calibration
@@ -94,11 +110,16 @@ movement. Every activation is confirmed before
 the ledger advances.
 
 Timing admission budgets each command size and the final completion cost. An unmeasured size uses
-the session's worst observed command cost as an estimate until that size completes. The controller
-halts on a missed budget instead of sending catch-up commands. The spacing guard also rejects sparse coarse schedules like those that previously showed stepping
+the session's worst observed command cost as an estimate until that size completes. Measured
+playback never invents timing for an unmeasured residual. The command sequence and read windows
+are fixed before movement; runtime checks use that planned duration, rather than the nominal
+target. The controller halts on a missed execution budget instead of sending catch-up commands.
+The spacing guard also rejects sparse coarse schedules like those that previously showed stepping
 in source recordings. Some durations can remain unsupported between the available profiles.
 It is an experimental scheduling policy, not a measured lens encoder or a guarantee of optical
-smoothness. Very close marks may still require finer movement than the tested base increment.
+smoothness. Requested duration, planned execution duration, and observed host command span remain
+distinct in diagnostics. None of them is a measurement of optical arrival. Very close marks may
+still require finer movement than the tested base increment.
 
 The local finer-increment trial offers optional **Calibrate increments** under Options. It measures
 all five finer sizes in both directions over the actual A/B span, including exact residual commands.

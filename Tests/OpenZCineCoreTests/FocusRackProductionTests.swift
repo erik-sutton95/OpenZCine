@@ -218,11 +218,15 @@ private final class RackFakeCamera: @unchecked Sendable {
     private var sleeps = 0
     private var manualSleeps = false
     private var sleepContinuation: CheckedContinuation<Void, Never>?
+    private var pendingSleep = 0.0
+    private var driveLatencies: [UInt32: Double] = [:]
 
     var readCount: Int { lock.withLock { reads } }
     var driveCount: Int { lock.withLock { drives.count } }
     var stopCount: Int { lock.withLock { stops.count } }
     var isSleeping: Bool { lock.withLock { sleepContinuation != nil } }
+    var pendingSleepSeconds: Double { lock.withLock { pendingSleep } }
+    var isReadingSafety: Bool { lock.withLock { safetyContinuation != nil } }
     var isPreparing: Bool { prepareCondition.withLock { insidePrepare } }
 
     // Unrelated CPU-heavy tests must not age this synthetic camera's accepted frames.
@@ -234,11 +238,12 @@ private final class RackFakeCamera: @unchecked Sendable {
                     return instant
                 }
             },
-            sleep: { [self] _ in
+            sleep: { [self] seconds in
                 if lock.withLock({ manualSleeps }) {
                     await withCheckedContinuation { pending in
                         let held = lock.withLock {
                             sleeps += 1
+                            pendingSleep = seconds
                             if manualSleeps { sleepContinuation = pending }
                             return manualSleeps
                         }
@@ -279,6 +284,9 @@ private final class RackFakeCamera: @unchecked Sendable {
         pending?.resume()
     }
     func setSafetyLatency(_ seconds: Double) { lock.withLock { safetyLatency = seconds } }
+    func setDriveLatencies(_ seconds: [UInt32: Double]) {
+        lock.withLock { driveLatencies = seconds }
+    }
     func advanceClockBeforeNextSleep(_ seconds: Double) -> Int {
         let (count, pending) = lock.withLock {
             instant += seconds
@@ -331,6 +339,7 @@ private final class RackFakeCamera: @unchecked Sendable {
             let shouldFinish = lock.withLock {
                 drives.append(pulses)
                 if hold { continuation = pending }
+                if !hold { instant += driveLatencies[pulses] ?? 0 }
                 return !hold
             }
             if shouldFinish { pending.resume(returning: .complete) }
@@ -702,6 +711,7 @@ func rackControllerCloseWaitsForTheNativeOutcomeWithoutLosingUncertainty(
     let state = engine.state(at: 0.5)
     #expect(state.primary.title == "Run B→A")
     #expect(state.primary.detail == "Fastest")
+    #expect(state.pullBToA?.detail == "2 s pull")
     #expect(state.primary.disabledReason == "Go to B first")
     #expect(!state.primary.enabled)
     #expect(state.capabilities.canGoToB)
@@ -879,6 +889,123 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
     #expect(!state.capabilities.canStop)
     #expect(state.capabilities.canNudge)
     #expect(FocusRackError.samePosition.localizedDescription.contains("Near/Far"))
+}
+
+@Test(arguments: [0.0, 3.0])
+func rackControllerExecutesJointMovesAndReadsWithoutSyntheticSafetyRefresh(delay: Double)
+    async throws
+{
+    try await runJointControllerComparison(delay: delay, disposition: "complete")
+}
+
+@Test(arguments: ["stop", "late"])
+func rackControllerHeldJointReadCannotActivateAnotherMove(disposition: String) async throws {
+    try await runJointControllerComparison(delay: 0, disposition: disposition)
+}
+
+private func runJointControllerComparison(delay: Double, disposition: String) async throws {
+    let camera = RackFakeCamera()
+    let controller = FocusRackController(
+        driver: camera.access, clock: camera.clock, profile: .calibratedFineExperiment)
+    var observation = cameraObservation(1)
+    observation.cameraID = "synthetic-joint-body"
+    observation.transport = "usb"
+    await controller.observe(observation)
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    observation.frameSequence = 2
+    try await controller.handle(
+        .capture(markID: "A", expectedFrameSequence: 2), observation: observation)
+    for sequence in 3...12 {
+        try await controller.handle(.nudge(towardNear: false, steps: 10))
+        try await waitForRack { !(await controller.snapshot()).busy }
+        observation.frameSequence = Int64(sequence)
+        await controller.observe(observation)
+    }
+    observation.frameSequence = 13
+    try await controller.handle(
+        .capture(markID: "B", expectedFrameSequence: 13), observation: observation)
+    let context = try #require(await controller.diagnostics().context)
+    let key = try #require(
+        FocusRackCalibrationKey(
+            cameraID: observation.cameraID, transport: observation.transport, context: context))
+    try await controller.loadCalibration(.init(key: key, commandDurations: jointRackMaxima))
+    try await controller.handle(.updateTiming(.init(duration: 3, delay: delay, easing: .linear)))
+    // Slightly below saved maxima: clock.now itself advances this fixture by one microsecond.
+    camera.setDriveLatencies(
+        Dictionary(
+            uniqueKeysWithValues: jointRackMaxima.map { (UInt32($0.key), $0.value - 0.0001) }))
+    camera.setSafetyLatency(0.099)
+    camera.useManualSleeps()
+    defer {
+        camera.finishManualSleeps()
+        camera.releaseSafetyRead()
+    }
+    try await waitForRack { camera.isSleeping }
+    let initialDrives = camera.driveCount
+    try await controller.handle(.run(direction: .bToA))
+    _ = camera.advanceClockBeforeNextSleep(0)
+    try await waitForRack {
+        camera.isSleeping && camera.driveCount > initialDrives || camera.isSleeping && delay > 0
+    }
+    var holding = false
+    for sequence in 14..<250 {
+        if !(await controller.snapshot()).busy || camera.isReadingSafety { break }
+        if disposition != "complete", !holding, camera.driveCount > initialDrives {
+            camera.holdNextSafetyRead(latency: disposition == "late" ? 0.3 : 0.099)
+            holding = true
+        }
+        observation.frameSequence = Int64(sequence)
+        await controller.observe(observation)
+        let sleep = camera.advanceClockBeforeNextSleep(camera.pendingSleepSeconds)
+        try await waitForRack {
+            if camera.slept(after: sleep) || camera.isReadingSafety { return true }
+            return !(await controller.snapshot()).busy
+        }
+    }
+    let before = await controller.snapshot()
+    if disposition != "complete" {
+        #expect(camera.isReadingSafety)
+        let drives = camera.driveCount
+        if disposition == "stop" {
+            let stops = camera.stopCount
+            controller.requestStop()
+            #expect(camera.stopCount > stops)
+            try await waitForRack { (await controller.snapshot()).phase == .stopped }
+        }
+        camera.releaseSafetyRead()
+        try await waitForRack { !(await controller.snapshot()).busy }
+        let after = await controller.snapshot()
+        #expect(after.phase == (disposition == "stop" ? .stopped : .failed))
+        #expect(after.stepPosition == before.stepPosition)
+        #expect(after.program.marks == before.program.marks)
+        #expect(after.referenceValid)
+        #expect(camera.driveCount == drives)
+    } else {
+        #expect(before.phase == .complete)
+        #expect(before.stepPosition == 0)
+    }
+    let trace = await controller.diagnostics()
+    let events = trace.events.filter { $0.runID == before.runID }
+    let commands = events.filter { $0.kind == "commandStarted" }
+    #expect(!events.contains { $0.kind == "invalidated" || $0.kind == "missedDeadline" })
+    if disposition == "complete" {
+        #expect(commands.count == 23)
+        #expect(commands.reduce(0) { $0 + ($1.signedPulses ?? 0) } == -1600)
+        let start = try #require(commands.first).timestamp
+        let end = try #require(events.last { $0.kind == "commandCompleted" }).timestamp
+        #expect(abs(end - start - 3) < 0.002)
+        let slots = events.filter { $0.kind == "maintenanceReadStarted" }
+        #expect(slots.count == 1)
+        for slot in slots {
+            let read = try #require(
+                events.first { $0.kind == "safetyRead" && ($0.scheduledAt ?? 0) >= slot.timestamp })
+            let next = try #require(commands.first { $0.commandID == slot.commandID })
+            #expect(read.timestamp <= (next.scheduledAt ?? 0))
+        }
+        #expect(!events.contains { $0.kind == "maintenanceBudgetExceeded" })
+    }
+    camera.finishManualSleeps()
+    await controller.close()
 }
 
 @Test(arguments: [false, true])

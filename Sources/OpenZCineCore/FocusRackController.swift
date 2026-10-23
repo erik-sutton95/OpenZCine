@@ -213,7 +213,7 @@ public actor FocusRackController {
         if engine.isTimedRun, preparedRun != state.runID {
             state.activeElapsed = 0
             state.remainingDelay = state.transition.delay
-            state.remainingDuration = state.transition.duration
+            state.remainingDuration = state.estimatedDuration ?? state.transition.duration
         }
         return state
     }
@@ -506,6 +506,15 @@ public actor FocusRackController {
             }
             let action = engine.nextAction(at: clock.now())
             publish()
+            if action.kind == "readSafety", let command = action.commandID, let observation {
+                let accepted = await readSafety(observation)
+                synchronizeControl()
+                refreshEngineContext()
+                engine.finishScheduledRead(
+                    runID: action.runID, commandID: command, accepted: accepted, at: clock.now())
+                publish()
+                continue
+            }
             if action.kind == "drive", let pulses = action.signedPulses,
                 let command = action.commandID
             {
@@ -534,6 +543,14 @@ public actor FocusRackController {
 
     private var shouldRefreshSafety: Bool {
         let now = clock.now()
+        if let due = engine.initialMaintenanceDeadline, let safetyAt,
+            now >= due - FocusRackPlanner.maximumFineSpacing,
+            safetyAt < due - FocusRackPlanner.maximumFineSpacing,
+            now + engine.maintenanceReadBudget <= due
+        {
+            return true
+        }
+        if engine.ownsMaintenanceSchedule(at: now) { return false }
         guard now >= nextSafetyAt else { return false }
         if let safetyAt, let finish = engine.scheduledFinish,
             max(now, finish) < safetyAt + 2
@@ -546,7 +563,9 @@ public actor FocusRackController {
         return true
     }
 
-    private func readSafety(_ initial: FocusRackObservation, maintenanceRun: Int64? = nil) async {
+    @discardableResult private func readSafety(
+        _ initial: FocusRackObservation, maintenanceRun: Int64? = nil
+    ) async -> Bool {
         let started = clock.now()
         let generation = gate.snapshot().generation
         defer {
@@ -560,7 +579,7 @@ public actor FocusRackController {
         do {
             let fresh = try await driver.refreshSafety()
             // A superseded read cannot erase still-valid evidence after Stop before movement.
-            guard gate.snapshot().generation == generation else { return }
+            guard gate.snapshot().generation == generation else { return false }
             guard !closed, !Task.isCancelled, driver.isCurrent(),
                 observation?.sessionID == initial.sessionID,
                 observation?.cameraID == initial.cameraID,
@@ -571,7 +590,7 @@ public actor FocusRackController {
             else {
                 safety = nil
                 safetyAt = nil
-                return
+                return false
             }
             safety = fresh
             safetyAt = started
@@ -580,11 +599,12 @@ public actor FocusRackController {
                 needsReadinessFrameBarrier = false
             }
         } catch {
-            guard gate.snapshot().generation == generation else { return }
+            guard gate.snapshot().generation == generation else { return false }
             safety = nil
             safetyAt = nil
         }
         nextSafetyAt = clock.now() + 0.5
+        return safetyAt == started
     }
 
     private func synchronizeControl() {

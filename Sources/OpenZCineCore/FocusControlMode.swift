@@ -19,7 +19,8 @@ public enum FocusControlModePolicy {
         return !rack.busy && !rack.capabilities.canStop && rack.phase != .stopUnconfirmed
     }
 
-    /// Native AF requires movie AF-F. Area, subject detection and AF speed remain camera settings.
+    /// Checks movie AF-F; the temporary settings lease configures area and subject detection.
+    /// Transition speed continues to use the camera's existing AF-speed setting.
     public static func nativeAFConfigured(movieFocusMode: String?, photography: Bool) -> Bool {
         !photography && movieFocusMode == "AF-F"
     }

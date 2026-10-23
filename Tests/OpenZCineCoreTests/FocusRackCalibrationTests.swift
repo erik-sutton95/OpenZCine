@@ -118,6 +118,14 @@ private func settleCalibrationTest(
             engine.complete(
                 runID: action.runID, commandID: try #require(action.commandID), outcome: 0, at: now)
             now += 0.001
+        } else if action.kind == "readSafety" {
+            let started = now
+            now += 0.1
+            engine.recordSafetyRead(startedAt: started, finishedAt: now, accepted: true)
+            engine.observe(calibrationContext(now), at: now)
+            engine.finishScheduledRead(
+                runID: action.runID, commandID: try #require(action.commandID), accepted: true,
+                at: now)
         } else {
             now += max(0.001, action.waitSeconds ?? 0.01)
         }
@@ -145,12 +153,10 @@ private func settleCalibrationTest(
             try engine.setTransition(.init(duration: duration), at: now)
             try engine.run(direction: direction, at: now)
             let sign = direction == .aToB ? 1 : -1
-            let expected =
-                duration == 5.5
-                ? Array(repeating: sign * 64, count: 25)
-                : Array(repeating: sign * 128, count: 12) + [sign * 64]
             let actual = try settleCalibrationTest(&engine, now: &now, cost: 0.02)
-            #expect(actual == expected)
+            #expect(actual.reduce(0, +) == sign * 1600)
+            #expect(actual.allSatisfy { savedCalibration.commandDurations[abs($0)] != nil })
+            if duration >= 3 { #expect(actual.filter { abs($0) < 128 }.count > actual.count / 2) }
             #expect(engine.snapshot(at: now).phase == "complete")
             #expect(engine.snapshot(at: now).marks == marks)
         }

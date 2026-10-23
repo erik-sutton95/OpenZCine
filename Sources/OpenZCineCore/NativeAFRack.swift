@@ -104,7 +104,7 @@ public struct NativeAFAdmission: Equatable, Sendable {
         } else if !liveViewFresh {
             disabledReason = "Waiting for a fresh live camera picture…"
         } else if !commandIdle {
-            disabledReason = "Waiting for the current focus command to finish…"
+            disabledReason = "Waiting for the current camera command to finish…"
         } else {
             disabledReason = nil
         }

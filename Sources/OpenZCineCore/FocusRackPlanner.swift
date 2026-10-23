@@ -25,6 +25,9 @@ struct FocusRackMovementPlan: Sendable {
     let minimumDuration: Double
     let maximumDuration: Double?
     let estimatedDuration: Double?
+    // Next command index -> earliest read start, in the same fixed epoch as offsets.
+    // nil retains the legacy periodic-refresh policy; an explicit schedule owns its reads.
+    var maintenanceReadOffsets: [Int: Double]? = nil
 }
 
 /// Keeps fine setup units while selecting bounded command sizes for the requested timing.
@@ -94,6 +97,8 @@ enum FocusRackPlanner {
                 signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
                 quiet: quiet, timings: timings, quanta: quanta, safetyReadBudget: safetyReadBudget,
                 requireMeasured: profile == .calibratedFineExperiment
+                    && easing == .linear,
+                preserveFineFamily: profile == .calibratedFineExperiment && duration == 3
                     && easing == .linear)
         }
         let cost = timings[1]?.longest ?? 0
@@ -118,7 +123,7 @@ enum FocusRackPlanner {
     private static func adaptiveTimed(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
         quiet: Double, timings: [Int: FocusRackCommandTiming], quanta: [Int],
-        safetyReadBudget: Double, requireMeasured: Bool
+        safetyReadBudget: Double, requireMeasured: Bool, preserveFineFamily: Bool
     ) throws -> FocusRackMovementPlan {
         let count = abs(signedSteps)
         let sign = signedSteps < 0 ? -1 : 1
@@ -127,7 +132,9 @@ enum FocusRackPlanner {
         let fallback = timings.values.map(\.longest).max() ?? 0
         // Long pulls reserve a qualified read window. Short pulls are checked against their
         // actual post-preflight evidence age before activation, without a future idle read.
-        let maintenance = duration >= 2 ? safetyReadBudget : 0
+        let planningReadBudget =
+            requireMeasured && duration >= 2 ? max(0.1, safetyReadBudget) : safetyReadBudget
+        let maintenance = duration >= 2 ? planningReadBudget : 0
         let candidates = quanta.compactMap { quantum -> TimedCandidate? in
             var chunks = Array(repeating: sign * quantum, count: count / quantum)
             if count % quantum != 0 { chunks.append(sign * (count % quantum)) }
@@ -158,10 +165,44 @@ enum FocusRackPlanner {
         let viable = candidates.filter {
             focusRackMinimumForDisplay($0.minimum) <= focusRackMaximumForDisplay($0.maximum) + 1e-9
         }
+        if requireMeasured, duration >= 2, planningReadBudget > 0 {
+            let preservesThreeSecondFamily = preserveFineFamily && count > 4
+            let joint =
+                preservesThreeSecondFamily
+                ? FocusRackJointPlanner.fineTarget(
+                    signedSteps: signedSteps, duration: duration, delay: delay, quiet: quiet,
+                    timings: timings, quanta: quanta, readBudget: planningReadBudget)
+                : FocusRackJointPlanner.make(
+                    signedSteps: signedSteps, duration: duration, delay: delay, quiet: quiet,
+                    timings: timings, quanta: quanta, readBudget: planningReadBudget)
+            if let joint {
+                return .init(
+                    signedSteps: signedSteps, chunks: joint.chunks, offsets: joint.offsets,
+                    duration: joint.duration, delay: delay,
+                    minimumDuration: min(
+                        viable.map(\.minimum).min() ?? joint.duration, joint.duration),
+                    maximumDuration: max(
+                        viable.map(\.maximum).max() ?? joint.duration, joint.duration),
+                    estimatedDuration: joint.duration, maintenanceReadOffsets: joint.reads)
+            }
+            if preservesThreeSecondFamily { throw FocusRackError.noSmoothTiming }
+        }
         guard let minimum = viable.map(\.minimum).min(), let maximum = viable.map(\.maximum).max()
         else { throw FocusRackError.noSmoothTiming }
-        guard duration + 1e-9 >= minimum else {
-            throw FocusRackError.durationTooShort(minimum: minimum)
+        var executionDuration = duration
+        if duration + 1e-9 < minimum {
+            guard requireMeasured, let fastest = viable.min(by: { $0.minimum < $1.minimum })
+            else { throw FocusRackError.durationTooShort(minimum: minimum) }
+            // Duration is an operator target. Retain the fastest measured family and leave
+            // dispatch headroom rather than disabling it for a few milliseconds of growth.
+            executionDuration = fastest.minimum + 0.002 * Double(fastest.chunks.count - 1)
+            if duration < 2, executionDuration >= 2 {
+                return try adaptiveTimed(
+                    signedSteps: signedSteps, duration: executionDuration, delay: delay,
+                    easing: easing, quiet: quiet, timings: timings, quanta: quanta,
+                    safetyReadBudget: max(0.1, safetyReadBudget), requireMeasured: requireMeasured,
+                    preserveFineFamily: preserveFineFamily)
+            }
         }
         guard duration <= maximum + 1e-9 else {
             throw FocusRackError.durationTooLong(maximum: maximum)
@@ -169,14 +210,20 @@ enum FocusRackPlanner {
         // Ascending quantum selects the finest cadence that actually fits this request.
         guard
             let selected = viable.first(where: {
-                duration + 1e-9 >= $0.minimum && duration <= $0.maximum + 1e-9
+                executionDuration + 1e-9 >= $0.minimum && executionDuration <= $0.maximum + 1e-9
+                    && (executionDuration <= duration
+                        || executionDuration + 1e-9 >= $0.minimum + 0.002
+                            * Double($0.chunks.count - 1))
             })
         else { throw FocusRackError.noSmoothTiming }
         return .init(
             signedSteps: signedSteps, chunks: selected.chunks,
-            offsets: selected.fractions.map { delay + $0 * (duration - selected.finalCost) },
-            duration: duration, delay: delay, minimumDuration: minimum, maximumDuration: maximum,
-            estimatedDuration: nil)
+            offsets: selected.fractions.map {
+                delay + $0 * (executionDuration - selected.finalCost)
+            },
+            duration: executionDuration, delay: delay, minimumDuration: minimum,
+            maximumDuration: maximum,
+            estimatedDuration: executionDuration)
     }
 
 }

@@ -112,8 +112,16 @@ private func adaptiveContext(_ now: Double) -> FocusRackContext {
             now += commandDuration
             engine.complete(
                 runID: action.runID, commandID: try #require(action.commandID), outcome: 0, at: now)
+        } else if action.kind == "readSafety" {
+            let started = now
+            now += 0.1
+            engine.recordSafetyRead(startedAt: started, finishedAt: now, accepted: true)
+            engine.observe(adaptiveContext(now), at: now)
+            engine.finishScheduledRead(
+                runID: action.runID, commandID: try #require(action.commandID), accepted: true,
+                at: now)
         } else {
-            now += max(0.001, action.waitSeconds ?? 0.01)
+            now += action.waitSeconds ?? 0.01
         }
     }
     throw FocusRackError.movementPending
@@ -663,11 +671,11 @@ func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome:
     }
     #expect(engine.state(at: now).calibration?.title == "Calibration measured")
     #expect(engine.state(at: now).calibration?.enabled == false)
-    for (duration, quantum) in [(1.0, 8), (3.0, 6), (5.0, 4)] {
+    for duration in [1.0, 3.0, 5.0] {
         try engine.setTransition(.init(duration: duration), at: now)
         try engine.run(direction: .aToB, at: now)
         let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
-        #expect(pulses.first == quantum * 16)
+        #expect(pulses.first == (duration == 1 ? 128 : (duration == 3 ? 64 : 32)))
         #expect(pulses.reduce(0, +) == 1_600)
         #expect(engine.state(at: now).phase == .complete)
         try engine.seek(markID: "A", at: now)
@@ -713,13 +721,13 @@ func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome:
             profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
     }
     #expect(try plan(1).chunks == Array(repeating: 10, count: 10))
-    // The 6-unit size needs a measured 4-unit tail.
-    #expect(throws: FocusRackError.self) { try plan(3) }
+    // The finer 3s family cannot be replaced with unqualified coarse ordinary moves.
+    #expect(throws: FocusRackError.noSmoothTiming) { try plan(3) }
     timings[4] = timing(0.06)
-    #expect(try plan(3).chunks == Array(repeating: 6, count: 16) + [4])
-    #expect(try plan(5).chunks == Array(repeating: 4, count: 25))
+    #expect(try plan(3).chunks.contains(4))
+    #expect(try plan(5).chunks.contains(4))
     timings[6] = timing(0.4)
-    #expect(throws: FocusRackError.self) { try plan(3) }
+    #expect(try plan(3).chunks.allSatisfy { abs($0) == 4 })
 }
 
 @Test(arguments: [1.0, 3.0, 5.0])
@@ -734,10 +742,14 @@ func rackMeasuredFinePlanningRetainsWorstCostsAndReservesSafetySlots(duration: D
             quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
             profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
         #expect(plan.chunks.reduce(0, +) == sign * 100)
-        let maintenance = duration == 1 ? 0.0 : 0.1
         for index in 0..<(plan.chunks.count - 1) {
             let gap = plan.offsets[index + 1] - plan.offsets[index]
-            #expect(gap + 1e-9 >= (timings[abs(plan.chunks[index])]?.longest ?? 0) + maintenance)
+            let nativeCost = timings[abs(plan.chunks[index])]?.longest ?? 0
+            #expect(gap + 1e-9 >= nativeCost)
+            if let read = plan.maintenanceReadOffsets?[index + 1] {
+                #expect(read + 1e-9 >= plan.offsets[index] + nativeCost)
+                #expect(read + 0.1 <= plan.offsets[index + 1] + 1e-9)
+            }
             #expect(gap <= FocusRackPlanner.maximumFineSpacing + 1e-9)
         }
         #expect(
@@ -900,13 +912,14 @@ func rackFineCalibrationUsesTheActualSharpMarkSpan(span: Int) throws {
     }
     #expect(engine.state(at: now).calibration?.title == "Calibration measured")
     guard span == 106 else { return }
-    for (duration, quantum) in [(1.0, 8), (3.0, 6), (5.0, 4)] {
+    for duration in [1.0, 3.0, 5.0] {
         try engine.setTransition(.init(duration: duration), at: now)
         for direction in [FocusRackDirection.bToA, .aToB] {
             try engine.run(direction: direction, at: now)
             let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
             let sign = direction == .aToB ? 1 : -1
-            #expect(pulses.first == sign * quantum * 16)
+            let expectedFirst = duration == 1 ? 128 : (duration == 3 ? 64 : 32)
+            #expect(pulses.first == sign * expectedFirst)
             #expect(pulses.reduce(0, +) == sign * 1_696)
             #expect(engine.state(at: now).phase == .complete)
             #expect(engine.currentProgram.marks == marks)
@@ -928,9 +941,13 @@ func rackFineCalibrationUsesTheActualSharpMarkSpan(span: Int) throws {
             quiet: 0, timings: timings, adaptive: true, timed: true, grouped: true,
             profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
     }
-    #expect(throws: FocusRackError.self) { try plan() }
+    let fine = try plan()
+    #expect(fine.chunks.allSatisfy { abs($0) == 1 })
+    #expect(fine.duration > 1)
     timings[2] = timing(0.06)
     #expect(try plan().chunks == Array(repeating: 8, count: 13) + [2])
     timings[2] = timing(0.128)
-    #expect(throws: FocusRackError.self) { try plan() }
+    let slowerResidual = try plan()
+    #expect(slowerResidual.chunks == Array(repeating: 8, count: 13) + [2])
+    #expect(slowerResidual.duration > 1)
 }

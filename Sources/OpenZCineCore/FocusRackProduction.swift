@@ -126,7 +126,23 @@ public struct FocusRackState: Codable, Sendable {
     public var referenceValid = true
     public var minimumDuration: Double?
     public var maximumDuration: Double?
+    /// Planned execution time; the operator's requested target remains in `transition.duration`.
     public var estimatedDuration: Double?
+    /// Observed command-dispatch-to-completion span; not an optical arrival measurement.
+    public var actualMovementDuration: Double?
+    /// Requested target and planned estimate, without claiming optical arrival timing.
+    public var playbackDetail: String {
+        playbackDetail(for: transition)
+    }
+
+    private func playbackDetail(for move: FocusRackTransition) -> String {
+        guard move.durationMode == .timed, let estimatedDuration,
+            estimatedDuration > move.duration + 0.0005
+        else { return move.playbackDetail }
+        let estimate = estimatedDuration.formatted(.number.precision(.fractionLength(0...2)))
+        return
+            "\(move.duration.formatted(.number.precision(.fractionLength(0...2)))) s target · ~\(estimate) s"
+    }
     public var admissionMessage: String?
     public var primary = FocusRackPrimaryAction()
     /// Explicit duration-based playback in each direction; absent in older state snapshots.
@@ -171,7 +187,7 @@ public struct FocusRackState: Codable, Sendable {
                                     ? "Go to " + from + " first" : nil
             return .init(
                 kind: "run", title: (recording ? "Run " : "Rehearse ") + from + "→" + to,
-                enabled: reason == nil, markID: from, detail: timed.playbackDetail,
+                enabled: reason == nil, markID: from, detail: playbackDetail(for: timed),
                 disabledReason: reason)
         }
         pullAToB = action(from: "A", to: "B")

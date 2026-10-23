@@ -154,6 +154,10 @@ public struct FocusRackDiagnostics: Codable, Sendable {
     public let omittedEvents: Int
     /// Current per-pulse maxima, including restored history; no camera identity is exported.
     public let timingEvidence: [Int: Double]?
+    /// Fixed execution duration selected for this run, separately from its requested target.
+    public let plannedDuration: Double?
+    /// Observed host span from the first command dispatch to the latest command completion.
+    public let actualMovementDuration: Double?
 }
 
 /// Deterministic session-local rack state machine, advanced by the production controller.
@@ -175,6 +179,9 @@ public struct FocusRackEngine: Sendable {
     private var message = "UNQUALIFIED - set a fixed zoom, use AF-S, and adjust focus only here."
     private var runID: Int64
     private var trajectory: FocusRackMovementPlan?
+    private var plannedDuration: Double?
+    private var firstCommandAt: Double?
+    private var lastCommandFinishedAt: Double?
     private let adaptive: Bool
     private let profile: FocusRackProfile
     private var completedUnits = 0
@@ -189,6 +196,8 @@ public struct FocusRackEngine: Sendable {
     private var startedAt = 0.0
     private var enforcesTiming = false
     private var nextStep = 0
+    private var completedMaintenanceReads: Set<Int> = []
+    private var pendingMaintenanceRead: (step: Int, configuration: Int)?
     private var inFlight:
         (
             id: Int, signedStep: Int, sessionID: String, startedAt: Double,
@@ -305,6 +314,9 @@ public struct FocusRackEngine: Sendable {
         completedUnits = 0
         totalUnits = 0
         hasStarted = false
+        plannedDuration = nil
+        firstCommandAt = nil
+        lastCommandFinishedAt = nil
         finishedAt = nil
         message = "Focus A, set A, then use Near/Far to focus B."
         append("reset", at: timestamp)
@@ -443,7 +455,8 @@ public struct FocusRackEngine: Sendable {
     public mutating func nextAction(at timestamp: Double) -> FocusRackEngineAction {
         let idle = FocusRackEngineAction(
             kind: "idle", runID: runID, commandID: nil, signedPulses: nil, waitSeconds: nil)
-        guard let trajectory, inFlight == nil, !stopRequested else { return idle }
+        guard let trajectory, inFlight == nil, pendingMaintenanceRead == nil, !stopRequested
+        else { return idle }
         if pauseRequested {
             return .init(
                 kind: "wait", runID: runID, commandID: nil, signedPulses: nil, waitSeconds: 0.1)
@@ -453,6 +466,29 @@ public struct FocusRackEngine: Sendable {
             ?? (hasReadinessFrame ? nil : "Wait for a fresh real camera frame.")
         guard let reason = unavailable else {
             let due = startedAt + accumulatedPause + trajectory.offsets[nextStep]
+            if let offset = trajectory.maintenanceReadOffsets?[nextStep],
+                !completedMaintenanceReads.contains(nextStep)
+            {
+                let readAt = max(
+                    startedAt + accumulatedPause + offset,
+                    (lastCommandSettledAt ?? -.infinity) + configuration.commandInterval)
+                if timestamp < readAt {
+                    return .init(
+                        kind: "wait", runID: runID, commandID: nil, signedPulses: nil,
+                        waitSeconds: min(0.1, readAt - timestamp))
+                }
+                guard maintenanceFits(at: timestamp) else {
+                    failMaintenance(at: timestamp)
+                    return idle
+                }
+                pendingMaintenanceRead = (nextStep, configurationRevision)
+                append(
+                    "maintenanceReadStarted", at: timestamp, commandID: nextStep,
+                    scheduledAt: readAt)
+                return .init(
+                    kind: "readSafety", runID: runID, commandID: nextStep,
+                    signedPulses: nil, waitSeconds: nil)
+            }
             if timestamp < due {
                 return .init(
                     kind: "wait", runID: runID, commandID: nil, signedPulses: nil,
@@ -481,6 +517,7 @@ public struct FocusRackEngine: Sendable {
                         0.1, lastCommandSettledAt + configuration.commandInterval - timestamp))
             }
             let signedUnits = trajectory.chunks[nextStep]
+            if firstCommandAt == nil { firstCommandAt = timestamp }
             inFlight = (
                 nextStep, signedUnits, context?.sessionID ?? "", timestamp, configurationRevision
             )
@@ -504,6 +541,7 @@ public struct FocusRackEngine: Sendable {
         guard completedRun == runID, let command = inFlight, command.id == commandID else { return }
         append("commandCompleted", at: timestamp, commandID: commandID, outcome: outcome)
         inFlight = nil
+        lastCommandFinishedAt = timestamp
         lastCommandSettledAt = timestamp
         if outcome == 0 {
             if command.configurationRevision == configurationRevision {
@@ -644,7 +682,8 @@ public struct FocusRackEngine: Sendable {
                 && inFlight == nil && isFrameAfterMovement,
             busy: trajectory != nil || inFlight != nil, configuration: currentConfiguration,
             context: context, events: includeEvents ? events : [], omittedEvents: omittedEvents,
-            timingEvidence: calibrationTimings)
+            timingEvidence: calibrationTimings, plannedDuration: plannedDuration,
+            actualMovementDuration: actualMovementDuration)
     }
 
     var calibrationTimings: [Int: Double] {
@@ -744,6 +783,11 @@ public struct FocusRackEngine: Sendable {
         activeNudge = nil
         activeCalibration = nil
         trajectory = planned
+        plannedDuration = planned.duration
+        firstCommandAt = nil
+        lastCommandFinishedAt = nil
+        completedMaintenanceReads = []
+        pendingMaintenanceRead = nil
         runSafetyReadBudget = safetyReadBudget
         if marks.isEmpty { referenceContext = context }
         startedAt = timestamp
@@ -762,7 +806,7 @@ public struct FocusRackEngine: Sendable {
         append(
             "runStarted", at: timestamp,
             note:
-                "timed=\(enforcesTiming) duration=\(duration) delay=\(delay) easing=\(easing.rawValue) profile=\(profile.rawValue)"
+                "timed=\(enforcesTiming) duration=\(duration) plannedDuration=\(planned.duration) delay=\(delay) easing=\(easing.rawValue) profile=\(profile.rawValue)"
         )
     }
 
@@ -776,16 +820,44 @@ public struct FocusRackEngine: Sendable {
 
     // The controller performs fresh safety reads before this run's timing epoch begins.
     mutating func finishPreflight(runID expected: Int64, at timestamp: Double) {
-        guard expected == runID, trajectory != nil, nextStep == 0, inFlight == nil,
-            !stopRequested
+        guard expected == runID, let previous = trajectory, nextStep == 0, inFlight == nil,
+            pendingMaintenanceRead == nil, firstCommandAt == nil, !stopRequested
         else { return }
+        if enforcesTiming {
+            do {
+                let move = program.transitions[0]
+                let adjusted = try FocusRackPlanner.make(
+                    signedSteps: previous.signedSteps, duration: move.duration,
+                    delay: previous.delay, easing: move.easing,
+                    quiet: configuration.commandInterval,
+                    timings: commandTimings, adaptive: adaptive, timed: true, grouped: true,
+                    profile: profile, safetyReadBudget: runSafetyReadBudget)
+                trajectory = adjusted
+                plannedDuration = adjusted.duration
+                completedMaintenanceReads = []
+            } catch {
+                trajectory = nil
+                phase = "failed"
+                finishedAt = timestamp
+                message = error.localizedDescription
+                append("preflightRejected", at: timestamp, note: message)
+                return
+            }
+        }
         startedAt = timestamp
         accumulatedPause = 0
         if pausedAt != nil { pausedAt = timestamp }
-        append("preflightCompleted", at: timestamp)
+        append(
+            "preflightCompleted", at: timestamp,
+            note: "plannedDuration=\(plannedDuration ?? previous.duration)")
     }
 
     var isTimedRun: Bool { trajectory != nil && enforcesTiming }
+
+    private var actualMovementDuration: Double? {
+        guard let firstCommandAt, let lastCommandFinishedAt else { return nil }
+        return max(0, lastCommandFinishedAt - firstCommandAt)
+    }
 
     // A paused or untimed run cannot justify deferring the periodic safety refresh.
     var scheduledFinish: Double? {
@@ -797,6 +869,10 @@ public struct FocusRackEngine: Sendable {
         guard enforcesTiming, runSafetyReadBudget > 0, let trajectory,
             let safetyAt = context?.safetyTimestamp
         else { return true }
+        if let reads = trajectory.maintenanceReadOffsets {
+            return scheduledMaintenanceFits(
+                trajectory, reads: reads, safetyAt: safetyAt, at: timestamp)
+        }
         let finish = startedAt + accumulatedPause + trajectory.delay + trajectory.duration
         if max(timestamp, finish) < safetyAt + 2 { return true }
         let fallback = commandTimings.values.map(\.longest).max() ?? 0
@@ -808,6 +884,68 @@ public struct FocusRackEngine: Sendable {
             }
         }
         return true
+    }
+
+    // Project the remaining immutable schedule with current maxima and actual evidence age.
+    // Reads finish while the previous reading is still fresh; freshness starts at read START.
+    private func scheduledMaintenanceFits(
+        _ plan: FocusRackMovementPlan, reads: [Int: Double], safetyAt: Double, at timestamp: Double
+    ) -> Bool {
+        let epoch = startedAt + accumulatedPause
+        var freshAt = safetyAt
+        var cursor = max(
+            timestamp, (lastCommandSettledAt ?? -.infinity) + configuration.commandInterval)
+        for index in nextStep..<plan.chunks.count {
+            let due = epoch + plan.offsets[index]
+            if let offset = reads[index], !completedMaintenanceReads.contains(index) {
+                let start = max(cursor, epoch + offset)
+                cursor = start + runSafetyReadBudget
+                guard cursor <= due + 1e-9, cursor <= freshAt + 2 else { return false }
+                freshAt = start
+            }
+            guard let cost = commandTimings[abs(plan.chunks[index])]?.longest else { return false }
+            let start = max(cursor, due)
+            let finish = start + cost
+            guard start - due <= max(0.2, plan.duration * 0.05), finish <= freshAt + 2 else {
+                return false
+            }
+            if index + 1 < plan.chunks.count {
+                cursor = finish + configuration.commandInterval
+                guard cursor <= epoch + plan.offsets[index + 1] + 1e-9 else { return false }
+            } else if finish > epoch + plan.delay + plan.duration + max(0.2, plan.duration * 0.05) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Countdown refreshes remain periodic, including a final read within the initial-age reserve.
+    var initialMaintenanceDeadline: Double? {
+        guard trajectory?.maintenanceReadOffsets != nil, nextStep == 0 else { return nil }
+        return nextCommandDeadline
+    }
+
+    func ownsMaintenanceSchedule(at timestamp: Double) -> Bool {
+        guard let trajectory, trajectory.maintenanceReadOffsets != nil,
+            !pauseRequested, pausedAt == nil
+        else { return false }
+        return nextStep > 0 || timestamp >= startedAt + accumulatedPause + trajectory.offsets[0]
+    }
+
+    mutating func finishScheduledRead(
+        runID expected: Int64, commandID: Int, accepted: Bool, at timestamp: Double
+    ) {
+        guard expected == runID, let pending = pendingMaintenanceRead,
+            pending.step == commandID, pending.configuration == configurationRevision
+        else { return }
+        pendingMaintenanceRead = nil
+        guard trajectory != nil, !stopRequested, !pauseRequested else { return }
+        guard accepted, let deadline = nextCommandDeadline, timestamp <= deadline + 1e-9 else {
+            failMaintenance(at: timestamp)
+            return
+        }
+        completedMaintenanceReads.insert(commandID)
+        if !maintenanceFits(at: timestamp) { failMaintenance(at: timestamp) }
     }
 
     // This deadline stays in the original epoch across polling and acknowledged pauses.
@@ -940,6 +1078,8 @@ public struct FocusRackEngine: Sendable {
         state.runID = runID
         state.program = program
         state.transition = program.transitions[0]
+        state.estimatedDuration = plannedDuration
+        state.actualMovementDuration = actualMovementDuration
         state.direction = state.transition.fromMark == "A" ? .aToB : .bToA
         state.stepPosition = position
         state.completedSteps = raw.completedSteps
@@ -958,7 +1098,7 @@ public struct FocusRackEngine: Sendable {
         state.remainingDelay = max(0, state.transition.delay - state.activeElapsed)
         let expectedDuration =
             state.transition.durationMode == .timed
-            ? state.transition.duration : trajectory?.estimatedDuration ?? 0
+            ? plannedDuration ?? state.transition.duration : trajectory?.estimatedDuration ?? 0
         state.remainingDuration = max(
             0, expectedDuration - max(0, state.activeElapsed - state.transition.delay))
         let ready =
@@ -986,7 +1126,7 @@ public struct FocusRackEngine: Sendable {
         state.capabilities = caps
         state.calibration = calibrationAction(ready: ready, idle: idle)
         var admissionInstruction: String?
-        if let from = marks.first(where: { $0.id == state.transition.fromMark }),
+        if idle, let from = marks.first(where: { $0.id == state.transition.fromMark }),
             let to = marks.first(where: { $0.id == state.transition.toMark })
         {
             do {
@@ -999,6 +1139,7 @@ public struct FocusRackEngine: Sendable {
                     safetyReadBudget: safetyReadBudget)
                 state.minimumDuration = focusRackMinimumForDisplay(plan.minimumDuration)
                 state.maximumDuration = plan.maximumDuration
+                if idle { state.estimatedDuration = plan.estimatedDuration }
             } catch FocusRackError.calibrationRequired {
                 state.admissionMessage = FocusRackError.calibrationRequired.localizedDescription
                 admissionInstruction = "Go to A or B first"
@@ -1037,7 +1178,7 @@ public struct FocusRackEngine: Sendable {
                 kind: recording ? "run" : "rehearse",
                 title: (recording ? "Run " : "Rehearse ") + direction,
                 enabled: ready && atStart && state.admissionMessage == nil,
-                detail: state.transition.playbackDetail, disabledReason: reason)
+                detail: state.playbackDetail, disabledReason: reason)
         }
         state.updateTimedActions(
             recording: context?.recording == true, ready: ready,
