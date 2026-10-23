@@ -13,7 +13,9 @@ sets its movie AF configuration through the existing confirmed camera-setting pa
 uses **AF-F / Auto-area AF / subject detection Off**; Timed Rack uses **AF-S / Auto-area AF /
 subject detection Off**, preserving the configuration used for the local timing calibration.
 A mode change is unavailable while a timed movement, unconfirmed stop or another focus command
-still owns control. Automatic writes wait for confirmed recording stop and settled focus.
+still owns control. Setup waits for confirmed recording stop, a fresh post-action header, idle
+focus commands and bounded DeviceReady confirmation. It can switch AF-F to AF-S without first
+acquiring a subject. Restoration retains the stricter focus-settlement checks below.
 
 **Native AF** uses the normal live-picture tap target through the existing serialized camera-control
 path. After automatic setup completes, set **g6 AF speed** on the camera. Tap the subject in the
@@ -32,6 +34,7 @@ outside the rack or its configuration changed.
 Closing the panel restores the confirmed values from before automatic setup, only for settings
 the app changed and still owns. Manual picker intent, including selecting the same value, or an
 observed camera change relinquishes that setting; changing away and back does not regain ownership.
+Manual choices made while the initial setup reads are pending are also kept.
 An explicit later mode selection can configure it again, remembering the latest manual value for
 restoration. Lens position is never restored. If recording or focus work is active, closing hides
 the panel and retains pending restoration until the camera is idle. Unknown recording/readiness

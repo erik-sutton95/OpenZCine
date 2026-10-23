@@ -76,6 +76,7 @@ struct FocusRackPendingCapture {
     private(set) var afSetupFailure: String?
     @ObservationIgnored private var afWriteAuthority: FocusRackAuthority?
     @ObservationIgnored private var afReadinessPolls = 0
+    @ObservationIgnored private var afSetupManualChanges: Set<FocusAFProperty> = []
     var isExpanded = true
     /// Preserves an attention request while compact and expanded views are exchanged.
     var revealAdmission = false
@@ -115,7 +116,7 @@ struct FocusRackPendingCapture {
         if afSettingsPending {
             return afSettings.restoring
                 ? "Waiting to restore AF settings…"
-                : "Waiting for recording and focus to stop before AF setup…"
+                : "Setting up camera AF…"
         }
         return nil
     }
@@ -157,12 +158,14 @@ struct FocusRackPendingCapture {
     }
 
     var autofocusDisabledReason: String {
-        mode == .nativeAF
+        if let afSettingsStatus { return afSettingsStatus }
+        return mode == .nativeAF
             ? nativeAFInstruction : "Use the rack dial, or reset marks before autofocus."
     }
 
     func selectMode(_ selected: FocusControlMode) {
         guard canChangeMode else { return }
+        afSetupManualChanges.removeAll()
         retirePresentation()
         authority.update(false)
         controller?.suspend()
@@ -322,6 +325,7 @@ struct FocusRackPendingCapture {
     func open() {
         isActive = true
         isExpanded = true
+        afSetupManualChanges.removeAll()
         requestAFSetup()
         authority.update(false)
         controller?.suspend()
@@ -337,6 +341,7 @@ struct FocusRackPendingCapture {
         controller?.invalidate(reason: "Focus Rack closed. Reset marks before moving focus.")
         isActive = false
         afSetupRequested = false
+        afSetupManualChanges.removeAll()
         afSetupFailure = nil
         revokeAFWrite()
         afSettings.requestRestore()
@@ -372,6 +377,7 @@ struct FocusRackPendingCapture {
     func sessionChanged() {
         revokeAFWrite()
         afSettings.abandon()
+        afSetupManualChanges.removeAll()
         afSetupRequested = isActive && storesTemplates
         afSetupFailure = nil
         afReadinessPolls = 0
@@ -611,6 +617,9 @@ struct FocusRackPendingCapture {
             do {
                 guard let sessionID = observation.sessionID else { return nil }
                 try afSettings.requestMode(mode, sessionID: sessionID, values: observation.values)
+                // A fresh lease must retain picker intents received while its reads were pending.
+                for property in afSetupManualChanges { afSettings.manualChange(property) }
+                afSetupManualChanges.removeAll()
                 afSetupRequested = false
             } catch {
                 afSetupRequested = false
@@ -634,6 +643,9 @@ struct FocusRackPendingCapture {
 
     func manualAFChange(_ property: FocusAFProperty) {
         revokeAFWrite()
+        if afSetupRequested || (isActive && modeSwitchPending) {
+            afSetupManualChanges.insert(property)
+        }
         afSettings.manualChange(property)
     }
 

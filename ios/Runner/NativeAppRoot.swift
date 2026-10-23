@@ -4965,12 +4965,17 @@ final class NativeAppModel {
         focusAFFrameFence = focusRackAcceptedFrameRevision
     }
 
-    private var focusAFHasSettledHeader: Bool {
+    private var focusAFHasFreshHeader: Bool {
         let now = ProcessInfo.processInfo.systemUptime
         guard focusRackAcceptedFrameAt.map({ now >= $0 && now - $0 <= 2 }) == true,
             focusAFFrameFence.map({ focusRackAcceptedFrameRevision > $0 }) != false,
-            let liveViewFocus
+            liveViewFocus != nil
         else { return false }
+        return true
+    }
+
+    private var focusAFRestorationSettled: Bool {
+        guard let liveViewFocus else { return false }
         return reportedPropertySnapshot.focusMode == "AF-F"
             ? liveViewFocus.focusResult == .focused : liveViewFocus.focusResult != .unknown
     }
@@ -4994,7 +4999,8 @@ final class NativeAppModel {
             recordingPending: pendingRecordToggle || shell.control.recordPending,
             movie: reportedPropertySnapshot.captureSelector == .video,
             foreground: context.foregroundOwner && !interfaceLocked,
-            focusIdle: focusAFHasSettledHeader && ready && commandsIdle,
+            focusIdle: focusAFHasFreshHeader && ready && commandsIdle,
+            restorationFocusSettled: focusAFRestorationSettled,
             commandsIdle: commandsIdle, rack: focusRack?.state)
     }
 
@@ -5017,8 +5023,9 @@ final class NativeAppModel {
             return false
         }
         // DeviceReady is evidence collected below, never inferred from an idle UI snapshot.
-        eligibility.focusIdle = eligibility.commandsIdle && focusAFHasSettledHeader
-        guard eligibility.permitsWrite else { return false }
+        eligibility.focusIdle = eligibility.commandsIdle && focusAFHasFreshHeader
+        let restoring = rack.afSettings.restoring && !rack.afSetupRequested
+        guard eligibility.permitsWrite(restoring: restoring) else { return false }
         let sourceID = focusAFSessionID
         do {
             for property: PTPPropertyCode in [
@@ -5038,7 +5045,7 @@ final class NativeAppModel {
             guard rack.observesAFReadiness(readiness) else { return true }
             focusAFReadyAt = ProcessInfo.processInfo.systemUptime
             let observation = focusAFObservation()
-            guard observation.permitsWrite,
+            guard observation.permitsWrite(restoring: restoring),
                 let change = rack.nextAFChange(observation),
                 let write = change.property.write(change.value)
             else { return true }

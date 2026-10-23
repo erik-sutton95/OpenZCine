@@ -405,6 +405,75 @@ struct FocusRackAdapterTests {
 @MainActor @Suite("Automatic focus AF settings")
 struct FocusAFSettingsAdapterTests {
     @Test(
+        "Timed setup leaves continuous AF without requiring an acquired subject or known marks",
+        arguments: [PTPLiveViewFocusInfo.FocusResult.unknown, .notFocused])
+    func timedSetupFromUnacquiredContinuousAF(result: PTPLiveViewFocusInfo.FocusResult) async throws
+    {
+        let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        var initial = FocusRackState.initial
+        initial.referenceValid = false
+        initial.stepPosition = nil
+        rack.present(initial)
+        model.debugSeedFocusAF(recording: false, result: result)
+        rack.selectMode(.timedRack)
+        #expect(rack.state?.referenceValid != true)
+        #expect(await model.debugServiceFocusAFSettings())
+        #expect(await wire.readinessPollCount == 1)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.values() == .target(.timedRack))
+        #expect(await wire.writeCount == 1)
+        model.debugSeedFocusAF(recording: false, result: result)
+        _ = await model.debugServiceFocusAFSettings()
+        #expect(!rack.afSettingsPending)
+    }
+
+    @Test(
+        "Native setup may configure each AF property before the subject has been acquired",
+        arguments: [PTPLiveViewFocusInfo.FocusResult.unknown, .notFocused])
+    func nativeSetupFromUnacquiredSubject(result: PTPLiveViewFocusInfo.FocusResult) async throws {
+        let (model, native, wire, rack) = try await fixture()
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack, result: result)
+        #expect(await wire.values() == .target(.nativeAF))
+        #expect(await wire.writeCount == 3)
+        #expect(rack.allowsAutofocus)
+    }
+
+    @Test("Unacquired setup still requires a new header and stopped recording at final admission")
+    func unacquiredSetupKeepsFreshnessAndRecordingGates() async throws {
+        let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        model.debugSeedFocusAF(recording: false, result: .unknown)
+        rack.selectMode(.timedRack)
+        model.debugFenceFocusAFHeader()
+        #expect(!(await model.debugServiceFocusAFSettings()))
+        #expect(await wire.readinessPollCount == 0)
+        #expect(rack.autofocusDisabledReason == "Setting up camera AF…")
+        model.debugSeedFocusAF(recording: true, result: .unknown)
+        #expect(!(await model.debugServiceFocusAFSettings()))
+        #expect(await wire.readinessPollCount == 0)
+        model.debugSeedFocusAF(recording: false, result: .unknown)
+        #expect(await model.debugServiceFocusAFSettings())
+        model.debugSeedFocusAF(recording: true, result: .unknown)
+        #expect(await model.debugServiceNextCameraWrite())
+        #expect(await wire.writeCount == 0)
+        try await drain(model, rack: rack, result: .unknown)
+        #expect(await wire.values() == .target(.timedRack))
+        #expect(await wire.writeCount == 1)
+    }
+
+    @Test(
         "Automatic setup restores confirmed originals after recording stops and keeps manual edits")
     func setupRestoreAndManualArea() async throws {
         let (model, native, wire, rack) = try await fixture()
@@ -434,6 +503,40 @@ struct FocusAFSettingsAdapterTests {
         try await drain(model, rack: rack)
         #expect(await wire.values() == .init(mode: "AF-S", area: "Wide-L", subject: "People"))
         #expect(!rack.afSettingsPending && rack.allowsAutofocus)
+    }
+
+    @Test(
+        "Manual choices during the first setup read survive until another explicit selection",
+        arguments: ["Wide-L", "Wide-S"])
+    func manualChoiceBeforeLeaseCapture(area: String) async throws {
+        let (model, native, wire, rack) = try await fixture()
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        await wire.holdNextAFRead()
+        let preparing = Task { await model.debugServiceFocusAFSettings() }
+        for _ in 0..<2_000 {
+            if await wire.readHeld { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(await wire.readHeld)
+        rack.manualAFChange(.area)
+        await wire.set(.area, value: area)
+        let write = try #require(FocusAFProperty.area.write(area))
+        model.applyBootstrapObservation(.property(write.property, write.data))
+        await wire.releaseRead()
+        #expect(await preparing.value)
+        try await drain(model, rack: rack, result: .notFocused)
+        #expect(await wire.values() == .init(mode: "AF-F", area: area, subject: "Off"))
+        #expect(await wire.writeCount == 2)
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack)
+        #expect(await wire.values() == .target(.nativeAF))
+        rack.closePanel()
+        try await drain(model, rack: rack)
+        #expect(await wire.values() == .init(mode: "AF-S", area: area, subject: "People"))
     }
 
     @Test("A queued restore defers when recording starts before its first send")
@@ -688,9 +791,12 @@ struct FocusAFSettingsAdapterTests {
         #expect(await wire.writeCount == 3)
     }
 
-    private func drain(_ model: NativeAppModel, rack: FocusRackModel) async throws {
+    private func drain(
+        _ model: NativeAppModel, rack: FocusRackModel,
+        result: PTPLiveViewFocusInfo.FocusResult = .focused
+    ) async throws {
         for _ in 0..<12 {
-            model.debugSeedFocusAF(recording: false)
+            model.debugSeedFocusAF(recording: false, result: result)
             _ = await model.debugServiceFocusAFSettings()
             _ = await model.debugServiceNextCameraWrite()
             if !rack.afSettingsPending { break }
@@ -736,6 +842,7 @@ private actor FocusAFQueueTransport: CameraTransport {
     private var readCompletion: CheckedContinuation<Void, Never>?
     private(set) var readHeld = false
     private(set) var writeCount = 0
+    private(set) var readinessPollCount = 0
     private static let afProperties: Set<UInt32> = [
         PTPPropertyCode.movieFocusMode.rawValue, PTPPropertyCode.movieFocusMeteringMode.rawValue,
         PTPPropertyCode.movieAFSubjectDetection.rawValue,
@@ -807,6 +914,7 @@ private actor FocusAFQueueTransport: CameraTransport {
             readHeld = true
             await withCheckedContinuation { readCompletion = $0 }
         }
+        if operation == .deviceReady { readinessPollCount += 1 }
         let code = operation == .deviceReady ? readiness : .ok
         let response = ByteCoding.uint16LE(code.rawValue) + ByteCoding.uint32LE(transaction ?? 1)
         return .init(

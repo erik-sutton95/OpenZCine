@@ -56,6 +56,8 @@ public struct FocusAFSettingsObservation: Sendable {
     public var foreground: Bool
     /// Includes a fresh accepted header, completed bounded DeviceReady barrier and no focus work.
     public var focusIdle: Bool
+    /// Existing acquisition evidence required for restoration; explicit setup may change AF mode.
+    public var restorationFocusSettled: Bool
     public var commandsIdle: Bool
     public var rack: FocusRackState?
 
@@ -63,6 +65,7 @@ public struct FocusAFSettingsObservation: Sendable {
     public init(
         sessionID: String?, values: FocusAFSettingsValues, recording: Bool?,
         recordingPending: Bool, movie: Bool, foreground: Bool, focusIdle: Bool,
+        restorationFocusSettled: Bool,
         commandsIdle: Bool, rack: FocusRackState?
     ) {
         self.sessionID = sessionID
@@ -72,14 +75,16 @@ public struct FocusAFSettingsObservation: Sendable {
         self.movie = movie
         self.foreground = foreground
         self.focusIdle = focusIdle
+        self.restorationFocusSettled = restorationFocusSettled
         self.commandsIdle = commandsIdle
         self.rack = rack
     }
 
     /// Unknown recording or movement evidence never permits a settings write.
-    public var permitsWrite: Bool {
+    public func permitsWrite(restoring: Bool) -> Bool {
         sessionID != nil && recording == false && !recordingPending && movie && foreground
-            && focusIdle && commandsIdle && FocusControlModePolicy.canChange(rack: rack)
+            && focusIdle && (!restoring || restorationFocusSettled) && commandsIdle
+            && FocusControlModePolicy.canChange(rack: rack)
     }
 }
 
@@ -198,7 +203,7 @@ public struct FocusAFSettingsLease: Sendable {
             guard let desired else { continue }
             guard let current = observation.values[property] else { return nil }
             if desired == current { continue }
-            guard observation.permitsWrite else { return nil }
+            guard observation.permitsWrite(restoring: restoring) else { return nil }
             sequence &+= 1
             let change = FocusAFSettingChange(
                 id: sequence, sessionID: sessionID, property: property,
@@ -220,7 +225,8 @@ public struct FocusAFSettingsLease: Sendable {
     public func allows(_ change: FocusAFSettingChange, observation: FocusAFSettingsObservation)
         -> Bool
     {
-        pending == change && sessionID == observation.sessionID && observation.permitsWrite
+        pending == change && sessionID == observation.sessionID
+            && observation.permitsWrite(restoring: change.restoring)
             && change.restoring == restoring
             && !released.contains(change.property)
             && observation.values[change.property] == change.expectedValue

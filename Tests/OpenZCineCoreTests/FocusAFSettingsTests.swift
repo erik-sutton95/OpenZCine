@@ -6,13 +6,42 @@ private let originalAF = FocusAFSettingsValues(mode: "AF-C", area: "Wide-L", sub
 
 private func afObservation(
     _ values: FocusAFSettingsValues, recording: Bool? = false, pending: Bool = false,
-    focusIdle: Bool = true, commandsIdle: Bool = true, movie: Bool = true,
+    focusIdle: Bool = true, restorationFocusSettled: Bool = true,
+    commandsIdle: Bool = true, movie: Bool = true,
     foreground: Bool = true, session: String = "camera:1"
 ) -> FocusAFSettingsObservation {
     .init(
         sessionID: session, values: values, recording: recording, recordingPending: pending,
-        movie: movie, foreground: foreground, focusIdle: focusIdle, commandsIdle: commandsIdle,
+        movie: movie, foreground: foreground, focusIdle: focusIdle,
+        restorationFocusSettled: restorationFocusSettled, commandsIdle: commandsIdle,
         rack: nil)
+}
+
+@Test func unacquiredSubjectPermitsSetupButCannotAuthorizeRestoration() throws {
+    var lease = FocusAFSettingsLease()
+    let original = FocusAFSettingsValues.target(.nativeAF)
+    try lease.requestMode(.timedRack, sessionID: "camera:1", values: original)
+    var observation = afObservation(original, restorationFocusSettled: false)
+    var rack = FocusRackState.initial
+    rack.stepPosition = nil
+    rack.referenceValid = false
+    observation.rack = rack
+    let pending = lease.nextChange(observation)
+    let change = try #require(pending)
+    #expect(change.property == .mode && change.value == "AF-S" && !change.restoring)
+    #expect(lease.allows(change, observation: observation))
+    observation.values = .target(.timedRack)
+    lease.confirm(change, sessionID: "camera:1", values: observation.values)
+    _ = lease.nextChange(observation)
+    lease.requestRestore()
+    #expect(lease.nextChange(observation) == nil)
+    #expect(lease.restoring)
+    observation.restorationFocusSettled = true
+    let restorePending = lease.nextChange(observation)
+    let restore = try #require(restorePending)
+    #expect(restore.restoring && lease.allows(restore, observation: observation))
+    observation.restorationFocusSettled = false
+    #expect(!lease.allows(restore, observation: observation))
 }
 
 private func afValues(_ values: FocusAFSettingsValues, applying change: FocusAFSettingChange)
