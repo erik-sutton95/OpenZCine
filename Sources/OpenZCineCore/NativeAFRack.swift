@@ -49,6 +49,8 @@ public enum NativeAFRackError: Error, LocalizedError, Equatable, Sendable {
     case invalidPoint, invalidDelay, invalidTime, selectionNotArmed, commandInFlight
     case missingTarget(NativeAFMark)
     case requestNotPending, requestNotDue
+    case invalidCheckpoint, checkpointRequiresIdle
+    case requestIdentityExhausted
 
     /// An operator-facing explanation for the rejected action.
     public var errorDescription: String? {
@@ -61,6 +63,9 @@ public enum NativeAFRackError: Error, LocalizedError, Equatable, Sendable {
         case .missingTarget(let mark): "Set target \(mark.rawValue) first."
         case .requestNotPending: "This focus request is no longer pending."
         case .requestNotDue: "The focus start delay has not finished."
+        case .invalidCheckpoint: "Saved Native AF targets are invalid."
+        case .checkpointRequiresIdle: "Finish or cancel target selection before restoring targets."
+        case .requestIdentityExhausted: "Native AF request identities are exhausted."
         }
     }
 }
@@ -234,6 +239,43 @@ public struct NativeAFRack: Equatable, Sendable {
         lastSelectedMark = nil
     }
 
+    /// Encodes only target coordinates, delay and request identity for owner recreation.
+    /// Armed selection, queued work, active commands and acknowledgments are never saved.
+    public func checkpointJSON() throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let checkpoint = Checkpoint(
+            a: targetA, b: targetB, startDelay: startDelay, nextRequestID: nextRequestID)
+        return String(decoding: try encoder.encode(checkpoint), as: UTF8.self)
+    }
+
+    /// Restores an idle value without replaying work or allowing old request identities to recur.
+    public mutating func restoreCheckpointJSON(_ json: String) throws {
+        guard selectingMark == nil, pendingRequest == nil, dispatchedRequest == nil else {
+            throw NativeAFRackError.checkpointRequiresIdle
+        }
+        guard json.utf8.count <= 4096 else { throw NativeAFRackError.invalidCheckpoint }
+        let checkpoint: Checkpoint
+        do {
+            checkpoint = try JSONDecoder().decode(Checkpoint.self, from: Data(json.utf8))
+        } catch { throw NativeAFRackError.invalidCheckpoint }
+        guard checkpoint.startDelay.isFinite, checkpoint.startDelay >= 0 else {
+            throw NativeAFRackError.invalidCheckpoint
+        }
+        targetA = checkpoint.a
+        targetB = checkpoint.b
+        startDelay = checkpoint.startDelay
+        nextRequestID = max(nextRequestID, checkpoint.nextRequestID)
+        lastSelectedMark = nil
+    }
+
+    private struct Checkpoint: Codable {
+        let a: NativeAFPoint?
+        let b: NativeAFPoint?
+        let startDelay: Double
+        let nextRequestID: UInt64
+    }
+
     private func requireCommandIdle() throws {
         guard dispatchedRequest == nil else { throw NativeAFRackError.commandInFlight }
     }
@@ -242,7 +284,9 @@ public struct NativeAFRack: Equatable, Sendable {
         point: NativeAFPoint, mark: NativeAFMark, now: Double, delay: Double
     ) throws -> NativeAFRequest {
         guard now.isFinite, (now + delay).isFinite else { throw NativeAFRackError.invalidTime }
-        nextRequestID &+= 1
+        let (next, overflow) = nextRequestID.addingReportingOverflow(1)
+        guard !overflow else { throw NativeAFRackError.requestIdentityExhausted }
+        nextRequestID = next
         lastSelectedMark = nil
         return NativeAFRequest(id: nextRequestID, point: point, mark: mark, dueAt: now + delay)
     }
