@@ -301,7 +301,7 @@ extension NativeAppModel {
         projection: NikonAppGalleryProjection
     ) -> MonitorMediaItem {
         let downloaded = isClipDownloaded(clip)
-        let raw = rawSibling(of: clip) != nil
+        let raw = projection.rawSibling(of: clip) != nil
         return MediaClipCellPresentation.item(
             clip: clip,
             detail: list
