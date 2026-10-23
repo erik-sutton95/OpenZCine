@@ -47,6 +47,11 @@ class FocusRackControllerTest {
         var nudgeProgress: JSONObject? = null
         var calibration: JSONObject? = null
         var unavailable = false
+        var focusMode = "timedRack"
+        var focusModeSwitchPending = false
+        var canChangeFocusMode = true
+        var nativeAFConfigured = false
+        var canNativeAutofocus = false
         override fun create(connectionOwner: Long, templates: String): String {
             assertEquals(42L, connectionOwner)
             createdTemplates = templates
@@ -58,6 +63,7 @@ class FocusRackControllerTest {
             if (unavailable) return "invalid JSON"
             val caps = JSONObject().put("canCaptureA", false).put("canCaptureB", false)
                 .put("canNudge", false).put("canEditTiming", !busy).put("canReset", !busy)
+                .put("canAutofocus", !busy)
                 .put("canPause", busy).put("canStop", busy)
             val transition = JSONObject().put("fromMark", "A").put("toMark", "B")
                 .put("duration", 24).put("delay", 2).put("easing", "linear").put("durationMode", durationMode)
@@ -71,8 +77,58 @@ class FocusRackControllerTest {
             calibration?.let { state.put("calibration", it) }
             return JSONObject().put("state", state).put("templates", JSONArray(templates))
                 .put("templatesJSON", templates).put("traceJSON", traceJSON)
-                .put("calibrationJSON", calibrationJSON).toString()
+                .put("calibrationJSON", calibrationJSON).put("focusMode", focusMode)
+                .put("focusModeSwitchPending", focusModeSwitchPending)
+                .put("canChangeFocusMode", canChangeFocusMode).put("nativeAFConfigured", nativeAFConfigured)
+                .put("canNativeAutofocus", canNativeAutofocus).toString()
         }
+    }
+
+    @Test fun `focus modes project Swift admission and forward camera readbacks without control writes`() = runTest {
+        val wire = Wire().apply { busy = false }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        rack.observe(JSONObject().put("movieFocusMode", "AF-F").put("photography", false))
+        assertEquals("timedRack", rack.state.value.focusMode)
+        assertTrue(rack.state.value.canAutofocus)
+        rack.selectFocusMode("nativeAF")
+        val request = wire.requests.last()
+        assertEquals("selectFocusMode", request.getString("kind"))
+        assertEquals("nativeAF", request.getString("focusMode"))
+        assertEquals("AF-F", request.getString("movieFocusMode"))
+        assertFalse(request.getBoolean("photography"))
+        assertFalse(rack.state.value.canAutofocus)
+        assertFalse(rack.state.value.canNativeAutofocus)
+        assertFalse(rack.state.value.canChangeFocusMode)
+        assertFalse(rack.closePanel())
+        assertFalse(wire.requests.any { it.getString("kind") == "closePanel" })
+        rack.observe(JSONObject())
+        assertFalse(rack.state.value.canAutofocus, "An old reply cannot release the local reservation")
+        wire.focusMode = "nativeAF"
+        wire.focusModeSwitchPending = true
+        wire.nativeAFConfigured = true
+        wire.canNativeAutofocus = true
+        wire.canChangeFocusMode = false
+        rack.observe(JSONObject())
+        assertFalse(rack.state.value.canNativeAutofocus)
+        wire.focusModeSwitchPending = false
+        rack.observe(JSONObject())
+        assertEquals("nativeAF", rack.state.value.focusMode)
+        assertTrue(rack.state.value.nativeAFConfigured)
+        assertTrue(rack.state.value.canNativeAutofocus)
+        assertFalse(rack.state.value.canChangeFocusMode)
+        assertFalse(wire.requests.any { it.getString("kind") in setOf("run", "nudge", "goTo", "calibrate") })
+        wire.unavailable = true
+        rack.observe(JSONObject())
+        assertFalse(rack.state.value.canAutofocus)
+        assertFalse(rack.state.value.canNativeAutofocus)
+        assertFalse(rack.state.value.canChangeFocusMode)
+        assertEquals("stop", wire.requests.last().getString("kind"))
+        wire.unavailable = false
+        rack.observe(JSONObject())
+        assertTrue(rack.closePanel())
+        rack.close()
     }
 
     @Test fun `saved calibration loads once before observations and survives owner replacement`() = runTest {

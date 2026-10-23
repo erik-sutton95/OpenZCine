@@ -51,6 +51,11 @@ private struct RackWireReply: Decodable {
     let templatesJSON: String
     let traceJSON: String?
     let calibrationJSON: String?
+    let focusModeSwitchPending: Bool
+    let focusMode: FocusControlMode
+    let canChangeFocusMode: Bool
+    let nativeAFConfigured: Bool
+    let canNativeAutofocus: Bool
 }
 
 private func rackWireReply(
@@ -277,4 +282,178 @@ func rackProductionWireStopDiscardsQueuedMovementBeforeItCanRearm(kind: String) 
     #expect(try FocusRackCalibrationCodec.decode(Data(retained.utf8)) == calibration)
     #expect(reply.state?.program.marks.isEmpty == true)
     #expect(camera.log.isEmpty)
+}
+
+@Test func rackWireNativeModeRevokesTimedIntentsAndAllowsRepeatedCameraAutofocus() async throws {
+    let camera = RackWireCamera()
+    let wire = FocusRackWire()
+    let owner = try #require(wire.create(driver: camera.driver))
+    defer { wire.close(owner: owner) }
+    #expect(try rackWireReply(wire, owner).focusMode == .timedRack)
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "nativeAF"])
+    _ = try await waitForRackWire(wire, owner) { $0.focusMode == .nativeAF }
+    var observation: [String: Any] = [
+        "sessionID": "native-owner", "connected": true, "foregroundOwner": true,
+        "recording": false, "frameSequence": 1, "frameAgeSeconds": 0,
+        "externalFocusRevision": 0, "externalFocusIdle": true,
+    ]
+    for revision in 1...3 {
+        observation["frameSequence"] = revision
+        observation["externalFocusRevision"] = revision
+        _ = try rackWireReply(
+            wire, owner, kind: "externalFocus",
+            fields: [
+                "observation": observation, "movieFocusMode": "AF-F", "photography": false,
+            ])
+        let reply = try await waitForRackWire(wire, owner) { $0.nativeAFConfigured }
+        #expect(reply.canNativeAutofocus)
+    }
+    for kind in ["nudge", "run", "capture", "calibrate", "primary", "goTo", "updateTiming"] {
+        _ = try rackWireReply(wire, owner, kind: kind)
+        _ = try await waitForRackWire(wire, owner) { $0.error != nil }
+    }
+    #expect(!camera.log.contains("prepare"))
+    #expect(!camera.log.contains("drive"))
+    _ = try rackWireReply(
+        wire, owner, kind: "observe",
+        fields: [
+            "observation": observation, "movieFocusMode": "AF-S", "photography": false,
+        ])
+    let unconfigured = try rackWireReply(wire, owner)
+    #expect(!unconfigured.nativeAFConfigured)
+    #expect(!unconfigured.canNativeAutofocus)
+    observation["externalFocusIdle"] = false
+    _ = try rackWireReply(wire, owner, kind: "observe", fields: ["observation": observation])
+    #expect(try !rackWireReply(wire, owner).canChangeFocusMode)
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "timedRack"])
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(try rackWireReply(wire, owner).focusMode == .nativeAF)
+    observation["externalFocusIdle"] = true
+    _ = try rackWireReply(wire, owner, kind: "observe", fields: ["observation": observation])
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "timedRack"])
+    _ = try await waitForRackWire(wire, owner) { $0.focusMode == .timedRack }
+    #expect(!camera.log.contains("drive"))
+}
+
+private final class HeldModeDrive: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<NikonFocusRackDriveOutcome, Never>?
+    var hasStarted: Bool { lock.withLock { continuation != nil } }
+    func drive() async -> NikonFocusRackDriveOutcome {
+        await withCheckedContinuation { continuation in
+            lock.withLock { self.continuation = continuation }
+        }
+    }
+    func release() {
+        let held = lock.withLock {
+            let held = continuation
+            continuation = nil
+            return held
+        }
+        held?.resume(returning: .complete)
+    }
+}
+
+@Test(arguments: ["stop", "interrupt"])
+func rackWireModeReservationSurvivesImmediateControlCancellation(kind: String) async throws {
+    let camera = RackWireCamera()
+    let wire = FocusRackWire()
+    let owner = try #require(wire.create(driver: camera.driver))
+    defer { wire.close(owner: owner) }
+    let observation: [String: Any] = [
+        "sessionID": "mode-cancellation", "connected": true, "foregroundOwner": true,
+        "recording": false, "frameSequence": 1, "frameAgeSeconds": 0,
+        "externalFocusRevision": 0, "externalFocusIdle": true,
+        "focus": ["trackingAFActive": false, "subjectDetectionActive": false, "boxCount": 0],
+    ]
+    _ = try rackWireReply(
+        wire, owner, kind: "observe",
+        fields: ["observation": observation, "movieFocusMode": "AF-F", "photography": false])
+    _ = try await waitForRackWire(wire, owner) { $0.state != nil && $0.canChangeFocusMode }
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "nativeAF"])
+    _ = try rackWireReply(wire, owner, kind: kind)
+    let settled = try await waitForRackWire(wire, owner) {
+        $0.focusMode == .nativeAF && !$0.focusModeSwitchPending
+    }
+    #expect(settled.canNativeAutofocus)
+    #expect(!camera.log.contains("prepare"))
+    #expect(!camera.log.contains("drive"))
+}
+
+@Test func rackWireCannotEnableNativeAutofocusBeforeAHeldManualDriveAcknowledgesCompletion()
+    async throws
+{
+    let camera = RackWireCamera()
+    let held = HeldModeDrive()
+    let base = camera.driver
+    let driver = NikonFocusRackAccess(
+        isCurrent: base.isCurrent, prepareRun: base.prepareRun, requestStop: base.requestStop,
+        driveChunk: { _, _, _ in await held.drive() }, refreshSafety: base.refreshSafety)
+    let wire = FocusRackWire()
+    let owner = try #require(
+        wire.create(
+            driver: driver,
+            clock: .init(now: { 100 }, sleep: { _ in try await Task.sleep(for: .milliseconds(5)) }))
+    )
+    defer {
+        held.release()
+        wire.close(owner: owner)
+    }
+    var observation: [String: Any] = [
+        "sessionID": "held-owner", "connected": true, "foregroundOwner": true,
+        "recording": false, "frameSequence": 1, "frameAgeSeconds": 0,
+        "externalFocusRevision": 0, "externalFocusIdle": true,
+        "focus": ["trackingAFActive": false, "subjectDetectionActive": false, "boxCount": 0],
+    ]
+    for sequence in 1...20 {
+        observation["frameSequence"] = sequence
+        _ = try rackWireReply(
+            wire, owner, kind: "observe",
+            fields: [
+                "observation": observation, "movieFocusMode": "AF-F", "photography": false,
+            ])
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    _ = try await waitForRackWire(wire, owner) { $0.state?.capabilities.canNudge == true }
+    let selected = try rackWireReply(
+        wire, owner, kind: "selectFocusMode", fields: ["focusMode": "nativeAF"])
+    _ = try rackWireReply(
+        wire, owner, kind: "observe",
+        fields: [
+            "observation": observation, "movieFocusMode": "AF-F", "photography": false,
+        ])
+    #expect(selected.focusMode != .timedRack || selected.state?.capabilities.canAutofocus != true)
+    if selected.focusModeSwitchPending {
+        #expect(!selected.canNativeAutofocus)
+        #expect(!selected.canChangeFocusMode)
+    }
+    _ = try await waitForRackWire(wire, owner) {
+        $0.focusMode == .nativeAF && !$0.focusModeSwitchPending
+    }
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "timedRack"])
+    _ = try await waitForRackWire(wire, owner) {
+        $0.focusMode == .timedRack && !$0.focusModeSwitchPending
+    }
+    for sequence in 21...30 {
+        observation["frameSequence"] = sequence
+        _ = try rackWireReply(
+            wire, owner, kind: "observe",
+            fields: ["observation": observation, "movieFocusMode": "AF-F", "photography": false])
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    _ = try await waitForRackWire(wire, owner) { $0.state?.capabilities.canNudge == true }
+    _ = try rackWireReply(wire, owner, kind: "nudge", fields: ["steps": 1])
+    for _ in 0..<200 where !held.hasStarted { try await Task.sleep(for: .milliseconds(5)) }
+    try #require(held.hasStarted)
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "nativeAF"])
+    let refused = try await waitForRackWire(wire, owner) { $0.error != nil }
+    #expect(refused.focusMode == .timedRack)
+    #expect(!refused.canNativeAutofocus)
+    #expect(!refused.canChangeFocusMode)
+    held.release()
+    _ = try await waitForRackWire(wire, owner) { $0.state?.busy == false }
+    _ = try rackWireReply(wire, owner, kind: "selectFocusMode", fields: ["focusMode": "nativeAF"])
+    _ = try await waitForRackWire(wire, owner) {
+        $0.focusMode == .nativeAF && $0.canNativeAutofocus
+    }
 }

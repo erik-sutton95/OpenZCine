@@ -58,6 +58,31 @@ class FocusRackPanelComposeTest {
 
     @Before fun landscapeFirst() { compose.settleLandscape() }
 
+    @Test fun nativeModeUsesExistingTapGuidanceAndHidesAllTimedControls() {
+        val state = mutableStateOf(ready().copy(canChangeFocusMode = true))
+        val actions = Actions()
+        mount(state, actions)
+        compose.onNodeWithTag("focusRack.mode.timedRack").assertIsDisplayed().insideFrame()
+        compose.saveLandscapeEvidence("focus-modes-timed-rack-landscape")
+        compose.onNodeWithTag("focusRack.mode.nativeAF").performClick()
+        compose.onNodeWithTag("focusRack.nativeAF").assertIsDisplayed().insideFrame()
+        for (tag in listOf("positions", "nudges", "duration", "calibrate", "primary", "pull.aToB", "pull.bToA")) {
+            compose.onNodeWithTag("focusRack.$tag").assertDoesNotExist()
+        }
+        compose.onNodeWithText("Use movie AF-F before tapping.")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.nativeAF.settings").performScrollTo().performClick()
+        assertEquals(1, actions.focusSettings)
+        assertEquals(0, actions.primary)
+        assertEquals(0, actions.calibrations)
+        assertTrue(actions.nudges.isEmpty())
+        compose.onNodeWithText("Tap a subject in the live view. The camera controls the transition.").performScrollTo()
+        compose.saveLandscapeEvidence("focus-modes-native-af-landscape")
+        compose.runOnIdle { state.value = state.value.copy(canChangeFocusMode = false, focusModeSwitchPending = true) }
+        compose.onNodeWithTag("focusRack.mode.timedRack").assertIsNotEnabled()
+        compose.onNodeWithTag("focusRack.close").assertIsNotEnabled()
+    }
+
     @Test fun groupedMarksAndFourButtonsForwardSetupWithoutAWheel() {
         val state = mutableStateOf(ready().copy(marks = emptyList(), canCaptureB = false))
         val actions = Actions()
@@ -588,7 +613,8 @@ class FocusRackPanelComposeTest {
                             onLoad = { actions.loaded += it }, onDelete = { actions.deleted += it },
                             onFocusSettings = { actions.focusSettings++ }, setupEnabled = setupEnabled(), onClose = { actions.closes++ },
                             onGoTo = { actions.goes += it }, onRun = { actions.runs += it },
-                            onCalibrate = { actions.calibrations++ }, onMovePanel = { actions.moves += it })
+                            onCalibrate = { actions.calibrations++ }, onMovePanel = { actions.moves += it },
+                            onFocusMode = { mode -> state.value = state.value.copy(focusMode = mode) })
                     }
                 }
             }

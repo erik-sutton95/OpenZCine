@@ -1745,7 +1745,9 @@ internal fun MonitorScreen(
                     ?.takeIf(String::isNotBlank) ?: org.json.JSONObject.NULL)
                 .put("transport", activeTransportIsUsb?.let { if (it) "usb" else "ptpIP" } ?: org.json.JSONObject.NULL)
                 .put("connected", connected)
-                .put("foregroundOwner", focusRackVisible && rackForeground)
+                .put("foregroundOwner", focusRackVisible && rackForeground && rackState.focusMode == "timedRack")
+                .put("movieFocusMode", cameraProperties.focusMode ?: org.json.JSONObject.NULL)
+                .put("photography", isPhotographyMode)
                 .put("recording", session.recordingState.value in setOf(CameraRecordingState.RECORDING, CameraRecordingState.STARTING))
                 .put("frameSequence", if (frameAt == null) org.json.JSONObject.NULL else liveFeedPresentation.acceptedFrameSequence)
                 .put("frameAgeSeconds", if (frameAt == null) 999.0 else now - frameAt)
@@ -1798,12 +1800,17 @@ internal fun MonitorScreen(
                 onDelete = focusRack::deleteTemplate,
                 onFocusSettings = { activeMonitorPickerKind = MonitorPickerKind.FOCUS; activeCommandControl = null },
                 setupEnabled = !locked, onClose = {
-                    focusRack.closePanel()
-                    focusRackVisible = false
+                    if (focusRack.closePanel()) focusRackVisible = false
                 },
                 onGoTo = { id -> focusRack.observe(rackObservation()); focusRack.goTo(id) },
                 onRun = { direction -> focusRack.observe(rackObservation()); focusRack.run(direction) },
                 onCalibrate = { focusRack.observe(rackObservation()); focusRack.calibrate() },
+                onFocusMode = { mode ->
+                    if (focusMoveRequestsInFlight == 0 && !focusResetPending && rackFocusIdle()) {
+                        focusRack.observe(rackObservation())
+                        focusRack.selectFocusMode(mode)
+                    }
+                },
                 onMovePanel = { delta -> if (!locked) {
                     val placement = com.opencapture.monitorui.MonitorFocusAccessoryLayout.resolve(
                         fieldLayout, safeLeading, safeTrailing, safeBottom,
@@ -1915,8 +1922,10 @@ internal fun MonitorScreen(
                     if (!focusGestureContext.canSetFocusPoint) {
                         return@handleFocusFeedAction
                     }
-                    if (focusRackVisible && !rackState.canAutofocus) {
-                        Toast.makeText(appContext, "Use the rack dial, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
+                    if (focusRackVisible && !(focusRack.state.value.let { if (it.focusMode == "nativeAF") it.canNativeAutofocus else it.canAutofocus })) {
+                        Toast.makeText(appContext, if (rackState.focusMode == "nativeAF") {
+                            if (rackState.nativeAFConfigured) "Wait for focus movement to finish." else "Set movie focus mode to AF-F before tapping."
+                        } else "Use the rack dial, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
                         return@handleFocusFeedAction
                     }
                     notifyRackExternalFocus()
@@ -1964,11 +1973,13 @@ internal fun MonitorScreen(
                 mounted(MonitorDisplaySection.FOCUS_BOX) &&
                 sessionState is CameraSessionState.Connected &&
                 !mediaOwnsCommandChannel &&
-                !otherCameraCommandPending && (!focusRackVisible || rackState.canAutofocus)
+                !otherCameraCommandPending && (!focusRackVisible || (if (rackState.focusMode == "nativeAF") rackState.canNativeAutofocus else rackState.canAutofocus))
         val requestFocusReset: () -> Unit = resetFocusPoint@{
             if (focusCommandPending) return@resetFocusPoint
-            if (focusRackVisible && !rackState.canAutofocus) {
-                Toast.makeText(appContext, "Use Near/Far, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
+            if (focusRackVisible && !(focusRack.state.value.let { if (it.focusMode == "nativeAF") it.canNativeAutofocus else it.canAutofocus })) {
+                Toast.makeText(appContext, if (rackState.focusMode == "nativeAF") {
+                            if (rackState.nativeAFConfigured) "Wait for focus movement to finish." else "Set movie focus mode to AF-F before tapping."
+                        } else "Use Near/Far, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
                 return@resetFocusPoint
             }
             notifyRackExternalFocus()

@@ -40,6 +40,9 @@ import androidx.compose.ui.unit.sp
 
 /** Display-only projection of the shared Swift controller. No position or timing policy lives here. */
 internal data class FocusRackViewState(
+    val focusMode: String = "timedRack", val canChangeFocusMode: Boolean = false,
+    val focusModeSwitchPending: Boolean = false,
+    val nativeAFConfigured: Boolean = false, val canNativeAutofocus: Boolean = false,
     val phase: String = "idle", val message: String = "Connect a camera to set focus marks.",
     val recovery: String? = null, val error: String? = null, val admissionMessage: String? = null,
     val position: Int? = null, val marks: List<FocusRackMarkViewState> = emptyList(),
@@ -81,7 +84,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     onDelete: (FocusRackTimingViewState) -> Unit, onFocusSettings: () -> Unit,
     setupEnabled: Boolean = true, onClose: () -> Unit = {},
     onGoTo: (String) -> Unit = {}, onRun: (String) -> Unit = {}, onMovePanel: (Offset) -> Unit = {}, onResetPanel: () -> Unit = {},
-    onCalibrate: () -> Unit = {},
+    onCalibrate: () -> Unit = {}, onFocusMode: (String) -> Unit = {},
 ) {
     var optionsExpanded by remember { mutableStateOf(false) }
     val nudging = state.nudgeProgress != null
@@ -128,7 +131,15 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                         CustomAccessibilityAction("Move panel down") { onMovePanel(Offset(0f, 80f)); true },
                         CustomAccessibilityAction("Reset panel position") { onResetPanel(); true })
                 }, verticalArrangement = Arrangement.Center) {
-                Text(if (compact) when (state.phase) {
+                if (!compact) Row(Modifier.fillMaxWidth().testTag("focusRack.modes"), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for ((mode, title) in listOf("nativeAF" to "Native AF", "timedRack" to "Timed Rack")) {
+                        FilterChip(selected = state.focusMode == mode, onClick = { onFocusMode(mode) },
+                            enabled = setupEnabled && state.canChangeFocusMode,
+                            label = { Text(title, fontSize = 10.sp, maxLines = 1) },
+                            modifier = Modifier.weight(1f).testTag("focusRack.mode.$mode"))
+                    }
+                }
+                else Text(if (state.focusMode == "nativeAF") "Native AF" else when (state.phase) {
                     "countdown" -> "Starts in ${"%.1f".format(state.remainingDelay)} s"
                     "pausing" -> "Pausing…"
                     "paused" -> "Paused"
@@ -140,10 +151,8 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                     "refused" -> "Camera busy"
                     "failed" -> "Move stopped"
                     else -> "Focus Rack"
-                } else if (state.admissionMessage != null && state.canEdit) "Move needs attention" else "⠿ Focus Rack",
+                },
                     color = Color.White, fontSize = 12.sp)
-                if (!compact && state.admissionMessage == null) Text(state.playbackInstruction ?: "Drag to move",
-                    color = Color.LightGray, fontSize = 10.sp)
             }
             TextButton(onClick = { onExpanded(!expanded) }, enabled = setupEnabled && !nudging,
                 modifier = Modifier.width(48.dp).heightIn(min = 48.dp).testTag("focusRack.expand")
@@ -151,12 +160,24 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 contentPadding = PaddingValues(0.dp)) {
                 Text(if (expanded && !compact) "⌄" else "⌃", fontSize = 22.sp)
             }
-            TextButton(onClick = { confirmClose = true }, enabled = !state.active && setupEnabled,
+            TextButton(onClick = { confirmClose = true }, enabled = !state.active && !state.focusModeSwitchPending && setupEnabled,
                 modifier = Modifier.width(48.dp).heightIn(min = 48.dp).testTag("focusRack.close")
                     .semantics { contentDescription = "Close Focus Rack" },
                 contentPadding = PaddingValues(0.dp)) { Text("×", fontSize = 24.sp) }
         }
-        if (!compact) {
+        if (state.focusMode == "nativeAF") {
+            if (!compact) Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("focusRack.nativeAF"),
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Tap a subject in the live view. The camera controls the transition.", color = Color.LightGray, fontSize = 13.sp)
+                if (!state.nativeAFConfigured) Text("Use movie AF-F before tapping.",
+                    color = Color(0xFFFFB869), fontSize = 12.sp)
+                Text("AF-area: Auto-area AF. Subject detection: Off.", color = Color.LightGray, fontSize = 12.sp)
+                Text("Set movie AF speed on the camera.", color = Color.LightGray, fontSize = 12.sp)
+                state.error?.let { Text(it, color = Color(0xFFFFB869), fontSize = 12.sp) }
+                TextButton(onClick = onFocusSettings, enabled = setupEnabled,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.nativeAF.settings")) { Text("Focus settings") }
+            }
+        } else if (!compact) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("focusRack.marks"),
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     if ((state.position != null && !state.active) || nudging) {
@@ -278,6 +299,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 progress = { state.completed.toFloat() / state.total }, modifier = Modifier.fillMaxWidth()
                     .testTag("focusRack.progress"))
         }
+        if (state.focusMode == "timedRack") {
         val showsStop = state.canStop || state.phase == "stopping"
         if (showsStop && !compact && !nudging) Text("Stop cancels focus movement only.", color = Color.LightGray,
             fontSize = 11.sp, modifier = Modifier.testTag("focusRack.stopHint"))
@@ -316,6 +338,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 Text(if (state.phase == "stopping") "Stopping…" else "Stop", color = Color(0xFFFFAA9B), fontSize = 12.sp)
             }
         }
+    }
     }
     LaunchedEffect(showAdmission, compact, state.admissionMessage) {
         if (showAdmission && !compact) {

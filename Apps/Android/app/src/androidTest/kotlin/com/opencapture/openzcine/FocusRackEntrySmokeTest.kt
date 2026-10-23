@@ -44,6 +44,30 @@ class FocusRackEntrySmokeTest {
 
     @After fun restoreIdleWait() { Configurator.getInstance().setWaitForIdleTimeout(idleTimeout) }
 
+    @Test fun landscapeFocusModesUseNativeGuidanceAndReturnToTimedRackWithoutMovement() {
+        withDemoRack(portrait = false) {
+            val native = device.wait(Until.findObject(By.text("Native AF")), 5_000)
+                ?: throw AssertionError("No Native AF mode selector")
+            native.click()
+            val guidance = device.wait(Until.findObject(By.textStartsWith("Tap a subject in the live view")), 5_000)
+                ?: throw AssertionError("Native AF guidance did not appear")
+            device.waitForIdle(1_000)
+            refreshAccessibilityCache()
+            assertInsideDisplay(guidance.visibleBounds)
+            saveDisplay("focus-modes-native-af-monitor-landscape")
+            assertTrue("Native AF must not show timed transport", device.wait(Until.gone(By.text("Set A and B")), 5_000))
+            assertFalse("Native AF must not show a duration editor", device.hasObject(By.text("Duration")))
+            saveDisplay("focus-modes-native-af-monitor-landscape")
+            device.wait(Until.findObject(By.text("Timed Rack")), 5_000)?.click()
+                ?: throw AssertionError("No Timed Rack mode selector")
+            refreshAccessibilityCache()
+            assertTrue("Native guidance did not close", device.wait(Until.gone(By.textStartsWith("Tap a subject in the live view")), 5_000))
+            assertTrue("Timed transport did not return", device.wait(Until.hasObject(By.text("Set A and B")), 5_000))
+            SystemClock.sleep(200)
+            saveDisplay("focus-modes-timed-rack-monitor-landscape")
+        }
+    }
+
     @Test fun landscapeEntryKeepsSavedWaveformCentreAndOpensSharedTimingEditor() {
         val preferences = context.getSharedPreferences("assist", Context.MODE_PRIVATE)
         val original = preferences.getString("monitorAssist.v1", null)

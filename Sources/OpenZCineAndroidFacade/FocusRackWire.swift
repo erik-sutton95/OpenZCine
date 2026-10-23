@@ -75,6 +75,9 @@ public final class FocusRackWire: @unchecked Sendable {
         let template: FocusRackTemplate?
         let name: String?
         let calibrationJSON: String?
+        let focusMode: FocusControlMode?
+        let movieFocusMode: String?
+        let photography: Bool?
     }
 
     private final class Authority: @unchecked Sendable {
@@ -107,6 +110,11 @@ public final class FocusRackWire: @unchecked Sendable {
         private var observer: Task<Void, Never>?
         private var closed = false
         private var wasRecording = false
+        private var focusMode = FocusControlMode.timedRack
+        private var movieFocusMode: String?
+        private var photography = false
+        private var externalFocusIdle = true
+        private var modeSwitchPending = false
 
         init(controller: FocusRackController, authority: Authority) {
             self.controller = controller
@@ -146,7 +154,12 @@ public final class FocusRackWire: @unchecked Sendable {
             lock.withLock {
                 guard !closed else { return }
                 if let observation = request.observation {
-                    let admitted = observation.connected && observation.foregroundOwner
+                    externalFocusIdle = observation.externalFocusIdle
+                    movieFocusMode = observation.connected ? request.movieFocusMode : nil
+                    photography = request.photography ?? false
+                    let admitted =
+                        observation.connected && observation.foregroundOwner
+                        && focusMode == .timedRack && !modeSwitchPending
                     let wasAdmitted = authority.set(admitted)
                     if wasRecording && !observation.recording {
                         authority.cancelPending()
@@ -156,6 +169,21 @@ public final class FocusRackWire: @unchecked Sendable {
                     if wasAdmitted && !admitted {
                         controller.suspend()
                     }
+                }
+                if request.kind == "selectFocusMode" {
+                    guard let selected = request.focusMode else { return }
+                    if selected == focusMode { return }
+                    guard !modeSwitchPending,
+                        FocusControlModePolicy.canChange(
+                            rack: state, externalFocusIdle: externalFocusIdle)
+                    else {
+                        error = FocusRackError.movementPending.localizedDescription
+                        return
+                    }
+                    modeSwitchPending = true
+                    error = nil
+                    authority.cancelPending()
+                    authority.set(false)
                 }
                 if request.kind == "stop" || request.kind == "externalFocus" {
                     authority.cancelPending()
@@ -172,7 +200,8 @@ public final class FocusRackWire: @unchecked Sendable {
                 tail = Task { [weak self, controller] in
                     await previous?.value
                     guard let self, !self.lock.withLock({ self.closed }),
-                        generation == self.authority.generation
+                        request.kind == "selectFocusMode"
+                            || generation == self.authority.generation
                     else { return }
                     do {
                         try await self.apply(request, receivedAt: receivedAt, ticket: ticket)
@@ -185,6 +214,7 @@ public final class FocusRackWire: @unchecked Sendable {
                         }
                     } catch {
                         self.lock.withLock {
+                            if request.kind == "selectFocusMode" { self.modeSwitchPending = false }
                             if !self.closed && generation == self.authority.generation {
                                 self.error = error.localizedDescription
                             }
@@ -201,6 +231,59 @@ public final class FocusRackWire: @unchecked Sendable {
             if observation != nil {
                 observation?.frameAgeSeconds += max(
                     0, ProcessInfo.processInfo.systemUptime - receivedAt)
+            }
+            if request.kind == "selectFocusMode" {
+                guard let selected = request.focusMode else {
+                    throw FocusRackError.invalidConfiguration
+                }
+                if selected == lock.withLock({ focusMode }) { return }
+                let current = await controller.snapshot()
+                lock.withLock { state = current }
+                guard
+                    FocusControlModePolicy.canChange(
+                        rack: current, externalFocusIdle: lock.withLock { externalFocusIdle })
+                else { throw FocusRackError.movementPending }
+                lock.withLock {
+                    focusMode = selected
+                    modeSwitchPending = true
+                    error = nil
+                    authority.cancelPending()
+                    authority.set(false)
+                }
+                controller.suspend()
+                if var admitted = observation {
+                    admitted.foregroundOwner = false
+                    await controller.observe(admitted)
+                } else {
+                    // A synthetic inactive observation applies the control fence without restoring authority.
+                    await controller.observe(
+                        .init(
+                            sessionID: "unavailable", connected: false, foregroundOwner: false,
+                            recording: false, frameSequence: nil, focus: nil))
+                }
+                // Subscribe after suspension was applied. Cached idle state cannot acknowledge cleanup.
+                for await fresh in await controller.states() {
+                    if (!fresh.busy && !fresh.capabilities.canStop)
+                        || fresh.phase == .stopUnconfirmed
+                    {
+                        lock.withLock {
+                            state = fresh
+                            modeSwitchPending = false
+                        }
+                        break
+                    }
+                }
+                return
+            }
+            let timedIntent = ![
+                "poll", "observe", "diagnostics", "loadCalibration", "stop", "interrupt",
+                "closePanel", "externalFocus",
+            ].contains(request.kind)
+            if timedIntent && lock.withLock({ focusMode != .timedRack }) {
+                throw FocusRackError.referenceUnavailable
+            }
+            if observation != nil && lock.withLock({ focusMode == .nativeAF }) {
+                observation?.foregroundOwner = false
             }
             let intent: FocusRackIntent
             switch request.kind {
@@ -283,14 +366,33 @@ public final class FocusRackWire: @unchecked Sendable {
                     let templatesJSON: String
                     let traceJSON: String?
                     let calibrationJSON: String?
+                    let focusMode: FocusControlMode
+                    let focusModeSwitchPending: Bool
+                    let canChangeFocusMode: Bool
+                    let nativeAFConfigured: Bool
+                    let canNativeAutofocus: Bool
                 }
+                var projectedState = state
+                if modeSwitchPending { projectedState?.capabilities.canAutofocus = false }
                 guard let saved = try? FocusRackTemplateCodec.encode(templates),
                     let json = String(data: saved, encoding: .utf8),
                     let data = try? JSONEncoder().encode(
                         Reply(
-                            state: state, error: error,
+                            state: projectedState, error: error,
                             templates: templates, templatesJSON: json, traceJSON: traceJSON,
-                            calibrationJSON: calibrationJSON))
+                            calibrationJSON: calibrationJSON, focusMode: focusMode,
+                            focusModeSwitchPending: modeSwitchPending,
+                            canChangeFocusMode: !modeSwitchPending
+                                && FocusControlModePolicy.canChange(
+                                    rack: state, externalFocusIdle: externalFocusIdle),
+                            nativeAFConfigured: FocusControlModePolicy.nativeAFConfigured(
+                                movieFocusMode: movieFocusMode, photography: photography),
+                            canNativeAutofocus: !modeSwitchPending
+                                && FocusControlModePolicy.allowsNativeAutofocus(
+                                    mode: focusMode, rack: state)
+                                && FocusControlModePolicy.nativeAFConfigured(
+                                    movieFocusMode: movieFocusMode, photography: photography)
+                        ))
                 else { return nil }
                 traceJSON = nil
                 return String(data: data, encoding: .utf8)

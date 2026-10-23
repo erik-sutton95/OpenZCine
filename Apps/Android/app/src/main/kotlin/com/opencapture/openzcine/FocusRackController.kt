@@ -54,6 +54,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     private var pendingCapture: Triple<String, Long, Bitmap>? = null
     private var captures: Map<String, Long> = emptyMap()
     private var stopPending = false
+    private var pendingFocusMode: String? = null
 
     /** Allocates the inert native owner only when the operator first opens Focus Rack. */
     fun activate() {
@@ -82,6 +83,12 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         send("capture", JSONObject().put("markID", id).put("expectedFrameSequence", candidate.first))
     }
     fun nudge(near: Boolean, steps: Int) = send("nudge", JSONObject().put("towardNear", near).put("steps", steps))
+    fun selectFocusMode(mode: String) {
+        pendingFocusMode = mode
+        mutableState.value = state.value.copy(focusModeSwitchPending = true,
+            canChangeFocusMode = false, canAutofocus = false, canNativeAutofocus = false)
+        send("selectFocusMode", JSONObject().put("focusMode", mode))
+    }
     fun primary() = send("primary")
     fun run(direction: String) = send("run", JSONObject().put("direction", direction))
     fun goTo(mark: String) = send("goTo", JSONObject().put("markID", mark))
@@ -97,12 +104,14 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         observation?.put("foregroundOwner", false)
         send("interrupt")
     }
-    fun closePanel() {
+    fun closePanel(): Boolean {
+        if (state.value.focusModeSwitchPending) return false
         observation?.put("foregroundOwner", false)
         pendingCapture = null
         send("closePanel")
         poller?.cancel()
         mutableThumbnails.value = emptyMap()
+        return true
     }
     fun timing(edit: FocusRackTimingEdit) {
         val update = JSONObject()
@@ -139,12 +148,17 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         val handle = owner ?: return
         val wasActive = state.value.active
         request.put("kind", kind)
-        observation?.let { request.put("observation", it) }
+        observation?.let {
+            request.put("observation", it)
+            request.put("movieFocusMode", it.opt("movieFocusMode") ?: JSONObject.NULL)
+            request.put("photography", it.optBoolean("photography", false))
+        }
         val reply = runCatching { wire.step(handle, request.toString())?.let(::JSONObject) }.getOrNull()
         if (reply == null) {
             // Cancellation remains a synchronous JNI intent even if state decoding failed.
             runCatching { wire.step(handle, "{\"kind\":\"stop\"}") }
             mutableState.value = state.value.copy(error = "Focus Rack is unavailable; stop requested.", primaryEnabled = false,
+                canChangeFocusMode = false, canAutofocus = false, canNativeAutofocus = false,
                 pullAToB = state.value.pullAToB?.copy(enabled = false), pullBToA = state.value.pullBToA?.copy(enabled = false),
                 calibration = state.value.calibration?.copy(enabled = false))
             return
@@ -175,7 +189,17 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             captures = validCaptures
             val sharedBusy = snapshot.getBoolean("busy")
             if (!sharedBusy) stopPending = false
-            mutableState.value = FocusRackViewState(phase = if (stopPending) "stopping" else snapshot.getString("phase"),
+            val sharedMode = reply.optString("focusMode", "timedRack")
+            val sharedModePending = reply.optBoolean("focusModeSwitchPending")
+            if (!sharedModePending && (sharedMode == pendingFocusMode || reply.nullableString("error") != null)) pendingFocusMode = null
+            val modePending = sharedModePending || pendingFocusMode != null
+            mutableState.value = FocusRackViewState(
+                focusMode = sharedMode,
+                focusModeSwitchPending = modePending,
+                canChangeFocusMode = reply.optBoolean("canChangeFocusMode") && !stopPending && !modePending,
+                nativeAFConfigured = reply.optBoolean("nativeAFConfigured"),
+                canNativeAutofocus = reply.optBoolean("canNativeAutofocus") && !stopPending && !modePending,
+                phase = if (stopPending) "stopping" else snapshot.getString("phase"),
                 message = snapshot.getString("message"), recovery = snapshot.nullableString("recoveryInstruction"),
                 admissionMessage = snapshot.nullableString("admissionMessage"),
                 error = reply.nullableString("error") ?: snapshot.nullableString("admissionMessage"),
@@ -193,7 +217,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 canGoToA = caps.optBoolean("canGoToA"), canGoToB = caps.optBoolean("canGoToB"), primaryEnabled = primary.getBoolean("enabled") && !stopPending,
                 canCaptureA = caps.getBoolean("canCaptureA"), canCaptureB = caps.getBoolean("canCaptureB"),
                 canNudge = caps.getBoolean("canNudge"), canEdit = caps.getBoolean("canEditTiming"),
-                canReset = caps.getBoolean("canReset"), canAutofocus = caps.optBoolean("canAutofocus"), canPause = caps.getBoolean("canPause"), canStop = caps.getBoolean("canStop"), active = snapshot.getBoolean("busy"),
+                canReset = caps.getBoolean("canReset"), canAutofocus = caps.optBoolean("canAutofocus") && !modePending, canPause = caps.getBoolean("canPause"), canStop = caps.getBoolean("canStop"), active = snapshot.getBoolean("busy"),
                 completed = snapshot.getInt("completedSteps"), total = snapshot.getInt("totalSteps"),
                 minimumDuration = if (snapshot.isNull("minimumDuration")) null else snapshot.getDouble("minimumDuration"),
                 remainingDelay = snapshot.optDouble("remainingDelay", 0.0),
