@@ -399,11 +399,273 @@ struct FocusRackAdapterTests {
         #expect(adapter.templates == saved)
         #expect(adapter.notice != nil)
     }
+
+    @Test("Native Set A captures the same camera coordinates as a picture tap")
+    func nativeTargetUsesPictureCoordinatePath() throws {
+        let (model, rack) = nativeFixture()
+        let timedMarks = rack.state?.program.marks
+        rack.armNativeTarget(.a)
+        #expect(!rack.isExpanded)
+        model.setFocusPoint(at: CGPoint(x: 250, y: 100), feedSize: CGSize(width: 1000, height: 500))
+        let point = try #require(rack.nativeRack.target(for: .a))
+        #expect(point.x == 0.25)
+        #expect(point.y == 0.2)
+        #expect(rack.isExpanded)
+        #expect(rack.nativeRack.lastSelectedMark == .a)
+        #expect(rack.nativeAFInstruction == "Target A selected.")
+        #expect(rack.state?.program.marks == timedMarks)
+        #expect(model.liveViewFocus?.boxes.first?.centerX == 250)
+        #expect(model.liveViewFocus?.boxes.first?.centerY == 113)
+    }
+
+    @Test("Native delay cancellation sends no destination and leaves recording unchanged")
+    func nativeDelayCancellationIsCameraFree() async throws {
+        let (model, rack) = nativeFixture()
+        for (mark, x) in [(NativeAFMark.a, 0.2), (.b, 0.8)] {
+            rack.armNativeTarget(mark)
+            #expect(rack.captureNativeTarget(try NativeAFPoint(x: x, y: 0.5)))
+        }
+        model.isRecording = true
+        rack.setNativeDelay("0.2")
+        rack.selectNativeTarget(.a, delayed: true)
+        #expect(rack.nativeRack.pendingRequest?.mark == .a)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        rack.cancelNativeTarget()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(rack.nativeRack.pendingRequest == nil)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        #expect(model.isRecording)
+        rack.selectNativeTarget(.a, delayed: false)
+        #expect(rack.nativeRack.lastSelectedMark == .a)
+        #expect(model.isRecording)
+        rack.selectNativeTarget(.b, delayed: true)
+        model.setFocusPoint(at: .init(x: 500, y: 250), feedSize: .init(width: 1000, height: 500))
+        #expect(rack.nativeRack.pendingRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        #expect(model.liveViewFocus?.boxes.first?.centerX == 500)
+        rack.selectNativeTarget(.b, delayed: true)
+        model.interfaceLocked = true
+        model.interfaceLocked = false
+        #expect(rack.nativeRack.pendingRequest == nil)
+        rack.selectNativeTarget(.a, delayed: true)
+        model.focusPointLocked = true
+        model.focusPointLocked = false
+        #expect(rack.nativeRack.pendingRequest == nil)
+        rack.selectNativeTarget(.b, delayed: true)
+        rack.manualAFChange(.area)
+        #expect(rack.nativeRack.pendingRequest == nil)
+    }
+
+    @Test("Native readiness and actual picture tap share interface and focus lock blockers")
+    func nativeLocksExplainTheRejectedTap() {
+        let (model, rack) = nativeFixture()
+        model.interfaceLocked = true
+        #expect(!rack.allowsAutofocus)
+        #expect(rack.nativeAFInstruction.contains("Unlock the interface"))
+        rack.armNativeTarget(.a)
+        #expect(rack.nativeRack.selectingMark == nil)
+        model.interfaceLocked = false
+        model.focusPointLocked = true
+        #expect(!rack.allowsAutofocus)
+        #expect(rack.nativeAFInstruction.contains("Unlock the focus point"))
+        model.focusPointLocked = false
+        #expect(rack.allowsAutofocus)
+        rack.armNativeTarget(.a)
+        model.focusPointLocked = true
+        model.setFocusPoint(at: .init(x: 10, y: 10), feedSize: .init(width: 100, height: 100))
+        #expect(rack.nativeRack.target(for: .a) == nil)
+    }
+
+    @Test("An unfocused Native AF scene remains retryable and modes retain separate marks")
+    func nativeRetryAndMarksRemainIndependent() throws {
+        let (model, rack) = nativeFixture()
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        #expect(rack.allowsAutofocus)
+        rack.armNativeTarget(.a)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.3, y: 0.5)))
+        let saved = rack.nativeRack.target(for: .a)
+        rack.selectMode(.timedRack)
+        #expect(rack.state?.program.marks.count == 2)
+        rack.selectMode(.nativeAF)
+        #expect(rack.nativeRack.target(for: .a) == saved)
+        rack.selectNativeTarget(.a, delayed: false)
+        #expect(rack.nativeRack.lastSelectedMark == .a)
+        rack.closePanel()
+        #expect(rack.nativeRack.target(for: .a) == saved)
+        rack.open()
+        #expect(rack.nativeRack.target(for: .a) == saved)
+        rack.setNativeDelay("1")
+        rack.selectNativeTarget(.a, delayed: true)
+        let beforeReconnect = try #require(rack.nativeRack.pendingRequest)
+        rack.sessionChanged()
+        #expect(rack.nativeRack.target(for: .a) == saved)
+        #expect(rack.nativeRack.pendingRequest == nil)
+        rack.selectNativeTarget(.a, delayed: true)
+        #expect(try #require(rack.nativeRack.pendingRequest).id > beforeReconnect.id)
+        rack.cancelNativeTarget()
+    }
+
+    @Test("Native diagnostics stay bounded and contain no camera identity or images")
+    func nativeDiagnosticsAreBounded() throws {
+        let rack = FocusRackModel(fixture: .initial)
+        rack.selectMode(.nativeAF)
+        for _ in 0..<140 { rack.armNativeTarget(.a) }
+        let data = try rack.debugNativeAFTraceData()
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let events = try #require(json["events"] as? [[String: Any]])
+        #expect(events.count == 128)
+        #expect(json["omittedEvents"] as? Int == 12)
+        let encoded = String(decoding: data, as: UTF8.self)
+        #expect(!encoded.contains("serialNumber"))
+        #expect(!encoded.contains("image"))
+        #expect(data.count < 100_000)
+        rack.cancelNativeTarget()
+    }
+
+    private func nativeFixture() -> (NativeAppModel, FocusRackModel) {
+        let model = NativeAppModel()
+        model.isDemoSession = true
+        model.applyBootstrapObservation(.property(.liveViewSelector, Data([1])))
+        model.applyBootstrapObservation(.property(.movieFocusMode, Data([2])))
+        var fixture = FocusRackState.initial
+        fixture.program.marks = [
+            .init(id: "A", stepPosition: 0), .init(id: "B", stepPosition: 100),
+        ]
+        let rack = FocusRackModel(fixture: fixture, model: model)
+        model.focusRack = rack
+        rack.selectMode(.nativeAF)
+        return (model, rack)
+    }
 }
 
 /// SIMULATED Nikon settings through the actual root safe point and property write/readback queue.
 @MainActor @Suite("Automatic focus AF settings")
 struct FocusAFSettingsAdapterTests {
+    @Test("Native target dispatch rechecks fresh evidence after waiting for the safe point")
+    func nativeTargetRejectsAStaleQueuedPicture() async throws {
+        let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack, result: .notFocused)
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        rack.armNativeTarget(.a)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.2, y: 0.5)))
+        try await Task.sleep(for: .milliseconds(650))
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await wire.targetCommands.isEmpty)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        rack.selectNativeTarget(.a, delayed: false)
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await wire.targetCommands.count == 1)
+        #expect(rack.nativeRack.lastSelectedMark == .a)
+    }
+
+    @Test("A held Native response releases ownership without reclaiming a superseded target")
+    func retiredNativeAcknowledgmentIsNotCurrentSelection() async throws {
+        let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack, result: .notFocused)
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        rack.armNativeTarget(.a)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.2, y: 0.5)))
+        await wire.holdNextTargetResponse()
+        let service = Task { await model.debugServiceNativeFocusTarget() }
+        for _ in 0..<1_000 {
+            if await wire.targetHeld { break }
+            await Task.yield()
+        }
+        #expect(await wire.targetHeld)
+        model.interfaceLocked = true
+        await wire.releaseTargetResponse()
+        #expect(await service.value)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: rack.debugNativeAFTraceData()) as? [String: Any])
+        let events = try #require(json["events"] as? [[String: Any]])
+        #expect(events.last?["event"] as? String == "completionRetired")
+    }
+
+    @Test("Native saved targets use the real safe-point slot and report command acknowledgment")
+    func nativeTargetAcknowledgesSerializedCommand() async throws {
+        let (model, native, wire, rack) = try await fixture(values: .target(.nativeAF))
+        defer {
+            model.debugAdoptEstablishedMediaSession(nil)
+            native.close()
+        }
+        rack.selectMode(.nativeAF)
+        try await drain(model, rack: rack, result: .notFocused)
+        model.debugSeedFocusAF(recording: false, result: .notFocused)
+        #expect(rack.nativeAFBlocker == nil)
+        rack.armNativeTarget(.a)
+        model.setFocusPoint(at: .init(x: 250, y: 100), feedSize: .init(width: 1000, height: 500))
+        #expect(rack.nativeRack.dispatchedRequest?.mark == .a)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        #expect(!rack.allowsAutofocus)
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await wire.targetCommands == [[250, 112]])
+        #expect(rack.nativeRack.lastSelectedMark == .a)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeAFInstruction == "Target A selected.")
+        #expect(model.isRecording == false)
+        let data = try rack.debugNativeAFTraceData()
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let events = try #require(json["events"] as? [[String: Any]])
+        let acknowledgment = try #require(events.last)
+        #expect(acknowledgment["event"] as? String == "targetAcknowledged")
+        #expect(acknowledgment["lastSelectedMark"] as? String == "A")
+        #expect(acknowledgment["focusResult"] as? String == "notFocused")
+        #expect(acknowledgment["recording"] as? Bool == false)
+        #expect(events.contains { $0["event"] as? String == "commandStarted" })
+        #expect(!String(decoding: data, as: UTF8.self).contains("SIMULATED-af-settings"))
+        rack.armNativeTarget(.b)
+        #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.8, y: 0.6)))
+        for _ in 0..<3 { model.debugApplyNativeRecordingReadback(true) }
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await wire.targetCommands == [[250, 112], [800, 337]])
+        #expect(rack.nativeRack.lastSelectedMark == .b)
+        #expect(model.isRecording)
+        model.debugSetNativeRecordPending(true)
+        #expect(!rack.allowsAutofocus)
+        rack.selectNativeTarget(.a, delayed: false)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        model.debugSetNativeRecordPending(false)
+        #expect(rack.allowsAutofocus)
+        rack.selectNativeTarget(.a, delayed: false)
+        model.interfaceLocked = true
+        model.debugApplyNativeRecordingReadback(true)
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await wire.targetCommands.count == 2)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        #expect(rack.notice != nil)
+        model.interfaceLocked = false
+        model.debugSeedFocusAF(recording: true, result: .notFocused)
+        rack.selectNativeTarget(.a, delayed: false)
+        rack.recordingWillStop()
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await wire.targetCommands.count == 2)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        model.debugSeedFocusAF(recording: true, result: .notFocused)
+        rack.selectNativeTarget(.a, delayed: false)
+        model.debugApplyNativeRecordingReadback(false)
+        #expect(await model.debugServiceNativeFocusTarget())
+        #expect(await wire.targetCommands.count == 2)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+    }
+
     @Test(
         "Timed setup leaves continuous AF without requiring an acquired subject or known marks",
         arguments: [PTPLiveViewFocusInfo.FocusResult.unknown, .notFocused])
@@ -833,16 +1095,20 @@ private actor FocusAFQueueTransport: CameraTransport {
     nonisolated let kind = CameraTransportKind.usb
     private let establishment = LargeTransferTransport(operations: [
         .setDevicePropValue, .setDevicePropValueEx, .getDevicePropValue, .getDevicePropValueEx,
-        .deviceReady,
+        .deviceReady, .changeAfArea,
     ])
     private var properties: [UInt32: Data] = [PTPPropertyCode.liveViewSelector.rawValue: Data([1])]
     private var readiness = PTPResponseCode.ok
     private var ignoreWrites = false
     private var holdRead = false
     private var readCompletion: CheckedContinuation<Void, Never>?
+    private var holdTarget = false
+    private var targetCompletion: CheckedContinuation<Void, Never>?
+    private(set) var targetHeld = false
     private(set) var readHeld = false
     private(set) var writeCount = 0
     private(set) var readinessPollCount = 0
+    private(set) var targetCommands: [[UInt32]] = []
     private static let afProperties: Set<UInt32> = [
         PTPPropertyCode.movieFocusMode.rawValue, PTPPropertyCode.movieFocusMeteringMode.rawValue,
         PTPPropertyCode.movieAFSubjectDetection.rawValue,
@@ -860,6 +1126,12 @@ private actor FocusAFQueueTransport: CameraTransport {
     }
     func setReadiness(_ value: PTPResponseCode) { readiness = value }
     func setIgnoreWrites(_ value: Bool) { ignoreWrites = value }
+    func holdNextTargetResponse() { holdTarget = true }
+    func releaseTargetResponse() {
+        targetCompletion?.resume()
+        targetCompletion = nil
+        targetHeld = false
+    }
     func holdNextAFRead() { holdRead = true }
     func releaseRead() {
         holdRead = false
@@ -915,6 +1187,14 @@ private actor FocusAFQueueTransport: CameraTransport {
             await withCheckedContinuation { readCompletion = $0 }
         }
         if operation == .deviceReady { readinessPollCount += 1 }
+        if operation == .changeAfArea {
+            targetCommands.append(parameters)
+            if holdTarget {
+                holdTarget = false
+                targetHeld = true
+                await withCheckedContinuation { targetCompletion = $0 }
+            }
+        }
         let code = operation == .deviceReady ? readiness : .ok
         let response = ByteCoding.uint16LE(code.rawValue) + ByteCoding.uint32LE(transaction ?? 1)
         return .init(

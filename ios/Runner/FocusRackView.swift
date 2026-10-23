@@ -44,12 +44,12 @@ struct FocusRackView: View {
     @GestureState private var draggingPanel = false
 
     private enum Editor {
-        case template, duration, delay
+        case template, duration, delay, nativeDelay
         var title: String {
             switch self {
             case .template: "Save timing template"
             case .duration: "Duration in seconds"
-            case .delay: "Delay in seconds"
+            case .delay, .nativeDelay: "Delay in seconds"
             }
         }
     }
@@ -165,6 +165,8 @@ struct FocusRackView: View {
             Button(editor == .template ? "Save" : "Apply") {
                 if editor == .template {
                     rack.saveTemplate(named: entryText)
+                } else if editor == .nativeDelay {
+                    rack.setNativeDelay(entryText)
                 } else {
                     rack.setTimingText(entryText, isDelay: editor == .delay)
                 }
@@ -195,11 +197,16 @@ struct FocusRackView: View {
         .confirmationDialog(
             "Close Focus Rack?", isPresented: $closingRack, titleVisibility: .visible
         ) {
-            Button("Close and discard marks", role: .destructive) { rack.closePanel() }
+            Button(
+                rack.mode == .nativeAF ? "Close Focus Rack" : "Close and discard marks",
+                role: rack.mode == .nativeAF ? nil : .destructive
+            ) { rack.closePanel() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
-                "Session marks will be discarded. Previous AF settings restore after recording and focus stop. Manual changes are kept."
+                (rack.mode == .nativeAF
+                    ? "Saved picture targets are kept. " : "Session marks will be discarded. ")
+                    + "Previous AF settings restore after recording and focus stop. Manual changes are kept."
             )
         }
         .accessibilityElement(children: .contain)
@@ -231,40 +238,143 @@ struct FocusRackView: View {
     }
 
     private var nativeAF: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(rack.nativeAFInstruction)
-                .font(.system(size: compact ? 11 : 13, weight: .medium))
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("focusControl.nativeAF.instruction")
+        VStack(alignment: .leading, spacing: 6) {
             if !compact {
+                Text(rack.nativeAFInstruction)
+                    .font(.system(size: 13, weight: .medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("focusControl.nativeAF.instruction")
+            }
+            if rack.nativeRack.selectingMark != nil {
+                Button("Cancel target selection") {
+                    rack.cancelNativeTarget()
+                    rack.isExpanded = true
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("focusControl.nativeAF.cancelSelection")
+            } else if !compact {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         if let failure = rack.afSettingsFailure {
                             Text(failure).foregroundStyle(.orange)
                         }
-                        Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.")
-                        Text(
-                            "Set g6 AF speed on the camera. The camera controls transition duration."
-                        )
-                        Button {
-                            rack.openFocusSettings()
-                        } label: {
-                            Text("Focus settings").frame(minHeight: 44)
+                        HStack(spacing: 6) {
+                            nativeMark(.a)
+                            nativeMark(.b)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(
-                            !allowsSetup || rack.modeSwitchPending || rack.state?.busy == true
-                        )
-                        .accessibilityIdentifier("focusControl.nativeAF.settings")
+                        Button {
+                            editor = .nativeDelay
+                            entryText = rack.nativeRack.startDelay.formatted(.number)
+                            editing = true
+                        } label: {
+                            HStack {
+                                Text("Start delay")
+                                Spacer(minLength: 0)
+                                Text("\(rack.nativeRack.startDelay.formatted(.number)) s")
+                                    .monospacedDigit()
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!allowsSetup || rack.nativeAFBusy)
+                        .accessibilityIdentifier("focusControl.nativeAF.delay")
+                        Text("Transition speed: camera setting (g6).")
+                            .foregroundStyle(.white.opacity(0.7))
+                        Text("Choose the starting target with Go to A/B.")
+                            .foregroundStyle(.white.opacity(0.7))
+                        Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.")
+                            .foregroundStyle(.white.opacity(0.7))
+                        Button("Focus settings") { rack.openFocusSettings() }
+                            .frame(minHeight: 44)
+                            .buttonStyle(.bordered)
+                            .disabled(
+                                !allowsSetup || rack.modeSwitchPending || rack.state?.busy == true
+                                    || rack.nativeAFBusy
+                            )
+                            .accessibilityIdentifier("focusControl.nativeAF.settings")
+                        if let notice = rack.notice {
+                            Text(notice).foregroundStyle(.orange)
+                                .accessibilityIdentifier("focusRack.notice")
+                        }
                     }
                     .font(.system(size: 12))
                     .fixedSize(horizontal: false, vertical: true)
                 }
+                .defaultScrollAnchor(.top)
+                .id("focusControl.nativeAF.setup")
+                .accessibilityIdentifier("focusRack.setup")
+                nativeTransport
+            } else {
+                nativeTransport
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        .accessibilityValue(rack.nativeAFInstruction)
         .accessibilityIdentifier("focusControl.nativeAF")
+    }
+
+    private func nativeMark(_ mark: NativeAFMark) -> some View {
+        VStack(spacing: 4) {
+            Button {
+                rack.armNativeTarget(mark)
+            } label: {
+                VStack(spacing: 1) {
+                    Text("Set " + mark.rawValue).fontWeight(.semibold)
+                    Text(
+                        rack.nativeRack.target(for: mark) == nil
+                            ? "Tap a subject" : "Replace target"
+                    )
+                    .font(.system(size: 10))
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .accessibilityIdentifier("focusControl.nativeAF.set." + mark.rawValue)
+            Button("Go to " + mark.rawValue) {
+                rack.selectNativeTarget(mark, delayed: false)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .disabled(rack.nativeRack.target(for: mark) == nil)
+            .accessibilityIdentifier("focusControl.nativeAF.go." + mark.rawValue)
+        }
+        .buttonStyle(.plain)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        .disabled(!allowsSetup || rack.nativeAFBlocker != nil || rack.nativeAFBusy)
+    }
+
+    private var nativeTransport: some View {
+        HStack(spacing: 6) {
+            if rack.nativeRack.pendingRequest != nil {
+                Button("Cancel delay") { rack.cancelNativeTarget() }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .accessibilityIdentifier("focusControl.nativeAF.cancelDelay")
+            } else {
+                nativePull("A→B", target: .b)
+                nativePull("B→A", target: .a)
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12, weight: .semibold))
+        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func nativePull(_ direction: String, target: NativeAFMark) -> some View {
+        Button {
+            rack.selectNativeTarget(target, delayed: true)
+        } label: {
+            Text("\(rack.nativeIsRecording ? "Run" : "Rehearse") \(direction)")
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(
+            !allowsSetup || rack.nativeAFBlocker != nil || rack.nativeAFBusy
+                || rack.nativeRack.target(for: .a) == nil || rack.nativeRack.target(for: .b) == nil
+        )
+        .accessibilityHint("Selects the destination after the start delay. Recording is unchanged.")
+        .accessibilityIdentifier("focusControl.nativeAF.pull." + (target == .b ? "aToB" : "bToA"))
     }
 
     private func dismissEditors() {
@@ -339,10 +449,14 @@ struct FocusRackView: View {
             .buttonStyle(.plain)
             .disabled(
                 !allowsSetup || rack.state?.busy == true || rack.stopPending
-                    || rack.modeSwitchPending
+                    || rack.modeSwitchPending || rack.nativeAFBusy
             )
             .accessibilityLabel("Close Focus Rack")
-            .accessibilityHint("Discards session marks after confirmation.")
+            .accessibilityHint(
+                rack.mode == .nativeAF
+                    ? "Keeps saved picture targets. Restores previous AF settings when safe."
+                    : "Discards session marks after confirmation."
+            )
             .accessibilityIdentifier("focusRack.close")
         }
         .frame(minHeight: 44)
@@ -364,7 +478,11 @@ struct FocusRackView: View {
             .font(.system(size: 11, weight: .bold))
             .accessibilityIdentifier("focusRack.phase")
             if rack.mode == .nativeAF {
-                EmptyView()
+                if compact {
+                    Text(compactNativeStatus)
+                        .font(.system(size: 11))
+                        .accessibilityValue(rack.nativeAFInstruction)
+                }
             } else if rack.afSettingsStatus != nil {
                 Text(rack.afSettingsFailure == nil ? "Waiting for AF setup…" : "AF setup failed")
                     .font(.system(size: 11, weight: .medium))
@@ -386,6 +504,19 @@ struct FocusRackView: View {
                 .accessibilityIdentifier("focusRack.status")
             }
         }
+    }
+
+    private var compactNativeStatus: String {
+        if rack.nativeAFBlocker != nil { return "Needs attention" }
+        if let mark = rack.nativeRack.selectingMark { return "Tap subject " + mark.rawValue }
+        if rack.nativeRack.pendingRequest != nil { return "Start delay…" }
+        if let request = rack.nativeRack.dispatchedRequest {
+            return "Selecting " + request.mark.rawValue
+        }
+        if let mark = rack.nativeRack.lastSelectedMark {
+            return "Target " + mark.rawValue + " selected"
+        }
+        return "Set targets"
     }
 
     private var compactPhase: String? {
@@ -650,6 +781,16 @@ struct FocusRackView: View {
             HStack(spacing: 8) {
                 timing("Duration", seconds: state.transition.duration, id: "duration", state: state)
                 timing("Start delay", seconds: state.transition.delay, id: "delay", state: state)
+            }
+            if let estimate = state.estimatedDuration,
+                estimate > state.transition.duration + 0.0005
+            {
+                Text(
+                    "\(state.transition.duration.formatted(.number)) s target · ~\(estimate.formatted(.number.precision(.fractionLength(0...2)))) s estimated"
+                )
+                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("focusRack.duration.estimate")
             }
             Button {
                 optionsExpanded.toggle()
