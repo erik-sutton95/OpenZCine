@@ -212,6 +212,87 @@ struct NativeAFRackTests {
                 == admission(settingsPending: true).disabledReason)
     }
 
+    @Test func checkpointRetainsTargetsDelayAndCounterWithoutReplayingAnyWork() throws {
+        var original = try savedRack()
+        try original.setStartDelay(2.5)
+        let active = try original.request(.a, now: 10, delayed: false)
+        try original.beginDispatch(id: active.id, at: 10)
+        let checkpoint = try original.checkpointJSON()
+        #expect(try original.checkpointJSON() == checkpoint)
+        var restored = NativeAFRack()
+        try restored.restoreCheckpointJSON(checkpoint)
+        #expect(restored.target(for: .a) == near)
+        #expect(restored.target(for: .b) == far)
+        #expect(restored.startDelay == 2.5)
+        #expect(restored.selectingMark == nil)
+        #expect(restored.pendingRequest == nil)
+        #expect(restored.dispatchedRequest == nil)
+        #expect(restored.lastSelectedMark == nil)
+        let staleCompleted = restored.complete(id: active.id)
+        #expect(!staleCompleted)
+        let next = try restored.request(.b, now: 20, delayed: true)
+        #expect(next.id > active.id)
+        #expect(next.dueAt == 22.5)
+    }
+
+    @Test func checkpointDoesNotRewindCurrentIDsOrReplayAcknowledgments() throws {
+        var rack = try savedRack()
+        let earlier = try rack.checkpointJSON()
+        let request = try rack.request(.a, now: 10, delayed: false)
+        try rack.beginDispatch(id: request.id, at: 10)
+        rack.complete(id: request.id)
+        let acknowledged = try rack.checkpointJSON()
+        try rack.restoreCheckpointJSON(earlier)
+        #expect(rack.lastSelectedMark == nil)
+        let next = try rack.request(.b, now: 20, delayed: false)
+        #expect(next.id > request.id)
+        rack.cancel()
+        try rack.restoreCheckpointJSON(acknowledged)
+        #expect(rack.lastSelectedMark == nil)
+    }
+
+    @Test func checkpointRestoreRequiresIdleAndRejectsMalformedInputAtomically() throws {
+        var rack = try savedRack()
+        let checkpoint = try rack.checkpointJSON()
+        try rack.arm(.a)
+        #expect(throws: NativeAFRackError.checkpointRequiresIdle) {
+            try rack.restoreCheckpointJSON(checkpoint)
+        }
+        let request = try rack.capture(near, now: 10)
+        #expect(throws: NativeAFRackError.checkpointRequiresIdle) {
+            try rack.restoreCheckpointJSON(checkpoint)
+        }
+        try rack.beginDispatch(id: request.id, at: 10)
+        #expect(throws: NativeAFRackError.checkpointRequiresIdle) {
+            try rack.restoreCheckpointJSON(checkpoint)
+        }
+        rack.complete(id: request.id)
+        let before = rack
+        for invalid in [
+            "{}", "not json", String(repeating: " ", count: 4097),
+            #"{"a":{"x":2,"y":0.5},"startDelay":0,"nextRequestID":1}"#,
+            #"{"startDelay":-1,"nextRequestID":1}"#,
+            #"{"startDelay":1e999,"nextRequestID":1}"#,
+            #"{"startDelay":0,"nextRequestID":-1}"#,
+        ] {
+            #expect(throws: NativeAFRackError.invalidCheckpoint) {
+                try rack.restoreCheckpointJSON(invalid)
+            }
+            #expect(rack == before)
+        }
+    }
+
+    @Test func checkpointCannotMakeRequestIDsWrapAndAcceptAnOldCompletion() throws {
+        var rack = NativeAFRack()
+        try rack.restoreCheckpointJSON(
+            #"{"a":{"x":0.2,"y":0.7},"startDelay":0,"nextRequestID":18446744073709551615}"#)
+        #expect(throws: NativeAFRackError.requestIdentityExhausted) {
+            try rack.request(.a, now: 10, delayed: false)
+        }
+        #expect(rack.pendingRequest == nil)
+        #expect(rack.dispatchedRequest == nil)
+    }
+
     private func admission(
         connected: Bool = true, foreground: Bool = true, interfaceLocked: Bool = false,
         focusPointLocked: Bool = false, liveViewFresh: Bool = true, commandIdle: Bool = true,
