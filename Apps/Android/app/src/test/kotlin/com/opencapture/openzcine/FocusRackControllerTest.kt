@@ -4,11 +4,15 @@ import com.opencapture.opencine.nikon.LiveFocusBox
 import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.LiveFocusResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.json.JSONArray
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
 import kotlin.test.*
 
@@ -72,8 +76,13 @@ class FocusRackControllerTest {
         var afSettingsReady = false
         var afSettingsFailure: String? = null
         var afAdmission = true
+        var nativeAF = JSONObject()
+        var nativeAFChange: JSONObject? = null
+        var nativeAdmission = true
+        var nativeCheckpointJSON: String? = null
+        var expectedConnectionOwner = 42L
         override fun create(connectionOwner: Long, templates: String): String {
-            assertEquals(42L, connectionOwner)
+            assertEquals(expectedConnectionOwner, connectionOwner)
             createdTemplates = templates
             return "rack-owner"
         }
@@ -81,6 +90,10 @@ class FocusRackControllerTest {
         override fun step(owner: String, request: String): String {
             requests += JSONObject(request)
             if (unavailable) return "invalid JSON"
+            if (JSONObject(request).optString("kind") == "nativeAFRestoreCheckpoint")
+                focusMode = JSONObject(request).getString("focusMode")
+            if (JSONObject(request).optString("kind") == "nativeAFAdmission")
+                return JSONObject().put("allowed", nativeAdmission).toString()
             if (JSONObject(request).optString("kind") == "afSettingsAdmission")
                 return JSONObject().put("allowed", afAdmission).toString()
             if (JSONObject(request).optString("kind") == "manualAFSetting") afAdmission = false
@@ -103,7 +116,8 @@ class FocusRackControllerTest {
                 .put("calibrationJSON", calibrationJSON).put("focusMode", focusMode)
                 .put("focusModeSwitchPending", focusModeSwitchPending)
                 .put("canChangeFocusMode", canChangeFocusMode).put("nativeAFConfigured", nativeAFConfigured)
-                .put("canNativeAutofocus", canNativeAutofocus)
+                .put("canNativeAutofocus", canNativeAutofocus).put("nativeAF", nativeAF)
+                .put("nativeAFChange", nativeAFChange).put("nativeAFCheckpointJSON", nativeCheckpointJSON)
                 .put("afSettingsChange", afSettingsChange).put("afSettingsPending", afSettingsPending)
                 .put("afSettingsRestoring", afSettingsRestoring).put("afSettingsReady", afSettingsReady)
                 .put("afSettingsFailure", afSettingsFailure).toString()
@@ -155,6 +169,122 @@ class FocusRackControllerTest {
         rack.observe(JSONObject())
         assertTrue(rack.closePanel())
         rack.close()
+    }
+
+
+    @Test fun `native targets delay and cancellation remain Swift intents and target writer has one acknowledgment`() = runTest {
+        val wire = Wire().apply {
+            busy = false
+            focusMode = "nativeAF"
+            nativeAF = JSONObject().put("a", JSONObject().put("x", 0.2).put("y", 0.5))
+                .put("b", JSONObject().put("x", 0.8).put("y", 0.5)).put("canSet", true)
+                .put("canRun", true).put("canGoToA", true).put("canGoToB", true)
+                .put("startDelay", 2).put("message", "Target A selected")
+        }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        var targetCalls = 0
+        rack.configureNativeAF { change, admitted ->
+            assertTrue(admitted())
+            assertEquals(0.8, change.getJSONObject("point").getDouble("x"))
+            targetCalls++
+            true
+        }
+        rack.activate()
+        rack.observe(JSONObject().put("movieFocusMode", "AF-F").put("recording", true)
+            .put("nativeAFPointLocked", false))
+        assertTrue(rack.state.value.nativeAF.hasA)
+        assertTrue(rack.state.value.nativeAF.hasB)
+        assertTrue(rack.state.value.nativeAF.canRun)
+        assertTrue(rack.state.value.recording)
+        rack.armNativeTarget("A")
+        assertEquals("nativeAFArm", wire.requests.last().getString("kind"))
+        rack.captureNativeTarget(0.2, 0.5)
+        assertEquals(0.2, wire.requests.last().getJSONObject("nativeAFPoint").getDouble("x"))
+        rack.nativeDelay("2.5")
+        assertEquals(2.5, wire.requests.last().getDouble("nativeAFStartDelay"))
+        rack.goNativeTarget("A")
+        assertEquals("nativeAFGo", wire.requests.last().getString("kind"))
+        rack.runNativeTarget("B")
+        assertEquals("nativeAFRun", wire.requests.last().getString("kind"))
+        rack.cancelNativeDelay()
+        assertEquals("nativeAFCancel", wire.requests.last().getString("kind"))
+        wire.nativeAFChange = JSONObject().put("id", 7).put("mark", "B")
+            .put("point", JSONObject().put("x", 0.8).put("y", 0.5))
+        rack.observe(JSONObject().put("movieFocusMode", "AF-F"))
+        testScheduler.runCurrent()
+        assertEquals(1, targetCalls)
+        assertEquals(1, wire.requests.count { it.optString("kind") == "nativeAFComplete" })
+        rack.observe(JSONObject())
+        testScheduler.runCurrent()
+        assertEquals(1, targetCalls, "An offered effect is never dispatched twice")
+        assertFalse(wire.requests.any { it.optString("kind") in setOf("run", "goTo", "nudge", "calibrate") })
+        rack.close()
+    }
+
+    @Test fun `native admission reads an immutable atomic snapshot on the command dispatcher`() = runTest {
+        val now = AtomicLong(0)
+        val wire = Wire().apply { busy = false; focusMode = "nativeAF"
+            nativeAFChange = JSONObject().put("id", 77).put("mark", "B")
+                .put("point", JSONObject().put("x", 0.8).put("y", 0.5)) }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire,
+            observationNanos = now::get)
+        val completed = kotlinx.coroutines.CompletableDeferred<Result<Boolean>>()
+        rack.configureNativeAF { _, admitted ->
+            val result = runCatching {
+                val accepted = withContext(Dispatchers.Default) { admitted() }
+                val captured = wire.requests.last { it.optString("kind") == "nativeAFAdmission" }
+                assertFalse(captured.getBoolean("nativeAFPointLocked"), "Mutating the source object cannot change the captured receipt")
+                assertEquals(0.45, captured.getJSONObject("observation").getDouble("frameAgeSeconds"), 0.000001)
+                now.set(600_000_000L)
+                assertFalse(withContext(Dispatchers.Default) { admitted() }, "Snapshot freshness expires on the dispatcher too")
+                accepted
+            }
+            completed.complete(result)
+            result.getOrDefault(false)
+        }
+        rack.activate()
+        val raw = JSONObject().put("nativeAFPointLocked", false).put("frameAgeSeconds", 0.05)
+            .put("movieFocusMode", "AF-F")
+        rack.observe(raw)
+        raw.put("nativeAFPointLocked", true)
+        now.set(400_000_000L)
+        testScheduler.runCurrent()
+        assertTrue(completed.await().getOrThrow())
+        rack.close()
+    }
+
+    @Test fun `owner replacement restores opaque native targets and selected mode without target or record replay`() = runTest {
+        val checkpoint = AtomicReference<String?>(null)
+        val selection = AtomicReference<String?>(null)
+        val preferences = TestSharedPreferences()
+        val taskScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val firstWire = Wire().apply {
+            busy = false; focusMode = "nativeAF"; nativeCheckpointJSON = "opaque Swift checkpoint"
+        }
+        val first = FocusRackController(42, preferences, taskScope, firstWire,
+            nativeCheckpoint = checkpoint, selectedFocusMode = selection)
+        first.activate()
+        first.observe(JSONObject())
+        assertEquals("opaque Swift checkpoint", checkpoint.get())
+        assertEquals("nativeAF", selection.get())
+        first.close()
+        val replacementWire = Wire().apply { busy = false; expectedConnectionOwner = 43 }
+        val replacement = FocusRackController(43, preferences, taskScope, replacementWire,
+            nativeCheckpoint = checkpoint, selectedFocusMode = selection)
+        replacement.activate()
+        val restored = replacementWire.requests.first()
+        assertEquals("nativeAFRestoreCheckpoint", restored.getString("kind"))
+        assertEquals("opaque Swift checkpoint", restored.getString("nativeAFCheckpointJSON"))
+        assertEquals("nativeAF", restored.getString("focusMode"))
+        assertEquals("nativeAF", replacement.state.value.focusMode)
+        replacement.openPanel()
+        assertEquals("openPanel", replacementWire.requests.last().getString("kind"))
+        assertFalse(replacementWire.requests.any { it.optString("kind") in setOf(
+            "nativeAFGo", "nativeAFRun", "nativeAFCapture", "run", "goTo", "startRecording") })
+        assertNull(preferences.getString("focusRack.nativeAF", null), "Native targets stay in memory only")
+        replacement.close()
     }
 
     @Test fun `saved calibration loads once before observations and survives owner replacement`() = runTest {

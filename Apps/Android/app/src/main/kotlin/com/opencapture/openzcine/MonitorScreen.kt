@@ -358,9 +358,12 @@ internal fun MonitorScreen(
     var rackPanelPosition by remember(session) { mutableStateOf<com.opencapture.monitorui.MonitorScopePoint?>(null) }
     val rackScope = rememberCoroutineScope()
     val rackPreferences = remember(appContext) { appContext.getSharedPreferences("focus-rack-timing", 0) }
+    // Opaque Swift value only: reconnects keep picture points and delay, never queued work.
+    val nativeRackCheckpoint = remember { java.util.concurrent.atomic.AtomicReference<String?>(null) }
+    val rackFocusModeSelection = remember { java.util.concurrent.atomic.AtomicReference<String?>(null) }
     val rackOwner = session.focusRackConnectionOwner ?: 0L
     val focusRack = remember(session, rackOwner) {
-        FocusRackController(rackOwner, rackPreferences, rackScope, traceSink = { trace ->
+        FocusRackController(rackOwner, rackPreferences, rackScope, nativeCheckpoint = nativeRackCheckpoint, selectedFocusMode = rackFocusModeSelection, traceSink = { trace ->
             java.io.File(appContext.filesDir, "focus-rack-production.json").writeText(trace)
         })
     }
@@ -1806,7 +1809,15 @@ internal fun MonitorScreen(
                     ?.takeIf(String::isNotBlank) ?: org.json.JSONObject.NULL)
                 .put("transport", activeTransportIsUsb?.let { if (it) "usb" else "ptpIP" } ?: org.json.JSONObject.NULL)
                 .put("connected", connected)
-                .put("foregroundOwner", focusRackVisible && rackForeground && rackState.focusMode == "timedRack")
+                .put("foregroundOwner", focusRackVisible && rackForeground)
+                .put("nativeAFInterfaceLocked", locked || isCommand)
+                .put("nativeAFPointLocked", focusPointLocked)
+                .put("nativeAFUnrelatedCommandPending", pendingCommandControl != null || recordCommandPending ||
+                    focusResetPending || mediaOwnsCommandChannel || mfDrive.isBusy ||
+                    listOf(CameraControl.FOCUS_MODE, CameraControl.FOCUS_AREA, CameraControl.FOCUS_SUBJECT).any(nativeWrites::isWaiting))
+                .put("nativeAFCoordinateSpaceAvailable", liveFeedPresentation.focus?.let {
+                    !it.isDebugFixture && it.coordinateWidth > 0 && it.coordinateHeight > 0
+                } == true)
                 .put("movieFocusMode", reportedCameraProperties.focusMode ?: org.json.JSONObject.NULL)
                 .put("photography", isPhotographyMode)
                 .put("recording", session.recordingState.value in setOf(CameraRecordingState.RECORDING, CameraRecordingState.STARTING))
@@ -1817,6 +1828,17 @@ internal fun MonitorScreen(
                 .put("externalFocusRevision", rackExternalFocusRevision)
                 .put("externalFocusIdle", rackFocusIdle())
                 .put("afSettings", settingsInput())
+        }
+        var reopenRackForOwner by remember(focusRack) { mutableStateOf(focusRackVisible) }
+        LaunchedEffect(focusRack, focusRackVisible, sessionState, reportedCameraProperties) {
+            if (reopenRackForOwner && focusRackVisible && rackOwner != 0L &&
+                sessionState is CameraSessionState.Connected &&
+                reportedCameraProperties.focusMode != null && reportedCameraProperties.focusArea != null &&
+                reportedCameraProperties.focusSubject != null) {
+                reopenRackForOwner = false
+                focusRack.observe(rackObservation())
+                focusRack.openPanel()
+            }
         }
         LaunchedEffect(focusRack, focusRackVisible, rackState.afSettingsPending) {
             if (focusRackVisible || rackState.afSettingsPending) {
@@ -1873,6 +1895,10 @@ internal fun MonitorScreen(
                 onGoTo = { id -> focusRack.observe(rackObservation()); focusRack.goTo(id) },
                 onRun = { direction -> focusRack.observe(rackObservation()); focusRack.run(direction) },
                 onCalibrate = { focusRack.observe(rackObservation()); focusRack.calibrate() },
+                onNativeSet = { mark -> focusRack.observe(rackObservation()); focusRack.armNativeTarget(mark) },
+                onNativeGo = { mark -> focusRack.observe(rackObservation()); focusRack.goNativeTarget(mark) },
+                onNativeRun = { mark -> focusRack.observe(rackObservation()); focusRack.runNativeTarget(mark) },
+                onNativeCancel = focusRack::cancelNativeDelay, onNativeDelay = focusRack::nativeDelay,
                 onFocusMode = { mode ->
                     if (focusMoveRequestsInFlight == 0 && !focusResetPending && rackFocusIdle()) {
                         focusRack.observe(rackObservation())
@@ -1937,6 +1963,11 @@ internal fun MonitorScreen(
                 width = feedPointerSize.width.toFloat(),
                 height = feedPointerSize.height.toFloat(),
             )
+        // Native retargeting can acquire an unfocused subject; real dimensions, not a focused box,
+        // authorize the existing camera-coordinate mapping.
+        val nativeTargetMetadata = focusRackVisible && rackState.focusMode == "nativeAF" &&
+            feedFocus?.let { !it.isDebugFixture && it.coordinateWidth > 0 && it.coordinateHeight > 0 } == true
+        val directFocusMetadata = focusMetadataAvailable || nativeTargetMetadata
         val feedGestureGeometry =
             if (feedContent != null) {
                 focusFeedGeometry(
@@ -1945,10 +1976,10 @@ internal fun MonitorScreen(
                     verticalPresentationScale = localFraming.verticalPresentationScale,
                     viewport = feedPointerViewport,
                     coordinateWidth = feedFocus?.coordinateWidth.takeIf {
-                        focusMetadataAvailable
+                        directFocusMetadata
                     },
                     coordinateHeight = feedFocus?.coordinateHeight.takeIf {
-                        focusMetadataAvailable
+                        directFocusMetadata
                     },
                     generation = liveFeedPresentation.focusGestureGeometryGeneration,
                     mirrored = renderedFraming.mirrorsHorizontally,
@@ -1960,13 +1991,42 @@ internal fun MonitorScreen(
                     generation = liveFeedPresentation.focusGestureGeometryGeneration,
                 )
             }
+        SideEffect {
+            focusRack.configureNativeAF(completionInput = settingsInput) { change, admitted ->
+                val focus = liveFeedPresentation.focus?.takeIf {
+                    !it.isDebugFixture && it.coordinateWidth > 0 && it.coordinateHeight > 0
+                } ?: throw com.opencapture.opencine.nikon.CameraFocusException.Unavailable
+                val point = change.getJSONObject("point")
+                val target = CameraFocusPoint(
+                    kotlin.math.round(point.getDouble("x") * (focus.coordinateWidth - 1)).toInt(),
+                    kotlin.math.round(point.getDouble("y") * (focus.coordinateHeight - 1)).toInt())
+                val commandAuthority = commonSession.captureCommandAuthority()
+                val admission = com.opencapture.opencine.nikon.CameraCommandAdmission(session) {
+                    commandAuthority() && admitted()
+                }
+                mfDrive.clearManualFocus()
+                mfDrive.cancel()
+                rackExternalFocusRevision += 1
+                focusRack.nativeTargetFocus()
+                focusMoveRequestsInFlight += 1
+                try {
+                    session.changeAfArea(target, admission).also { accepted ->
+                        if (accepted && operatorSettings.hapticsEnabled.value)
+                            view.performOperatorHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                } finally {
+                    focusAFCompletedSequence = liveFeedPresentation.acceptedFrameSequence
+                    focusMoveRequestsInFlight = (focusMoveRequestsInFlight - 1).coerceAtLeast(0)
+                }
+            }
+        }
         val otherCameraCommandPending = pendingCommandControl != null || recordCommandPending
         val focusGestureContext =
             FocusFeedGestureContext(
                 geometry = feedGestureGeometry,
                 interfaceLocked = locked || isCommand,
                 focusPointLocked = focusPointLocked,
-                focusAvailable = focusMetadataAvailable,
+                focusAvailable = directFocusMetadata,
                 commandPending = otherCameraCommandPending || focusResetPending,
                 mediaBusy = mediaOwnsCommandChannel,
             )
@@ -1987,15 +2047,27 @@ internal fun MonitorScreen(
         val handleFocusFeedAction: (FocusFeedGestureAction) -> Unit = handleFocusFeedAction@{ action ->
             when (action) {
                 is FocusFeedGestureAction.SetFocusPoint -> {
+                    val currentRack = focusRack.state.value
                     if (!focusGestureContext.canSetFocusPoint) {
+                        if (focusRackVisible && currentRack.focusMode == "nativeAF")
+                            currentRack.nativeAFDisabledReason?.let { Toast.makeText(appContext, it, Toast.LENGTH_SHORT).show() }
                         return@handleFocusFeedAction
                     }
-                    if (focusRack.state.value.afSettingsPending || (focusRackVisible && !(focusRack.state.value.let { if (it.focusMode == "nativeAF") it.canNativeAutofocus else it.canAutofocus }))) {
-                        Toast.makeText(appContext, if (focusRack.state.value.afSettingsPending) {
+                    if (currentRack.afSettingsPending || (focusRackVisible && !(currentRack.let { if (it.focusMode == "nativeAF") it.canNativeAutofocus else it.canAutofocus }))) {
+                        Toast.makeText(appContext, if (currentRack.afSettingsPending) {
                             "Setting up camera AF…"
-                        } else if (rackState.focusMode == "nativeAF") {
-                            if (rackState.nativeAFConfigured) "Wait for focus movement to finish." else "Set movie focus mode to AF-F before tapping."
+                        } else if (currentRack.focusMode == "nativeAF") {
+                            currentRack.nativeAFDisabledReason ?: "Wait for target selection to finish."
                         } else "Use the rack dial, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
+                        return@handleFocusFeedAction
+                    }
+                    if (focusRackVisible && currentRack.focusMode == "nativeAF" && currentRack.nativeAF.selectingMark != null) {
+                        val width = feedGestureGeometry?.coordinateWidth ?: return@handleFocusFeedAction
+                        val height = feedGestureGeometry.coordinateHeight ?: return@handleFocusFeedAction
+                        focusRack.observe(rackObservation())
+                        focusRack.captureNativeTarget(action.coordinate.x.toDouble() / (width - 1).coerceAtLeast(1),
+                            action.coordinate.y.toDouble() / (height - 1).coerceAtLeast(1))
+                        focusRackExpanded = true
                         return@handleFocusFeedAction
                     }
                     notifyRackExternalFocus()
@@ -2049,7 +2121,7 @@ internal fun MonitorScreen(
             if (focusCommandPending) return@resetFocusPoint
             if (focusRack.state.value.afSettingsPending || (focusRackVisible && !(focusRack.state.value.let { if (it.focusMode == "nativeAF") it.canNativeAutofocus else it.canAutofocus }))) {
                 Toast.makeText(appContext, if (rackState.focusMode == "nativeAF") {
-                            if (rackState.nativeAFConfigured) "Wait for focus movement to finish." else "Set movie focus mode to AF-F before tapping."
+                            rackState.nativeAFDisabledReason ?: "Wait for target selection to finish."
                         } else "Use Near/Far, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
                 return@resetFocusPoint
             }
@@ -2390,9 +2462,9 @@ internal fun MonitorScreen(
                             link.label, link.bars, hero)
                     },
                     focusAccessory = if (focusRackVisible &&
-                        (activeMonitorPickerKind == null || rackState.active))
+                        (activeMonitorPickerKind == null || rackState.active || rackState.nativeAF.busy))
                         com.opencapture.opencine.cameracontrols.MonitorOperatorFocusAccessoryViews(
-                            isExpanded = focusRackExpanded, active = rackState.active,
+                            isExpanded = focusRackExpanded, active = rackState.active || rackState.nativeAF.busy,
                             expanded = { height -> RackContent(false, height) },
                             compact = { RackContent(true, 112f) }, position = rackPanelPosition) else null,
                     focusDrive = if (

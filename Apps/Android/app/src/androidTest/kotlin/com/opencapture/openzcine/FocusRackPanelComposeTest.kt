@@ -58,30 +58,55 @@ class FocusRackPanelComposeTest {
 
     @Before fun landscapeFirst() { compose.settleLandscape() }
 
-    @Test fun nativeModeUsesExistingTapGuidanceAndHidesAllTimedControls() {
-        val state = mutableStateOf(ready().copy(canChangeFocusMode = true))
+    @Test fun nativeModeOffersTargetsDelayAndDirectionalActionsWithoutTimedControls() {
+        val state = mutableStateOf(ready().copy(canChangeFocusMode = true,
+            nativeAF = NativeAFRackViewState(canSet = true)))
         val actions = Actions()
         mount(state, actions)
-        compose.onNodeWithTag("focusRack.mode.timedRack").assertIsDisplayed().insideFrame()
-        compose.saveLandscapeEvidence("focus-modes-timed-rack-landscape")
         compose.onNodeWithTag("focusRack.mode.nativeAF").performClick()
         compose.onNodeWithTag("focusRack.nativeAF").assertIsDisplayed().insideFrame()
         for (tag in listOf("positions", "nudges", "duration", "calibrate", "primary", "pull.aToB", "pull.bToA")) {
             compose.onNodeWithTag("focusRack.$tag").assertDoesNotExist()
         }
-        compose.onNodeWithText("Movie AF-F is required before tapping.")
-            .performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("focusRack.nativeAF.settings").assertIsDisplayed().assertIsEnabled().insideFrame()
-        compose.onNodeWithTag("focusRack.nativeAF.settings").performClick()
+        compose.onNodeWithTag("focusRack.nativeAF.set.A").assertIsEnabled().performClick()
+        assertEquals(listOf("A"), actions.nativeSets)
+        assertEquals(listOf(false), actions.expansions)
+        compose.runOnIdle {
+            state.value = state.value.copy(nativeAF = NativeAFRackViewState(hasA = true, hasB = true,
+                canSet = true, canGoToA = true, canGoToB = true, canRun = true, message = "Target A selected"))
+        }
+        compose.onNodeWithTag("focusRack.nativeAF.go.B").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithTag("focusRack.nativeAF.run.aToB").assertIsDisplayed().insideFrame().performClick()
+        compose.onNodeWithTag("focusRack.nativeAF.run.bToA").assertIsDisplayed().insideFrame().performClick()
+        assertEquals(listOf("B"), actions.nativeGoes)
+        assertEquals(listOf("B", "A"), actions.nativeRuns)
+        compose.onNodeWithTag("focusRack.nativeAF.settings").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText("Transition speed: camera setting").performScrollTo().assertIsDisplayed()
         assertEquals(1, actions.focusSettings)
-        assertEquals(0, actions.primary)
-        assertEquals(0, actions.calibrations)
         assertTrue(actions.nudges.isEmpty())
-        compose.onNodeWithText("Tap a subject in the live view. The camera controls the transition.").performScrollTo()
-        compose.saveLandscapeEvidence("focus-modes-native-af-landscape")
-        compose.runOnIdle { state.value = state.value.copy(canChangeFocusMode = false, focusModeSwitchPending = true) }
-        compose.onNodeWithTag("focusRack.mode.timedRack").assertIsNotEnabled()
-        compose.onNodeWithTag("focusRack.close").assertIsNotEnabled()
+        compose.saveLandscapeEvidence("native-rack-settings-landscape")
+        compose.onNodeWithTag("focusRack.nativeAF.set.A").performScrollTo()
+        compose.saveLandscapeEvidence("native-rack-ab-ready-landscape")
+        compose.runOnIdle { state.value = state.value.copy(recording = true) }
+        compose.onNodeWithTag("focusRack.nativeAF.run.aToB").assertTextContains("Run A→B")
+        compose.runOnIdle { state.value = state.value.copy(nativeAF = state.value.nativeAF.copy(
+            busy = true, canSet = false, canGoToA = false, canGoToB = false,
+            canRun = false, canCancel = true, message = "Starts in 2.0 s")) }
+        compose.onNodeWithTag("focusRack.nativeAF.cancel").assertIsDisplayed().insideFrame().performClick()
+        assertEquals(1, actions.nativeCancels)
+        compose.saveLandscapeEvidence("native-rack-countdown-landscape")
+    }
+
+    @Test fun compactNativeSelectionKeepsCancelAndStatusInsideAllEdges() {
+        val state = mutableStateOf(ready().copy(focusMode = "nativeAF", nativeAF = NativeAFRackViewState(
+            selectingMark = "B", canCancel = true, message = "Tap subject B in the picture.")))
+        val actions = Actions()
+        mount(state, actions, compact = true, maximumHeight = 112f)
+        compose.onNodeWithText("Tap subject B in the picture.").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.nativeAF.cancel").assertIsDisplayed().insideFrame().performClick()
+        assertEquals(1, actions.nativeCancels)
+        compose.onNodeWithTag("focusRack.panel").insideFrame()
+        compose.saveLandscapeEvidence("native-rack-selecting-b-landscape")
     }
 
     @Test fun automaticSetupKeepsStatusScrollableAndManualSettingsAvailable() {
@@ -97,16 +122,17 @@ class FocusRackPanelComposeTest {
         assertEquals(1, actions.focusSettings)
         compose.saveLandscapeEvidence("auto-af-timed-setup-pending-landscape")
         compose.runOnIdle { state.value = state.value.copy(focusMode = "nativeAF") }
-        compose.onNodeWithTag("focusRack.nativeAF.settings").assertIsDisplayed().assertIsEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.nativeAF.settings").performScrollTo().assertIsDisplayed().assertIsEnabled().insideFrame()
         compose.onNodeWithTag("focusRack.nativeAF.settings").performClick()
         assertEquals(2, actions.focusSettings)
+        compose.runOnIdle { state.value = state.value.copy(nativeAF = NativeAFRackViewState(message = "Setting up camera AF…")) }
         compose.onNodeWithText("Setting up camera AF…").performScrollTo().assertIsDisplayed().insideFrame()
         compose.saveLandscapeEvidence("auto-af-native-setup-pending-landscape")
         compose.runOnIdle { state.value = state.value.copy(afSettingsPending = false,
             afSettingsFailure = "Camera AF settings are unavailable; automatic setup could not start.") }
         compose.onNodeWithText("Camera AF settings are unavailable; automatic setup could not start.")
             .performScrollTo().assertIsDisplayed().insideFrame()
-        compose.onNodeWithTag("focusRack.nativeAF.settings").assertIsDisplayed().assertIsEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.nativeAF.settings").performScrollTo().assertIsDisplayed().assertIsEnabled().insideFrame()
         compose.saveLandscapeEvidence("auto-af-native-setup-failed-landscape")
     }
 
@@ -393,6 +419,16 @@ class FocusRackPanelComposeTest {
         compose.saveLandscapeEvidence("focus-rack-production-locked-uncertain-landscape")
     }
 
+    @Test fun plannedTimedDurationIsVisibleWithoutDisablingTheRequestedPull() {
+        val state = mutableStateOf(ready().copy(duration = 3.0, estimatedDuration = 3.4,
+            pullAToB = FocusRackActionViewState("Rehearse A→B", "3 s target · ~3.4 s estimated", true)))
+        mount(state, Actions())
+        compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled().assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.estimate").performScrollTo()
+            .assertTextEquals("3 s target · ~3.40 s estimated").assertIsDisplayed().insideFrame()
+        compose.saveLandscapeEvidence("timed-rack-planned-estimate-landscape")
+    }
+
     @Test fun timingAdmissionHintRemainsReadableAndEditable() {
         val reason = "This move needs at least 24.60 seconds at the test cadence."
         val state = mutableStateOf(ready().copy(admissionMessage = reason, primaryEnabled = false,
@@ -641,7 +677,10 @@ class FocusRackPanelComposeTest {
                             onFocusSettings = { actions.focusSettings++ }, setupEnabled = setupEnabled(), onClose = { actions.closes++ },
                             onGoTo = { actions.goes += it }, onRun = { actions.runs += it },
                             onCalibrate = { actions.calibrations++ }, onMovePanel = { actions.moves += it },
-                            onFocusMode = { mode -> state.value = state.value.copy(focusMode = mode) })
+                            onFocusMode = { mode -> state.value = state.value.copy(focusMode = mode) },
+                            onNativeSet = { actions.nativeSets += it }, onNativeGo = { actions.nativeGoes += it },
+                            onNativeRun = { actions.nativeRuns += it }, onNativeCancel = { actions.nativeCancels++ },
+                            onNativeDelay = { actions.nativeDelays += it })
                     }
                 }
             }
@@ -673,12 +712,13 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag(tag).assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
     }
 
-    private fun SemanticsNodeInteraction.insideFrame() {
+    private fun SemanticsNodeInteraction.insideFrame(): SemanticsNodeInteraction {
         val bounds = fetchSemanticsNode().boundsInRoot
         val frame = compose.onRoot().fetchSemanticsNode().boundsInRoot
         assertTrue("All edges must fit inside the display: $bounds within $frame",
             bounds.left >= frame.left && bounds.top >= frame.top &&
                 bounds.right <= frame.right && bounds.bottom <= frame.bottom)
+        return this
     }
 
     private fun ready() = FocusRackViewState(message = "SIMULATED ready.", position = 0,
@@ -692,6 +732,11 @@ class FocusRackPanelComposeTest {
     private fun mark(id: String, position: Int) = FocusRackMarkViewState(id, position, 1, "fixture", 1)
     private data class Timing(val duration: String, val delay: String, val easing: String, val reverse: Boolean)
     private class Actions {
+        val nativeSets = mutableListOf<String>()
+        val nativeGoes = mutableListOf<String>()
+        val nativeRuns = mutableListOf<String>()
+        val nativeDelays = mutableListOf<String>()
+        var nativeCancels = 0
         val captures = mutableListOf<String>()
         val goes = mutableListOf<String>()
         val runs = mutableListOf<String>()
