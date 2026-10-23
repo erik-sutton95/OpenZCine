@@ -15,7 +15,7 @@ public final class FocusRackWire: @unchecked Sendable {
         let authority = Authority()
         let access = NikonAndroidFocusRackAccess.capture(
             connectionOwner: connectionOwner, cadence: .fastExperimental,
-            isAdmitted: { authority.admitted })
+            isAdmitted: { authority.admitted || authority.settingsReadAdmitted })
         let driver: any FocusRackDriver
         if let access { driver = access } else { driver = UnavailableDriver() }
         return register(
@@ -39,7 +39,7 @@ public final class FocusRackWire: @unchecked Sendable {
         profile: FocusRackProfile = .adaptive
     ) -> String {
         let controller = FocusRackController(driver: driver, clock: clock, profile: profile)
-        let entry = Entry(controller: controller, authority: authority)
+        let entry = Entry(controller: controller, driver: driver, authority: authority)
         entry.loadTemplates(templatesJSON)
         let owner = UUID().uuidString
         lock.withLock { entries[owner] = entry }
@@ -53,6 +53,7 @@ public final class FocusRackWire: @unchecked Sendable {
             let request = try? JSONDecoder().decode(Request.self, from: data),
             let entry = lock.withLock({ entries[owner] })
         else { return nil }
+        if request.kind == "afSettingsAdmission" { return entry.admissionReply(request) }
         entry.submit(request)
         return entry.reply()
     }
@@ -78,6 +79,45 @@ public final class FocusRackWire: @unchecked Sendable {
         let focusMode: FocusControlMode?
         let movieFocusMode: String?
         let photography: Bool?
+        let afSettings: SettingsInput?
+        let afProperty: FocusAFProperty?
+        let afChange: FocusAFSettingChange?
+        let afFailure: String?
+    }
+
+    private struct SettingsInput: Decodable, Equatable, Sendable {
+        let sessionID: String?
+        var values: FocusAFSettingsValues
+        let recording: Bool?
+        let recordingPending: Bool
+        let movie: Bool
+        var foreground: Bool
+        let focusIdle: Bool
+        let commandsIdle: Bool
+        let frameSequence: Int64?
+        let focusAfterSequence: Int64?
+
+        private var postActionFocusIdle: Bool {
+            guard focusIdle else { return false }
+            guard let focusAfterSequence else { return true }
+            return frameSequence.map { $0 > focusAfterSequence } == true
+        }
+
+        // New headers may arrive during readiness I/O; only changed safety facts revoke it.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.sessionID == rhs.sessionID && lhs.values == rhs.values
+                && lhs.recording == rhs.recording && lhs.recordingPending == rhs.recordingPending
+                && lhs.movie == rhs.movie && lhs.foreground == rhs.foreground
+                && lhs.postActionFocusIdle == rhs.postActionFocusIdle
+                && lhs.commandsIdle == rhs.commandsIdle
+        }
+
+        func observation(rack: FocusRackState?, ready: Bool) -> FocusAFSettingsObservation {
+            .init(
+                sessionID: sessionID, values: values, recording: recording,
+                recordingPending: recordingPending, movie: movie, foreground: foreground,
+                focusIdle: postActionFocusIdle && ready, commandsIdle: commandsIdle, rack: rack)
+        }
     }
 
     private final class Authority: @unchecked Sendable {
@@ -86,6 +126,9 @@ public final class FocusRackWire: @unchecked Sendable {
         private var revision = 0
         var admitted: Bool { lock.withLock { allowed } }
         var generation: Int { lock.withLock { revision } }
+        private var safetyAllowed = false
+        var settingsReadAdmitted: Bool { lock.withLock { safetyAllowed } }
+        func setSettingsRead(_ value: Bool) { lock.withLock { safetyAllowed = value } }
         func cancelPending() { lock.withLock { revision += 1 } }
         @discardableResult func set(_ value: Bool) -> Bool {
             lock.withLock {
@@ -99,6 +142,7 @@ public final class FocusRackWire: @unchecked Sendable {
 
     private final class Entry: @unchecked Sendable {
         let controller: FocusRackController
+        let driver: any FocusRackDriver
         let authority: Authority
         private let lock = NSLock()
         private var state: FocusRackState?
@@ -115,9 +159,19 @@ public final class FocusRackWire: @unchecked Sendable {
         private var photography = false
         private var externalFocusIdle = true
         private var modeSwitchPending = false
+        private var afLease = FocusAFSettingsLease()
+        private var afInput: SettingsInput?
+        private var afRevision = 0
+        private var afEffectReady = false
+        private var afEffectOffered = false
+        private var afSuspended = false
+        private var afFailure: String?
+        private var afSetupReady = false
+        private var panelOpen = false
 
-        init(controller: FocusRackController, authority: Authority) {
+        init(controller: FocusRackController, driver: any FocusRackDriver, authority: Authority) {
             self.controller = controller
+            self.driver = driver
             self.authority = authority
         }
 
@@ -153,6 +207,13 @@ public final class FocusRackWire: @unchecked Sendable {
             let receivedAt = ProcessInfo.processInfo.systemUptime
             lock.withLock {
                 guard !closed else { return }
+                acceptSettingsInput(request.afSettings)
+                if request.kind == "manualAFSetting", let property = request.afProperty {
+                    afLease.manualChange(property)
+                    afRevision += 1
+                    afEffectReady = false
+                    authority.setSettingsRead(false)
+                }
                 if let observation = request.observation {
                     externalFocusIdle = observation.externalFocusIdle
                     movieFocusMode = observation.connected ? request.movieFocusMode : nil
@@ -160,6 +221,7 @@ public final class FocusRackWire: @unchecked Sendable {
                     let admitted =
                         observation.connected && observation.foregroundOwner
                         && focusMode == .timedRack && !modeSwitchPending
+                        && (!panelOpen || afSetupReady) && !afLease.needsService
                     let wasAdmitted = authority.set(admitted)
                     if wasRecording && !observation.recording {
                         authority.cancelPending()
@@ -170,17 +232,37 @@ public final class FocusRackWire: @unchecked Sendable {
                         controller.suspend()
                     }
                 }
+                if request.kind == "resumeAFSettings" { afSuspended = false }
+                if request.kind == "interrupt" {
+                    afSuspended = true
+                    afInput?.foreground = false
+                    afRevision += 1
+                    afEffectReady = false
+                    authority.setSettingsRead(false)
+                }
+                if request.kind == "openPanel" {
+                    afSuspended = false
+                    panelOpen = true
+                    afSetupReady = false
+                    authority.cancelPending()
+                    authority.set(false)
+                    controller.suspend()
+                }
                 if request.kind == "selectFocusMode" {
-                    guard let selected = request.focusMode else { return }
-                    if selected == focusMode { return }
-                    guard !modeSwitchPending,
+                    guard request.focusMode != nil else { return }
+                    guard !modeSwitchPending, afLease.pending == nil,
                         FocusControlModePolicy.canChange(
                             rack: state, externalFocusIdle: externalFocusIdle)
                     else {
                         error = FocusRackError.movementPending.localizedDescription
                         return
                     }
+                    afSuspended = false
                     modeSwitchPending = true
+                    afSetupReady = false
+                    afEffectReady = false
+                    afRevision += 1
+                    authority.setSettingsRead(false)
                     error = nil
                     authority.cancelPending()
                     authority.set(false)
@@ -188,6 +270,14 @@ public final class FocusRackWire: @unchecked Sendable {
                 if request.kind == "stop" || request.kind == "externalFocus" {
                     authority.cancelPending()
                     controller.requestStop()
+                }
+                if request.kind == "closePanel" {
+                    panelOpen = false
+                    afSetupReady = false
+                    afEffectReady = false
+                    afFailure = nil
+                    afLease.requestRestore()
+                    authority.setSettingsRead(false)
                 }
                 if request.kind == "interrupt" || request.kind == "closePanel" {
                     authority.set(false)
@@ -197,14 +287,19 @@ public final class FocusRackWire: @unchecked Sendable {
                 let generation = authority.generation
                 let ticket = controller.makeIntentTicket()
                 let previous = tail
-                tail = Task { [weak self, controller] in
+                tail = Task { [weak self] in
                     await previous?.value
                     guard let self, !self.lock.withLock({ self.closed }),
-                        request.kind == "selectFocusMode"
+                        [
+                            "selectFocusMode", "openPanel", "closePanel", "manualAFSetting",
+                            "afSettingsComplete", "afSettingsDeferred", "resumeAFSettings",
+                            "observe", "poll",
+                        ].contains(request.kind)
                             || generation == self.authority.generation
                     else { return }
                     do {
                         try await self.apply(request, receivedAt: receivedAt, ticket: ticket)
+                        await self.serviceSettings()
                         if request.kind != "observe" && request.kind != "poll" {
                             self.lock.withLock {
                                 if !self.closed && generation == self.authority.generation {
@@ -236,7 +331,6 @@ public final class FocusRackWire: @unchecked Sendable {
                 guard let selected = request.focusMode else {
                     throw FocusRackError.invalidConfiguration
                 }
-                if selected == lock.withLock({ focusMode }) { return }
                 let current = await controller.snapshot()
                 lock.withLock { state = current }
                 guard
@@ -273,16 +367,66 @@ public final class FocusRackWire: @unchecked Sendable {
                         break
                     }
                 }
+                try lock.withLock { try requestSettings(selected) }
+                return
+            }
+            if request.kind == "openPanel" {
+                try lock.withLock { try requestSettings(focusMode) }
+                controller.suspend()
+                if var observation {
+                    observation.foregroundOwner = false
+                    await controller.observe(observation)
+                } else {
+                    await controller.observe(
+                        .init(
+                            sessionID: "unavailable", connected: false,
+                            foregroundOwner: false, recording: false,
+                            frameSequence: nil, focus: nil))
+                }
+                for await fresh in await controller.states() {
+                    if (!fresh.busy && !fresh.capabilities.canStop)
+                        || fresh.phase == .stopUnconfirmed
+                    {
+                        break
+                    }
+                }
+                return
+            }
+            if request.kind == "manualAFSetting" || request.kind == "resumeAFSettings" { return }
+            if request.kind == "afSettingsDeferred", let change = request.afChange {
+                lock.withLock {
+                    afLease.deferChange(change)
+                    afEffectReady = false
+                }
+                return
+            }
+            if request.kind == "afSettingsComplete", let change = request.afChange {
+                lock.withLock {
+                    if let message = request.afFailure {
+                        afLease.fail(change, message: message)
+                    } else if let input = afInput, let sessionID = input.sessionID {
+                        afLease.confirm(change, sessionID: sessionID, values: input.values)
+                    }
+                    afEffectReady = false
+                }
                 return
             }
             let timedIntent = ![
                 "poll", "observe", "diagnostics", "loadCalibration", "stop", "interrupt",
                 "closePanel", "externalFocus",
             ].contains(request.kind)
-            if timedIntent && lock.withLock({ focusMode != .timedRack }) {
+            if timedIntent
+                && lock.withLock({
+                    focusMode != .timedRack || afLease.needsService || (panelOpen && !afSetupReady)
+                })
+            {
                 throw FocusRackError.referenceUnavailable
             }
-            if observation != nil && lock.withLock({ focusMode == .nativeAF }) {
+            if observation != nil
+                && lock.withLock({
+                    focusMode == .nativeAF || afLease.needsService || (panelOpen && !afSetupReady)
+                })
+            {
                 observation?.foregroundOwner = false
             }
             let intent: FocusRackIntent
@@ -333,7 +477,14 @@ public final class FocusRackWire: @unchecked Sendable {
             case "reset": intent = .reset
             case "externalFocus": intent = .externalFocusAction
             case "interrupt": return
-            case "closePanel": intent = .discardMarks
+            case "closePanel":
+                lock.withLock {
+                    panelOpen = false
+                    afSetupReady = false
+                    afFailure = nil
+                    afLease.requestRestore()
+                }
+                intent = .discardMarks
             case "loadTemplate":
                 guard let template = request.template else {
                     throw FocusRackError.invalidConfiguration
@@ -357,6 +508,116 @@ public final class FocusRackWire: @unchecked Sendable {
             try await controller.handle(intent, observation: observation, ticket: ticket)
         }
 
+        // All ownership mutation and comparisons share the entry lock; I/O stays outside it.
+        private func acceptSettingsInput(_ input: SettingsInput?) {
+            guard let input else { return }
+            if input != afInput {
+                afRevision += 1
+                afEffectReady = false
+                if !afEffectOffered, let change = afLease.pending { afLease.deferChange(change) }
+                authority.setSettingsRead(false)
+            }
+            if let owner = afLease.sessionID, input.sessionID != owner {
+                afLease.abandon()
+                afEffectReady = false
+                afSetupReady = false
+                afFailure = nil
+            }
+            afInput = input
+            afLease.observe(input.values)
+        }
+
+        private func requestSettings(_ mode: FocusControlMode) throws {
+            afSetupReady = false
+            afFailure = nil
+            afEffectReady = false
+            guard let input = afInput, let sessionID = input.sessionID else {
+                afFailure = FocusAFSettingsError.unavailable.localizedDescription
+                throw FocusAFSettingsError.unavailable
+            }
+            do { try afLease.requestMode(mode, sessionID: sessionID, values: input.values) } catch {
+                afFailure = error.localizedDescription
+                throw error
+            }
+            authority.set(false)
+        }
+
+        private func serviceSettings() async {
+            let current = await controller.snapshot()
+            let start: (SettingsInput, Int)? = lock.withLock {
+                state = current
+                guard !closed, !afSuspended, afLease.needsService, afLease.pending == nil,
+                    afFailure == nil, let input = afInput
+                else { return nil }
+                _ = afLease.nextChange(input.observation(rack: current, ready: false))
+                if !afLease.needsService {
+                    if panelOpen { afSetupReady = true }
+                    return nil
+                }
+                guard
+                    input.observation(rack: current, ready: true).permitsWrite
+                else { return nil }
+                authority.set(false)
+                authority.setSettingsRead(true)
+                return (input, afRevision)
+            }
+            guard let (input, revision) = start else { return }
+            do {
+                let safety = try await driver.refreshSafety()
+                let change: FocusAFSettingChange? = lock.withLock {
+                    authority.setSettingsRead(false)
+                    guard !closed, revision == afRevision, afInput == input else { return nil }
+                    let values = FocusAFSettingsValues(
+                        mode: safety.focusMode, area: safety.focusArea,
+                        subject: safety.focusSubject)
+                    guard safety.movieMode, values == input.values else {
+                        afLease.observe(values)
+                        return nil
+                    }
+                    let change = afLease.nextChange(input.observation(rack: current, ready: true))
+                    afEffectOffered = false
+                    if !afLease.needsService && panelOpen { afSetupReady = true }
+                    return change
+                }
+                guard let change else { return }
+                // A real configuration write can activate AF. Invalidate the relative rack first.
+                try await controller.handle(.externalFocusAction)
+                let invalidated = await controller.snapshot()
+                lock.withLock {
+                    state = invalidated
+                    guard let latest = afInput,
+                        afLease.allows(
+                            change, observation: latest.observation(rack: invalidated, ready: true))
+                    else {
+                        afLease.deferChange(change)
+                        return
+                    }
+                    afEffectReady = true
+                }
+            } catch {
+                lock.withLock {
+                    authority.setSettingsRead(false)
+                    guard !closed, revision == afRevision else { return }
+                    afLease.failPreparation(message: error.localizedDescription)
+                }
+            }
+        }
+
+        func admissionReply(_ request: Request) -> String? {
+            lock.withLock {
+                acceptSettingsInput(request.afSettings)
+                let allowed =
+                    request.afChange.map { change in
+                        afEffectReady && !afSuspended
+                            && afInput.map {
+                                afLease.allows(
+                                    change, observation: $0.observation(rack: state, ready: true))
+                            } == true
+                    } ?? false
+                return "{\"allowed\":\(allowed)}"
+            }
+        }
+
         func reply() -> String? {
             lock.withLock {
                 struct Reply: Encodable {
@@ -371,9 +632,27 @@ public final class FocusRackWire: @unchecked Sendable {
                     let canChangeFocusMode: Bool
                     let nativeAFConfigured: Bool
                     let canNativeAutofocus: Bool
+                    let afSettingsChange: FocusAFSettingChange?
+                    let afSettingsExpectedValues: FocusAFSettingsValues?
+                    let afSettingsPending: Bool
+                    let afSettingsRestoring: Bool
+                    let afSettingsReady: Bool
+                    let afSettingsFailure: String?
                 }
                 var projectedState = state
-                if modeSwitchPending { projectedState?.capabilities.canAutofocus = false }
+                let settingsBlocked = afLease.needsService || (panelOpen && !afSetupReady)
+                if modeSwitchPending || settingsBlocked {
+                    projectedState?.capabilities.canAutofocus = false
+                    projectedState?.capabilities.canNudge = false
+                    projectedState?.capabilities.canCaptureA = false
+                    projectedState?.capabilities.canCaptureB = false
+                    projectedState?.capabilities.canGoToA = false
+                    projectedState?.capabilities.canGoToB = false
+                    projectedState?.primary.enabled = false
+                    projectedState?.pullAToB?.enabled = false
+                    projectedState?.pullBToA?.enabled = false
+                    projectedState?.calibration?.enabled = false
+                }
                 guard let saved = try? FocusRackTemplateCodec.encode(templates),
                     let json = String(data: saved, encoding: .utf8),
                     let data = try? JSONEncoder().encode(
@@ -382,18 +661,25 @@ public final class FocusRackWire: @unchecked Sendable {
                             templates: templates, templatesJSON: json, traceJSON: traceJSON,
                             calibrationJSON: calibrationJSON, focusMode: focusMode,
                             focusModeSwitchPending: modeSwitchPending,
-                            canChangeFocusMode: !modeSwitchPending
+                            canChangeFocusMode: !modeSwitchPending && afLease.pending == nil
                                 && FocusControlModePolicy.canChange(
                                     rack: state, externalFocusIdle: externalFocusIdle),
                             nativeAFConfigured: FocusControlModePolicy.nativeAFConfigured(
                                 movieFocusMode: movieFocusMode, photography: photography),
-                            canNativeAutofocus: !modeSwitchPending
+                            canNativeAutofocus: !modeSwitchPending && !settingsBlocked
                                 && FocusControlModePolicy.allowsNativeAutofocus(
                                     mode: focusMode, rack: state)
                                 && FocusControlModePolicy.nativeAFConfigured(
-                                    movieFocusMode: movieFocusMode, photography: photography)
+                                    movieFocusMode: movieFocusMode, photography: photography),
+                            afSettingsChange: afEffectReady ? afLease.pending : nil,
+                            afSettingsExpectedValues: afEffectReady ? afInput?.values : nil,
+                            afSettingsPending: afLease.needsService,
+                            afSettingsRestoring: afLease.restoring,
+                            afSettingsReady: afSetupReady,
+                            afSettingsFailure: afFailure ?? afLease.failure
                         ))
                 else { return nil }
+                if afEffectReady && afLease.pending != nil { afEffectOffered = true }
                 traceJSON = nil
                 return String(data: data, encoding: .utf8)
             }
@@ -402,6 +688,8 @@ public final class FocusRackWire: @unchecked Sendable {
         func close() {
             let previous: Task<Void, Never>? = lock.withLock {
                 closed = true
+                afLease.abandon()
+                authority.setSettingsRead(false)
                 authority.set(false)
                 authority.cancelPending()
                 controller.invalidate(reason: "Camera owner retired.")

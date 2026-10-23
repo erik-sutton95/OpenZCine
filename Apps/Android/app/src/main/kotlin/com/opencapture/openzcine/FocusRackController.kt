@@ -3,6 +3,7 @@ package com.opencapture.openzcine
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import com.opencapture.opencine.nikon.LiveFocusInfo
+import com.opencapture.opencine.nikon.CameraPropertySnapshot
 import com.opencapture.openzcine.bridge.SwiftCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 
 /** Raw real-frame metadata only; Swift owns all focus eligibility decisions. */
 internal fun focusRackFocusJSON(focus: LiveFocusInfo?): JSONObject? =
@@ -19,6 +22,13 @@ internal fun focusRackFocusJSON(focus: LiveFocusInfo?): JSONObject? =
             .put("subjectDetectionActive", it.subjectDetectionActive)
             .put("boxCount", it.boxes.size)
             .put("selectedBoxIndex", it.selectedBoxIndex ?: JSONObject.NULL)
+    }
+
+/** Rechecks the exact prepared readback tuple at the existing serialized send boundary. */
+internal fun focusAFSettingsReadbacksMatch(expected: JSONObject, actual: CameraPropertySnapshot): Boolean =
+    actual.captureSelector == "video" && listOf("mode" to actual.focusMode,
+        "area" to actual.focusArea, "subject" to actual.focusSubject).all { (key, value) ->
+        value != null && !expected.isNull(key) && expected.optString(key) == value
     }
 
 /** Native transport to a Swift runner; this boundary never exposes camera command actions. */
@@ -38,6 +48,7 @@ private object NativeFocusRackWire : FocusRackWirePort {
 internal class FocusRackController(private val connectionOwner: Long, private val preferences: SharedPreferences,
     private val scope: CoroutineScope, private val wire: FocusRackWirePort = NativeFocusRackWire,
     private val traceSink: (String) -> Unit = {},
+    private val observationNanos: () -> Long = System::nanoTime,
 ) {
     private var owner: String? = null
     private val mutableState = MutableStateFlow(FocusRackViewState())
@@ -47,7 +58,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     private val mutableTemplates = MutableStateFlow<List<FocusRackTimingViewState>>(emptyList())
     val templates: StateFlow<List<FocusRackTimingViewState>> = mutableTemplates
     private var observation: JSONObject? = null
-    private var closed = false
+    @Volatile private var closed = false
     private var poller: Job? = null
     private var persistedTemplates: String? = null
     private var persistedCalibration: String? = null
@@ -55,6 +66,23 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     private var captures: Map<String, Long> = emptyMap()
     private var stopPending = false
     private var pendingFocusMode: String? = null
+    private val afInput = AtomicReference<String?>(null)
+    private val afInputAt = AtomicLong(0)
+    @Volatile private var afSuspended = false
+    private var afWriter: (suspend (JSONObject, () -> Boolean) -> JSONObject)? = null
+    private var afWriteJob: Job? = null
+    private var afEffectID: Long? = null
+
+    /** The shell supplies only the existing admitted setting writer and actual readback. */
+    fun configureAFSettings(writer: suspend (JSONObject, () -> Boolean) -> JSONObject) { afWriter = writer }
+
+    /** Manual intent retires ownership before even a same-value picker write can be queued. */
+    fun manualAFSetting(property: String) {
+        send("manualAFSetting", JSONObject().put("afProperty", property))
+    }
+
+    fun openPanel() { afSuspended = false; activate(); send("openPanel") }
+    fun resumeAFSettings() { afSuspended = false; send("resumeAFSettings") }
 
     /** Allocates the inert native owner only when the operator first opens Focus Rack. */
     fun activate() {
@@ -76,7 +104,12 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         }
     }
 
-    fun observe(value: JSONObject) { observation = value; send("observe") }
+    fun observe(value: JSONObject) {
+        observation = value
+        afInput.set(value.optJSONObject("afSettings")?.toString())
+        afInputAt.set(observationNanos())
+        send("observe")
+    }
     fun capture(id: String, candidate: Pair<Long, Bitmap>?) {
         if (candidate == null) return
         pendingCapture = Triple(id, candidate.first, candidate.second)
@@ -84,6 +117,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     }
     fun nudge(near: Boolean, steps: Int) = send("nudge", JSONObject().put("towardNear", near).put("steps", steps))
     fun selectFocusMode(mode: String) {
+        afSuspended = false
         pendingFocusMode = mode
         mutableState.value = state.value.copy(focusModeSwitchPending = true,
             canChangeFocusMode = false, canAutofocus = false, canNativeAutofocus = false)
@@ -101,7 +135,13 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     fun reset() = send("reset")
     fun externalFocus() = send("externalFocus")
     fun interrupt() {
+        afSuspended = true
         observation?.put("foregroundOwner", false)
+        observation?.optJSONObject("afSettings")?.let {
+            it.put("foreground", false)
+            afInput.set(it.toString())
+            afInputAt.set(observationNanos())
+        }
         send("interrupt")
     }
     fun closePanel(): Boolean {
@@ -109,7 +149,6 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         observation?.put("foregroundOwner", false)
         pendingCapture = null
         send("closePanel")
-        poller?.cancel()
         mutableThumbnails.value = emptyMap()
         return true
     }
@@ -138,6 +177,8 @@ internal class FocusRackController(private val connectionOwner: Long, private va
         if (closed) return
         closed = true
         poller?.cancel()
+        afWriteJob?.cancel()
+        afInput.set(null)
         owner?.let(wire::close)
         pendingCapture = null
         mutableThumbnails.value = emptyMap()
@@ -152,6 +193,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             request.put("observation", it)
             request.put("movieFocusMode", it.opt("movieFocusMode") ?: JSONObject.NULL)
             request.put("photography", it.optBoolean("photography", false))
+            if (!request.has("afSettings")) it.optJSONObject("afSettings")?.let { input -> request.put("afSettings", input) }
         }
         val reply = runCatching { wire.step(handle, request.toString())?.let(::JSONObject) }.getOrNull()
         if (reply == null) {
@@ -197,6 +239,10 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 focusMode = sharedMode,
                 focusModeSwitchPending = modePending,
                 canChangeFocusMode = reply.optBoolean("canChangeFocusMode") && !stopPending && !modePending,
+                afSettingsPending = reply.optBoolean("afSettingsPending"),
+                afSettingsRestoring = reply.optBoolean("afSettingsRestoring"),
+                afSettingsReady = reply.optBoolean("afSettingsReady"),
+                afSettingsFailure = reply.nullableString("afSettingsFailure"),
                 nativeAFConfigured = reply.optBoolean("nativeAFConfigured"),
                 canNativeAutofocus = reply.optBoolean("canNativeAutofocus") && !stopPending && !modePending,
                 phase = if (stopPending) "stopping" else snapshot.getString("phase"),
@@ -225,6 +271,10 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                     FocusRackNudgeProgressViewState(it.getBoolean("towardNear"), it.getInt("steps"), it.getInt("percent"))
                 })
         }
+        reply.optJSONObject("afSettingsChange")?.let { change ->
+            reply.optJSONObject("afSettingsExpectedValues")?.let { change.put("expectedValues", it) }
+            executeAFSetting(change)
+        }
         if (BuildConfig.DEBUG) {
             reply.nullableString("traceJSON")?.let { trace -> runCatching { traceSink(trace) } }
             if (wasActive && !state.value.active) send("diagnostics")
@@ -248,6 +298,42 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             }
         }
     }
+    private fun executeAFSetting(change: JSONObject) {
+        val id = change.getLong("id")
+        if (afEffectID == id || afWriteJob?.isActive == true) return
+        val handle = owner ?: return
+        val writer = afWriter ?: return
+        afEffectID = id
+        val changeJSON = change.toString()
+        val admitted = {
+            val input = afInput.get()
+            val age = observationNanos() - afInputAt.get()
+            !closed && !afSuspended && input != null && age in 0..500_000_000L && runCatching {
+                val request = JSONObject().put("kind", "afSettingsAdmission")
+                    .put("afChange", JSONObject(changeJSON)).put("afSettings", JSONObject(input))
+                wire.step(handle, request.toString())?.let(::JSONObject)?.optBoolean("allowed") == true
+            }.getOrDefault(false)
+        }
+        afWriteJob = scope.launch {
+            try {
+                if (!admitted()) {
+                    send("afSettingsDeferred", JSONObject().put("afChange", change))
+                } else {
+                    val confirmed = writer(change, admitted)
+                    afInput.set(confirmed.toString())
+                    afInputAt.set(observationNanos())
+                    observation?.put("afSettings", confirmed)
+                    send("afSettingsComplete", JSONObject().put("afChange", change).put("afSettings", confirmed))
+                }
+            } catch (error: Exception) {
+                send("afSettingsComplete", JSONObject().put("afChange", change)
+                    .put("afFailure", error.message ?: "The camera did not confirm the AF setting."))
+            } finally {
+                afWriteJob = null
+            }
+        }
+    }
+
     private fun JSONObject.action(): FocusRackActionViewState = FocusRackActionViewState(
         getString("title"), nullableString("detail"), getBoolean("enabled") && !stopPending,
         nullableString("disabledReason"))

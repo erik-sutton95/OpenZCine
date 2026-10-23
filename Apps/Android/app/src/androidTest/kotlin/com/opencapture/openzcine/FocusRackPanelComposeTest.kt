@@ -69,9 +69,10 @@ class FocusRackPanelComposeTest {
         for (tag in listOf("positions", "nudges", "duration", "calibrate", "primary", "pull.aToB", "pull.bToA")) {
             compose.onNodeWithTag("focusRack.$tag").assertDoesNotExist()
         }
-        compose.onNodeWithText("Use movie AF-F before tapping.")
+        compose.onNodeWithText("Movie AF-F is required before tapping.")
             .performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("focusRack.nativeAF.settings").performScrollTo().performClick()
+        compose.onNodeWithTag("focusRack.nativeAF.settings").assertIsDisplayed().assertIsEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.nativeAF.settings").performClick()
         assertEquals(1, actions.focusSettings)
         assertEquals(0, actions.primary)
         assertEquals(0, actions.calibrations)
@@ -81,6 +82,32 @@ class FocusRackPanelComposeTest {
         compose.runOnIdle { state.value = state.value.copy(canChangeFocusMode = false, focusModeSwitchPending = true) }
         compose.onNodeWithTag("focusRack.mode.timedRack").assertIsNotEnabled()
         compose.onNodeWithTag("focusRack.close").assertIsNotEnabled()
+    }
+
+    @Test fun automaticSetupKeepsStatusScrollableAndManualSettingsAvailable() {
+        val state = mutableStateOf(ready().copy(afSettingsPending = true, canNudge = false,
+            canAutofocus = false, primaryEnabled = false, canChangeFocusMode = false))
+        val actions = Actions()
+        mount(state, actions)
+        compose.onNodeWithTag("focusRack.message").performScrollTo()
+            .assertTextEquals("Applying camera AF setup…").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.close").assertIsEnabled()
+        openOptions()
+        compose.onNodeWithText("Focus settings").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, actions.focusSettings)
+        compose.saveLandscapeEvidence("auto-af-timed-setup-pending-landscape")
+        compose.runOnIdle { state.value = state.value.copy(focusMode = "nativeAF") }
+        compose.onNodeWithTag("focusRack.nativeAF.settings").assertIsDisplayed().assertIsEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.nativeAF.settings").performClick()
+        assertEquals(2, actions.focusSettings)
+        compose.onNodeWithText("Applying camera AF setup…").performScrollTo().assertIsDisplayed().insideFrame()
+        compose.saveLandscapeEvidence("auto-af-native-setup-pending-landscape")
+        compose.runOnIdle { state.value = state.value.copy(afSettingsPending = false,
+            afSettingsFailure = "Camera AF settings are unavailable; automatic setup could not start.") }
+        compose.onNodeWithText("Camera AF settings are unavailable; automatic setup could not start.")
+            .performScrollTo().assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.nativeAF.settings").assertIsDisplayed().assertIsEnabled().insideFrame()
+        compose.saveLandscapeEvidence("auto-af-native-setup-failed-landscape")
     }
 
     @Test fun groupedMarksAndFourButtonsForwardSetupWithoutAWheel() {

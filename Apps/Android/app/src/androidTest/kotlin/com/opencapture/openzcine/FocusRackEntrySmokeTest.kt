@@ -161,6 +161,10 @@ class FocusRackEntrySmokeTest {
             verify(close)
             verifySharedMoveEditor(portrait)
             if (!portrait) verifyFocusSettingsRoute()
+        } catch (error: Throwable) {
+            saveDisplay("auto-af-route-failure")
+            device.dumpWindowHierarchy(File(context.cacheDir, "diagnostics/ready/auto-af-route-failure.xml"))
+            throw error
         } finally { instrumentation.runOnMainSync { activity.finish() } }
     }
 
@@ -188,7 +192,7 @@ class FocusRackEntrySmokeTest {
         val minimumPan = (20 * context.resources.displayMetrics.density).toInt()
         repeat(20) {
             refreshAccessibilityCache()
-            val viewport = device.findObject(By.desc("Focus rack setup"))?.visibleBounds
+            val viewport = device.wait(Until.findObject(By.desc("Focus rack setup")), 5_000)?.visibleBounds
                 ?: throw AssertionError("No focus rack setup scroller")
             val label = device.findObject(By.textStartsWith(prefix))
             val bounds = label?.let { clickableControl(it).visibleBounds }
