@@ -29,6 +29,7 @@ import struct OpenCineCameraVocabulary.ControlCapabilities
 import struct OpenCineCameraVocabulary.CustomLUTArchiveEntry
 import class OpenCineCameraVocabulary.CustomLUTStore
 import class OpenCineCameraVocabulary.LUTPreferences
+import struct OpenCineCameraVocabulary.MonitorLinkMeter
 import struct OpenCineCameraVocabulary.MonitorLutPackImportResult
 
 private let connectionLogger = Logger(
@@ -884,6 +885,7 @@ final class NativeAppModel {
     var connection: ConnectionState = .disconnected {
         didSet {
             syncReportingCameraPath()
+            applyLinkChip()
             publishWatchState()
             guard oldValue != connection else { return }
             AppDiagnostics.shared.record(connection.diagnosticEvent)
@@ -969,7 +971,9 @@ final class NativeAppModel {
     @ObservationIgnored private var connectionProgressShowsFailure = false
     /// Whether an established session dropped and is being recovered behind a preserved monitor.
     /// Drives the recovery affordance over the held frame (`MonitorRecoveryOverlay`).
-    private(set) var sessionRecovery: SessionRecoveryState = .idle
+    private(set) var sessionRecovery: SessionRecoveryState = .idle {
+        didSet { applyLinkChip() }
+    }
     /// True once the attempt-1 card grace has run out (the card shows immediately from attempt 2).
     /// Model-owned deliberately: this timer lived in the overlay as a `.task`, but the overlay
     /// renders NOTHING until the card shows and SwiftUI does not run `.task` on content-less
@@ -1154,8 +1158,6 @@ final class NativeAppModel {
     @ObservationIgnored private var lastLoggedHDMIFrameSize: CGSize?
     /// The live capture session. Non-nil only while `videoSource == .hdmiCapture`.
     @ObservationIgnored private var uvcSource: UVCVideoSource?
-    /// Frame-rate sampler for the capture path, mirroring the camera stream's `liveFPS` readout.
-    @ObservationIgnored private var hdmiFrameRate = FrameRateSampler()
 
     /// Whether this monitor session has a camera behind it at all.
     ///
@@ -1759,7 +1761,9 @@ final class NativeAppModel {
         isMonitorPresented = wasWatching
         connection = .connected
         connectionMessage = "Joining \(discovery.name)…"
-        liveFPS = "LINK"
+        relayJoinDenied = false
+        linkMeter.restart()
+        applyLinkChip()
         operatorSession.declare(modes: displayModes)
 
         let client = MonitorRelayClient()
@@ -1770,11 +1774,11 @@ final class NativeAppModel {
             // state — the same idiom the camera loop uses (RECOV/LINK). Without this, a route
             // that never comes up is indistinguishable from a connected feed with no frames,
             // which is exactly how it was reported from set.
+            self.applyLinkChip()
             switch state {
             case .connecting:
-                self.liveFPS = "LINK"
+                break
             case .waiting(let reason):
-                self.liveFPS = "LINK"
                 self.connectionMessage = "Can't reach the broadcasting device yet: \(reason)"
                 self.relayFailureReason = reason
             case .connected(let hostName, let cameraName):
@@ -1786,7 +1790,6 @@ final class NativeAppModel {
                     ?? "Watching \(hostName)."
                 self.relayFailureReason = nil
             case .failed(let reason):
-                self.liveFPS = "FAIL"
                 // Watching from ON the camera's own Wi-Fi depends on the AP forwarding
                 // client-to-client traffic, which camera APs typically do not — the honest
                 // remedy is leaving that network (nearby broadcasts reach this device
@@ -1836,7 +1839,8 @@ final class NativeAppModel {
                 denial.passcodeRequired && self.relayPasscodeWasAttempted
                 ? "That passcode wasn't accepted — check it with the broadcasting device."
                 : denial.reason
-            self.liveFPS = "FAIL"
+            self.relayJoinDenied = true
+            self.applyLinkChip()
             self.liveFrameImage = nil
         }
         relayHoldsControl = false
@@ -1978,7 +1982,6 @@ final class NativeAppModel {
             },
             mediaStatus: state.mediaStatus)
         if isRecording != state.isRecording { isRecording = state.isRecording }
-        liveFPS = state.liveFPS
     }
 
     private func applyRelayFrame(
@@ -2060,6 +2063,8 @@ final class NativeAppModel {
             }
             self.publishNativeFrame(display, clean: decoded, owner: .relay(client))
             self.lastGoodFrameAt = Date()
+            self.linkMeter.notePresented(at: CACurrentMediaTime())
+            self.applyLinkChip()
             if self.relayFailureReason != nil { self.relayFailureReason = nil }
             // The viewer's assists meter the clean frame exactly as the host's do.
             self.sampleScopesIfDue(clean: decoded) { [weak self, weak client] in
@@ -4187,7 +4192,7 @@ final class NativeAppModel {
                 // from whatever the last setup left behind.
                 adoptActiveSetupStreamSettings(host: session.identity.host)
                 markFirstPairWizardCompleted()
-                liveFPS = "READY"
+                applyLinkChip()
                 cameraState = cameraState.updating(
                     cameraName: session.identity.displayName
                 )
@@ -4586,7 +4591,6 @@ final class NativeAppModel {
         /// No retry loop is started — this only paints the state the loop would publish.
         func forceSessionRecoveryState(_ state: SessionRecoveryState) {
             activePanel = nil
-            liveFPS = SessionRecoveryCopy.heldFrameBadge
             sessionRecovery = state
             // A painted state has no retry to wait out: its card shows at once.
             sessionRecoveryCardGraceElapsed = true
@@ -5055,7 +5059,12 @@ final class NativeAppModel {
     @ObservationIgnored private var consecutiveBadLiveFrames = 0
     @ObservationIgnored private var recentKeepaliveFailures = 0
     @ObservationIgnored private var isStreamRecovering = false
-    @ObservationIgnored private var signalBarsFilter = LinkSignalBars()
+    /// The shared FPS chip word, measured rate and bars (A5-17): every picture source feeds it.
+    @ObservationIgnored private var linkMeter = MonitorLinkMeter()
+    /// The body-busy notice shows once per busy spell.
+    @ObservationIgnored private var bodyBusyNoticed = false
+    /// The broadcaster refused this watcher's join; the chip says FAIL until the next join.
+    @ObservationIgnored private var relayJoinDenied = false
     /// The fire-and-forget `stopLiveView()` started on background, tracked so a quick return to the
     /// foreground awaits it before restarting the stream (otherwise the stop can land after the
     /// restart and shut the resumed feed back down).
@@ -7125,8 +7134,8 @@ final class NativeAppModel {
         switch kind {
         case .initialDrop:
             connection = .reconnecting
-            liveFPS = SessionRecoveryCopy.heldFrameBadge
             isStreamRecovering = true
+            applyLinkChip()
             startRelayRecoveryHeartbeat()
             logConnection(
                 "session lost host=\(attempt.targetID) (\(attempt.reason)) → bounded recovery")
@@ -7361,7 +7370,6 @@ final class NativeAppModel {
             resetCameraPropertyState(
                 keepingCaptureMode: true, keepingReadings: skipPropertyBootstrap)
         }
-        var frameRate = FrameRateSampler()
         monitorRuntime?.startPreview(
             bootstrap: { [weak self] in
                 guard let self, cameraSession === session else { return }
@@ -7385,8 +7393,7 @@ final class NativeAppModel {
             consume: { [weak self] frame, delivery in
                 guard let self, cameraSession === session else { return false }
                 return await consumeCameraFrame(
-                    frame, delivery: delivery, session: session, frameRate: &frameRate,
-                    incident: incident)
+                    frame, delivery: delivery, session: session, incident: incident)
             },
             safePoint: { [weak self] count, pollEveryCall in
                 guard let self, cameraSession === session else { return }
@@ -7399,20 +7406,14 @@ final class NativeAppModel {
                 self?.lastAppliedStreamCompression = demand.compression
             },
             resetCadence: { [weak self] in
-                frameRate = FrameRateSampler()
+                self?.linkMeter.restart()
                 self?.lastLevelUpdateTime = 0
             },
             health: { [weak self] health in
                 guard let self, cameraSession === session else { return }
                 lastGoodFrameAt = health.lastGoodFrameAt
                 consecutiveBadLiveFrames = health.badFrames
-                if health.bodyBusy {
-                    if liveFPS != "BUSY" {
-                        showMonitorNotice(
-                            "The camera is busy on the body - the feed resumes automatically.")
-                    }
-                    liveFPS = "BUSY"
-                }
+                noteBodyBusy(health.bodyBusy)
             },
             event: { [weak self] event in
                 guard let self, cameraSession === session else { return }
@@ -7423,13 +7424,11 @@ final class NativeAppModel {
                     AppDiagnostics.shared.record(.liveViewStalled)
                     connectionMessage =
                         "Live view stalled (\(reason)). Restarting in \(formattedSeconds(delay))…"
-                    liveFPS = "RECOV"
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnect(_, _):
                     AppDiagnostics.shared.record(.liveViewFailed)
                     connectionMessage = "Live view didn't start - reconnecting…"
-                    liveFPS = "RECOV"
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnectReady:
@@ -7533,7 +7532,7 @@ final class NativeAppModel {
         // Only a capture-only monitor loses the header. With a session up the pump keeps pulling
         // it, so clearing here would blank the AF box and meters for one tick and nothing more.
         if cameraSession == nil { clearFrameHeaderDerivedState() }
-        hdmiFrameRate = FrameRateSampler()
+        linkMeter.restart()
         let source = UVCVideoSource(
             queueLabel: "com.opencapture.openzcine.uvc-capture",
             logSubsystem: "com.opencapture.openzcine",
@@ -7611,10 +7610,9 @@ final class NativeAppModel {
                 "hdmi frame \(w)x\(h) aspect=\(String(format: "%.3f", Double(w) / Double(max(1, h))))"
             )
         }
-        hdmiFrameRate.recordFrame(at: CACurrentMediaTime())
-        measuredLiveViewFPS = hdmiFrameRate.displayFPS
-        let label = hdmiFrameRate.formatted
-        if label != liveFPS { liveFPS = label }
+        linkMeter.notePresented(at: CACurrentMediaTime())
+        measuredLiveViewFPS = linkMeter.measuredFPS
+        applyLinkChip()
         lastGoodFrameAt = Date()
         consecutiveBadLiveFrames = 0
         // Publish the picture ONLY — deliberately not through `publishLiveFrameDisplay`, which
@@ -7650,8 +7648,9 @@ final class NativeAppModel {
         // pretending to be live.
         if !state.isStreaming {
             liveFrameImage = nil
-            liveFPS = "—"
+            linkMeter.restart()
         }
+        applyLinkChip()
     }
 
     /// Services camera control when the camera's own frame loop isn't running.
@@ -7813,7 +7812,17 @@ final class NativeAppModel {
         }
     }
 
+    /// The chip keeps the shared words (no BUSY, A5-17): the notice says why the feed paused, once
+    /// per busy spell. A new session starts a new spell (`resetLinkHealthMeasurements`).
+    func noteBodyBusy(_ busy: Bool) {
+        if busy, !bodyBusyNoticed {
+            showMonitorNotice("The camera is busy on the body - the feed resumes automatically.")
+        }
+        bodyBusyNoticed = busy
+    }
+
     private func resetLinkHealthMeasurements() {
+        bodyBusyNoticed = false
         measuredLiveViewFPS = 0
         lastGoodFrameAt = nil
         consecutiveBadLiveFrames = 0
@@ -7821,7 +7830,7 @@ final class NativeAppModel {
         isStreamRecovering = false
         linkHealth = 0
         linkHealthDetail = "Not connected"
-        signalBarsFilter = LinkSignalBars()
+        linkMeter = MonitorLinkMeter()
         liveSignalBars = 0
     }
 
@@ -7840,17 +7849,57 @@ final class NativeAppModel {
         } else {
             linkHealthDetail = snapshot.detailCaption
         }
-        // USB-C: frame timing isn't radio quality — show full bars whenever the link is alive.
-        let bars =
-            cameraSession?.transportKind == .usb
-            ? (linkHealth > 0 ? 4 : 0)
-            : signalBarsFilter.update(score: linkHealth)
-        if bars != liveSignalBars { liveSignalBars = bars }
+        linkMeter.age(at: CACurrentMediaTime())
+        applyLinkChip()
         // THE ladder applier: this tick is the only steady-state caller, and without it a
         // step-down waited on the property round-robin's warningStatus visit — 10+ minutes on
         // exactly the congested link that triggered it, with the fetch deadline killing the
         // session first. (The audit's H3.)
         applyThermalStreamStepDownIfNeeded()
+    }
+
+    /// The FPS chip and bars through the shared `MonitorLinkMeter` (A5-17): Z's picture sources map
+    /// onto the shared connection phase here, so the chip reads like Pocket, Insta and Z Android.
+    private func applyLinkChip() {
+        linkMeter.update(
+            connection: linkConnectionPhase, feedRecovering: isStreamRecovering,
+            sessionRecovering: sessionRecovery.isRecovering || recoveryEpisode.isRunning,
+            linkHealthScore: linkHealth,
+            // USB-C: frame timing is not radio quality, so a live link shows full bars.
+            linkBars: cameraSession?.transportKind == .usb ? (linkHealth > 0 ? 4 : 0) : nil)
+        if linkMeter.label != liveFPS { liveFPS = linkMeter.label }
+        if linkMeter.bars != liveSignalBars { liveSignalBars = linkMeter.bars }
+    }
+
+    private var linkConnectionPhase: LinkConnectionPhase {
+        if isDemoSession { return .idle }
+        switch videoSource {
+        case .relay:
+            if relayJoinDenied { return .failed("join refused") }
+            switch relayClientState {
+            case .idle: return .idle
+            case .connecting, .waiting: return .openingDatalink
+            case .connected: return .live
+            case .failed(let reason): return .failed(reason)
+            }
+        case .hdmiCapture:
+            switch hdmiCaptureState {
+            case .streaming: return .live
+            case .starting: return .openingDatalink
+            case .failed(let reason): return .failed(reason)
+            // Terminal: the chip keeps saying FAIL after the state's notice is gone.
+            case .unsupportedDevice, .permissionDenied: return .failed(hdmiCaptureState.message)
+            case .waitingForDevice: return .idle
+            }
+        default:
+            switch connection {
+            case .disconnected: return .idle
+            case .scanning: return .scanning
+            case .pairing: return .pairing
+            case .reconnecting, .preparingLiveView: return .openingDatalink
+            case .connected: return .live
+            }
+        }
     }
 
     private func currentLinkHealthInputs() -> CameraLinkHealthInputs {
@@ -8109,8 +8158,7 @@ final class NativeAppModel {
     /// scopes, relay, watch and display processing stay with their presentation owner.
     private func consumeCameraFrame(
         _ frame: PTPLiveViewFrame, delivery: NikonLiveViewPump.Delivery,
-        session: NativeCameraSession, frameRate: inout FrameRateSampler,
-        incident: NikonFeedIncidentProducer.Preview?
+        session: NativeCameraSession, incident: NikonFeedIncidentProducer.Preview?
     ) async -> Bool {
         guard !Task.isCancelled, cameraSession === session else { return false }
         // Calibration needs the raw header at arrival, before decode or display smoothing.
@@ -8146,11 +8194,10 @@ final class NativeAppModel {
         guard !Task.isCancelled, cameraSession === session, let image = decoded, let cleanFrame
         else { return false }
         recoverySourceFrameAt = Date.timeIntervalSinceReferenceDate
-        let arrival = CACurrentMediaTime()
-        frameRate.recordFrame(at: arrival)
+        linkMeter.notePresented(at: CACurrentMediaTime())
         lastGoodFrameAt = Date()
         consecutiveBadLiveFrames = 0
-        measuredLiveViewFPS = frameRate.displayFPS
+        measuredLiveViewFPS = linkMeter.measuredFPS
         if delivery.first {
             publishNativeFrame(image, clean: cleanFrame, owner: .camera(session))
             liveViewFocus = frame.focus
@@ -8181,7 +8228,7 @@ final class NativeAppModel {
         recoveryPresentedAt = Date.timeIntervalSinceReferenceDate
         applyLiveViewHeaderState(frame)
         applyLiveViewHeaderTimecode(frame.timecode)
-        if !delivery.bodyBusy { liveFPS = frameRate.formatted }
+        applyLinkChip()
         return true
     }
 
