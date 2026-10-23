@@ -34,7 +34,7 @@ jobs:
         run: |
           hour=$(date -u +%H)
           if [ "$EVENT" = schedule ] && [ "$hour" -ge 7 ] && [ "$hour" -lt 19 ]; then
-            echo "::notice::scheduled nightly started at ${hour}:xx UTC, outside the 19:00-07:00 UTC window; skipped"
+            echo "::notice::scheduled nightly started at ${hour}:xx UTC, outside the 19:00-06:59 UTC window; skipped"
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
