@@ -1,5 +1,5 @@
-- Shared OpenCine setup, monitor, View Assist and media controls; clearer portrait/landscape readouts.
-- DISP 3 restores REC, timecode and larger tiles; codec uses the accent colour.
-- RAW/JPEG instant review is faster; tap once in CL/CH for one photo, hold for a burst.
-- Photo LUT, stills-card counts, focus, GYRO lock overlap and Media sharing fixes.
-- Clearer connection recovery and take-over; better dropout diagnostics.
+- Shared OpenCine setup, monitor, View Assist and media controls; clearer readouts.
+- Fixes a freeze while the live picture rebuilds after rotating or returning.
+- A dozing camera is woken and dialled again instead of failing as unreachable.
+- Faster RAW/JPEG instant review; tap once in CL/CH for one photo, hold for a burst.
+- Photo LUT, stills-card counts, focus, GYRO and Media sharing fixes; better dropout diagnostics.
