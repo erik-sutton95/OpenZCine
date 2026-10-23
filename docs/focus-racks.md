@@ -5,6 +5,39 @@ start delay and Linear timing. It uses the same Swift execution controller on iO
 This local implementation is experimental: the remaining physical qualification is recorded
 in [the qualification log](investigations/focus-rack-qualification.md).
 
+## Native AF and Timed Rack
+
+The focus panel offers **Native AF** and **Timed Rack** on iOS and Android. It opens in
+Timed Rack to retain the existing workflow. Opening the panel or selecting a mode temporarily
+sets its movie AF configuration through the existing confirmed camera-setting path. Native AF
+uses **AF-F / Auto-area AF / subject detection Off**; Timed Rack uses **AF-S / Auto-area AF /
+subject detection Off**, preserving the configuration used for the local timing calibration.
+A mode change is unavailable while a timed movement, unconfirmed stop or another focus command
+still owns control. Automatic writes wait for confirmed recording stop and settled focus.
+
+**Native AF** uses the normal live-picture tap target through the existing serialized camera-control
+path. After automatic setup completes, set **g6 AF speed** on the camera. Tap the subject in the
+live picture to request a transition, including while recording. Native AF has no duration, delay, calibration or A/B lens
+marks: the camera determines the transition and whether it acquires the subject. A completed target
+request does not prove that focus arrived. The local test at speed −5 produced smooth transitions
+of roughly five seconds; the near bedpost needed retries. This does not promise exact 1/3/6-second
+moves or reliable acquisition of every subject.
+
+**Timed Rack** retains the existing mark, planner, cancellation, readiness, freshness and timing
+checks described below. Native AF revokes timed movement authority. A no-op setup retains timed
+marks; actual AF actions and AF-setting writes invalidate their relative reference through the
+existing external-focus path. Before returning to timed playback, set fresh marks if focus moved
+outside the rack or its configuration changed.
+
+Closing the panel restores the confirmed values from before automatic setup, only for settings
+the app changed and still owns. Manual picker intent, including selecting the same value, or an
+observed camera change relinquishes that setting; changing away and back does not regain ownership.
+An explicit later mode selection can configure it again, remembering the latest manual value for
+restoration. Lens position is never restored. If recording or focus work is active, closing hides
+the panel and retains pending restoration until the camera is idle. Unknown recording/readiness
+or setting values do not permit a write. Errors are reported without an automatic retry loop.
+Disconnecting retires the pending restoration; it is never replayed on a replacement connection.
+
 ## Set the marks
 
 1. Connect the camera, open live view, select movie AF-S and turn tracking off.
@@ -123,12 +156,25 @@ keeps the saved measurements inactive; it does not authorize an unmeasured comma
 
 Linear playback selects the finest measured size that fits the duration using currently available
 evidence, including before or during optional calibration. Completing all stages is not required.
-Measured worst command costs are retained. Longer pulls also reserve the worst measured camera
-read cost between commands; periodic reads start only when that budget fits before the next
-command deadline. The two-second evidence freshness limit, native completion, no-overlap and
+Measured worst command costs are retained. The local measured Linear planner schedules fine moves
+and explicit safety-read windows together. Ordinary gaps cover native completion and quiet time;
+larger measured moves create room for reads where needed, with an exact measured final move.
+Admission rejects plans with less than two milliseconds of minimum timing headroom, including
+read windows; the unchanged runtime guards still stop delays or cost growth that no longer fit.
+The plan retains the existing maximum start spacing and fixed timing epoch. It checks the remaining
+commands and read windows against current native/read maxima and actual evidence age before
+activation, including the final command. A read must finish before both the next command deadline
+and expiration of the previous reading; freshness starts when each read starts. Active scheduled
+pulls use these windows, while countdowns and pauses continue refreshing safety. The two-second
+evidence freshness limit, native completion, no-overlap and
 Stop priority remain in force. Preflight or later timing growth can refuse/stop a plan; it never
 replans into a catch-up burst. Admission and regular host timing do not establish optical smoothness.
 Other timing modes keep the existing adaptive policy.
+
+An offline regression with a 100-unit span and the saved native timing maxima replaces the old
+13-command 3-second plan with 28 measured 48-pulse moves and two 128-pulse moves, including one
+reserved 100ms safety read. This verifies scheduling and safety admission only; recorded optical
+smoothness still requires a separate source-video comparison.
 
 Old timing templates still decode. The new direct playback actions always use the displayed duration
 and delay, including when a template retains the legacy Fastest mode internally. Fast repositioning

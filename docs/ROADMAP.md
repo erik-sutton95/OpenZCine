@@ -134,9 +134,13 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
 
 - **Programmable A/B focus racks** (local implementation, discussion #11): shared timing,
   session-local acknowledged marks, Pause/Resume and timing templates for iOS and Android.
+  Local work adds Native AF tap targeting alongside the existing Timed Rack, with camera-set AF
+  speed and separate movement authority on both shells.
   The coarse profile failed source smoothness; finer iPhone USB trials passed isolated source
   checks and four repeated round trips. Further physical testing ended at the operator's request;
   the remaining qualification matrix is explicitly open.
+  Both modes temporarily configure movie AF and restore only still-owned settings on close,
+  deferring restoration until recording and focus work stop while preserving manual changes.
   See [the local workflow](focus-racks.md) and
   [qualification result](investigations/focus-rack-qualification.md).
 - **Monitoring & focus assists** (in progress) — focus peaking, vectorscope + waveform scopes,
