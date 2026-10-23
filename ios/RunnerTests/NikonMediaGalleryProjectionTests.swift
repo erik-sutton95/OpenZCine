@@ -21,6 +21,32 @@ import XCTest
         model.mediaClips = clips
         return model
     }
+    /// OPENZCINE-IOS-6/-7 (build 281): the catalog screen builds every cell on each render, and a
+    /// cell's RAW+J lookup rebuilt the library-wide pairing policy from all clips (246 s main-thread
+    /// hang in String.lowercased under a lazy grid). One render's cells must read that render's
+    /// projection pass, so a large card stays responsive.
+    func testEveryGalleryCellOfALargeLibraryReadsTheRenderProjection() {
+        var clips: [MediaClip] = []
+        for index in 0..<1_500 {
+            let stem = String(format: "DSC_%04d", index)
+            clips.append(clip("\(stem).JPG", handle: UInt32(index * 2 + 1)))
+            if index.isMultiple(of: 3) { clips.append(clip("\(stem).NEF", handle: UInt32(index * 2 + 2))) }
+        }
+        let model = model(clips)
+        let projection = model.mediaGalleryProjection
+        let started = ContinuousClock.now
+        let items = clips.map {
+            model.mediaCellItem($0, list: true, selecting: false, duration: nil, projection: projection)
+        }
+        let elapsed = ContinuousClock.now - started
+        XCTAssertLessThan(elapsed, .seconds(2), "\(elapsed) to build \(clips.count) cells")
+        XCTAssertTrue(items[0].metadata.contains("RAW+J"), items[0].metadata)
+        XCTAssertFalse(items[2].metadata.contains("RAW+J"), items[2].metadata)
+        let paired = zip(clips, items).filter { $0.1.metadata.contains("RAW+J") }.map(\.0.filename)
+        XCTAssertEqual(paired.count, 500)
+        XCTAssertTrue(paired.allSatisfy { $0.hasSuffix(".JPG") })
+        XCTAssertEqual(model.rawSibling(of: clips[0])?.filename, "DSC_0000.NEF")
+    }
     func testActualPhotoRankUsesWholeCategoryBeforeFormatAndKeepsUnknownFourWidthDomain() {
         let model = model([
             clip("L.JPG", width: 6048), clip("M.NEF", width: 4032), clip("S.TIF", width: 3024),
