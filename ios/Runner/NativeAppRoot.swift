@@ -7413,12 +7413,7 @@ final class NativeAppModel {
                 guard let self, cameraSession === session else { return }
                 lastGoodFrameAt = health.lastGoodFrameAt
                 consecutiveBadLiveFrames = health.badFrames
-                // The chip keeps the shared words (no BUSY): the notice says why the feed paused.
-                if health.bodyBusy, !bodyBusyNoticed {
-                    showMonitorNotice(
-                        "The camera is busy on the body - the feed resumes automatically.")
-                }
-                bodyBusyNoticed = health.bodyBusy
+                noteBodyBusy(health.bodyBusy)
             },
             event: { [weak self] event in
                 guard let self, cameraSession === session else { return }
@@ -7817,7 +7812,17 @@ final class NativeAppModel {
         }
     }
 
+    /// The chip keeps the shared words (no BUSY, A5-17): the notice says why the feed paused, once
+    /// per busy spell. A new session starts a new spell (`resetLinkHealthMeasurements`).
+    func noteBodyBusy(_ busy: Bool) {
+        if busy, !bodyBusyNoticed {
+            showMonitorNotice("The camera is busy on the body - the feed resumes automatically.")
+        }
+        bodyBusyNoticed = busy
+    }
+
     private func resetLinkHealthMeasurements() {
+        bodyBusyNoticed = false
         measuredLiveViewFPS = 0
         lastGoodFrameAt = nil
         consecutiveBadLiveFrames = 0
@@ -7882,7 +7887,9 @@ final class NativeAppModel {
             case .streaming: return .live
             case .starting: return .openingDatalink
             case .failed(let reason): return .failed(reason)
-            case .unsupportedDevice, .permissionDenied, .waitingForDevice: return .idle
+            // Terminal: the chip keeps saying FAIL after the state's notice is gone.
+            case .unsupportedDevice, .permissionDenied: return .failed(hdmiCaptureState.message)
+            case .waitingForDevice: return .idle
             }
         default:
             switch connection {

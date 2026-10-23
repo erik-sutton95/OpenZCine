@@ -195,6 +195,32 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertEqual(model.liveFPS, "FAIL")
         model.applyHDMICaptureState(.waitingForDevice)
         XCTAssertEqual(model.liveFPS, MonitorLinkMeter.idle)
+        // Terminal capture states keep saying FAIL after their notice is gone; only waiting for a
+        // device is idle.
+        model.applyHDMICaptureState(.permissionDenied)
+        XCTAssertEqual(model.liveFPS, "FAIL")
+        model.applyHDMICaptureState(.unsupportedDevice)
+        XCTAssertEqual(model.liveFPS, "FAIL")
+    }
+
+    /// A5-17: with no BUSY chip, the body-busy notice is the only explanation of a paused feed.
+    /// It shows once per busy spell, and a new session starts a new spell: a session that ended
+    /// while the body was busy must not silence the next session's first notice.
+    func testTheBodyBusyNoticeShowsAgainInTheNextSession() {
+        let model = NativeAppModel()
+        model.isMonitorPresented = true
+        model.noteBodyBusy(true)
+        XCTAssertEqual(model.monitorNote?.contains("busy"), true)
+        model.monitorNote = nil
+        model.noteBodyBusy(true)
+        XCTAssertNil(model.monitorNote, "one notice per busy spell")
+
+        model.clearCameraSessionState(resetConnection: true)
+        model.isMonitorPresented = true
+        model.noteBodyBusy(true)
+        XCTAssertEqual(
+            model.monitorNote?.contains("busy"), true,
+            "the next session's first busy spell is announced")
     }
 
     /// A5-17: every chip word Z shows is one the shared meter can produce; Z's own READY and BUSY
