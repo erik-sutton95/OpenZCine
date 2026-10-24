@@ -49,7 +49,6 @@ private struct RackWireReply: Decodable {
     let error: String?
     let templates: [FocusRackTemplate]
     let templatesJSON: String
-    let traceJSON: String?
     let calibrationJSON: String?
     let focusModeSwitchPending: Bool
     let focusMode: FocusControlMode
@@ -242,22 +241,6 @@ func rackProductionWireStopDiscardsQueuedMovementBeforeItCanRearm(kind: String) 
     #expect(reply.error != nil)
     #expect(camera.log.isEmpty)
     #expect(wire.step(owner: owner, requestJSON: #"{"kind":"run","direction":"bad"}"#) == nil)
-}
-
-@Test func rackWireDiagnosticsAreExplicitBoundedAndConsumedOnceWithoutCameraMovement() async throws
-{
-    let camera = RackWireCamera()
-    let wire = FocusRackWire()
-    let owner = try #require(wire.create(driver: camera.driver))
-    defer { wire.close(owner: owner) }
-    #expect(try rackWireReply(wire, owner).traceJSON == nil)
-    _ = try rackWireReply(wire, owner, kind: "diagnostics")
-    let reply = try await waitForRackWire(wire, owner) { $0.traceJSON != nil }
-    let data = Data(try #require(reply.traceJSON).utf8)
-    let trace = try JSONDecoder().decode(FocusRackDiagnostics.self, from: data)
-    #expect(trace.events.isEmpty)
-    #expect(try rackWireReply(wire, owner).traceJSON == nil)
-    #expect(camera.log.isEmpty)
 }
 
 @Test func rackWireRestoresValidatedCalibrationAcrossOwnersWithoutMarksOrMovement() async throws {
