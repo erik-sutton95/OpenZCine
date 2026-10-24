@@ -457,7 +457,7 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.applyEdit").assertDoesNotExist()
         waitForKeyboardDismissed()
         openOptions()
-        compose.onNodeWithText("Options · Linear").assertIsDisplayed()
+        compose.onNodeWithText("Options · Linear").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Ease in-out").assertDoesNotExist()
         compose.onNodeWithText("Ease in-out starts and finishes gently; it may need a longer duration.").assertDoesNotExist()
         assertEquals(32.0, actions.timings.last().duration.toDouble(), 0.0)
