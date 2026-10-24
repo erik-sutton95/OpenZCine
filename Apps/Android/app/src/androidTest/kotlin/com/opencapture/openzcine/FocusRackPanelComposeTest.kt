@@ -389,8 +389,8 @@ class FocusRackPanelComposeTest {
 
     @Test fun compactBlockedPlaybackExposesFastPositioning() {
         val state = mutableStateOf(ready().copy(
-            admissionMessage = "This move needs at least 1.32 seconds.",
-            playbackInstruction = "Adjust timing",
+            admissionMessage = "Use Go to A or Go to B once to measure this move before timed playback.",
+            playbackInstruction = "Measure move",
             pullAToB = ready().pullAToB?.copy(enabled = false),
             pullBToA = ready().pullBToA?.copy(enabled = false)))
         val actions = Actions()
@@ -563,10 +563,10 @@ class FocusRackPanelComposeTest {
         compose.saveLandscapeEvidence("timed-rack-planned-estimate-landscape")
     }
 
-    @Test fun timingAdmissionHintRemainsReadableAndEditable() {
-        val reason = "This move needs at least 24.60 seconds at the test cadence."
+    @Test fun calibrationAdmissionHintRemainsReadableAndEditable() {
+        val reason = "Use Go to A or Go to B once to measure this move before timed playback."
         val state = mutableStateOf(ready().copy(admissionMessage = reason, primaryEnabled = false,
-            playbackInstruction = "Adjust timing", pullAToB = ready().pullAToB?.copy(enabled = false),
+            playbackInstruction = "Measure move", pullAToB = ready().pullAToB?.copy(enabled = false),
             pullBToA = ready().pullBToA?.copy(enabled = false)))
         mount(state, Actions())
         compose.onNodeWithTag("focusRack.dragHandle").assertIsDisplayed().insideFrame().performClick()
