@@ -217,9 +217,9 @@ func rackJointReadSettlementCannotUnlockUnsafeOrRetiredMovement(reason: String) 
     engine.finishScheduledRead(
         runID: action.runID, commandID: try #require(action.commandID),
         accepted: reason != "rejected", at: now)
-    #expect(engine.nextAction(at: now).kind != "drive")
+    #expect((engine.nextAction(at: now).kind == "drive") == (reason == "late"))
     if reason != "frame" { #expect(engine.snapshot(at: now).stepPosition == position) }
-    if reason == "late" || reason == "rejected" {
+    if reason == "rejected" {
         #expect(engine.snapshot(at: now).phase == "failed")
     }
     if reason == "pause" {
@@ -231,7 +231,7 @@ func rackJointReadSettlementCannotUnlockUnsafeOrRetiredMovement(reason: String) 
 }
 
 @Test(arguments: ["native", "late"])
-func rackJointGrowthOrLatenessFailsBeforeAnotherActivationAndKeepsKnownPosition(cause: String)
+func rackJointGrowthOrLatenessExtendsCadenceAndKeepsKnownPosition(cause: String)
     throws
 {
     var (engine, now) = try jointEngine()
@@ -241,17 +241,17 @@ func rackJointGrowthOrLatenessFailsBeforeAnotherActivationAndKeepsKnownPosition(
     now += try #require(jointRackMaxima[abs(pulses)]) + (cause == "native" ? 0.03 : 0)
     engine.complete(
         runID: first.runID, commandID: try #require(first.commandID), outcome: 0, at: now)
-    now = try #require(engine.nextCommandDeadline) + (cause == "late" ? 0.25 : 0)
+    now = max(now, try #require(engine.nextCommandDeadline)) + (cause == "late" ? 0.25 : 0)
     engine.observe(jointContext(now, safetyAt: now), at: now)
     let position = engine.snapshot(at: now).stepPosition
-    #expect(engine.nextAction(at: now).kind == "idle")
-    #expect(engine.snapshot(at: now).phase == "failed")
+    #expect(engine.nextAction(at: now).kind == "drive")
+    #expect(engine.snapshot(at: now).phase == "moving")
     #expect(engine.snapshot(at: now).stepPosition == position)
     #expect(engine.state(at: now).referenceValid)
     #expect(engine.calibrationTimings[abs(pulses)] ?? 0 >= jointRackMaxima[abs(pulses)] ?? 0)
 }
 
-@Test func rackJointSlowPreflightRefusesBeforeAnyActivation() throws {
+@Test func rackJointSlowPreflightKeepsSafeMovementAvailable() throws {
     var (engine, now) = try jointEngine()
     let run = engine.snapshot(at: now).runID
     let start = now
@@ -259,13 +259,13 @@ func rackJointGrowthOrLatenessFailsBeforeAnotherActivationAndKeepsKnownPosition(
     engine.recordSafetyRead(startedAt: start, finishedAt: now, accepted: true)
     engine.observe(jointContext(now, safetyAt: start), at: now)
     engine.finishPreflight(runID: run, at: now)
-    #expect(engine.nextAction(at: now).kind == "idle")
-    #expect(engine.snapshot(at: now).phase == "failed")
+    #expect(engine.nextAction(at: now).kind == "drive")
+    #expect(engine.snapshot(at: now).phase == "moving")
     #expect(engine.snapshot(at: now).stepPosition == 100)
     #expect(engine.state(at: now).referenceValid)
 }
 
-@Test func rackJointReadMeetingItsDeadlineStillRejectsInfeasibleLaterWindows() throws {
+@Test func rackJointReadGrowthKeepsLaterFreshReadWindowsAvailable() throws {
     // All gaps have room for 160ms reads, but a later read-to-read interval plus
     // that grown cost exceeds the unchanged 2s evidence lifetime.
     let maxima = [16: 0.13, 32: 0.06]
@@ -291,8 +291,8 @@ func rackJointGrowthOrLatenessFailsBeforeAnotherActivationAndKeepsKnownPosition(
                 runID: action.runID, commandID: step, accepted: true, at: now)
             #expect(step == 7)
             #expect(now < deadline)
-            #expect(engine.snapshot(at: now).phase == "failed")
-            #expect(engine.nextAction(at: now).kind == "idle")
+            #expect(engine.snapshot(at: now).busy)
+            #expect(engine.nextAction(at: now).kind != "idle")
             #expect(engine.snapshot(at: now).stepPosition == position)
             #expect(engine.state(at: now).referenceValid)
             return
@@ -333,7 +333,7 @@ func rackJointGrowthOrLatenessFailsBeforeAnotherActivationAndKeepsKnownPosition(
 }
 
 @Test(arguments: [0.0032, 0.01])
-func rackJointSixSecondReplayAllowsObservedWakeLatenessAndStillStopsExcessiveDelay(
+func rackJointSixSecondReplayExtendsCadenceForObservedWakeLateness(
     wakeLateness: Double
 ) throws {
     // Captured iPhone maxima. The old 6s plan left only 1.311ms between its
@@ -373,12 +373,6 @@ func rackJointSixSecondReplayAllowsObservedWakeLatenessAndStillStopsExcessiveDel
         #expect(engine.state(at: now).referenceValid)
         for (pulses, maximum) in maxima {
             #expect(engine.calibrationTimings[pulses] ?? 0 >= maximum)
-        }
-        if wakeLateness > 0.0032 {
-            #expect(engine.snapshot(at: now).phase == "failed")
-            #expect(delivered == -32)
-            #expect(engine.snapshot(at: now).stepPosition == 98)
-            return
         }
         #expect(engine.snapshot(at: now).phase == "complete")
         #expect(delivered == (direction == .bToA ? -1600 : 1600))
@@ -473,7 +467,9 @@ func rackTargetDurationExecutesBothDirectionsWithCapturedPhoneCosts(
         #expect(delivered == (direction == .bToA ? -span : span) * 16)
         #expect(engine.state(at: now).referenceValid)
         let actual = try #require(engine.snapshot(at: now).actualMovementDuration)
-        #expect(abs(actual - planned) < 0.01)
+        #expect(actual + 1e-9 >= planned)
+        #expect(actual - planned < 0.3)
+        #expect(engine.state(at: now).timingWarning != nil)
         safetyAt = now
         engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
     }
@@ -501,4 +497,215 @@ func rackPreflightReadGrowthReplansFineMovesOnlyBeforeActivation(stopped: Bool) 
     #expect(engine.state(at: now).estimatedDuration ?? 0 >= 3)
     #expect(engine.snapshot(at: now).events.isEmpty)
     #expect(engine.snapshot(at: now, includeEvents: true).events.last?.kind == "commandStarted")
+}
+
+@Test(arguments: [4, 10])
+func rackRecordedSixteenAndFortyUnitStopsNowReachBothEndpoints(prefixCount: Int) throws {
+    // Anonymous command durations and dispatch wakes from the two recorded partial pulls.
+    let durations =
+        prefixCount == 4
+        ? [0.057841375, 0.051205417, 0.068138750, 0.092350666]
+        : [
+            0.069812167, 0.066426625, 0.051177250, 0.056338083, 0.063968292,
+            0.053858583, 0.054810166, 0.049414750, 0.059105917, 0.050065917,
+        ]
+    let wakes =
+        prefixCount == 4
+        ? [0.000738125, 0.001447698, 0.001597438, 0.001243429]
+        : [
+            0.001133666, 0.001179698, 0.000340897, 0.001921804, 0.001435169,
+            0.001129409, 0.000203774, 0.001684681, 0.001102296, 0.001337536,
+        ]
+    var (engine, now) = try jointEngine(span: 110, maxima: phoneJointMaxima)
+    var safetyAt = now - 0.09691525
+    for direction in [FocusRackDirection.bToA, .aToB] {
+        if direction == .aToB {
+            engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+            try engine.run(direction: direction, at: now)
+            engine.finishPreflight(runID: engine.state(at: now).runID, at: now)
+        }
+        let run = engine.state(at: now).runID
+        let requested = engine.currentProgram.transitions[0].duration
+        var delivered: [Int] = []
+        var lastDispatch: Double?
+        let expected = try FocusRackPlanner.make(
+            signedSteps: direction == .bToA ? -110 : 110, duration: requested, delay: 0,
+            easing: .linear, quiet: 0,
+            timings: phoneJointMaxima.reduce(into: [:]) { result, pair in
+                var timing = FocusRackCommandTiming()
+                timing.record(pair.value)
+                result[pair.key / 16] = timing
+            }, adaptive: true, timed: true, grouped: true, profile: .calibratedFineExperiment,
+            safetyReadBudget: engine.safetyReadBudget)
+        for _ in 0..<1000 {
+            if !engine.snapshot(at: now).busy { break }
+            engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+            let action = engine.nextAction(at: now)
+            switch action.kind {
+            case "drive":
+                let pulses = try #require(action.signedPulses)
+                let index = delivered.count
+                if let lastDispatch {
+                    let nominalGap = expected.offsets[index] - expected.offsets[index - 1]
+                    #expect(now - lastDispatch + 1e-9 >= nominalGap)
+                }
+                #expect(now - safetyAt < 2)
+                lastDispatch = now
+                delivered.append(pulses)
+                now +=
+                    index < durations.count
+                    ? durations[index] : try #require(phoneJointMaxima[abs(pulses)])
+                engine.complete(
+                    runID: run, commandID: try #require(action.commandID), outcome: 0, at: now)
+            case "readSafety":
+                safetyAt = now
+                now += 0.12124
+                engine.recordSafetyRead(startedAt: safetyAt, finishedAt: now, accepted: true)
+                engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+                engine.finishScheduledRead(
+                    runID: run, commandID: try #require(action.commandID), accepted: true, at: now)
+            case "wait":
+                now += try #require(action.waitSeconds) + wakes[delivered.count % wakes.count]
+            default: Issue.record("Unexpected idle action during a recorded-pull replay")
+            }
+        }
+        let state = engine.state(at: now)
+        #expect(state.phase == .complete)
+        #expect(state.stepPosition == (direction == .bToA ? 0 : 110))
+        #expect(delivered.reduce(0, +) == (direction == .bToA ? -1760 : 1760))
+        #expect(delivered == expected.chunks.map { $0 * 16 })
+        #expect(delivered.prefix(prefixCount).allSatisfy { abs($0) == 64 })
+        #expect(state.transition.duration == requested)
+        #expect(state.timingWarning != nil)
+        #expect(state.admissionMessage == nil)
+        #expect(
+            !engine.snapshot(at: now, includeEvents: true).events.contains {
+                $0.runID == run
+                    && ["maintenanceBudgetExceeded", "missedDeadline"].contains($0.kind)
+            })
+    }
+}
+
+@Test(arguments: [1.95, 1.875])
+func rackFreshReadThatCannotCoverOneCommandFailsWithoutRepeatingReads(readCost: Double) throws {
+    let maxima = readCost == 1.875 ? jointRackMaxima.mapValues { _ in 0.125 } : jointRackMaxima
+    var (engine, now) = try jointEngine(maxima: maxima)
+    var safetyAt = now - 0.099
+    for _ in 0..<200 {
+        engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+        let action = engine.nextAction(at: now)
+        if action.kind == "readSafety" {
+            let position = engine.state(at: now).stepPosition
+            safetyAt = now.rounded(.up)
+            now = safetyAt + readCost
+            engine.recordSafetyRead(startedAt: safetyAt, finishedAt: now, accepted: true)
+            engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+            engine.finishScheduledRead(
+                runID: action.runID, commandID: try #require(action.commandID),
+                accepted: true, at: now)
+            #expect(engine.state(at: now).phase == .failed)
+            #expect(engine.state(at: now).stepPosition == position)
+            #expect(engine.nextAction(at: now).kind == "idle")
+            #expect(
+                engine.snapshot(at: now, includeEvents: true).events.last?.kind
+                    == "safetyReadRejected")
+            return
+        }
+        if action.kind == "drive" {
+            let pulses = try #require(action.signedPulses)
+            now += try #require(maxima[abs(pulses)])
+            engine.complete(
+                runID: action.runID, commandID: try #require(action.commandID), outcome: 0, at: now)
+        } else {
+            now += try #require(action.waitSeconds)
+        }
+    }
+    Issue.record("Expected a serialized safety refresh")
+}
+
+@Test(arguments: ["native", "read"])
+func rackRuntimeLatencyGrowthRetainsTheFrozenFineSequenceAndCompletes(cause: String) throws {
+    var (engine, now) = try jointEngine()
+    let expected = try jointPlan(-100)
+    var safetyAt = now - 0.099
+    var delivered: [Int] = []
+    var lastDispatch: Double?
+    for _ in 0..<1000 {
+        if !engine.snapshot(at: now).busy { break }
+        engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+        let action = engine.nextAction(at: now)
+        switch action.kind {
+        case "drive":
+            let pulses = try #require(action.signedPulses)
+            let index = delivered.count
+            if let lastDispatch {
+                #expect(
+                    now - lastDispatch + 1e-9 >= expected.offsets[index]
+                        - expected.offsets[index - 1])
+            }
+            #expect(now - safetyAt < 2)
+            lastDispatch = now
+            delivered.append(pulses)
+            now +=
+                try #require(jointRackMaxima[abs(pulses)])
+                + (cause == "native" && index >= 4 ? 0.1 : 0)
+            engine.complete(
+                runID: action.runID, commandID: try #require(action.commandID), outcome: 0, at: now)
+        case "readSafety":
+            safetyAt = now
+            now += cause == "read" ? 0.3 : 0.1
+            engine.recordSafetyRead(startedAt: safetyAt, finishedAt: now, accepted: true)
+            engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+            engine.finishScheduledRead(
+                runID: action.runID, commandID: try #require(action.commandID),
+                accepted: true, at: now)
+        case "wait": now += try #require(action.waitSeconds) + 0.001
+        default: Issue.record("Unexpected idle action during latency growth")
+        }
+    }
+    #expect(engine.state(at: now).phase == .complete)
+    #expect(engine.state(at: now).stepPosition == 0)
+    #expect(engine.state(at: now).timingWarning != nil)
+    #expect(delivered == expected.chunks.map { $0 * 16 })
+}
+
+@Test func rackTimingOnlyPlanningFailureKeepsSmallMeasuredMovesAvailable() throws {
+    var (engine, now) = try jointEngine(span: 110, maxima: [32: 0.15, 64: 0.3])
+    engine.requestStop(at: now)
+    let state = engine.state(at: now)
+    #expect(state.pullBToA?.enabled == true)
+    #expect(state.admissionMessage == nil)
+    #expect(state.timingWarning != nil)
+    #expect(try #require(state.estimatedDuration) > 3)
+    try engine.run(direction: .bToA, at: now)
+    engine.finishPreflight(runID: engine.state(at: now).runID, at: now)
+    var safetyAt = now - 0.099
+    var delivered: [Int] = []
+    for _ in 0..<1000 {
+        if !engine.snapshot(at: now).busy { break }
+        engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+        let action = engine.nextAction(at: now)
+        if action.kind == "drive" {
+            let pulses = try #require(action.signedPulses)
+            delivered.append(pulses)
+            #expect(now - safetyAt < 2)
+            now += abs(pulses) == 64 ? 0.3 : 0.15
+            engine.complete(
+                runID: action.runID, commandID: try #require(action.commandID), outcome: 0, at: now)
+        } else if action.kind == "readSafety" {
+            safetyAt = now
+            now += 0.12
+            engine.recordSafetyRead(startedAt: safetyAt, finishedAt: now, accepted: true)
+            engine.observe(jointContext(now, safetyAt: safetyAt), at: now)
+            engine.finishScheduledRead(
+                runID: action.runID, commandID: try #require(action.commandID), accepted: true,
+                at: now)
+        } else {
+            now += try #require(action.waitSeconds)
+        }
+    }
+    #expect(delivered.reduce(0, +) == -1760)
+    #expect(delivered.allSatisfy { [-32, -64].contains($0) })
+    #expect(engine.state(at: now).phase == .complete)
+    #expect(engine.state(at: now).stepPosition == 0)
 }

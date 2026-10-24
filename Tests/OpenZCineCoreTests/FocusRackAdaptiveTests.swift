@@ -722,7 +722,7 @@ func rackTenBy160StopKeepsCompletedLedgerOrInvalidatesUncertainMovement(outcome:
     }
     #expect(try plan(1).chunks == Array(repeating: 10, count: 10))
     // The finer 3s family cannot be replaced with unqualified coarse ordinary moves.
-    #expect(throws: FocusRackError.noSmoothTiming) { try plan(3) }
+    #expect(throws: FocusRackError.calibrationRequired) { try plan(3) }
     timings[4] = timing(0.06)
     #expect(try plan(3).chunks.contains(4))
     #expect(try plan(5).chunks.contains(4))
@@ -760,7 +760,7 @@ func rackMeasuredFinePlanningRetainsWorstCostsAndReservesSafetySlots(duration: D
 }
 
 @Test(arguments: [false, true])
-func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) throws {
+func rackGrowingReadBudgetKeepsSafeMovementAvailable(afterFirstCommand: Bool) throws {
     var (engine, now) = try adaptiveEngineWithMarks(100)
     engine.recordSafetyRead(startedAt: now - 0.05, finishedAt: now, accepted: true)
     try engine.setTransition(.init(duration: 3), at: now)
@@ -777,13 +777,14 @@ func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) 
     engine.recordSafetyRead(startedAt: now - 0.3, finishedAt: now, accepted: true)
     if afterFirstCommand { now += 0.25 }
     engine.observe(adaptiveContext(now), at: now)
-    #expect(engine.nextAction(at: now).kind == "idle")
-    #expect(engine.state(at: now).phase == .failed)
+    #expect(engine.nextAction(at: now).kind == "drive")
+    #expect(engine.state(at: now).phase == .moving)
     #expect(engine.state(at: now).stepPosition == acknowledged)
     #expect(engine.state(at: now).referenceValid)
     #expect(
-        engine.snapshot(at: now, includeEvents: true).events.last?.kind
-            == "maintenanceBudgetExceeded")
+        !engine.snapshot(at: now, includeEvents: true).events.contains {
+            $0.kind == "maintenanceBudgetExceeded"
+        })
 }
 
 @Test func rackCountdownRefreshCanKeepAOneSecondFinePullWithinFreshEvidence() throws {
@@ -823,7 +824,8 @@ func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) 
     try engine.setTransition(.init(duration: 1), at: now)
     #expect(engine.state(at: now).admissionMessage == nil)
     try engine.setTransition(.init(duration: 3), at: now)
-    #expect(engine.state(at: now).admissionMessage != nil)
+    #expect(engine.state(at: now).admissionMessage == nil)
+    #expect(engine.state(at: now).timingWarning != nil)
     engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
     #expect(engine.safetyReadBudget == 0.1)
     for duration in [1.0, 3.0, 5.0] {
@@ -844,7 +846,7 @@ func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) 
     #expect(engine.state(at: now).phase == .complete)
 }
 
-@Test func rackActualSlowPreflightRefusesAShortPullBeforeActivation() throws {
+@Test func rackActualSlowPreflightKeepsCoveredCommandsAvailable() throws {
     var (engine, now) = try adaptiveEngineWithMarks(100, profile: .calibratedFineExperiment)
     engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
     try engine.setTransition(.init(duration: 1), at: now)
@@ -857,13 +859,13 @@ func rackGrowingReadBudgetStopsBeforeTheNextActivation(afterFirstCommand: Bool) 
     context.safetyTimestamp = readStart
     engine.observe(context, at: now)
     engine.finishPreflight(runID: run, at: now)
-    #expect(engine.nextAction(at: now).kind == "idle")
-    #expect(engine.state(at: now).phase == .failed)
+    #expect(engine.nextAction(at: now).kind == "drive")
+    #expect(engine.state(at: now).busy)
     #expect(engine.state(at: now).stepPosition == 0)
     #expect(engine.state(at: now).referenceValid)
     #expect(
         !engine.snapshot(at: now, includeEvents: true).events.contains {
-            $0.runID == run && $0.kind == "commandStarted"
+            $0.runID == run && $0.kind == "preflightRejected"
         })
 }
 

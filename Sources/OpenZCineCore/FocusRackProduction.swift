@@ -20,7 +20,7 @@ public enum FocusRackPhase: String, Codable, Sendable {
         case .stopping: "Stopping…"
         case .stopped: "Stopped"
         case .complete: "Complete"
-        case .failed: "Timing missed"
+        case .failed: "Unavailable"
         case .stepTooSmall: "Increment too small"
         case .refused: "Camera busy"
         case .uncertain: "Reset marks"
@@ -130,6 +130,8 @@ public struct FocusRackState: Codable, Sendable {
     public var estimatedDuration: Double?
     /// Observed command-dispatch-to-completion span; not an optical arrival measurement.
     public var actualMovementDuration: Double?
+    /// Nonblocking duration estimate or overrun; camera admission is reported separately.
+    public var timingWarning: String?
     /// Requested target and planned estimate, without claiming optical arrival timing.
     public var playbackDetail: String {
         playbackDetail(for: transition)

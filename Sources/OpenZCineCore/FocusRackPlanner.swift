@@ -128,7 +128,7 @@ enum FocusRackPlanner {
         let count = abs(signedSteps)
         let sign = signedSteps < 0 ? -1 : 1
         // Unmeasured sizes use the session's worst observed command as an estimate, not a
-        // measurement of that size. Every completed command updates its own budget; late runs halt.
+        // measurement of that size. Completed commands update estimates; overruns extend playback.
         let fallback = timings.values.map(\.longest).max() ?? 0
         // Long pulls reserve a qualified read window. Short pulls are checked against their
         // actual post-preflight evidence age before activation, without a future idle read.
@@ -185,10 +185,21 @@ enum FocusRackPlanner {
                         viable.map(\.maximum).max() ?? joint.duration, joint.duration),
                     estimatedDuration: joint.duration, maintenanceReadOffsets: joint.reads)
             }
-            if preservesThreeSecondFamily { throw FocusRackError.noSmoothTiming }
+            if preservesThreeSecondFamily {
+                return try serializedFallback(
+                    signedSteps: signedSteps, duration: duration, delay: delay, quiet: quiet,
+                    timings: timings, quanta: quanta.filter { $0 <= 8 },
+                    readBudget: planningReadBudget, requireMeasured: requireMeasured)
+            }
         }
         guard let minimum = viable.map(\.minimum).min(), let maximum = viable.map(\.maximum).max()
-        else { throw FocusRackError.noSmoothTiming }
+        else {
+            guard requireMeasured else { throw FocusRackError.noSmoothTiming }
+            return try serializedFallback(
+                signedSteps: signedSteps, duration: duration, delay: delay, quiet: quiet,
+                timings: timings, quanta: quanta, readBudget: planningReadBudget,
+                requireMeasured: requireMeasured)
+        }
         var executionDuration = duration
         if duration + 1e-9 < minimum {
             guard requireMeasured, let fastest = viable.min(by: { $0.minimum < $1.minimum })
@@ -205,7 +216,11 @@ enum FocusRackPlanner {
             }
         }
         guard duration <= maximum + 1e-9 else {
-            throw FocusRackError.durationTooLong(maximum: maximum)
+            guard requireMeasured else { throw FocusRackError.durationTooLong(maximum: maximum) }
+            return try serializedFallback(
+                signedSteps: signedSteps, duration: duration, delay: delay, quiet: quiet,
+                timings: timings, quanta: quanta, readBudget: planningReadBudget,
+                requireMeasured: requireMeasured)
         }
         // Ascending quantum selects the finest cadence that actually fits this request.
         guard
@@ -215,7 +230,13 @@ enum FocusRackPlanner {
                         || executionDuration + 1e-9 >= $0.minimum + 0.002
                             * Double($0.chunks.count - 1))
             })
-        else { throw FocusRackError.noSmoothTiming }
+        else {
+            guard requireMeasured else { throw FocusRackError.noSmoothTiming }
+            return try serializedFallback(
+                signedSteps: signedSteps, duration: duration, delay: delay, quiet: quiet,
+                timings: timings, quanta: quanta, readBudget: planningReadBudget,
+                requireMeasured: requireMeasured)
+        }
         return .init(
             signedSteps: signedSteps, chunks: selected.chunks,
             offsets: selected.fractions.map {
@@ -224,6 +245,62 @@ enum FocusRackPlanner {
             duration: executionDuration, delay: delay, minimumDuration: minimum,
             maximumDuration: maximum,
             estimatedDuration: executionDuration)
+    }
+
+    // When only the requested cadence cannot fit, keep small known moves and reserve a read
+    // between them. This bounded fallback sacrifices duration, never the endpoint or safety.
+    private static func serializedFallback(
+        signedSteps: Int, duration: Double, delay: Double, quiet: Double,
+        timings: [Int: FocusRackCommandTiming], quanta: [Int], readBudget: Double,
+        requireMeasured: Bool
+    ) throws -> FocusRackMovementPlan {
+        let count = abs(signedSteps)
+        let measured = quanta.filter {
+            $0 > 0 && $0 <= count && (!requireMeasured || timings[$0]?.count ?? 0 > 0)
+        }
+        guard let base = measured.filter({ $0 <= 4 }).max() else {
+            throw FocusRackError.calibrationRequired
+        }
+        let choices =
+            measured.filter { $0 <= base }.sorted(by: >)
+            + measured.filter { $0 > base && $0 <= 8 }.sorted()
+        var reachable = Array(repeating: false, count: count + 1)
+        reachable[0] = true
+        for span in 1...count {
+            reachable[span] = choices.contains { $0 <= span && reachable[span - $0] }
+        }
+        guard reachable[count] else { throw FocusRackError.calibrationRequired }
+        var remaining = count
+        var chunks: [Int] = []
+        while remaining > 0 {
+            guard
+                let quantum = choices.first(where: { $0 <= remaining && reachable[remaining - $0] })
+            else { throw FocusRackError.calibrationRequired }
+            chunks.append((signedSteps < 0 ? -1 : 1) * quantum)
+            remaining -= quantum
+        }
+        let fallback = timings.values.map(\.longest).max() ?? 0
+        let costs = chunks.map { timings[abs($0)]?.longest ?? fallback }
+        let final = costs[costs.count - 1]
+        let gap = chunks.count > 1 ? max(0, duration - final) / Double(chunks.count - 1) : 0
+        var offsets = [delay]
+        var reads: [Int: Double] = [:]
+        for index in 1..<chunks.count {
+            let settled = offsets[index - 1] + costs[index - 1] + quiet
+            let due = max(delay + Double(index) * gap, settled + readBudget + 0.002)
+            offsets.append(due)
+            if readBudget > 0 { reads[index] = due - readBudget }
+        }
+        let execution = offsets[offsets.count - 1] - delay + final
+        let minimum = costs.reduce(0, +) + Double(chunks.count - 1) * (quiet + readBudget + 0.002)
+        let maximum = Double(chunks.count - 1) * maximumFineSpacing + final
+        guard execution.isFinite, offsets.allSatisfy(\.isFinite) else {
+            throw FocusRackError.invalidConfiguration
+        }
+        return .init(
+            signedSteps: signedSteps, chunks: chunks, offsets: offsets, duration: execution,
+            delay: delay, minimumDuration: minimum, maximumDuration: maximum,
+            estimatedDuration: execution, maintenanceReadOffsets: readBudget > 0 ? reads : nil)
     }
 
 }

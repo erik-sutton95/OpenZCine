@@ -180,6 +180,7 @@ public struct FocusRackEngine: Sendable {
     private var runID: Int64
     private var trajectory: FocusRackMovementPlan?
     private var plannedDuration: Double?
+    private var lastRunTransition: FocusRackTransition?
     private var firstCommandAt: Double?
     private var lastCommandFinishedAt: Double?
     private let adaptive: Bool
@@ -213,6 +214,7 @@ public struct FocusRackEngine: Sendable {
     private var pauseRequested = false
     private var pausedAt: Double?
     private var accumulatedPause = 0.0
+    private var timingSlip = 0.0
     private var finishedAt: Double?
     private var hasStarted = false
     private var events: [FocusRackDiagnosticEvent] = []
@@ -451,7 +453,7 @@ public struct FocusRackEngine: Sendable {
         }
     }
 
-    /// Returns one adapter action. Late timed runs halt; positioning retains the minimum cadence.
+    /// Returns one serialized adapter action. Timing growth extends the remaining cadence.
     public mutating func nextAction(at timestamp: Double) -> FocusRackEngineAction {
         let idle = FocusRackEngineAction(
             kind: "idle", runID: runID, commandID: nil, signedPulses: nil, waitSeconds: nil)
@@ -465,47 +467,39 @@ public struct FocusRackEngine: Sendable {
             context?.unavailableReason(at: timestamp)
             ?? (hasReadinessFrame ? nil : "Wait for a fresh real camera frame.")
         guard let reason = unavailable else {
-            let due = startedAt + accumulatedPause + trajectory.offsets[nextStep]
+            if enforcesTiming, commandCost(trajectory) >= 2 {
+                failMaintenance(at: timestamp)
+                return idle
+            }
+            var due = commandTime(trajectory.offsets[nextStep])
             if let offset = trajectory.maintenanceReadOffsets?[nextStep],
                 !completedMaintenanceReads.contains(nextStep)
             {
                 let readAt = max(
-                    startedAt + accumulatedPause + offset,
+                    commandTime(offset),
                     (lastCommandSettledAt ?? -.infinity) + configuration.commandInterval)
-                if timestamp < readAt {
+                let refreshAt = min(readAt, safetyRefreshAt(for: trajectory, at: timestamp))
+                if timestamp < refreshAt {
                     return .init(
                         kind: "wait", runID: runID, commandID: nil, signedPulses: nil,
-                        waitSeconds: min(0.1, readAt - timestamp))
+                        waitSeconds: min(0.1, refreshAt - timestamp))
                 }
-                guard maintenanceFits(at: timestamp) else {
-                    failMaintenance(at: timestamp)
-                    return idle
-                }
-                pendingMaintenanceRead = (nextStep, configurationRevision)
-                append(
-                    "maintenanceReadStarted", at: timestamp, commandID: nextStep,
-                    scheduledAt: readAt)
-                return .init(
-                    kind: "readSafety", runID: runID, commandID: nextStep,
-                    signedPulses: nil, waitSeconds: nil)
+                extendTiming(by: max(0, timestamp - readAt), at: timestamp)
+                return beginSafetyRead(at: timestamp, scheduledAt: refreshAt)
             }
+            if timestamp >= safetyRefreshAt(for: trajectory, at: timestamp) {
+                return beginSafetyRead(at: timestamp, scheduledAt: timestamp)
+            }
+            due = commandTime(trajectory.offsets[nextStep])
             if timestamp < due {
                 return .init(
                     kind: "wait", runID: runID, commandID: nil, signedPulses: nil,
-                    waitSeconds: min(0.1, due - timestamp))
+                    waitSeconds: min(
+                        0.1, due - timestamp,
+                        safetyRefreshAt(for: trajectory, at: timestamp) - timestamp))
             }
-            if !maintenanceFits(at: timestamp) {
-                failMaintenance(at: timestamp)
-                return idle
-            }
-            if enforcesTiming, timestamp - due > max(0.2, trajectory.duration * 0.05) {
-                self.trajectory = nil
-                finishedAt = timestamp
-                phase = "failed"
-                message = "Camera cadence missed the requested timing. No catch-up commands sent."
-                append("missedDeadline", at: timestamp)
-                return idle
-            }
+            extendTiming(by: max(0, timestamp - due), at: timestamp)
+            due = commandTime(trajectory.offsets[nextStep])
             // Native admission may lag host dispatch. Space from confirmed completion so queued
             // commands cannot compress physical activations, even across separate nudges.
             if let lastCommandSettledAt,
@@ -563,28 +557,18 @@ public struct FocusRackEngine: Sendable {
                 activeNudge = nil
                 self.trajectory = nil
                 finishedAt = timestamp
-                let durationError = abs(
-                    timestamp - startedAt - accumulatedPause - trajectory.delay
-                        - trajectory.duration)
-                if enforcesTiming, durationError > max(0.2, trajectory.duration * 0.05) + 1e-9 {
-                    phase = "failed"
-                    message =
-                        "Focus arrived, but the requested duration was missed. No more movement scheduled."
-                    append("missedDeadline", at: timestamp)
-                } else {
-                    phase = "complete"
-                    message = "Complete. Inspect the source recording for sharpness and smoothness."
-                    append("runCompleted", at: timestamp)
-                    if let activeCalibration, activeCalibration.trip == calibrationTrips,
-                        activeCalibration.configuration == configurationRevision,
-                        activeCalibration.capture == captureRevision
-                    {
-                        calibrationTrips += 1
-                        append(
-                            "calibrationCompleted", at: timestamp, note: "trip=\(calibrationTrips)")
-                    }
-                    activeCalibration = nil
+                phase = "complete"
+                message = "Complete. Inspect the source recording for sharpness and smoothness."
+                append("runCompleted", at: timestamp)
+                if let activeCalibration, activeCalibration.trip == calibrationTrips,
+                    activeCalibration.configuration == configurationRevision,
+                    activeCalibration.capture == captureRevision
+                {
+                    calibrationTrips += 1
+                    append(
+                        "calibrationCompleted", at: timestamp, note: "trip=\(calibrationTrips)")
                 }
+                activeCalibration = nil
             } else if pauseRequested {
                 pausedAt = timestamp
                 phase = "paused"
@@ -784,6 +768,7 @@ public struct FocusRackEngine: Sendable {
         activeCalibration = nil
         trajectory = planned
         plannedDuration = planned.duration
+        lastRunTransition = program.transitions[0]
         firstCommandAt = nil
         lastCommandFinishedAt = nil
         completedMaintenanceReads = []
@@ -794,6 +779,7 @@ public struct FocusRackEngine: Sendable {
         pauseRequested = false
         pausedAt = nil
         accumulatedPause = 0
+        timingSlip = 0
         finishedAt = nil
         hasStarted = true
         self.enforcesTiming = enforcesTiming
@@ -846,6 +832,7 @@ public struct FocusRackEngine: Sendable {
         }
         startedAt = timestamp
         accumulatedPause = 0
+        timingSlip = 0
         if pausedAt != nil { pausedAt = timestamp }
         append(
             "preflightCompleted", at: timestamp,
@@ -859,64 +846,50 @@ public struct FocusRackEngine: Sendable {
         return max(0, lastCommandFinishedAt - firstCommandAt)
     }
 
+    private func commandTime(_ offset: Double) -> Double {
+        startedAt + accumulatedPause + timingSlip + offset
+    }
+
+    private mutating func extendTiming(by seconds: Double, at timestamp: Double) {
+        guard enforcesTiming, seconds > 1e-9, let trajectory else { return }
+        timingSlip += seconds
+        plannedDuration = trajectory.duration + timingSlip
+        append("timingExtended", at: timestamp, note: "seconds=\(seconds) total=\(timingSlip)")
+    }
+
+    private func commandCost(_ plan: FocusRackMovementPlan) -> Double {
+        commandTimings[abs(plan.chunks[nextStep])]?.longest
+            ?? commandTimings.values.map(\.longest).max() ?? 0
+    }
+
+    // Reserve a rolling refresh even when growth has displaced a planned read window.
+    private func safetyRefreshAt(for plan: FocusRackMovementPlan, at timestamp: Double) -> Double {
+        guard enforcesTiming, let safetyAt = context?.safetyTimestamp else { return .infinity }
+        let cost = commandCost(plan)
+        if completedMaintenanceReads.contains(nextStep),
+            commandTime(plan.offsets[nextStep]) <= timestamp, timestamp + cost < safetyAt + 2
+        {
+            return .infinity
+        }
+        return safetyAt + 2 - cost - 0.05
+    }
+
+    private mutating func beginSafetyRead(
+        at timestamp: Double, scheduledAt: Double
+    ) -> FocusRackEngineAction {
+        pendingMaintenanceRead = (nextStep, configurationRevision)
+        append(
+            "maintenanceReadStarted", at: timestamp, commandID: nextStep,
+            scheduledAt: scheduledAt)
+        return .init(
+            kind: "readSafety", runID: runID, commandID: nextStep,
+            signedPulses: nil, waitSeconds: nil)
+    }
+
     // A paused or untimed run cannot justify deferring the periodic safety refresh.
     var scheduledFinish: Double? {
         guard enforcesTiming, let trajectory, !pauseRequested, pausedAt == nil else { return nil }
-        return startedAt + accumulatedPause + trajectory.delay + trajectory.duration
-    }
-
-    private func maintenanceFits(at timestamp: Double) -> Bool {
-        guard enforcesTiming, runSafetyReadBudget > 0, let trajectory,
-            let safetyAt = context?.safetyTimestamp
-        else { return true }
-        if let reads = trajectory.maintenanceReadOffsets {
-            return scheduledMaintenanceFits(
-                trajectory, reads: reads, safetyAt: safetyAt, at: timestamp)
-        }
-        let finish = startedAt + accumulatedPause + trajectory.delay + trajectory.duration
-        if max(timestamp, finish) < safetyAt + 2 { return true }
-        let fallback = commandTimings.values.map(\.longest).max() ?? 0
-        for index in nextStep..<max(nextStep, trajectory.offsets.count - 1) {
-            let cost = commandTimings[abs(trajectory.chunks[index])]?.longest ?? fallback
-            let gap = trajectory.offsets[index + 1] - trajectory.offsets[index]
-            if cost + configuration.commandInterval + runSafetyReadBudget > gap + 1e-9 {
-                return false
-            }
-        }
-        return true
-    }
-
-    // Project the remaining immutable schedule with current maxima and actual evidence age.
-    // Reads finish while the previous reading is still fresh; freshness starts at read START.
-    private func scheduledMaintenanceFits(
-        _ plan: FocusRackMovementPlan, reads: [Int: Double], safetyAt: Double, at timestamp: Double
-    ) -> Bool {
-        let epoch = startedAt + accumulatedPause
-        var freshAt = safetyAt
-        var cursor = max(
-            timestamp, (lastCommandSettledAt ?? -.infinity) + configuration.commandInterval)
-        for index in nextStep..<plan.chunks.count {
-            let due = epoch + plan.offsets[index]
-            if let offset = reads[index], !completedMaintenanceReads.contains(index) {
-                let start = max(cursor, epoch + offset)
-                cursor = start + runSafetyReadBudget
-                guard cursor <= due + 1e-9, cursor <= freshAt + 2 else { return false }
-                freshAt = start
-            }
-            guard let cost = commandTimings[abs(plan.chunks[index])]?.longest else { return false }
-            let start = max(cursor, due)
-            let finish = start + cost
-            guard start - due <= max(0.2, plan.duration * 0.05), finish <= freshAt + 2 else {
-                return false
-            }
-            if index + 1 < plan.chunks.count {
-                cursor = finish + configuration.commandInterval
-                guard cursor <= epoch + plan.offsets[index + 1] + 1e-9 else { return false }
-            } else if finish > epoch + plan.delay + plan.duration + max(0.2, plan.duration * 0.05) {
-                return false
-            }
-        }
-        return true
+        return commandTime(trajectory.delay + trajectory.duration)
     }
 
     // Countdown refreshes remain periodic, including a final read within the initial-age reserve.
@@ -929,7 +902,7 @@ public struct FocusRackEngine: Sendable {
         guard let trajectory, trajectory.maintenanceReadOffsets != nil,
             !pauseRequested, pausedAt == nil
         else { return false }
-        return nextStep > 0 || timestamp >= startedAt + accumulatedPause + trajectory.offsets[0]
+        return nextStep > 0 || timestamp >= commandTime(trajectory.offsets[0])
     }
 
     mutating func finishScheduledRead(
@@ -939,21 +912,29 @@ public struct FocusRackEngine: Sendable {
             pending.step == commandID, pending.configuration == configurationRevision
         else { return }
         pendingMaintenanceRead = nil
-        guard trajectory != nil, !stopRequested, !pauseRequested else { return }
-        guard accepted, let deadline = nextCommandDeadline, timestamp <= deadline + 1e-9 else {
+        guard let trajectory, !stopRequested, !pauseRequested else { return }
+        guard accepted else {
+            failMaintenance(at: timestamp)
+            return
+        }
+        guard let safetyAt = context?.safetyTimestamp,
+            timestamp + commandCost(trajectory) < safetyAt + 2
+        else {
             failMaintenance(at: timestamp)
             return
         }
         completedMaintenanceReads.insert(commandID)
-        if !maintenanceFits(at: timestamp) { failMaintenance(at: timestamp) }
+        if let deadline = nextCommandDeadline {
+            extendTiming(by: max(0, timestamp - deadline), at: timestamp)
+        }
     }
 
-    // This deadline stays in the original epoch across polling and acknowledged pauses.
+    // Late work shifts the remaining cadence instead of sending compressed catch-up commands.
     var nextCommandDeadline: Double? {
         guard enforcesTiming, let trajectory, !pauseRequested, pausedAt == nil,
             !stopRequested, inFlight == nil
         else { return nil }
-        return startedAt + accumulatedPause + trajectory.offsets[nextStep]
+        return commandTime(trajectory.offsets[nextStep])
     }
 
     // The read drains before this check. Pause/Resume may deliberately extend the same run's epoch.
@@ -961,15 +942,16 @@ public struct FocusRackEngine: Sendable {
         guard expected == runID, let deadline = nextCommandDeadline,
             timestamp > deadline + 1e-9
         else { return }
-        failMaintenance(at: timestamp)
+        extendTiming(by: timestamp - deadline, at: timestamp)
     }
 
     private mutating func failMaintenance(at timestamp: Double) {
         trajectory = nil
         finishedAt = timestamp
         phase = "failed"
-        message = "Fresh camera readings cannot fit this cadence. Adjust duration and try again."
-        append("maintenanceBudgetExceeded", at: timestamp)
+        message =
+            "Fresh camera readings could not be confirmed. Wait for the camera before retrying."
+        append("safetyReadRejected", at: timestamp)
     }
 
     var maintenanceReadBudget: Double {
@@ -980,7 +962,7 @@ public struct FocusRackEngine: Sendable {
         let elapsed = finishedAt - startedAt
         longestSafetyRead = max(longestSafetyRead, elapsed)
         // Qualification is per run, not a permanent prediction from an unrelated idle stall.
-        // Every active read must still finish before the next command; no late continuation.
+        // Late successful reads extend the remaining cadence; their evidence must still be fresh.
         if accepted {
             safetyReadBudget = max(0.1, elapsed)
             if isTimedRun { runSafetyReadBudget = max(runSafetyReadBudget, safetyReadBudget) }
@@ -1185,6 +1167,24 @@ public struct FocusRackEngine: Sendable {
             admissionInstruction: admissionInstruction)
         state.admissionMessage = state.admissionMessage?.replacingOccurrences(
             of: "test cadence", with: "current camera cadence")
+        let completedCurrentTarget =
+            state.phase == .complete && enforcesTiming
+            && lastRunTransition == state.transition
+        let elapsed =
+            completedCurrentTarget ? state.actualMovementDuration : state.estimatedDuration
+        if state.transition.durationMode == .timed, let elapsed,
+            elapsed > state.transition.duration + 0.0005
+        {
+            let target = state.transition.duration.formatted(
+                .number.precision(.fractionLength(0...2)))
+            let measured = elapsed.formatted(.number.precision(.fractionLength(0...2)))
+            state.timingWarning =
+                completedCurrentTarget
+                ? "\(target) s target; completed in \(measured) s."
+                : "\(target) s target · ~\(measured) s estimated. Timing is advisory."
+        } else if let maximum = state.maximumDuration, state.transition.duration > maximum {
+            state.timingWarning = "This duration may show pauses between focus adjustments."
+        }
         if context?.unavailableReason(at: timestamp) == nil, position != nil {
             switch state.phase {
             case .idle, .ready:
@@ -1203,9 +1203,7 @@ public struct FocusRackEngine: Sendable {
             case .stopping: state.message = "Stopping. Waiting for the camera."
             case .stopped: state.message = "Stopped. Focus stays where it stopped."
             case .complete: state.message = ""
-            case .failed:
-                state.message =
-                    "The requested timing could not be maintained. Adjust the duration and try again."
+            case .failed: break
             case .stepTooSmall: state.message = "The camera could not make this small adjustment."
             case .refused:
                 state.message =

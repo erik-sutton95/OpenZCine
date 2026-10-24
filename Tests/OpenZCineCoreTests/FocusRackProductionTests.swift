@@ -849,7 +849,7 @@ func rackSafetyRefreshDefersOnlyWhenTheRemainingPullFitsFreshness(duration: Doub
     try await waitForRack {
         camera.readCount > reads && camera.driveCount > drives && camera.isSleeping
     }
-    for _ in 0..<250 {
+    for _ in 0..<500 {
         if !(await controller.snapshot()).busy { break }
         let sleep = camera.advanceClockBeforeNextSleep(0.05)
         sequence += 1
@@ -973,13 +973,26 @@ private func runJointControllerComparison(delay: Double, disposition: String) as
             try await waitForRack { (await controller.snapshot()).phase == .stopped }
         }
         camera.releaseSafetyRead()
+        if disposition == "late" {
+            for sequence in 250..<750 {
+                if !(await controller.snapshot()).busy { break }
+                observation.frameSequence = Int64(sequence)
+                await controller.observe(observation)
+                let sleep = camera.advanceClockBeforeNextSleep(camera.pendingSleepSeconds)
+                try await waitForRack {
+                    if camera.slept(after: sleep) { return true }
+                    return !(await controller.snapshot()).busy
+                }
+            }
+        }
         try await waitForRack { !(await controller.snapshot()).busy }
         let after = await controller.snapshot()
-        #expect(after.phase == (disposition == "stop" ? .stopped : .failed))
-        #expect(after.stepPosition == before.stepPosition)
+        #expect(after.phase == (disposition == "stop" ? .stopped : .complete))
+        #expect(after.stepPosition == (disposition == "stop" ? before.stepPosition : 0))
         #expect(after.program.marks == before.program.marks)
         #expect(after.referenceValid)
-        #expect(camera.driveCount == drives)
+        #expect(disposition == "stop" ? camera.driveCount == drives : camera.driveCount > drives)
+        if disposition == "late" { #expect(after.timingWarning != nil) }
     } else {
         #expect(before.phase == .complete)
         #expect(before.stepPosition == 0)
@@ -1051,17 +1064,30 @@ func rackHeldMaintenanceReadCannotSendLateCommands(stopDuringRead: Bool) async t
         try await waitForRack { (await controller.snapshot()).phase == .stopped }
     }
     camera.releaseSafetyRead()
+    if !stopDuringRead {
+        for _ in 0..<500 {
+            if !(await controller.snapshot()).busy { break }
+            sequence += 1
+            await controller.observe(cameraObservation(sequence))
+            let sleep = camera.advanceClockBeforeNextSleep(0.05)
+            try await waitForRack {
+                if camera.slept(after: sleep) { return true }
+                return !(await controller.snapshot()).busy
+            }
+        }
+    }
     try await waitForRack { !(await controller.snapshot()).busy }
     let after = await controller.snapshot()
-    #expect(camera.driveCount == drives)
-    #expect(after.stepPosition == before.stepPosition)
+    #expect(stopDuringRead ? camera.driveCount == drives : camera.driveCount > drives)
+    #expect(after.stepPosition == (stopDuringRead ? before.stepPosition : 0))
     #expect(after.program.marks == before.program.marks)
     #expect(after.referenceValid)
-    #expect(after.phase == (stopDuringRead ? .stopped : .failed))
+    #expect(after.phase == (stopDuringRead ? .stopped : .complete))
     let events = await controller.diagnostics().events
     #expect(
-        events.contains { $0.runID == before.runID && $0.kind == "maintenanceBudgetExceeded" }
-            == !stopDuringRead)
+        !events.contains {
+            $0.runID == before.runID && $0.kind == "maintenanceBudgetExceeded"
+        })
     await controller.close()
 }
 
