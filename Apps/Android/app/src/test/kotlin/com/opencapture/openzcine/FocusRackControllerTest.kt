@@ -69,7 +69,6 @@ class FocusRackControllerTest {
         var durationMode = "timed"
         var templates = "[]"
         var createdTemplates: String? = null
-        var traceJSON: String? = null
         var calibrationJSON: String? = null
         var nudgeProgress: JSONObject? = null
         var calibration: JSONObject? = null
@@ -123,7 +122,7 @@ class FocusRackControllerTest {
             timingWarning?.let { state.put("timingWarning", it) }
             calibration?.let { state.put("calibration", it) }
             return JSONObject().put("state", state).put("templates", JSONArray(templates))
-                .put("templatesJSON", templates).put("traceJSON", traceJSON)
+                .put("templatesJSON", templates)
                 .put("calibrationJSON", calibrationJSON).put("focusMode", focusMode)
                 .put("focusModeSwitchPending", focusModeSwitchPending)
                 .put("canChangeFocusMode", canChangeFocusMode).put("nativeAFConfigured", nativeAFConfigured)
@@ -402,20 +401,18 @@ class FocusRackControllerTest {
         rack.close()
     }
 
-    @Test fun `debug completion requests and forwards the private native trace`() = runTest {
+    @Test fun `movement completion updates state without submitting another intent`() = runTest {
         val wire = Wire()
-        val traces = mutableListOf<String>()
         val rack = FocusRackController(42, TestSharedPreferences(),
-            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire,
-            traceSink = { traces += it })
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
         rack.activate()
         rack.observe(JSONObject())
+        assertTrue(rack.state.value.active)
+        val requestsBeforeCompletion = wire.requests.size
         wire.busy = false
-        wire.traceJSON = "{\"events\":[]}"
         rack.observe(JSONObject())
-        assertTrue(wire.requests.any { it.getString("kind") == "diagnostics" })
-        assertTrue(traces.contains(wire.traceJSON))
-        assertFalse(wire.requests.any { it.getString("kind") == "run" })
+        assertFalse(rack.state.value.active)
+        assertEquals(listOf("observe"), wire.requests.drop(requestsBeforeCompletion).map { it.getString("kind") })
         rack.close()
     }
 

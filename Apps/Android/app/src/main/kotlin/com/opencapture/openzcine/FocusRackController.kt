@@ -52,7 +52,6 @@ private object NativeFocusRackWire : FocusRackWirePort {
 /** Main-thread shell adapter: forwards observations/intents, thumbnails and timing-template bytes. */
 internal class FocusRackController(private val connectionOwner: Long, private val preferences: SharedPreferences,
     private val scope: CoroutineScope, private val wire: FocusRackWirePort = NativeFocusRackWire,
-    private val traceSink: (String) -> Unit = {},
     private val observationNanos: () -> Long = System::nanoTime,
     private val nativeCheckpoint: AtomicReference<String?> = AtomicReference(null),
     private val selectedFocusMode: AtomicReference<String?> = AtomicReference(null),
@@ -229,7 +228,6 @@ internal class FocusRackController(private val connectionOwner: Long, private va
     private fun send(kind: String, request: JSONObject = JSONObject()) {
         if (closed) return
         val handle = owner ?: return
-        val wasActive = state.value.active
         request.put("kind", kind)
         observation?.let {
             request.put("observation", it)
@@ -338,10 +336,6 @@ internal class FocusRackController(private val connectionOwner: Long, private va
             executeAFSetting(change)
         }
         reply.optJSONObject("nativeAFChange")?.let(::executeNativeTarget)
-        if (BuildConfig.DEBUG) {
-            reply.nullableString("traceJSON")?.let { trace -> runCatching { traceSink(trace) } }
-            if (wasActive && !state.value.active) send("diagnostics")
-        }
         val saved = reply.optString("templatesJSON").takeIf { it.isNotEmpty() && it != "null" }
         if (saved != null && saved != persistedTemplates) {
             // Swift validates and emits this timing-only schema. The shell stores the bytes verbatim.
