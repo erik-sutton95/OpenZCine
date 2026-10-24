@@ -31,6 +31,11 @@ internal fun focusAFSettingsReadbacksMatch(expected: JSONObject, actual: CameraP
         value != null && !expected.isNull(key) && expected.optString(key) == value
     }
 
+/** Explicit Native mode selection releases the app point lock, preserving the interface lock. */
+internal fun focusPointLockedAfterModeSelection(pointLocked: Boolean, currentMode: String,
+    selectedMode: String, interfaceLocked: Boolean): Boolean =
+    pointLocked && (interfaceLocked || currentMode != "timedRack" || selectedMode != "nativeAF")
+
 /** Native transport to a Swift runner; this boundary never exposes camera command actions. */
 internal interface FocusRackWirePort {
     fun create(connectionOwner: Long, templates: String): String?
@@ -309,6 +314,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 recording = observation?.optBoolean("recording") == true,
                 durationMode = transition.optString("durationMode", "timed"),
                 estimatedDuration = if (snapshot.isNull("estimatedDuration")) null else snapshot.getDouble("estimatedDuration"),
+                timingWarning = snapshot.nullableString("timingWarning"),
                 primaryTitle = primary.getString("title"), primaryDetail = primary.nullableString("detail"),
                 primaryDisabledReason = primary.nullableString("disabledReason"),
                 pullAToB = snapshot.optJSONObject("pullAToB")?.action(),

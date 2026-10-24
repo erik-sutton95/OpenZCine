@@ -51,7 +51,7 @@ internal data class FocusRackViewState(
     val position: Int? = null, val marks: List<FocusRackMarkViewState> = emptyList(),
     val fromMark: String = "A", val toMark: String = "B", val duration: Double = 3.0,
     val delay: Double = 0.0, val easing: String = "linear", val durationMode: String = "timed",
-    val estimatedDuration: Double? = null,
+    val estimatedDuration: Double? = null, val timingWarning: String? = null,
     val primaryTitle: String = "Set A and B", val primaryEnabled: Boolean = false,
     val primaryDetail: String? = null, val primaryDisabledReason: String? = null,
     val pullAToB: FocusRackActionViewState? = null, val pullBToA: FocusRackActionViewState? = null,
@@ -99,6 +99,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     onCalibrate: () -> Unit = {}, onFocusMode: (String) -> Unit = {},
     onNativeSet: (String) -> Unit = {}, onNativeGo: (String) -> Unit = {},
     onNativeRun: (String) -> Unit = {}, onNativeCancel: () -> Unit = {}, onNativeDelay: (String) -> Unit = {},
+    nativeAFPointLocked: Boolean = false, onUnlockNativeFocusPoint: () -> Unit = {},
 ) {
     var optionsExpanded by remember { mutableStateOf(false) }
     val nudging = state.nudgeProgress != null
@@ -181,28 +182,41 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
         }
         if (state.focusMode == "nativeAF") {
             val native = state.nativeAF
+            val targetControlsEnabled = setupEnabled && !nativeAFPointLocked
+            val nativeOutlineColors = ButtonDefaults.outlinedButtonColors(disabledContentColor = Color.White.copy(alpha = 0.4f))
             if (!compact) {
                 Column(Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState())
                     .testTag("focusRack.nativeAF"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(native.failure ?: state.afSettingsFailure ?: native.message,
                         color = if (native.failure != null || state.nativeAFDisabledReason != null) Color(0xFFFFB869) else Color.LightGray,
                         fontSize = 12.sp, modifier = Modifier.testTag("focusRack.nativeAF.message"))
+                    if (nativeAFPointLocked) {
+                        OutlinedButton(onClick = onUnlockNativeFocusPoint, enabled = setupEnabled, colors = nativeOutlineColors,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .testTag("focusRack.nativeAF.unlock"),
+                            contentPadding = PaddingValues(4.dp)) { Text("Unlock focus point", fontSize = 12.sp) }
+                    }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for ((mark, hasTarget) in listOf("A" to native.hasA, "B" to native.hasB)) {
                             Column(Modifier.weight(1f)) {
+                                Text(if (hasTarget) "✓ $mark set" else "$mark not set",
+                                    color = if (hasTarget) Color(0xFFD8B16B) else Color.LightGray,
+                                    fontSize = 12.sp, modifier = Modifier.testTag("focusRack.nativeAF.saved.$mark"))
                                 OutlinedButton(onClick = { onNativeSet(mark); onExpanded(false) },
-                                    enabled = setupEnabled && native.canSet,
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.nativeAF.set.$mark"),
+                                    enabled = targetControlsEnabled && native.canSet, colors = nativeOutlineColors,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                        .testTag("focusRack.nativeAF.set.$mark"),
                                     contentPadding = PaddingValues(4.dp)) { Text(if (hasTarget) "Replace $mark" else "Set $mark", fontSize = 12.sp) }
-                                if (hasTarget) TextButton(onClick = { onNativeGo(mark) },
-                                    enabled = setupEnabled && if (mark == "A") native.canGoToA else native.canGoToB,
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.nativeAF.go.$mark"),
+                                val canGo = targetControlsEnabled && if (mark == "A") native.canGoToA else native.canGoToB
+                                OutlinedButton(onClick = { onNativeGo(mark) }, enabled = canGo, colors = nativeOutlineColors,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                        .testTag("focusRack.nativeAF.go.$mark"),
                                     contentPadding = PaddingValues(4.dp)) { Text("Go to $mark", fontSize = 12.sp) }
                             }
                         }
                     }
                     OutlinedButton(onClick = { editingField = "nativeDelay"; editText = native.startDelay.toString().removeSuffix(".0") },
-                        enabled = setupEnabled && native.canSet,
+                        enabled = targetControlsEnabled && native.canSet,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.nativeAF.delay"),
                         contentPadding = PaddingValues(4.dp)) { Text("Start delay  ${native.startDelay.toString().removeSuffix(".0")} s", fontSize = 12.sp) }
                     Text("Transition speed: camera setting", color = Color.LightGray, fontSize = 12.sp)
@@ -210,15 +224,23 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                     TextButton(onClick = onFocusSettings, enabled = setupEnabled && !native.busy,
                         modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.nativeAF.settings")) { Text("Focus settings", fontSize = 12.sp) }
                 }
+            } else if (nativeAFPointLocked) {
+                OutlinedButton(onClick = onUnlockNativeFocusPoint, enabled = setupEnabled, colors = nativeOutlineColors,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .testTag("focusRack.nativeAF.unlock"),
+                    contentPadding = PaddingValues(4.dp)) { Text("Unlock focus point", fontSize = 12.sp) }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (!compact || !nativeAFPointLocked) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (native.canCancel) {
                     OutlinedButton(onClick = onNativeCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                         .testTag("focusRack.nativeAF.cancel")) { Text(if (native.selectingMark != null) "Cancel selection" else "Cancel delay") }
                 } else if (native.selectingMark == null) {
                     for ((direction, target) in listOf("aToB" to "B", "bToA" to "A")) {
-                        Button(onClick = { onNativeRun(target) }, enabled = setupEnabled && native.canRun,
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("focusRack.nativeAF.run.$direction"),
+                        Button(onClick = { onNativeRun(target) }, enabled = targetControlsEnabled && native.canRun,
+                            colors = ButtonDefaults.buttonColors(disabledContainerColor = Color.White.copy(alpha = 0.06f),
+                                disabledContentColor = Color.White.copy(alpha = 0.4f)),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                .testTag("focusRack.nativeAF.run.$direction"),
                             contentPadding = PaddingValues(4.dp)) {
                             Text("${if (state.recording) "Run" else "Rehearse"} ${if (target == "B") "A→B" else "B→A"}", fontSize = 12.sp)
                         }
@@ -339,6 +361,8 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                     Text("${state.duration.toString().removeSuffix(".0")} s target · ~${"%.2f".format(it)} s estimated",
                         color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.testTag("focusRack.estimate"))
                 }
+                state.timingWarning?.let { Text(it, color = Color(0xFFFFCE9B), fontSize = 12.sp,
+                    modifier = Modifier.fillMaxWidth().testTag("focusRack.timingWarning")) }
                 state.admissionMessage?.let { Text(it, color = Color(0xFFFFCE9B), fontSize = 12.sp,
                     modifier = Modifier.bringIntoViewRequester(admissionAttention).testTag("focusRack.admission")) }
                 val message = state.afSettingsFailure ?: if (state.afSettingsPending)

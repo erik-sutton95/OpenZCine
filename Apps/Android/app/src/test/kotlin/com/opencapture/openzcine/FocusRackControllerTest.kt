@@ -18,6 +18,15 @@ import kotlin.test.*
 
 /** Boundary tests: Kotlin renders shared policy and never receives or executes native movement. */
 class FocusRackControllerTest {
+    @Test fun `explicit Timed to Native selection releases only the app point lock`() {
+        assertFalse(focusPointLockedAfterModeSelection(true, "timedRack", "nativeAF", false))
+        assertFalse(focusPointLockedAfterModeSelection(false, "timedRack", "nativeAF", false))
+        assertTrue(focusPointLockedAfterModeSelection(true, "timedRack", "nativeAF", true))
+        assertTrue(focusPointLockedAfterModeSelection(true, "nativeAF", "nativeAF", false))
+        assertTrue(focusPointLockedAfterModeSelection(true, "nativeAF", "timedRack", false))
+        assertTrue(focusPointLockedAfterModeSelection(true, "timedRack", "timedRack", false))
+    }
+
     @Test
     fun `focus wire preserves independent raw fields and excludes synthetic metadata`() {
         val point = LiveFocusBox(50, 50, 10, 10)
@@ -77,6 +86,7 @@ class FocusRackControllerTest {
         var afSettingsFailure: String? = null
         var afAdmission = true
         var nativeAF = JSONObject()
+        var timingWarning: String? = null
         var nativeAFChange: JSONObject? = null
         var nativeAdmission = true
         var nativeCheckpointJSON: String? = null
@@ -110,6 +120,7 @@ class FocusRackControllerTest {
                 .put("capabilities", caps).put("primary", JSONObject().put("title", "Pause")
                     .put("enabled", busy)).put("minimumDuration", 16.6)
             nudgeProgress?.let { state.put("nudgeProgress", it) }
+            timingWarning?.let { state.put("timingWarning", it) }
             calibration?.let { state.put("calibration", it) }
             return JSONObject().put("state", state).put("templates", JSONArray(templates))
                 .put("templatesJSON", templates).put("traceJSON", traceJSON)
@@ -122,6 +133,22 @@ class FocusRackControllerTest {
                 .put("afSettingsRestoring", afSettingsRestoring).put("afSettingsReady", afSettingsReady)
                 .put("afSettingsFailure", afSettingsFailure).toString()
         }
+    }
+
+    @Test fun `timing warnings project independently without disabling admitted actions`() = runTest {
+        val wire = Wire().apply { timingWarning = "Camera cadence is slower; the pull will finish late." }
+        val rack = FocusRackController(42, TestSharedPreferences(),
+            CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
+        rack.activate()
+        try {
+            rack.observe(JSONObject())
+            assertEquals(wire.timingWarning, rack.state.value.timingWarning)
+            assertTrue(rack.state.value.primaryEnabled)
+            assertNull(rack.state.value.admissionMessage)
+            wire.timingWarning = null
+            rack.observe(JSONObject())
+            assertNull(rack.state.value.timingWarning)
+        } finally { rack.close() }
     }
 
     @Test fun `focus modes project Swift admission and forward camera readbacks without control writes`() = runTest {

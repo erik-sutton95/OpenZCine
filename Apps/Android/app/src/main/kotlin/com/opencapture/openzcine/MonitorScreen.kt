@@ -1899,8 +1899,18 @@ internal fun MonitorScreen(
                 onNativeGo = { mark -> focusRack.observe(rackObservation()); focusRack.goNativeTarget(mark) },
                 onNativeRun = { mark -> focusRack.observe(rackObservation()); focusRack.runNativeTarget(mark) },
                 onNativeCancel = focusRack::cancelNativeDelay, onNativeDelay = focusRack::nativeDelay,
+                nativeAFPointLocked = focusPointLocked,
+                onUnlockNativeFocusPoint = { if (!locked) {
+                    focusRack.cancelNativeDelay()
+                    focusPointLocked = false
+                    focusLockHolding = false
+                    focusRack.observe(rackObservation())
+                } },
                 onFocusMode = { mode ->
-                    if (focusMoveRequestsInFlight == 0 && !focusResetPending && rackFocusIdle()) {
+                    if (!locked && focusMoveRequestsInFlight == 0 && !focusResetPending && rackFocusIdle()) {
+                        focusPointLocked = focusPointLockedAfterModeSelection(
+                            focusPointLocked, focusRack.state.value.focusMode, mode, locked)
+                        focusLockHolding = false
                         focusRack.observe(rackObservation())
                         focusRack.selectFocusMode(mode)
                     }
