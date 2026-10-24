@@ -157,16 +157,23 @@ enum DemoHarness {
             state.primary = .init(
                 kind: "rehearse", title: "Rehearse A→B", enabled: true,
                 detail: state.transition.playbackDetail)
-            if fixture == "calibration" || fixture == "calibrationMeasured" {
+            if ["preparationReady", "preparationRecording", "preparationComplete"].contains(fixture)
+            {
                 state.program.marks = [
                     .init(id: "A", stepPosition: 0), .init(id: "B", stepPosition: 100),
                 ]
+                let recording = fixture == "preparationRecording"
+                let completed = fixture == "preparationComplete"
+                if completed {
+                    state.phase = .complete
+                    state.stepPosition = 100
+                }
                 state.calibration = .init(
-                    kind: "calibrate",
-                    title: fixture == "calibration" ? "Calibrate to B" : "Calibration measured",
-                    enabled: fixture == "calibration",
-                    detail: fixture == "calibration"
-                        ? "32-pulse increments · 1/10" : "All 5 sizes in both directions")
+                    kind: "calibrate", title: "Prepare lens", enabled: !recording,
+                    detail: recording
+                        ? "Stop recording before preparing the lens"
+                        : "One pass \(completed ? "B→A" : "A→B") · recording stopped",
+                    disabledReason: recording ? "Stop recording before preparing the lens" : nil)
             }
             if fixture == "setupChanged" {
                 state.message = "Camera setup changed. Check A and B; reset marks if needed."
@@ -242,7 +249,9 @@ enum DemoHarness {
                 state.phase = .complete
                 state.message = ""
             }
-            state.updateTimedActions(recording: fixture == "recording", ready: state.referenceValid)
+            state.updateTimedActions(
+                recording: fixture == "recording" || fixture == "preparationRecording",
+                ready: state.referenceValid)
             return state
         }
     #endif

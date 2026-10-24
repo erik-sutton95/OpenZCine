@@ -743,28 +743,31 @@ class FocusRackPanelComposeTest {
         assertEquals(1, actions.resets)
     }
 
-    @Test fun calibrationProjectsSharedStagesAndKeepsStopReachableInLandscape() {
+    @Test fun lensPreparationProjectsReadinessAndKeepsStopReachableInLandscape() {
         val state = mutableStateOf(ready())
         val setup = mutableStateOf(true)
         val actions = Actions()
         mount(state, actions, setupEnabled = { setup.value })
         openOptions()
         compose.onNodeWithTag("focusRack.calibrate").assertDoesNotExist()
-        val next = FocusRackActionViewState("Calibrate to B", "32-pulse increments · 1/10", true)
-        compose.runOnIdle { state.value = state.value.copy(calibration = next) }
+        val prepare = FocusRackActionViewState("Prepare lens", "One pass A→B · recording stopped", true)
+        compose.runOnIdle { state.value = state.value.copy(calibration = prepare) }
         compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsEnabled()
-            .assertTextContains(next.title).assertTextContains(requireNotNull(next.detail)).insideFrame()
+            .assertTextContains(prepare.title).assertTextContains(requireNotNull(prepare.detail)).insideFrame()
         assertTouchTarget("focusRack.calibrate")
         compose.onNodeWithTag("focusRack.calibrate").performClick()
         assertEquals(1, actions.calibrations)
         assertTransportInsideFrame()
-        compose.saveLandscapeEvidence("focus-rack-calibration-next-landscape")
+        compose.saveLandscapeEvidence("focus-rack-preparation-ready-landscape")
 
-        compose.runOnIdle { state.value = state.value.copy(calibration =
-            FocusRackActionViewState("Calibrate to A", "32-pulse increments · 2/10", true)) }
-        compose.onNodeWithTag("focusRack.calibrate").assertTextContains("Calibrate to A")
-            .assertTextContains("32-pulse increments · 2/10").assertIsEnabled()
-        compose.runOnIdle { setup.value = false }
+        val recordingReason = "Stop recording before preparing the lens"
+        compose.runOnIdle { state.value = state.value.copy(recording = true, calibration =
+            prepare.copy(enabled = false, detail = recordingReason, disabledReason = recordingReason)) }
+        compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsNotEnabled()
+            .assertTextContains(recordingReason).insideFrame()
+        assertTouchTarget("focusRack.calibrate")
+        compose.saveLandscapeEvidence("focus-rack-preparation-recording-landscape")
+        compose.runOnIdle { state.value = state.value.copy(recording = false, calibration = prepare); setup.value = false }
         compose.onNodeWithTag("focusRack.calibrate").assertIsNotEnabled()
         compose.runOnIdle { setup.value = true; state.value = state.value.copy(active = true, phase = "moving",
             canStop = true, primaryTitle = "Pause", canPause = true, primaryEnabled = true, completed = 30, total = 100) }
@@ -772,21 +775,40 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithTag("focusRack.stop").assertIsEnabled().performClick()
         assertEquals(1, actions.stops)
         assertTransportInsideFrame()
-        compose.saveLandscapeEvidence("focus-rack-calibration-moving-landscape")
+        compose.saveLandscapeEvidence("focus-rack-preparation-moving-landscape")
 
         compose.runOnIdle { state.value = state.value.copy(phase = "stopping", canStop = false, primaryEnabled = false) }
         compose.onNodeWithTag("focusRack.calibrate").assertIsNotEnabled()
         compose.onNodeWithTag("focusRack.stop").assertIsNotEnabled()
         assertTransportInsideFrame()
-        compose.saveLandscapeEvidence("focus-rack-calibration-stopping-landscape")
-        compose.runOnIdle { state.value = ready().copy(calibration =
-            FocusRackActionViewState("Calibration measured", "All 5 sizes in both directions", false)) }
-        compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsNotEnabled()
-            .assertTextContains("Calibration measured").assertTextContains("All 5 sizes in both directions").insideFrame()
+        val complete = prepare.copy(detail = "One pass B→A · recording stopped")
+        compose.runOnIdle { state.value = ready().copy(phase = "complete", calibration = complete,
+            position = 94, canGoToA = true, canGoToB = false,
+            pullAToB = ready().pullAToB?.copy(enabled = false),
+            pullBToA = ready().pullBToA?.copy(enabled = true)) }
+        compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsEnabled()
+            .assertTextContains("Prepare lens").assertTextContains(requireNotNull(complete.detail)).insideFrame()
         compose.onNodeWithTag("focusRack.stop").assertDoesNotExist()
-        assertEquals(1, actions.calibrations)
+        compose.onNodeWithTag("focusRack.calibrate").performClick()
+        assertEquals(2, actions.calibrations)
         assertTransportInsideFrame()
-        compose.saveLandscapeEvidence("focus-rack-calibration-complete-landscape")
+        compose.saveLandscapeEvidence("focus-rack-preparation-complete-landscape")
+    }
+
+    @Test fun lensPreparationRecordingReasonFitsPortraitWithoutEnablingMovement() {
+        compose.settlePortrait()
+        val reason = "Stop recording before preparing the lens"
+        val state = mutableStateOf(ready().copy(recording = true, calibration =
+            FocusRackActionViewState("Prepare lens", reason, false, reason)))
+        val actions = Actions()
+        mount(state, actions, maximumHeight = 620f)
+        openOptions()
+        compose.onNodeWithTag("focusRack.calibrate").performScrollTo().assertIsNotEnabled()
+            .assertTextContains("Prepare lens").assertTextContains(reason).insideFrame()
+        assertTouchTarget("focusRack.calibrate")
+        assertEquals(0, actions.calibrations)
+        assertTransportInsideFrame()
+        compose.savePortraitEvidence("focus-rack-preparation-recording-portrait")
     }
 
     private fun waitForKeyboardDismissed() {
