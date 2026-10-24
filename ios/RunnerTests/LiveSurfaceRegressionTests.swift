@@ -178,6 +178,71 @@ final class LiveSurfaceRegressionTests: XCTestCase {
         XCTAssertTrue(shown, "the failure must read on the mounted monitor")
     }
 
+    // MARK: A5-17
+
+    /// A5-17: Z wrote its own FPS chip words (READY, BUSY, a dash for every capture state) while
+    /// Pocket, Insta and Z Android word it through the shared `MonitorLinkMeter`. A capture card
+    /// coming up now reads LINK, one that failed reads FAIL and one waiting for a device reads the
+    /// idle dash: the shared words for the same states.
+    func testTheCaptureCardChipUsesTheSharedLinkWords() {
+        let model = NativeAppModel()
+        model.isMonitorPresented = true
+        model.videoSource = .hdmiCapture
+
+        model.applyHDMICaptureState(.starting)
+        XCTAssertEqual(model.liveFPS, "LINK")
+        model.applyHDMICaptureState(.failed(reason: "SIMULATED capture card unplugged"))
+        XCTAssertEqual(model.liveFPS, "FAIL")
+        model.applyHDMICaptureState(.waitingForDevice)
+        XCTAssertEqual(model.liveFPS, MonitorLinkMeter.idle)
+        // Terminal capture states keep saying FAIL after their notice is gone; only waiting for a
+        // device is idle.
+        model.applyHDMICaptureState(.permissionDenied)
+        XCTAssertEqual(model.liveFPS, "FAIL")
+        model.applyHDMICaptureState(.unsupportedDevice)
+        XCTAssertEqual(model.liveFPS, "FAIL")
+    }
+
+    /// A5-17: with no BUSY chip, the body-busy notice is the only explanation of a paused feed.
+    /// It shows once per busy spell, and a new session starts a new spell: a session that ended
+    /// while the body was busy must not silence the next session's first notice.
+    func testTheBodyBusyNoticeShowsAgainInTheNextSession() {
+        let model = NativeAppModel()
+        model.isMonitorPresented = true
+        model.noteBodyBusy(true)
+        XCTAssertEqual(model.monitorNote?.contains("busy"), true)
+        model.monitorNote = nil
+        model.noteBodyBusy(true)
+        XCTAssertNil(model.monitorNote, "one notice per busy spell")
+
+        model.clearCameraSessionState(resetConnection: true)
+        model.isMonitorPresented = true
+        model.noteBodyBusy(true)
+        XCTAssertEqual(
+            model.monitorNote?.contains("busy"), true,
+            "the next session's first busy spell is announced")
+    }
+
+    /// A5-17: every chip word Z shows is one the shared meter can produce; Z's own READY and BUSY
+    /// are gone. The live states below are the ones a test can reach without a camera.
+    func testTheChipNeverShowsZOnlyWords() {
+        let model = NativeAppModel()
+        model.isMonitorPresented = true
+        for state: UVCVideoSourceState in [
+            .unsupportedDevice, .permissionDenied, .waitingForDevice, .starting,
+            .failed(reason: "SIMULATED"),
+        ] {
+            model.videoSource = .hdmiCapture
+            model.applyHDMICaptureState(state)
+            XCTAssertFalse(["READY", "BUSY"].contains(model.liveFPS), "\(state): \(model.liveFPS)")
+        }
+        model.videoSource = .cameraLiveView
+        model.connection = .preparingLiveView
+        XCTAssertEqual(model.liveFPS, "LINK", "a camera link with no picture yet reads LINK")
+        model.connection = .disconnected
+        XCTAssertEqual(model.liveFPS, MonitorLinkMeter.idle)
+    }
+
     // MARK: A1-03
 
     /// A1-03: the live chrome started from the `.preview` fixture (ISO 800, "6K · 25p", a battery

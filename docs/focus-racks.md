@@ -81,9 +81,10 @@ unknown. Once a mark exists, use the rack's controls for focus
 adjustments; peaking and magnification remain available. **Replace A/B** explicitly replaces
 that mark at the current acknowledged focus position. **Reset marks** discards both marks.
 
-Physical lens-ring movement may be undetectable. Reset the marks if someone adjusts the ring,
-changes zoom or moves the setup. Observed lens, zoom, session, focus-setting or external AF
-changes invalidate the reference automatically; the app cannot detect every physical change.
+Physical lens-ring movement may be undetectable. Check the marks if someone adjusts the ring,
+changes zoom or moves the setup, and reset them if needed. Observed lens, zoom or focus-setting
+changes preserve marks and detach incompatible timings. A new camera session or an external AF
+move invalidates the relative reference; the app cannot detect every physical change.
 
 ## Choose and run a move
 

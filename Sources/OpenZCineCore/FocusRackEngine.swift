@@ -165,7 +165,7 @@ public struct FocusRackEngine: Sendable {
     private var captureRevision: Int64 = 0
     private var position: Int? = 0
     private var phase = "idle"
-    private var message = "UNQUALIFIED - set a fixed zoom, use AF-S, and adjust focus only here."
+    private var message = "Focus the first subject, then set A."
     private var runID: Int64
     private var trajectory: FocusRackMovementPlan?
     private var plannedDuration: Double?
@@ -517,7 +517,7 @@ public struct FocusRackEngine: Sendable {
                 self.trajectory = nil
                 finishedAt = timestamp
                 phase = "complete"
-                message = "Complete. Inspect the source recording for sharpness and smoothness."
+                message = "Complete."
                 if let activeCalibration, activeCalibration.trip == calibrationTrips,
                     activeCalibration.configuration == configurationRevision,
                     activeCalibration.capture == captureRevision
@@ -539,7 +539,7 @@ public struct FocusRackEngine: Sendable {
                 phase = outcome == 2 ? "stepTooSmall" : "stopped"
                 message =
                     outcome == 2
-                    ? "The lens did not move: increase the test increment."
+                    ? "The camera could not make this small adjustment."
                     : "Stopped before activation."
             case 0x10000...:
                 phase = "refused"
@@ -731,7 +731,7 @@ public struct FocusRackEngine: Sendable {
         nextStep = 0
         stopRequested = false
         phase = delay > 0 ? "countdown" : "ready"
-        message = "Experimental move: \(signedSteps) mark units, \(planned.chunks.count) commands."
+        message = "Moving focus."
     }
 
     /// Current session program, including its selected transition.

@@ -1467,7 +1467,7 @@ internal fun MonitorScreen(
         val timecodeOwner = monitorTimecodeOwner(sessionState)
         // iOS top-bar semantics: readouts seed from the preview values and
         // hold the last camera readback rather than blanking to "—"; FPS is
-        // the live-measured delivery rate ("READY" before the first frame);
+        // the live-measured delivery rate (the shared LINK before the first frame);
         // the media cell cycles capacity <-> estimated minutes.
         val readoutRetention =
             remember(session, timecodeOwner) { MonitorReadoutRetention(timecodeOwner) }

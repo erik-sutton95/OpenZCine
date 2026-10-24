@@ -145,23 +145,9 @@ struct MediaBrowserView: View {
                                 ? model.mediaDownloadProgress[record.payload.id] : nil)
                     },
                     cell: { record, context in
-                        let clip = record.payload
-                        let downloaded = model.isClipDownloaded(clip)
-                        let raw = model.rawSibling(of: clip) != nil
-                        return MediaClipCellPresentation.item(
-                            clip: clip,
-                            detail: context.list
-                                ? MediaClipCellPresentation.metadataLine(
-                                    clip,
-                                    hasRawSibling: raw, duration: context.duration,
-                                    isDownloaded: downloaded) : "",
-                            isDownloaded: downloaded,
-                            cacheProgress: model.mediaDownloadProgress[clip.id]
-                                ?? model.clipBufferedFraction(clip),
-                            isStreaming: model.isClipStreaming(clip), hasRawSibling: raw,
-                            burstCount: projection.series(for: clip)?.count,
-                            duration: context.duration,
-                            list: context.list, selecting: context.selecting)
+                        model.mediaCellItem(
+                            record.payload, list: context.list, selecting: context.selecting,
+                            duration: context.duration, projection: projection)
                     }, begin: begin, refresh: model.refreshCameraMediaInventory,
                     close: model.dismissMediaLibrary, open: open,
                     share: { records, token in
@@ -307,6 +293,28 @@ struct MediaBrowserView: View {
 }
 
 /// Source-derived catalog facts. The shared catalog never inspects camera handles or cache URLs.
+extension NativeAppModel {
+    /// One gallery cell. The catalog screen calls this for every record on each render, so it reads
+    /// the render's one projection pass and never rebuilds a library-wide index per cell.
+    func mediaCellItem(
+        _ clip: MediaClip, list: Bool, selecting: Bool, duration: String?,
+        projection: NikonAppGalleryProjection
+    ) -> MonitorMediaItem {
+        let downloaded = isClipDownloaded(clip)
+        let raw = projection.rawSibling(of: clip) != nil
+        return MediaClipCellPresentation.item(
+            clip: clip,
+            detail: list
+                ? MediaClipCellPresentation.metadataLine(
+                    clip, hasRawSibling: raw, duration: duration, isDownloaded: downloaded) : "",
+            isDownloaded: downloaded,
+            cacheProgress: mediaDownloadProgress[clip.id] ?? clipBufferedFraction(clip),
+            isStreaming: isClipStreaming(clip), hasRawSibling: raw,
+            burstCount: projection.series(for: clip)?.count,
+            duration: duration, list: list, selecting: selecting)
+    }
+}
+
 enum MediaClipCellPresentation {
     static func item(
         clip: MediaClip, detail: String, isDownloaded: Bool, cacheProgress: Double?,
