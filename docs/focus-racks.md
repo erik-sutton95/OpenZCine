@@ -1,9 +1,9 @@
-# Local A/B focus racks
+# A/B focus racks
 
 Focus Rack sets two session-relative marks and pulls between them with a chosen duration,
 start delay and Linear timing. It uses the same Swift execution controller on iOS and Android.
-This local implementation is experimental: the remaining physical qualification is recorded
-in [the qualification log](investigations/focus-rack-qualification.md).
+Remaining physical qualification is recorded in
+[the qualification summary](investigations/focus-rack-qualification.md).
 
 ## Native AF and Timed Rack
 
@@ -58,7 +58,7 @@ Disconnecting retires the pending restoration; it is never replayed on a replace
 
 ## Set the marks
 
-1. Connect the camera, open live view, select movie AF-S and turn tracking off.
+1. Connect the camera and open live view. Leave recording stopped for automatic AF setup.
 2. Open **FOCUS → Focus Rack**. Keep zoom and camera position fixed.
 3. Focus the first subject visually or with one-shot AF. After focus settles and a new camera
    frame arrives, choose **Set A**.
@@ -124,92 +124,38 @@ movement. If a command, host wake or safety read runs late, the remaining schedu
 of compressing commands or stopping short. A separate timing warning reports the overrun and does
 not disable playback. Timing-only planning limits use a slower measured schedule and estimate.
 Required calibration, invalid marks, camera errors and unsafe context can still prevent movement.
-It is an experimental scheduling policy, not a measured lens encoder or a guarantee of optical
-smoothness. Requested duration, planned execution duration, and observed host command span remain
-distinct in diagnostics. None of them is a measurement of optical arrival. Very close marks may
-still require finer movement than the tested base increment.
+Requested duration, estimated execution duration and observed host command span are separate
+values. None measures optical arrival or guarantees smoothness. Very close marks may require
+finer movement than the tested base increment.
 
-The local finer-increment trial offers optional **Calibrate increments** under Options. It measures
-all five finer sizes in both directions over the actual A/B span, including exact residual commands.
-Marks need enough separation for every calibration size: at least eight mark units. They do not
-need to be exactly 100 units apart. Timed playback still requires measured costs for every command
-size and residual it selects, and calibration does not guarantee that a requested duration will fit.
+Optional **Calibrate increments** under Options measures 32, 48, 64, 96 and 128 pulses in
+both directions over the actual A/B span, including exact residual commands. Each tap moves to
+the other mark. A partial, stopped or failed traversal does not complete its stage. Marks must
+be at least eight units apart; they do not need to be exactly 100 units apart. Playback can use
+available measured sizes before every calibration stage is complete.
 
-The local production controller opts into 5ms early Busy polling, with no extra quiet time after
-native Ready confirmation. Ordinary camera focus and other SDK consumers retain their existing
-cadence. A full safety preflight finishes before timed playback starts its delay/pull clock.
-Periodic reads may be deferred only when the complete remaining trajectory fits within the existing
-2-second safety freshness limit, measured from the oldest preflight evidence. Longer pulls reserve
-the latest accepted read duration, with a 100ms floor; the reservation can grow during that run.
-This replaces admission based on the all-time slowest read, which could permanently disable pulls
-after an unrelated idle stall. Historical read costs remain in the trace. Planning uses the latest
-preflight evidence before the first movement command. A maintenance read must drain before another
-focus command; a successful late read extends the schedule. Additional serialized reads refresh
-safety evidence when needed. Expiry of the previous reading while its replacement is pending
-waits for that read rather than ending the pull. No movement starts until its result is accepted;
-failed or stale safety evidence still prevents the next activation.
-Stop remains immediate while a read is outstanding. Countdown and
-paused runs retain periodic checks, and acknowledged pauses extend the same timing epoch.
+Both apps save acknowledged command timing maxima separately from session marks. Compatible
+measurements recover after reconnecting only when fresh camera identity, transport, lens, zoom
+and focus configuration match. Recovery restores no position, mark, readiness timestamp or
+movement authority. New larger costs take precedence; incompatible measurements remain inactive.
+Reset, mark replacement and a confirmed setup change restart traversal credit. Idle inactivity
+preserves completed stages.
 
-A later Mac USB trial at 70mm/f2.8 used twelve 80-pulse commands over the same 60-unit span:
-1-second Linear host spans were 0.972s/0.973s. The operator preferred its source-recorded smoothness
-over the 96-pulse comparison. This is one round trip on the Mac, not qualification of a 94-unit span,
-phone transport, or another lens/zoom. No universal 1-second minimum is assumed. Debug phone builds
-save bounded private execution traces after movement, including safety-read duration and scheduled
-versus actual command timestamps, for local verification.
+The controller uses early Busy polling with no extra quiet time after native Ready confirmation.
+A full safety preflight finishes before the delay/pull clock starts. Periodic reads may be deferred
+only if the complete remaining trajectory fits the two-second freshness limit, measured from the
+oldest preflight evidence. Longer pulls reserve safety-read windows alongside movement. The latest
+accepted read duration, with a 100ms floor, determines the reservation; the budget can grow during
+the run. Ordinary focus commands retain their existing polling cadence.
 
-A wider Mac USB source comparison at the same zoom/aperture used fresh A0/B−135 marks
-(2160 pulses). The 144-pulse profile completed at 0.996s/1.001s; the 192-pulse profile at
-0.998s/1.002s. The operator judged both smooth with matching endpoints and preferred 144 pulses.
-The planner therefore prefers the smaller feasible profile, retaining 192 when the measured budget
-needs it. The recorded 144-pulse cost budget was 1.003125s for fifteen commands. The current target
-policy permits a longer estimate rather than refusing for this overrun. This source comparison does not establish phone
-cadence, repeated returns or other zoom/lens combinations.
+A safety read must drain before the next focus command. A late successful read extends the
+schedule. When earlier evidence expires while its replacement is pending, playback waits for that
+read; it never starts movement without an accepted result. Failed or stale evidence still prevents
+activation. Stop remains available during reads. Countdowns and pauses retain periodic checks,
+and acknowledged pauses extend the timing epoch. Timing growth never causes a catch-up burst.
 
-A local Mac USB trial at 70mm/f2.8 completed one 60-unit round trip with 48-pulse commands at
-3 seconds Linear: host movement spans were 2.998s/2.955s, and the operator judged both pulls smooth
-with matching focus in native-size source crops. This is one diagnostic result; 94-unit timing is
-covered by deterministic tests, and production-phone timing, repeatability and other setups remain
-unqualified. Rehearse the actual lens, zoom and marks before recording a take.
-
-The earlier local ten160 trial remains a preserved checkpoint. A later source recording showed
-visible stepping despite regular one-second command timing, and periodic camera reads delayed
-longer pulls. It is not qualified as optically smooth.
-
-The current local comparison offers optional finer-increment calibration under **Options** for
-A/B spans from 8 to 10,000 units. For a 100-unit span, Go to A/B measures the 160-pulse baseline.
-To measure finer sizes,
-tap **Calibrate to A/B** once per traversal: 32, 48, 64, 96 and 128 pulses, each in both directions.
-Each tap moves only to the other mark; a partial, stopped or failed traversal does not complete
-that stage. Reset, mark replacement and a confirmed setup change restart calibration. Idle
-inactivity preserves completed stages. Marks and stage credit remain session-local. Both apps
-save acknowledged command timing maxima separately and recover them after reconnecting when the
-reported camera identity, USB/Wi-Fi transport, lens, zoom and focus configuration match fresh
-camera evidence. Recovery never restores positions, marks, readiness timestamps or control authority.
-Larger new-session command costs take precedence. Missing or incompatible identity/configuration
-keeps the saved measurements inactive; it does not authorize an unmeasured command size.
-
-Linear playback selects the finest measured size that fits the duration using currently available
-evidence, including before or during optional calibration. Completing all stages is not required.
-Measured worst command costs are retained. The local measured Linear planner schedules fine moves
-and explicit safety-read windows together. Ordinary gaps cover native completion and quiet time;
-larger measured moves create room for reads where needed, with an exact measured final move.
-Admission rejects plans with less than two milliseconds of minimum timing headroom, including
-read windows; the unchanged runtime guards still stop delays or cost growth that no longer fit.
-The plan retains the existing maximum start spacing and fixed timing epoch. It checks the remaining
-commands and read windows against current native/read maxima and actual evidence age before
-activation, including the final command. A read must finish before both the next command deadline
-and expiration of the previous reading; freshness starts when each read starts. Active scheduled
-pulls use these windows, while countdowns and pauses continue refreshing safety. The two-second
-evidence freshness limit, native completion, no-overlap and
-Stop priority remain in force. Preflight or later timing growth can refuse/stop a plan; it never
-replans into a catch-up burst. Admission and regular host timing do not establish optical smoothness.
-Other timing modes keep the existing adaptive policy.
-
-An offline regression with a 100-unit span and the saved native timing maxima replaces the old
-13-command 3-second plan with 28 measured 48-pulse moves and two 128-pulse moves, including one
-reserved 100ms safety read. This verifies scheduling and safety admission only; recorded optical
-smoothness still requires a separate source-video comparison.
+Rehearse the actual lens, zoom and marks before recording a take. Command acknowledgments and
+host timing do not establish optical smoothness or sharpness.
 
 Old timing templates still decode. The new direct playback actions always use the displayed duration
 and delay, including when a template retains the legacy Fastest mode internally. Fast repositioning
@@ -256,8 +202,8 @@ A confirmed lens, zoom or focus-configuration change advises you to check A and 
 marks if needed. Resetting is the operator's decision. Timing measurements from an incompatible setup
 are detached from playback. Compatible saved timings can recover after a fresh readiness read,
 including after resetting or recapturing marks; calibration traversal credit is never fabricated.
-The normal preflight, two-second freshness, Stop, uncertainty and fixed-plan deadline checks still
-apply. Diagnostics include restored maxima and restoration events without camera serial numbers.
+The normal preflight, two-second freshness, Stop, uncertainty and fixed-plan ordering checks
+still apply. Timing overruns remain warnings.
 
 An interrupted increment may have moved only part of its requested travel. If the native
 outcome cannot account for that displacement, follow the displayed Reset or Reconnect
@@ -268,35 +214,18 @@ On a slow or failed connection, native cancellation can take longer than the hea
 qualification target. Keep the stopped state visible until readiness is confirmed; never infer
 that the lens stopped from a UI acknowledgment alone.
 
-## Diagnostics
+## Execution and verification
 
-Diagnostics use the same production `FocusRackController` as normal operation on both apps.
-There is one scheduler, safety-read path and native cancellation owner. The deterministic
-`FocusRackEngine` holds the session ledger and plans; the shells forward observations and intents.
-Debug builds save bounded traces after movement to `focus-rack-production.json` in the app's private
-Documents directory on iOS or files directory on Android. Traces include command outcomes and timing,
-with no images or camera serial numbers. Collecting a trace starts no movement.
+Both apps use the same production `FocusRackController`. The deterministic `FocusRackEngine`
+holds the session ledger and plans; shells forward observations and intents. There is one
+scheduler, safety-read path and native cancellation owner. Temporary focus-trace exporters,
+Native AF event logging and retired pulse-profile trials are not part of the app.
 
-The earlier standalone Focus Probe panels, pulse/cadence launch overrides and action-returning
-Android probe bridge have been retired. Historical trials in the qualification log retain their
-original settings; new investigations exercise the production panel and controller.
+Portable and fake-camera tests cover capture identities, direction, timing warnings, six-second
+completion, safety-read placement, pause/resume, cancellation, stale callbacks, template and
+calibration restoration, AF ownership and native failures. Simulator/emulator tests cover both
+modes, saved targets, the setup controls, accessibility, compact transport and screen edges.
+Canonical gates are `just native-check`, `just android-check` and `just check`.
 
-## Local verification
-
-Portable tests cover capture identities, timing/easing, direction, pause/resume, cancellation,
-stale callbacks, invalidation, template restoration and native failure outcomes. Fake-camera
-and facade tests exercise command ownership and queued-intent cancellation. Simulator/emulator
-checks cover the two native editors, compact transport, input dialogs, accessibility and screen
-edges. Canonical gates are `just native-check`, `just android-check` and `just check`.
-
-The finer 16-pulse/10ms profile passed source smoothness in two isolated iPhone USB round trips
-at 70mm. The latest repeated sequence contains eight timed pulls, four complete round trips,
-with operator-reported sharp endpoints. Its source recording was not reviewed. Further physical
-testing ended at the operator's request. This does not qualify the wider lens/transport matrix,
-new editor or finer-profile cancellation behavior. Nothing is pushed, published or released.
-
-The local Mac USB investigation subsequently demonstrated one smooth source-reviewed round trip
-at about 1.50/1.51 seconds using twenty 64-pulse chunks over 1,280 requested pulses at 70mm/f2.8.
-The 128-pulse/2-second and 256-pulse/1-second scheduled trials failed source smoothness. The Mac
-result does not establish exact requested timing, repeatability, cancellation or production-phone
-cadence. Both native shells require qualification with their normal live-view and safety traffic.
+Software checks do not close the remaining optical qualification in the
+[qualification summary](investigations/focus-rack-qualification.md).

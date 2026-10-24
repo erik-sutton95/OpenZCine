@@ -140,9 +140,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   estimate when needed; runtime overruns warn and extend playback, and the 3-second target
   preserves the accepted finer movement family. Native AF shows saved targets and visible
   point-lock recovery. Timed mark setup selects Near/Far, then 1/10/100 signed steps.
-  The coarse profile failed source smoothness; finer iPhone USB trials passed isolated source
-  checks and four repeated round trips. Further physical testing ended at the operator's request;
-  the remaining qualification matrix is explicitly open.
+  Shared and native-shell regressions cover timing overruns, safety-read placement and cancellation;
+  the remaining recorded qualification matrix is explicitly open.
   Both modes temporarily configure movie AF and restore only still-owned settings on close,
   deferring restoration until recording and focus work stop while preserving manual changes.
   See [the local workflow](focus-racks.md) and
