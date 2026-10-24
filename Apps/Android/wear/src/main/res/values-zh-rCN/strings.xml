@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenZCine</string>
+    <string name="wear_monitor_description">手表相机监视器</string>
+    <string name="wear_live_preview_description">来自手机的实时相机预览</string>
+    <string name="wear_open_on_phone">在手机上打开 OpenZCine</string>
+    <string name="wear_waiting_for_phone">正在等待手机监视器</string>
+    <string name="wear_phone_unavailable">手机监视器不可用</string>
+    <string name="wear_phone_unavailable_error">手机监视器不可用。</string>
+    <string name="wear_no_camera">未连接相机</string>
+    <string name="wear_feed_paused">画面已暂停（指令模式）</string>
+    <string name="wear_waiting_for_preview">正在等待相机预览</string>
+    <string name="wear_start_recording_description">开始相机录制</string>
+    <string name="wear_stop_recording_description">停止相机录制</string>
+    <string name="wear_record_timeout">手机未确认录制指令。</string>
+    <string name="wear_unavailable">—</string>
+    <string name="wear_storage_capacity">%1$d GB · %2$d%%</string>
+    <string name="wear_battery_percent">%1$d%%</string>
+</resources>
