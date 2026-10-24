@@ -1570,27 +1570,29 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         }
     }
 
-    func testExplicitCalibrationIsVisibleInLandscapeOptions() {
-        let app = launch("calibration")
-        scrollTo(app.buttons["focusRack.options"], in: app)
-        app.buttons["focusRack.options"].tap()
-        let action = app.buttons["focusRack.calibrate"]
-        scrollTo(action, in: app)
-        XCTAssertTrue(action.isEnabled)
-        XCTAssertTrue(action.label.contains("Calibrate to B"))
-        XCTAssertTrue(action.label.contains("32-pulse increments"))
-        assertTransport(app)
-        screenshot("focus-rack-finer-calibration-landscape")
-        app.terminate()
-        let measured = launch("calibrationMeasured")
-        scrollTo(measured.buttons["focusRack.options"], in: measured)
-        measured.buttons["focusRack.options"].tap()
-        let complete = measured.buttons["focusRack.calibrate"]
-        scrollTo(complete, in: measured)
-        XCTAssertFalse(complete.isEnabled)
-        XCTAssertTrue(complete.label.contains("Calibration measured"))
-        assertTransport(measured)
-        screenshot("focus-rack-finer-calibration-measured-landscape")
+    func testLensPreparationProjectsReadinessInLandscapeAndPortrait() {
+        for portrait in [false, true] {
+            for (fixture, detail, enabled) in [
+                ("preparationReady", "One pass A→B · recording stopped", true),
+                ("preparationRecording", "Stop recording before preparing the lens", false),
+                ("preparationComplete", "One pass B→A · recording stopped", true),
+            ] {
+                let orientation = portrait ? "portrait" : "landscapeLeft"
+                let app = launch(fixture, extra: ["ZC_DEMO_ORIENTATION": orientation])
+                openOptions(in: app)
+                let action = app.buttons["focusRack.calibrate"]
+                scrollTo(action, in: app)
+                XCTAssertEqual(action.isEnabled, enabled)
+                XCTAssertTrue(action.label.contains("Prepare lens"))
+                XCTAssertTrue(action.label.contains(detail))
+                XCTAssertTrue(app.frame.contains(action.frame))
+                XCTAssertFalse(action.label.contains("1/10"))
+                assertTransport(app)
+                screenshot("focus-rack-\(fixture)-\(portrait ? "portrait" : "landscape")")
+                app.terminate()
+            }
+        }
+        XCUIDevice.shared.orientation = .landscapeLeft
     }
 
     func testSetupChangeAdvisesWithoutRequiringReset() {
