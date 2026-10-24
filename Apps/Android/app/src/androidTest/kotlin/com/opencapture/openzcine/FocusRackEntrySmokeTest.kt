@@ -44,16 +44,22 @@ class FocusRackEntrySmokeTest {
 
     @After fun restoreIdleWait() { Configurator.getInstance().setWaitForIdleTimeout(idleTimeout) }
 
-    @Test fun landscapeFocusModesUseNativeGuidanceAndReturnToTimedRackWithoutMovement() {
+    @Test fun landscapeFocusModesExposeNativeTargetsAndReturnToTimedRackWithoutMovement() {
         withDemoRack(portrait = false) {
             val native = device.wait(Until.findObject(By.text("Native AF")), 5_000)
                 ?: throw AssertionError("No Native AF mode selector")
             native.click()
-            val guidance = device.wait(Until.findObject(By.textStartsWith("Tap a subject in the live view")), 5_000)
-                ?: throw AssertionError("Native AF guidance did not appear")
+            for (mark in listOf("A", "B")) {
+                val target = device.wait(Until.findObject(By.text("$mark not set")), 5_000)
+                    ?: throw AssertionError("Native AF target $mark did not appear")
+                assertInsideDisplay(target.visibleBounds)
+                assertTrue("Native AF must offer Set $mark", device.hasObject(By.text("Set $mark")))
+                val go = device.findObject(By.text("Go to $mark"))
+                    ?: throw AssertionError("Native AF must offer Go to $mark")
+                assertFalse("An unset target must not enable movement", clickableControl(go).isEnabled)
+            }
             device.waitForIdle(1_000)
             refreshAccessibilityCache()
-            assertInsideDisplay(guidance.visibleBounds)
             saveDisplay("focus-modes-native-af-monitor-landscape")
             assertTrue("Native AF must not show timed transport", device.wait(Until.gone(By.text("Set A and B")), 5_000))
             assertFalse("Native AF must not show a duration editor", device.hasObject(By.text("Duration")))
@@ -61,7 +67,7 @@ class FocusRackEntrySmokeTest {
             device.wait(Until.findObject(By.text("Timed Rack")), 5_000)?.click()
                 ?: throw AssertionError("No Timed Rack mode selector")
             refreshAccessibilityCache()
-            assertTrue("Native guidance did not close", device.wait(Until.gone(By.textStartsWith("Tap a subject in the live view")), 5_000))
+            assertTrue("Native targets did not close", device.wait(Until.gone(By.text("A not set")), 5_000))
             assertTrue("Timed transport did not return", device.wait(Until.hasObject(By.text("Set A and B")), 5_000))
             SystemClock.sleep(200)
             saveDisplay("focus-modes-timed-rack-monitor-landscape")
@@ -135,7 +141,9 @@ class FocusRackEntrySmokeTest {
             }
             assertTrue("Demo monitor did not reach its requested orientation", oriented)
             assertTrue("No demo live view", device.wait(Until.hasObject(By.descContains("Live view active")), 10_000))
-            val focus = device.wait(Until.findObject(By.text("FOCUS")), 5_000)
+            device.waitForIdle(1_000)
+            refreshAccessibilityCache()
+            val focus = device.wait(Until.findObject(By.descStartsWith("FOCUS ")), 5_000)
                 ?: throw AssertionError("No FOCUS entry on demo monitor")
             focus.click()
             device.wait(Until.findObject(By.text("Focus Rack")), 5_000)

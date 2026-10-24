@@ -1426,11 +1426,7 @@ internal fun MonitorScreen(
                 )
                 .minOrNull()
         val levelGaugeBottomChromeInset =
-            with(density) {
-                bottomChromeTop?.let { chromeTop ->
-                    maxOf(0f, fieldLayout.picture.maxY - chromeTop).dp.toPx()
-                } ?: 0f
-            }
+            levelGaugeBottomChromeInsetPx(fieldLayout.picture.maxY, bottomChromeTop, density)
 
         // An explicit demo source wins; otherwise a connected Swift-core
         // session streams its own live view. Media ownership gates collection,
@@ -2937,6 +2933,15 @@ internal fun MonitorDataAvailability.monitorSections(
  */
 internal fun portraitPhoneSafeTop(safeTop: Float, width: Float, height: Float): Float =
     com.opencapture.monitorui.MonitorLayoutPolicy.portraitHeaderSafeTop(width, height, safeTop)
+
+// Keep this conversion outside the monitor lambda to avoid invalid D8 high-register spills.
+private fun levelGaugeBottomChromeInsetPx(
+    pictureBottom: Float,
+    chromeTop: Float?,
+    density: androidx.compose.ui.unit.Density,
+): Float = with(density) {
+    chromeTop?.let { maxOf(0f, pictureBottom - it).dp.toPx() } ?: 0f
+}
 
 /** Localized DISP mode label for the monitor's accessibility description. */
 @StringRes
