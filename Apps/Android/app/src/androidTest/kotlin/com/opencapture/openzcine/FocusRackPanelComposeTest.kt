@@ -522,9 +522,30 @@ class FocusRackPanelComposeTest {
         compose.onNodeWithText("Resume").assertIsEnabled().performClick()
         compose.onNodeWithTag("focusRack.expand").assertIsEnabled().performClick()
         assertEquals(2, actions.primary)
-        assertEquals(listOf(false), actions.expansions)
+        assertEquals(listOf(true), actions.expansions)
         assertTransportInsideFrame()
         compose.saveLandscapeEvidence("focus-rack-production-clean-paused-landscape")
+    }
+
+    @Test fun compactTimingWarningStaysVisibleAndStopRemainsAvailableWhileLocked() {
+        val state = mutableStateOf(ready().copy(timingWarning = "3 s target · ~28.07 s estimated. Timing is advisory."))
+        val locked = mutableStateOf(false)
+        val actions = Actions()
+        mount(state, actions, compact = true, maximumHeight = 112f, setupEnabled = { !locked.value })
+        compose.onNodeWithText("Timing warning").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.expand").performClick()
+        assertEquals(listOf(true), actions.expansions)
+        compose.runOnIdle {
+            locked.value = true
+            state.value = state.value.copy(active = true, phase = "moving", canStop = true,
+                canPause = true, primaryTitle = "Pause", primaryEnabled = true)
+        }
+        compose.onNodeWithText("Running late").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.expand").assertIsNotEnabled()
+        compose.onNodeWithTag("focusRack.stop").assertIsEnabled().performClick()
+        assertEquals(1, actions.stops)
+        assertTransportInsideFrame()
+        compose.saveLandscapeEvidence("focus-rack-compact-timing-warning-locked-landscape")
     }
 
     @Test fun compactRecoveryNamesRemainVisibleWhileLocked() {

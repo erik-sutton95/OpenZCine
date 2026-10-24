@@ -155,22 +155,30 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                             modifier = Modifier.weight(1f).testTag("focusRack.mode.$mode"))
                     }
                 }
-                else Text(if (state.focusMode == "nativeAF") state.nativeAF.message else when (state.phase) {
-                    "countdown" -> "Starts in ${"%.1f".format(state.remainingDelay)} s"
-                    "pausing" -> "Pausing…"
-                    "paused" -> "Paused"
-                    "stopping" -> "Stopping…"
-                    "moving" -> if (state.total > 0) "Focus Rack · ${state.completed * 100 / state.total}%" else "Moving focus"
-                    "complete" -> "Complete"
-                    "uncertain" -> "Reference uncertain"
-                    "stopUnconfirmed" -> "Stop unconfirmed"
-                    "refused" -> "Camera busy"
-                    "failed" -> "Move stopped"
-                    else -> "Focus Rack"
-                },
-                    color = Color.White, fontSize = 12.sp)
+                else Column {
+                    Text(if (state.focusMode == "nativeAF") state.nativeAF.message else when (state.phase) {
+                        "countdown" -> "Starts in ${"%.1f".format(state.remainingDelay)} s"
+                        "pausing" -> "Pausing…"
+                        "paused" -> "Paused"
+                        "stopping" -> "Stopping…"
+                        "moving" -> if (state.total > 0) "Focus Rack · ${state.completed * 100 / state.total}%" else "Moving focus"
+                        "complete" -> "Complete"
+                        "uncertain" -> "Reference uncertain"
+                        "stopUnconfirmed" -> "Stop unconfirmed"
+                        "refused" -> "Camera busy"
+                        "failed" -> "Move stopped"
+                        else -> "Focus Rack"
+                    },
+                        color = Color.White, fontSize = 12.sp)
+                    if (state.focusMode == "timedRack" && state.timingWarning != null) {
+                        Text(if (state.active) "Running late" else "Timing warning",
+                            color = Color(0xFFFFCE9B), fontSize = 11.sp,
+                            modifier = Modifier.testTag("focusRack.timingWarning")
+                                .semantics { stateDescription = state.timingWarning })
+                    }
+                }
             }
-            TextButton(onClick = { onExpanded(!expanded) }, enabled = setupEnabled && !nudging,
+            TextButton(onClick = { onExpanded(compact || !expanded) }, enabled = setupEnabled && !nudging,
                 modifier = Modifier.width(48.dp).heightIn(min = 48.dp).testTag("focusRack.expand")
                     .semantics { contentDescription = if (expanded && !compact) "Collapse focus rack" else "Open focus rack setup" },
                 contentPadding = PaddingValues(0.dp)) {

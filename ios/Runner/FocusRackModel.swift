@@ -455,6 +455,13 @@ struct FocusRackPendingCapture {
         }
     }
 
+    /// An explicit setup request leaves Clean display without changing focus state.
+    func setExpanded(_ expanded: Bool) {
+        guard model?.interfaceLocked != true else { return }
+        if expanded, model?.displayMode == .clean { model?.setDisplayMode(.live) }
+        isExpanded = expanded
+    }
+
     func open() {
         isActive = true
         isExpanded = true

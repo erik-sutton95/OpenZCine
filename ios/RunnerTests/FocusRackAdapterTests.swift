@@ -30,6 +30,32 @@ struct FocusRackAdapterTests {
         #expect(!adapter.allowsAutofocus)
     }
 
+    @Test("Opening setup leaves Clean display and preserves marks and timing")
+    func openingSetupKeepsFocusState() {
+        let model = NativeAppModel()
+        var state = FocusRackState.initial
+        state.program.marks = [.init(id: "A", stepPosition: 0), .init(id: "B", stepPosition: 150)]
+        state.transition = .init(duration: 3, delay: 2)
+        let adapter = FocusRackModel(fixture: state, model: model)
+        for expanded in [true, false] {
+            adapter.isExpanded = expanded
+            model.setDisplayMode(.clean)
+            adapter.setExpanded(true)
+            #expect(model.displayMode == .live)
+            #expect(adapter.isExpanded)
+            #expect(adapter.state?.program == state.program)
+            #expect(adapter.state?.transition == state.transition)
+            #expect(adapter.simulatedNudgeIntents.isEmpty)
+        }
+        adapter.isExpanded = false
+        model.setDisplayMode(.clean)
+        model.interfaceLocked = true
+        adapter.setExpanded(true)
+        #expect(model.displayMode == .clean)
+        #expect(!adapter.isExpanded)
+        #expect(adapter.state?.program == state.program)
+    }
+
     @Test("Active and unconfirmed timed movement retain exclusive focus ownership")
     func movementBlocksModeChanges() {
         var state = FocusRackState.initial

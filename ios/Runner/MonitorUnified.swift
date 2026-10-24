@@ -541,7 +541,7 @@ struct NikonMonitorShell: View {
             compact: AnyView(
                 FocusRackView(
                     rack: rack, maximumHeight: 112, compact: true,
-                    allowsExpansion: !model.interfaceLocked && model.displayMode != .clean,
+                    allowsExpansion: !model.interfaceLocked,
                     allowsSetup: !model.interfaceLocked,
                     onMovePanel: { moveRack(rack, by: $0, layout: layout) },
                     onResetPanel: { if !model.interfaceLocked { rack.panelPosition = nil } })),

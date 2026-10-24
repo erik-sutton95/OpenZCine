@@ -401,7 +401,7 @@ struct FocusRackView: View {
         HStack(spacing: 4) {
             Button {
                 if needsMoveAttention {
-                    rack.isExpanded = true
+                    rack.setExpanded(true)
                     rack.revealAdmission = true
                 }
             } label: {
@@ -442,9 +442,9 @@ struct FocusRackView: View {
                         panelTranslation = value.translation
                     })
             modeSelector
-            if !compact || (!rack.isExpanded && allowsExpansion) {
+            if !compact || allowsExpansion {
                 Button {
-                    rack.isExpanded.toggle()
+                    rack.setExpanded(compact || !rack.isExpanded)
                 } label: {
                     Image(systemName: compact ? "chevron.up" : "chevron.down")
                         .frame(width: 44, height: 44).contentShape(Rectangle())

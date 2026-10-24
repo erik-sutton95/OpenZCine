@@ -1865,7 +1865,14 @@ internal fun MonitorScreen(
 
         @Composable fun RackContent(compact: Boolean, maximumHeight: Float) {
             FocusRackPanel(rackState, rackThumbnails, rackTemplates, compact, maximumHeight,
-                focusRackExpanded, { focusRackExpanded = it },
+                focusRackExpanded, { expanded ->
+                    if (!locked) {
+                        if (expanded && effectiveDisplayMode == MonitorDisplayMode.CLEAN) {
+                            operatorSession.select(MonitorDisplayMode.LIVE)
+                        }
+                        focusRackExpanded = expanded
+                    }
+                },
                 onCapture = { id ->
                     val candidate = liveFeedPresentation.rackThumbnail()
                     focusRack.observe(rackObservation())

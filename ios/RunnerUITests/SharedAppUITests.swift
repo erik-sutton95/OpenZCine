@@ -1924,6 +1924,29 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         screenshot("focus-rack-recovery-compact")
     }
 
+    func testCleanCompactSetupOpensInOneTapWithoutDiscardingMarks() {
+        for expanded in [true, false] {
+            let app = launch("ready", extra: ["ZC_DEMO_DISP": expanded ? "clean" : "live"])
+            if !expanded {
+                app.buttons["focusRack.expand"].tap()
+                app.buttons["monitor.system.display"].tap()
+            }
+            XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
+            let open = app.buttons["focusRack.expand"]
+            XCTAssertTrue(open.isHittable)
+            open.tap()
+            XCTAssertTrue(app.otherElements["focusRack.expanded"].waitForExistence(timeout: 3))
+            XCTAssertEqual(app.staticTexts["focusRack.positions"].label, "A 0 · B 20 · Now 0")
+            XCTAssertTrue(app.buttons["focusControl.modePicker"].isHittable)
+            XCTAssertTrue(app.buttons["focusRack.direction.near"].exists)
+            XCTAssertTrue(app.buttons["focusRack.direction.far"].exists)
+            XCTAssertTrue(app.buttons["focusRack.duration.value"].exists)
+            assertTransport(app)
+            screenshot("focus-rack-clean-open-\(expanded ? "expanded" : "collapsed")-landscape")
+            app.terminate()
+        }
+    }
+
     func testCleanLockedRecoveryNamesTheUnconfirmedState() {
         for (fixture, phase, instruction) in [
             ("uncertain", "Stop unconfirmed", "Reconnect camera, then reset marks."),

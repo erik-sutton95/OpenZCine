@@ -94,6 +94,36 @@ class FocusRackEntrySmokeTest {
         }
     }
 
+    @Test fun cleanCompactSetupOpensInOneTapWithoutResettingTheRack() {
+        for (expanded in listOf(true, false)) {
+            withDemoRack(portrait = false) {
+                val positions = device.wait(Until.findObject(By.descStartsWith("Relative focus steps:")), 5_000)
+                    ?: throw AssertionError("No relative position before opening setup")
+                val originalPositions = positions.contentDescription
+                if (!expanded) {
+                    clickableControl(requireNotNull(device.findObject(By.desc("Collapse focus rack")))).click()
+                }
+                clickableControl(requireNotNull(device.findObject(By.text("DISP")))).click()
+                assertTrue("Clean display must hide the focus readout",
+                    device.wait(Until.gone(By.descStartsWith("FOCUS ")), 5_000))
+                val open = device.wait(Until.findObject(By.desc("Open focus rack setup")), 5_000)
+                    ?: throw AssertionError("Clean compact rack has no Open setup action")
+                clickableControl(open).click()
+                assertTrue("One tap must return to expanded setup",
+                    device.wait(Until.hasObject(By.desc("Collapse focus rack")), 5_000))
+                assertTrue("One tap must return to Live display",
+                    device.wait(Until.hasObject(By.descStartsWith("FOCUS ")), 5_000))
+                val currentPositions = device.wait(Until.findObject(By.descStartsWith("Relative focus steps:")), 5_000)
+                    ?: throw AssertionError("No position after opening setup")
+                assertEquals(originalPositions, currentPositions.contentDescription)
+                for (mark in listOf("A", "B")) assertTrue(device.hasObject(By.text("Set $mark")))
+                for (mode in listOf("Native AF", "Timed Rack")) assertTrue(device.hasObject(By.text(mode)))
+                rackText("Duration")
+                saveDisplay("focus-rack-clean-open-${if (expanded) "expanded" else "collapsed"}-landscape")
+            }
+        }
+    }
+
     @Test fun portraitDefaultFitOpenExposesMarksAndMoveSetup() {
         val settings = OperatorSettings(context)
         val original = settings.portraitFeedAspect

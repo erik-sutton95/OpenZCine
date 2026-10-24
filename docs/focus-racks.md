@@ -76,6 +76,9 @@ not represent measured distances. The fixed mark cards group thumbnails and rela
 once captured, it is labelled Go to A/B with Fast reposition. Replace A/B is explicit under Options.
 The current relative position is shown in the same group. The Near/Far selector sits below it,
 with the three signed step buttons directly underneath.
+In Clean display the panel keeps its compact transport. **Open focus rack setup** returns to Live
+display and opens setup without changing marks or timing. The interface lock still prevents setup;
+Stop remains available during movement. Compact transport keeps timing warnings visible.
 The panel has no focus wheel or separate setup tabs. Uncertain references show positions as
 unknown. Once a mark exists, use the rack's controls for focus
 adjustments; peaking and magnification remain available. **Replace A/B** explicitly replaces
