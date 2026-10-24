@@ -84,12 +84,6 @@ enum FocusRackPlanner {
             let quanta: [Int]
             if profile == .calibratedFineExperiment, easing == .linear {
                 quanta = [1] + calibrationQuanta + [10]
-            } else if profile == .tenBy160Experiment, count == 100, duration == 1, easing == .linear
-            {
-                guard timings[10]?.count ?? 0 > 0 else {
-                    throw FocusRackError.calibrationRequired
-                }
-                quanta = [10]
             } else {
                 quanta = [1, 2, 3, 4, 5, 9, 12]
             }

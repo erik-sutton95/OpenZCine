@@ -121,18 +121,6 @@ public struct FocusRackContext: Codable, Equatable, Sendable {
     }
 }
 
-/// One bounded diagnostic event. No credentials, camera serial numbers, or image data are stored.
-public struct FocusRackDiagnosticEvent: Codable, Equatable, Sendable {
-    public let kind: String
-    public let timestamp: Double
-    public let runID: Int64
-    public let commandID: Int?
-    public let signedPulses: Int?
-    public let scheduledAt: Double?
-    public let outcome: Int?
-    public let note: String?
-}
-
 /// The next bounded action consumed only by the shared production controller.
 public struct FocusRackEngineAction: Codable, Equatable, Sendable {
     public let kind: String
@@ -142,29 +130,23 @@ public struct FocusRackEngineAction: Codable, Equatable, Sendable {
     public let waitSeconds: Double?
 }
 
-/// Bounded diagnostic values exported by the production controller.
-public struct FocusRackDiagnostics: Codable, Sendable {
-    public let phase: String
-    public let message: String
-    /// Short recovery guidance that must remain visible outside scrolling diagnostic details.
-    public let recoveryInstruction: String?
-    public let runID: Int64
-    public let stepPosition: Int?
-    public let marks: [FocusRackMark]
-    public let completedSteps: Int
-    public let totalSteps: Int
-    public let canCapture: Bool
-    public let busy: Bool
-    public let configuration: FocusRackConfiguration
-    public let context: FocusRackContext?
-    public let events: [FocusRackDiagnosticEvent]
-    public let omittedEvents: Int
-    /// Current per-pulse maxima, including restored history; no camera identity is exported.
-    public let timingEvidence: [Int: Double]?
-    /// Fixed execution duration selected for this run, separately from its requested target.
-    public let plannedDuration: Double?
-    /// Observed host span from the first command dispatch to the latest command completion.
-    public let actualMovementDuration: Double?
+/// Execution ledger shared by the engine and its production controller.
+struct FocusRackEngineSnapshot: Sendable {
+    let phase: String
+    let message: String
+    /// Recovery guidance for an uncertain focus reference.
+    let recoveryInstruction: String?
+    let runID: Int64
+    let stepPosition: Int?
+    let marks: [FocusRackMark]
+    let completedSteps: Int
+    let totalSteps: Int
+    let canCapture: Bool
+    let busy: Bool
+    let configuration: FocusRackConfiguration
+    let context: FocusRackContext?
+    /// Measured command costs currently used by the planner.
+    let calibrationTimings: [Int: Double]
 }
 
 /// Deterministic session-local rack state machine, advanced by the production controller.
@@ -199,7 +181,6 @@ public struct FocusRackEngine: Sendable {
     private var calibrationOrigin: String?
     private var activeCalibration: (trip: Int, configuration: Int, capture: Int64)?
     private(set) var safetyReadBudget = 0.0
-    private var longestSafetyRead = 0.0
     private var runSafetyReadBudget = 0.0
     private var startedAt = 0.0
     private var enforcesTiming = false
@@ -224,8 +205,6 @@ public struct FocusRackEngine: Sendable {
     private var timingSlip = 0.0
     private var finishedAt: Double?
     private var hasStarted = false
-    private var events: [FocusRackDiagnosticEvent] = []
-    private var omittedEvents = 0
 
     /// Creates an inert state machine; the controller seeds run IDs from monotonic microseconds.
     public init(
@@ -280,7 +259,6 @@ public struct FocusRackEngine: Sendable {
             configurationRevision += 1
             referenceContext = observation
             commandTimings = [:]
-            append("configurationChanged", at: timestamp)
             requestStop(at: timestamp)
         }
         if observation.unavailableReason(at: timestamp) != nil {
@@ -328,7 +306,6 @@ public struct FocusRackEngine: Sendable {
         lastCommandFinishedAt = nil
         finishedAt = nil
         message = "Focus A, set A, then use Near/Far to focus B."
-        append("reset", at: timestamp)
     }
 
     /// Captures/replaces A or B only after acknowledged movement and a new live frame.
@@ -353,7 +330,6 @@ public struct FocusRackEngine: Sendable {
         marks.append(.init(id: markID, stepPosition: position, captureIdentity: identity))
         marks.sort { $0.id < $1.id }
         message = "Set \(markID) at relative step \(position)."
-        append("mark", at: timestamp, note: markID)
     }
 
     /// Starts one to one hundred identical increments after an explicit operator action.
@@ -404,31 +380,12 @@ public struct FocusRackEngine: Sendable {
             calibrationQuantum: quantum, at: timestamp)
         calibrationOrigin = origin
         activeCalibration = (calibrationTrips, configurationRevision, captureRevision)
-        append(
-            "calibrationStarted", at: timestamp,
-            note: "trip=\(calibrationTrips + 1) quantum=\(quantum)")
     }
 
     private mutating func clearCalibration() {
         calibrationTrips = 0
         calibrationOrigin = nil
         activeCalibration = nil
-    }
-
-    /// Changes diagnostic timing while idle without changing the pulse quantum or session marks.
-    /// This neither starts movement nor persists positions; active runs reject timing changes.
-    public mutating func setTiming(
-        duration: Double? = nil, easing: FocusRackEasing? = nil, at timestamp: Double
-    ) throws {
-        var transition = program.transitions[0]
-        guard duration != nil || easing != nil else { throw FocusRackError.invalidConfiguration }
-        if let duration { transition.duration = duration }
-        if let easing { transition.easing = easing }
-        try setTransition(transition, at: timestamp)
-        let move = program.transitions[0]
-        append(
-            "timingChanged", at: timestamp,
-            note: "duration=\(move.duration) delay=\(move.delay) easing=\(move.easing.rawValue)")
     }
 
     /// Runs the requested transition only from its start mark; it never silently repositions.
@@ -491,11 +448,11 @@ public struct FocusRackEngine: Sendable {
                         kind: "wait", runID: runID, commandID: nil, signedPulses: nil,
                         waitSeconds: min(0.1, refreshAt - timestamp))
                 }
-                extendTiming(by: max(0, timestamp - readAt), at: timestamp)
-                return beginSafetyRead(at: timestamp, scheduledAt: refreshAt)
+                extendTiming(by: max(0, timestamp - readAt))
+                return beginSafetyRead()
             }
             if timestamp >= safetyRefreshAt(for: trajectory, at: timestamp) {
-                return beginSafetyRead(at: timestamp, scheduledAt: timestamp)
+                return beginSafetyRead()
             }
             due = commandTime(trajectory.offsets[nextStep])
             if timestamp < due {
@@ -505,8 +462,7 @@ public struct FocusRackEngine: Sendable {
                         0.1, due - timestamp,
                         safetyRefreshAt(for: trajectory, at: timestamp) - timestamp))
             }
-            extendTiming(by: max(0, timestamp - due), at: timestamp)
-            due = commandTime(trajectory.offsets[nextStep])
+            extendTiming(by: max(0, timestamp - due))
             // Native admission may lag host dispatch. Space from confirmed completion so queued
             // commands cannot compress physical activations, even across separate nudges.
             if let lastCommandSettledAt,
@@ -523,9 +479,6 @@ public struct FocusRackEngine: Sendable {
                 nextStep, signedUnits, context?.sessionID ?? "", timestamp, configurationRevision
             )
             phase = "moving"
-            append(
-                "commandStarted", at: timestamp, commandID: nextStep,
-                signedPulses: signedUnits * configuration.pulsesPerStep, scheduledAt: due)
             return .init(
                 kind: "drive", runID: runID, commandID: nextStep,
                 signedPulses: signedUnits * configuration.pulsesPerStep, waitSeconds: nil)
@@ -540,7 +493,6 @@ public struct FocusRackEngine: Sendable {
         runID completedRun: Int64, commandID: Int, outcome: Int, at timestamp: Double
     ) {
         guard completedRun == runID, let command = inFlight, command.id == commandID else { return }
-        append("commandCompleted", at: timestamp, commandID: commandID, outcome: outcome)
         inFlight = nil
         lastCommandFinishedAt = timestamp
         lastCommandSettledAt = timestamp
@@ -566,21 +518,17 @@ public struct FocusRackEngine: Sendable {
                 finishedAt = timestamp
                 phase = "complete"
                 message = "Complete. Inspect the source recording for sharpness and smoothness."
-                append("runCompleted", at: timestamp)
                 if let activeCalibration, activeCalibration.trip == calibrationTrips,
                     activeCalibration.configuration == configurationRevision,
                     activeCalibration.capture == captureRevision
                 {
                     calibrationTrips += 1
-                    append(
-                        "calibrationCompleted", at: timestamp, note: "trip=\(calibrationTrips)")
                 }
                 activeCalibration = nil
             } else if pauseRequested {
                 pausedAt = timestamp
                 phase = "paused"
                 message = "Paused. Resume continues the remaining move."
-                append("paused", at: timestamp)
             }
         } else {
             activeNudge = nil
@@ -622,7 +570,6 @@ public struct FocusRackEngine: Sendable {
             self.pausedAt = nil
         }
         finishedAt = timestamp
-        append("stopRequested", at: timestamp)
         if inFlight == nil {
             activeNudge = nil
             trajectory = nil
@@ -641,7 +588,6 @@ public struct FocusRackEngine: Sendable {
         position = nil
         phase = inFlight == nil ? "uncertain" : "stopping"
         message = reason
-        append("invalidated", at: timestamp, note: reason)
     }
 
     /// Allows initial AF acquisition; established marks are invalidated by outside focus moves.
@@ -654,13 +600,10 @@ public struct FocusRackEngine: Sendable {
         lastMovementAt = timestamp
         awaitingExternalFocus = true
         message = "Wait for focus to settle, then set A from a fresh live frame."
-        append("initialFocusAcquisition", at: timestamp)
     }
 
-    /// Produces a bounded trace and actual observations for display or explicit local export.
-    public func snapshot(at timestamp: Double, includeEvents: Bool = false)
-        -> FocusRackDiagnostics
-    {
+    /// Returns the current execution ledger without triggering camera work.
+    func snapshot(at timestamp: Double) -> FocusRackEngineSnapshot {
         let unavailable =
             context?.unavailableReason(at: timestamp)
             ?? (context == nil ? "Connect a real camera." : nil)
@@ -672,9 +615,7 @@ public struct FocusRackEngine: Sendable {
             canCapture: unavailable == nil && position != nil && trajectory == nil
                 && inFlight == nil && isFrameAfterMovement,
             busy: trajectory != nil || inFlight != nil, configuration: currentConfiguration,
-            context: context, events: includeEvents ? events : [], omittedEvents: omittedEvents,
-            timingEvidence: calibrationTimings, plannedDuration: plannedDuration,
-            actualMovementDuration: actualMovementDuration)
+            context: context, calibrationTimings: calibrationTimings)
     }
 
     var calibrationTimings: [Int: Double] {
@@ -691,7 +632,6 @@ public struct FocusRackEngine: Sendable {
         clearCalibration()
         configurationRevision += 1
         interrupt(reason: "Camera control path changed. Reset marks.", at: timestamp)
-        append("timingContextChanged", at: timestamp)
     }
 
     mutating func bindCalibrationKey(_ key: FocusRackCalibrationKey, at timestamp: Double) {
@@ -706,7 +646,6 @@ public struct FocusRackEngine: Sendable {
         } else if trajectory != nil || inFlight != nil {
             requestStop(at: timestamp)
         }
-        append("timingContextChanged", at: timestamp)
     }
 
     func canRestoreCalibration(at timestamp: Double) -> Bool {
@@ -722,9 +661,6 @@ public struct FocusRackEngine: Sendable {
             let units = pulses / configuration.pulsesPerStep
             guard seconds > commandTimings[units, default: .init()].longest else { continue }
             commandTimings[units, default: .init()].record(seconds)
-            append(
-                "timingRestored", at: timestamp, signedPulses: pulses,
-                note: "longest=\(seconds) source=savedCalibration")
         }
     }
 
@@ -796,11 +732,6 @@ public struct FocusRackEngine: Sendable {
         stopRequested = false
         phase = delay > 0 ? "countdown" : "ready"
         message = "Experimental move: \(signedSteps) mark units, \(planned.chunks.count) commands."
-        append(
-            "runStarted", at: timestamp,
-            note:
-                "timed=\(enforcesTiming) duration=\(duration) plannedDuration=\(planned.duration) delay=\(delay) easing=\(easing.rawValue) profile=\(profile.rawValue)"
-        )
     }
 
     /// Current session program, including its selected transition.
@@ -833,7 +764,6 @@ public struct FocusRackEngine: Sendable {
                 phase = "failed"
                 finishedAt = timestamp
                 message = error.localizedDescription
-                append("preflightRejected", at: timestamp, note: message)
                 return
             }
         }
@@ -841,9 +771,6 @@ public struct FocusRackEngine: Sendable {
         accumulatedPause = 0
         timingSlip = 0
         if pausedAt != nil { pausedAt = timestamp }
-        append(
-            "preflightCompleted", at: timestamp,
-            note: "plannedDuration=\(plannedDuration ?? previous.duration)")
     }
 
     var isTimedRun: Bool { trajectory != nil && enforcesTiming }
@@ -857,11 +784,10 @@ public struct FocusRackEngine: Sendable {
         startedAt + accumulatedPause + timingSlip + offset
     }
 
-    private mutating func extendTiming(by seconds: Double, at timestamp: Double) {
+    private mutating func extendTiming(by seconds: Double) {
         guard enforcesTiming, seconds > 1e-9, let trajectory else { return }
         timingSlip += seconds
         plannedDuration = trajectory.duration + timingSlip
-        append("timingExtended", at: timestamp, note: "seconds=\(seconds) total=\(timingSlip)")
     }
 
     private func commandCost(_ plan: FocusRackMovementPlan) -> Double {
@@ -881,13 +807,8 @@ public struct FocusRackEngine: Sendable {
         return safetyAt + 2 - cost - 0.05
     }
 
-    private mutating func beginSafetyRead(
-        at timestamp: Double, scheduledAt: Double
-    ) -> FocusRackEngineAction {
+    private mutating func beginSafetyRead() -> FocusRackEngineAction {
         pendingMaintenanceRead = (nextStep, configurationRevision)
-        append(
-            "maintenanceReadStarted", at: timestamp, commandID: nextStep,
-            scheduledAt: scheduledAt)
         return .init(
             kind: "readSafety", runID: runID, commandID: nextStep,
             signedPulses: nil, waitSeconds: nil)
@@ -932,7 +853,7 @@ public struct FocusRackEngine: Sendable {
         }
         completedMaintenanceReads.insert(commandID)
         if let deadline = nextCommandDeadline {
-            extendTiming(by: max(0, timestamp - deadline), at: timestamp)
+            extendTiming(by: max(0, timestamp - deadline))
         }
     }
 
@@ -949,7 +870,7 @@ public struct FocusRackEngine: Sendable {
         guard expected == runID, let deadline = nextCommandDeadline,
             timestamp > deadline + 1e-9
         else { return }
-        extendTiming(by: timestamp - deadline, at: timestamp)
+        extendTiming(by: timestamp - deadline)
     }
 
     private mutating func failMaintenance(at timestamp: Double) {
@@ -958,7 +879,6 @@ public struct FocusRackEngine: Sendable {
         phase = "failed"
         message =
             "Fresh camera readings could not be confirmed. Wait for the camera before retrying."
-        append("safetyReadRejected", at: timestamp)
     }
 
     var maintenanceReadBudget: Double {
@@ -967,18 +887,12 @@ public struct FocusRackEngine: Sendable {
 
     mutating func recordSafetyRead(startedAt: Double, finishedAt: Double, accepted: Bool) {
         let elapsed = finishedAt - startedAt
-        longestSafetyRead = max(longestSafetyRead, elapsed)
         // Qualification is per run, not a permanent prediction from an unrelated idle stall.
         // Late successful reads extend the remaining cadence; their evidence must still be fresh.
         if accepted {
             safetyReadBudget = max(0.1, elapsed)
             if isTimedRun { runSafetyReadBudget = max(runSafetyReadBudget, safetyReadBudget) }
         }
-        append(
-            "safetyRead", at: finishedAt, scheduledAt: startedAt,
-            note:
-                "elapsed=\(elapsed) accepted=\(accepted) worst=\(longestSafetyRead) window=\(safetyReadBudget)"
-        )
     }
 
     /// Updates the entire idle transition atomically, preserving session marks.
@@ -987,13 +901,6 @@ public struct FocusRackEngine: Sendable {
     {
         guard trajectory == nil, inFlight == nil else { throw FocusRackError.movementPending }
         try FocusRackTemplateCodec.validate(transition)
-        if program.transitions[0] != transition {
-            append(
-                "timingChanged", at: timestamp,
-                note:
-                    "duration=\(transition.duration) delay=\(transition.delay) easing=\(transition.easing.rawValue)"
-            )
-        }
         program.transitions[0] = transition
     }
 
@@ -1002,14 +909,12 @@ public struct FocusRackEngine: Sendable {
         let template = try FocusRackTemplateCodec.validate(template)
         try setTransition(template.transition, at: timestamp)
         clearMarks(at: timestamp)
-        append("templateLoaded", at: timestamp, note: template.name)
     }
 
     /// Discards idle session marks without requiring a connection or clearing stop uncertainty.
     public mutating func discardMarks(at timestamp: Double) throws {
         guard trajectory == nil, inFlight == nil else { throw FocusRackError.movementPending }
         clearMarks(at: timestamp)
-        append("marksDiscarded", at: timestamp)
     }
 
     private mutating func clearMarks(at timestamp: Double) {
@@ -1041,7 +946,6 @@ public struct FocusRackEngine: Sendable {
             phase = "pausing"
         }
         message = "Pausing after the current increment settles."
-        append("pauseRequested", at: timestamp)
     }
 
     /// Continues the same trajectory and run identity, excluding paused wall time.
@@ -1054,7 +958,6 @@ public struct FocusRackEngine: Sendable {
         pauseRequested = false
         phase = "ready"
         message = "Resuming the remaining move."
-        append("resumed", at: timestamp)
     }
 
     /// Typed production state and control admission derived from the same execution ledger.
@@ -1260,19 +1163,5 @@ public struct FocusRackEngine: Sendable {
         var value = configuration
         value.transition = program.transitions[0]
         return value
-    }
-
-    private mutating func append(
-        _ kind: String, at timestamp: Double, commandID: Int? = nil, signedPulses: Int? = nil,
-        scheduledAt: Double? = nil, outcome: Int? = nil, note: String? = nil
-    ) {
-        if events.count == 20_000 {
-            events.removeFirst(1_000)
-            omittedEvents += 1_000
-        }
-        events.append(
-            .init(
-                kind: kind, timestamp: timestamp, runID: runID, commandID: commandID,
-                signedPulses: signedPulses, scheduledAt: scheduledAt, outcome: outcome, note: note))
     }
 }

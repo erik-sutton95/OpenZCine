@@ -219,9 +219,9 @@ public actor FocusRackController {
         return state
     }
 
-    /// Bounded local timing evidence, excluding images, credentials and camera serial numbers.
-    public func diagnostics() -> FocusRackDiagnostics {
-        engine.snapshot(at: clock.now(), includeEvents: true)
+    /// Current execution ledger for shared-core regression tests.
+    func engineSnapshot() -> FocusRackEngineSnapshot {
+        engine.snapshot(at: clock.now())
     }
 
     /// Loads historical timing evidence without restoring marks or starting camera work.

@@ -56,13 +56,13 @@ private func recoveredEngine() throws -> FocusRackEngine {
 
 @Test func rackCalibrationRecoveryIsIdempotentAndDoesNotRestoreExecutionState() throws {
     var engine = try recoveredEngine()
-    let before = engine.snapshot(at: 1, includeEvents: true)
+    let before = engine.snapshot(at: 1)
     engine.restoreCalibration(savedCalibration, at: 1)
-    let first = engine.snapshot(at: 1, includeEvents: true)
+    let first = engine.snapshot(at: 1)
     engine.restoreCalibration(savedCalibration, at: 1)
-    let second = engine.snapshot(at: 1, includeEvents: true)
-    #expect(second.timingEvidence == savedCalibration.commandDurations)
-    #expect(second.events == first.events)
+    let second = engine.snapshot(at: 1)
+    #expect(second.calibrationTimings == savedCalibration.commandDurations)
+    #expect(second.calibrationTimings == first.calibrationTimings)
     #expect(second.runID == before.runID)
     #expect(second.marks == before.marks)
     #expect(second.stepPosition == before.stepPosition)
@@ -70,10 +70,6 @@ private func recoveredEngine() throws -> FocusRackEngine {
     #expect(engine.safetyReadBudget == 0)
     #expect(engine.state(at: 1).calibration == nil)
     #expect(engine.nextAction(at: 1).kind == "idle")
-    #expect(second.events.allSatisfy { $0.kind == "timingRestored" })
-    #expect(
-        !String(decoding: try JSONEncoder().encode(second), as: UTF8.self).contains(
-            "synthetic-body"))
 }
 
 @Test func rackCalibrationRecoveryRequiresFreshMatchingSettledEvidence() throws {

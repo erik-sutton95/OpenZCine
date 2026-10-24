@@ -1,7 +1,7 @@
 import Foundation
 
 /// Configuration identity for reusable timing evidence, independent of session-local marks.
-/// Camera identity stays in local persistence and is excluded from diagnostic exports.
+/// Camera identity stays in platform-owned local persistence.
 public struct FocusRackCalibrationKey: Codable, Equatable, Sendable {
     public let cameraID: String
     public let transport: String

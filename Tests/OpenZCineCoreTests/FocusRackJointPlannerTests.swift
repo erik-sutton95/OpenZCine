@@ -466,7 +466,7 @@ func rackTargetDurationExecutesBothDirectionsWithCapturedPhoneCosts(
         #expect(engine.snapshot(at: now).phase == "complete")
         #expect(delivered == (direction == .bToA ? -span : span) * 16)
         #expect(engine.state(at: now).referenceValid)
-        let actual = try #require(engine.snapshot(at: now).actualMovementDuration)
+        let actual = try #require(engine.state(at: now).actualMovementDuration)
         #expect(actual + 1e-9 >= planned)
         #expect(actual - planned < 0.3)
         #expect(engine.state(at: now).timingWarning != nil)
@@ -495,8 +495,7 @@ func rackPreflightReadGrowthReplansFineMovesOnlyBeforeActivation(stopped: Bool) 
     #expect(action.signedPulses == -64)
     #expect(engine.state(at: now).transition.duration == 3)
     #expect(engine.state(at: now).estimatedDuration ?? 0 >= 3)
-    #expect(engine.snapshot(at: now).events.isEmpty)
-    #expect(engine.snapshot(at: now, includeEvents: true).events.last?.kind == "commandStarted")
+    #expect(engine.nextAction(at: now).kind == "idle")
 }
 
 @Test(arguments: [4, 10])
@@ -578,11 +577,6 @@ func rackRecordedSixteenAndFortyUnitStopsNowReachBothEndpoints(prefixCount: Int)
         #expect(state.transition.duration == requested)
         #expect(state.timingWarning != nil)
         #expect(state.admissionMessage == nil)
-        #expect(
-            !engine.snapshot(at: now, includeEvents: true).events.contains {
-                $0.runID == run
-                    && ["maintenanceBudgetExceeded", "missedDeadline"].contains($0.kind)
-            })
     }
 }
 
@@ -606,9 +600,7 @@ func rackFreshReadThatCannotCoverOneCommandFailsWithoutRepeatingReads(readCost: 
             #expect(engine.state(at: now).phase == .failed)
             #expect(engine.state(at: now).stepPosition == position)
             #expect(engine.nextAction(at: now).kind == "idle")
-            #expect(
-                engine.snapshot(at: now, includeEvents: true).events.last?.kind
-                    == "safetyReadRejected")
+            #expect(engine.state(at: now).message.contains("Fresh camera readings"))
             return
         }
         if action.kind == "drive" {
