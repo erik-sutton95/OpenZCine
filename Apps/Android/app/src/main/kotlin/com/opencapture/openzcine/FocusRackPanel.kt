@@ -102,6 +102,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
     nativeAFPointLocked: Boolean = false, onUnlockNativeFocusPoint: () -> Unit = {},
 ) {
     var optionsExpanded by remember { mutableStateOf(false) }
+    var nudgeTowardNear by remember { mutableStateOf(true) }
     val nudging = state.nudgeProgress != null
     val directPulls = !state.active && state.position != null && state.marks.size == 2 &&
         state.pullAToB != null && state.pullBToA != null
@@ -290,7 +291,10 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                 }
             Column(Modifier.weight(1f, fill = false).verticalScroll(setupScroll)
                 .testTag("focusRack.setup").semantics { contentDescription = "Focus rack setup" }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FocusRackNudgeControls(state.canNudge && !nudging, state.nudgeProgress, onNudge)
+                val directionEnabled = setupEnabled && !state.active && !state.canStop
+                    && state.phase != "stopping" && !nudging
+                FocusRackNudgeControls(directionEnabled, directionEnabled && state.canNudge,
+                    nudgeTowardNear, { nudgeTowardNear = it }, state.nudgeProgress, onNudge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("duration" to "Duration", "delay" to "Start delay").forEach { (field, label) ->
                         OutlinedButton(onClick = { editingField = field
@@ -474,26 +478,33 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
 }
 
 @Composable
-private fun FocusRackNudgeControls(enabled: Boolean, progress: FocusRackNudgeProgressViewState?,
-    onNudge: (Boolean, Int) -> Unit) {
-    Row(Modifier.fillMaxWidth().testTag("focusRack.nudges"), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        listOf(Triple(true, 10, "near10"), Triple(true, 1, "near"),
-            Triple(false, 1, "far"), Triple(false, 10, "far10")).forEach { (near, steps, id) ->
-            val direction = if (near) "Near" else "Far"
-            val amount = if (near) "−$steps" else "+$steps"
-            val percent = progress?.takeIf { it.towardNear == near && it.steps == steps }?.percent
-            OutlinedButton(onClick = { onNudge(near, steps) }, enabled = enabled,
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("focusRack.$id")
-                    .semantics {
-                        contentDescription = "$direction $amount"
-                        if (percent != null) stateDescription = "$percent percent"
-                    },
-                contentPadding = PaddingValues(2.dp)) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(direction, fontSize = 11.sp, lineHeight = 14.sp)
+private fun FocusRackNudgeControls(directionEnabled: Boolean, stepEnabled: Boolean, selectedNear: Boolean,
+    onDirection: (Boolean) -> Unit, progress: FocusRackNudgeProgressViewState?, onNudge: (Boolean, Int) -> Unit) {
+    val near = progress?.towardNear ?: selectedNear
+    val direction = if (near) "Near" else "Far"
+    Column(Modifier.fillMaxWidth().testTag("focusRack.nudges"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for ((towardNear, title) in listOf(true to "Near", false to "Far")) {
+                FilterChip(selected = near == towardNear, onClick = { onDirection(towardNear) }, enabled = directionEnabled,
+                    label = { Text(title, fontSize = 12.sp) },
+                    modifier = Modifier.weight(1f).height(48.dp)
+                        .testTag("focusRack.direction.${if (towardNear) "near" else "far"}"))
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (steps in listOf(1, 10, 100)) {
+                val amount = if (near) "−$steps" else "+$steps"
+                val percent = progress?.takeIf { it.steps == steps }?.percent
+                OutlinedButton(onClick = { onNudge(near, steps) }, enabled = stepEnabled,
+                    modifier = Modifier.weight(1f).height(48.dp).testTag("focusRack.nudge.$steps")
+                        .semantics {
+                            contentDescription = "$direction $amount"
+                            if (percent != null) stateDescription = "$percent percent"
+                        },
+                    contentPadding = PaddingValues(2.dp)) {
                     Text(if (percent == null) amount else "$percent%", fontSize = 13.sp, lineHeight = 16.sp,
                         color = if (percent == null) Color.Unspecified else Color.White,
-                        modifier = if (percent == null) Modifier else Modifier.testTag("focusRack.nudgeProgress.$id"))
+                        modifier = if (percent == null) Modifier else Modifier.testTag("focusRack.nudgeProgress.$steps"))
                 }
             }
         }
