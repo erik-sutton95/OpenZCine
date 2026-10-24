@@ -1593,7 +1593,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
     func testSetupChangeAdvisesWithoutRequiringReset() {
         let app = launch("setupChanged")
         XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
-        XCTAssertTrue(app.buttons["focusRack.far10"].isEnabled)
+        XCTAssertTrue(app.buttons["focusRack.nudge.10"].isEnabled)
         XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("A 0"))
         XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("B 20"))
         let message = app.staticTexts["focusRack.message"]
@@ -1692,7 +1692,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         entry.tap()
         assertTransport(app)
         screenshot("focus-rack-marks-empty")
-        XCTAssertGreaterThanOrEqual(app.buttons["focusRack.far"].frame.height + 0.5, 44)
+        XCTAssertGreaterThanOrEqual(app.buttons["focusRack.nudge.1"].frame.height + 0.5, 44)
         XCTAssertFalse(app.otherElements["focusRack.dial"].exists)
         assertTransport(app)
         screenshot("focus-rack-marks-dial")
@@ -1732,42 +1732,51 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         wait(for: [closed], timeout: 5)
     }
 
-    func testTenStepSetupControlsForwardCountsAndKeepStopVisible() {
+    func testDirectionalSetupControlsForwardAllSixCountsAndKeepStopVisible() {
         let app = launch("empty")
-        for (id, label, direction) in [
-            ("near10", "Near −10", "Near"), ("far10", "Far +10", "Far"),
-        ] {
-            let button = app.buttons["focusRack.\(id)"]
-            scrollTo(button, in: app)
-            XCTAssertEqual(button.label, label)
-            XCTAssertGreaterThanOrEqual(button.frame.height + 0.5, 44)
-            XCTAssertTrue(app.frame.contains(button.frame))
-            button.tap()
+        for (near, direction) in [(true, "Near"), (false, "Far")] {
+            let selector = app.buttons["focusRack.direction." + (near ? "near" : "far")]
+            scrollTo(selector, in: app)
             let positions = app.staticTexts["focusRack.positions"]
-            scrollTo(positions, in: app)
-            XCTAssertTrue((positions.value as? String)?.contains("Last \(direction) 10") == true)
-            assertTransport(app)
+            let before = positions.value as? String
+            selector.tap()
+            XCTAssertEqual(selector.value as? String, "Selected")
+            XCTAssertEqual(positions.value as? String, before)
+            for steps in [1, 10, 100] {
+                let button = app.buttons["focusRack.nudge.\(steps)"]
+                scrollTo(button, in: app)
+                XCTAssertEqual(button.label, "\(direction) \(near ? "−" : "+")\(steps)")
+                XCTAssertGreaterThanOrEqual(button.frame.height + 0.5, 44)
+                XCTAssertTrue(app.frame.contains(button.frame))
+                button.tap()
+                XCTAssertTrue(
+                    (positions.value as? String)?.contains("Last \(direction) \(steps)") == true)
+                assertTransport(app)
+            }
+            screenshot("focus-rack-\(direction.lowercased())-steps-landscape")
         }
-        scrollTo(app.buttons["focusRack.near10"], in: app)
-        screenshot("focus-rack-ten-step-landscape")
-        XCUIDevice.shared.orientation = .portrait
-        let portrait = expectation(
-            for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
-        wait(for: [portrait], timeout: 8)
-        scrollTo(app.buttons["focusRack.near10"], in: app)
-        assertTransport(app)
-        screenshot("focus-rack-ten-step-portrait")
+        app.buttons["focusRack.expand"].tap()
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertEqual(app.buttons["focusRack.direction.far"].value as? String, "Selected")
+        XCTAssertEqual(app.buttons["focusRack.nudge.100"].label, "Far +100")
         app.terminate()
+        let portrait = launch("empty", extra: ["ZC_DEMO_ORIENTATION": "portrait"])
+        scrollTo(portrait.buttons["focusRack.nudge.100"], in: portrait)
+        assertTransport(portrait)
+        screenshot("focus-rack-signed-steps-portrait")
+        portrait.terminate()
         let moving = launch("moving")
-        scrollTo(moving.buttons["focusRack.near10"], in: moving)
-        XCTAssertFalse(moving.buttons["focusRack.near10"].isEnabled)
-        XCTAssertFalse(moving.buttons["focusRack.far10"].isEnabled)
+        for id in ["direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100"] {
+            XCTAssertTrue(moving.buttons["focusRack." + id].exists)
+            XCTAssertFalse(moving.buttons["focusRack." + id].isEnabled)
+        }
         assertTransport(moving)
     }
 
     func testNudgeProgressKeepsSetupInPlaceUntilStopSettles() throws {
         let ids = [
-            "go.A", "go.B", "near10", "near", "far", "far10", "duration.value",
+            "go.A", "go.B", "direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100",
+            "duration.value",
             "delay.value", "options",
         ]
         let ready = launch("ready")
@@ -1777,7 +1786,11 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             })
         screenshot("focus-rack-nudge-ready-landscape")
         ready.terminate()
-        for (fixture, pressed) in [("nudgeNear", "near10"), ("nudgeFar", "far10")] {
+        for (fixture, near, steps) in [
+            ("nudgeNear", true, 10), ("nudgeFar", false, 10),
+            ("nudgeNear100", true, 100), ("nudgeFar100", false, 100),
+        ] {
+            let pressed = "nudge.\(steps)"
             let app = launch(fixture)
             for id in ids {
                 let control = app.buttons["focusRack." + id]
@@ -1790,7 +1803,10 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             }
             let active = app.buttons["focusRack." + pressed]
             XCTAssertEqual(active.value as? String, "30%")
-            XCTAssertEqual(active.label, pressed == "near10" ? "Near −10" : "Far +10")
+            XCTAssertEqual(active.label, "\(near ? "Near −" : "Far +")\(steps)")
+            for count in [1, 10, 100] where count != steps {
+                XCTAssertEqual(app.buttons["focusRack.nudge.\(count)"].value as? String, "")
+            }
             XCTAssertFalse(app.staticTexts["focusRack.stopHint"].exists)
             XCTAssertFalse(app.buttons["focusRack.expand"].isEnabled)
             XCTAssertFalse(app.buttons["focusRack.close"].isEnabled)
@@ -1812,7 +1828,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         let settled = launch("atB")
         XCTAssertFalse(settled.staticTexts["focusRack.message"].exists)
         XCTAssertFalse(settled.buttons["focusRack.stop"].exists)
-        XCTAssertEqual(settled.buttons["focusRack.far10"].value as? String, "")
+        XCTAssertEqual(settled.buttons["focusRack.nudge.10"].value as? String, "")
         assertTransport(settled)
         screenshot("focus-rack-complete-position-only-landscape")
     }
@@ -2034,9 +2050,13 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
                     "focusRack.compact")
             ).firstMatch
         XCTAssertTrue(expected.waitForExistence(timeout: 20))
-        let landscape = expectation(
-            for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
-        wait(for: [landscape], timeout: 8)
+        let wantsPortrait = extra["ZC_DEMO_ORIENTATION"] == "portrait"
+        let orientation = expectation(
+            for: NSPredicate { _, _ in
+                wantsPortrait
+                    ? app.frame.height > app.frame.width : app.frame.width > app.frame.height
+            }, evaluatedWith: app)
+        wait(for: [orientation], timeout: 8)
         return app
     }
 

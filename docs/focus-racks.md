@@ -62,8 +62,9 @@ Disconnecting retires the pending restoration; it is never replayed on a replace
 2. Open **FOCUS → Focus Rack**. Keep zoom and camera position fixed.
 3. Focus the first subject visually or with one-shot AF. After focus settles and a new camera
    frame arrives, choose **Set A**.
-4. Use **Near −1 / Far +1** to focus the second subject. **Near −10**
-   and **Far +10** each run ten separately confirmed steps for quicker setup; **Stop** discards
+4. Select **Near** or **Far**, then choose **1**, **10** or **100** steps to focus the second
+   subject. The buttons show negative amounts for Near and positive amounts for Far. Selecting
+   a direction does not move focus. Each step is confirmed separately; **Stop** discards
    the remaining steps. The mark cards and Near/Far controls stay in place during a nudge. The
    pressed button shows the percentage of acknowledged steps; the other setup controls are disabled
    until movement settles, and Stop remains available. Choose **Set B** after movement settles.
@@ -73,7 +74,8 @@ Disconnecting retires the pending restoration; it is never replayed on a replace
 The rack counts acknowledged increments, independently of the ordinary focus dial. Marks do
 not represent measured distances. The fixed mark cards group thumbnails and relative step positions. A card sets an empty mark;
 once captured, it is labelled Go to A/B with Fast reposition. Replace A/B is explicit under Options.
-The current relative position is shown in the same group. Near/Far ±1/±10 sit directly below it.
+The current relative position is shown in the same group. The Near/Far selector sits below it,
+with the three signed step buttons directly underneath.
 The panel has no focus wheel or separate setup tabs. Uncertain references show positions as
 unknown. Once a mark exists, use the rack's controls for focus
 adjustments; peaking and magnification remain available. **Replace A/B** explicitly replaces
@@ -109,7 +111,7 @@ and safety-read bridges no larger than 128 pulses. Measured smaller ordinary mov
 when 64-pulse measurements are unavailable; larger ordinary moves are not silently substituted.
 The existing 1-second and 6-second families remain separate. Each plan preserves the exact signed
 sum of the original 16-pulse mark units, including one
-bounded residual command. Setup ±1/±10 retains its fine increment; explicit fast positioning keeps
+bounded residual command. Setup ±1/±10/±100 retains its fine increment; explicit fast positioning keeps
 its bounded camera-speed path using 192-pulse groups and one exact residual. Repositioning also
 collects timing for the largest playback group and its exact residual without hidden calibration
 movement. Every activation is confirmed before

@@ -224,14 +224,16 @@ enum DemoHarness {
                 state.primary = .init(kind: "reset", title: "Reset marks", enabled: false)
                 state.capabilities = .init()
             }
-            if fixture == "nudgeNear" || fixture == "nudgeFar" {
-                let near = fixture == "nudgeNear"
+            if ["nudgeNear", "nudgeFar", "nudgeNear100", "nudgeFar100"].contains(fixture) {
+                let near = fixture.hasPrefix("nudgeNear")
+                let steps = fixture.hasSuffix("100") ? 100 : 10
+                let completed = steps * 30 / 100
                 state.phase = .moving
                 state.busy = true
-                state.completedSteps = 3
-                state.totalSteps = 10
-                state.stepPosition = near ? -3 : 3
-                state.nudgeProgress = .init(towardNear: near, steps: 10, percent: 30)
+                state.completedSteps = completed
+                state.totalSteps = steps
+                state.stepPosition = near ? -completed : completed
+                state.nudgeProgress = .init(towardNear: near, steps: steps, percent: 30)
                 if !near {
                     state.admissionMessage =
                         "This move needs at least 4.00 seconds at the current camera cadence."

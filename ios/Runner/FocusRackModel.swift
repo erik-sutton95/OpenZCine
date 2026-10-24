@@ -94,6 +94,7 @@ struct FocusRackPendingCapture {
 
 /// Root-owned UI/OS adapter. The portable controller owns execution and operator rules.
 @MainActor @Observable final class FocusRackModel {
+    var nudgeTowardNear = true
     private(set) var state: FocusRackState?
     private(set) var templates: [FocusRackTemplate] = []
     private(set) var notice: String?

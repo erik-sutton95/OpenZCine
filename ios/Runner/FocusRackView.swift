@@ -77,24 +77,7 @@ struct FocusRackView: View {
                                         .accessibilityIdentifier("focusControl.setupStatus")
                                 }
                                 if let state = rack.state {
-                                    HStack(spacing: 4) {
-                                        nudge(
-                                            "Near", amount: "−10", id: "near10", state: state,
-                                            near: true,
-                                            steps: 10)
-                                        nudge(
-                                            "Near", amount: "−1", id: "near", state: state,
-                                            near: true,
-                                            steps: 1)
-                                        nudge(
-                                            "Far", amount: "+1", id: "far", state: state,
-                                            near: false,
-                                            steps: 1)
-                                        nudge(
-                                            "Far", amount: "+10", id: "far10", state: state,
-                                            near: false,
-                                            steps: 10)
-                                    }
+                                    nudgeControls(state)
                                     move(state)
                                     if let reason = state.admissionMessage {
                                         Text(reason).font(.system(size: 12)).foregroundStyle(
@@ -794,28 +777,56 @@ struct FocusRackView: View {
         .accessibilityIdentifier("focusRack." + (captured == nil ? "capture." : "go.") + id)
     }
 
-    private func nudge(
-        _ title: String, amount: String, id: String, state: FocusRackState, near: Bool, steps: Int
+    private func nudgeControls(_ state: FocusRackState) -> some View {
+        let near = state.nudgeProgress?.towardNear ?? rack.nudgeTowardNear
+        return VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                nudgeDirection("Near", towardNear: true, selected: near, state: state)
+                nudgeDirection("Far", towardNear: false, selected: !near, state: state)
+            }
+            HStack(spacing: 4) {
+                ForEach([1, 10, 100], id: \.self) { steps in
+                    nudge(state, near: near, steps: steps)
+                }
+            }
+        }
+    }
+
+    private func nudgeDirection(
+        _ title: String, towardNear: Bool, selected: Bool, state: FocusRackState
     ) -> some View {
+        Button {
+            rack.nudgeTowardNear = towardNear
+        } label: {
+            Text(title).font(.system(size: 12, weight: .semibold))
+                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(.white.opacity(selected ? 0.22 : 0.06), in: RoundedRectangle(cornerRadius: 6))
+        .disabled(!allowsSetup || state.busy || state.nudgeProgress != nil)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityValue(selected ? "Selected" : "")
+        .accessibilityIdentifier("focusRack.direction." + (towardNear ? "near" : "far"))
+    }
+
+    private func nudge(_ state: FocusRackState, near: Bool, steps: Int) -> some View {
+        let amount = near ? "−\(steps)" : "+\(steps)"
         let progress = state.nudgeProgress.flatMap {
             $0.towardNear == near && $0.steps == steps ? $0.percent : nil
         }
         return Button {
             rack.nudge(near: near, steps: steps)
         } label: {
-            VStack(spacing: 1) {
-                Text(title).font(.system(size: 11))
-                Text(progress.map { "\($0)%" } ?? amount)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-            }
-            .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+            Text(progress.map { "\($0)%" } ?? amount)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-        .disabled(!state.capabilities.canNudge)
-        .accessibilityLabel("\(title) \(amount)")
+        .disabled(!allowsSetup || !state.capabilities.canNudge)
+        .accessibilityLabel("\(near ? "Near" : "Far") \(amount)")
         .accessibilityValue(progress.map { "\($0)%" } ?? "")
-        .accessibilityIdentifier("focusRack.\(id)")
+        .accessibilityIdentifier("focusRack.nudge.\(steps)")
     }
 
     private func move(_ state: FocusRackState) -> some View {
