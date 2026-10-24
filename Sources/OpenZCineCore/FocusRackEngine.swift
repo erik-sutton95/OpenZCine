@@ -95,6 +95,11 @@ public struct FocusRackContext: Codable, Equatable, Sendable {
 
     /// Explains why movement is unavailable; unknown safety observations fail closed.
     public func unavailableReason(at timestamp: Double) -> String? {
+        unavailableReason(at: timestamp, requiresFreshSafety: true)
+    }
+
+    // Observation-only checks may wait for an already serialized safety refresh to finish.
+    func unavailableReason(at timestamp: Double, requiresFreshSafety: Bool) -> String? {
         if !connected { return "Connect a real camera." }
         if !movieMode { return "Use movie mode." }
         if !foregroundOwner { return "Keep the live monitor open with local camera control." }
@@ -104,9 +109,11 @@ public struct FocusRackContext: Codable, Equatable, Sendable {
         if focusSettled != true {
             return "Wait for autofocus and external focus commands to settle."
         }
-        guard let safetyTimestamp, safetyTimestamp.isFinite,
-            timestamp >= safetyTimestamp, timestamp - safetyTimestamp <= 2
-        else { return "Wait for fresh camera focus and lens readings." }
+        if requiresFreshSafety {
+            guard let safetyTimestamp, safetyTimestamp.isFinite,
+                timestamp >= safetyTimestamp, timestamp - safetyTimestamp <= 2
+            else { return "Wait for fresh camera focus and lens readings." }
+        }
         guard let frameTimestamp, frameTimestamp.isFinite,
             timestamp >= frameTimestamp, timestamp - frameTimestamp <= 2
         else { return "Wait for a fresh real camera frame." }

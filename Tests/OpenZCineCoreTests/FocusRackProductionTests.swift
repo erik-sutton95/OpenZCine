@@ -201,6 +201,8 @@ private func productionWithMarks(delay: Double = 0) throws -> FocusRackEngine {
     }
 }
 
+private enum RackFakeSafetyError: Error { case unavailable }
+
 private final class RackFakeCamera: @unchecked Sendable {
     private let lock = NSLock()
     private let prepareCondition = NSCondition()
@@ -213,6 +215,8 @@ private final class RackFakeCamera: @unchecked Sendable {
     private var blocksPrepare = false
     private var insidePrepare = false
     private var safetyLatency = 0.0
+    private var safetyFailure = false
+    private var reportedFocusArea = "Single-point AF"
     private var holdsSafety = false
     private var safetyContinuation: CheckedContinuation<Void, Never>?
     private var sleeps = 0
@@ -284,6 +288,8 @@ private final class RackFakeCamera: @unchecked Sendable {
         pending?.resume()
     }
     func setSafetyLatency(_ seconds: Double) { lock.withLock { safetyLatency = seconds } }
+    func failSafetyRead() { lock.withLock { safetyFailure = true } }
+    func changeReportedFocusArea() { lock.withLock { reportedFocusArea = "Auto-area AF" } }
     func setDriveLatencies(_ seconds: [UInt32: Double]) {
         lock.withLock { driveLatencies = seconds }
     }
@@ -297,6 +303,7 @@ private final class RackFakeCamera: @unchecked Sendable {
         pending?.resume()
         return count
     }
+    func advanceClock(_ seconds: Double) { lock.withLock { instant += seconds } }
     func slept(after count: Int) -> Bool { lock.withLock { sleeps > count } }
     private func waitForSafety() async {
         await withCheckedContinuation { pending in
@@ -353,11 +360,13 @@ private final class RackFakeCamera: @unchecked Sendable {
             driveChunk: { [self] _, _, pulses in await drive(pulses) },
             refreshSafety: { [self] in
                 await waitForSafety()
+                if lock.withLock({ safetyFailure }) { throw RackFakeSafetyError.unavailable }
                 return try .init(
                     reported: .init(
                         focalLength: "70", focalMinX100: 3500,
                         focalMaxX100: 10000, apertureMinX100: 280, focusMode: "AF-S",
-                        focusArea: "Single-point AF", focusSubject: "Off", captureSelector: .video))
+                        focusArea: lock.withLock { reportedFocusArea }, focusSubject: "Off",
+                        captureSelector: .video))
             })
     }
 }
@@ -766,6 +775,126 @@ private func controllerWithTwoMarks(_ camera: RackFakeCamera) async throws -> Fo
     return controller
 }
 
+private func observationDuringPendingRead(_ disposition: String) -> FocusRackObservation {
+    var value = cameraObservation(5, age: disposition == "frame" ? 3 : 0)
+    switch disposition {
+    case "foreground": value.foregroundOwner = false
+    case "session": value.sessionID = "changed-session"
+    case "external": value.externalFocusRevision = 1
+    case "camera": value.cameraID = "changed-body"
+    case "transport": value.transport = "changed-link"
+    case "externalBusy": value.externalFocusIdle = false
+    case "tracking":
+        value.focus = .init(
+            trackingAFActive: true, subjectDetectionActive: false,
+            boxCount: 1, selectedBoxIndex: nil)
+    default: break
+    }
+    return value
+}
+
+@Test(arguments: [
+    "complete", "stop", "failed", "stale", "frame", "foreground", "session", "external",
+    "tracking", "recordStop", "configuration", "camera", "transport", "externalBusy",
+])
+func rackPendingReadWaitsOnlyForSafetyAgeAndRetainsEveryOtherGate(disposition: String) async throws
+{
+    let camera = RackFakeCamera()
+    let controller = try await controllerWithTwoMarks(camera)
+    camera.useManualSleeps()
+    defer {
+        camera.finishManualSleeps()
+        camera.releaseSafetyRead()
+    }
+    try await waitForRack { camera.isSleeping }
+    let oldSafetyAt = try #require(await controller.diagnostics().context?.safetyTimestamp)
+    camera.advanceClock(1.7)
+    var initial = cameraObservation(4)
+    initial.recording = disposition == "recordStop"
+    await controller.observe(initial)
+    camera.holdNextSafetyRead()
+    try await controller.handle(.run(direction: .bToA))
+    _ = camera.advanceClockBeforeNextSleep(0)
+    try await waitForRack { camera.isReadingSafety }
+    let readStarted = camera.clock.now()
+    let run = await controller.snapshot().runID
+    let drives = camera.driveCount
+    camera.advanceClock(disposition == "stale" ? 2.1 : 0.4)
+    if disposition == "stop" { controller.requestStop() }
+    if disposition == "failed" { camera.failSafetyRead() }
+    if disposition == "configuration" { camera.changeReportedFocusArea() }
+    await controller.observe(observationDuringPendingRead(disposition))
+    let waiting = await controller.snapshot()
+    let trace = await controller.diagnostics()
+    let stop = trace.events.last { $0.runID == run && $0.kind == "stopRequested" }
+    let waitsForResult = ["complete", "failed", "stale", "configuration"].contains(disposition)
+    #expect(camera.isReadingSafety)
+    #expect(camera.driveCount == drives)
+    #expect(
+        (stop == nil) == waitsForResult,
+        "Old receipt \(oldSafetyAt), read started \(readStarted), stop \(String(describing: stop?.timestamp)), fresh frame \(String(describing: trace.context?.frameTimestamp))"
+    )
+    #expect(waiting.busy == waitsForResult)
+    camera.releaseSafetyRead()
+    if disposition != "complete" {
+        try await waitForRack { !(await controller.snapshot()).busy }
+        #expect(camera.driveCount == drives)
+        #expect(
+            !(await controller.diagnostics()).events.contains {
+                $0.runID == run && $0.kind == "commandStarted"
+            })
+        camera.finishManualSleeps()
+        await controller.close()
+        return
+    }
+    for sequence in 6..<100 {
+        if !(await controller.snapshot()).busy { break }
+        await controller.observe(cameraObservation(Int64(sequence)))
+        let sleep = camera.advanceClockBeforeNextSleep(camera.pendingSleepSeconds)
+        try await waitForRack {
+            if camera.slept(after: sleep) { return true }
+            return !(await controller.snapshot()).busy
+        }
+    }
+    let completed = await controller.snapshot()
+    #expect(completed.phase == .complete)
+    #expect(completed.stepPosition == 0)
+    #expect(camera.driveCount == drives + 2)
+    camera.finishManualSleeps()
+    await controller.close()
+}
+
+@Test func rackPendingPeriodicReadKeepsItsOldReceiptHonestAndCannotAdmitMovement() async throws {
+    let camera = RackFakeCamera()
+    let controller = try await controllerWithTwoMarks(camera)
+    camera.useManualSleeps()
+    defer {
+        camera.finishManualSleeps()
+        camera.releaseSafetyRead()
+    }
+    try await waitForRack { camera.isSleeping }
+    let old = try #require(await controller.diagnostics().context?.safetyTimestamp)
+    camera.advanceClock(1.7)
+    await controller.observe(cameraObservation(4))
+    camera.holdNextSafetyRead()
+    _ = camera.advanceClockBeforeNextSleep(0)
+    try await waitForRack { camera.isReadingSafety }
+    camera.advanceClock(0.4)
+    await controller.observe(cameraObservation(5))
+    #expect(await controller.diagnostics().context?.safetyTimestamp == old)
+    #expect(!(await controller.snapshot()).capabilities.canNudge)
+    await #expect(throws: FocusRackError.referenceUnavailable) {
+        try await controller.handle(.nudge(towardNear: true, steps: 1))
+    }
+    #expect(camera.driveCount == 2)
+    camera.releaseSafetyRead()
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    #expect(try #require(await controller.diagnostics().context?.safetyTimestamp) > old + 1)
+    #expect(camera.driveCount == 2)
+    camera.finishManualSleeps()
+    await controller.close()
+}
+
 @Test func rackControllerExcludesFullSafetyPreflightFromTheMovementEpoch() async throws {
     let camera = RackFakeCamera()
     let controller = try await controllerWithTwoMarks(camera)
@@ -966,6 +1095,14 @@ private func runJointControllerComparison(delay: Double, disposition: String) as
     if disposition != "complete" {
         #expect(camera.isReadingSafety)
         let drives = camera.driveCount
+        if disposition == "late" {
+            let old = try #require(await controller.diagnostics().context?.safetyTimestamp)
+            camera.advanceClock(max(0, old + 2.01 - camera.clock.now()))
+            observation.frameSequence = 250
+            await controller.observe(observation)
+            #expect((await controller.snapshot()).busy)
+            #expect(camera.driveCount == drives)
+        }
         if disposition == "stop" {
             let stops = camera.stopCount
             controller.requestStop()
@@ -974,7 +1111,7 @@ private func runJointControllerComparison(delay: Double, disposition: String) as
         }
         camera.releaseSafetyRead()
         if disposition == "late" {
-            for sequence in 250..<750 {
+            for sequence in 251..<750 {
                 if !(await controller.snapshot()).busy { break }
                 observation.frameSequence = Int64(sequence)
                 await controller.observe(observation)

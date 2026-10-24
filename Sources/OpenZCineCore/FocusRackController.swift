@@ -124,6 +124,7 @@ public actor FocusRackController {
     private var acceptedFocusResult: String?
     private var safety: NikonFocusRackSafetySnapshot?
     private var safetyAt: Double?
+    private var refreshingSafety = false
     private var nextSafetyAt = 0.0
     private var needsReadinessFrameBarrier = true
     private var nativeRun: Int64?
@@ -413,6 +414,13 @@ public actor FocusRackController {
             recording: observation.recording,
             frameSequence: acceptedSequence, focusArea: safety?.focusArea,
             focusSubject: safety?.focusSubject)
+        if refreshingSafety, let safetyAt, safetyAt.isFinite, now > safetyAt + 2,
+            context.unavailableReason(at: now, requiresFreshSafety: false) == nil
+        {
+            // No drive can dispatch while this read is pending. Keep its old receipt honest;
+            // the result, all other observations, and the next activation stay fully checked.
+            return
+        }
         let available = context.unavailableReason(at: now) == nil
         let previousRevision = engine.configurationRevision
         engine.observe(context, at: now)
@@ -563,9 +571,11 @@ public actor FocusRackController {
     @discardableResult private func readSafety(
         _ initial: FocusRackObservation, maintenanceRun: Int64? = nil
     ) async -> Bool {
+        refreshingSafety = true
         let started = clock.now()
         let generation = gate.snapshot().generation
         defer {
+            refreshingSafety = false
             let finished = clock.now()
             engine.recordSafetyRead(
                 startedAt: started, finishedAt: finished, accepted: safetyAt == started)
