@@ -557,9 +557,6 @@ public actor FocusRackController {
         {
             return false
         }
-        if let deadline = engine.nextCommandDeadline {
-            return now + engine.maintenanceReadBudget <= deadline
-        }
         return true
     }
 

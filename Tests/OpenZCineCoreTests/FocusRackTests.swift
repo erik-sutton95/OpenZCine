@@ -93,7 +93,8 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
     #expect(second.kind == "drive")
     probe.complete(runID: second.runID, commandID: 1, outcome: 0, at: 0.54)
     #expect(probe.nextAction(at: 0.61).kind == "wait")
-    #expect(probe.nextAction(at: 0.621).kind == "drive")
+    #expect(probe.nextAction(at: 0.66).kind == "wait")
+    #expect(probe.nextAction(at: 0.662).kind == "drive")
 }
 
 @Test func rackPositioningWaitsForReadinessWithoutPretendingToBeATimedPull() throws {
@@ -116,8 +117,8 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
     var timed = try probeWithMarks()
     try timed.run(reverse: true, at: 0.3)
     timed.observe(rackContext(at: 0.8), at: 0.8)
-    #expect(timed.nextAction(at: 0.8).kind == "idle")
-    #expect(timed.snapshot(at: 0.8).phase == "failed")
+    #expect(timed.nextAction(at: 0.8).kind == "drive")
+    #expect(timed.snapshot(at: 0.8).phase == "moving")
 }
 
 @Test func rackInitialAutofocusRequiresSettlingAndASubsequentFrame() throws {
@@ -339,9 +340,14 @@ func rackRepeatedInvalidationPreservesUnconfirmedNativeRecovery(outcome: Int) th
     var probe = try probeWithMarks()
     try probe.run(reverse: true, at: 0.3)
     probe.observe(rackContext(at: 0.6), at: 0.6)
-    #expect(probe.nextAction(at: 0.6).kind == "idle")
-    #expect(probe.snapshot(at: 0.6).phase == "failed")
-    #expect(probe.snapshot(at: 0.6).stepPosition == 3)
+    let first = probe.nextAction(at: 0.6)
+    #expect(first.kind == "drive")
+    probe.complete(runID: first.runID, commandID: 0, outcome: 0, at: 0.61)
+    #expect(probe.nextAction(at: 0.7).kind == "wait")
+    #expect(probe.snapshot(at: 0.7).busy)
+    #expect(probe.snapshot(at: 0.7).stepPosition == 2)
+    probe.observe(rackContext(at: 1.096), at: 1.096)
+    #expect(probe.nextAction(at: 1.096).kind == "drive")
 }
 
 @Test func rackRetainsIdleMarksWhileUnavailableAndWarnsForKnownSetupChanges() throws {
@@ -553,7 +559,7 @@ func rackTenStepStopKeepsOnlyTheCompletedPrefix(towardNear: Bool) throws {
 }
 
 @Test(arguments: [3.5, 3.501])
-func rackChecksFinalTimingWhileRetainingTheAcknowledgedEndpoint(completedAt: Double) throws {
+func rackWarnsAboutFinalTimingWhileCompletingTheAcknowledgedEndpoint(completedAt: Double) throws {
     var probe = try probeWithMarks(delay: 2)
     try probe.run(reverse: true, at: 0.3)
     for (index, time) in [2.3, 2.795, 3.29].enumerated() {
@@ -567,11 +573,11 @@ func rackChecksFinalTimingWhileRetainingTheAcknowledgedEndpoint(completedAt: Dou
     let result = probe.snapshot(at: completedAt, includeEvents: true)
     #expect(result.stepPosition == 0)
     #expect(result.completedSteps == 3)
-    #expect(result.phase == (completedAt > 3.5 ? "failed" : "complete"))
-    #expect(result.events.contains { $0.kind == "missedDeadline" } == (completedAt > 3.5))
+    #expect(result.phase == "complete")
+    #expect(probe.state(at: completedAt).timingWarning != nil)
+    #expect(!result.events.contains { $0.kind == "missedDeadline" })
     #expect(
-        result.events.contains { $0.runID == result.runID && $0.kind == "runCompleted" }
-            == (completedAt <= 3.5))
+        result.events.contains { $0.runID == result.runID && $0.kind == "runCompleted" })
     #expect(probe.nextAction(at: completedAt).kind == "idle")
     probe.observe(rackContext(at: completedAt + 0.01), at: completedAt + 0.01)
     #expect(probe.snapshot(at: completedAt + 0.01).canCapture)
