@@ -356,10 +356,10 @@ public struct FocusRackEngine: Sendable {
         append("mark", at: timestamp, note: markID)
     }
 
-    /// Starts one to ten identical increments after an explicit operator action.
+    /// Starts one to one hundred identical increments after an explicit operator action.
     /// Each increment is acknowledged separately; Stop discards the remaining ones.
     public mutating func nudge(towardNear: Bool, steps: Int = 1, at timestamp: Double) throws {
-        guard (1...10).contains(steps) else { throw FocusRackError.invalidConfiguration }
+        guard (1...100).contains(steps) else { throw FocusRackError.invalidConfiguration }
         try begin(
             signedSteps: towardNear ? -steps : steps,
             duration: 1,
