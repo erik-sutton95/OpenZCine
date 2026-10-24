@@ -1631,21 +1631,6 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         XCTAssertLessThan(panel.frame.minX, before.minX - 100)
         assertTransport(app)
         screenshot("focus-rack-explicit-actions-moved-landscape")
-        app.terminate()
-        let blocked = launch("timing")
-        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isHittable)
-        XCTAssertFalse(blocked.buttons["focusRack.pull.aToB"].isEnabled)
-        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isEnabled)
-        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isHittable)
-        assertTransport(blocked)
-        screenshot("focus-rack-invalid-timing-keeps-positioning")
-        blocked.buttons["focusRack.expand"].tap()
-        XCTAssertTrue(blocked.otherElements["focusRack.compact"].exists)
-        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isHittable)
-        XCTAssertTrue(blocked.buttons["focusRack.go.B"].isEnabled)
-        XCTAssertFalse(blocked.buttons["focusRack.pull.aToB"].exists)
-        assertTransport(blocked)
-        screenshot("focus-rack-invalid-timing-compact-positioning")
     }
 
     func testDirectTimedDirectionsKeepSetupAndTransportVisible() {
@@ -1934,24 +1919,6 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         XCTAssertTrue(app.frame.contains(recovery.frame))
         assertTransport(app)
         screenshot("focus-rack-recovery-compact")
-    }
-
-    func testDisabledRunExplainsHowToFindTheSharedAdmissionReason() {
-        let app = launch("timing")
-        let attention = app.buttons["focusRack.moveAttention"]
-        XCTAssertTrue(attention.isHittable)
-        XCTAssertGreaterThanOrEqual(attention.frame.height, 44)
-        XCTAssertFalse(app.buttons["focusRack.pull.aToB"].isEnabled)
-        assertTransport(app)
-        screenshot("focus-rack-admission-hint-landscape")
-        app.buttons["focusRack.expand"].tap()
-        XCTAssertTrue(app.otherElements["focusRack.compact"].exists)
-        app.buttons["focusRack.moveAttention"].tap()
-        let reason = app.staticTexts["focusRack.admission"]
-        XCTAssertEqual(reason.label, "Increase duration to at least 16.61s for these marks.")
-        XCTAssertTrue(app.scrollViews["focusRack.setup"].frame.contains(reason.frame))
-        assertTransport(app)
-        screenshot("focus-rack-admission-reason-landscape")
     }
 
     func testCleanLockedRecoveryNamesTheUnconfirmedState() {

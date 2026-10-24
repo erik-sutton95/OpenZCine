@@ -5,50 +5,6 @@ import OpenZCineCore
 import UIKit
 import os
 
-#if DEBUG
-    /// Serial background file I/O; cancellation follows the diagnostic task across the actor hop.
-    private actor FocusRackDiagnosticWriter {
-        static let shared = FocusRackDiagnosticWriter()
-
-        func write<T: Encodable & Sendable>(_ trace: T, to url: URL) throws {
-            try Task.checkCancellation()
-            let data = try JSONEncoder().encode(trace)
-            try Task.checkCancellation()
-            try data.write(to: url, options: .atomic)
-        }
-    }
-
-    /// Bounded, image-free evidence for native picture targeting; no camera identity is exported.
-    private struct NativeAFTraceEvent: Encodable, Sendable {
-        let time: Double
-        let event: String
-        let requestID: UInt64?
-        let mark: NativeAFMark?
-        let point: NativeAFPoint?
-        let dueAt: Double?
-        let targetA: NativeAFPoint?
-        let targetB: NativeAFPoint?
-        let selectingMark: NativeAFMark?
-        let pendingRequestID: UInt64?
-        let dispatchedRequestID: UInt64?
-        let lastSelectedMark: NativeAFMark?
-        let startDelay: Double
-        let mode: FocusControlMode
-        let afSettings: FocusAFSettingsValues?
-        let recording: Bool
-        let focusPointLocked: Bool
-        let interfaceLocked: Bool
-        let focusResult: String?
-        let message: String?
-    }
-
-    private struct NativeAFTrace: Encodable, Sendable {
-        let version = 1
-        let events: [NativeAFTraceEvent]
-        let omittedEvents: Int
-    }
-#endif
-
 /// Revocable OS ownership checked by the native driver without crossing the main actor.
 final class FocusRackAuthority: Sendable {
     private let admitted = OSAllocatedUnfairLock(initialState: false)
@@ -122,7 +78,6 @@ struct FocusRackPendingCapture {
     @ObservationIgnored private var authority = FocusRackAuthority()
     @ObservationIgnored private var stateTask: Task<Void, Never>?
     @ObservationIgnored private var modeSwitchTask: Task<Void, Never>?
-    @ObservationIgnored private var diagnosticTask: Task<Void, Never>?
     @ObservationIgnored private var observationTask: Task<Void, Never>?
     @ObservationIgnored private var contextTask: Task<Void, Never>?
     @ObservationIgnored private var observations:
@@ -135,9 +90,6 @@ struct FocusRackPendingCapture {
     #if DEBUG
         /// Driver-free fixture evidence; real sessions never populate this list.
         private(set) var simulatedNudgeIntents: [FocusRackIntent] = []
-        @ObservationIgnored private var nativeTraceEvents: [NativeAFTraceEvent] = []
-        @ObservationIgnored private var nativeTraceOmitted = 0
-        @ObservationIgnored private var nativeTraceTask: Task<Void, Never>?
     #endif
 
     private struct Thumbnail {
@@ -202,7 +154,6 @@ struct FocusRackPendingCapture {
         guard canUnlockNativeFocusPoint else { return }
         model?.focusPointLocked = false
         notice = nil
-        traceNativeAF("focusPointUnlocked")
     }
 
     var nativeAFInstruction: String {
@@ -247,7 +198,6 @@ struct FocusRackPendingCapture {
             try nativeRack.arm(mark)
             notice = nil
             isExpanded = false
-            traceNativeAF("targetArmed", mark: mark)
         } catch { notice = error.localizedDescription }
     }
 
@@ -257,8 +207,7 @@ struct FocusRackPendingCapture {
         guard mode == .nativeAF, nativeRack.selectingMark != nil else { return false }
         guard nativeAFBlocker == nil, !nativeAFBusy else { return true }
         do {
-            let request = try nativeRack.capture(point, now: ProcessInfo.processInfo.systemUptime)
-            traceNativeAF("targetCaptured", request: request)
+            _ = try nativeRack.capture(point, now: ProcessInfo.processInfo.systemUptime)
             isExpanded = true
             serviceNativeTarget()
         } catch { notice = error.localizedDescription }
@@ -268,9 +217,8 @@ struct FocusRackPendingCapture {
     func selectNativeTarget(_ mark: NativeAFMark, delayed: Bool) {
         guard mode == .nativeAF, nativeAFBlocker == nil, !nativeAFBusy else { return }
         do {
-            let request = try nativeRack.request(
+            _ = try nativeRack.request(
                 mark, now: ProcessInfo.processInfo.systemUptime, delayed: delayed)
-            traceNativeAF("targetRequested", request: request)
             notice = nil
             serviceNativeTarget()
         } catch { notice = error.localizedDescription }
@@ -289,14 +237,10 @@ struct FocusRackPendingCapture {
     }
 
     func cancelNativeTarget() {
-        let request = nativeRack.pendingRequest
-        let changed =
-            request != nil || nativeRack.selectingMark != nil || nativeRack.lastSelectedMark != nil
         nativeDelayTask?.cancel()
         nativeDelayTask = nil
         nativeDelayRemaining = 0
         nativeRack.cancel()
-        if changed { traceNativeAF("cancelled", request: request) }
     }
 
     private func serviceNativeTarget() {
@@ -314,14 +258,12 @@ struct FocusRackPendingCapture {
             return
         }
         if let reason = nativeAFBlocker {
-            traceNativeAF("admissionRefused", request: due, message: reason)
             cancelNativeTarget()
             notice = reason
             return
         }
         do {
             let request = try nativeRack.beginDispatch(id: due.id, at: now)
-            traceNativeAF("dispatch", request: request)
             if let model {
                 if !model.queueNativeAFTarget(request) {
                     nativeTargetFailed(
@@ -336,32 +278,23 @@ struct FocusRackPendingCapture {
     }
 
     func nativeTargetCompleted(_ id: UInt64) {
-        guard let request = nativeRack.dispatchedRequest, request.id == id else { return }
+        guard nativeRack.dispatchedRequest?.id == id else { return }
         guard nativeWriteAuthority?.isAdmitted == true else {
             _ = nativeRack.fail(id: id)
             nativeWriteAuthority = nil
-            traceNativeAF("completionRetired", request: request)
             return
         }
         if nativeRack.complete(id: id) {
             nativeWriteAuthority = nil
             notice = nil
-            traceNativeAF("targetAcknowledged", request: request)
         }
     }
 
     func nativeTargetFailed(_ id: UInt64, message: String) {
-        let request = nativeRack.dispatchedRequest
         if nativeRack.fail(id: id) {
             nativeWriteAuthority = nil
             notice = message
-            traceNativeAF("error", request: request, message: message)
         }
-    }
-
-    func nativeTargetCommandStarted(_ id: UInt64) {
-        guard let request = nativeRack.dispatchedRequest, request.id == id else { return }
-        traceNativeAF("commandStarted", request: request)
     }
 
     func nativeRecordingChanged() {
@@ -370,47 +303,6 @@ struct FocusRackPendingCapture {
             cancelNativeTarget()
             revokeNativeTargetAuthority()
         }
-        traceNativeAF("recordingChanged")
-    }
-
-    private func traceNativeAF(
-        _ event: String, request: NativeAFRequest? = nil, mark: NativeAFMark? = nil,
-        message: String? = nil
-    ) {
-        #if DEBUG
-            let context = model?.focusRackObservation()
-            nativeTraceEvents.append(
-                .init(
-                    time: ProcessInfo.processInfo.systemUptime, event: event,
-                    requestID: request?.id, mark: request?.mark ?? mark, point: request?.point,
-                    dueAt: request?.dueAt, targetA: nativeRack.target(for: .a),
-                    targetB: nativeRack.target(for: .b), selectingMark: nativeRack.selectingMark,
-                    pendingRequestID: nativeRack.pendingRequest?.id,
-                    dispatchedRequestID: nativeRack.dispatchedRequest?.id,
-                    lastSelectedMark: nativeRack.lastSelectedMark,
-                    startDelay: nativeRack.startDelay,
-                    mode: mode, afSettings: model?.nativeAFTraceSettings,
-                    recording: nativeIsRecording,
-                    focusPointLocked: nativeFocusPointLocked,
-                    interfaceLocked: model?.interfaceLocked == true,
-                    focusResult: context?.focusResult,
-                    message: message.map { _ in "Native AF request failed." }))
-            if nativeTraceEvents.count > 128 {
-                nativeTraceEvents.removeFirst()
-                nativeTraceOmitted += 1
-            }
-            let trace = NativeAFTrace(events: nativeTraceEvents, omittedEvents: nativeTraceOmitted)
-            guard
-                let directory = FileManager.default.urls(
-                    for: .documentDirectory, in: .userDomainMask
-                ).first
-            else { return }
-            let url = directory.appendingPathComponent("focus-rack-native-af.json")
-            nativeTraceTask?.cancel()
-            nativeTraceTask = Task {
-                try? await FocusRackDiagnosticWriter.shared.write(trace, to: url)
-            }
-        #endif
     }
 
     func admitNativeTarget(_ id: UInt64) -> FocusRackAuthority? {
@@ -477,12 +369,6 @@ struct FocusRackPendingCapture {
     }
 
     #if DEBUG
-        /// A camera-free assertion over the same bounded evidence exported to Documents.
-        func debugNativeAFTraceData() throws -> Data {
-            try JSONEncoder().encode(
-                NativeAFTrace(events: nativeTraceEvents, omittedEvents: nativeTraceOmitted))
-        }
-
         /// Injects a SIMULATED held driver without starting a camera observer.
         func debugBindController(_ controller: FocusRackController) { self.controller = controller }
 
@@ -527,23 +413,7 @@ struct FocusRackPendingCapture {
             let states = await controller.states()
             for await state in states {
                 guard let self, self.controller === controller, !Task.isCancelled else { return }
-                #if DEBUG
-                    self.present(state) { [weak self] in
-                        let trace = await controller.diagnostics()
-                        guard let self, self.controller === controller, !Task.isCancelled else {
-                            return
-                        }
-                        if let directory = FileManager.default.urls(
-                            for: .documentDirectory, in: .userDomainMask
-                        ).first {
-                            try? await FocusRackDiagnosticWriter.shared.write(
-                                trace,
-                                to: directory.appendingPathComponent("focus-rack-production.json"))
-                        }
-                    }
-                #else
-                    self.present(state)
-                #endif
+                self.present(state)
                 if !state.busy, let checkpoint = await controller.calibrationCheckpoint() {
                     guard self.controller === controller, !Task.isCancelled else { return }
                     if checkpoint != self.persistedCalibration {
@@ -575,22 +445,13 @@ struct FocusRackPendingCapture {
         }
     }
 
-    /// Publishes controls immediately; diagnostic export cannot hold or replace UI state.
-    func present(
-        _ state: FocusRackState, exportDiagnostics: (@MainActor () async -> Void)? = nil
-    ) {
-        let shouldExport =
-            !state.busy
-            && (self.state?.busy == true || self.state?.transition != state.transition)
+    /// Publishes the controller state and reconciles accepted mark thumbnails.
+    func present(_ state: FocusRackState) {
         self.state = state
         if !state.busy { stopPending = false }
         attachPendingCapture(to: state)
         thumbnails = thumbnails.filter { id, thumbnail in
             state.captures.contains { $0.markID == id && $0.revision == thumbnail.revision }
-        }
-        if shouldExport, let exportDiagnostics {
-            diagnosticTask?.cancel()
-            diagnosticTask = Task { await exportDiagnostics() }
         }
     }
 
@@ -652,7 +513,6 @@ struct FocusRackPendingCapture {
         revokeAFWrite()
         if let request = nativeRack.dispatchedRequest { _ = nativeRack.fail(id: request.id) }
         nativeWriteAuthority = nil
-        traceNativeAF("sessionRetired")
         afSettings.abandon()
         afSetupManualChanges.removeAll()
         afSetupRequested = isActive && storesTemplates
@@ -666,8 +526,6 @@ struct FocusRackPendingCapture {
         let previous = controller
         controller = nil
         stateTask?.cancel()
-        diagnosticTask?.cancel()
-        diagnosticTask = nil
         observations?.finish()
         observations = nil
         observationTask?.cancel()
