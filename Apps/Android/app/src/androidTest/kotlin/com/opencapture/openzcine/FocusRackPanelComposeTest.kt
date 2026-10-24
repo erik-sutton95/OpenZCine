@@ -58,6 +58,74 @@ class FocusRackPanelComposeTest {
 
     @Before fun landscapeFirst() { compose.settleLandscape() }
 
+    @Test fun nativeSavedStateAndUnavailableActionsAreExplicitForZeroOneAndTwoTargets() {
+        val state = mutableStateOf(ready().copy(focusMode = "nativeAF",
+            nativeAF = NativeAFRackViewState(canSet = true)))
+        val actions = Actions()
+        mount(state, actions)
+        compose.onNodeWithTag("focusRack.nativeAF.saved.A").assertTextEquals("A not set").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.nativeAF.saved.B").assertTextEquals("B not set").assertIsDisplayed()
+        for (mark in listOf("A", "B")) compose.onNodeWithTag("focusRack.nativeAF.go.$mark")
+            .assertIsDisplayed().assertIsNotEnabled().insideFrame()
+        for (direction in listOf("aToB", "bToA")) compose.onNodeWithTag("focusRack.nativeAF.run.$direction").assertIsNotEnabled()
+        compose.saveLandscapeEvidence("native-af-zero-targets-landscape")
+        compose.runOnIdle { state.value = state.value.copy(nativeAF = state.value.nativeAF.copy(
+            hasA = true, canGoToA = true, message = "Camera did not accept target A.")) }
+        compose.onNodeWithTag("focusRack.nativeAF.saved.A").assertTextEquals("✓ A set").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.nativeAF.saved.B").assertTextEquals("B not set")
+        compose.onNodeWithTag("focusRack.nativeAF.go.A").assertIsEnabled()
+        compose.onNodeWithTag("focusRack.nativeAF.go.B").assertIsNotEnabled()
+        compose.onNodeWithTag("focusRack.nativeAF.run.aToB").assertIsNotEnabled()
+        compose.saveLandscapeEvidence("native-af-one-target-landscape")
+        compose.runOnIdle { state.value = state.value.copy(nativeAF = state.value.nativeAF.copy(
+            hasB = true, canGoToB = true, canRun = true, message = "Target B selected")) }
+        compose.onNodeWithTag("focusRack.nativeAF.saved.B").assertTextEquals("✓ B set").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.nativeAF.go.B").assertIsEnabled()
+        compose.onNodeWithTag("focusRack.nativeAF.run.aToB").assertIsEnabled()
+        compose.onNodeWithTag("focusRack.nativeAF.run.bToA").assertIsEnabled()
+        assertTrue(actions.nativeGoes.isEmpty())
+        assertTrue(actions.nativeRuns.isEmpty())
+        compose.saveLandscapeEvidence("native-af-two-targets-landscape")
+    }
+
+    @Test fun nativePointLockRecoveryRequiresAnExplicitActionAndRespectsInterfaceLock() {
+        val state = mutableStateOf(ready().copy(focusMode = "nativeAF",
+            nativeAFDisabledReason = "Unlock the focus point before selecting a new target.",
+            nativeAF = NativeAFRackViewState(hasA = true, hasB = true, canSet = true, canGoToA = true,
+                canGoToB = true, canRun = true, message = "Unlock the focus point before selecting a new target.")))
+        val pointLocked = mutableStateOf(true)
+        val interfaceUnlocked = mutableStateOf(true)
+        val actions = Actions()
+        mount(state, actions, setupEnabled = { interfaceUnlocked.value },
+            nativePointLocked = { pointLocked.value }, onUnlockNativeFocusPoint = { pointLocked.value = false })
+        compose.onNodeWithTag("focusRack.nativeAF.unlock").assertIsDisplayed().assertIsEnabled().insideFrame()
+        compose.onNodeWithTag("focusRack.nativeAF.set.A").assertIsNotEnabled()
+        compose.onNodeWithTag("focusRack.nativeAF.go.A").assertIsNotEnabled()
+        compose.onNodeWithTag("focusRack.nativeAF.run.aToB").assertIsNotEnabled()
+        compose.saveLandscapeEvidence("native-af-point-locked-landscape")
+        compose.runOnIdle { interfaceUnlocked.value = false }
+        compose.onNodeWithTag("focusRack.nativeAF.unlock").assertIsNotEnabled().performClick()
+        assertEquals(0, actions.nativeUnlocks)
+        compose.runOnIdle { interfaceUnlocked.value = true }
+        compose.onNodeWithTag("focusRack.nativeAF.unlock").assertIsEnabled().performClick()
+        compose.onNodeWithTag("focusRack.nativeAF.unlock").assertDoesNotExist()
+        assertEquals(1, actions.nativeUnlocks)
+        assertTrue(actions.nativeSets.isEmpty())
+        assertTrue(actions.nativeGoes.isEmpty())
+        assertTrue(actions.nativeRuns.isEmpty())
+    }
+
+    @Test fun compactNativePointLockRecoveryFitsWithoutFocusBoxes() {
+        val state = mutableStateOf(ready().copy(focusMode = "nativeAF",
+            nativeAF = NativeAFRackViewState(message = "Focus point locked")))
+        val actions = Actions()
+        mount(state, actions, compact = true, maximumHeight = 112f, nativePointLocked = { true })
+        compose.onNodeWithTag("focusRack.nativeAF.unlock").assertIsDisplayed().assertIsEnabled().insideFrame().performClick()
+        assertEquals(1, actions.nativeUnlocks)
+        compose.onNodeWithTag("focusRack.nativeAF.run.aToB").assertDoesNotExist()
+        compose.saveLandscapeEvidence("native-af-compact-point-locked-landscape")
+    }
+
     @Test fun nativeModeOffersTargetsDelayAndDirectionalActionsWithoutTimedControls() {
         val state = mutableStateOf(ready().copy(canChangeFocusMode = true,
             nativeAF = NativeAFRackViewState(canSet = true)))
@@ -421,11 +489,15 @@ class FocusRackPanelComposeTest {
 
     @Test fun plannedTimedDurationIsVisibleWithoutDisablingTheRequestedPull() {
         val state = mutableStateOf(ready().copy(duration = 3.0, estimatedDuration = 3.4,
+            timingWarning = "Camera cadence is slower; this pull may exceed 3 s.",
             pullAToB = FocusRackActionViewState("Rehearse A→B", "3 s target · ~3.4 s estimated", true)))
         mount(state, Actions())
         compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled().assertIsDisplayed().insideFrame()
         compose.onNodeWithTag("focusRack.estimate").performScrollTo()
             .assertTextEquals("3 s target · ~3.40 s estimated").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.timingWarning").performScrollTo()
+            .assertTextEquals("Camera cadence is slower; this pull may exceed 3 s.").assertIsDisplayed().insideFrame()
+        compose.onNodeWithTag("focusRack.pull.aToB").assertIsEnabled()
         compose.saveLandscapeEvidence("timed-rack-planned-estimate-landscape")
     }
 
@@ -647,6 +719,7 @@ class FocusRackPanelComposeTest {
         compact: Boolean = false, maximumHeight: Float = 320f,
         templates: List<FocusRackTimingViewState> = emptyList(),
         setupEnabled: () -> Boolean = { true }, updateTiming: Boolean = false,
+        nativePointLocked: () -> Boolean = { false }, onUnlockNativeFocusPoint: () -> Unit = {},
     ) {
         compose.setContent {
             MaterialTheme {
@@ -680,7 +753,8 @@ class FocusRackPanelComposeTest {
                             onFocusMode = { mode -> state.value = state.value.copy(focusMode = mode) },
                             onNativeSet = { actions.nativeSets += it }, onNativeGo = { actions.nativeGoes += it },
                             onNativeRun = { actions.nativeRuns += it }, onNativeCancel = { actions.nativeCancels++ },
-                            onNativeDelay = { actions.nativeDelays += it })
+                            onNativeDelay = { actions.nativeDelays += it }, nativeAFPointLocked = nativePointLocked(),
+                            onUnlockNativeFocusPoint = { actions.nativeUnlocks++; onUnlockNativeFocusPoint() })
                     }
                 }
             }
@@ -737,6 +811,7 @@ class FocusRackPanelComposeTest {
         val nativeRuns = mutableListOf<String>()
         val nativeDelays = mutableListOf<String>()
         var nativeCancels = 0
+        var nativeUnlocks = 0
         val captures = mutableListOf<String>()
         val goes = mutableListOf<String>()
         val runs = mutableListOf<String>()
