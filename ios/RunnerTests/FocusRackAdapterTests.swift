@@ -508,6 +508,53 @@ struct FocusRackAdapterTests {
         rack.cancelNativeTarget()
     }
 
+    @Test("Explicit Native selection releases only the point lock and does not select a target")
+    func nativeModeReleasesThePointLock() {
+        let (model, rack) = nativeFixture()
+        rack.selectMode(.timedRack)
+        model.focusPointLocked = true
+        let revision = model.focusRackObservation().externalFocusRevision
+        rack.selectMode(.nativeAF)
+        #expect(!model.focusPointLocked)
+        #expect(!model.interfaceLocked)
+        #expect(rack.nativeRack.pendingRequest == nil)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+        #expect(model.focusRackObservation().externalFocusRevision == revision)
+
+        model.focusPointLocked = true
+        rack.selectMode(.nativeAF)
+        #expect(model.focusPointLocked)
+        rack.unlockNativeFocusPoint()
+        #expect(!model.focusPointLocked)
+
+        rack.selectMode(.timedRack)
+        model.focusPointLocked = true
+        model.interfaceLocked = true
+        rack.selectMode(.nativeAF)
+        #expect(model.interfaceLocked && model.focusPointLocked)
+    }
+
+    @Test("Native point unlock works without AF boxes and never bypasses the interface lock")
+    func nativePointUnlockNeedsNoCameraBox() {
+        let (model, rack) = nativeFixture()
+        model.liveViewFocus = nil
+        model.focusPointLocked = true
+        #expect(rack.nativeFocusPointLocked && rack.canUnlockNativeFocusPoint)
+        model.interfaceLocked = true
+        rack.unlockNativeFocusPoint()
+        #expect(model.focusPointLocked)
+        #expect(!rack.canUnlockNativeFocusPoint)
+        model.interfaceLocked = false
+        rack.unlockNativeFocusPoint()
+        #expect(!model.focusPointLocked)
+        #expect(model.liveViewFocus == nil)
+        #expect(rack.nativeRack.target(for: .a) == nil)
+        #expect(rack.nativeRack.target(for: .b) == nil)
+        #expect(rack.nativeRack.dispatchedRequest == nil)
+        #expect(rack.nativeRack.lastSelectedMark == nil)
+    }
+
     @Test("Native diagnostics stay bounded and contain no camera identity or images")
     func nativeDiagnosticsAreBounded() throws {
         let rack = FocusRackModel(fixture: .initial)
@@ -904,7 +951,9 @@ struct FocusAFSettingsAdapterTests {
             model.debugAdoptEstablishedMediaSession(nil)
             native.close()
         }
+        model.focusPointLocked = true
         rack.selectMode(.nativeAF)
+        #expect(!model.focusPointLocked)
         for _ in 0..<3 {
             model.debugSeedFocusAF(recording: false)
             #expect(await model.debugServiceFocusAFSettings())

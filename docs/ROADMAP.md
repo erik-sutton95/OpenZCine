@@ -137,7 +137,9 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   Local work adds Native AF picture A/B targets, immediate selection and delayed directional
   actions alongside Timed Rack, with camera-set AF speed and separate movement authority on both
   shells. Timed duration targets retain their requested value while showing a longer execution
-  estimate when needed; the 3-second target preserves the accepted finer movement family.
+  estimate when needed; runtime overruns warn and extend playback, and the 3-second target
+  preserves the accepted finer movement family. Native AF shows saved targets and visible
+  point-lock recovery.
   The coarse profile failed source smoothness; finer iPhone USB trials passed isolated source
   checks and four repeated round trips. Further physical testing ended at the operator's request;
   the remaining qualification matrix is explicitly open.

@@ -1465,6 +1465,12 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         let setA = app.buttons["focusControl.nativeAF.set.A"]
         XCTAssertTrue(setA.waitForExistence(timeout: 5))
         XCTAssertTrue(setA.isHittable)
+        XCTAssertTrue(setA.label.contains("A not set"))
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.set.B"].label.contains("B not set"))
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.go.A"].isEnabled)
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.go.B"].isEnabled)
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.pull.aToB"].isEnabled)
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.pull.bToA"].isEnabled)
         screenshot("native-af-empty-targets-landscape")
         setA.tap()
         XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
@@ -1476,12 +1482,19 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             for: NSPredicate(format: "label == %@", "Target A selected."),
             evaluatedWith: instruction)
         wait(for: [selectedA], timeout: 5)
+        XCTAssertTrue(setA.label.contains("A set"))
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.go.A"].isEnabled)
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.go.B"].isEnabled)
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.pull.aToB"].isEnabled)
+        screenshot("native-af-only-a-set-landscape")
         app.buttons["focusControl.nativeAF.set.B"].tap()
+        XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
         app.coordinate(withNormalizedOffset: .init(dx: 0.65, dy: 0.65)).tap()
         let selectedB = expectation(
             for: NSPredicate(format: "label == %@", "Target B selected."),
             evaluatedWith: instruction)
         wait(for: [selectedB], timeout: 5)
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.set.B"].label.contains("B set"))
         let forward = app.buttons["focusControl.nativeAF.pull.aToB"]
         scrollTo(forward, in: app)
         XCTAssertTrue(forward.isEnabled)
@@ -1502,6 +1515,56 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         XCTAssertTrue(app.buttons["focusControl.nativeAF.pull.aToB"].waitForExistence(timeout: 3))
         XCTAssertTrue(instruction.label == "Choose a target or run an A/B transition.")
         assertTransport(app)
+    }
+
+    func testNativePointLockIsVisibleAndRecoverableInLandscape() {
+        let app = launch("ready", extra: ["ZC_DEMO_FOCUSLOCK": "1"])
+        app.buttons["focusControl.modePicker"].tap()
+        app.buttons["Native AF"].tap()
+        let setA = app.buttons["focusControl.nativeAF.set.A"]
+        XCTAssertTrue(setA.waitForExistence(timeout: 5))
+        XCTAssertTrue(setA.isEnabled)
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.unlock"].exists)
+        let picture = app.coordinate(withNormalizedOffset: .init(dx: 0.25, dy: 0.55))
+        picture.press(forDuration: 0.6)
+        let unlock = app.buttons["focusControl.nativeAF.unlock"]
+        XCTAssertTrue(unlock.waitForExistence(timeout: 3))
+        XCTAssertTrue(unlock.isEnabled && unlock.isHittable)
+        XCTAssertFalse(setA.isEnabled)
+        assertTransport(app)
+        screenshot("native-af-point-lock-unlock-landscape")
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
+        assertTransport(app)
+        screenshot("native-af-point-lock-compact-landscape")
+        unlock.tap()
+        app.buttons["focusRack.expand"].tap()
+        XCTAssertTrue(setA.isEnabled)
+        XCTAssertTrue(setA.label.contains("A not set"))
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.go.A"].isEnabled)
+        screenshot("native-af-point-unlocked-landscape")
+    }
+
+    func testTimingWarningsKeepPlaybackAndStopAvailableInLandscape() {
+        for fixture in ["overrun", "overrunMoving"] {
+            let app = launch(fixture)
+            let warning = app.staticTexts["focusRack.timingWarning"]
+            XCTAssertTrue(warning.waitForExistence(timeout: 5))
+            XCTAssertTrue(warning.isHittable)
+            if fixture == "overrun" {
+                XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
+            } else {
+                XCTAssertTrue(app.buttons["focusRack.stop"].isEnabled)
+            }
+            assertTransport(app)
+            screenshot("timed-rack-\(fixture)-landscape")
+            app.buttons["focusRack.expand"].tap()
+            XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
+            XCTAssertTrue(warning.isHittable)
+            assertTransport(app)
+            screenshot("timed-rack-\(fixture)-compact-landscape")
+            app.terminate()
+        }
     }
 
     func testExplicitCalibrationIsVisibleInLandscapeOptions() {
@@ -1947,6 +2010,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         let app = XCUIApplication()
         app.launchEnvironment["ZC_DEMO_AUTOSTART"] = "1"
         app.launchEnvironment["ZC_DEMO_FOCUS_RACK"] = fixture
+        app.launchEnvironment["ZC_DEMO_ORIENTATION"] = "landscapeLeft"
         for (key, value) in extra { app.launchEnvironment[key] = value }
         app.launch()
         let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
@@ -1970,10 +2034,20 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
                     "focusRack.compact")
             ).firstMatch
         XCTAssertTrue(expected.waitForExistence(timeout: 20))
+        let landscape = expectation(
+            for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+        wait(for: [landscape], timeout: 8)
         return app
     }
 
     private func assertTransport(_ app: XCUIApplication) {
+        let unlock = app.buttons["focusControl.nativeAF.unlock"]
+        if unlock.exists {
+            XCTAssertTrue(unlock.isHittable)
+            XCTAssertTrue(app.frame.contains(unlock.frame))
+            XCTAssertGreaterThanOrEqual(unlock.frame.height, 44)
+            return
+        }
         let stop = app.buttons["focusRack.stop"]
         if stop.exists {
             XCTAssertTrue(stop.isHittable)

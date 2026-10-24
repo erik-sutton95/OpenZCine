@@ -171,6 +171,9 @@ enum DemoHarness {
             }
             if fixture == "setupChanged" {
                 state.message = "Camera setup changed. Check A and B; reset marks if needed."
+            } else if fixture == "overrun" {
+                state.estimatedDuration = 3.39
+                state.timingWarning = "Timing target exceeded. The pull will continue."
             } else if fixture == "timing" {
                 state.admissionMessage = "Increase duration to at least 16.61s for these marks."
                 state.minimumDuration = 16.61
@@ -185,8 +188,12 @@ enum DemoHarness {
                 state.primary = .init(
                     kind: "run", title: "Run A→B", enabled: true,
                     detail: state.transition.playbackDetail)
-            } else if fixture == "moving" || fixture == "paused" {
+            } else if fixture == "moving" || fixture == "paused" || fixture == "overrunMoving" {
                 state.phase = fixture == "moving" ? .moving : .paused
+                if fixture == "overrunMoving" {
+                    state.phase = .moving
+                    state.timingWarning = "Timing target exceeded. Continuing to B."
+                }
                 state.busy = true
                 state.completedSteps = 8
                 state.totalSteps = 20
@@ -197,12 +204,12 @@ enum DemoHarness {
                 state.capabilities.canEditTiming = false
                 state.capabilities.canGoToA = false
                 state.capabilities.canGoToB = false
-                state.capabilities.canPause = fixture == "moving"
+                state.capabilities.canPause = fixture != "paused"
                 state.capabilities.canResume = fixture == "paused"
                 state.capabilities.canStop = true
                 state.primary = .init(
-                    kind: fixture == "moving" ? "pause" : "resume",
-                    title: fixture == "moving" ? "Pause" : "Resume", enabled: true)
+                    kind: fixture != "paused" ? "pause" : "resume",
+                    title: fixture != "paused" ? "Pause" : "Resume", enabled: true)
             } else if fixture == "uncertain" || fixture == "reference" {
                 state.phase = fixture == "uncertain" ? .stopUnconfirmed : .uncertain
                 state.stepPosition = nil

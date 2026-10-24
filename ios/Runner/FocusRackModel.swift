@@ -36,6 +36,8 @@ import os
         let mode: FocusControlMode
         let afSettings: FocusAFSettingsValues?
         let recording: Bool
+        let focusPointLocked: Bool
+        let interfaceLocked: Bool
         let focusResult: String?
         let message: String?
     }
@@ -187,6 +189,20 @@ struct FocusRackPendingCapture {
     }
 
     var nativeIsRecording: Bool { model?.isRecording ?? false }
+
+    var nativeFocusPointLocked: Bool { model?.focusPointLocked == true }
+
+    var canUnlockNativeFocusPoint: Bool {
+        isActive && mode == .nativeAF && model?.interfaceLocked != true && !nativeAFBusy
+    }
+
+    /// Releases only the app's point lock. Target selection still needs a separate action.
+    func unlockNativeFocusPoint() {
+        guard canUnlockNativeFocusPoint else { return }
+        model?.focusPointLocked = false
+        notice = nil
+        traceNativeAF("focusPointUnlocked")
+    }
 
     var nativeAFInstruction: String {
         if let reason = nativeAFBlocker { return reason }
@@ -373,7 +389,10 @@ struct FocusRackPendingCapture {
                     lastSelectedMark: nativeRack.lastSelectedMark,
                     startDelay: nativeRack.startDelay,
                     mode: mode, afSettings: model?.nativeAFTraceSettings,
-                    recording: nativeIsRecording, focusResult: context?.focusResult,
+                    recording: nativeIsRecording,
+                    focusPointLocked: nativeFocusPointLocked,
+                    interfaceLocked: model?.interfaceLocked == true,
+                    focusResult: context?.focusResult,
                     message: message.map { _ in "Native AF request failed." }))
             if nativeTraceEvents.count > 128 {
                 nativeTraceEvents.removeFirst()
@@ -405,12 +424,16 @@ struct FocusRackPendingCapture {
 
     func selectMode(_ selected: FocusControlMode) {
         guard canChangeMode else { return }
+        let enteringNative = mode == .timedRack && selected == .nativeAF
         cancelNativeTarget()
         afSetupManualChanges.removeAll()
         retirePresentation()
         authority.update(false)
         controller?.suspend()
         mode = selected
+        if enteringNative, nativeFocusPointLocked, model?.interfaceLocked != true {
+            unlockNativeFocusPoint()
+        }
         notice = nil
         waitForFocusStop(setupAfterStop: true)
         publishObservation()

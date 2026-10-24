@@ -26,6 +26,11 @@ the source or changes recording automatically. **Cancel delay** discards unsent 
 does not promise to stop the camera's continuous AF after a target request has been sent.
 Target coordinates use the camera picture, so rotating or mirroring the monitor does not reverse
 them. A mode or lifecycle interruption cancels unsent work while retaining the saved targets.
+Each target explicitly shows **A set / B set** or **not set**. Go requires its saved target;
+directional transitions require both. Unavailable actions remain visible with a dimmed appearance.
+Switching from Timed Rack to Native AF releases the app's focus-point lock so the picture can accept targets.
+If the point is locked again, **Unlock focus point** is available in the panel, even without an AF
+box. Unlocking does not select a target, move focus, or release the main interface lock.
 
 Native AF uses the camera's existing **g6 AF speed**. It has no exact-duration selector or MF
 calibration requirement: the camera determines the transition and whether it acquires the subject.
@@ -35,7 +40,7 @@ current protocol implementation. **Focus settings** remains an optional secondar
 of roughly five seconds; the near bedpost needed retries. This does not promise exact 1/3/6-second
 moves or reliable acquisition of every subject.
 
-**Timed Rack** retains the existing mark, planner, cancellation, readiness, freshness and timing
+**Timed Rack** retains the existing mark, planner, cancellation, readiness and freshness
 checks described below. Native AF revokes timed movement authority. A no-op setup retains timed
 marks; actual AF actions and AF-setting writes invalidate their relative reference through the
 existing external-focus path. Before returning to timed playback, set fresh marks if focus moved
@@ -85,7 +90,8 @@ Set **Duration** and **Start delay** in the same panel, then use **Rehearse A→
 remain visible and show the selected pull duration. There is no separate direction or
 Fastest/Timed selector. Defaults are three seconds, zero delay and Linear. The panel currently offers
 Linear only. Ease in-out remains readable in old templates, but loading them uses Linear while
-retaining their duration and delay. The timing and command-spacing checks remain enforced.
+retaining their duration and delay. Timing is a target; overruns are warnings, while cancellation,
+camera errors and safety admission remain enforced.
 
 The selected start mark must match the current position. **Go to A / Go to B**, labelled
 **Fast reposition**, are separate actions that ignore Duration and Delay. They remain available
@@ -111,11 +117,11 @@ the ledger advances.
 
 Timing admission budgets each command size and the final completion cost. An unmeasured size uses
 the session's worst observed command cost as an estimate until that size completes. Measured
-playback never invents timing for an unmeasured residual. The command sequence and read windows
-are fixed before movement; runtime checks use that planned duration, rather than the nominal
-target. The controller halts on a missed execution budget instead of sending catch-up commands.
-The spacing guard also rejects sparse coarse schedules like those that previously showed stepping
-in source recordings. Some durations can remain unsupported between the available profiles.
+playback never invents timing for an unmeasured residual. The command sequence is fixed before
+movement. If a command, host wake or safety read runs late, the remaining schedule extends instead
+of compressing commands or stopping short. A separate timing warning reports the overrun and does
+not disable playback. Timing-only planning limits use a slower measured schedule and estimate.
+Required calibration, invalid marks, camera errors and unsafe context can still prevent movement.
 It is an experimental scheduling policy, not a measured lens encoder or a guarantee of optical
 smoothness. Requested duration, planned execution duration, and observed host command span remain
 distinct in diagnostics. None of them is a measurement of optical arrival. Very close marks may
@@ -134,10 +140,13 @@ Periodic reads may be deferred only when the complete remaining trajectory fits 
 2-second safety freshness limit, measured from the oldest preflight evidence. Longer pulls reserve
 the latest accepted read duration, with a 100ms floor; the reservation can grow during that run.
 This replaces admission based on the all-time slowest read, which could permanently disable pulls
-after an unrelated idle stall. Historical read costs remain in the trace. The fixed plan is checked
-again after preflight, without replanning or relaxing native command costs. A maintenance read
-must drain before another focus command; if it misses that command's deadline, the run fails
-without catch-up movement. Stop remains immediate while a read is outstanding. Countdown and
+after an unrelated idle stall. Historical read costs remain in the trace. Planning uses the latest
+preflight evidence before the first movement command. A maintenance read must drain before another
+focus command; a successful late read extends the schedule. Additional serialized reads refresh
+safety evidence when needed. Expiry of the previous reading while its replacement is pending
+waits for that read rather than ending the pull. No movement starts until its result is accepted;
+failed or stale safety evidence still prevents the next activation.
+Stop remains immediate while a read is outstanding. Countdown and
 paused runs retain periodic checks, and acknowledged pauses extend the same timing epoch.
 
 A later Mac USB trial at 70mm/f2.8 used twelve 80-pulse commands over the same 60-unit span:
@@ -151,8 +160,8 @@ A wider Mac USB source comparison at the same zoom/aperture used fresh A0/B−13
 (2160 pulses). The 144-pulse profile completed at 0.996s/1.001s; the 192-pulse profile at
 0.998s/1.002s. The operator judged both smooth with matching endpoints and preferred 144 pulses.
 The planner therefore prefers the smaller feasible profile, retaining 192 when the measured budget
-needs it. The latest 144-pulse cost budgets 1.003125s for fifteen commands, so a strict 1s request
-must choose a feasible larger profile or refuse. This source comparison does not establish phone
+needs it. The recorded 144-pulse cost budget was 1.003125s for fifteen commands. The current target
+policy permits a longer estimate rather than refusing for this overrun. This source comparison does not establish phone
 cadence, repeated returns or other zoom/lens combinations.
 
 A local Mac USB trial at 70mm/f2.8 completed one 60-unit round trip with 48-pulse commands at

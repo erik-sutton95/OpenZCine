@@ -245,7 +245,25 @@ struct FocusRackView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("focusControl.nativeAF.instruction")
             }
-            if rack.nativeRack.selectingMark != nil {
+            if rack.nativeFocusPointLocked {
+                Button {
+                    rack.unlockNativeFocusPoint()
+                } label: {
+                    Text("Unlock focus point")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 7))
+                .disabled(!allowsSetup || !rack.canUnlockNativeFocusPoint)
+                .accessibilityIdentifier("focusControl.nativeAF.unlock")
+                if !compact {
+                    HStack(spacing: 6) {
+                        nativeMark(.a)
+                        nativeMark(.b)
+                    }
+                }
+            } else if rack.nativeRack.selectingMark != nil {
                 Button("Cancel target selection") {
                     rack.cancelNativeTarget()
                     rack.isExpanded = true
@@ -317,32 +335,43 @@ struct FocusRackView: View {
     }
 
     private func nativeMark(_ mark: NativeAFMark) -> some View {
-        VStack(spacing: 4) {
+        let saved = rack.nativeRack.target(for: mark) != nil
+        let canSet = allowsSetup && rack.nativeAFBlocker == nil && !rack.nativeAFBusy
+        let canGo = canSet && saved
+        return VStack(spacing: 4) {
             Button {
                 rack.armNativeTarget(mark)
             } label: {
                 VStack(spacing: 1) {
-                    Text("Set " + mark.rawValue).fontWeight(.semibold)
-                    Text(
-                        rack.nativeRack.target(for: mark) == nil
-                            ? "Tap a subject" : "Replace target"
-                    )
-                    .font(.system(size: 10))
+                    HStack(spacing: 4) {
+                        Text(mark.rawValue + (saved ? " set" : " not set"))
+                            .fontWeight(.semibold)
+                        if saved {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    Text(saved ? "Replace target" : "Set target").font(.system(size: 10))
                 }
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
             }
+            .foregroundStyle(.white.opacity(canSet ? 1 : 0.35))
+            .background(.white.opacity(canSet ? 0.1 : 0.03), in: RoundedRectangle(cornerRadius: 6))
+            .disabled(!canSet)
+            .accessibilityValue(saved ? "Target saved" : "Target not set")
             .accessibilityIdentifier("focusControl.nativeAF.set." + mark.rawValue)
             Button("Go to " + mark.rawValue) {
                 rack.selectNativeTarget(mark, delayed: false)
             }
             .frame(maxWidth: .infinity, minHeight: 44)
-            .disabled(rack.nativeRack.target(for: mark) == nil)
+            .foregroundStyle(.white.opacity(canGo ? 1 : 0.3))
+            .background(.white.opacity(canGo ? 0.16 : 0.03), in: RoundedRectangle(cornerRadius: 6))
+            .disabled(!canGo)
             .accessibilityIdentifier("focusControl.nativeAF.go." + mark.rawValue)
         }
         .buttonStyle(.plain)
-        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-        .disabled(!allowsSetup || rack.nativeAFBlocker != nil || rack.nativeAFBusy)
     }
 
     private var nativeTransport: some View {
@@ -350,6 +379,7 @@ struct FocusRackView: View {
             if rack.nativeRack.pendingRequest != nil {
                 Button("Cancel delay") { rack.cancelNativeTarget() }
                     .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 7))
                     .accessibilityIdentifier("focusControl.nativeAF.cancelDelay")
             } else {
                 nativePull("A→B", target: .b)
@@ -358,21 +388,22 @@ struct FocusRackView: View {
         }
         .buttonStyle(.plain)
         .font(.system(size: 12, weight: .semibold))
-        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
     }
 
     private func nativePull(_ direction: String, target: NativeAFMark) -> some View {
-        Button {
+        let enabled =
+            allowsSetup && rack.nativeAFBlocker == nil && !rack.nativeAFBusy
+            && rack.nativeRack.target(for: .a) != nil && rack.nativeRack.target(for: .b) != nil
+        return Button {
             rack.selectNativeTarget(target, delayed: true)
         } label: {
             Text("\(rack.nativeIsRecording ? "Run" : "Rehearse") \(direction)")
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
         }
-        .disabled(
-            !allowsSetup || rack.nativeAFBlocker != nil || rack.nativeAFBusy
-                || rack.nativeRack.target(for: .a) == nil || rack.nativeRack.target(for: .b) == nil
-        )
+        .foregroundStyle(.white.opacity(enabled ? 1 : 0.3))
+        .background(.white.opacity(enabled ? 0.16 : 0.03), in: RoundedRectangle(cornerRadius: 7))
+        .disabled(!enabled)
         .accessibilityHint("Selects the destination after the start delay. Recording is unchanged.")
         .accessibilityIdentifier("focusControl.nativeAF.pull." + (target == .b ? "aToB" : "bToA"))
     }
@@ -491,6 +522,11 @@ struct FocusRackView: View {
                 Text(instruction).font(.system(size: 11, weight: .medium))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("focusRack.recovery")
+            } else if compact, let warning = rack.state?.timingWarning {
+                Text(rack.state?.busy == true ? "Running late" : "Timing warning")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.orange)
+                    .accessibilityValue(warning)
+                    .accessibilityIdentifier("focusRack.timingWarning")
             } else if let state = rack.state {
                 Text(
                     rack.stopPending
@@ -538,6 +574,12 @@ struct FocusRackView: View {
 
     private var transport: some View {
         VStack(spacing: 4) {
+            if !compact, let warning = rack.state?.timingWarning {
+                Text(warning).font(.system(size: 11)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("focusRack.timingWarning")
+            }
             if showsStop && !compact && rack.state?.nudgeProgress == nil {
                 Text("Stop cancels focus movement only.")
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
