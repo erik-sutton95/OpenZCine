@@ -363,9 +363,8 @@ internal fun MonitorScreen(
     val rackFocusModeSelection = remember { java.util.concurrent.atomic.AtomicReference<String?>(null) }
     val rackOwner = session.focusRackConnectionOwner ?: 0L
     val focusRack = remember(session, rackOwner) {
-        FocusRackController(rackOwner, rackPreferences, rackScope, nativeCheckpoint = nativeRackCheckpoint, selectedFocusMode = rackFocusModeSelection, traceSink = { trace ->
-            java.io.File(appContext.filesDir, "focus-rack-production.json").writeText(trace)
-        })
+        FocusRackController(rackOwner, rackPreferences, rackScope,
+            nativeCheckpoint = nativeRackCheckpoint, selectedFocusMode = rackFocusModeSelection)
     }
     val rackState by focusRack.state.collectAsState()
     val rackThumbnails by focusRack.thumbnails.collectAsState()

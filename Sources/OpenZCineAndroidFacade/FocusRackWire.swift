@@ -163,7 +163,6 @@ public final class FocusRackWire: @unchecked Sendable {
         private let lock = NSLock()
         private var state: FocusRackState?
         private var error: String?
-        private var traceJSON: String?
         private var calibrationJSON: String?
         private var templates: [FocusRackTemplate] = []
         private var tail: Task<Void, Never>?
@@ -462,7 +461,7 @@ public final class FocusRackWire: @unchecked Sendable {
                 return
             }
             let timedIntent = ![
-                "poll", "observe", "diagnostics", "loadCalibration", "stop", "interrupt",
+                "poll", "observe", "loadCalibration", "stop", "interrupt",
                 "closePanel", "externalFocus", "nativeTargetFocus",
             ].contains(request.kind)
             if timedIntent
@@ -487,10 +486,6 @@ public final class FocusRackWire: @unchecked Sendable {
                 }
                 try await controller.loadCalibration(
                     FocusRackCalibrationCodec.decode(Data(json.utf8)))
-                return
-            case "diagnostics":
-                let data = try JSONEncoder().encode(await controller.diagnostics())
-                lock.withLock { traceJSON = String(data: data, encoding: .utf8) }
                 return
             case "poll", "observe":
                 if let observation { await controller.observe(observation) }
@@ -936,7 +931,6 @@ public final class FocusRackWire: @unchecked Sendable {
                     let error: String?
                     let templates: [FocusRackTemplate]
                     let templatesJSON: String
-                    let traceJSON: String?
                     let calibrationJSON: String?
                     let focusMode: FocusControlMode
                     let focusModeSwitchPending: Bool
@@ -973,7 +967,7 @@ public final class FocusRackWire: @unchecked Sendable {
                     let data = try? JSONEncoder().encode(
                         Reply(
                             state: projectedState, error: error,
-                            templates: templates, templatesJSON: json, traceJSON: traceJSON,
+                            templates: templates, templatesJSON: json,
                             calibrationJSON: calibrationJSON, focusMode: focusMode,
                             focusModeSwitchPending: modeSwitchPending,
                             canChangeFocusMode: !modeSwitchPending && afLease.pending == nil
@@ -997,7 +991,6 @@ public final class FocusRackWire: @unchecked Sendable {
                         ))
                 else { return nil }
                 if afEffectReady && afLease.pending != nil { afEffectOffered = true }
-                traceJSON = nil
                 return String(data: data, encoding: .utf8)
             }
         }

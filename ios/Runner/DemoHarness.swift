@@ -21,7 +21,6 @@ import os
 enum DemoHarness {
     /// SIMULATED product layouts, never connected to a camera driver.
     static let focusRackFixture = value("ZC_DEMO_FOCUS_RACK")
-    static let opensFocusRackFixture = value("ZC_DEMO_FOCUS_RACK_AUTOOPEN") != "0"
 
     // MARK: Hook registry — every env toggle, one place.
 
@@ -174,11 +173,6 @@ enum DemoHarness {
             } else if fixture == "overrun" {
                 state.estimatedDuration = 3.39
                 state.timingWarning = "Timing target exceeded. The pull will continue."
-            } else if fixture == "timing" {
-                state.admissionMessage = "Increase duration to at least 16.61s for these marks."
-                state.minimumDuration = 16.61
-                state.primary.enabled = false
-                state.primary.disabledReason = "Adjust timing"
             } else if fixture == "elsewhere" {
                 state.stepPosition = 10
                 state.primary = .init(

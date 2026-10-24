@@ -107,31 +107,21 @@ struct FocusRackAdapterTests {
         #expect(adapter.state?.transition.delay == 3)
     }
 
-    @Test("Delayed diagnostics cannot hold controls or restore an old session snapshot")
-    func diagnosticsNeverOwnPresentedState() async throws {
+    @Test("Idle controls publish immediately and session retirement clears the displayed state")
+    func controllerStateOwnsPresentation() {
         var busy = FocusRackState.initial
         busy.busy = true
         let adapter = FocusRackModel(fixture: busy)
         var idle = busy
         idle.busy = false
-        var release: CheckedContinuation<Void, Never>?
-        var exported = false
-        adapter.present(idle) {
-            await withCheckedContinuation { release = $0 }
-            exported = true
-        }
+        adapter.present(idle)
         #expect(adapter.state?.busy == false)
-        for _ in 0..<100 where release == nil { await Task.yield() }
-        let pending = try #require(release)
         idle.transition.duration = 1
         idle.updateTimedActions(recording: false, ready: true)
         adapter.present(idle)
         #expect(adapter.state?.transition.duration == 1)
         #expect(adapter.state?.pullAToB?.detail == "1 s pull")
         adapter.sessionChanged()
-        pending.resume()
-        for _ in 0..<100 where !exported { await Task.yield() }
-        #expect(exported)
         #expect(adapter.state == nil)
     }
 
@@ -555,23 +545,6 @@ struct FocusRackAdapterTests {
         #expect(rack.nativeRack.lastSelectedMark == nil)
     }
 
-    @Test("Native diagnostics stay bounded and contain no camera identity or images")
-    func nativeDiagnosticsAreBounded() throws {
-        let rack = FocusRackModel(fixture: .initial)
-        rack.selectMode(.nativeAF)
-        for _ in 0..<140 { rack.armNativeTarget(.a) }
-        let data = try rack.debugNativeAFTraceData()
-        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let events = try #require(json["events"] as? [[String: Any]])
-        #expect(events.count == 128)
-        #expect(json["omittedEvents"] as? Int == 12)
-        let encoded = String(decoding: data, as: UTF8.self)
-        #expect(!encoded.contains("serialNumber"))
-        #expect(!encoded.contains("image"))
-        #expect(data.count < 100_000)
-        rack.cancelNativeTarget()
-    }
-
     private func nativeFixture() -> (NativeAppModel, FocusRackModel) {
         let model = NativeAppModel()
         model.isDemoSession = true
@@ -639,10 +612,6 @@ struct FocusAFSettingsAdapterTests {
         #expect(await service.value)
         #expect(rack.nativeRack.dispatchedRequest == nil)
         #expect(rack.nativeRack.lastSelectedMark == nil)
-        let json = try #require(
-            JSONSerialization.jsonObject(with: rack.debugNativeAFTraceData()) as? [String: Any])
-        let events = try #require(json["events"] as? [[String: Any]])
-        #expect(events.last?["event"] as? String == "completionRetired")
     }
 
     @Test("Native saved targets use the real safe-point slot and report command acknowledgment")
@@ -667,16 +636,7 @@ struct FocusAFSettingsAdapterTests {
         #expect(rack.nativeRack.dispatchedRequest == nil)
         #expect(rack.nativeAFInstruction == "Target A selected.")
         #expect(model.isRecording == false)
-        let data = try rack.debugNativeAFTraceData()
-        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let events = try #require(json["events"] as? [[String: Any]])
-        let acknowledgment = try #require(events.last)
-        #expect(acknowledgment["event"] as? String == "targetAcknowledged")
-        #expect(acknowledgment["lastSelectedMark"] as? String == "A")
-        #expect(acknowledgment["focusResult"] as? String == "notFocused")
-        #expect(acknowledgment["recording"] as? Bool == false)
-        #expect(events.contains { $0["event"] as? String == "commandStarted" })
-        #expect(!String(decoding: data, as: UTF8.self).contains("SIMULATED-af-settings"))
+        #expect(model.liveViewFocus?.focusResult == .notFocused)
         rack.armNativeTarget(.b)
         #expect(rack.captureNativeTarget(try NativeAFPoint(x: 0.8, y: 0.6)))
         for _ in 0..<3 { model.debugApplyNativeRecordingReadback(true) }

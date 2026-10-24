@@ -92,7 +92,7 @@ private val feedBlitPaint: android.graphics.Paint by lazy {
  */
 @Stable
 public class LiveFeedPresentationState {
-    /** Monotonic acceptance time for the opt-in probe; this does not recompose chrome per frame. */
+    /** Monotonic frame acceptance time for focus safety; this does not recompose chrome per frame. */
     internal var acceptedAtSeconds: Double? = null
         private set
     internal var rackFrameAccepted: (() -> Unit)? = null

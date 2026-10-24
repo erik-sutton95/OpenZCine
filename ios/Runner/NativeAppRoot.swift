@@ -5131,10 +5131,6 @@ final class NativeAppModel {
 
     var nativeAFTargetDisabledReason: String? { nativeAFAdmission.disabledReason }
 
-    #if DEBUG
-        var nativeAFTraceSettings: FocusAFSettingsValues { reportedFocusAFSettings }
-    #endif
-
     /// Reuses the single existing safe-point slot; there is no separate Native AF command queue.
     @discardableResult
     func queueNativeAFTarget(_ request: NativeAFRequest) -> Bool {
@@ -5409,10 +5405,6 @@ final class NativeAppModel {
     @ObservationIgnored private var recentKeepaliveFailures = 0
     @ObservationIgnored private var isStreamRecovering = false
     @ObservationIgnored private var signalBarsFilter = LinkSignalBars()
-    #if DEBUG
-        @ObservationIgnored private var nativeAFTraceFocus: PTPLiveViewFocusInfo?
-        @ObservationIgnored private var nativeAFTraceProperties: [PTPPropertyCode: Data] = [:]
-    #endif
     /// The fire-and-forget `stopLiveView()` started on background, tracked so a quick return to the
     /// foreground awaits it before restarting the stream (otherwise the stop can land after the
     /// restart and shut the resumed feed back down).
@@ -8588,24 +8580,12 @@ final class NativeAppModel {
                 if let admission = point.admission {
                     try admission.require(owner: session.commandOwner)
                 }
-                if let id = point.nativeRequestID { focusRack?.nativeTargetCommandStarted(id) }
                 focusManuallyDialed = false
-                #if DEBUG
-                    logConnection(
-                        "native-af target begin uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration) x=\(point.x) y=\(point.y) movieFocus=\(reportedPropertySnapshot.activeFocusMode(photography: false) ?? "nil") area=\(focusArea) subject=\(focusSubject)"
-                    )
-                #endif
                 if let admission = point.admission {
                     try await session.changeAfArea(x: point.x, y: point.y, admission: admission)
                 } else {
                     try await session.changeAfArea(x: point.x, y: point.y)
                 }
-                #if DEBUG
-                    // Method completion can include retries; it is not optical arrival.
-                    logConnection(
-                        "native-af target returned uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration) x=\(point.x) y=\(point.y)"
-                    )
-                #endif
                 guard cameraSession === session, connectionGeneration == sourceGeneration else {
                     return
                 }
@@ -8627,11 +8607,6 @@ final class NativeAppModel {
                     focusMode: cameraPropertySnapshot.activeFocusMode(photography: photography),
                     photography: photography)
                 {
-                    #if DEBUG
-                        logConnection(
-                            "native-af oneShotAFDrive uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration)"
-                        )
-                    #endif
                     if let admission = point.admission {
                         try await session.afDrive(admission: admission)
                     } else {
@@ -8646,11 +8621,6 @@ final class NativeAppModel {
                     focusAFSettlePolls = 4
                 }
             } catch {
-                #if DEBUG
-                    logConnection(
-                        "native-af target error uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(sourceGeneration) x=\(point.x) y=\(point.y) error=\(error)"
-                    )
-                #endif
                 guard cameraSession === session, connectionGeneration == sourceGeneration else {
                     return
                 }
@@ -9123,14 +9093,6 @@ final class NativeAppModel {
     /// source of truth for each (no property polling, no extra traffic; all decoded from the
     /// header the app already reads).
     private func applyLiveViewHeaderState(_ frame: PTPLiveViewFrame) {
-        #if DEBUG
-            if nativeAFTraceFocus != frame.focus {
-                nativeAFTraceFocus = frame.focus
-                logConnection(
-                    "native-af focusHeader uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(connectionGeneration) recording=\(frame.isRecording) focus=\(String(describing: frame.focus))"
-                )
-            }
-        #endif
         // Body rotation (byte 839) → vertical mode. Guarded write: this runs per frame and an
         // unconditional set would invalidate the whole feed layout 30×/s.
         if liveFeedRotation != frame.rotation { liveFeedRotation = frame.rotation }
@@ -9165,11 +9127,6 @@ final class NativeAppModel {
         // The camera's report is recorded even while the button defers to an app command below:
         // that report is exactly what confirms (or never confirms) the command.
         if reportedRecording != recording {
-            #if DEBUG
-                logConnection(
-                    "native-af cameraRecording uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(connectionGeneration) recording=\(recording)"
-                )
-            #endif
             retireOperatorQuickPresentation()
             reportedRecording = recording
             refreshCommonControlFacts()
@@ -9697,20 +9654,6 @@ final class NativeAppModel {
 
     /// A value the camera returned, applied to the display snapshot and the reported one.
     private func applyCameraRead(_ property: PTPPropertyCode, _ data: Data) {
-        #if DEBUG
-            switch property {
-            case .movieFocusMode, .movieFocusMeteringMode, .movieAFSubjectDetection,
-                .focalLength, .movieFNumber, .movieRecordScreenSize, .movieFileType:
-                if nativeAFTraceProperties[property] != data {
-                    nativeAFTraceProperties[property] = data
-                    let hex = data.map { String(format: "%02x", $0) }.joined()
-                    logConnection(
-                        "native-af property uptime=\(ProcessInfo.processInfo.systemUptime) generation=\(connectionGeneration) property=\(property) raw=\(hex)"
-                    )
-                }
-            default: break
-            }
-        #endif
         let previous = reportedPropertySnapshot
         cameraPropertySnapshot = cameraPropertySnapshot.applying(property: property, data: data)
         reportedPropertySnapshot = reportedPropertySnapshot.applying(property: property, data: data)
@@ -14027,11 +13970,6 @@ extension NativeAppModel {
             }
             runtime.onRecordQueued = { [weak self, weak runtime] start in
                 guard let self, monitorRuntime === runtime else { return }
-                #if DEBUG
-                    logConnection(
-                        "native-af recordQueued uptime=\(ProcessInfo.processInfo.systemUptime) start=\(start)"
-                    )
-                #endif
                 focusRack?.revokeAFSettingsWrite()
                 isRecording = start
                 if !start { focusRack?.recordingWillStop() }
@@ -14042,11 +13980,6 @@ extension NativeAppModel {
             }
             runtime.onRecordCommand = { [weak self, weak runtime] start, accepted in
                 guard let self, monitorRuntime === runtime else { return }
-                #if DEBUG
-                    logConnection(
-                        "native-af recordCommand uptime=\(ProcessInfo.processInfo.systemUptime) start=\(start) accepted=\(accepted)"
-                    )
-                #endif
                 pendingRecordToggle = false
                 appRecordCommandAt = Date()
                 if accepted {

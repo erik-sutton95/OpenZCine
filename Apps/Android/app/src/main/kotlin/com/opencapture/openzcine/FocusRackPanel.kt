@@ -61,7 +61,7 @@ internal data class FocusRackViewState(
     val canCaptureA: Boolean = false, val canCaptureB: Boolean = false, val canNudge: Boolean = false, val canEdit: Boolean = false,
     val canReset: Boolean = false, val canAutofocus: Boolean = false, val canPause: Boolean = false, val canStop: Boolean = false, val active: Boolean = false,
     val completed: Int = 0, val total: Int = 0, val minimumDuration: Double? = null,
-    val captureRevision: Long = 0, val remainingDelay: Double = 0.0, val recording: Boolean = false,
+    val remainingDelay: Double = 0.0, val recording: Boolean = false,
     val nudgeProgress: FocusRackNudgeProgressViewState? = null,
 )
 /** Native target state projected by the shared Swift value; coordinates never become lens marks. */
