@@ -448,7 +448,7 @@ func rackRepeatedInvalidationPreservesUnconfirmedNativeRecovery(outcome: Int) th
     }
 }
 
-@Test(arguments: [false, true], [1, 4, 10])
+@Test(arguments: [false, true], [1, 4, 10, 11, 100])
 func rackSetupUsesIdenticalAcknowledgedChunks(towardNear: Bool, steps: Int) throws {
     var probe = try FocusRackEngine(configuration: .init(pulsesPerStep: 16, commandInterval: 0.01))
     probe.observe(rackContext(), at: 0)
@@ -483,7 +483,7 @@ func rackSetupUsesIdenticalAcknowledgedChunks(towardNear: Bool, steps: Int) thro
     #expect(starts.map(\.signedPulses) == Array(repeating: sign * 16, count: steps))
 }
 
-@Test(arguments: [0, -1, 11, Int.min, Int.max])
+@Test(arguments: [0, -1, 101, Int.min, Int.max])
 func rackSetupRejectsUnboundedStepCounts(steps: Int) throws {
     var probe = try FocusRackEngine()
     probe.observe(rackContext(), at: 0)
@@ -494,11 +494,11 @@ func rackSetupRejectsUnboundedStepCounts(steps: Int) throws {
     #expect(probe.snapshot(at: 0).stepPosition == 0)
 }
 
-@Test(arguments: [0, 2, 3, 0x12019])
-func rackTenStepSetupHaltsWithoutLosingAcknowledgedPrefix(outcome: Int) throws {
+@Test(arguments: [0, 2, 3, 0x12019], [10, 100])
+func rackSetupHaltsWithoutLosingAcknowledgedPrefix(outcome: Int, steps: Int) throws {
     var probe = try FocusRackEngine(configuration: .init(pulsesPerStep: 16, commandInterval: 0.01))
     probe.observe(rackContext(), at: 0)
-    try probe.nudge(towardNear: false, steps: 10, at: 0)
+    try probe.nudge(towardNear: false, steps: steps, at: 0)
     for index in 0..<2 {
         let time = Double(index) * 0.06
         let action = probe.nextAction(at: time)
@@ -519,11 +519,11 @@ func rackTenStepSetupHaltsWithoutLosingAcknowledgedPrefix(outcome: Int) throws {
     #expect(!snapshot.events.contains { $0.kind == "runCompleted" })
 }
 
-@Test(arguments: [false, true])
-func rackTenStepStopKeepsOnlyTheCompletedPrefix(towardNear: Bool) throws {
+@Test(arguments: [false, true], [10, 100])
+func rackSetupStopKeepsOnlyTheCompletedPrefix(towardNear: Bool, steps: Int) throws {
     var probe = try FocusRackEngine(configuration: .init(pulsesPerStep: 16, commandInterval: 0.01))
     probe.observe(rackContext(), at: 0)
-    try probe.nudge(towardNear: towardNear, steps: 10, at: 0)
+    try probe.nudge(towardNear: towardNear, steps: steps, at: 0)
     for index in 0..<3 {
         let time = Double(index) * 0.06
         let action = probe.nextAction(at: time)

@@ -1228,41 +1228,102 @@ func rackHeldMaintenanceReadCannotSendLateCommands(stopDuringRead: Bool) async t
     await controller.close()
 }
 
-private func progressNudge(towardNear: Bool = false) throws -> FocusRackEngine {
+private func progressNudge(towardNear: Bool = false, steps: Int = 10) throws -> FocusRackEngine {
     var engine = try FocusRackEngine(
         configuration: FocusRackEngine.productionConfiguration, adaptive: true,
         profile: .tenBy160Experiment)
     engine.observe(productionContext(0), at: 0)
-    try engine.nudge(towardNear: towardNear, steps: 10, at: 0)
+    try engine.nudge(towardNear: towardNear, steps: steps, at: 0)
     return engine
 }
 
-@Test(arguments: [true, false])
-func rackNudgeProgressCountsAcknowledgedFineStepsAndIgnoresElapsedTime(towardNear: Bool) throws {
-    var engine = try progressNudge(towardNear: towardNear)
+@Test(arguments: [false, true], [false, true])
+func rackControllerHundredStepNudgeSerializesSafetyReadsAndStopsAtAcknowledgedPrefix(
+    towardNear: Bool, stopMidway: Bool
+) async throws {
+    let camera = RackFakeCamera()
+    let controller = FocusRackController(driver: camera.access, clock: camera.clock)
+    await controller.observe(cameraObservation(1))
+    try await waitForRack { await controller.snapshot().capabilities.canNudge }
+    camera.setSafetyLatency(0.02)
+    camera.holdNextDrive()
+    defer { camera.finish(.cancelledReady) }
+    try await controller.handle(.nudge(towardNear: towardNear, steps: 100))
+    let count = stopMidway ? 12 : 100
+    let sign = towardNear ? -1 : 1
+    for index in 0..<count {
+        try await waitForRack { camera.driveCount == index + 1 }
+        let held = await controller.snapshot()
+        #expect(held.stepPosition == sign * index)
+        #expect(held.nudgeProgress == .init(towardNear: towardNear, steps: 100, percent: index))
+        camera.advanceClock(0.06)
+        await controller.observe(cameraObservation(Int64(index + 2)))
+        if stopMidway, index == count - 1 {
+            controller.requestStop()
+            #expect(camera.stopCount > 0)
+            try await waitForRack { (await controller.snapshot()).phase == .stopping }
+            #expect((await controller.snapshot()).phase == .stopping)
+        }
+        camera.finish(.complete)
+    }
+    try await waitForRack { !(await controller.snapshot()).busy }
+    let after = await controller.snapshot()
+    #expect(after.stepPosition == sign * count)
+    #expect(after.completedSteps == count)
+    #expect(after.totalSteps == 100)
+    #expect(after.nudgeProgress == nil)
+    #expect(after.phase == (stopMidway ? .stopped : .complete))
+    #expect(camera.driveCount == count)
+    #expect(camera.readCount > 1)
+    let events = await controller.diagnostics().events
+    let starts = events.filter { $0.kind == "commandStarted" }
+    #expect(starts.map(\.signedPulses) == Array(repeating: sign * 16, count: count))
+    for start in starts {
+        let completion = try #require(
+            events.first {
+                $0.kind == "commandCompleted" && $0.runID == start.runID
+                    && $0.commandID == start.commandID
+            })
+        #expect(
+            !events.contains {
+                $0.kind == "safetyRead" && ($0.scheduledAt ?? 0) < completion.timestamp
+                    && $0.timestamp > start.timestamp
+            })
+    }
+    await controller.close()
+    #expect(camera.driveCount == count)
+}
+
+@Test(arguments: [true, false], [10, 100])
+func rackNudgeProgressCountsAcknowledgedFineStepsAndIgnoresElapsedTime(
+    towardNear: Bool, steps: Int
+) throws {
+    var engine = try progressNudge(towardNear: towardNear, steps: steps)
     var now = 0.0
     #expect(
-        engine.state(at: now).nudgeProgress == .init(towardNear: towardNear, steps: 10, percent: 0))
-    for index in 0..<10 {
+        engine.state(at: now).nudgeProgress
+            == .init(towardNear: towardNear, steps: steps, percent: 0))
+    for index in 0..<steps {
+        engine.observe(productionContext(now), at: now)
         let action = engine.nextAction(at: now)
         #expect(action.signedPulses == (towardNear ? -16 : 16))
         if index == 3 {
             engine.complete(runID: action.runID - 1, commandID: index, outcome: 0, at: now)
             engine.complete(runID: action.runID, commandID: index - 1, outcome: 0, at: now)
-            #expect(engine.state(at: now + 1).nudgeProgress?.percent == 30)
+            #expect(engine.state(at: now + 1).nudgeProgress?.percent == 3 * 100 / steps)
         }
         now += 0.02
         engine.complete(runID: action.runID, commandID: index, outcome: 0, at: now)
-        if index < 9 {
-            #expect(engine.state(at: now).nudgeProgress?.percent == (index + 1) * 10)
+        if index < steps - 1 {
+            #expect(engine.state(at: now).nudgeProgress?.percent == (index + 1) * 100 / steps)
             #expect(engine.state(at: now).capabilities.canStop)
             #expect(!engine.state(at: now).capabilities.canNudge)
         }
     }
     let completed = engine.state(at: now)
     #expect(completed.nudgeProgress == nil)
-    #expect(completed.completedSteps == 10)
-    #expect(completed.stepPosition == (towardNear ? -10 : 10))
+    #expect(completed.completedSteps == steps)
+    #expect(completed.stepPosition == (towardNear ? -steps : steps))
     #expect(completed.phase == .complete)
     #expect(completed.message.isEmpty)
 }
