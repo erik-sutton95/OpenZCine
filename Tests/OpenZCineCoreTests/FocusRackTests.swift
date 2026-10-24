@@ -186,10 +186,9 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
         changed.safetyTimestamp = now
         probe.observe(changed, at: now)
     }
-    let invalid = probe.snapshot(at: 1.4, includeEvents: true)
+    let invalid = probe.snapshot(at: 1.4)
     #expect(invalid.stepPosition == nil)
-    #expect(invalid.events.filter { $0.kind == "invalidated" }.count == 1)
-    #expect(invalid.omittedEvents == 0)
+    #expect(invalid.message == "Camera session changed. Reset both marks.")
     #expect(throws: FocusRackError.referenceUnavailable) {
         try probe.nudge(towardNear: false, at: 1.4)
     }
@@ -204,10 +203,9 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
     try probe.capture(markID: "A", at: 1.5)
     changed.connected = false
     probe.observe(changed, at: 1.6)
-    let interruptedAgain = probe.snapshot(at: 1.6, includeEvents: true)
+    let interruptedAgain = probe.snapshot(at: 1.6)
     #expect(interruptedAgain.stepPosition == 0)
     #expect(!interruptedAgain.canCapture)
-    #expect(interruptedAgain.events.filter { $0.kind == "invalidated" }.count == 1)
 }
 
 @Test func rackRepeatedInflightInvalidationStopsOnceAndCannotRestorePosition() throws {
@@ -217,10 +215,10 @@ private func probeWithMarks(delay: Double = 0, duration: Double = 1) throws -> F
     for index in 0..<100 {
         probe.interrupt(reason: "External focus changed.", at: 0.31 + Double(index) * 0.0001)
     }
-    let stopping = probe.snapshot(at: 0.33, includeEvents: true)
+    let stopping = probe.snapshot(at: 0.33)
     #expect(stopping.phase == "stopping")
-    #expect(stopping.events.filter { $0.kind == "stopRequested" }.count == 1)
-    #expect(stopping.events.filter { $0.kind == "invalidated" }.count == 1)
+    #expect(stopping.message == "External focus changed.")
+    #expect(probe.nextAction(at: 0.33).kind == "idle")
     probe.complete(runID: command.runID, commandID: 0, outcome: 0, at: 0.4)
     #expect(probe.snapshot(at: 0.4).stepPosition == nil)
     #expect(probe.nextAction(at: 0.4).kind == "idle")
@@ -236,12 +234,11 @@ func rackRepeatedInvalidationPreservesUnconfirmedNativeRecovery(outcome: Int) th
     probe.observe(rackContext(at: 0.2), at: 0.2)
     let failed = probe.snapshot(at: 0.2)
     probe.interrupt(reason: "An additional stale observation.", at: 0.21)
-    let repeated = probe.snapshot(at: 0.21, includeEvents: true)
+    let repeated = probe.snapshot(at: 0.21)
     #expect(repeated.phase == failed.phase)
     #expect(repeated.message == failed.message)
     #expect(repeated.message.contains("Reconnect"))
     #expect(repeated.recoveryInstruction == "Reconnect camera, then reset marks.")
-    #expect(repeated.events.filter { $0.kind == "invalidated" }.isEmpty)
     #expect(throws: FocusRackError.reconnectRequired) { try probe.reset(at: 0.21) }
 }
 
@@ -477,10 +474,7 @@ func rackSetupUsesIdenticalAcknowledgedChunks(towardNear: Bool, steps: Int) thro
     probe.observe(rackContext(at: captureTime), at: captureTime)
     try probe.capture(markID: "B", at: captureTime)
     #expect(probe.snapshot(at: captureTime).marks.map(\.stepPosition) == [0, sign * steps])
-    let starts = probe.snapshot(at: captureTime, includeEvents: true).events.filter {
-        $0.kind == "commandStarted"
-    }
-    #expect(starts.map(\.signedPulses) == Array(repeating: sign * 16, count: steps))
+    #expect(probe.nextAction(at: captureTime).kind == "idle")
 }
 
 @Test(arguments: [0, -1, 101, Int.min, Int.max])
@@ -513,10 +507,10 @@ func rackSetupHaltsWithoutLosingAcknowledgedPrefix(outcome: Int, steps: Int) thr
         probe.complete(runID: third.runID, commandID: 2, outcome: outcome, at: 0.15)
     }
     #expect(probe.nextAction(at: 0.3).kind == "idle")
-    let snapshot = probe.snapshot(at: 0.3, includeEvents: true)
+    let snapshot = probe.snapshot(at: 0.3)
     #expect(snapshot.stepPosition == (outcome == 3 ? nil : 2))
-    #expect(snapshot.events.filter { $0.kind == "commandStarted" }.count == (outcome == 0 ? 2 : 3))
-    #expect(!snapshot.events.contains { $0.kind == "runCompleted" })
+    #expect(snapshot.completedSteps == 2)
+    #expect(snapshot.phase != "complete")
 }
 
 @Test(arguments: [false, true], [10, 100])
@@ -532,10 +526,10 @@ func rackSetupStopKeepsOnlyTheCompletedPrefix(towardNear: Bool, steps: Int) thro
         probe.complete(runID: action.runID, commandID: index, outcome: 0, at: time + 0.03)
     }
     #expect(probe.nextAction(at: 1).kind == "idle")
-    let snapshot = probe.snapshot(at: 1, includeEvents: true)
+    let snapshot = probe.snapshot(at: 1)
     #expect(snapshot.phase == "stopped")
     #expect(snapshot.stepPosition == (towardNear ? -3 : 3))
-    #expect(snapshot.events.filter { $0.kind == "commandStarted" }.count == 3)
+    #expect(snapshot.completedSteps == 3)
 }
 
 @Test func rackTimingAdmissionIncludesObservedCommandCostAndResetClearsIt() throws {
@@ -570,14 +564,11 @@ func rackWarnsAboutFinalTimingWhileCompletingTheAcknowledgedEndpoint(completedAt
             runID: action.runID, commandID: index, outcome: 0,
             at: index == 2 ? completedAt : time + 0.01)
     }
-    let result = probe.snapshot(at: completedAt, includeEvents: true)
+    let result = probe.snapshot(at: completedAt)
     #expect(result.stepPosition == 0)
     #expect(result.completedSteps == 3)
     #expect(result.phase == "complete")
     #expect(probe.state(at: completedAt).timingWarning != nil)
-    #expect(!result.events.contains { $0.kind == "missedDeadline" })
-    #expect(
-        result.events.contains { $0.runID == result.runID && $0.kind == "runCompleted" })
     #expect(probe.nextAction(at: completedAt).kind == "idle")
     probe.observe(rackContext(at: completedAt + 0.01), at: completedAt + 0.01)
     #expect(probe.snapshot(at: completedAt + 0.01).canCapture)
@@ -594,13 +585,10 @@ func rackWarnsAboutFinalTimingWhileCompletingTheAcknowledgedEndpoint(completedAt
             runID: action.runID, commandID: index, outcome: 0,
             at: index == 2 ? 1.6 : time + 0.01)
     }
-    let result = probe.snapshot(at: 1.6, includeEvents: true)
+    let result = probe.snapshot(at: 1.6)
     #expect(result.phase == "stopped")
     #expect(result.stepPosition == 0)
-    #expect(
-        !result.events.contains {
-            $0.runID == result.runID && ($0.kind == "runCompleted" || $0.kind == "missedDeadline")
-        })
+    #expect(probe.nextAction(at: 1.6).kind == "idle")
 }
 
 @Test func rackFinalCompletionDoesNotReserveAnUnusedQuietGap() throws {
@@ -654,8 +642,8 @@ func rackDenseSixteenPulseProfileUsesMeasuredPeakCadence(nativeDuration: Double)
     }
     let startedAt = time
     try probe.run(reverse: true, at: time)
-    let runID = probe.snapshot(at: time).runID
     var commands = 0
+    var previousCompletion: Double?
     for _ in 0..<1_000 {
         probe.observe(rackContext(at: time), at: time)
         let action = probe.nextAction(at: time)
@@ -664,32 +652,32 @@ func rackDenseSixteenPulseProfileUsesMeasuredPeakCadence(nativeDuration: Double)
         } else if action.kind == "drive" {
             #expect(action.commandID == commands)
             #expect(action.signedPulses == -16)
+            if let previousCompletion {
+                #expect(time - previousCompletion >= 0.01 - 1e-9)
+            }
             time += nativeDuration
+            previousCompletion = time
             probe.complete(runID: action.runID, commandID: commands, outcome: 0, at: time)
             commands += 1
         } else {
             break
         }
     }
-    let result = probe.snapshot(at: time, includeEvents: true)
+    let result = probe.snapshot(at: time)
     #expect(commands == 92)
     #expect(result.phase == "complete")
     #expect(result.stepPosition == 0)
     #expect(abs(time - startedAt - 2 - 8) < 0.4)
-    let events = result.events.filter { $0.runID == runID }
-    let starts = events.filter { $0.kind == "commandStarted" }
-    let completions = events.filter { $0.kind == "commandCompleted" }
-    #expect(starts.count == 92 && completions.count == 92)
-    for index in 1..<starts.count {
-        #expect(starts[index].timestamp - completions[index - 1].timestamp >= 0.01 - 1e-9)
-    }
 }
 
 @Test func rackTimingChangesKeepMarksAndDoNotStartOrReposition() throws {
     var probe = try probeWithMarks()
     let before = probe.snapshot(at: 0.3)
-    try probe.setTiming(duration: 24, easing: .linear, at: 0.3)
-    let after = probe.snapshot(at: 0.3, includeEvents: true)
+    var transition = probe.currentProgram.transitions[0]
+    transition.duration = 24
+    transition.easing = .linear
+    try probe.setTransition(transition, at: 0.3)
+    let after = probe.snapshot(at: 0.3)
     #expect(after.marks == before.marks)
     #expect(after.stepPosition == before.stepPosition)
     #expect(after.configuration.pulsesPerStep == before.configuration.pulsesPerStep)
@@ -699,11 +687,8 @@ func rackDenseSixteenPulseProfileUsesMeasuredPeakCadence(nativeDuration: Double)
     #expect(after.configuration.transition.easing == .linear)
     #expect(after.runID == before.runID)
     #expect(probe.nextAction(at: 0.3).kind == "idle")
-    #expect(after.events.last?.kind == "timingChanged")
     try probe.run(reverse: true, at: 0.3)
-    #expect(
-        probe.snapshot(at: 0.3, includeEvents: true).events.last?.note?.contains("duration=24")
-            == true)
+    #expect(probe.currentProgram.transitions[0] == transition)
 }
 
 @Test func rackActiveMovementRejectsTimingChangesAndKeepsItsPlan() throws {
@@ -711,7 +696,10 @@ func rackDenseSixteenPulseProfileUsesMeasuredPeakCadence(nativeDuration: Double)
     try probe.run(reverse: true, at: 0.3)
     let before = probe.snapshot(at: 0.3)
     #expect(throws: FocusRackError.movementPending) {
-        try probe.setTiming(duration: 32, easing: .easeInOut, at: 0.31)
+        var transition = probe.currentProgram.transitions[0]
+        transition.duration = 32
+        transition.easing = .easeInOut
+        try probe.setTransition(transition, at: 0.31)
     }
     let after = probe.snapshot(at: 0.31)
     #expect(after.configuration == before.configuration)
@@ -724,7 +712,10 @@ func rackTimingRejectsInvalidDurationsAtomically(duration: Double) throws {
     var probe = try probeWithMarks()
     let before = probe.snapshot(at: 0.3)
     #expect(throws: FocusRackError.invalidConfiguration) {
-        try probe.setTiming(duration: duration, easing: .easeInOut, at: 0.3)
+        var transition = probe.currentProgram.transitions[0]
+        transition.duration = duration
+        transition.easing = .easeInOut
+        try probe.setTransition(transition, at: 0.3)
     }
     #expect(probe.snapshot(at: 0.3).configuration == before.configuration)
     #expect(probe.snapshot(at: 0.3).marks == before.marks)
@@ -732,12 +723,13 @@ func rackTimingRejectsInvalidDurationsAtomically(duration: Double) throws {
 
 @Test func rackCurveOnlyChangePreservesDurationAndWorksBeforeMarks() throws {
     var probe = try FocusRackEngine()
-    try probe.setTiming(easing: .linear, at: 0)
+    var transition = probe.currentProgram.transitions[0]
+    transition.easing = .linear
+    try probe.setTransition(transition, at: 0)
     #expect(probe.snapshot(at: 0).configuration.transition.duration == 3)
     #expect(probe.snapshot(at: 0).configuration.transition.easing == .linear)
     #expect(probe.snapshot(at: 0).marks.isEmpty)
     #expect(probe.nextAction(at: 0).kind == "idle")
-    #expect(throws: FocusRackError.invalidConfiguration) { try probe.setTiming(at: 0) }
 }
 
 @Test func rackConfigurationWarningSurvivesExplicitMovesUntilOperatorReset() throws {

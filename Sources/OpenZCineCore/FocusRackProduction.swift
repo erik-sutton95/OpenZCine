@@ -121,7 +121,7 @@ public struct FocusRackState: Codable, Sendable {
     public var busy = false
     /// Active setup progress; absent for other moves, settled nudges and older state snapshots.
     public var nudgeProgress: FocusRackNudgeProgress?
-    /// Next explicit calibration traversal; absent outside the local measured-size trial.
+    /// Next optional finer-increment timing measurement.
     public var calibration: FocusRackPrimaryAction?
     public var referenceValid = true
     public var minimumDuration: Double?

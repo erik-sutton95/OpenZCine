@@ -29,9 +29,7 @@ public enum FocusRackEasing: String, Codable, CaseIterable, Sendable {
 public enum FocusRackProfile: String, Sendable {
     /// Selects the finest feasible profile from the existing adaptive command sizes.
     case adaptive
-    /// Local, unqualified ten-command trial for a 100-unit, one-second Linear move.
-    case tenBy160Experiment
-    /// Local measured-size comparison with explicit bidirectional finer-increment calibration.
+    /// Production planning using measured costs, with optional finer-increment calibration.
     case calibratedFineExperiment
 }
 
@@ -99,7 +97,7 @@ public struct FocusRackProgram: Codable, Equatable, Sendable {
     public var marks: [FocusRackMark]
     public var transitions: [FocusRackTransition]
 
-    /// Creates a program; the diagnostic surface currently captures A and B only.
+    /// Creates the current two-mark program.
     public init(marks: [FocusRackMark], transitions: [FocusRackTransition]) {
         self.marks = marks
         self.transitions = transitions
@@ -130,7 +128,7 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
     case durationTooShort(minimum: Double)
     case durationTooLong(maximum: Double)
     case noSmoothTiming
-    /// Timed experimental playback requires a completed command of its selected size.
+    /// Timed playback requires a completed command of its selected size.
     case calibrationRequired
     case marksTooClose
     case reconnectRequired
