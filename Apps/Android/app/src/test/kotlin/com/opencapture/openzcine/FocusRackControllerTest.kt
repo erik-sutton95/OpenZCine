@@ -344,17 +344,17 @@ class FocusRackControllerTest {
         replacement.close()
     }
 
-    @Test fun `calibration renders shared action and forwards only the semantic intent`() = runTest {
+    @Test fun `lens preparation renders shared action and forwards only the semantic intent`() = runTest {
         val wire = Wire().apply { busy = false }
         val rack = FocusRackController(42, TestSharedPreferences(),
             CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)), wire)
         rack.activate()
         rack.observe(JSONObject())
         assertNull(rack.state.value.calibration) // Older shared payloads omit the action.
-        wire.calibration = JSONObject().put("kind", "calibrate").put("title", "Calibrate to B")
-            .put("detail", "32-pulse increments · 1/10").put("enabled", true).put("markID", "B")
+        wire.calibration = JSONObject().put("kind", "calibrate").put("title", "Prepare lens")
+            .put("detail", "One pass A→B · recording stopped").put("enabled", true).put("markID", "B")
         rack.observe(JSONObject())
-        assertEquals(FocusRackActionViewState("Calibrate to B", "32-pulse increments · 1/10", true),
+        assertEquals(FocusRackActionViewState("Prepare lens", "One pass A→B · recording stopped", true),
             rack.state.value.calibration)
         val before = wire.requests.size
         rack.calibrate()

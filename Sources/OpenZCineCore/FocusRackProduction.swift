@@ -121,7 +121,7 @@ public struct FocusRackState: Codable, Sendable {
     public var busy = false
     /// Active setup progress; absent for other moves, settled nudges and older state snapshots.
     public var nudgeProgress: FocusRackNudgeProgress?
-    /// Next optional finer-increment timing measurement.
+    /// Optional one-pass timing preparation between the saved marks.
     public var calibration: FocusRackPrimaryAction?
     public var referenceValid = true
     public var minimumDuration: Double?
@@ -139,7 +139,7 @@ public struct FocusRackState: Codable, Sendable {
 
     private func playbackDetail(for move: FocusRackTransition) -> String {
         guard move.durationMode == .timed, let estimatedDuration,
-            estimatedDuration > move.duration + 0.0005
+            abs(estimatedDuration - move.duration) > 0.0005
         else { return move.playbackDetail }
         let estimate = estimatedDuration.formatted(.number.precision(.fractionLength(0...2)))
         return
@@ -299,7 +299,7 @@ public enum FocusRackIntent: Codable, Sendable {
     case capture(markID: String, expectedFrameSequence: Int64)
     case nudge(towardNear: Bool, steps: Int)
     case goTo(markID: String)
-    /// Starts exactly one explicitly requested finer-increment calibration traversal.
+    /// Measures lens command timing in one explicit A/B pass, with recording stopped.
     case calibrate
     /// Starts a duration-based pull in one atomic intent, without implicit repositioning.
     case run(direction: FocusRackDirection)

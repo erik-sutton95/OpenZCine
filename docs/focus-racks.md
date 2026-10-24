@@ -110,40 +110,39 @@ Duration is a requested target, separate from the estimated fixed execution sche
 command costs need longer, the controls remain available and show the longer estimate without
 overwriting the requested value. Small estimate growth, such as 1.007 seconds for a 1-second
 target, does not disable playback. The planner leaves dispatch headroom when extending a move.
-The 3-second target preserves the accepted 64-pulse ordinary family, with measured smaller tails
-and safety-read bridges no larger than 128 pulses. Measured smaller ordinary moves can be used
-when 64-pulse measurements are unavailable; larger ordinary moves are not silently substituted.
-The existing 1-second and 6-second families remain separate. Each plan preserves the exact signed
-sum of the original 16-pulse mark units, including one
-bounded residual command. Setup ±1/±10/±100 retains its fine increment; explicit fast positioning keeps
-its bounded camera-speed path using 192-pulse groups and one exact residual. Repositioning also
-collects timing for the largest playback group and its exact residual without hidden calibration
-movement. Every activation is confirmed before
-the ledger advances.
+One measured planner handles every duration and lens. It selects the finest measured command
+sizes that fit the requested movement and safety-read windows; there are no separate 1-, 3- or
+6-second command profiles. If the target cannot fit, it keeps a fixed measured schedule and shows
+its longer estimate. The fallback reserves periodic safety reads where needed rather than adding
+a read-sized gap after every movement. Every plan preserves the exact signed sum of the original
+16-pulse mark units. Setup ±1/±10/±100 retains its fine increment; explicit fast positioning keeps
+its bounded camera-speed path using 192-pulse groups and an exact residual. Every activation is
+confirmed before the ledger advances.
 
-Timing admission budgets each command size and the final completion cost. An unmeasured size uses
-the session's worst observed command cost as an estimate until that size completes. Measured
-playback never invents timing for an unmeasured residual. The command sequence is fixed before
-movement. If a command, host wake or safety read runs late, the remaining schedule extends instead
-of compressing commands or stopping short. A separate timing warning reports the overrun and does
-not disable playback. Timing-only planning limits use a slower measured schedule and estimate.
-Required calibration, invalid marks, camera errors and unsafe context can still prevent movement.
-Requested duration, estimated execution duration and observed host command span are separate
-values. None measures optical arrival or guarantees smoothness. Very close marks may require
-finer movement than the tested base increment.
+Timed playback uses acknowledged costs for each selected size, including any residual command.
+The command sequence and read schedule are fixed before movement. If a command, host wake or
+safety read runs late, the remaining schedule extends instead of compressing commands or stopping
+short. A timing warning reports the overrun and does not disable playback. Invalid marks, camera
+errors and unsafe context can still prevent movement. Requested duration, estimated execution
+duration and observed host command span are separate values. None measures optical arrival or
+guarantees smoothness. Very close marks may require finer movement than the base increment.
 
-Optional **Calibrate increments** under Options measures 32, 48, 64, 96 and 128 pulses in
-both directions over the actual A/B span, including exact residual commands. Each tap moves to
-the other mark. A partial, stopped or failed traversal does not complete its stage. Marks must
-be at least eight units apart; they do not need to be exactly 100 units apart. Playback can use
-available measured sizes before every calibration stage is complete.
+Use **Prepare lens** under Options to measure the connected lens in one explicit pass from the
+current A or B mark to the other. Recording must be stopped. The pass tries 16, 32, 48, 64, 96,
+128, 160 and 192 pulses as the mark span permits, then completes the exact remaining distance
+without exceeding either endpoint. Short spans measure a subset; they do not require wider marks.
+It never returns automatically or starts recording. Pause and Stop retain their normal behavior;
+starting recording during preparation stops further preparation commands. The button states the
+direction and can run another pass from the opposite endpoint when needed.
 
-Both apps save acknowledged command timing maxima separately from session marks. Compatible
+Both apps save successful native command timing maxima separately from session marks. Partial
+successful measurements can be reused after an interrupted preparation, but a failed command adds
+no timing evidence. Measurements in the other direction can increase the stored maxima during
+later explicit movement, so the first reverse pull may need a longer estimate. Compatible
 measurements recover after reconnecting only when fresh camera identity, transport, lens, zoom
 and focus configuration match. Recovery restores no position, mark, readiness timestamp or
 movement authority. New larger costs take precedence; incompatible measurements remain inactive.
-Reset, mark replacement and a confirmed setup change restart traversal credit. Idle inactivity
-preserves completed stages.
+Resetting or replacing marks does not fabricate timing evidence or complete any movement.
 
 The controller uses early Busy polling with no extra quiet time after native Ready confirmation.
 A full safety preflight finishes before the delay/pull clock starts. Periodic reads may be deferred

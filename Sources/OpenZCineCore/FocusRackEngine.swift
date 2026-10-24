@@ -177,9 +177,7 @@ public struct FocusRackEngine: Sendable {
     private var completedUnits = 0
     private var totalUnits = 0
     private var activeNudge: (towardNear: Bool, steps: Int)?
-    private var calibrationTrips = 0
-    private var calibrationOrigin: String?
-    private var activeCalibration: (trip: Int, configuration: Int, capture: Int64)?
+    private var preparingLens = false
     private(set) var safetyReadBudget = 0.0
     private var runSafetyReadBudget = 0.0
     private var startedAt = 0.0
@@ -254,7 +252,7 @@ public struct FocusRackEngine: Sendable {
                     return old != new
                 })
         {
-            clearCalibration()
+            clearPreparation()
             configurationChanged = true
             configurationRevision += 1
             referenceContext = observation
@@ -263,7 +261,9 @@ public struct FocusRackEngine: Sendable {
         }
         if observation.unavailableReason(at: timestamp) != nil {
             requestStop(at: timestamp)
-        } else if previous?.recording == true, !observation.recording, trajectory != nil {
+        } else if preparingLens && observation.recording
+            || previous?.recording == true && !observation.recording && trajectory != nil
+        {
             requestStop(at: timestamp)
         }
     }
@@ -284,7 +284,7 @@ public struct FocusRackEngine: Sendable {
             throw FocusRackError.reconnectRequired
         }
         position = 0
-        clearCalibration()
+        clearPreparation()
         activeNudge = nil
         commandTimings = [:]
         marks = []
@@ -318,7 +318,7 @@ public struct FocusRackEngine: Sendable {
         if let other = marks.first(where: { $0.id != markID }), other.stepPosition == position {
             throw FocusRackError.samePosition
         }
-        clearCalibration()
+        clearPreparation()
         if marks.isEmpty { referenceContext = context }
         marks.removeAll { $0.id == markID }
         captureRevision += 1
@@ -357,35 +357,27 @@ public struct FocusRackEngine: Sendable {
             easing: .linear, enforcesTiming: false, grouped: true, at: timestamp)
     }
 
-    /// Measures one full mark-to-mark traversal with the next finer command size.
-    /// Each tap starts one move; cancellation never credits an incomplete stage.
+    /// Measures bounded command sizes in one explicit traversal between the current marks.
+    /// Preparation requires recording stopped and never moves beyond either endpoint.
     public mutating func calibrate(at timestamp: Double) throws {
         try requireReady(at: timestamp)
-        guard profile == .calibratedFineExperiment, marks.count == 2,
-            FocusRackPlanner.supportsCalibration(
-                span: abs(marks[1].stepPosition - marks[0].stepPosition)),
-            calibrationTrips < FocusRackPlanner.calibrationQuanta.count * 2,
-            let current = marks.first(where: { $0.stepPosition == position })
-        else { throw FocusRackError.referenceUnavailable }
-        let origin = calibrationOrigin ?? current.id
-        let expected = calibrationTrips % 2 == 0 ? origin : (origin == "A" ? "B" : "A")
-        guard current.id == expected else { throw FocusRackError.notAtStart }
+        guard context?.recording != true else { throw FocusRackError.recordingInProgress }
+        guard profile == .calibratedFineExperiment, marks.count == 2 else {
+            throw FocusRackError.marksRequired
+        }
+        guard let current = marks.first(where: { $0.stepPosition == position }) else {
+            throw FocusRackError.notAtStart
+        }
         guard let target = marks.first(where: { $0.id != current.id }), let position else {
             throw FocusRackError.marksRequired
         }
-        let quantum = FocusRackPlanner.calibrationQuanta[calibrationTrips / 2]
         try begin(
             signedSteps: target.stepPosition - position, duration: 1, delay: 0,
-            easing: .linear, enforcesTiming: false, grouped: true,
-            calibrationQuantum: quantum, at: timestamp)
-        calibrationOrigin = origin
-        activeCalibration = (calibrationTrips, configurationRevision, captureRevision)
+            easing: .linear, enforcesTiming: false, preparingLens: true, at: timestamp)
     }
 
-    private mutating func clearCalibration() {
-        calibrationTrips = 0
-        calibrationOrigin = nil
-        activeCalibration = nil
+    private mutating func clearPreparation() {
+        preparingLens = false
     }
 
     /// Runs the requested transition only from its start mark; it never silently repositions.
@@ -518,13 +510,7 @@ public struct FocusRackEngine: Sendable {
                 finishedAt = timestamp
                 phase = "complete"
                 message = "Complete."
-                if let activeCalibration, activeCalibration.trip == calibrationTrips,
-                    activeCalibration.configuration == configurationRevision,
-                    activeCalibration.capture == captureRevision
-                {
-                    calibrationTrips += 1
-                }
-                activeCalibration = nil
+                preparingLens = false
             } else if pauseRequested {
                 pausedAt = timestamp
                 phase = "paused"
@@ -532,6 +518,7 @@ public struct FocusRackEngine: Sendable {
             }
         } else {
             activeNudge = nil
+            preparingLens = false
             trajectory = nil
             finishedAt = timestamp
             switch outcome {
@@ -563,6 +550,7 @@ public struct FocusRackEngine: Sendable {
     /// Stops future scheduling immediately. The adapter also requests native cancellation.
     public mutating func requestStop(at timestamp: Double) {
         guard !stopRequested, trajectory != nil || inFlight != nil else { return }
+        preparingLens = false
         stopRequested = true
         pauseRequested = false
         if let pausedAt {
@@ -629,7 +617,7 @@ public struct FocusRackEngine: Sendable {
         guard calibrationKey != nil else { return }
         calibrationKey = nil
         commandTimings = [:]
-        clearCalibration()
+        clearPreparation()
         configurationRevision += 1
         interrupt(reason: "Camera control path changed. Reset marks.", at: timestamp)
     }
@@ -639,7 +627,7 @@ public struct FocusRackEngine: Sendable {
         let previous = calibrationKey
         calibrationKey = key
         commandTimings = [:]
-        clearCalibration()
+        clearPreparation()
         configurationRevision += 1
         if let previous, previous.cameraID != key.cameraID || previous.transport != key.transport {
             interrupt(reason: "Camera control path changed. Reset marks.", at: timestamp)
@@ -696,19 +684,21 @@ public struct FocusRackEngine: Sendable {
 
     private mutating func begin(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
-        enforcesTiming: Bool, grouped: Bool = false, calibrationQuantum: Int? = nil,
+        enforcesTiming: Bool, grouped: Bool = false, preparingLens: Bool = false,
         at timestamp: Double
     ) throws {
         try requireReady(at: timestamp)
-        let planned = try FocusRackPlanner.make(
-            signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
-            quiet: configuration.commandInterval, timings: commandTimings, adaptive: adaptive,
-            timed: enforcesTiming, grouped: grouped, profile: profile,
-            safetyReadBudget: safetyReadBudget,
-            calibrationQuantum: calibrationQuantum)
+        let planned =
+            preparingLens
+            ? try FocusRackPreparation.make(signedSteps: signedSteps)
+            : try FocusRackPlanner.make(
+                signedSteps: signedSteps, duration: duration, delay: delay, easing: easing,
+                quiet: configuration.commandInterval, timings: commandTimings, adaptive: adaptive,
+                timed: enforcesTiming, grouped: grouped, profile: profile,
+                safetyReadBudget: safetyReadBudget)
         runID += 1
         activeNudge = nil
-        activeCalibration = nil
+        self.preparingLens = preparingLens
         trajectory = planned
         plannedDuration = planned.duration
         lastRunTransition = program.transitions[0]
@@ -874,6 +864,7 @@ public struct FocusRackEngine: Sendable {
     }
 
     private mutating func failMaintenance(at timestamp: Double) {
+        preparingLens = false
         trajectory = nil
         finishedAt = timestamp
         phase = "failed"
@@ -918,7 +909,7 @@ public struct FocusRackEngine: Sendable {
     }
 
     private mutating func clearMarks(at timestamp: Double) {
-        clearCalibration()
+        clearPreparation()
         activeNudge = nil
         marks = []
         nextStep = 0
@@ -1017,6 +1008,7 @@ public struct FocusRackEngine: Sendable {
             idle && ready && marks.contains { $0.id == "B" && $0.stepPosition != position }
         state.capabilities = caps
         state.calibration = calibrationAction(ready: ready, idle: idle)
+        if idle { state.estimatedDuration = nil }
         var admissionInstruction: String?
         if idle, let from = marks.first(where: { $0.id == state.transition.fromMark }),
             let to = marks.first(where: { $0.id == state.transition.toMark })
@@ -1034,7 +1026,10 @@ public struct FocusRackEngine: Sendable {
                 if idle { state.estimatedDuration = plan.estimatedDuration }
             } catch FocusRackError.calibrationRequired {
                 state.admissionMessage = FocusRackError.calibrationRequired.localizedDescription
-                admissionInstruction = "Go to A or B first"
+                admissionInstruction = "Prepare lens in Options"
+            } catch FocusRackError.safetyReadUnavailable {
+                state.admissionMessage = FocusRackError.safetyReadUnavailable.localizedDescription
+                admissionInstruction = "Camera not ready"
             } catch FocusRackError.durationTooShort(let minimum) {
                 state.minimumDuration = focusRackMinimumForDisplay(minimum)
                 state.admissionMessage =
@@ -1082,8 +1077,9 @@ public struct FocusRackEngine: Sendable {
             && lastRunTransition == state.transition
         let elapsed =
             completedCurrentTarget ? state.actualMovementDuration : state.estimatedDuration
-        if state.transition.durationMode == .timed, let elapsed,
+        if idle || enforcesTiming, state.transition.durationMode == .timed, let elapsed,
             elapsed > state.transition.duration + 0.0005
+                || idle && elapsed < state.transition.duration - 0.0005
         {
             let target = state.transition.duration.formatted(
                 .number.precision(.fractionLength(0...2)))
@@ -1137,26 +1133,23 @@ public struct FocusRackEngine: Sendable {
 
     private func calibrationAction(ready: Bool, idle: Bool) -> FocusRackPrimaryAction? {
         guard profile == .calibratedFineExperiment, marks.count == 2,
-            FocusRackPlanner.supportsCalibration(
-                span: abs(marks[1].stepPosition - marks[0].stepPosition))
+            FocusRackPreparation.supports(span: abs(marks[1].stepPosition - marks[0].stepPosition))
         else { return nil }
-        let total = FocusRackPlanner.calibrationQuanta.count * 2
-        guard calibrationTrips < total else {
-            return .init(title: "Calibration measured", detail: "All 5 sizes in both directions")
-        }
-        let origin = calibrationOrigin ?? marks.first(where: { $0.stepPosition == position })?.id
-        let expected = calibrationTrips % 2 == 0 ? origin : (origin == "A" ? "B" : "A")
-        let target = expected.map { $0 == "A" ? "B" : "A" }
-        let atStart = marks.contains { $0.id == expected && $0.stepPosition == position }
-        let pulses =
-            FocusRackPlanner.calibrationQuanta[calibrationTrips / 2] * configuration.pulsesPerStep
+        let current = marks.first(where: { $0.stepPosition == position })
+        let target = marks.first(where: { $0.id != current?.id })
+        let recording = context?.recording == true
         return .init(
-            kind: "calibrate", title: target.map { "Calibrate to " + $0 } ?? "Calibrate increments",
-            enabled: ready && idle && atStart,
-            detail: "\(pulses)-pulse increments · \(calibrationTrips + 1)/\(total)",
-            disabledReason: !atStart
-                ? expected.map { "Go to " + $0 + " first" } ?? "Go to A or B first"
-                : !ready ? "Camera not ready" : nil)
+            kind: "calibrate", title: "Prepare lens",
+            enabled: ready && idle && current != nil && !recording,
+            detail: recording
+                ? "Stop recording before preparing the lens"
+                : current.flatMap { start in
+                    target.map { "One pass \(start.id)→\($0.id) · recording stopped" }
+                }
+                    ?? "Go to A or B first",
+            disabledReason: recording
+                ? "Stop recording before preparing the lens"
+                : current == nil ? "Go to A or B first" : !ready ? "Camera not ready" : nil)
     }
 
     private var currentConfiguration: FocusRackConfiguration {

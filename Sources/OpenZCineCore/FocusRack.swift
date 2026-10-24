@@ -29,7 +29,7 @@ public enum FocusRackEasing: String, Codable, CaseIterable, Sendable {
 public enum FocusRackProfile: String, Sendable {
     /// Selects the finest feasible profile from the existing adaptive command sizes.
     case adaptive
-    /// Production planning using measured costs, with optional finer-increment calibration.
+    /// Production planning using measured costs, with optional one-pass lens preparation.
     case calibratedFineExperiment
 }
 
@@ -130,6 +130,10 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
     case noSmoothTiming
     /// Timed playback requires a completed command of its selected size.
     case calibrationRequired
+    /// Lens preparation moves only while recording is stopped.
+    case recordingInProgress
+    /// No measured command can complete inside fresh camera evidence.
+    case safetyReadUnavailable
     case marksTooClose
     case reconnectRequired
     case invalidTemplateName
@@ -142,6 +146,9 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
         case .samePosition: "Move focus with Near/Far before setting the second mark."
         case .referenceUnavailable: "The focus position is uncertain. Reset both marks."
         case .movementPending: "Wait for the current focus movement to settle."
+        case .recordingInProgress: "Stop recording before preparing the lens."
+        case .safetyReadUnavailable:
+            "Fresh camera readings cannot cover this movement. Wait for the camera and try again."
         case .freshFrameRequired: "Wait for a fresh camera frame before setting a mark."
         case .notAtStart: "Go to the selected start mark before running."
         case .marksTooClose:
@@ -150,7 +157,7 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
         case .invalidTemplateName: "Use a unique template name of 1–60 characters."
         case .templateStorageFull: "Remove a saved timing template before saving another."
         case .calibrationRequired:
-            "Use Go to A or Go to B once to measure this move before timed playback."
+            "Use Prepare lens in Options to measure command timing before timed playback."
         case .noSmoothTiming:
             "This duration is not supported for these marks at the current camera cadence. Try another duration or Linear. Go to A/B remains available for fast positioning."
         case .durationTooLong(let maximum):

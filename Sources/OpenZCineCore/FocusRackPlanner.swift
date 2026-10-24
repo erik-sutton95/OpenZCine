@@ -33,22 +33,15 @@ struct FocusRackMovementPlan: Sendable {
 /// Keeps fine setup units while selecting bounded command sizes for the requested timing.
 /// Scheduling estimates cannot establish optical smoothness; rehearse the selected lens and span.
 enum FocusRackPlanner {
-    static let calibrationQuanta = [2, 3, 4, 6, 8]
     // The fine source trial used 94 increments over 24 seconds. This conservative spacing envelope
     // rejects sparse long moves; it is not a guarantee of optical smoothness on another lens.
     static let maximumFineSpacing = 24.0 / 93.0
-
-    // Every stage must deliver its actual quantum inside the bounded mark-to-mark move.
-    static func supportsCalibration(span: Int) -> Bool {
-        span <= 10_000 && calibrationQuanta.allSatisfy { $0 <= span }
-    }
 
     static func make(
         signedSteps: Int, duration: Double, delay: Double, easing: FocusRackEasing,
         quiet: Double, timings: [Int: FocusRackCommandTiming], adaptive: Bool,
         timed: Bool, grouped: Bool, profile: FocusRackProfile = .adaptive,
-        safetyReadBudget: Double = 0,
-        calibrationQuantum: Int? = nil
+        safetyReadBudget: Double = 0
     ) throws -> FocusRackMovementPlan {
         guard signedSteps != 0, signedSteps != .min, abs(signedSteps) <= 10_000,
             duration.isFinite, duration > 0, delay.isFinite, delay >= 0,
@@ -56,17 +49,8 @@ enum FocusRackPlanner {
         else { throw FocusRackError.invalidConfiguration }
         let sign = signedSteps < 0 ? -1 : 1
         let count = abs(signedSteps)
-        if let calibrationQuantum {
-            guard !timed, grouped, profile == .calibratedFineExperiment,
-                supportsCalibration(span: count),
-                calibrationQuanta.contains(calibrationQuantum)
-            else { throw FocusRackError.invalidConfiguration }
-        }
         if !timed {
-            let quantum =
-                calibrationQuantum
-                ?? (adaptive && grouped
-                    ? (profile != .adaptive && count == 100 ? 10 : 12) : 1)
+            let quantum = adaptive && grouped ? (profile != .adaptive && count == 100 ? 10 : 12) : 1
             var chunks = Array(repeating: sign * quantum, count: count / quantum)
             if count % quantum != 0 { chunks.append(sign * (count % quantum)) }
             let known = chunks.allSatisfy { timings[abs($0)]?.count ?? 0 > 0 }
@@ -232,7 +216,7 @@ enum FocusRackPlanner {
                 if abs($0.duration - $1.duration) > 1e-9 { return $0.duration < $1.duration }
                 return $0.preferred(to: $1)
             })
-        else { throw FocusRackError.noSmoothTiming }
+        else { throw FocusRackError.safetyReadUnavailable }
         return movementPlan(fastest, signedSteps: signedSteps, delay: delay)
     }
 

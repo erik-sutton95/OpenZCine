@@ -801,8 +801,11 @@ func rackControllerCloseWaitsForTheNativeOutcomeWithoutLosingUncertainty(
     #expect(engine.nextAction(at: 1).kind == "wait")
 }
 
-private func controllerWithTwoMarks(_ camera: RackFakeCamera) async throws -> FocusRackController {
-    let controller = FocusRackController(driver: camera.access, clock: camera.clock)
+private func controllerWithTwoMarks(
+    _ camera: RackFakeCamera, profile: FocusRackProfile = .adaptive
+) async throws -> FocusRackController {
+    let controller = FocusRackController(
+        driver: camera.access, clock: camera.clock, profile: profile)
     await controller.observe(cameraObservation(1))
     try await waitForRack { await controller.snapshot().capabilities.canNudge }
     try await controller.handle(
@@ -816,6 +819,35 @@ private func controllerWithTwoMarks(_ camera: RackFakeCamera) async throws -> Fo
         .capture(markID: "B", expectedFrameSequence: 3), observation: cameraObservation(3))
     try await controller.handle(.updateTiming(.init(duration: 0.2, delay: 0, easing: .linear)))
     return controller
+}
+
+@Test func rackPreparationRejectsRecordingAndForwardsStopToTheProductionDriver() async throws {
+    let camera = RackFakeCamera()
+    let controller = try await controllerWithTwoMarks(camera, profile: .calibratedFineExperiment)
+    var recording = cameraObservation(4)
+    recording.recording = true
+    await #expect(throws: FocusRackError.recordingInProgress) {
+        try await controller.handle(.calibrate, observation: recording)
+    }
+    #expect(camera.driveCount == 2)
+    await controller.observe(cameraObservation(5))
+    await controller.observe(cameraObservation(6))
+    try await waitForRack { await controller.snapshot().calibration?.enabled == true }
+    try await controller.handle(.calibrate)
+    try await waitForRack { !(await controller.snapshot()).busy }
+    #expect(camera.driveObservations.dropFirst(2).map(\.signedPulses) == [-16, -16])
+    camera.holdNextDrive()
+    try await controller.handle(.calibrate, observation: cameraObservation(7))
+    try await waitForRack { camera.driveCount == 5 }
+    recording.frameSequence = 8
+    await controller.observe(recording)
+    try await waitForRack { camera.stopCount > 0 }
+    camera.finish(.complete)
+    try await waitForRack { !(await controller.snapshot()).busy }
+    #expect(camera.driveCount == 5)
+    #expect(!camera.hasOverlappingAccess)
+    #expect(await controller.snapshot().phase == .stopped)
+    await controller.close()
 }
 
 private func observationDuringPendingRead(_ disposition: String) -> FocusRackObservation {

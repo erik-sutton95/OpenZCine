@@ -157,7 +157,7 @@ private func settleCalibrationTest(
             #expect(engine.snapshot(at: now).marks == marks)
         }
     }
-    #expect(engine.state(at: now).calibration?.detail == "32-pulse increments · 1/10")
+    #expect(engine.state(at: now).calibration?.detail == "One pass A→B · recording stopped")
     // Reset clears relative positions, but the same saved evidence can be merged again.
     try engine.reset(at: now)
     #expect(engine.calibrationTimings.isEmpty)

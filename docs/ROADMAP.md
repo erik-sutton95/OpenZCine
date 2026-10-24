@@ -137,9 +137,11 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   Local work adds Native AF picture A/B targets, immediate selection and delayed directional
   actions alongside Timed Rack, with camera-set AF speed and separate movement authority on both
   shells. Timed duration targets retain their requested value while showing a longer execution
-  estimate when needed; runtime overruns warn and extend playback, and the 3-second target
-  preserves the accepted finer movement family. Native AF shows saved targets and visible
-  point-lock recovery. Timed mark setup selects Near/Far, then 1/10/100 signed steps.
+  estimate when needed; runtime overruns warn and extend playback. A shared measured planner
+  selects command sizes for every duration and lens. One explicit Prepare lens pass measures
+  bounded sizes within A/B while recording is stopped, replacing manual multi-stage preparation.
+  Native AF shows saved targets and visible point-lock recovery. Timed mark setup selects Near/Far,
+  then 1/10/100 signed steps.
   Shared and native-shell regressions cover timing overruns, safety-read placement and cancellation;
   the remaining recorded qualification matrix is explicitly open.
   Both modes temporarily configure movie AF and restore only still-owned settings on close,
