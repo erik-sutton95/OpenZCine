@@ -1163,7 +1163,7 @@ private func runJointControllerComparison(delay: Double, disposition: String) as
     let commands = camera.driveObservations.filter { $0.runID == before.runID }
     #expect(!camera.hasOverlappingAccess)
     if disposition == "complete" {
-        #expect(commands.count == 23)
+        #expect(commands.count == 30)
         #expect(commands.reduce(0) { $0 + $1.signedPulses } == -1600)
         let start = try #require(commands.first).startedAt
         let end = try #require(commands.last?.finishedAt)

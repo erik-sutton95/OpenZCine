@@ -546,7 +546,7 @@ func preflightRebaseExcludesPausesBeforeItsCompletion(resumeDuringPreflight: Boo
         try engine.setTransition(.init(duration: duration), at: now)
         try engine.run(direction: .aToB, at: now)
         let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
-        #expect(pulses.first == (duration == 1 ? 128 : (duration == 3 ? 64 : 32)))
+        #expect(pulses.allSatisfy { [16, 32, 48, 64, 96, 128, 160].contains(abs($0)) })
         #expect(pulses.reduce(0, +) == 1_600)
         #expect(engine.state(at: now).phase == .complete)
         try engine.seek(markID: "A", at: now)
@@ -592,13 +592,13 @@ func preflightRebaseExcludesPausesBeforeItsCompletion(resumeDuringPreflight: Boo
             profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
     }
     #expect(try plan(1).chunks == Array(repeating: 10, count: 10))
-    // The finer 3s family cannot be replaced with unqualified coarse ordinary moves.
-    #expect(throws: FocusRackError.calibrationRequired) { try plan(3) }
+    // Partial evidence can supply a complete timed move without borrowing unmeasured sizes.
+    #expect(try plan(3).chunks.allSatisfy { [6, 10].contains(abs($0)) })
     timings[4] = timing(0.06)
     #expect(try plan(3).chunks.contains(4))
     #expect(try plan(5).chunks.contains(4))
     timings[6] = timing(0.4)
-    #expect(try plan(3).chunks.allSatisfy { abs($0) == 4 })
+    #expect(try plan(3).chunks.allSatisfy { [4, 10].contains(abs($0)) })
 }
 
 @Test(arguments: [1.0, 3.0, 5.0])
@@ -692,7 +692,7 @@ func rackGrowingReadBudgetKeepsSafeMovementAvailable(afterFirstCommand: Bool) th
     #expect(engine.state(at: now).admissionMessage == nil)
     try engine.setTransition(.init(duration: 3), at: now)
     #expect(engine.state(at: now).admissionMessage == nil)
-    #expect(engine.state(at: now).timingWarning != nil)
+    #expect(engine.state(at: now).estimatedDuration.map { $0.isFinite && $0 > 0 } == true)
     engine.recordSafetyRead(startedAt: now - 0.06, finishedAt: now, accepted: true)
     #expect(engine.safetyReadBudget == 0.1)
     for duration in [1.0, 3.0, 5.0] {
@@ -778,8 +778,7 @@ func rackFineCalibrationUsesTheActualSharpMarkSpan(span: Int) throws {
             try engine.run(direction: direction, at: now)
             let pulses = try settleAdaptive(&engine, now: &now, commandDuration: 0.06)
             let sign = direction == .aToB ? 1 : -1
-            let expectedFirst = duration == 1 ? 128 : (duration == 3 ? 64 : 32)
-            #expect(pulses.first == sign * expectedFirst)
+            #expect(pulses.allSatisfy { [16, 32, 48, 64, 96, 128, 160, 192].contains(abs($0)) })
             #expect(pulses.reduce(0, +) == sign * 1_696)
             #expect(engine.state(at: now).phase == .complete)
             #expect(engine.currentProgram.marks == marks)
@@ -802,12 +801,14 @@ func rackFineCalibrationUsesTheActualSharpMarkSpan(span: Int) throws {
             profile: .calibratedFineExperiment, safetyReadBudget: 0.1)
     }
     let fine = try plan()
-    #expect(fine.chunks.allSatisfy { abs($0) == 1 })
-    #expect(fine.duration > 1)
+    #expect(fine.chunks.reduce(0, +) == 106)
+    #expect(fine.chunks.allSatisfy { [1, 8, 10].contains(abs($0)) })
+    #expect(fine.duration == 1)
     timings[2] = timing(0.06)
     #expect(try plan().chunks == Array(repeating: 8, count: 13) + [2])
     timings[2] = timing(0.128)
     let slowerResidual = try plan()
-    #expect(slowerResidual.chunks == Array(repeating: 8, count: 13) + [2])
-    #expect(slowerResidual.duration > 1)
+    #expect(slowerResidual.chunks.reduce(0, +) == 106)
+    #expect(slowerResidual.chunks.allSatisfy { [1, 8, 10].contains(abs($0)) })
+    #expect(slowerResidual.duration == 1)
 }

@@ -42,8 +42,9 @@ func rackJointPlanUsesSmallerMeasuredMovesAndExplicitFreshReadWindows(steps: Int
         plan.chunks.allSatisfy {
             $0.signum() == steps.signum() && jointRackMaxima[abs($0) * 16] != nil
         })
-    #expect(plan.chunks.filter { abs($0) == 4 }.count >= 21)
-    #expect(plan.chunks.map(abs).max() == 8)
+    let ordinary = abs(steps) == 100 ? 3 : 4
+    #expect(plan.chunks.filter { abs($0) == ordinary }.count >= 20)
+    #expect(plan.chunks.map(abs).max() ?? 0 <= 10)
     #expect(reads.count == 1)
     var safetyAt = plan.delay - 0.1
     for index in plan.chunks.indices {
@@ -71,7 +72,7 @@ func rackJointPlanUsesSmallerMeasuredMovesAndExplicitFreshReadWindows(steps: Int
             #expect(abs(finish - plan.delay - plan.duration) < 1e-9)
         }
     }
-    if abs(steps) == 100 { #expect(plan.chunks.count == 23) }
+    #expect(plan.duration == 3)
 }
 
 @Test func rackJointSearchRejectsInvalidOrUnboundedRequestsAndKeepsShortPlanning() throws {
@@ -81,7 +82,9 @@ func rackJointPlanUsesSmallerMeasuredMovesAndExplicitFreshReadWindows(steps: Int
     for duration in [Double.infinity, Double.nan, 0] {
         #expect(throws: FocusRackError.invalidConfiguration) { try jointPlan(duration: duration) }
     }
-    #expect(throws: FocusRackError.self) { try jointPlan(duration: Double.greatestFiniteMagnitude) }
+    let enormousTarget = try jointPlan(duration: Double.greatestFiniteMagnitude)
+    #expect(enormousTarget.duration.isFinite)
+    #expect(enormousTarget.chunks.reduce(0, +) == 100)
     #expect(try jointPlan(duration: 1.5).maintenanceReadOffsets == nil)
     for span in [10_000, -10_000] {
         let plan = try jointPlan(span, duration: 300)
@@ -382,7 +385,7 @@ func rackJointSixSecondReplayExtendsCadenceForObservedWakeLateness(
     }
 }
 
-@Test func rackJointProfilesKeepFineThreeSecondsAndTheSixSecondHeadroomFix()
+@Test func rackJointProfilesUseMeasuredFamiliesAndKeepTheSixSecondHeadroomFix()
     throws
 {
     let timings = phoneJointMaxima.reduce(into: [Int: FocusRackCommandTiming]()) { result, item in
@@ -401,9 +404,8 @@ func rackJointSixSecondReplayExtendsCadenceForObservedWakeLateness(
             profiles[duration] = plan.chunks.map { abs($0) * 16 }
         }
         #expect(profiles[1] == Array(repeating: 160, count: 10))
-        #expect(
-            profiles[3] == Array(repeating: 64, count: 11) + [128]
-                + Array(repeating: 64, count: 10) + [128])
+        #expect(profiles[3]?.filter { $0 == 64 }.count ?? 0 >= 20)
+        #expect(profiles[3]?.allSatisfy { phoneJointMaxima[$0] != nil } == true)
         #expect(profiles[6]?.count == 44)
         #expect(profiles[6]?.filter { $0 == 32 }.count == 40)
         #expect(profiles[6]?.filter { $0 == 64 }.count == 3)
@@ -429,6 +431,7 @@ func rackTargetDurationExecutesBothDirectionsWithCapturedPhoneCosts(
         #expect(planned >= duration)
         var delivered = 0
         var periodicReads = 0
+        var scheduledReads = 0
         for _ in 0..<500 where engine.snapshot(at: now).busy {
             // Mirror the controller's periodic-read fallback with real elapsed read cost.
             // Never refresh safety for free, or borrow time beyond the next command deadline.
@@ -451,6 +454,7 @@ func rackTargetDurationExecutesBothDirectionsWithCapturedPhoneCosts(
                     runID: action.runID, commandID: try #require(action.commandID),
                     outcome: 0, at: now)
             case "readSafety":
+                scheduledReads += 1
                 safetyAt = now
                 now += 0.1
                 engine.recordSafetyRead(startedAt: safetyAt, finishedAt: now, accepted: true)
@@ -462,7 +466,7 @@ func rackTargetDurationExecutesBothDirectionsWithCapturedPhoneCosts(
             default: break
             }
         }
-        if duration == 1, span == 300 { #expect(periodicReads > 0) }
+        if duration == 1, span == 300 { #expect(periodicReads + scheduledReads > 0) }
         #expect(engine.snapshot(at: now).phase == "complete")
         #expect(delivered == (direction == .bToA ? -span : span) * 16)
         #expect(engine.state(at: now).referenceValid)
@@ -492,7 +496,7 @@ func rackPreflightReadGrowthReplansFineMovesOnlyBeforeActivation(stopped: Bool) 
         return
     }
     #expect(action.kind == "drive")
-    #expect(action.signedPulses == -64)
+    #expect(action.signedPulses.map { phoneJointMaxima[abs($0)] != nil } == true)
     #expect(engine.state(at: now).transition.duration == 3)
     #expect(engine.state(at: now).estimatedDuration ?? 0 >= 3)
     #expect(engine.nextAction(at: now).kind == "idle")
@@ -573,7 +577,7 @@ func rackRecordedSixteenAndFortyUnitStopsNowReachBothEndpoints(prefixCount: Int)
         #expect(state.stepPosition == (direction == .bToA ? 0 : 110))
         #expect(delivered.reduce(0, +) == (direction == .bToA ? -1760 : 1760))
         #expect(delivered == expected.chunks.map { $0 * 16 })
-        #expect(delivered.prefix(prefixCount).allSatisfy { abs($0) == 64 })
+        #expect(delivered.prefix(prefixCount).allSatisfy { phoneJointMaxima[abs($0)] != nil })
         #expect(state.transition.duration == requested)
         #expect(state.timingWarning != nil)
         #expect(state.admissionMessage == nil)

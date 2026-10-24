@@ -39,8 +39,7 @@ enum FocusRackJointPlanner {
 
     static func make(
         signedSteps: Int, duration: Double, delay: Double, quiet: Double,
-        timings: [Int: FocusRackCommandTiming], quanta: [Int], readBudget: Double,
-        ordinaryQuantum: Int? = nil
+        timings: [Int: FocusRackCommandTiming], quanta: [Int], readBudget: Double
     ) -> Schedule? {
         guard signedSteps != .min, (2...10_000).contains(abs(signedSteps)),
             duration.isFinite, duration >= 2, delay.isFinite, delay >= 0,
@@ -54,7 +53,7 @@ enum FocusRackJointPlanner {
                 && timings[$0]?.longest.isFinite == true && timings[$0]?.longest ?? 0 >= 0
         }.sorted()
         var best: Schedule?
-        for base in measured where ordinaryQuantum == nil || ordinaryQuantum == base {
+        for base in measured {
             for final in measured {
                 let search = Search(
                     count: count, base: base, final: final, duration: duration, quiet: quiet,
@@ -70,45 +69,6 @@ enum FocusRackJointPlanner {
             if let best, best.finest <= base { break }
         }
         return best
-    }
-
-    // Preserve the optically accepted 64-pulse ordinary family for the 3s target. Timing
-    // growth can lengthen its fixed schedule, but cannot substitute 96-pulse ordinary moves.
-    static func fineTarget(
-        signedSteps: Int, duration: Double, delay: Double, quiet: Double,
-        timings: [Int: FocusRackCommandTiming], quanta: [Int], readBudget: Double
-    ) -> Schedule? {
-        let measured = quanta.filter {
-            $0 <= 8 && timings[$0]?.count ?? 0 > 0
-                && timings[$0]?.longest.isFinite == true && timings[$0]?.longest ?? -1 >= 0
-        }
-        guard let base = measured.filter({ $0 <= 4 }).max(), abs(signedSteps) > base,
-            readBudget > 0, readBudget < FocusRackPlanner.maximumFineSpacing
-        else { return nil }
-        if let exact = make(
-            signedSteps: signedSteps, duration: duration, delay: delay, quiet: quiet,
-            timings: timings, quanta: measured, readBudget: readBudget, ordinaryQuantum: base)
-        {
-            return exact
-        }
-        let costs = timings.mapValues(\.longest)
-        let candidates = measured.filter { $0 < abs(signedSteps) }.reduce(into: Set<Double>()) {
-            result, final in
-            let search = Search(
-                count: abs(signedSteps), base: base, final: final, duration: duration,
-                quiet: quiet, costs: costs, quanta: measured, readBudget: readBudget)
-            result.formUnion(search.targetDurations())
-        }
-        for candidate in candidates.sorted() where candidate >= duration {
-            if let plan = make(
-                signedSteps: signedSteps, duration: candidate, delay: delay, quiet: quiet,
-                timings: timings, quanta: measured, readBudget: readBudget,
-                ordinaryQuantum: base)
-            {
-                return plan
-            }
-        }
-        return nil
     }
 
     private struct Search {
@@ -127,55 +87,6 @@ enum FocusRackJointPlanner {
         // precedes the previous read START + 2s. This also leaves a preflight-age reserve.
         var period: Double { 2 - cap - readBudget - 1e-6 }
         var requiredReads: Int { max(1, Int(ceil((duration + cap - 2 + 1e-6) / period))) }
-
-        func targetDurations() -> Set<Double> {
-            let finalCost = costs[final] ?? 0
-            let headroom = minimumDispatchHeadroom + 1e-8
-            let baseScale = ((costs[base] ?? 0) + quiet + headroom) / Double(base)
-            let lower = max(baseScale, (duration - finalCost) / Double(span))
-            let upper = min(
-                cap / Double(base), (Double(count) * cap + 2 - finalCost) / Double(span))
-            guard lower <= upper else { return [] }
-            var candidates: Set<Double> = [
-                Double(span) * lower + finalCost, Double(span) * upper + finalCost,
-            ]
-            for quantum in quanta where quantum >= base {
-                let scale = max(
-                    lower, ((costs[quantum] ?? 0) + quiet + readBudget + headroom) / Double(quantum)
-                )
-                let bridgeUpper = min(upper, cap / Double(quantum))
-                if scale <= bridgeUpper {
-                    candidates.insert(Double(span) * scale + finalCost)
-                    candidates.insert(Double(span) * bridgeUpper + finalCost)
-                }
-            }
-            candidates.formUnion(
-                readBoundaryDurations(lower: lower, upper: upper, headroom: headroom))
-            return candidates
-        }
-
-        private func readBoundaryDurations(lower: Double, upper: Double, headroom: Double) -> Set<
-            Double
-        > {
-            let finalCost = costs[final] ?? 0
-            var boundaries: Set<Double> = []
-            let readCount = max(
-                1, Int(ceil((Double(span) * upper + finalCost + cap - 2 + 1e-6) / period)))
-            // Keep eight nearby read boundaries per final, rather than enumerating every
-            // position/read pair. Full schedule validation still decides each candidate.
-            for read in 1...readCount {
-                let numerator = Double(read) * period - cap + readBudget + headroom
-                let nearest = min(span, Int(floor(numerator / lower)))
-                guard nearest >= 1 else { continue }
-                for position in max(1, nearest - 8)...nearest {
-                    let scale = numerator / Double(position)
-                    if scale >= lower && scale <= upper {
-                        boundaries.insert(Double(span) * scale + finalCost)
-                    }
-                }
-            }
-            return Set(boundaries.sorted().prefix(8))
-        }
 
         func ordinaryFits(_ quantum: Int) -> Bool {
             guard let cost = costs[quantum], scale > 0 else { return false }
