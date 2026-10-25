@@ -101,7 +101,7 @@ internal val RED_LUT_PACK: MonitorLutPackSource = MonitorLutPackSource(
     helperScript = RED_HELPER_JS,
     copy = MonitorLutPackCopy(
         intro = "RED provides its IPP2 Output Presets for free, but you must accept RED's terms on RED's own site.",
-        introDetail = "We'll open RED's real download page. Accept their terms there, then start the download — " +
+        introDetail = "We'll open RED's real download page. Accept their terms there, then start the download, and " +
             "we'll import the LUTs automatically.",
         continueLabel = "Continue to RED's page",
         hopReady = "We'll hop off the camera's Wi‑Fi to download, then reconnect your camera automatically.",
