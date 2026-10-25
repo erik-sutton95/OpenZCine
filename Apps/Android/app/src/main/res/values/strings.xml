@@ -170,22 +170,12 @@
     <!-- Saved cameras: the add-setup card and the cameras page rows. -->
     <string name="saved_your_cameras">Your cameras</string>
     <string name="saved_wifi_subtitle">Wi‑Fi · %1$s · %2$s</string>
-    <string name="saved_add_setup_title">Add a setup · %1$s</string>
-    <string name="saved_add_setup_body">One camera, several ways to reach it. Pick how this rig runs; the setup saves itself the first time you connect that way.</string>
-    <string name="saved_setup_ap_title">Camera access point</string>
-    <string name="saved_setup_ap_body">This device joins the camera\'s own Wi-Fi — best in the field with no other gear. You\'ll be asked for the camera\'s network key the first time only.</string>
-    <string name="saved_setup_ap_action_join">Join Camera Wi-Fi</string>
-    <string name="saved_setup_ap_action_scan">Scan Camera Wi-Fi</string>
-    <string name="saved_setup_connect_now">Connect Now</string>
-    <string name="saved_setup_connect_when_plugged">Connect When Plugged In</string>
-    <string name="saved_setup_find_on_network">Find On This Network</string>
-    <string name="saved_setup_wait_for_camera">Wait For Camera</string>
-    <string name="saved_setup_router_title">Wi-Fi network</string>
-    <string name="saved_setup_router_body">Put the camera and this device on the same network (a set router, house Wi-Fi). Turn on Connect to PC on the camera with a profile for that network; it appears in the camera list and saves on connect.</string>
-    <string name="saved_setup_hotspot_title">This device\'s hotspot</string>
-    <string name="saved_setup_hotspot_body">Turn on this device\'s hotspot and point a camera network profile at it. The camera joins YOU — once it does, it appears in the list.</string>
-    <string name="saved_setup_usb_title">USB-C cable</string>
-    <string name="saved_setup_usb_body">Plug the camera straight into this device. It connects and saves itself — nothing to configure.</string>
+    <string name="saved_setup_ap_action_join">Join camera Wi-Fi</string>
+    <string name="saved_setup_ap_action_scan">Scan camera Wi-Fi</string>
+    <string name="saved_setup_connect_now">Connect now</string>
+    <string name="saved_setup_connect_when_plugged">Connect when plugged in</string>
+    <string name="saved_setup_find_on_network">Find on this network</string>
+    <string name="saved_setup_wait_for_camera">Wait for camera</string>
     <string name="saved_network_filters_discovery">This network blocks device discovery (multicast/mDNS is filtered), so devices can be unstable or missing here. OpenZCine is reaching them directly instead. For reliable discovery, disable multicast filtering and multicast minimum-rate limits on the router.</string>
     <string name="relay_watch">Watch</string>
     <string name="pairing_watcher_question">Watching another device?</string>
@@ -493,7 +483,7 @@
     <string name="settings_quality_bias_fast">Fast</string>
     <string name="settings_quality_bias_balanced">Balanced</string>
     <string name="settings_quality_bias_quality">Quality</string>
-    <string name="saved_setup_router_name_permission">To keep more than one router setup for this camera, OpenZCine needs to read the name of the network you are on — Android treats a network name as location information. Without it, every router shares one setup, exactly as before.</string>
+    <string name="saved_setup_router_name_permission">To keep more than one router setup for this camera, OpenZCine needs to read the name of the network you are on. Android treats a network name as location information. Without it, every router shares one setup, exactly as before.</string>
     <string name="saved_setup_router_name_permission_action">Allow network names</string>
     <string name="settings_processing">Processing</string>
     <string name="settings_auto_rotate_feed">Auto-Rotate Feed</string>

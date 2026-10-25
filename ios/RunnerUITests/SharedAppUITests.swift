@@ -100,13 +100,26 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         let addSetup = app.buttons["cameras.addSetup"].firstMatch
         XCTAssertTrue(waitUntilHittable(addSetup))
         addSetup.tap()
-        let usb = app.buttons["addSetup.usbC"]
+        // OpenCine's shared chooser, the one Pocket shows, with Nikon's own routes as options.
+        XCTAssertTrue(
+            app.staticTexts["How should this camera connect?"].waitForExistence(timeout: 5))
+        // A demo camera without a model is named alone, no dangling separator.
+        XCTAssertFalse(
+            app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", " ·")).firstMatch
+                .exists)
+        XCTAssertFalse(
+            app.staticTexts.matching(
+                NSPredicate(format: "label BEGINSWITH %@", "Add a setup")
+            ).firstMatch.exists)
+        let usb = app.buttons["addSetup.usb"]
         XCTAssertTrue(usb.waitForExistence(timeout: 5))
-        XCTAssertTrue(usb.isHittable)
-        XCTAssertTrue(app.buttons["addSetup.infrastructure"].isHittable)
+        XCTAssertTrue(app.buttons["addSetup.wifi"].exists)
         XCTAssertTrue(app.buttons["addSetup.phoneHotspot"].exists)
         XCTAssertFalse(app.buttons["addSetup.cameraAccessPoint"].exists)
-        XCTAssertEqual(usb.label, "Connect When Plugged In")
+        XCTAssertEqual(app.buttons["addSetup.wifi"].label, "Find on this network")
+        XCTAssertEqual(usb.label, "Connect when plugged in")
+        // Shared order: the networks first, then the cable.
+        XCTAssertLessThan(app.buttons["addSetup.wifi"].frame.minY, usb.frame.minY)
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "SIMULATED-typed-add-setup-landscape"
         shot.lifetime = .keepAlways
