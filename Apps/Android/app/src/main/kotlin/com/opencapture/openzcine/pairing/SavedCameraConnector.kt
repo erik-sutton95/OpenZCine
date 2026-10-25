@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.CameraConnectionFailure
 import com.opencapture.opencine.nikon.NikonBodyWake
 import com.opencapture.opencine.nikon.NikonHosts
 import com.opencapture.openzcine.R
@@ -306,6 +307,13 @@ internal class SavedCameraConnector(
                     scope.launch(start = CoroutineStart.UNDISPATCHED) {
                         attemptSession.connectionProgress.collect { progress ->
                             when (progress.phase) {
+                                // The dial's own body wake (OpenCine `NikonBodyWake`): the same
+                                // waiting step as the pre-dial wake, then back to the handshake.
+                                CameraConnectionPhase.DISCOVERING -> _phase.value = SavedCameraPhase.Waking(record.displayTitle)
+                                CameraConnectionPhase.HANDSHAKING ->
+                                    if (_phase.value is SavedCameraPhase.Waking) {
+                                        _phase.value = SavedCameraPhase.Connecting(record.displayTitle)
+                                    }
                                 CameraConnectionPhase.PAIRING -> _phase.value = SavedCameraPhase.Pairing(record.displayTitle)
                                 CameraConnectionPhase.CONFIRM_ON_CAMERA -> {
                                     pairingWasConfirmed = true
@@ -427,6 +435,11 @@ internal class SavedCameraConnector(
      * point setups never do, their remedy is the join flow reconnect already runs.
      */
     private fun unreachable(record: SavedCameraRecord, last: CameraConnectionProgress?): SavedCameraConnectException {
+        // A body the wake never heard gets the shared copy iOS shows, named like the card. It
+        // already names the network cause, so no second hint.
+        if (last?.failure == CameraConnectionFailure.CAMERA_SILENT) {
+            return SavedCameraConnectException(NikonBodyWake.silentMessage(record.displayTitle))
+        }
         val message =
             friendlyCameraConnectionFailure(
                 last?.failure,

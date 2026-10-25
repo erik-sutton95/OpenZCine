@@ -98,11 +98,11 @@ internal fun ratingWriteResult(returnValue: Int): RatingWriteResult =
 /** Operator-facing refusal line carrying the body's response code (the diagnostic discriminator). */
 internal fun ratingRefusalMessage(code: Int): String =
     when {
-        code == 0 -> "Rating not saved — the camera didn't respond."
+        code == 0 -> "Rating not saved: the camera didn't respond."
         code == 0x2013 ->
-            "Rating not saved — camera refused (Access Denied ${ratingCodeHex(code)}). " +
+            "Rating not saved: camera refused (Access Denied ${ratingCodeHex(code)}). " +
                 "It may not accept ratings in this mode."
-        else -> "Rating not saved — camera refused (${ratingCodeHex(code)})."
+        else -> "Rating not saved: camera refused (${ratingCodeHex(code)})."
     }
 
 private fun ratingCodeHex(code: Int): String = "0x%04X".format(code)

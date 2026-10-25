@@ -7,6 +7,7 @@ New and changed
 
 Fixes
 
+- A dozing camera gets a waiting step of up to about 20 s; half-press the shutter during it to connect. A camera that stays silent says it may be asleep.
 - A safe timed pull can finish after its requested duration and show a warning. Stop, cancellation and camera safety checks still apply.
 - Saved Native AF targets and focus-point unlock are easier to see. Focus setup reopens from Clean display, and nudge progress stays in the pressed button.
 - Automatic focus setup restores settings after closing when recording and focus have stopped, while keeping manual changes.

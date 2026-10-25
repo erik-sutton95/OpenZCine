@@ -6,6 +6,8 @@ import androidx.compose.ui.test.filter
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -71,8 +73,8 @@ class PublishedOperatorSettingsCompatibilityTest {
         trafficHelp.performScrollTo().performClick()
         composeRule.onNodeWithText("SIMULATED published traffic help").assertIsDisplayed()
         trafficHelp.performClick()
-        composeRule.onAllNodesWithContentDescription("Traffic Lights").assertCountEquals(1)
-        composeRule.onNodeWithContentDescription("Traffic Lights").performScrollTo().performClick()
+        composeRule.onAllNodes(hasText("Traffic Lights") and hasClickAction()).assertCountEquals(1)
+        composeRule.onNode(hasText("Traffic Lights") and hasClickAction()).performScrollTo().performClick()
         composeRule.runOnIdle { assertEquals(1, trafficCalls) }
         composeRule.onNodeWithTag("monitor.settings.tab.Display").performScrollTo().performClick()
         composeRule.onNodeWithText("Published layout").performScrollTo().assertIsDisplayed()
@@ -99,7 +101,7 @@ class PublishedOperatorSettingsCompatibilityTest {
             MonitorDisplayOrderGroup("Published order", "SIMULATED order", emptyList(), move = { _, _ -> }))
         composeRule.setContent { OpenZCineTheme { MonitorOperatorSettingsScreen(configuration, display) } }
         composeRule.onNodeWithText("SIMULATED transport").assertIsDisplayed()
-        composeRule.onAllNodesWithContentDescription("Traffic Lights").assertCountEquals(0)
+        composeRule.onAllNodes(hasText("Traffic Lights") and hasClickAction()).assertCountEquals(0)
         composeRule.runOnIdle {
             assertSame(list, configuration.assistSections)
             display.returnedFromEditor()
