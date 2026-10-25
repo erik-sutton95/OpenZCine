@@ -377,7 +377,7 @@ class FocusRackPanelComposeTest {
         waitForKeyboardDismissed()
         compose.onNodeWithTag("focusRack.duration").performScrollTo().assertTextContains("10 s")
         compose.runOnIdle { state.value = state.value.copy(primaryEnabled = false,
-            admissionMessage = "This move needs at least 19 seconds.", primaryDisabledReason = "Adjust timing",
+            admissionMessage = "This move needs at least 19 seconds.",
             playbackInstruction = "Adjust timing", pullAToB = state.value.pullAToB?.copy(enabled = false),
             pullBToA = state.value.pullBToA?.copy(enabled = false)) }
         compose.onNodeWithTag("focusRack.pull.aToB").assertIsNotEnabled()
@@ -1058,7 +1058,7 @@ class FocusRackPanelComposeTest {
         primaryDetail = "3 s pull", pullAToB = ready().pullAToB?.copy(detail = "3 s pull"),
         pullBToA = ready().pullBToA?.copy(detail = "3 s pull"))
 
-    private fun mark(id: String, position: Int) = FocusRackMarkViewState(id, position, 1, "fixture", 1)
+    private fun mark(id: String, position: Int) = FocusRackMarkViewState(id, position, 1, 1)
     private data class Timing(val duration: String, val delay: String, val easing: String, val reverse: Boolean)
     private class Actions {
         val nativeSets = mutableListOf<String>()

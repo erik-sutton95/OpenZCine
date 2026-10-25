@@ -297,12 +297,6 @@ public actor FocusRackController {
         case .updateTiming(let update):
             let transition = try engine.currentProgram.transitions[0].applying(update)
             try engine.setTransition(Self.linearTransition(transition), at: now)
-        case .setDirection(let direction):
-            var transition = engine.currentProgram.transitions[0]
-            transition.fromMark = direction == .aToB ? "A" : "B"
-            transition.toMark = direction == .aToB ? "B" : "A"
-            try engine.setTransition(transition, at: now)
-        case .start: try engine.run(reverse: false, at: now)
         case .pause: engine.requestPause(at: now)
         case .resume: try engine.resume(at: now)
         case .stop: engine.requestStop(at: now)
@@ -318,11 +312,10 @@ public actor FocusRackController {
             nextSafetyAt = 0
             needsReadinessFrameBarrier = true
             engine.externalFocusAction(at: now)
-        case .performPrimary, .primary:
+        case .performPrimary:
             let primary = engine.state(at: now).primary
             guard primary.enabled else { throw FocusRackError.referenceUnavailable }
             switch primary.kind {
-            case "goTo": try engine.seek(markID: primary.markID ?? "", at: now)
             case "run", "rehearse": try engine.run(reverse: false, at: now)
             case "pause": engine.requestPause(at: now)
             case "resume": try engine.resume(at: now)

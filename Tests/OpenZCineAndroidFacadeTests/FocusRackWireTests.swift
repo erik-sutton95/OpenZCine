@@ -155,10 +155,11 @@ private func waitForRackWire(
     )
     #expect(wire.step(owner: owner, requestJSON: "not JSON") == nil)
     #expect(wire.step(owner: owner, requestJSON: String(repeating: " ", count: 16_385)) == nil)
-    _ = try rackWireReply(wire, owner, kind: "start")
+    _ = try rackWireReply(wire, owner, kind: "run", fields: ["direction": "aToB"])
     _ = try await waitForRackWire(wire, owner) { $0.error != nil }
     wire.close(owner: owner)
-    #expect(wire.step(owner: owner, requestJSON: "{\"kind\":\"start\"}") == nil)
+    #expect(
+        wire.step(owner: owner, requestJSON: "{\"kind\":\"run\",\"direction\":\"aToB\"}") == nil)
     #expect(camera.log.isEmpty)
 }
 

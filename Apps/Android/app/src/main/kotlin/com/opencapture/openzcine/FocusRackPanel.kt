@@ -45,8 +45,8 @@ internal data class FocusRackViewState(
     val focusMode: String = "timedRack", val canChangeFocusMode: Boolean = false,
     val focusModeSwitchPending: Boolean = false,
     val afSettingsPending: Boolean = false, val afSettingsRestoring: Boolean = false,
-    val afSettingsReady: Boolean = false, val afSettingsFailure: String? = null,
-    val nativeAFConfigured: Boolean = false, val canNativeAutofocus: Boolean = false,
+    val afSettingsFailure: String? = null,
+    val canNativeAutofocus: Boolean = false,
     val nativeAFDisabledReason: String? = null, val nativeAF: NativeAFRackViewState = NativeAFRackViewState(),
     val phase: String = "idle", val message: String = "Connect a camera to set focus marks.",
     val recovery: String? = null, val error: String? = null, val admissionMessage: String? = null,
@@ -56,7 +56,7 @@ internal data class FocusRackViewState(
     val estimatedDuration: Double? = null, val timingWarning: String? = null,
     val timingWarningIsEstimate: Boolean = false,
     val primaryTitle: String = "Set A and B", val primaryEnabled: Boolean = false,
-    val primaryDetail: String? = null, val primaryDisabledReason: String? = null,
+    val primaryDetail: String? = null,
     val pullAToB: FocusRackActionViewState? = null, val pullBToA: FocusRackActionViewState? = null,
     val calibration: FocusRackActionViewState? = null,
     val preparationRecommended: Boolean = false, val preparingLens: Boolean = false,
@@ -64,15 +64,15 @@ internal data class FocusRackViewState(
     val canGoToA: Boolean = false, val canGoToB: Boolean = false,
     val canCaptureA: Boolean = false, val canCaptureB: Boolean = false, val canNudge: Boolean = false, val canEdit: Boolean = false,
     val canReset: Boolean = false, val canAutofocus: Boolean = false, val canPause: Boolean = false, val canStop: Boolean = false, val active: Boolean = false,
-    val completed: Int = 0, val total: Int = 0, val minimumDuration: Double? = null,
+    val completed: Int = 0, val total: Int = 0,
     val remainingDelay: Double = 0.0, val recording: Boolean = false,
     val nudgeProgress: FocusRackNudgeProgressViewState? = null,
 )
 /** Native target state projected by the shared Swift value; coordinates never become lens marks. */
 internal data class NativeAFRackViewState(
     val hasA: Boolean = false, val hasB: Boolean = false, val selectingMark: String? = null,
-    val startDelay: Double = 0.0, val remainingDelay: Double = 0.0, val busy: Boolean = false,
-    val dispatching: Boolean = false, val canSet: Boolean = false, val canGoToA: Boolean = false,
+    val startDelay: Double = 0.0, val busy: Boolean = false,
+    val canSet: Boolean = false, val canGoToA: Boolean = false,
     val canGoToB: Boolean = false, val canRun: Boolean = false, val canCancel: Boolean = false,
     val message: String = "Set A and B by tapping subjects in the picture.", val failure: String? = null,
 )
@@ -82,7 +82,7 @@ internal data class FocusRackNudgeProgressViewState(val towardNear: Boolean, val
 internal data class FocusRackActionViewState(val title: String, val detail: String?, val enabled: Boolean,
     val disabledReason: String? = null)
 internal data class FocusRackMarkViewState(val id: String, val position: Int, val revision: Long,
-    val sessionID: String, val frameSequence: Long)
+    val frameSequence: Long)
 internal data class FocusRackTimingViewState(val name: String, val json: String)
 
 /** Only edited fields cross the queued boundary; Swift merges and validates them. */

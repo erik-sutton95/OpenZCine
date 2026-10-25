@@ -515,7 +515,6 @@ public final class FocusRackWire: @unchecked Sendable {
                 }
                 intent = .setTransition(transition)
             case "primary": intent = .performPrimary
-            case "start": intent = .start
             case "pause": intent = .pause
             case "resume": intent = .resume
             case "stop": return  // Already published synchronously at request receipt.

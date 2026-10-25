@@ -595,24 +595,8 @@ struct FocusRackPendingCapture {
         clearPendingCapture()
         send(.reset)
     }
-    func performPrimary() { send(.primary) }
+    func performPrimary() { send(.performPrimary) }
     func run(_ direction: FocusRackDirection) { send(.run(direction: direction)) }
-    func setDirection(_ direction: FocusRackDirection) { send(.setDirection(direction)) }
-    func setTransition(_ transition: FocusRackTransition) {
-        #if DEBUG
-            // Driver-free presentation fixtures only; movement always remains in the controller.
-            if controller == nil, !storesTemplates, var fixture = state {
-                fixture.transition = transition
-                fixture.direction = transition.fromMark == "A" ? .aToB : .bToA
-                fixture.primary.detail = transition.playbackDetail
-                fixture.updateTimedActions(
-                    recording: fixture.primary.kind == "run", ready: fixture.referenceValid)
-                state = fixture
-                return
-            }
-        #endif
-        send(.setTransition(transition))
-    }
     func updateTiming(_ update: FocusRackTimingUpdate) {
         #if DEBUG
             if controller == nil, !storesTemplates, var fixture = state {

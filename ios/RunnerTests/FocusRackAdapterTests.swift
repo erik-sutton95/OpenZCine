@@ -115,9 +115,7 @@ struct FocusRackAdapterTests {
             fromMark: "B", toMark: "A", duration: 20, delay: 2, easing: .linear)
         fixture.program.marks = [.init(id: "A", stepPosition: 0), .init(id: "B", stepPosition: 80)]
         let adapter = FocusRackModel(fixture: fixture)
-        var transition = fixture.transition
-        transition.durationMode = .fastest
-        adapter.setTransition(transition)
+        adapter.updateTiming(.init(durationMode: .fastest))
         adapter.setTimingText("3", isDelay: true)
         let fastest = try #require(adapter.state)
         #expect(fastest.transition.durationMode == .fastest)
@@ -126,9 +124,7 @@ struct FocusRackAdapterTests {
         #expect(fastest.transition.easing == .linear)
         #expect(fastest.direction == .bToA)
         #expect(fastest.program.marks == fixture.program.marks)
-        transition = fastest.transition
-        transition.durationMode = .timed
-        adapter.setTransition(transition)
+        adapter.updateTiming(.init(durationMode: .timed))
         #expect(adapter.state?.transition.duration == 20)
         #expect(adapter.state?.transition.delay == 3)
     }

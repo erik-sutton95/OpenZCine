@@ -263,7 +263,7 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 val mark = identities.getJSONObject(index)
                 val id = mark.getString("markID")
                 markPositions[id]?.let { position -> FocusRackMarkViewState(id, position,
-                    mark.getLong("revision"), mark.getString("sessionID"), mark.getLong("frameSequence")) }
+                    mark.getLong("revision"), mark.getLong("frameSequence")) }
             }
             val validCaptures = marks.associate { it.id to it.revision }
             mutableThumbnails.value = mutableThumbnails.value.filterKeys { validCaptures[it] == captures[it] }
@@ -287,16 +287,14 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 canChangeFocusMode = reply.optBoolean("canChangeFocusMode") && !stopPending && !modePending,
                 afSettingsPending = reply.optBoolean("afSettingsPending"),
                 afSettingsRestoring = reply.optBoolean("afSettingsRestoring"),
-                afSettingsReady = reply.optBoolean("afSettingsReady"),
                 afSettingsFailure = reply.nullableString("afSettingsFailure"),
-                nativeAFConfigured = reply.optBoolean("nativeAFConfigured"),
                 nativeAFDisabledReason = reply.nullableString("nativeAFDisabledReason"),
                 nativeAF = reply.optJSONObject("nativeAF")?.let { native ->
                     NativeAFRackViewState(
                         hasA = native.optJSONObject("a") != null, hasB = native.optJSONObject("b") != null,
                         selectingMark = native.nullableString("selectingMark"), startDelay = native.optDouble("startDelay"),
-                        remainingDelay = native.optDouble("remainingDelay"), busy = native.optBoolean("busy"),
-                        dispatching = native.optBoolean("dispatching"), canSet = native.optBoolean("canSet"),
+                        busy = native.optBoolean("busy"),
+                        canSet = native.optBoolean("canSet"),
                         canGoToA = native.optBoolean("canGoToA"), canGoToB = native.optBoolean("canGoToB"),
                         canRun = native.optBoolean("canRun"), canCancel = native.optBoolean("canCancel"),
                         message = native.optString("message"), failure = native.nullableString("failure"))
@@ -315,7 +313,6 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 timingWarning = snapshot.nullableString("timingWarning"),
                 timingWarningIsEstimate = snapshot.optBoolean("timingWarningIsEstimate"),
                 primaryTitle = primary.getString("title"), primaryDetail = primary.nullableString("detail"),
-                primaryDisabledReason = primary.nullableString("disabledReason"),
                 pullAToB = snapshot.optJSONObject("pullAToB")?.action(),
                 pullBToA = snapshot.optJSONObject("pullBToA")?.action(),
                 calibration = snapshot.optJSONObject("calibration")?.action(),
@@ -327,7 +324,6 @@ internal class FocusRackController(private val connectionOwner: Long, private va
                 canNudge = caps.getBoolean("canNudge"), canEdit = caps.getBoolean("canEditTiming"),
                 canReset = caps.getBoolean("canReset"), canAutofocus = caps.optBoolean("canAutofocus") && !modePending, canPause = caps.getBoolean("canPause"), canStop = caps.getBoolean("canStop"), active = snapshot.getBoolean("busy"),
                 completed = snapshot.getInt("completedSteps"), total = snapshot.getInt("totalSteps"),
-                minimumDuration = if (snapshot.isNull("minimumDuration")) null else snapshot.getDouble("minimumDuration"),
                 remainingDelay = snapshot.optDouble("remainingDelay", 0.0),
                 nudgeProgress = snapshot.optJSONObject("nudgeProgress")?.let {
                     FocusRackNudgeProgressViewState(it.getBoolean("towardNear"), it.getInt("steps"), it.getInt("percent"))

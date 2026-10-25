@@ -78,12 +78,10 @@ class FocusRackControllerTest {
         var focusMode = "timedRack"
         var focusModeSwitchPending = false
         var canChangeFocusMode = true
-        var nativeAFConfigured = false
         var canNativeAutofocus = false
         var afSettingsChange: JSONObject? = null
         var afSettingsPending = false
         var afSettingsRestoring = false
-        var afSettingsReady = false
         var afSettingsFailure: String? = null
         var afAdmission = true
         var nativeAF = JSONObject()
@@ -120,7 +118,7 @@ class FocusRackControllerTest {
                 .put("transition", transition).put("stepPosition", JSONObject.NULL)
                 .put("completedSteps", 4).put("totalSteps", 94).put("busy", busy)
                 .put("capabilities", caps).put("primary", JSONObject().put("title", "Pause")
-                    .put("enabled", busy)).put("minimumDuration", 16.6)
+                    .put("enabled", busy))
             nudgeProgress?.let { state.put("nudgeProgress", it) }
             timingWarning?.let { state.put("timingWarning", it) }
             timingWarningIsEstimate?.let { state.put("timingWarningIsEstimate", it) }
@@ -131,11 +129,11 @@ class FocusRackControllerTest {
                 .put("templatesJSON", templates)
                 .put("calibrationJSON", calibrationJSON).put("focusMode", focusMode)
                 .put("focusModeSwitchPending", focusModeSwitchPending)
-                .put("canChangeFocusMode", canChangeFocusMode).put("nativeAFConfigured", nativeAFConfigured)
+                .put("canChangeFocusMode", canChangeFocusMode)
                 .put("canNativeAutofocus", canNativeAutofocus).put("nativeAF", nativeAF)
                 .put("nativeAFChange", nativeAFChange).put("nativeAFCheckpointJSON", nativeCheckpointJSON)
                 .put("afSettingsChange", afSettingsChange).put("afSettingsPending", afSettingsPending)
-                .put("afSettingsRestoring", afSettingsRestoring).put("afSettingsReady", afSettingsReady)
+                .put("afSettingsRestoring", afSettingsRestoring)
                 .put("afSettingsFailure", afSettingsFailure).toString()
         }
     }
@@ -208,7 +206,6 @@ class FocusRackControllerTest {
         assertFalse(rack.state.value.canAutofocus, "An old reply cannot release the local reservation")
         wire.focusMode = "nativeAF"
         wire.focusModeSwitchPending = true
-        wire.nativeAFConfigured = true
         wire.canNativeAutofocus = true
         wire.canChangeFocusMode = false
         rack.observe(JSONObject())
@@ -216,7 +213,6 @@ class FocusRackControllerTest {
         wire.focusModeSwitchPending = false
         rack.observe(JSONObject())
         assertEquals("nativeAF", rack.state.value.focusMode)
-        assertTrue(rack.state.value.nativeAFConfigured)
         assertTrue(rack.state.value.canNativeAutofocus)
         assertFalse(rack.state.value.canChangeFocusMode)
         assertFalse(wire.requests.any { it.getString("kind") in setOf("run", "nudge", "goTo", "calibrate") })

@@ -314,8 +314,7 @@ public enum FocusRackIntent: Codable, Sendable {
     case run(direction: FocusRackDirection)
     case setTransition(FocusRackTransition)
     case updateTiming(FocusRackTimingUpdate)
-    case setDirection(FocusRackDirection)
-    case start, pause, resume, stop, reset, discardMarks, performPrimary, primary
+    case pause, resume, stop, reset, discardMarks, performPrimary
     case applyTemplate(FocusRackTemplate)
     case externalFocusAction
 }
