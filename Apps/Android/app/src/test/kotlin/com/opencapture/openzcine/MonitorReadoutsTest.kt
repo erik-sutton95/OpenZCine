@@ -182,4 +182,15 @@ class MonitorReadoutsTest {
         // Z-ANDROID-FORMAT-TITLE (Root ruling): iOS titles the readout "Format" in both modes.
         assertEquals("Format", MONITOR_FORMAT_READOUT_TITLE)
     }
+
+    @Test
+    fun `a watcher's storage tap steps free space, free percentage, then the estimated time`() {
+        // Hardware pass 3.4 (Z + ZR): the tap skipped the percentage. The local camera reads the
+        // shared cycle directly (Core tests cover the Nikon path); a watcher builds the same forms
+        // from the host's media status. iOS twin: NikonSharedStorageReadoutTests.
+        val relayed = com.opencapture.opencine.nikon.MediaStatus(596, 58, 51, freeBytes = 595_840_000_000L)
+        assertEquals(listOf("596GB", "58%", "~51 Min"), relayedMediaForms(relayed))
+        val oldHost = com.opencapture.opencine.nikon.MediaStatus(596, 58, -1)
+        assertEquals(listOf("596GB", "58%"), relayedMediaForms(oldHost))
+    }
 }

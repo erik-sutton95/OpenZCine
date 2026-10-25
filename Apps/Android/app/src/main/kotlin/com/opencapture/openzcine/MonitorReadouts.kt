@@ -8,6 +8,9 @@ import com.opencapture.monitorui.MonitorTimecodeFormat
 import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
 import com.opencapture.opencine.core.Rational
+import com.opencapture.opencine.core.ObservationOrigin
+import com.opencapture.opencine.media.RecordingTimeLabel
+import com.opencapture.opencine.media.StorageReadoutCycle
 import com.opencapture.opencine.core.ISOValue
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -74,6 +77,15 @@ internal fun monitorFrameRateLabel(frameRate: Int?): String =
 /** Storage label derived from a complete, internally consistent camera readback. */
 internal fun monitorStorageLabel(storage: CameraStorageStatus?): String =
     storage?.readout?.takeIf { it.totalBytes != null }?.label ?: UNAVAILABLE_MONITOR_VALUE
+
+/**
+ * A watcher's video storage forms from the host's relayed media status, through the one shared
+ * storage cycle (`StorageReadoutCycle.forms`). iOS: `NativeAppModel.mediaReadoutForms`.
+ */
+internal fun relayedMediaForms(media: MediaStatus): List<String> =
+    StorageReadoutCycle.forms(media.freeBytes ?: (media.gigabytesFree.coerceAtLeast(0) * 1_000_000_000L),
+        "${media.percentFree}%",
+        RecordingTimeLabel.label(media.estimatedMinutesRemaining?.toLong(), ObservationOrigin.ESTIMATED), photo = false)
 
 /** Accepts only a real battery percentage; platform sentinels stay unavailable. */
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }

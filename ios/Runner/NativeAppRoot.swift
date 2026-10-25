@@ -2516,7 +2516,8 @@ final class NativeAppModel {
     var focusSubject = "Auto"
     /// When non-nil, the next picker present opens on this mode tab (e.g. FOCUS Area = 1).
     var pickerInitialMode: Int?
-    var prefersMediaDuration = false
+    /// The video MEDIA cell's tap form: free space, free percentage, then estimated time.
+    var mediaReadoutForm = 0
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
     let gyroCapture = GyroCaptureCoordinator()
@@ -4741,7 +4742,7 @@ final class NativeAppModel {
             guard isDemoSession else { return }
             applyLiveViewHeaderTimecode(
                 Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
-            prefersMediaDuration = false
+            mediaReadoutForm = 0
         }
 
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
@@ -13092,43 +13093,38 @@ final class NativeAppModel {
         activePanel = .media
     }
 
-    /// Toggles the MEDIA cell between capacity (GB · %) and duration (Min) readouts.
+    /// Steps the video MEDIA cell to its next form (free space, percentage, estimated time).
     func toggleMediaReadout() {
-        prefersMediaDuration.toggle()
+        mediaReadoutForm = MonitorStorageReadoutFormat.nextForm(
+            after: mediaReadoutForm, count: mediaReadoutForms.count)
     }
 
-    /// The MEDIA cell label, respecting the capacity/duration preference.
-    var mediaReadout: String {
-        // A relayed source supplies its own observations; the local camera uses the common session.
-        if videoSource == .relay {
-            if let status = cameraState.mediaStatus {
-                return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+    /// Operator monitor storage, the same text in every orientation as on every shared live
+    /// surface. Photo shows the free space and percentage (the SHOTS pill's storage side).
+    var liveMediaReadout: String {
+        if isPhotographyMode {
+            if videoSource == .relay {
+                return cameraState.mediaStatus?.capacityLabel ?? cameraState.media
             }
-            return cameraState.media
+            return LiveMediaReadout.photoStorage(shell.control.snapshot?.storage.storageReadout)
         }
-        let storage = shell.control.snapshot?.storage
-        return prefersMediaDuration
-            ? storage?.recordingTimeLabel ?? "-- Min"
-            : storage?.storageReadout?.label ?? StorageReadout.unavailable
+        let forms = mediaReadoutForms
+        return forms[mediaReadoutForm % forms.count]
     }
 
-    /// Operator monitor storage uses the same units as every shared live surface.
-    var liveMediaReadout: String { liveMediaReadout(portrait: false) }
-
-    /// Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
-    /// Duration mode and every non-portrait surface keep the existing labels.
-    func liveMediaReadout(portrait: Bool) -> String {
+    /// The video MEDIA cell's forms, the one shared storage cycle (`StorageReadoutCycle`).
+    /// A relayed source supplies its own observations; the local camera uses the common session.
+    private var mediaReadoutForms: [String] {
         if videoSource == .relay {
-            guard let status = cameraState.mediaStatus else { return cameraState.media }
-            if prefersMediaDuration { return status.durationLabel }
-            guard portrait, let bytes = status.freeBytes else { return status.capacityLabel }
-            return
-                "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
+            guard let status = cameraState.mediaStatus else { return [cameraState.media] }
+            return StorageReadoutCycle.forms(
+                freeBytes: status.freeBytes ?? UInt64(max(0, status.gigabytesFree)) * 1_000_000_000,
+                percent: "\(status.percentFree)%",
+                recordingTime: RecordingTimeLabel.label(
+                    status.estimatedMinutesRemaining.map(Int64.init), origin: .estimated),
+                photo: false)
         }
-        let storage = shell.control.snapshot?.storage
-        return LiveMediaReadout.label(
-            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
-            portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
+        return StorageReadoutCycle.forms(shell.control.snapshot?.storage, photo: false)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
