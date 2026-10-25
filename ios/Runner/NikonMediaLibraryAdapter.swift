@@ -63,6 +63,9 @@ import OpenZCineCore
     private let downloaded: (MediaClip) -> Bool
     // Immutable captured tombstones are checked against current bytes, never filename alone.
     private var acceptedRemovals: [NikonMediaObjectRecord] = []
+    /// The last record mapped per clip id. Listing re-captures every row on each 32-object page,
+    /// and an unchanged clip maps to the same record, so only new or changed clips pay the path work.
+    private var mapped: [String: (clip: MediaClip, record: MonitorMediaRecord<MediaClip>)] = [:]
     init(
         store: MediaClipStore, bucket: String, service: NikonMediaService?,
         downloaded: @escaping (MediaClip) -> Bool
@@ -73,6 +76,13 @@ import OpenZCineCore
         self.downloaded = downloaded
     }
     func record(_ clip: MediaClip) throws -> MonitorMediaRecord<MediaClip> {
+        if let known = mapped[clip.id], known.clip == clip { return known.record }
+        let value = try mappedRecord(clip)
+        mapped[clip.id] = (clip, value)
+        return value
+    }
+    private func mappedRecord(_ clip: MediaClip) throws -> MonitorMediaRecord<MediaClip> {
+        MediaPerformanceProbe.count(.recordMapping)
         let asset = NikonMediaLibraryAssets.asset(
             namespace: clip.cameraID, identity: clip.id,
             filename: clip.filename, captureDate: clip.captureDate, sizeBytes: clip.sizeBytes,
@@ -110,25 +120,39 @@ import OpenZCineCore
     func encodeForPersistence(_ records: [MonitorMediaRecord<MediaClip>], currentBytes: Data?)
         throws -> Data?
     {
+        try MediaPerformanceProbe.timed(.persistMicros) {
+            try persistedBytes(records, currentBytes: currentBytes)
+        }
+    }
+    private func persistedBytes(_ records: [MonitorMediaRecord<MediaClip>], currentBytes: Data?)
+        throws -> Data?
+    {
         let current = try currentBytes.map(MediaClipStore.decodeCatalogBytes) ?? []
         let candidate = records.map(\.payload).filter { $0.cameraID == bucket }
         var rows = Dictionary(
             current.map { ($0.filename, $0) }, uniquingKeysWith: { _, last in last })
         let candidateNames = Set(candidate.map(\.filename))
-        for old in current where !candidateNames.contains(old.filename) {
+        var changed = false
+        for old in current where !acceptedRemovals.isEmpty && !candidateNames.contains(old.filename)
+        {
             let matched = NikonMediaCatalogAdapter.records([old]).contains { live in
                 acceptedRemovals.contains {
                     $0.location == live.location && $0.identity == live.identity
                 }
             }
-            if matched { rows[old.filename] = nil }
+            if matched {
+                rows[old.filename] = nil
+                changed = true
+            }
         }
         for clip in candidate {
             if let live = rows[clip.filename] {
                 var merged = MediaClipStore.mergeCameraDiscovery(existing: live, incoming: clip)
                 // Source-removal survivors carry their exact remaining locations, not the old union.
+                let liveObjects =
+                    acceptedRemovals.isEmpty ? [] : NikonMediaCatalogAdapter.records([live])
                 let removed = acceptedRemovals.filter { tombstone in
-                    NikonMediaCatalogAdapter.records([live]).contains {
+                    liveObjects.contains {
                         $0.location == tombstone.location && $0.identity == tombstone.identity
                     }
                 }.map(\.location)
@@ -141,21 +165,32 @@ import OpenZCineCore
                     merged.storageID = primary?.storageID
                     merged.storageLocations = survivors.isEmpty ? nil : survivors
                 }
+                if merged != live { changed = true }
                 rows[clip.filename] = merged
             } else {
+                changed = true
                 rows[clip.filename] = clip
             }
         }
+        // A relisted card mostly re-reports rows the index already holds: skip that checkpoint's
+        // encode and atomic rewrite of the whole index.
+        if currentBytes != nil, !changed { return nil }
         return try MediaClipStore.encodeCatalogBytes(Array(rows.values))
     }
     func prepareCatalog(
         _ capture: MonitorMediaCatalogCapture<MediaClip>, binding: MediaBrowseBinding,
         existing: [MonitorMediaRecord<MediaClip>]
     ) async throws -> MonitorMediaCatalogCapture<MediaClip> {
+        try MediaPerformanceProbe.timed(.prepareMicros) {
+            try prepared(capture, existing: existing)
+        }
+    }
+    private func prepared(
+        _ capture: MonitorMediaCatalogCapture<MediaClip>,
+        existing: [MonitorMediaRecord<MediaClip>]
+    ) throws -> MonitorMediaCatalogCapture<MediaClip> {
         // Only canonical local metadata is reread here. No camera/source lookup follows suspension.
-        let current = Dictionary(
-            store.list(cameraID: bucket).map { ($0.filename, $0) },
-            uniquingKeysWith: { _, newer in newer })
+        let current = store.listByName(cameraID: bucket)
         func prepared(_ value: MonitorMediaRecord<MediaClip>) throws -> MonitorMediaRecord<
             MediaClip
         > {
@@ -167,27 +202,54 @@ import OpenZCineCore
             clip.storageLocations = value.payload.storageLocations
             return try record(clip)
         }
+        // Rows the page did not touch still take newer canonical operator flags, as when every
+        // row was amended on each page; a row whose preparation is unchanged needs no amendment.
+        var amendments = try capture.amendments.map(prepared)
+        if !capture.resetLibrary {
+            let touched = Set(
+                (capture.upserts + capture.amendments).map(\.asset.id) + capture.removed)
+            for row in existing where !touched.contains(row.asset.id) {
+                guard let live = current[row.payload.filename], live != row.payload else {
+                    continue
+                }
+                let value = try prepared(row)
+                if value.payload != row.payload { amendments.append(value) }
+            }
+        }
         return .init(
             resetLibrary: capture.resetLibrary,
             upserts: try capture.upserts.map(prepared), removed: capture.removed,
-            amendments: try capture.amendments.map(prepared), order: capture.order,
+            amendments: amendments, order: capture.order,
             sourceFavoriteKeys: Set(current.values.filter(\.isFavorite).map(\.id)))
     }
 
     func capture(_ asset: MediaAsset, binding: MediaBrowseBinding) throws -> MonitorMediaRecord<
         MediaClip
     > {
+        try record(capturedClip(asset, binding: binding))
+    }
+    private func capturedClip(_ asset: MediaAsset, binding: MediaBrowseBinding) throws -> MediaClip
+    {
         guard let service, service.isCurrent(binding),
             let value = service.mediaCatalogRecord(asset.id, binding: binding)
         else { throw MediaServiceError.retired }
-        return try record(NikonMediaCatalogAdapter.clip(value.object, bucket: bucket))
+        return NikonMediaCatalogAdapter.clip(value.object, bucket: bucket)
     }
     func captureCatalog(
         _ delta: MediaCatalogDelta, binding: MediaBrowseBinding,
         existing: [MonitorMediaRecord<MediaClip>]
     ) throws -> MonitorMediaCatalogCapture<MediaClip> {
+        try MediaPerformanceProbe.timed(.captureMicros) {
+            try captured(delta, binding: binding, existing: existing)
+        }
+    }
+    private func captured(
+        _ delta: MediaCatalogDelta, binding: MediaBrowseBinding,
+        existing: [MonitorMediaRecord<MediaClip>]
+    ) throws -> MonitorMediaCatalogCapture<MediaClip> {
         guard let service, service.isCurrent(binding) else { throw MediaServiceError.retired }
-        let additions = try delta.upserts.map { try capture($0, binding: binding).payload }
+        // Only the merged rows below are mapped; an addition's own record would be discarded.
+        let additions = try delta.upserts.map { try capturedClip($0, binding: binding) }
         let removals = try delta.removed.map { id -> NikonMediaObjectRecord in
             guard let value = service.mediaCatalogRecord(id, binding: binding) else {
                 throw MediaServiceError.retired
@@ -198,7 +260,8 @@ import OpenZCineCore
             throw MediaServiceError.retired
         }
         let old = existing.map(\.payload)
-        let indexed = NikonMediaCatalogAdapter.records(old)
+        // Tombstones arrive on few pages; build the indexed object list only for those.
+        let indexed = removals.isEmpty ? [] : NikonMediaCatalogAdapter.records(old)
         let accepted = removals.filter { tombstone in
             indexed.contains {
                 $0.location == tombstone.location && $0.identity == tombstone.identity
@@ -229,14 +292,31 @@ import OpenZCineCore
             incomingObjects.contains { $0.location == old.location && $0.identity == old.identity }
         }
         acceptedRemovals.append(contentsOf: accepted)
-        let records = try next.map(record)
-        let nextIDs = Set(records.map { $0.asset.id })
+        // A 32-object page leaves almost every row as it was: only new or changed clips are mapped
+        // and published. An unchanged row's amendment would replace it with itself.
+        let existingByName = Dictionary(
+            existing.map { ($0.payload.filename, $0) }, uniquingKeysWith: { _, last in last })
         let oldIDs = Set(existing.map { $0.asset.id })
+        var nextIDs = Set<MediaAssetID>()
+        var upserts: [MonitorMediaRecord<MediaClip>] = []
+        var amendments: [MonitorMediaRecord<MediaClip>] = []
+        for clip in next {
+            if let row = existingByName[clip.filename], row.payload == clip {
+                nextIDs.insert(row.asset.id)
+                continue
+            }
+            let value = try record(clip)
+            nextIDs.insert(value.asset.id)
+            if oldIDs.contains(value.asset.id) {
+                amendments.append(value)
+            } else {
+                upserts.append(value)
+            }
+        }
         return .init(
-            resetLibrary: false,
-            upserts: records.filter { !oldIDs.contains($0.asset.id) },
+            resetLibrary: false, upserts: upserts,
             removed: existing.filter { !nextIDs.contains($0.asset.id) }.map { $0.asset.id },
-            amendments: records.filter { oldIDs.contains($0.asset.id) },
+            amendments: amendments,
             sourceFavoriteKeys: Set(next.filter(\.isFavorite).map(\.id)))
     }
 }
@@ -257,6 +337,11 @@ import OpenZCineCore
     private let expected: [String: MediaClip]
     private let previouslyAbsent: Set<String>
     private let capturedRecords: [MonitorMediaRecord<MediaClip>]
+    private let buckets: Set<String>
+    /// Canonical rows by filename per bucket, valid while the bucket's listing stamp is unchanged.
+    private var rows: [String: (stamp: MediaClipIndexStamp, byName: [String: MediaClip])] = [:]
+    /// Listing stamps under which every captured row last matched the canonical index.
+    private var verifiedStamps: [String: MediaClipIndexStamp]?
     init(
         owner: MonitorMediaLibraryModel<MediaClip>?, store: MediaClipStore,
         codec: NikonMediaLibraryCodec, bytes: NikonMediaLibraryByteStore?,
@@ -274,10 +359,12 @@ import OpenZCineCore
         self.canonicalCurrent = canonicalCurrent
         var expected: [String: MediaClip] = [:]
         var absent: Set<String> = []
+        var canonical: [String: [String: MediaClip]] = [:]
+        for bucket in Set(clips.map(\.cameraID)) {
+            canonical[bucket] = store.listByName(cameraID: bucket)
+        }
         for clip in clips {
-            if let row = store.list(cameraID: clip.cameraID).first(where: {
-                $0.filename == clip.filename
-            }) {
+            if let row = canonical[clip.cameraID]?[clip.filename] {
                 expected[clip.id] = Self.sameContent(clip, row) ? row : clip
             } else {
                 expected[clip.id] = clip
@@ -286,6 +373,7 @@ import OpenZCineCore
         }
         self.expected = expected
         previouslyAbsent = absent
+        buckets = Set(expected.values.map(\.cameraID))
         capturedRecords = (owner?.records ?? []).filter { row in
             expected[row.payload.id].map { Self.sameContent($0, row.payload) } == true
         }
@@ -312,13 +400,28 @@ import OpenZCineCore
             && capturedIndexMatches && (bytes?.generation ?? 0) == generation
             && (bytes?.namespace ?? store.root.absoluteString) == namespace
     }
+    /// Playback, delivery and gallery bodies ask this many times per second; an unchanged index
+    /// (same listing stamps as the last match) needs no read at all.
     private var capturedIndexMatches: Bool {
-        expected.values.allSatisfy { old in
-            let current = store.list(cameraID: old.cameraID).first {
-                $0.filename == old.filename
-            }
-            return current.map { Self.sameContent(old, $0) } ?? true
+        var stamps: [String: MediaClipIndexStamp] = [:]
+        for bucket in buckets { stamps[bucket] = store.indexStamp(cameraID: bucket) }
+        if let verifiedStamps, verifiedStamps == stamps { return true }
+        let matches = expected.values.allSatisfy { old in
+            current(old.cameraID, old.filename, stamp: stamps[old.cameraID])
+                .map { Self.sameContent(old, $0) } ?? true
         }
+        verifiedStamps = matches ? stamps : nil
+        return matches
+    }
+    /// The canonical row, read through one memoized per-bucket lookup instead of a list scan.
+    private func current(_ bucket: String, _ filename: String, stamp: MediaClipIndexStamp? = nil)
+        -> MediaClip?
+    {
+        let stamp = stamp ?? store.indexStamp(cameraID: bucket)
+        if let cached = rows[bucket], cached.stamp == stamp { return cached.byName[filename] }
+        let byName = store.listByName(cameraID: bucket)
+        rows[bucket] = (stamp, byName)
+        return byName[filename]
     }
     var isCurrent: Bool {
         sourceIsCurrent && (deletionAuthority?.isCurrent ?? true)
@@ -330,7 +433,7 @@ import OpenZCineCore
     func capturedClip(_ clip: MediaClip) -> MediaClip { expected[clip.id] ?? clip }
     func canMutate(_ clip: MediaClip) -> Bool {
         guard isCurrent, let old = expected[clip.id] else { return false }
-        let current = store.list(cameraID: clip.cameraID).first { $0.filename == clip.filename }
+        let current = current(clip.cameraID, clip.filename)
         if previouslyAbsent.contains(clip.id) {
             return current.map { Self.sameContent(old, $0) } ?? true
         }
@@ -361,9 +464,7 @@ import OpenZCineCore
         var amendments: [MonitorMediaRecord<MediaClip>] = []
         var removed: [MediaAssetID] = []
         for old in capturedRecords {
-            let current = store.list(cameraID: old.payload.cameraID).first {
-                $0.filename == old.payload.filename
-            }
+            let current = current(old.payload.cameraID, old.payload.filename)
             if let current {
                 guard Self.sameContent(old.payload, current), let row = try? codec.record(current)
                 else { continue }
