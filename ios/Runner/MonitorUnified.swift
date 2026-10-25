@@ -237,6 +237,9 @@ struct NikonMonitorShell: View {
             waiting: waiting,
             vertical: model.displayedFeedRotation.isVertical, flipped: false,
             recovering: model.sessionRecovery.isRecovering,
+            // Only a running reconnect says "Reconnecting"; a taken-over, paused or spent
+            // recovery waits for the operator (hardware pass 4.1 showed both at once).
+            reconnecting: model.sessionRecovery.isReconnecting,
             // The camera's own stream with no camera behind it: the plate says why.
             notice: waiting && model.videoSource == .cameraLiveView
                 ? nikonCameraStatusNotice(
@@ -336,14 +339,14 @@ struct NikonMonitorShell: View {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: flipped
-                    ? model.liveMediaReadout(portrait: portrait)
+                    ? model.liveMediaReadout
                     : shots.map(MonitorTextFormat.shotsRemainingCompactLabel) ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() },
                 valueIcon: flipped ? nil : .image,
                 accessibilityLabel: flipped ? nil : spoken ?? "Shots remaining unknown")
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
-                id: .storage, title: "Storage", value: model.liveMediaReadout(portrait: portrait),
+                id: .storage, title: "Storage", value: model.liveMediaReadout,
                 section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil

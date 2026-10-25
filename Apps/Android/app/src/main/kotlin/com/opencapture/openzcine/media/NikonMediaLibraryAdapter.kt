@@ -33,6 +33,7 @@ internal class NikonMediaLibraryCodec(
     private val listed = linkedSetOf<String>()
     fun beginListing() { listed.clear() }
     fun record(value: NikonLibraryClip): MonitorMediaRecord<NikonLibraryClip> {
+        recordMappings += 1
         val clip = value.clip
         val key = clip.libraryKey(value.bucket)
         val asset = NikonMediaLibraryAssets.asset(value.bucket, key, clip)
@@ -73,35 +74,61 @@ internal class NikonMediaLibraryCodec(
         existing: List<MonitorMediaRecord<NikonLibraryClip>>): MonitorMediaCatalogCapture<NikonLibraryClip> {
         val service = source ?: throw MediaServiceException(MediaServiceFailure.RETIRED)
         if (!service.isCurrent(binding)) throw MediaServiceException(MediaServiceFailure.RETIRED)
-        if (delta.reset) listed.clear()
-        val rows = LinkedHashMap<String, NikonLibraryClip>()
-        existing.forEach { rows[it.payload.clip.libraryKey(it.payload.bucket)] = it.payload }
-        for (asset in delta.upserts) {
-            val incoming = capture(asset, binding).payload
-            val key = incoming.clip.libraryKey(incoming.bucket)
-            listed += key
-            rows[key] = incoming.copy(clip = mergeAuthoritativeObjectSize(rows[key]?.clip, incoming.clip))
-        }
-        for (id in delta.removed) {
-            val removal = service.mediaCatalogRecord(id, binding)?.identity
+        val incoming = delta.upserts.map { asset ->
+            val clip = service.mediaCatalogRecord(asset.id, binding)?.clip
                 ?: throw MediaServiceException(MediaServiceFailure.RETIRED)
-            val key = removal.libraryKey(bucket)
-            listed -= key; rows.remove(key)
+            NikonLibraryClip(bucket, clip)
         }
+        val removedKeys = delta.removed.map { id ->
+            (service.mediaCatalogRecord(id, binding)?.identity ?: throw MediaServiceException(MediaServiceFailure.RETIRED))
+                .libraryKey(bucket)
+        }
+        if (!service.isCurrent(binding)) throw MediaServiceException(MediaServiceFailure.RETIRED)
+        return assembleCatalog(existing, incoming, removedKeys, reset = delta.reset, complete = delta.complete)
+    }
+    /** Record mappings performed (test accounting for per-page cost). */
+    internal var recordMappings: Int = 0
+        private set
+    /** The pure page step of [captureCatalog], after every source read is captured. */
+    internal fun assembleCatalog(existing: List<MonitorMediaRecord<NikonLibraryClip>>, incoming: List<NikonLibraryClip>,
+        removedKeys: List<String>, reset: Boolean, complete: Boolean): MonitorMediaCatalogCapture<NikonLibraryClip> {
+        if (reset) listed.clear()
+        val rows = LinkedHashMap<String, NikonLibraryClip>()
+        // Existing rows keep their mapped record; only rows this page touches are mapped again.
+        val existingByKey = HashMap<String, MonitorMediaRecord<NikonLibraryClip>>(existing.size * 2)
+        existing.forEach { record ->
+            val key = record.payload.clip.libraryKey(record.payload.bucket)
+            rows[key] = record.payload; existingByKey.putIfAbsent(key, record)
+        }
+        for (value in incoming) {
+            val key = value.clip.libraryKey(value.bucket)
+            listed += key
+            rows[key] = value.copy(clip = mergeAuthoritativeObjectSize(rows[key]?.clip, value.clip))
+        }
+        for (key in removedKeys) { listed -= key; rows.remove(key) }
         // Confirmed whole census only. A failed/canceled partial pass never deletes unseen rows.
-        val censusCandidates = if (delta.complete) rows.filter { (key, value) ->
+        val censusCandidates = if (complete) rows.filter { (key, value) ->
             value.bucket == bucket && key !in listed
         }.keys else emptySet()
-        if (!service.isCurrent(binding)) throw MediaServiceException(MediaServiceFailure.RETIRED)
-        val next = rows.map { (key, value) -> record(value.copy(requiresLocalRetention = key in censusCandidates)) }
-        val prior = existing.map { it.asset.id }.toSet()
-        val retained = next.map { it.asset.id }.toSet()
+        // An untouched row (same payload instance, not a census candidate) is its existing record:
+        // it is neither re-mapped nor reported as an amendment, so a page costs its own size.
+        // A row whose favorite projection would change is re-mapped too (projection ORs a kept flag).
+        val favorites = favoriteKeys()
+        val changed = ArrayList<MonitorMediaRecord<NikonLibraryClip>>()
+        val next = rows.map { (key, value) ->
+            val old = existingByKey[key]
+            if (old != null && old.payload === value && key !in censusCandidates &&
+                old.favorite == (old.address.favoriteKey in favorites)) old
+            else record(value.copy(requiresLocalRetention = key in censusCandidates)).also { changed += it }
+        }
+        val prior = existing.mapTo(HashSet(existing.size * 2)) { it.asset.id }
+        val retained = next.mapTo(HashSet(next.size * 2)) { it.asset.id }
         return MonitorMediaCatalogCapture(resetLibrary = false,
-            upserts = next.filter { it.asset.id !in prior },
+            upserts = changed.filter { it.asset.id !in prior },
             removed = existing.filter { it.asset.id !in retained || it.payload.clip.libraryKey(it.payload.bucket) in censusCandidates }
                 .map { it.asset.id },
-            amendments = next.filter { it.asset.id in prior },
-            order = next.map { it.asset.id }, sourceFavoriteKeys = favoriteKeys())
+            amendments = changed.filter { it.asset.id in prior },
+            order = next.map { it.asset.id }, sourceFavoriteKeys = favorites)
     }
     override suspend fun prepareCatalog(capture: MonitorMediaCatalogCapture<NikonLibraryClip>,
         binding: MediaBrowseBinding, existing: List<MonitorMediaRecord<NikonLibraryClip>>): MonitorMediaCatalogCapture<NikonLibraryClip> {
@@ -147,10 +174,9 @@ internal class NikonMediaLibraryActions(
         private val generations = stores.mapValues { it.value.generation }
         private val namespaces = stores.mapValues { it.value.namespace }
         private val expected = values.associate { value ->
-            val current = index.persistedClips(value.bucket).firstOrNull {
-                it.libraryKey(value.bucket) == value.clip.libraryKey(value.bucket)
-            }
-            value.clip.libraryKey(value.bucket) to if (current != null && sameNikonActionContent(value.clip, current)) current else null
+            val key = value.clip.libraryKey(value.bucket)
+            val current = index.persistedClip(value.bucket, key)
+            key to if (current != null && sameNikonActionContent(value.clip, current)) current else null
         }
         private val requested = values.associateBy { it.clip.libraryKey(it.bucket) }
         private val capturedRecords = owner?.state?.value?.records.orEmpty().filter {
@@ -162,9 +188,9 @@ internal class NikonMediaLibraryActions(
             owner?.state?.value // Establish the same synchronous published-state observation as actions.
             return currentOwner() === owner && currentCodec() === codec && cache.rootDirectory == root &&
                 stores.all { (bucket, store) -> store.generation == generations[bucket] && store.namespace == namespaces[bucket] } &&
-                requested.values.all { old ->
-                    val current = index.persistedClips(old.bucket).firstOrNull { it.libraryKey(old.bucket) == old.clip.libraryKey(old.bucket) }
-                    current == null || sameNikonActionContent(expected[old.clip.libraryKey(old.bucket)] ?: old.clip, current)
+                requested.all { (key, old) ->
+                    val current = index.persistedClip(old.bucket, key)
+                    current == null || sameNikonActionContent(expected[key] ?: old.clip, current)
                 } && currentOwner() === owner && currentCodec() === codec && cache.rootDirectory == root &&
                 stores.all { (bucket, store) -> store.generation == generations[bucket] && store.namespace == namespaces[bucket] }
         }
@@ -177,8 +203,8 @@ internal class NikonMediaLibraryActions(
             val requestedValue = requested[key] ?: return false
             val observed = expected[key]
             // A conflicting row at capture is not an absent row eligible for an upsert.
-            if (observed == null && index.persistedClips(value.bucket).any {
-                    it.libraryKey(value.bucket) == key && !sameNikonActionContent(requestedValue.clip, it) }) return false
+            if (observed == null && index.persistedClip(value.bucket, key)
+                    ?.let { !sameNikonActionContent(requestedValue.clip, it) } == true) return false
             return index.mutateCapturedAction(value.bucket, value.clip, observed,
                 generations[value.bucket] ?: return false, { isCurrent }, operation)
         }
@@ -237,9 +263,7 @@ internal class NikonMediaLibraryActions(
             val removed = mutableListOf<MediaAssetID>()
             capturedRecords.forEach { old ->
                 val value = old.payload
-                val current = index.persistedClips(value.bucket).firstOrNull {
-                    it.libraryKey(value.bucket) == value.clip.libraryKey(value.bucket)
-                }
+                val current = index.persistedClip(value.bucket, value.clip.libraryKey(value.bucket))
                 if (current == null) removed += old.asset.id
                 else if (sameNikonActionContent(value.clip, current)) {
                     val record = capturedCodec.record(NikonLibraryClip(value.bucket, current))

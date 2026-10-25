@@ -133,6 +133,7 @@
 		F13D00000000000000000011 /* OpenCineAppKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = F13D00000000000000000012 /* OpenCineAppKitApple */; };
 		N01000000000000000000010 /* NikonCamerasMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0100000000000000000000F /* NikonCamerasMigrationTests.swift */; };
 		C0DE00000000000000000F02 /* NikonAssistsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000F12 /* NikonAssistsTests.swift */; };
+		C1A0000000000000000000F2 /* MediaLargeCardPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0000000000000000000F1 /* MediaLargeCardPerformanceTests.swift */; };
 		C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */; };
 		C1B000000000000000000004 /* NikonMediaLibraryAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */; };
 		C1C000000000000000000004 /* NikonMediaGalleryProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */; };
@@ -328,6 +329,7 @@
 		N02000000000000000000001 /* NikonCamerasFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasFlow.swift; sourceTree = "<group>"; };
 		N0100000000000000000000F /* NikonCamerasMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonCamerasMigrationTests.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000F12 /* NikonAssistsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAssistsTests.swift; sourceTree = "<group>"; };
+		C1A0000000000000000000F1 /* MediaLargeCardPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLargeCardPerformanceTests.swift; sourceTree = "<group>"; };
 		C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaCatalogAdoptionTests.swift; sourceTree = "<group>"; };
 		C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaLibraryAdoptionTests.swift; sourceTree = "<group>"; };
 		C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonMediaGalleryProjectionTests.swift; sourceTree = "<group>"; };
@@ -439,6 +441,7 @@
 				TEST00000000000000000095 /* LiveFeedNoiseFilterWindowTests.swift */,
 				2BD15F764C285E190D23ADBF /* MediaDeliveryCompositionTests.swift */,
 				A0D100000000000000000001 /* PlaybackAudioMeterAdoptionTests.swift */,
+				C1A0000000000000000000F1 /* MediaLargeCardPerformanceTests.swift */,
 				C1A000000000000000000003 /* NikonMediaCatalogAdoptionTests.swift */,
 				C1B000000000000000000003 /* NikonMediaLibraryAdoptionTests.swift */,
 				C1C000000000000000000003 /* NikonMediaGalleryProjectionTests.swift */,
@@ -838,6 +841,7 @@
 				TEST00000000000000000094 /* LiveFeedNoiseFilterWindowTests.swift in Sources */,
 				2C14A5F3090DBBC27051DCBC /* MediaDeliveryCompositionTests.swift in Sources */,
 				A0D100000000000000000002 /* PlaybackAudioMeterAdoptionTests.swift in Sources */,
+				C1A0000000000000000000F2 /* MediaLargeCardPerformanceTests.swift in Sources */,
 				C1A000000000000000000004 /* NikonMediaCatalogAdoptionTests.swift in Sources */,
 				C1B000000000000000000004 /* NikonMediaLibraryAdoptionTests.swift in Sources */,
 				C1C000000000000000000004 /* NikonMediaGalleryProjectionTests.swift in Sources */,

@@ -1,5 +1,6 @@
 package com.opencapture.openzcine.pairing
 
+import com.opencapture.opencine.nikon.CameraConnectionFailure
 import com.opencapture.opencine.nikon.CameraConnectionPhase
 import com.opencapture.opencine.nikon.CameraConnectionProgress
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -16,9 +17,11 @@ import com.opencapture.openzcine.R
 import com.opencapture.openzcine.transport.CameraListDiscovery
 import com.opencapture.openzcine.transport.DiscoveredCamera
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -37,11 +40,12 @@ class PostConfirmReconnectTest {
     private val identity = CameraIdentity("ZR_3001234", "ZR", "3001234")
     private val copy = PortCopy { id, args -> "$id ${args.joinToString(" ")}".trim() }
 
-    /** A session whose connect walks [phases] a beat apart, then connects. */
+    /** A session whose connect walks [phases] a beat apart, then connects, or ends with [failure]. */
     private class ScriptedSession(
         private val phases: List<CameraConnectionPhase>,
         identity: CameraIdentity,
         private val base: FakeCameraSession = FakeCameraSession(identity),
+        private val failure: CameraConnectionProgress? = null,
     ) : CameraSession by base {
         private val progress = MutableStateFlow(CameraConnectionProgress())
         override val connectionProgress: StateFlow<CameraConnectionProgress> = progress
@@ -51,6 +55,11 @@ class PostConfirmReconnectTest {
             for (phase in phases) {
                 progress.value = CameraConnectionProgress(phase)
                 delay(10)
+            }
+            if (failure != null) {
+                progress.value = failure
+                delay(10)
+                return
             }
             base.connect()
             progress.value = CameraConnectionProgress(CameraConnectionPhase.CONNECTED)
@@ -209,6 +218,34 @@ class PostConfirmReconnectTest {
         assertEquals(listOf("192.168.1.30"), dials.hosts)
         assertEquals(3, liveness.dials)
         assertTrue(currentTime >= 2 * NikonBodyWake.INTERVAL_MILLIS)
+    }
+
+    /** Hardware pass 2026-10-25 (3.7): the dial's wake ran under "Connecting", then generic copy. */
+    @Test
+    fun aDialWakeShowsTheWaitThenTheSharedSilentCopy() = runTest {
+        // The Swift session layer's own wake: handshake, waiting step, then CAMERA_SILENT.
+        val silentBody =
+            ScriptedSession(
+                listOf(CameraConnectionPhase.HANDSHAKING, CameraConnectionPhase.DISCOVERING),
+                identity,
+                failure =
+                    CameraConnectionProgress(
+                        CameraConnectionPhase.FAILED, NikonBodyWake.silentMessage(""), CameraConnectionFailure.CAMERA_SILENT,
+                    ),
+            )
+        val router = SavedCameraRecord("192.168.1.30", "ZR_3001234", SavedCameraTransport.INFRASTRUCTURE, 1_000, null)
+        val connector =
+            SavedCameraConnector(
+                environment(Dials(mutableListOf(silentBody))), { true }, { false }, backgroundScope, copy,
+                Liveness(answerOn = 1).discovery,
+            )
+        val seen = mutableListOf<SavedCameraPhase>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { connector.phase.collect { seen += it } }
+
+        val failure = assertFailsWith<SavedCameraConnectException> { connector.connect(router) }
+
+        assertEquals(NikonBodyWake.silentMessage(router.displayTitle), failure.message, "the copy iOS shows, with no second hint")
+        assertTrue(SavedCameraPhase.Waking(router.displayTitle) in seen, "the wait is shown as the waiting step: $seen")
     }
 
     @Test
