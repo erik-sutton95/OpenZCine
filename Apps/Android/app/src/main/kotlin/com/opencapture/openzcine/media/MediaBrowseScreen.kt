@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.setValue
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.media.MediaCatalog
@@ -233,7 +234,9 @@ internal fun MediaBrowseScreen(
         NikonMediaLibraryActions(libraryIndex, cacheStore, { library }, { libraryCodec })
     }
     val emptyLibraryState = remember(cameraID) { kotlinx.coroutines.flow.MutableStateFlow(MonitorMediaLibraryState<NikonLibraryClip>()) }
-    val libraryState by (library?.state ?: emptyLibraryState).collectAsState()
+    // This screen reads no transfer ticks: the library's content flow leaves them out, so a streaming
+    // download does not recompose the whole browser (and re-run its projection inputs) on every chunk.
+    val libraryState by (library?.content ?: emptyLibraryState).collectAsState()
     DisposableEffect(library, mediaService) {
         val retired = library
         onDispose {
@@ -385,7 +388,12 @@ internal fun MediaBrowseScreen(
             offlineClipOwners = emptyMap(); browseStorageSlots = null
             libraryCodec?.beginListing()
             if (actual.state.value.browsing) actual.refresh() else actual.begin()
-            actual.state.collect { snapshot ->
+            // A transfer tick or a cache scan changes nothing this listing reads: skip those emissions
+            // instead of re-mapping and re-sorting the whole catalog on each one.
+            actual.state.distinctUntilChanged { old, new ->
+                old.catalog === new.catalog && old.records === new.records && old.browsing == new.browsing &&
+                    old.fetching == new.fetching && old.catalogPageCount == new.catalogPageCount && old.note == new.note
+            }.collect { snapshot ->
                 val binding = actual.binding
                 if (library !== actual || !snapshot.browsing) return@collect
                 val clips = if (binding != null && connectedSource.isCurrent(binding)) {

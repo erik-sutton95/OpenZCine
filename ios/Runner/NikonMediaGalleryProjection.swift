@@ -22,6 +22,7 @@ struct NikonAppGalleryProjection {
         requireLocal: Bool, downloaded: (MediaClip) -> Bool,
         now: Date = Date(), calendar: Calendar = .current
     ) {
+        MediaPerformanceProbe.count(.projectionPass)
         let input = clips.map {
             Self.input(
                 $0, actualID: actualIDs[$0.id],
@@ -41,8 +42,16 @@ struct NikonAppGalleryProjection {
         result = MonitorMediaProjection.project(ids, request: request, policy: policy)
     }
     var gridClips: [MediaClip] { result.gridIDs.compactMap { rowsByID[$0] } }
+    private var categoryCounts: [MediaCategoryTab: Int] = [:]
+    /// Projects every category once, so the navigation counts read stored values.
+    mutating func precomputeCategoryCounts() {
+        var counts: [MediaCategoryTab: Int] = [:]
+        for category in MediaCategoryTab.allCases { counts[category] = count(in: category) }
+        categoryCounts = counts
+    }
     /// Grid count of `category` under the same filters (the Media navigation counts).
     func count(in category: MediaCategoryTab) -> Int {
+        if let known = categoryCounts[category] { return known }
         let category = Self.category(category)
         guard category != request.category else { return result.gridIDs.count }
         let other = MonitorMediaProjectionRequest(

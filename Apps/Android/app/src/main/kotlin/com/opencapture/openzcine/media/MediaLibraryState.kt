@@ -272,7 +272,7 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
     fun mutateCapturedAction(cameraID: String, clip: NikonMediaClipRecord, observed: NikonMediaClipRecord?,
         generation: Long, ifCurrent: () -> Boolean, mutate: () -> Unit): Boolean = synchronized(persistenceLock) {
         if (catalogGeneration != generation || !ifCurrent()) return@synchronized false
-        val current = persistedClipsLocked(cameraID).firstOrNull { it.libraryKey(cameraID) == clip.libraryKey(cameraID) }
+        val current = persistedClipLocked(cameraID, clip.libraryKey(cameraID))
         if (observed == null) {
             if (current != null && !sameNikonActionContent(clip, current)) return@synchronized false
         } else {
@@ -312,10 +312,10 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         synchronized(persistenceLock) {
             if (!ifCurrent()) return
             val remaining = persistedClipsLocked(cameraID).filter { it.libraryKey(cameraID) != identity }
-            preferences.putString(
-                indexKey(cameraID),
-                MediaLibraryRecordCodec.encode(remaining).takeIf { remaining.isNotEmpty() },
-            )
+            val encoded = MediaLibraryRecordCodec.encode(remaining).takeIf { remaining.isNotEmpty() }
+            preferences.putString(indexKey(cameraID), encoded)
+            // Write-through: the next check reuses these rows instead of decoding what was just encoded.
+            if (encoded != null) decoded[cameraID] = DecodedIndex(encoded, remaining, cameraID) else decoded.remove(cameraID)
         }
         if (!ifCurrent()) return
         val store = mediaPreferences(cameraID)
@@ -323,10 +323,28 @@ internal class MediaLibraryIndex(private val preferences: MediaLibraryPreference
         if (identity in favorites && ifCurrent()) store.saveFavorites(favorites - identity)
     }
 
-    private fun persistedClipsLocked(cameraID: String): List<NikonMediaClipRecord> =
-        preferences.getString(indexKey(cameraID))
-            ?.let(MediaLibraryRecordCodec::decode)
-            .orEmpty()
+    /**
+     * One decoded index per bucket, keyed by the exact stored string. Any write (ours or another
+     * path through [preferences]) stores a different string, so a stale decode is never served,
+     * and repeated checks (per clip, per deletion step) cost a lookup instead of a full decode.
+     */
+    private class DecodedIndex(val encoded: String, val clips: List<NikonMediaClipRecord>, val cameraID: String) {
+        val byKey: Map<String, NikonMediaClipRecord> by lazy {
+            HashMap<String, NikonMediaClipRecord>(clips.size * 2).also { map -> clips.forEach { map.putIfAbsent(it.libraryKey(cameraID), it) } }
+        }
+    }
+    private val decoded = HashMap<String, DecodedIndex>()
+    private fun decodedLocked(cameraID: String): DecodedIndex? {
+        val encoded = preferences.getString(indexKey(cameraID)) ?: run { decoded.remove(cameraID); return null }
+        decoded[cameraID]?.let { if (it.encoded === encoded || it.encoded == encoded) return it }
+        return DecodedIndex(encoded, MediaLibraryRecordCodec.decode(encoded), cameraID).also { decoded[cameraID] = it }
+    }
+    private fun persistedClipsLocked(cameraID: String): List<NikonMediaClipRecord> = decodedLocked(cameraID)?.clips.orEmpty()
+    private fun persistedClipLocked(cameraID: String, libraryKey: String): NikonMediaClipRecord? =
+        decodedLocked(cameraID)?.byKey?.get(libraryKey)
+    /** The persisted row with this library key, from the one decoded index (first row wins). */
+    fun persistedClip(cameraID: String, libraryKey: String): NikonMediaClipRecord? =
+        synchronized(persistenceLock) { persistedClipLocked(cameraID, libraryKey) }
 
     /** Remembers which durable saved profile owns an already-established cache bucket. */
     fun rememberCameraBucket(savedCameraID: String, cameraID: String, displayName: String) {

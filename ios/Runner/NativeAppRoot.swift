@@ -1402,10 +1402,11 @@ final class NativeAppModel {
                 RelayPresence(
                     name: UIDevice.current.name,
                     watchable: true,
-                    servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                    servedCameraHost: isCameraControlSession && sessionRecovery.claimsCamera
+                        ? connectedIdentity?.host : nil,
                     relayPort: relayHost?.boundPort.map(Int.init)
                         ?? relayListenerPreferredPort.map(Int.init)))
-        } else if isCameraControlSession, !isDemoSession,
+        } else if isCameraControlSession, !isDemoSession, sessionRecovery.claimsCamera,
             let host = connectedIdentity?.host, !host.isEmpty
         {
             relayPresenceServer.update(
@@ -1425,6 +1426,7 @@ final class NativeAppModel {
         let host = connectedIdentity?.host ?? ""
         let shouldBeacon =
             isCameraControlSession && !isRelayBroadcasting && !isDemoSession && !host.isEmpty
+            && sessionRecovery.claimsCamera
         if shouldBeacon {
             let beacon = cameraInUseBeacon ?? CameraInUseBeacon()
             cameraInUseBeacon = beacon
@@ -2553,7 +2555,8 @@ final class NativeAppModel {
     var focusSubject = "Auto"
     /// When non-nil, the next picker present opens on this mode tab (e.g. FOCUS Area = 1).
     var pickerInitialMode: Int?
-    var prefersMediaDuration = false
+    /// The video MEDIA cell's tap form: free space, free percentage, then estimated time.
+    var mediaReadoutForm = 0
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
     let gyroCapture = GyroCaptureCoordinator()
@@ -2690,6 +2693,8 @@ final class NativeAppModel {
     }
     /// The last grid pass owns its admitted group IDs; current payload lookup preserves native actions.
     @ObservationIgnored private var mediaProjectionSnapshot: NikonAppGalleryProjection?
+    /// The last projection pass and the inputs it was built from (see `mediaGalleryProjection`).
+    @ObservationIgnored private var mediaProjectionMemo: MediaProjectionMemo?
     var mediaFetchInProgress: Bool { mediaLibrary?.fetching ?? false }
     /// Movie clips discovered so far during an in-flight `fetchClipsFromCamera` listing pass.
     var mediaFetchListedCount: Int {
@@ -4808,7 +4813,7 @@ final class NativeAppModel {
             guard isDemoSession else { return }
             applyLiveViewHeaderTimecode(
                 Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
-            prefersMediaDuration = false
+            mediaReadoutForm = 0
         }
 
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
@@ -7604,9 +7609,28 @@ final class NativeAppModel {
         case .takenOver(let holder):
             logConnection(
                 "recovery stopped: \(holder ?? "another device") holds host=\(cameraHost)")
+            retireTakenOverSession()
         case .retrying:
             break
         }
+        // A device that stopped reconnecting gave the camera up: it no longer says it holds it,
+        // on the presence port, in the in-use beacon or in a running broadcast's advertisement
+        // (the broadcast itself stays up for its watchers).
+        if previous.claimsCamera, !snapshot.state.claimsCamera {
+            relayHost?.updateServedCamera(
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
+                servedCameraHost: nil)
+            updateCameraInUseBeacon()
+        }
+    }
+
+    /// Another device holds the camera now. The old link may still be open on this side, so it is
+    /// retired without a word to the body: no EndLiveView, no CloseSession and no live-view or
+    /// keepalive traffic, any of which could reach the session of the phone that took it. Retry
+    /// still starts from the held frame and disposes this session on its normal path.
+    private func retireTakenOverSession() {
+        monitorRuntime?.recovering()
+        cameraSession?.close()
     }
 
     /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
@@ -7860,6 +7884,13 @@ final class NativeAppModel {
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnectReady:
+                    // A running or stopped recovery owns every dial: it asks who holds the camera
+                    // first. An in-place reconnect behind it took a camera straight back from the
+                    // phone that had taken it over, and the ZR hung (hardware pass 4.1).
+                    guard !sessionRecovery.isRecovering else {
+                        logConnection("live view reconnect skipped: recovery owns the camera")
+                        return
+                    }
                     cameraHost = session.identity.host
                     connectToCamera(preservingMonitorSurface: true)
                 case .recover(let reason):
@@ -12402,7 +12433,9 @@ final class NativeAppModel {
             // chrome to show.
             isPhotography: StillCapturePolicy.prefersPhotographyChrome(
                 selector: cameraPropertySnapshot.captureSelector),
-            shotsRemaining: cameraPropertySnapshot.shotsRemaining.map(String.init) ?? "",
+            // The phone header's short count (`7.1k`), so the wrist never shows a longer figure.
+            shotsRemaining: cameraPropertySnapshot.shotsRemaining.map(
+                MonitorTextFormat.shotsRemainingCompactLabel) ?? "",
             // The still image area the phone itself frames at — carried as a ratio so a crop
             // change on the body reaches the wrist without a second mode-to-shape table.
             feedAspectRatio: StillCapturePolicy.prefersPhotographyChrome(
@@ -13567,43 +13600,38 @@ final class NativeAppModel {
         activePanel = .media
     }
 
-    /// Toggles the MEDIA cell between capacity (GB · %) and duration (Min) readouts.
+    /// Steps the video MEDIA cell to its next form (free space, percentage, estimated time).
     func toggleMediaReadout() {
-        prefersMediaDuration.toggle()
+        mediaReadoutForm = MonitorStorageReadoutFormat.nextForm(
+            after: mediaReadoutForm, count: mediaReadoutForms.count)
     }
 
-    /// The MEDIA cell label, respecting the capacity/duration preference.
-    var mediaReadout: String {
-        // A relayed source supplies its own observations; the local camera uses the common session.
-        if videoSource == .relay {
-            if let status = cameraState.mediaStatus {
-                return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+    /// Operator monitor storage, the same text in every orientation as on every shared live
+    /// surface. Photo shows the free space and percentage (the SHOTS pill's storage side).
+    var liveMediaReadout: String {
+        if isPhotographyMode {
+            if videoSource == .relay {
+                return cameraState.mediaStatus?.capacityLabel ?? cameraState.media
             }
-            return cameraState.media
+            return LiveMediaReadout.photoStorage(shell.control.snapshot?.storage.storageReadout)
         }
-        let storage = shell.control.snapshot?.storage
-        return prefersMediaDuration
-            ? storage?.recordingTimeLabel ?? "-- Min"
-            : storage?.storageReadout?.label ?? StorageReadout.unavailable
+        let forms = mediaReadoutForms
+        return forms[mediaReadoutForm % forms.count]
     }
 
-    /// Operator monitor storage uses the same units as every shared live surface.
-    var liveMediaReadout: String { liveMediaReadout(portrait: false) }
-
-    /// Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
-    /// Duration mode and every non-portrait surface keep the existing labels.
-    func liveMediaReadout(portrait: Bool) -> String {
+    /// The video MEDIA cell's forms, the one shared storage cycle (`StorageReadoutCycle`).
+    /// A relayed source supplies its own observations; the local camera uses the common session.
+    private var mediaReadoutForms: [String] {
         if videoSource == .relay {
-            guard let status = cameraState.mediaStatus else { return cameraState.media }
-            if prefersMediaDuration { return status.durationLabel }
-            guard portrait, let bytes = status.freeBytes else { return status.capacityLabel }
-            return
-                "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
+            guard let status = cameraState.mediaStatus else { return [cameraState.media] }
+            return StorageReadoutCycle.forms(
+                freeBytes: status.freeBytes ?? UInt64(max(0, status.gigabytesFree)) * 1_000_000_000,
+                percent: "\(status.percentFree)%",
+                recordingTime: RecordingTimeLabel.label(
+                    status.estimatedMinutesRemaining.map(Int64.init), origin: .estimated),
+                photo: false)
         }
-        let storage = shell.control.snapshot?.storage
-        return LiveMediaReadout.label(
-            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
-            portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
+        return StorageReadoutCycle.forms(shell.control.snapshot?.storage, photo: false)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {
@@ -14955,10 +14983,37 @@ extension NativeAppModel {
         mediaClipStore.listAllCachedClips().contains { isClipDownloaded($0) }
     }
 
-    var mediaFilterOptions: NikonMediaFilterOptions { mediaProjectionPass.filterOptions }
+    var mediaFilterOptions: NikonMediaFilterOptions { memoizedMediaProjection.filterOptions }
+    /// Every gallery body reads this pass. It projects, filters, sorts and counts the whole card,
+    /// so it is rebuilt only when one of its inputs changes (build 304 watchdog kill: this pass and
+    /// its four category counts ran in every body update of a 3,000-photo card).
     var mediaGalleryProjection: NikonAppGalleryProjection {
-        let pass = mediaProjectionPass
+        let pass = memoizedMediaProjection
         mediaProjectionSnapshot = pass
+        return pass
+    }
+    private var memoizedMediaProjection: NikonAppGalleryProjection {
+        // Reading each input here also keeps the body's observation of all of them. The library's
+        // records revision changes only with its rows (not with progress, cache or selection).
+        let library = mediaLibrary
+        let rows = library == nil ? unopenedMediaRows : []
+        let requireLocal = !isConnected
+        let key = MediaProjectionMemo.Key(
+            library: library.map(ObjectIdentifier.init),
+            recordsRevision: library?.recordsRevision,
+            rows: MediaProjectionMemo.identity(rows),
+            category: mediaCategoryTab, sort: mediaSortOrder, formats: mediaFormatFilters,
+            resolutions: mediaResolutionFilters, photoSizes: mediaPhotoSizeFilters,
+            dateWindow: mediaDateWindow, storage: mediaStorageSlotFilter,
+            requireLocal: requireLocal,
+            cacheRevision: requireLocal ? mediaLibrary?.cacheRevision : nil,
+            day: Calendar.current.startOfDay(for: Date()))
+        if let memo = mediaProjectionMemo, memo.key == key { return memo.pass }
+        var pass = mediaProjectionPass
+        pass.precomputeCategoryCounts()
+        // The memo holds the exact unopened rows it keyed, so their storage cannot be reused by
+        // a successor while the identity comparison is in use.
+        mediaProjectionMemo = .init(key: key, rows: rows, pass: pass)
         return pass
     }
     var filteredMediaClips: [MediaClip] { mediaGalleryProjection.gridClips }
@@ -15648,4 +15703,37 @@ extension NativeAppModel {
             calibrationSourceID: eligible && videoSource == .cameraLiveView
                 ? connectionGeneration : nil)
     }
+}
+
+/// One projection pass with the inputs it was built from. Library rows are keyed by the library's
+/// records revision; rows shown before a library opens are compared by storage identity (O(1)),
+/// and the memo retains them, so an identity can only repeat for the same contents.
+struct MediaProjectionMemo {
+    struct Key: Equatable {
+        let library: ObjectIdentifier?
+        let recordsRevision: UInt64?
+        let rows: ArrayIdentity
+        let category: MediaCategoryTab
+        let sort: MediaSortOrder
+        let formats: Set<MediaFormatChip>
+        let resolutions: Set<NikonMediaResolutionBucket>
+        let photoSizes: Set<NikonMediaPhotoSizeClass>
+        let dateWindow: NikonMediaDateWindow?
+        let storage: UInt32?
+        let requireLocal: Bool
+        let cacheRevision: UInt64?
+        let day: Date
+    }
+    struct ArrayIdentity: Equatable {
+        let base: UnsafeRawPointer?
+        let count: Int
+    }
+    static func identity<Element>(_ values: [Element]) -> ArrayIdentity {
+        values.withUnsafeBufferPointer {
+            .init(base: UnsafeRawPointer($0.baseAddress), count: $0.count)
+        }
+    }
+    let key: Key
+    let rows: [MediaClip]
+    let pass: NikonAppGalleryProjection
 }

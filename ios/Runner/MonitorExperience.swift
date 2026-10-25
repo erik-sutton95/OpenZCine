@@ -565,6 +565,9 @@ struct TimerTallyBorderOverlay: View {
     }
 }
 
+/// Instant playback after a still capture: the shared `MonitorInstantReview` (Android draws the
+/// same component), with the favorite write, the de-squeeze and the captured AF boxes supplied
+/// here.
 struct InstantReviewOverlay: View {
     @Environment(NativeAppModel.self) private var model
     /// Freshly captured shots start unfavourited; resets per review.
@@ -572,108 +575,42 @@ struct InstantReviewOverlay: View {
 
     var body: some View {
         if let review = model.instantReview {
-            ZStack(alignment: .topTrailing) {
-                Color.black
-                GeometryReader { proxy in
-                    // Fit the de-squeezed size rather than scaling after the fit: the AF boxes
-                    // below derive their scale from `fitted`, so de-squeezing here carries them
-                    // with the image instead of leaving them on the squeezed geometry.
-                    let fitted = Self.fittedRect(
-                        image: desqueezedSize(
-                            review.image.size, model.liveDesqueeze),
-                        container: proxy.size)
-                    // The stand-in thumb shows blurred; the upgrade animates the blur away
-                    // as the full image swaps underneath, reading as one continuous sharpen.
-                    Image(uiImage: review.image)
-                        .resizable()
+            MonitorInstantReview<LiveDesign, _>(
+                image: review.image,
+                // Fit the de-squeezed size rather than scaling after the fit: the AF boxes derive
+                // their scale from the fitted frame, so they stay on the de-squeezed geometry.
+                displaySize: desqueezedSize(review.image.size, model.liveDesqueeze),
+                isFullResolution: review.isFullResolution,
+                // Single-tap favourite (a one-star flag on the card): the between-shots keep/toss
+                // call. The full 1-5 rating lives in playback. No card object, nothing to rate.
+                favorited: review.handle != nil ? reviewFavorited : nil,
+                onToggleFavorite: { favorited in
+                    let previous = reviewFavorited
+                    reviewFavorited = favorited
+                    Task {
+                        if await !model.rateInstantReview(stars: favorited ? 1 : 0) {
+                            reviewFavorited = previous
+                        }
+                    }
+                },
+                infoLine: model.assistConfiguration.instantReviewShowsCaptureInfo
+                    ? review.infoLine : nil,
+                onDismiss: { model.dismissInstantReview() }
+            ) { fitted in
+                if model.assistConfiguration.instantReviewShowsFocusPoint,
+                    let focus = review.focus, focus.coordinateWidth > 0,
+                    focus.coordinateHeight > 0
+                {
+                    // The same marks as the live AF box: the picture here is already fitted.
+                    LiveFocusBoxOverlay(focus: focus)
                         .frame(width: fitted.width, height: fitted.height)
                         .position(x: fitted.midX, y: fitted.midY)
-                        .blur(radius: review.isFullResolution ? 0 : 14, opaque: true)
-                        .clipped()
-                    if model.assistConfiguration.instantReviewShowsFocusPoint,
-                        let focus = review.focus, focus.coordinateWidth > 0,
-                        focus.coordinateHeight > 0
-                    {
-                        // The same marks as the live AF box: the picture here is already fitted.
-                        LiveFocusBoxOverlay(focus: focus)
-                            .frame(width: fitted.width, height: fitted.height)
-                            .position(x: fitted.midX, y: fitted.midY)
-                    }
                 }
-                if !review.isFullResolution {
-                    ZStack {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(LiveDesign.text.opacity(0.9))
-                            .scaleEffect(1.4)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
-                }
-                VStack(spacing: 10) {
-                    Spacer()
-                    if review.handle != nil {
-                        // Single-tap favourite (a one-star flag on the card) — the between-
-                        // shots keep/toss call. The full 1-5 rating lives in playback.
-                        Button {
-                            let previous = reviewFavorited
-                            reviewFavorited.toggle()
-                            let target = reviewFavorited ? 1 : 0
-                            Task {
-                                if await !model.rateInstantReview(stars: target) {
-                                    reviewFavorited = previous
-                                }
-                            }
-                        } label: {
-                            Image(systemName: reviewFavorited ? "star.fill" : "star")
-                                .font(.system(size: 19, weight: .semibold))
-                                .foregroundStyle(
-                                    reviewFavorited
-                                        ? LiveDesign.accent : LiveDesign.text.opacity(0.85)
-                                )
-                                .frame(width: 42, height: 42)
-                                .liquidGlass(in: Circle(), interactive: true)
-                        }
-                        .buttonStyle(.monitorTapTarget)
-                    }
-                    if model.assistConfiguration.instantReviewShowsCaptureInfo,
-                        let info = review.infoLine
-                    {
-                        Text(info)
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(LiveDesign.text.opacity(0.85))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .liquidGlass(in: Capsule())
-                    }
-                }
-                .padding(.bottom, 14)
-                .frame(maxWidth: .infinity)
-                CloseButton { model.dismissInstantReview() }
-                    .padding(14)
             }
-            .animation(.easeInOut(duration: 0.4), value: review.isFullResolution)
             .onChange(of: review.handle) { _, _ in reviewFavorited = false }
             .onAppear { reviewFavorited = false }
-            .contentShape(Rectangle())
-            .onTapGesture { model.dismissInstantReview() }
             .transition(.opacity)
-            .ignoresSafeArea()
         }
-    }
-
-    /// Aspect-fit rect for the image inside the container.
-    private static func fittedRect(image: CGSize, container: CGSize) -> CGRect {
-        guard image.width > 0, image.height > 0, container.width > 0, container.height > 0
-        else { return .zero }
-        let scale = min(container.width / image.width, container.height / image.height)
-        let size = CGSize(width: image.width * scale, height: image.height * scale)
-        return CGRect(
-            x: (container.width - size.width) / 2,
-            y: (container.height - size.height) / 2,
-            width: size.width,
-            height: size.height
-        )
     }
 }
 

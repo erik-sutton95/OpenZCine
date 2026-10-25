@@ -1,20 +1,27 @@
 New and changed
 
-- Focus now offers Native AF and Timed Rack. Save two subjects and repeat a focus change from your phone when filming alone.
-- Native AF selects saved targets in the live picture. The camera controls the transition; set its g6 AF speed on the camera.
-- Timed Rack offers A/B marks, duration and start delay. Prepare lens measures timing in one pass between the marks while recording is stopped.
-- The compact panel shows saved marks, requested and expected timing, and playback. Edit marks holds Near/Far controls; Options holds the extra settings.
+- Focus offers Native AF for saved subjects and Timed Rack for repeatable A/B moves. Native AF uses the camera's g6 AF speed. Timed Rack shows requested and expected times; Prepare lens measures timing between sharp marks with recording stopped.
+- Camera setup, settings, View Assist and Media share controls with the other OpenCine apps. Add setup offers USB-C, camera Wi-Fi, Wi-Fi and Hotspot. DISP 3 returns with a REC chip, large timecode and setting tiles; tap to change, hold and drag to reorder.
+- Media is faster on large cards: listing, selecting, Select all, transfer progress and playback no longer stall. Full Resolution Caching keeps a played clip downloading after you close it and marks it CACHED.
+- Tap storage to cycle free space, free percentage and estimated time in either orientation. In Photo, SHOTS shows a short count such as 6.7k; tap for free space and percentage.
+- Instant review reads RAW previews, appears sooner for RAW, JPEG and RAW+JPEG in every exposure mode, and RAW+JPEG reviews turn sharp.
+- FPS reads LINK until the first picture, then the frame rate. Landscape places the colour profile beside the codec; portrait uses three readout columns. Diagnostics distinguish incoming video, decoding and display interruptions.
 
 Fixes
 
-- A dozing camera gets a waiting step of up to about 20 s; half-press the shutter during it to connect. A camera that stays silent says it may be asleep.
-- A safe timed pull can finish after its requested duration and show a warning. Stop, cancellation and camera safety checks still apply.
-- Saved Native AF targets and focus-point unlock are easier to see. Focus setup reopens from Clean display, and nudge progress stays in the pressed button.
-- Automatic focus setup restores settings after closing when recording and focus have stopped, while keeping manual changes.
+- The live picture stays smooth after connecting; running timecode no longer bogs it down. Live View keeps camera readouts and timecode frames through warm restarts and Quality Bias changes.
+- Background recovery keeps your stills or video mode, and no longer keeps the camera busy while the app is in the background.
+- A dozing camera gets a wait of up to about 20 s; half-press the shutter to connect. A silent camera says it may be asleep instead of showing a connection error.
+- Take Over asks first; the phone losing the camera stops reconnecting. Refused Wi-Fi joins offer Settings, explicit retries ask again, and abandoned connections stop behind the setup screen.
+- Exposure readouts return: Auto ISO shows its limit, program-owned values are dimmed and locked, hold SHUTTER to toggle its lock, and Reading camera settings shows at startup.
+- Photo disables LUTs and cinema tools; video restores them. Shots left and app-triggered photos use the stills card. In CL/CH, tap for one photo or hold for a burst.
+- Sharing treats photos as photos and finishes copying clips first. Playback stays paused after Share or app return. GYRO clears the screen lock. Safe timed pulls warn on overruns; Stop and safety checks remain. Closing Focus restores settings when idle and preserves manual changes.
+- VoiceOver skips collapsed or covered controls; shutter labels describe actions. Setup asks for Local Network at its own step. Landscape View Assist hides covered values; focus setup reopens from Clean display and tap-to-focus no longer leaves pulls busy.
 
 What to test
 
-- In Native AF, save two subjects and try both directions. Check low-contrast subjects too; autofocus may need another target or a retry.
-- In Timed Rack, set sharp A/B marks. With recording stopped, use Prepare lens once and confirm the other mark is sharp. Compare 1, 3 and 6 second targets in both directions; check the recording and the displayed expected time.
-- Try Pause, Resume and Stop, then reopen setup from Clean display. Close the panel and check that manual focus-setting changes are kept.
-- Repeat with your own lenses and report sharpness, visible steps, endpoint drift and any timing warning. Two lenses have been tried; more testing is needed.
+- Save two Native AF subjects and try both directions, including low contrast. For Timed Rack, set sharp A/B marks, Prepare lens with recording stopped, then compare 1, 3 and 6 second targets both ways. Check expected time, sharpness and steps; try Pause, Resume, Stop, Clean display and manual settings after closing. Two lenses have been tried; more testing is needed.
+- Rotate in video mode and inspect DISP 3, FPS, timecode and storage, then Photo SHOTS. Change Quality Bias and background/return. If live view drops, Share Diagnostics with the time and action.
+- Try RAW, JPEG and RAW+JPEG instant review in A, S, M and P. In CL/CH, tap then hold. Check the stills card and Photo/video LUT behavior.
+- On a full card, scroll Media, select, Select all and cache clips. With Full Resolution Caching on, play an uncached clip briefly, go back and wait about 30 s: it reads CACHED.
+- Connect a dozing camera; check wake-up or asleep guidance. Retry a cancelled Wi-Fi join. With two phones, Take Over asks first and the first phone stops.

@@ -372,3 +372,17 @@ struct RelayPasscodeKeychainTests {
         #expect(model.relayHostPasscode == "0000")
     }
 }
+
+/// Hardware pass 1.2: the wrist shows the same short count as the phone header.
+@Suite("Watch relay shots count")
+struct WatchRelayShotsCountTests {
+    @MainActor
+    @Test func theWatchRelaysTheShortShotsCount() {
+        let model = NativeAppModel()
+        model.startDemoSession()
+        model.applyDemoProperty(.liveViewSelector, data: Data([0]))
+        model.applyDemoProperty(.exposureRemaining, data: Data([0xED, 0x1B, 0, 0]))
+        #expect(model.cameraPropertySnapshot.shotsRemaining == 7149)
+        #expect(model.currentWatchRelayState().shotsRemaining == "7.1k")
+    }
+}
