@@ -668,17 +668,17 @@ final class NativeAppModel {
         var detail: String {
             switch self {
             case .cameraAccessPoint:
-                "The camera creates a Wi‑Fi network — join it from your iPhone."
+                "The camera creates a Wi‑Fi network. Join it from your iPhone."
             case .phoneHotspot:
-                "Turn on Personal Hotspot — the camera joins your iPhone's network."
+                "Turn on Personal Hotspot. The camera joins your iPhone's network."
             case .usbC:
                 DeviceUSBConnector.current == .lightning
-                    ? "Connect through Apple's Lightning to USB camera adapter — a USB-C to Lightning cable can't host the camera."
+                    ? "Connect through Apple's Lightning to USB camera adapter. A USB-C to Lightning cable can't host the camera."
                     : "Plug the camera into this device with a USB-C cable."
             case .hdmiCapture:
-                "Feed the camera's HDMI output into a USB capture device — full-quality picture, no camera control."
+                "Feed the camera's HDMI output into a USB capture device: full-quality picture, no camera control."
             case .wiFiNetwork:
-                "Both devices already on the same network — a set router, or the house Wi-Fi."
+                "Both devices already on the same network: a set router, or the house Wi-Fi."
             }
         }
 
@@ -1792,7 +1792,7 @@ final class NativeAppModel {
                 self.shell.dismissCover()
                 self.isMonitorPresented = true
                 self.connectionMessage =
-                    cameraName.map { "Watching \(hostName) — \($0)." }
+                    cameraName.map { "Watching \(hostName) (\($0))." }
                     ?? "Watching \(hostName)."
                 self.relayFailureReason = nil
             case .failed(let reason):
@@ -1803,7 +1803,7 @@ final class NativeAppModel {
                 // reach".
                 let hint =
                     self.isOnCameraAccessPointNetwork
-                    ? " This device is on the camera's own Wi-Fi — leave that network and "
+                    ? " This device is on the camera's own Wi-Fi. Leave that network and "
                         + "watch from your regular Wi-Fi; nearby broadcasts reach this "
                         + "device directly."
                     : ""
@@ -1843,7 +1843,7 @@ final class NativeAppModel {
             // not the generic ask.
             self.relayFailureReason =
                 denial.passcodeRequired && self.relayPasscodeWasAttempted
-                ? "That passcode wasn't accepted — check it with the broadcasting device."
+                ? "That passcode wasn't accepted. Check it with the broadcasting device."
                 : denial.reason
             self.relayJoinDenied = true
             self.applyLinkChip()
@@ -1925,7 +1925,7 @@ final class NativeAppModel {
                 case .connected:
                     if Date().timeIntervalSince(self.lastGoodFrameAt ?? .distantPast) > 8 {
                         self.relayFailureReason =
-                            "The stream stalled — reconnecting. Make sure OpenZCine is open "
+                            "The stream stalled. Reconnecting. Make sure OpenZCine is open "
                             + "on the broadcasting device."
                         self.joinRelay(fresh ?? target)
                         return
@@ -2917,7 +2917,7 @@ final class NativeAppModel {
             // The watch stays armed and self-heals the moment the network changes.
             instruction =
                 cameraAccessPointEvidence == true
-                ? "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use — we keep looking, and the camera appears once you are both on it."
+                ? "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use. We keep looking, and the camera appears once you are both on it."
                 : NativeNetworkInterfaceSnapshot.currentScanSubnetLabel().map {
                     "Searching \($0), the network this device is on. On the camera: Network menu → Connect to computer → pair with a profile for that same network."
                 }
@@ -4134,7 +4134,7 @@ final class NativeAppModel {
                     logConnection(
                         "first establish failed, auto-retrying host=\(host) "
                             + error.localizedDescription)
-                    self?.connectionMessage = "The camera answered slowly \u{2014} trying again…"
+                    self?.connectionMessage = "The camera answered slowly. Trying again…"
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     guard self?.connectionGeneration == generation else { return }
                     attempt = try await establish()
@@ -4165,7 +4165,7 @@ final class NativeAppModel {
                         displayName: initialSession.identity.displayName)
                     transitionToSavedCameraNetworkCheck(
                         message:
-                            "Pairing complete. Tap “Confirm” on the camera \u{2014} we'll reconnect automatically."
+                            "Pairing complete. Tap “Confirm” on the camera, and we'll reconnect automatically."
                     )
                     return
                 }
@@ -4297,7 +4297,7 @@ final class NativeAppModel {
                     )
                     transitionToSavedCameraNetworkCheck(
                         message:
-                            "Pairing complete. Tap “Confirm” on the camera — we'll reconnect automatically."
+                            "Pairing complete. Tap “Confirm” on the camera, and we'll reconnect automatically."
                     )
                     return
                 }
@@ -4398,7 +4398,7 @@ final class NativeAppModel {
                 {
                     message +=
                         " If the camera is on a router or hotspot, make sure this device is "
-                        + "on the same network — that is where it was reached last time."
+                        + "on the same network, since that is where it was reached last time."
                 }
                 self.failConnectionAttempt(
                     message: message,
@@ -4664,6 +4664,8 @@ final class NativeAppModel {
             var picture: @MainActor () -> (sourceAt: TimeInterval?, presentedAt: TimeInterval?)
             var now: @MainActor () -> TimeInterval
             var sleep: @MainActor (Duration) async throws -> Void
+            /// The device a presence sweep would name as holding the camera; `nil` means nobody.
+            var holder: (@MainActor (String) async -> String?)? = nil
         }
         @ObservationIgnored var sessionRecoveryPeers: SessionRecoveryPeers? {
             didSet { recoveryEpisode = makeRecoveryEpisode() }
@@ -6851,7 +6853,7 @@ final class NativeAppModel {
                     logger.info(
                         "Body answered busy; retrying once after a handoff settle")
                     self?.connectionStageDetail =
-                        "Camera is in use \u{2014} waiting for it to free up…"
+                        "Camera is in use. Waiting for it to free up…"
                     try await Task.sleep(for: .seconds(5))
                     try requireCurrent()
                     return try await NativeCameraSession.establish(
@@ -7035,7 +7037,7 @@ final class NativeAppModel {
             savePendingPairingCamera()
             transitionToSavedCameraNetworkCheck(
                 message:
-                    "Pairing saved. If the camera shows a prompt, tap Continue — we'll reconnect automatically."
+                    "Pairing saved. If the camera shows a prompt, tap Continue, and we'll reconnect automatically."
             )
         }
         continuation?.resume(returning: accepted)
@@ -7097,6 +7099,7 @@ final class NativeAppModel {
                     sleep: { try await peers.sleep($0) }, jitter: { 0.5 })
             }
         #endif
+        let pause = timing.sleep
         return SessionRecoveryEpisode(
             port: .init(
                 observe: { [weak self] in self?.recoveryObservation() ?? .init() },
@@ -7110,9 +7113,21 @@ final class NativeAppModel {
                 },
                 holder: { [weak self] attempt, number in
                     guard self?.isDemoSession == false else { return nil }
-                    return await NikonTakeOverRecovery.holder(beforeAttempt: number) {
-                        await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
-                    }
+                    #if DEBUG
+                        if let peers = self?.sessionRecoveryPeers {
+                            guard let holder = peers.holder else { return nil }
+                            return await NikonTakeOverRecovery.holder(
+                                beforeAttempt: number, pause: { try? await pause($0) },
+                                lookup: { await holder(attempt.targetID) })
+                        }
+                    #endif
+                    // A cable has no network holder to ask, so no presence window either.
+                    guard !DiscoveredCamera.isUSBHostKey(attempt.targetID) else { return nil }
+                    return await NikonTakeOverRecovery.holder(
+                        beforeAttempt: number, pause: { try? await pause($0) },
+                        lookup: {
+                            await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
+                        })
                 }),
             attemptDeadline: NikonSessionRecovery.attemptDeadline, timing: timing,
             changed: { [weak self] snapshot, episode in
@@ -10885,8 +10900,8 @@ final class NativeAppModel {
                     AppDiagnostics.shared.record(.mfDriveRefused)
                     self.connectionMessage =
                         code.rawValue == PTPResponseCode.invalidStatus.rawValue
-                        ? "Can't drive focus in MF — set the camera to an AF focus mode to scrub focus from the app."
-                        : "Couldn't drive focus just now — try again (\(String(format: "0x%04X", code.rawValue)))."
+                        ? "Can't drive focus in MF. Set the camera to an AF focus mode to scrub focus from the app."
+                        : "Couldn't drive focus just now. Try again (\(String(format: "0x%04X", code.rawValue)))."
                 }
             }
         }
@@ -11281,16 +11296,16 @@ final class NativeAppModel {
         guard case NativeCameraSessionError.objectRatingRejected(let response, let rawCode) = error
         else {
             AppDiagnostics.shared.record(.ratingWriteRefused)
-            return .refused(code: 0, message: "Rating not saved — the camera didn't respond.")
+            return .refused(code: 0, message: "Rating not saved: the camera didn't respond.")
         }
         AppDiagnostics.shared.record(
             response == .accessDenied ? .ratingWriteRefusedAccessDenied : .ratingWriteRefused)
         let hex = String(format: "0x%04X", rawCode)
         let reason =
             response == .accessDenied
-            ? "Access Denied \(hex) — it may not accept ratings in this mode"
+            ? "Access Denied \(hex); it may not accept ratings in this mode"
             : "response \(hex)"
-        return .refused(code: rawCode, message: "Rating not saved — camera refused (\(reason)).")
+        return .refused(code: rawCode, message: "Rating not saved: camera refused (\(reason)).")
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
@@ -11573,7 +11588,7 @@ final class NativeAppModel {
                 await exitBurstRemoteModeIfNeeded(session: session)
                 finishStillRelease(
                     message: code == .outOfFocus
-                        ? "AF did not focus — still not captured."
+                        ? "AF did not focus, still not captured."
                         : "Still capture failed (0x\(String(code.rawValue, radix: 16))).")
             }
         } catch {
@@ -12294,7 +12309,7 @@ final class NativeAppModel {
             !PTPCameraPropertyDecoders.isMovieFocusManual(requested)
         {
             return
-                "FOCUS \(requested) was rejected — the lens focus ring has the camera in manual focus. Rotate it back to AF and try again."
+                "FOCUS \(requested) was rejected: the lens focus ring has the camera in manual focus. Rotate it back to AF and try again."
         }
         if let reported {
             return "FOCUS \(requested) was rejected by the camera (still \(reported))."
@@ -13096,7 +13111,7 @@ final class NativeAppModel {
     /// Whether the monitor shell is currently rendering the portrait tree (set by `MonitorShell`).
     var monitorIsPortrait = false
     /// Legacy DEBUG screenshot notice. Live scope activation is no longer refused in fit mode.
-    let scopeCapNoticeText = "2 scopes max in fit view — close one or pinch to fill"
+    let scopeCapNoticeText = "2 scopes max in fit view: close one or pinch to fill"
 
     /// The shared surface's one note sink: a camera refusal or hint the operator has to be told
     /// about while the monitor is up. The surface clears it after its hold.
@@ -13424,14 +13439,14 @@ final class NativeAppModel {
                 index < cameraScreenModes.count
             else {
                 connectionMessage =
-                    "\(value) isn't a recording mode the camera reported — pick a listed one."
+                    "\(value) isn't a recording mode the camera reported. Pick a listed one."
                 return 0
             }
             writes = [PTPCameraPropertyWrite.screenSize(raw: cameraScreenModes[index].raw)]
         } else if cameraControl == .codec {
             guard let mode = codecMode(forPickedLabel: value) else {
                 connectionMessage =
-                    "\(value) isn't a codec the camera reported — pick a listed one."
+                    "\(value) isn't a codec the camera reported. Pick a listed one."
                 return 0
             }
             writes = [PTPCameraPropertyWrite.fileType(raw: mode.raw)]

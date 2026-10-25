@@ -110,12 +110,12 @@ enum StartupWizardContent {
             return [
                 "On the camera: Network menu → Connect to computer → Network settings.",
                 "Choose Create Profile and give the profile a name.",
-                "Select Direct connection to computer — the camera shows its SSID and key.",
+                "Select Direct connection to computer. The camera shows its SSID and key.",
             ]
         case .phoneHotspot:
             return [
                 "Turn on Personal Hotspot on your iPhone (Settings → Personal Hotspot).",
-                "On the same screen, turn off Maximize Compatibility — it slows live view.",
+                "On the same screen, turn off Maximize Compatibility. It slows live view.",
                 "On the camera: Network menu → Connect to computer.",
                 "We'll walk through joining your hotspot in the next step.",
             ]
@@ -123,7 +123,7 @@ enum StartupWizardContent {
             return [
                 "In the camera's setup menu, set USB to MTP/PTP.",
                 "Connect the USB‑C cable between the camera and this device.",
-                "Leave the camera switched on — no network profile is needed.",
+                "Leave the camera switched on. No network profile is needed.",
             ]
         case .wiFiNetwork:
             return [
@@ -134,7 +134,7 @@ enum StartupWizardContent {
         case .hdmiCapture:
             return [
                 "Connect the capture device to this iPad, and the camera's HDMI output to it.",
-                "Set the camera's HDMI output to 1080p and turn its display info off — 4K is often more than a capture device can lock onto, and anything the camera draws becomes part of the signal.",
+                "Set the camera's HDMI output to 1080p and turn its display info off. 4K is often more than a capture device can lock onto, and anything the camera draws becomes part of the signal.",
                 "Nothing is sent to the camera on this path: it's a picture, not a connection.",
             ]
         }
@@ -162,7 +162,7 @@ enum StartupWizardContent {
                         ? ["Tap Connect my camera, then scan the SSID & key to join"]
                         : [
                             "Tap Connect my camera below",
-                            "Scan the camera's SSID & key screen — we join for you, no typing",
+                            "Scan the camera's SSID & key screen: we join for you, no typing",
                         ]
                 ),
             ]
@@ -199,7 +199,7 @@ enum StartupWizardContent {
                     lines: tight
                         ? ["Tap Allow when iOS asks for camera access"]
                         : [
-                            "iOS asks to allow OpenZCine to access the camera the first time — tap Allow",
+                            "iOS asks to allow OpenZCine to access the camera the first time. Tap Allow",
                             "Return here once the cable is connected",
                         ]
                 ),
@@ -239,8 +239,8 @@ enum StartupWizardContent {
         switch transport {
         case .cameraAccessPoint:
             return tight
-                ? "Point your phone at the camera's SSID & key screen to join it — no typing."
-                : "The camera now shows its Wi‑Fi SSID and key. Scan that screen with your phone and OpenZCine joins the camera's network for you — no typing."
+                ? "Point your phone at the camera's SSID & key screen to join it, no typing."
+                : "The camera now shows its Wi‑Fi SSID and key. Scan that screen with your phone and OpenZCine joins the camera's network for you, no typing."
         case .phoneHotspot:
             return
                 "On iPhone: Settings → Personal Hotspot → turn on Allow Others to Join. Then on the camera:"
@@ -251,7 +251,7 @@ enum StartupWizardContent {
         case .wiFiNetwork:
             return tight
                 ? "Put both on the same network, then find the camera."
-                : "Nothing to join from here — get the camera onto the same network this device is on, and it will appear in the next step."
+                : "Nothing to join from here. Get the camera onto the same network this device is on, and it will appear in the next step."
         case .hdmiCapture:
             return ""  // Unreachable — HDMI has no network step.
         }
@@ -293,7 +293,7 @@ enum StartupWizardContent {
             if DeviceUSBConnector.current == .lightning {
                 return (
                     "Lightning needs the camera adapter",
-                    "Connect the camera through Apple's Lightning to USB camera adapter — a plain USB-C to Lightning cable can't host it."
+                    "Connect the camera through Apple's Lightning to USB camera adapter. A plain USB-C to Lightning cable can't host it."
                 )
             }
             return (
@@ -313,7 +313,7 @@ enum StartupWizardContent {
                 )
             }
             return (
-                "Looking on your network", "Searching \(network) — the camera has to be on it too."
+                "Looking on your network", "Searching \(network). The camera has to be on it too."
             )
         case .phoneHotspot:
             // The direction matters: the CAMERA joins this phone, the phone joins nothing.
@@ -444,7 +444,7 @@ struct StartupFirstPairWizardView: View {
         let supported = UVCVideoSource.isSupportedHardware
         let ready = supported && captureDeviceName != nil
         page.body =
-            "The camera isn't contacted on this path — nothing is sent to it, so exposure, focus and record stay on the body. Connect over Wi‑Fi as well if you want to control it from here."
+            "The camera isn't contacted on this path. Nothing is sent to it, so exposure, focus and record stay on the body. Connect over Wi‑Fi as well if you want to control it from here."
         page.checks = [
             CameraPairingCheck(
                 title: ready
@@ -461,10 +461,10 @@ struct StartupFirstPairWizardView: View {
     private func captureDeviceDetail(supported: Bool) -> String {
         guard supported else {
             return
-                "iOS doesn't expose USB capture devices to apps — this path works on iPad. Use USB‑C or Wi‑Fi on this device."
+                "iOS doesn't expose USB capture devices to apps. This path works on iPad. Use USB‑C or Wi‑Fi on this device."
         }
         if let captureDeviceName {
-            return "\(captureDeviceName) — connect the camera's HDMI output to it and start."
+            return "\(captureDeviceName): connect the camera's HDMI output to it and start."
         }
         #if DEBUG
             // The Debug-only phone experiment: without this, a phone that enumerates nothing looks
@@ -776,7 +776,7 @@ struct StartupWizardTransportCard: View {
             UVCVideoSource.isDocumentedHardware
                 ? "Picture only, full quality"
                 : (UVCVideoSource.isSupportedHardware
-                    ? "Picture only — unsupported here" : "Needs an iPad")
+                    ? "Picture only, unsupported here" : "Needs an iPad")
         }
     }
 
