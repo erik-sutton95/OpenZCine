@@ -129,14 +129,24 @@ enum DemoHarness {
         @MainActor static var focusRackFixtureState: FocusRackState? {
             guard let fixture = focusRackFixture else { return nil }
             var state = FocusRackState.initial
-            state.message = "SIMULATED layout. No camera driver is attached."
+            state.message = ""
+            state.preparationRecommended = false
+            state.preparingLens = false
             state.capabilities.canEditTiming = true
             state.capabilities.canReset = true
-            if fixture == "empty" || fixture == "entry" {
+            if fixture == "empty" || fixture == "entry" || fixture == "oneMark" {
                 state.capabilities.canCaptureA = true
                 state.capabilities.canCaptureB = true
                 state.capabilities.canNudge = true
                 state.capabilities.canAutofocus = true
+                state.message =
+                    fixture == "oneMark"
+                    ? "Focus the second subject with Near/Far, then set B."
+                    : "Focus your first subject, then set A."
+                if fixture == "oneMark" {
+                    state.program.marks = [.init(id: "A", stepPosition: 0)]
+                    state.stepPosition = 0
+                }
                 return state
             }
             state.program = .init(
@@ -151,22 +161,58 @@ enum DemoHarness {
             state.phase = .ready
             state.capabilities.canCaptureA = true
             state.capabilities.canCaptureB = true
-            state.capabilities.canGoToA = true
+            state.capabilities.canGoToA = false
             state.capabilities.canGoToB = true
             state.capabilities.canNudge = true
             state.primary = .init(
                 kind: "rehearse", title: "Rehearse A→B", enabled: true,
                 detail: state.transition.playbackDetail)
-            if ["preparationReady", "preparationRecording", "preparationComplete"].contains(fixture)
-            {
+            if [
+                "preparationReady", "preparationRecording", "preparationComplete",
+                "guidedUnprepared", "preparationMoving", "preparationPaused", "preparationStopping",
+            ].contains(fixture) {
                 state.program.marks = [
                     .init(id: "A", stepPosition: 0), .init(id: "B", stepPosition: 100),
                 ]
                 let recording = fixture == "preparationRecording"
                 let completed = fixture == "preparationComplete"
+                state.preparationRecommended = !completed
+                if fixture == "guidedUnprepared" {
+                    state.estimatedDuration = 13.88
+                    state.timingWarning = "3 s target · ~13.88 s estimated. Timing is advisory."
+                    state.timingWarningIsEstimate = true
+                }
+                if fixture.hasPrefix("preparation")
+                    && ["preparationMoving", "preparationPaused", "preparationStopping"].contains(
+                        fixture)
+                {
+                    state.phase =
+                        fixture == "preparationPaused"
+                        ? .paused : fixture == "preparationStopping" ? .stopping : .moving
+                    state.preparingLens = fixture != "preparationStopping"
+                    state.busy = true
+                    state.completedSteps = 30
+                    state.totalSteps = 100
+                    state.capabilities.canNudge = false
+                    state.capabilities.canCaptureA = false
+                    state.capabilities.canCaptureB = false
+                    state.capabilities.canGoToA = false
+                    state.capabilities.canGoToB = false
+                    state.capabilities.canEditTiming = false
+                    state.capabilities.canPause = fixture == "preparationMoving"
+                    state.capabilities.canResume = fixture == "preparationPaused"
+                    state.capabilities.canStop = fixture != "preparationStopping"
+                    state.primary = .init(
+                        kind: fixture == "preparationPaused" ? "resume" : "pause",
+                        title: fixture == "preparationPaused"
+                            ? "Resume" : fixture == "preparationStopping" ? "Stopping…" : "Pause",
+                        enabled: fixture != "preparationStopping", detail: "3 s pull")
+                }
                 if completed {
                     state.phase = .complete
                     state.stepPosition = 100
+                    state.capabilities.canGoToA = true
+                    state.capabilities.canGoToB = false
                 }
                 state.calibration = .init(
                     kind: "calibrate", title: "Prepare lens", enabled: !recording,
@@ -180,8 +226,20 @@ enum DemoHarness {
             } else if fixture == "overrun" {
                 state.estimatedDuration = 3.39
                 state.timingWarning = "Timing target exceeded. The pull will continue."
+                state.timingWarningIsEstimate = true
+            } else if fixture == "overrunComplete" {
+                state.phase = .complete
+                state.stepPosition = 20
+                state.capabilities.canGoToA = true
+                state.capabilities.canGoToB = false
+                state.estimatedDuration = 3
+                state.actualMovementDuration = 15
+                state.timingWarning = "3 s target; completed in 15 s."
+                state.timingWarningIsEstimate = false
             } else if fixture == "elsewhere" {
                 state.stepPosition = 10
+                state.capabilities.canGoToA = true
+                state.capabilities.canGoToB = true
                 state.primary = .init(
                     kind: "rehearse", title: "Rehearse A→B", enabled: false,
                     detail: state.transition.playbackDetail, disabledReason: "Go to A first")
@@ -225,6 +283,15 @@ enum DemoHarness {
                 state.primary = .init(kind: "reset", title: "Reset marks", enabled: false)
                 state.capabilities = .init()
             }
+            if fixture == "nudgeReady"
+                || ["nudgeNear", "nudgeFar", "nudgeNear100", "nudgeFar100"].contains(fixture)
+            {
+                state.preparationRecommended = true
+                state.calibration = .init(
+                    kind: "calibrate", title: "Prepare lens", enabled: fixture == "nudgeReady",
+                    detail: fixture == "nudgeReady"
+                        ? "One pass A→B · recording stopped" : "Go to A or B first")
+            }
             if ["nudgeNear", "nudgeFar", "nudgeNear100", "nudgeFar100"].contains(fixture) {
                 let near = fixture.hasPrefix("nudgeNear")
                 let steps = fixture.hasSuffix("100") ? 100 : 10
@@ -246,6 +313,8 @@ enum DemoHarness {
             }
             if fixture == "atB" {
                 state.stepPosition = 20
+                state.capabilities.canGoToA = true
+                state.capabilities.canGoToB = false
                 state.phase = .complete
                 state.message = ""
             }

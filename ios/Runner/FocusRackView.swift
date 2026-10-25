@@ -38,6 +38,9 @@ struct FocusRackView: View {
     @State private var editor = Editor.template
     @State private var editing = false
     @State private var optionsExpanded = false
+    @State private var marksExpanded = false
+    @State private var timedContentHeight = CGFloat.zero
+    @State private var nativeContentHeight = CGFloat.zero
     @State private var closingRack = false
     @State private var templateToLoad: FocusRackTemplate?
     @State private var panelTranslation = CGSize.zero
@@ -55,7 +58,7 @@ struct FocusRackView: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             header
             if rack.mode == .nativeAF {
                 nativeAF
@@ -77,7 +80,6 @@ struct FocusRackView: View {
                                         .accessibilityIdentifier("focusControl.setupStatus")
                                 }
                                 if let state = rack.state {
-                                    nudgeControls(state)
                                     move(state)
                                     if let reason = state.admissionMessage {
                                         Text(reason).font(.system(size: 12)).foregroundStyle(
@@ -108,6 +110,18 @@ struct FocusRackView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.bottom, 4)
+                            .id("focusRack.setup.top")
+                            .onGeometryChange(for: CGFloat.self) {
+                                $0.size.height
+                            } action: {
+                                timedContentHeight = $0
+                            }
+                        }
+                        .onChange(of: marksExpanded) { _, _ in
+                            proxy.scrollTo("focusRack.setup.top", anchor: .top)
+                        }
+                        .onChange(of: rack.state?.program.marks.count) { _, _ in
+                            proxy.scrollTo("focusRack.setup.top", anchor: .top)
                         }
                         .onChange(of: rack.revealAdmission, initial: true) { _, requested in
                             if requested {
@@ -119,6 +133,10 @@ struct FocusRackView: View {
                             rack.stopPending || rack.afSettingsPending
                                 || rack.afSettingsFailure != nil
                         )
+                        .frame(
+                            idealHeight: timedContentHeight > 0 ? timedContentHeight : nil,
+                            maxHeight: timedContentHeight > 0 ? timedContentHeight : nil
+                        )
                         .accessibilityIdentifier("focusRack.setup")
                     }
                 }
@@ -128,11 +146,20 @@ struct FocusRackView: View {
         .padding(8)
         .frame(maxWidth: .infinity)
         .frame(maxHeight: maximumHeight)
-        .background(.black.opacity(0.9), in: RoundedRectangle(cornerRadius: 12))
+        .fixedSize(horizontal: false, vertical: true)
+        .background(LiveDesign.surface.opacity(0.97), in: RoundedRectangle(cornerRadius: 12))
         .overlay {
-            RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.15), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12).stroke(LiveDesign.hairline, lineWidth: 1)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(LiveDesign.text)
+        .onAppear {
+            if rack.state?.nudgeProgress != nil, rack.state?.program.marks.count == 2 {
+                marksExpanded = true
+            }
+        }
+        .onChange(of: rack.state?.nudgeProgress) { _, progress in
+            if progress != nil, rack.state?.program.marks.count == 2 { marksExpanded = true }
+        }
         .onChange(of: draggingPanel) { _, active in
             if !active { panelTranslation = .zero }
         }
@@ -141,6 +168,9 @@ struct FocusRackView: View {
         }
         .onChange(of: rack.stopPending) { _, pending in
             if pending { dismissEditors() }
+        }
+        .onChange(of: allowsSetup) { _, allowed in
+            if !allowed { dismissEditors() }
         }
         .alert(editor.title, isPresented: $editing) {
             TextField(editor == .template ? "Template name" : "Seconds", text: $entryText)
@@ -221,10 +251,11 @@ struct FocusRackView: View {
     }
 
     private var nativeAF: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !compact {
+        VStack(alignment: .leading, spacing: 8) {
+            if !compact, rack.nativeAFBlocker != nil {
                 Text(rack.nativeAFInstruction)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(rack.nativeAFBlocker == nil ? LiveDesign.text : .orange)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("focusControl.nativeAF.instruction")
             }
@@ -232,21 +263,16 @@ struct FocusRackView: View {
                 Button {
                     rack.unlockNativeFocusPoint()
                 } label: {
-                    Text("Unlock focus point")
+                    Label("Unlock focus point", systemImage: "lock.open")
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 7))
+                .background(LiveDesign.accentDim, in: RoundedRectangle(cornerRadius: 8))
                 .disabled(!allowsSetup || !rack.canUnlockNativeFocusPoint)
                 .accessibilityIdentifier("focusControl.nativeAF.unlock")
-                if !compact {
-                    HStack(spacing: 6) {
-                        nativeMark(.a)
-                        nativeMark(.b)
-                    }
-                }
-            } else if rack.nativeRack.selectingMark != nil {
+            }
+            if rack.nativeRack.selectingMark != nil {
                 Button("Cancel target selection") {
                     rack.cancelNativeTarget()
                     rack.isExpanded = true
@@ -256,58 +282,74 @@ struct FocusRackView: View {
                 .accessibilityIdentifier("focusControl.nativeAF.cancelSelection")
             } else if !compact {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let failure = rack.afSettingsFailure {
-                            Text(failure).foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if rack.nativeAFBlocker == nil {
+                            Text(rack.nativeAFInstruction)
+                                .font(.system(size: 12, weight: .medium))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("focusControl.nativeAF.instruction")
                         }
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             nativeMark(.a)
                             nativeMark(.b)
                         }
-                        Button {
-                            editor = .nativeDelay
-                            entryText = rack.nativeRack.startDelay.formatted(.number)
-                            editing = true
-                        } label: {
-                            HStack {
-                                Text("Start delay")
-                                Spacer(minLength: 0)
-                                Text("\(rack.nativeRack.startDelay.formatted(.number)) s")
-                                    .monospacedDigit()
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .contentShape(Rectangle())
+                        HStack {
+                            Label("Camera speed · g6", systemImage: "camera")
+                                .font(.system(size: 11))
+                                .foregroundStyle(LiveDesign.muted)
+                            Spacer(minLength: 0)
+                            optionsToggle
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!allowsSetup || rack.nativeAFBusy)
-                        .accessibilityIdentifier("focusControl.nativeAF.delay")
-                        Text("Transition speed: camera setting (g6).")
-                            .foregroundStyle(.white.opacity(0.7))
-                        Text("Choose the starting target with Go to A/B.")
-                            .foregroundStyle(.white.opacity(0.7))
-                        Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.")
-                            .foregroundStyle(.white.opacity(0.7))
-                        Button("Focus settings") { rack.openFocusSettings() }
-                            .frame(minHeight: 44)
-                            .buttonStyle(.bordered)
-                            .disabled(
-                                !allowsSetup || rack.modeSwitchPending || rack.state?.busy == true
-                                    || rack.nativeAFBusy
-                            )
-                            .accessibilityIdentifier("focusControl.nativeAF.settings")
-                        if let notice = rack.notice {
-                            Text(notice).foregroundStyle(.orange)
-                                .accessibilityIdentifier("focusRack.notice")
+                        if optionsExpanded {
+                            Button {
+                                editor = .nativeDelay
+                                entryText = rack.nativeRack.startDelay.formatted(.number)
+                                editing = true
+                            } label: {
+                                HStack {
+                                    Text("Start delay")
+                                    Spacer(minLength: 0)
+                                    Text("\(rack.nativeRack.startDelay.formatted(.number)) s")
+                                        .monospacedDigit()
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!allowsSetup || rack.nativeAFBusy)
+                            .accessibilityIdentifier("focusControl.nativeAF.delay")
+                            Text("Transition speed is set on the camera with g6.")
+                                .foregroundStyle(LiveDesign.muted)
+                            Text("Automatic setup: AF-F · Auto-area AF · Subject detection Off.")
+                                .foregroundStyle(LiveDesign.muted)
+                            Button("Focus settings") { rack.openFocusSettings() }
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .buttonStyle(.bordered)
+                                .disabled(
+                                    !allowsSetup || rack.modeSwitchPending
+                                        || rack.state?.busy == true
+                                        || rack.nativeAFBusy
+                                )
+                                .accessibilityIdentifier("focusControl.nativeAF.settings")
                         }
                     }
                     .font(.system(size: 12))
                     .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) {
+                        $0.size.height
+                    } action: {
+                        nativeContentHeight = $0
+                    }
                 }
                 .defaultScrollAnchor(.top)
                 .id("focusControl.nativeAF.setup")
+                .frame(
+                    idealHeight: nativeContentHeight > 0 ? nativeContentHeight : nil,
+                    maxHeight: nativeContentHeight > 0 ? nativeContentHeight : nil
+                )
                 .accessibilityIdentifier("focusRack.setup")
-                nativeTransport
-            } else {
+            }
+            if rack.nativeRack.selectingMark == nil && !rack.nativeFocusPointLocked {
                 nativeTransport
             }
         }
@@ -384,8 +426,11 @@ struct FocusRackView: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
         }
-        .foregroundStyle(.white.opacity(enabled ? 1 : 0.3))
-        .background(.white.opacity(enabled ? 0.16 : 0.03), in: RoundedRectangle(cornerRadius: 7))
+        .foregroundStyle(enabled ? Color.black : LiveDesign.muted)
+        .background(
+            enabled ? LiveDesign.accent : LiveDesign.glassBright.opacity(0.45),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
         .disabled(!enabled)
         .accessibilityHint("Selects the destination after the start delay. Recording is unchanged.")
         .accessibilityIdentifier("focusControl.nativeAF.pull." + (target == .b ? "aToB" : "bToA"))
@@ -487,7 +532,7 @@ struct FocusRackView: View {
             Text(
                 rack.mode == .nativeAF
                     ? "⠿ FOCUS"
-                    : compactPhase.map { "FOCUS RACK · \($0)" } ?? "⠿ FOCUS RACK"
+                    : compactPhase.map { "FOCUS RACK · \($0)" } ?? "⠿ FOCUS"
             )
             .font(.system(size: 11, weight: .bold))
             .accessibilityIdentifier("focusRack.phase")
@@ -506,11 +551,13 @@ struct FocusRackView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("focusRack.recovery")
             } else if compact, let warning = rack.state?.timingWarning {
-                Text(rack.state?.busy == true ? "Running late" : "Timing warning")
+                Text(compactTimingStatus)
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(.orange)
                     .accessibilityValue(warning)
                     .accessibilityIdentifier("focusRack.timingWarning")
-            } else if let state = rack.state {
+            } else if let state = rack.state,
+                compact || state.busy || state.playbackInstruction != nil
+            {
                 Text(
                     rack.stopPending
                         ? "Stopping…"
@@ -523,6 +570,20 @@ struct FocusRackView: View {
                 .accessibilityIdentifier("focusRack.status")
             }
         }
+    }
+
+    private var compactTimingStatus: String {
+        guard let state = rack.state else { return "Timing warning" }
+        if state.busy { return "Running late" }
+        if state.phase == .complete, state.timingWarningIsEstimate != true,
+            let actual = state.actualMovementDuration
+        {
+            return "Completed in \(actual.formatted(.number.precision(.fractionLength(0...2)))) s"
+        }
+        if state.timingWarningIsEstimate == true, let estimate = state.estimatedDuration {
+            return "~\(estimate.formatted(.number.precision(.fractionLength(0...2)))) s expected"
+        }
+        return "Timing warning"
     }
 
     private var compactNativeStatus: String {
@@ -557,7 +618,9 @@ struct FocusRackView: View {
 
     private var transport: some View {
         VStack(spacing: 4) {
-            if !compact, let warning = rack.state?.timingWarning {
+            if !compact, let warning = rack.state?.timingWarning,
+                rack.state?.busy == true || rack.state?.timingWarningIsEstimate != true
+            {
                 Text(warning).font(.system(size: 11)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -585,7 +648,10 @@ struct FocusRackView: View {
                                     ? "Stopping…" : rack.state?.primary.title ?? "Set marks"
                             )
                             .font(.system(size: 13, weight: .semibold))
-                            if !rack.stopPending, let detail = rack.state?.primary.detail {
+                            if !rack.stopPending, rack.state?.preparingLens != true,
+                                rack.state?.phase != .stopping,
+                                let detail = rack.state?.primary.detail
+                            {
                                 Text(detail).font(.system(size: 11))
                             }
                         }
@@ -601,7 +667,12 @@ struct FocusRackView: View {
                     .accessibilityLabel(
                         rack.stopPending ? "Stopping…" : rack.state?.primary.title ?? "Set marks"
                     )
-                    .accessibilityValue(rack.state?.primary.detail ?? "")
+                    .accessibilityValue(
+                        rack.state?.phase == .stopping
+                            ? ""
+                            : rack.state?.preparingLens == true
+                                ? "Untimed lens preparation" : rack.state?.primary.detail ?? ""
+                    )
                     .accessibilityIdentifier("focusRack.primary")
                 }
                 if showsStop {
@@ -654,12 +725,23 @@ struct FocusRackView: View {
             VStack(spacing: 1) {
                 Text(action?.title ?? (direction == .aToB ? "A→B" : "B→A"))
                     .font(.system(size: 12, weight: .semibold))
-                if let detail = action?.detail { Text(detail).font(.system(size: 10)) }
+                if compact, let detail = action?.detail { Text(detail).font(.system(size: 10)) }
             }
             .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+        .foregroundStyle(
+            action?.enabled == true
+                ? (preparationIsPrimary ? LiveDesign.text : Color.black) : LiveDesign.muted
+        )
+        .background(
+            action?.enabled == true && !preparationIsPrimary
+                ? LiveDesign.accent : LiveDesign.glassBright.opacity(0.45),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8).stroke(LiveDesign.hairline, lineWidth: 1)
+        }
         .disabled(
             !allowsSetup || action?.enabled != true || rack.afSettingsPending
                 || rack.afSettingsFailure != nil
@@ -716,18 +798,10 @@ struct FocusRackView: View {
     }
 
     private func marks(_ state: FocusRackState) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if state.nudgeProgress != nil
-                || (state.stepPosition != nil && !state.busy && !rack.stopPending)
-            {
-                HStack(spacing: 8) {
-                    mark("A", state: state, enabled: state.capabilities.canCaptureA)
-                    mark("B", state: state, enabled: state.capabilities.canCaptureB)
-                }
-            }
-            positions(state)
+        HStack(spacing: 8) {
+            mark("A", state: state, enabled: state.capabilities.canCaptureA)
+            mark("B", state: state, enabled: state.capabilities.canCaptureB)
         }
-        .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("focusRack.marks")
     }
@@ -750,6 +824,14 @@ struct FocusRackView: View {
                 }
                 .frame(width: 36, height: 40).clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 5))
+                .overlay(alignment: .bottomTrailing) {
+                    if captured != nil {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 12)).foregroundStyle(LiveDesign.good)
+                            .background(.black, in: Circle()).padding(2)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .accessibilityIdentifier("focusRack.thumbnail.\(id)")
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.system(size: 12, weight: .semibold))
@@ -757,13 +839,13 @@ struct FocusRackView: View {
                         Text("Fast reposition").font(.system(size: 10)).foregroundStyle(
                             .white.opacity(0.7))
                     }
-                    Text(captured.map { "\($0.stepPosition) steps" } ?? "Not set")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(
-                            .white.opacity(0.7))
+                    if captured == nil {
+                        Text("Not set").font(.system(size: 11)).foregroundStyle(LiveDesign.muted)
+                    }
                 }
                 Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, minHeight: 56)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .padding(.horizontal, 6).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -831,88 +913,172 @@ struct FocusRackView: View {
 
     private func move(_ state: FocusRackState) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                timing("Duration", seconds: state.transition.duration, id: "duration", state: state)
-                timing("Start delay", seconds: state.transition.delay, id: "delay", state: state)
-            }
-            if let estimate = state.estimatedDuration,
-                estimate > state.transition.duration + 0.0005
-            {
-                Text(
-                    "\(state.transition.duration.formatted(.number)) s target · ~\(estimate.formatted(.number.precision(.fractionLength(0...2)))) s estimated"
-                )
-                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("focusRack.duration.estimate")
-            }
-            Button {
-                optionsExpanded.toggle()
-            } label: {
-                HStack {
-                    Text("Options · Linear")
-                    Spacer(minLength: 0)
-                    Image(systemName: optionsExpanded ? "chevron.up" : "chevron.down")
-                }
-                .font(.system(size: 12))
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(state.nudgeProgress != nil)
-            .accessibilityValue(optionsExpanded ? "Expanded" : "Collapsed")
-            .accessibilityIdentifier("focusRack.options")
-            if optionsExpanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(
-                        "Set A, adjust with Near/Far, then set B. Keep zoom and the focus ring fixed."
-                    )
-                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
-                    .fixedSize(horizontal: false, vertical: true)
-                    if let calibration = state.calibration {
-                        Button {
-                            rack.calibrate()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(calibration.title).font(.system(size: 12, weight: .semibold))
-                                if let detail = calibration.detail {
-                                    Text(detail).font(.system(size: 11))
-                                }
-                            }
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!calibration.enabled || state.busy)
-                        .accessibilityIdentifier("focusRack.calibrate")
-                        Text("Each tap measures one move between A and B.")
-                            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+            if markEditorVisible(state) {
+                VStack(alignment: .leading, spacing: 6) {
+                    nudgeControls(state)
+                    positions(state)
                     HStack(spacing: 8) {
                         ForEach(state.program.marks, id: \.id) { mark in
                             Button("Replace " + mark.id) { rack.capture(mark.id) }
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .disabled(
-                                    !(mark.id == "A"
-                                        ? state.capabilities.canCaptureA
-                                        : state.capabilities.canCaptureB)
+                                    !allowsSetup
+                                        || !(mark.id == "A"
+                                            ? state.capabilities.canCaptureA
+                                            : state.capabilities.canCaptureB)
                                 )
                                 .accessibilityIdentifier("focusRack.capture." + mark.id)
                         }
+                        Button(role: .destructive) {
+                            rack.reset()
+                        } label: {
+                            Text("Reset marks").frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .disabled(!allowsSetup || !state.capabilities.canReset)
+                        .accessibilityIdentifier("focusRack.reset")
+                    }
+                }
+                .padding(8)
+                .background(
+                    LiveDesign.glassBright.opacity(0.45), in: RoundedRectangle(cornerRadius: 8)
+                )
+            }
+            HStack(spacing: 8) {
+                timing(
+                    "Target duration", seconds: state.transition.duration, id: "duration",
+                    state: state)
+                if let estimate = state.estimatedDuration,
+                    abs(estimate - state.transition.duration) > 0.0005
+                {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Expected").font(.system(size: 11)).foregroundStyle(LiveDesign.muted)
+                        Text("~\(estimate.formatted(.number.precision(.fractionLength(0...2)))) s")
+                            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.orange)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(state.playbackDetail)
+                    .accessibilityIdentifier("focusRack.duration.estimate")
+                } else {
+                    Label("Linear", systemImage: "arrow.right")
+                        .font(.system(size: 11)).foregroundStyle(LiveDesign.muted)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            if state.preparationRecommended == true && (!state.busy || state.nudgeProgress != nil) {
+                preparation(state, prominent: true)
+            }
+            HStack(spacing: 8) {
+                Button {
+                    marksExpanded.toggle()
+                } label: {
+                    Label(
+                        markEditorVisible(state) ? "Hide marks" : "Edit marks",
+                        systemImage: "slider.horizontal.3"
+                    )
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(
+                    state.nudgeProgress != nil || state.program.marks.count < 2
+                        || !state.referenceValid
+                )
+                .accessibilityValue(markEditorVisible(state) ? "Expanded" : "Collapsed")
+                .accessibilityIdentifier("focusRack.editMarks")
+                optionsToggle
+            }
+            if optionsExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    timing(
+                        "Start delay", seconds: state.transition.delay, id: "delay", state: state)
+                    if state.preparationRecommended != true {
+                        preparation(state, prominent: false)
                     }
                     templates(state)
                     Button("Focus settings") { rack.openFocusSettings() }
                         .frame(maxWidth: .infinity, minHeight: 44)
-                        .disabled(state.busy)
-                    Button(role: .destructive) {
-                        rack.reset()
-                    } label: {
-                        Text("Reset marks").frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .disabled(!state.capabilities.canReset)
-                    .accessibilityIdentifier("focusRack.reset")
+                        .disabled(!allowsSetup || state.busy)
                 }
             }
+        }
+    }
+
+    private var optionsToggle: some View {
+        Button {
+            optionsExpanded.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Text("Options")
+                Image(systemName: optionsExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(.system(size: 12, weight: .medium))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(rack.state?.nudgeProgress != nil)
+        .accessibilityValue(optionsExpanded ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier("focusRack.options")
+    }
+
+    private func markEditorVisible(_ state: FocusRackState) -> Bool {
+        marksExpanded || state.program.marks.count < 2 || !state.referenceValid
+            || state.nudgeProgress != nil
+    }
+
+    private var preparationIsPrimary: Bool {
+        rack.state?.preparationRecommended == true && rack.state?.calibration?.enabled == true
+            && rack.state?.busy != true && allowsSetup && !rack.stopPending
+            && !rack.afSettingsPending && rack.afSettingsFailure == nil
+    }
+
+    @ViewBuilder private func preparation(_ state: FocusRackState, prominent: Bool) -> some View {
+        if let calibration = state.calibration {
+            Button {
+                rack.calibrate()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(.system(size: 16, weight: .medium))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(
+                            prominent ? calibration.title + " · measure timing" : calibration.title
+                        )
+                        .font(.system(size: 12, weight: .semibold))
+                        Text(calibration.detail ?? "One pass between A and B")
+                            .font(.system(size: 10))
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if prominent { Image(systemName: "arrow.right").font(.system(size: 11)) }
+                }
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(
+                prominent && preparationIsPrimary
+                    ? Color.black : prominent ? LiveDesign.accent : LiveDesign.text
+            )
+            .background(
+                prominent && preparationIsPrimary
+                    ? LiveDesign.accent
+                    : prominent ? LiveDesign.accentDim : LiveDesign.glassBright.opacity(0.45),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .disabled(
+                !allowsSetup || !calibration.enabled || state.busy || rack.stopPending
+                    || rack.afSettingsPending || rack.afSettingsFailure != nil
+            )
+            .accessibilityHint(
+                "Measures this lens in one pass to the other mark. Recording is unchanged."
+            )
+            .accessibilityIdentifier("focusRack.calibrate")
         }
     }
 
@@ -929,11 +1095,11 @@ struct FocusRackView: View {
                 Text("\(seconds.formatted(.number.precision(.fractionLength(0...3)))) s")
                     .font(.system(size: 15, weight: .semibold, design: .monospaced))
             }
-            .frame(maxWidth: .infinity, minHeight: 48).contentShape(Rectangle())
+            .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
-        .disabled(!state.capabilities.canEditTiming)
+        .disabled(!allowsSetup || !state.capabilities.canEditTiming)
         .accessibilityLabel("Edit " + title.lowercased())
         .accessibilityValue("\(seconds) seconds")
         .accessibilityIdentifier("focusRack.\(id).value")
@@ -965,7 +1131,7 @@ struct FocusRackView: View {
                     .font(.system(size: 13, weight: .medium))
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .disabled(!state.capabilities.canEditTiming)
+            .disabled(!allowsSetup || !state.capabilities.canEditTiming)
             .accessibilityIdentifier("focusRack.templates")
             Text("Templates save timing only. Capture fresh marks after loading.")
                 .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
@@ -981,7 +1147,10 @@ struct FocusRackView: View {
         if state.totalSteps > 0 {
             let percent = Int(
                 (100 * Double(state.completedSteps) / Double(state.totalSteps)).rounded())
-            return "\(state.phase.title) · \(percent)%"
+            let title =
+                state.preparingLens == true && state.phase == .moving
+                ? "Preparing lens" : state.phase.title
+            return "\(title) · \(percent)%"
         }
         return state.phase.title
     }
