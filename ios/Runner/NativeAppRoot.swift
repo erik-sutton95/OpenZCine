@@ -968,6 +968,12 @@ final class NativeAppModel {
     /// written ONLY by the connect machinery — unlike `connectionMessage`, which the discovery loop
     /// overwrites — so the progress sheet can show real progress instead of a frozen "Connecting".
     var connectionStageDetail = ""
+    /// The body wake (`NikonBodyWake`) is waiting for a dozing camera to answer: the sheet shows
+    /// the waiting step instead of a handshake that is not running yet (hardware pass 2026-10-25).
+    private(set) var isAwaitingBodyWake = false
+    /// The camera name the wake's waiting and silent copy use: the saved setup's title, the name
+    /// Android shows, so both platforms say the same sentence.
+    @ObservationIgnored private var bodyWakeDeviceName = ""
     @ObservationIgnored private var connectionProgressShowsFailure = false
     /// Whether an established session dropped and is being recovered behind a preserved monitor.
     /// Drives the recovery affordance over the held frame (`MonitorRecoveryOverlay`).
@@ -1362,10 +1368,11 @@ final class NativeAppModel {
                 RelayPresence(
                     name: UIDevice.current.name,
                     watchable: true,
-                    servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                    servedCameraHost: isCameraControlSession && sessionRecovery.claimsCamera
+                        ? connectedIdentity?.host : nil,
                     relayPort: relayHost?.boundPort.map(Int.init)
                         ?? relayListenerPreferredPort.map(Int.init)))
-        } else if isCameraControlSession, !isDemoSession,
+        } else if isCameraControlSession, !isDemoSession, sessionRecovery.claimsCamera,
             let host = connectedIdentity?.host, !host.isEmpty
         {
             relayPresenceServer.update(
@@ -1385,6 +1392,7 @@ final class NativeAppModel {
         let host = connectedIdentity?.host ?? ""
         let shouldBeacon =
             isCameraControlSession && !isRelayBroadcasting && !isDemoSession && !host.isEmpty
+            && sessionRecovery.claimsCamera
         if shouldBeacon {
             let beacon = cameraInUseBeacon ?? CameraInUseBeacon()
             cameraInUseBeacon = beacon
@@ -2508,7 +2516,8 @@ final class NativeAppModel {
     var focusSubject = "Auto"
     /// When non-nil, the next picker present opens on this mode tab (e.g. FOCUS Area = 1).
     var pickerInitialMode: Int?
-    var prefersMediaDuration = false
+    /// The video MEDIA cell's tap form: free space, free percentage, then estimated time.
+    var mediaReadoutForm = 0
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
     let gyroCapture = GyroCaptureCoordinator()
@@ -3053,8 +3062,40 @@ final class NativeAppModel {
             }(),
             isPreparingLiveView: connection == .preparingLiveView,
             isConnected: connection == .connected,
-            showsFailure: connectionProgressShowsFailure
+            showsFailure: connectionProgressShowsFailure,
+            isAwaitingBody: isAwaitingBodyWake
         )
+    }
+
+    /// The dial's wake progress for one attempt. It hops to the main actor and is dropped once
+    /// that attempt is no longer current, so a late step from a cancelled attempt can never set
+    /// or clear the waiting step of the attempt that replaced it.
+    func bodyWakeProgressHandler(
+        requireCurrent: @escaping @MainActor @Sendable () throws -> Void
+    ) -> @Sendable (NikonBodyWake.Progress) -> Void {
+        { [weak self] progress in
+            Task { @MainActor in
+                do { try requireCurrent() } catch { return }
+                self?.noteBodyWake(progress)
+            }
+        }
+    }
+
+    /// One step of the body wake. The waiting copy rides `connectionStageDetail`, the detail the
+    /// progress card reads; an answer hands the sheet back to the handshake.
+    func noteBodyWake(_ progress: NikonBodyWake.Progress) {
+        switch progress {
+        case .waiting:
+            guard connectionPhase != .failed else { return }
+            isAwaitingBodyWake = true
+            connectionStageDetail = NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName)
+        case .answered:
+            isAwaitingBodyWake = false
+            if connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName)
+            {
+                connectionStageDetail = ""
+            }
+        }
     }
 
     func prepareStartup() {
@@ -3898,6 +3939,7 @@ final class NativeAppModel {
         // frees the latch immediately, so the operator's next tap is never swallowed while an
         // abandoned attempt is still unwinding a blocking socket read.
         isEstablishingConnection = true
+        isAwaitingBodyWake = false
         // Bounded phase timeouts belong to operator-initiated connects: a recovery attempt behind a
         // preserved monitor is already bounded by its own loop, and failing it here could overlap a
         // second Init with a socket read the first attempt is still blocked in.
@@ -3994,6 +4036,11 @@ final class NativeAppModel {
                 startDiscoveryLoop(resetResults: false)
                 return
             }
+            do {
+                guard let self, self.connectionGeneration == generation else { return }
+                let title = savedCamera?.displayTitle.trimmingCharacters(in: .whitespaces) ?? ""
+                bodyWakeDeviceName = title.isEmpty ? connectionProgressDeviceName : title
+            }
             // A router or hotspot setup the list does not see is dialled at its stored address
             // blind. Ask the network first (`NikonBodyWake`): a body that answers goes on, a
             // silent one ends here with copy naming the real cause, not a PTP timeout.
@@ -4003,21 +4050,22 @@ final class NativeAppModel {
                 do {
                     guard let self, self.connectionGeneration == generation else { return }
                     connectionPhase = .discovering
-                    connectionMessage = NikonBodyWake.wakingMessage(
-                        deviceName: connectionProgressDeviceName)
+                    noteBodyWake(.waiting)
+                    connectionMessage = connectionStageDetail
                 }
                 let wake = await NikonBodyWake.awaitAnswer(
                     host: host, isAlive: { await NativeNikonDiscovery.dialer.isAlive($0) })
                 do {
                     guard let self, self.connectionGeneration == generation else { return }
                     logConnection("wake host=\(host) \(wake)")
+                    noteBodyWake(.answered)
                     if !wake.answered {
                         AppDiagnostics.shared.record(.connectionPtpFailed)
                         connection = .disconnected
                         connectionPhase = .failed
                         connectionProgressShowsFailure = true
                         connectionMessage = NikonBodyWake.silentMessage(
-                            deviceName: connectionProgressDeviceName)
+                            deviceName: bodyWakeDeviceName)
                         connectionFailureDetail = connectionMessage
                         startDiscoveryLoop(resetResults: false)
                         return
@@ -4274,10 +4322,15 @@ final class NativeAppModel {
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
+                noteBodyWake(.answered)
                 let baseError: String
                 if Self.isRejectedInitiator(error) {
                     baseError =
                         "The camera didn't recognize this phone. On the camera, create or choose a Connect to PC profile for this iPhone, then try again."
+                } else if error is NikonBodyWake.SilentError {
+                    // The dial's own wake heard nothing: the shared copy, named like the card
+                    // and like Android.
+                    baseError = NikonBodyWake.silentMessage(deviceName: bodyWakeDeviceName)
                 } else {
                     baseError =
                         (error as? LocalizedError)?.errorDescription
@@ -4691,7 +4744,7 @@ final class NativeAppModel {
             guard isDemoSession else { return }
             applyLiveViewHeaderTimecode(
                 Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
-            prefersMediaDuration = false
+            mediaReadoutForm = 0
         }
 
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
@@ -6766,6 +6819,8 @@ final class NativeAppModel {
         #if DEBUG
             let peers = cameraNetworkJoinPeers
         #endif
+        // The dial's body wake (`NikonBodyWake`) reports its wait here so the sheet shows it.
+        let onWakeProgress = bodyWakeProgressHandler(requireCurrent: requireCurrent)
         return { [weak self] requestPairing, onPairingChallenge in
             try requireCurrent()
             #if DEBUG
@@ -6787,6 +6842,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
@@ -6811,6 +6867,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
@@ -6835,6 +6892,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 }
@@ -7193,9 +7251,28 @@ final class NativeAppModel {
         case .takenOver(let holder):
             logConnection(
                 "recovery stopped: \(holder ?? "another device") holds host=\(cameraHost)")
+            retireTakenOverSession()
         case .retrying:
             break
         }
+        // A device that stopped reconnecting gave the camera up: it no longer says it holds it,
+        // on the presence port, in the in-use beacon or in a running broadcast's advertisement
+        // (the broadcast itself stays up for its watchers).
+        if previous.claimsCamera, !snapshot.state.claimsCamera {
+            relayHost?.updateServedCamera(
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
+                servedCameraHost: nil)
+            updateCameraInUseBeacon()
+        }
+    }
+
+    /// Another device holds the camera now. The old link may still be open on this side, so it is
+    /// retired without a word to the body: no EndLiveView, no CloseSession and no live-view or
+    /// keepalive traffic, any of which could reach the session of the phone that took it. Retry
+    /// still starts from the held frame and disposes this session on its normal path.
+    private func retireTakenOverSession() {
+        monitorRuntime?.recovering()
+        cameraSession?.close()
     }
 
     /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
@@ -7449,6 +7526,13 @@ final class NativeAppModel {
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnectReady:
+                    // A running or stopped recovery owns every dial: it asks who holds the camera
+                    // first. An in-place reconnect behind it took a camera straight back from the
+                    // phone that had taken it over, and the ZR hung (hardware pass 4.1).
+                    guard !sessionRecovery.isRecovering else {
+                        logConnection("live view reconnect skipped: recovery owns the camera")
+                        return
+                    }
                     cameraHost = session.identity.host
                     connectToCamera(preservingMonitorSurface: true)
                 case .recover(let reason):
@@ -11854,7 +11938,9 @@ final class NativeAppModel {
             // chrome to show.
             isPhotography: StillCapturePolicy.prefersPhotographyChrome(
                 selector: cameraPropertySnapshot.captureSelector),
-            shotsRemaining: cameraPropertySnapshot.shotsRemaining.map(String.init) ?? "",
+            // The phone header's short count (`7.1k`), so the wrist never shows a longer figure.
+            shotsRemaining: cameraPropertySnapshot.shotsRemaining.map(
+                MonitorTextFormat.shotsRemainingCompactLabel) ?? "",
             // The still image area the phone itself frames at — carried as a ratio so a crop
             // change on the body reaches the wrist without a second mode-to-shape table.
             feedAspectRatio: StillCapturePolicy.prefersPhotographyChrome(
@@ -13011,43 +13097,38 @@ final class NativeAppModel {
         activePanel = .media
     }
 
-    /// Toggles the MEDIA cell between capacity (GB · %) and duration (Min) readouts.
+    /// Steps the video MEDIA cell to its next form (free space, percentage, estimated time).
     func toggleMediaReadout() {
-        prefersMediaDuration.toggle()
+        mediaReadoutForm = MonitorStorageReadoutFormat.nextForm(
+            after: mediaReadoutForm, count: mediaReadoutForms.count)
     }
 
-    /// The MEDIA cell label, respecting the capacity/duration preference.
-    var mediaReadout: String {
-        // A relayed source supplies its own observations; the local camera uses the common session.
-        if videoSource == .relay {
-            if let status = cameraState.mediaStatus {
-                return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+    /// Operator monitor storage, the same text in every orientation as on every shared live
+    /// surface. Photo shows the free space and percentage (the SHOTS pill's storage side).
+    var liveMediaReadout: String {
+        if isPhotographyMode {
+            if videoSource == .relay {
+                return cameraState.mediaStatus?.capacityLabel ?? cameraState.media
             }
-            return cameraState.media
+            return LiveMediaReadout.photoStorage(shell.control.snapshot?.storage.storageReadout)
         }
-        let storage = shell.control.snapshot?.storage
-        return prefersMediaDuration
-            ? storage?.recordingTimeLabel ?? "-- Min"
-            : storage?.storageReadout?.label ?? StorageReadout.unavailable
+        let forms = mediaReadoutForms
+        return forms[mediaReadoutForm % forms.count]
     }
 
-    /// Operator monitor storage uses the same units as every shared live surface.
-    var liveMediaReadout: String { liveMediaReadout(portrait: false) }
-
-    /// Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
-    /// Duration mode and every non-portrait surface keep the existing labels.
-    func liveMediaReadout(portrait: Bool) -> String {
+    /// The video MEDIA cell's forms, the one shared storage cycle (`StorageReadoutCycle`).
+    /// A relayed source supplies its own observations; the local camera uses the common session.
+    private var mediaReadoutForms: [String] {
         if videoSource == .relay {
-            guard let status = cameraState.mediaStatus else { return cameraState.media }
-            if prefersMediaDuration { return status.durationLabel }
-            guard portrait, let bytes = status.freeBytes else { return status.capacityLabel }
-            return
-                "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
+            guard let status = cameraState.mediaStatus else { return [cameraState.media] }
+            return StorageReadoutCycle.forms(
+                freeBytes: status.freeBytes ?? UInt64(max(0, status.gigabytesFree)) * 1_000_000_000,
+                percent: "\(status.percentFree)%",
+                recordingTime: RecordingTimeLabel.label(
+                    status.estimatedMinutesRemaining.map(Int64.init), origin: .estimated),
+                photo: false)
         }
-        let storage = shell.control.snapshot?.storage
-        return LiveMediaReadout.label(
-            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
-            portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
+        return StorageReadoutCycle.forms(shell.control.snapshot?.storage, photo: false)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {

@@ -29,6 +29,9 @@ retaining Nikon's stills, video and Multicam controls.
   Bias changes. Recovery preserves the camera's photo/video mode.
 - Saved-camera connections can wake an unseen body. Take-over asks first,
   explicit Wi-Fi retries ask again, and abandoned setup work is cancelled.
+- After a take-over, the phone that lost the camera stops for good: it no longer
+  reconnects from its old live view, sends nothing more to the camera, stops
+  saying it holds it and drops the contradictory "Reconnecting" pill.
 - Media sharing keeps photo options separate from video export and completes
   pending copies before sharing. Playback stays paused after app return.
 - iOS improves shutter VoiceOver wording, hides collapsed assist controls from
