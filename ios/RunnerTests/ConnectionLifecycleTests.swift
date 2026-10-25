@@ -36,6 +36,21 @@ struct ConnectionLifecycleTests {
         #expect(model.connectionStageDetail.isEmpty)
     }
 
+    @Test("A late wake step from a superseded attempt never touches the current one")
+    func staleWakeProgressIsDropped() async {
+        let model = model()
+        struct Superseded: Error {}
+        let stale = model.bodyWakeProgressHandler(requireCurrent: { throw Superseded() })
+        stale(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+        let current = model.bodyWakeProgressHandler(requireCurrent: {})
+        current(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(model.isAwaitingBodyWake)
+    }
+
     @Test("Cancel retires an unanswered take-over before a late confirmation")
     func cancelledTakeOverCannotStartConnection() {
         let model = model()

@@ -3062,6 +3062,20 @@ final class NativeAppModel {
         )
     }
 
+    /// The dial's wake progress for one attempt. It hops to the main actor and is dropped once
+    /// that attempt is no longer current, so a late step from a cancelled attempt can never set
+    /// or clear the waiting step of the attempt that replaced it.
+    func bodyWakeProgressHandler(
+        requireCurrent: @escaping @MainActor @Sendable () throws -> Void
+    ) -> @Sendable (NikonBodyWake.Progress) -> Void {
+        { [weak self] progress in
+            Task { @MainActor in
+                do { try requireCurrent() } catch { return }
+                self?.noteBodyWake(progress)
+            }
+        }
+    }
+
     /// One step of the body wake. The waiting copy rides `connectionStageDetail`, the detail the
     /// progress card reads; an answer hands the sheet back to the handshake.
     func noteBodyWake(_ progress: NikonBodyWake.Progress) {
@@ -6799,9 +6813,7 @@ final class NativeAppModel {
             let peers = cameraNetworkJoinPeers
         #endif
         // The dial's body wake (`NikonBodyWake`) reports its wait here so the sheet shows it.
-        let onWakeProgress: @Sendable (NikonBodyWake.Progress) -> Void = { [weak self] progress in
-            Task { @MainActor in self?.noteBodyWake(progress) }
-        }
+        let onWakeProgress = bodyWakeProgressHandler(requireCurrent: requireCurrent)
         return { [weak self] requestPairing, onPairingChallenge in
             try requireCurrent()
             #if DEBUG
