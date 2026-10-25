@@ -1,4 +1,4 @@
-- Shared OpenCine setup, monitor, View Assist and media controls; clearer readouts.
+- Shared OpenCine setup (Add setup included), monitor, View Assist and media controls.
 - Fixes a freeze while the live picture rebuilds after rotating or returning.
 - A dozing camera is woken and dialled again instead of failing as unreachable.
 - Faster RAW/JPEG instant review; tap once in CL/CH for one photo, hold for a burst.
