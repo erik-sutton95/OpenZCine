@@ -23,10 +23,10 @@ public enum RedLUTDownloadAvailability: Equatable, Sendable {
         case .available:
             return nil
         case .blockedOnCameraAccessPoint:
-            return "Connect to the internet to download RED LUTs — you're on the camera's Wi‑Fi, "
+            return "Connect to the internet to download RED LUTs. You're on the camera's Wi‑Fi, "
                 + "which has no internet."
         case .blockedNoInternet:
-            return "Connect to the internet to download RED LUTs — no internet connection is "
+            return "Connect to the internet to download RED LUTs. No internet connection is "
                 + "available right now."
         }
     }

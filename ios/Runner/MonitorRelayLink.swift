@@ -18,7 +18,7 @@ extension RelayAppleHost where Codec == DeployedMonitorRelayCodec {
             codec: DeployedMonitorRelayCodec(), profile: profile,
             network: .init(prohibitsCellular: false),
             versionMismatchReason:
-                "That device is running a different version of OpenZCine \u{2014} update both to connect.",
+                "That device is running a different version of OpenZCine. Update both to connect.",
             requiresVersionMatch: false, journal: { logConnection($0) })
     }
 }
@@ -28,7 +28,7 @@ extension RelayAppleClient where Codec == DeployedMonitorRelayCodec {
             codec: DeployedMonitorRelayCodec(), network: .init(prohibitsCellular: false),
             racePeerToPeer: true, watcherID: Self.savedWatcherID,
             versionMismatchReason:
-                "That device is running a different version of OpenZCine \u{2014} update both to connect.",
+                "That device is running a different version of OpenZCine. Update both to connect.",
             unreachableSuffix: " Make sure OpenZCine is open on it.", journal: { logConnection($0) }
         )
     }

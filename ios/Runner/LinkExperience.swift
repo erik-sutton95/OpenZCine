@@ -102,7 +102,7 @@ struct LinkExperience: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(
-                "This device is on the camera's own Wi‑Fi, which doesn't pass traffic between devices — the broadcast can't reach it here. Switch to your regular Wi‑Fi, then join."
+                "This device is on the camera's own Wi‑Fi, which doesn't pass traffic between devices, so the broadcast can't reach it here. Switch to your regular Wi‑Fi, then join."
             )
         }
         // Owned at the root so the credential scanner can present directly from the join/scan

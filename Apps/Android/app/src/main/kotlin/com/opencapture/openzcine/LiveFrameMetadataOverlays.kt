@@ -298,7 +298,7 @@ private fun DebugMetadataBadge(show: Boolean, feed: LiveOverlayRect) {
     if (!show) return
     val density = LocalDensity.current
     androidx.compose.material3.Text(
-        text = "DEBUG FIXTURE — NOT CAMERA METADATA",
+        text = "DEBUG FIXTURE: NOT CAMERA METADATA",
         style = chromeStyle(9.5f, FontWeight.Bold, mono = true),
         color = LiveDesign.text,
         modifier =

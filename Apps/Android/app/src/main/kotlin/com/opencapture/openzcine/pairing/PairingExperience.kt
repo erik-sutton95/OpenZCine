@@ -1673,7 +1673,7 @@ private fun networkInstructions(path: PairingPath): List<MonitorPairingInstructi
     }
 }
 
-internal const val USB_DEBUG_FIXTURE_LABEL: String = "DEBUG FIXTURE — NOT USB HARDWARE"
+internal const val USB_DEBUG_FIXTURE_LABEL: String = "DEBUG FIXTURE: NOT USB HARDWARE"
 
 @StringRes
 internal fun usbCameraDetailResource(

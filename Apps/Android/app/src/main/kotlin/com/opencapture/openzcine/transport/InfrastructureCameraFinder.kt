@@ -139,7 +139,10 @@ public class InfrastructureCameraFinder(
     }
 }
 
-/** Live site-local IPv4 interfaces this device can sweep from. */
+/**
+ * Live site-local IPv4 interfaces this device can sweep from: never cellular or a tunnel, whose
+ * carrier 10/8 addresses look private too ([NikonHosts.isScanInterface]).
+ */
 public fun localIPv4Interfaces(): List<NikonLocalInterface> =
     runCatching {
         NetworkInterface.getNetworkInterfaces()
@@ -151,7 +154,7 @@ public fun localIPv4Interfaces(): List<NikonLocalInterface> =
                     .toList()
                     .filterIsInstance<Inet4Address>()
                     .mapNotNull { it.hostAddress }
-                    .filter(NikonHosts::isPrivateIPv4)
+                    .filter { NikonHosts.isScanInterface(networkInterface.name, it) }
                     .map { NikonLocalInterface(networkInterface.name, it) }
             }
     }
