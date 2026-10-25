@@ -350,6 +350,8 @@ struct SessionRecoveryPictureTests {
         var establishing = false
         var picture: (sourceAt: TimeInterval?, presentedAt: TimeInterval?) = (nil, nil)
         var onConnect: () -> Void = {}
+        /// The device a presence sweep names as holding the camera.
+        var holder: String?
         private var sleepers: [Sleeper] = []
 
         var peers: NativeAppModel.SessionRecoveryPeers {
@@ -362,7 +364,8 @@ struct SessionRecoveryPictureTests {
                 hasControlSession: { [unowned self] in controlReady },
                 picture: { [unowned self] in picture },
                 now: { [unowned self] in time },
-                sleep: { [unowned self] in try await pause($0) })
+                sleep: { [unowned self] in try await pause($0) },
+                holder: holder == nil ? nil : { @MainActor [unowned self] _ in holder })
         }
 
         private func pause(_ duration: Duration) async throws {
@@ -490,6 +493,34 @@ struct SessionRecoveryPictureTests {
         #expect(handedOver)
         #expect(peer.time <= 180.001, "automatic recovery ran \(peer.time) s")
         #expect(peer.connects > 1, "a control-only attempt is retried, not accepted")
+        model.exitMonitorToOperatorMenu()
+    }
+
+    /// OpenCine #253: before the first attempt dials, presence is asked three times, one second
+    /// apart. Those pauses run on the episode's clock; on a wall-clock sleep the first attempt
+    /// never dialed inside a virtual drive (Core 238bb3a pin, run 40171934283).
+    @Test("The first attempt's presence asks run on the episode clock, then it dials")
+    func firstAttemptPresenceAsksUseTheEpisodeClock() async {
+        let peer = Peer()
+        peer.onConnect = { peer.controlReady = true }
+        var asks: [TimeInterval] = []
+        var peers = peer.peers
+        peers.holder = { _ in
+            asks.append(peer.time)
+            return nil
+        }
+        let model = NativeAppModel()
+        model.cameraHost = "192.168.1.30"
+        model.isMonitorPresented = true
+        model.sessionRecoveryPeers = peers
+
+        model.debugSimulateTransportDetach()
+        let dialed = await peer.drive(until: 10) { peer.connects == 1 }
+
+        #expect(dialed)
+        #expect(asks.count == 3, "asks: \(asks)")
+        #expect(
+            zip(asks, asks.dropFirst()).allSatisfy { abs($1 - $0 - 1) < 0.001 }, "asks: \(asks)")
         model.exitMonitorToOperatorMenu()
     }
 }
