@@ -180,7 +180,9 @@ struct MediaBrowserView: View {
                             library.isCurrent(token), capture.isCurrent
                         else { return }
                         deliveryRequest = .init(capture: capture)
-                    }
+                    },
+                    // The caching header scans cell facts only while a clip streams.
+                    cachingActive: { !model.mediaDownloadProgress.isEmpty }
                 ) { request in
                     let clip = request.record.payload
                     MediaClipThumbnail(

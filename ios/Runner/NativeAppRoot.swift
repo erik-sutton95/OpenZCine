@@ -14382,13 +14382,14 @@ extension NativeAppModel {
         return pass
     }
     private var memoizedMediaProjection: NikonAppGalleryProjection {
-        // Reading each input here also keeps the body's observation of all of them.
-        let records = mediaLibrary?.records
-        let rows = records == nil ? unopenedMediaRows : []
+        // Reading each input here also keeps the body's observation of all of them. The library's
+        // records revision changes only with its rows (not with progress, cache or selection).
+        let library = mediaLibrary
+        let rows = library == nil ? unopenedMediaRows : []
         let requireLocal = !isConnected
         let key = MediaProjectionMemo.Key(
-            library: mediaLibrary.map(ObjectIdentifier.init),
-            records: MediaProjectionMemo.identity(records ?? []),
+            library: library.map(ObjectIdentifier.init),
+            recordsRevision: library?.recordsRevision,
             rows: MediaProjectionMemo.identity(rows),
             category: mediaCategoryTab, sort: mediaSortOrder, formats: mediaFormatFilters,
             resolutions: mediaResolutionFilters, photoSizes: mediaPhotoSizeFilters,
@@ -14399,9 +14400,9 @@ extension NativeAppModel {
         if let memo = mediaProjectionMemo, memo.key == key { return memo.pass }
         var pass = mediaProjectionPass
         pass.precomputeCategoryCounts()
-        // The memo holds the exact arrays it keyed, so their storage cannot be reused by a
-        // successor while the identity comparison is in use.
-        mediaProjectionMemo = .init(key: key, records: records ?? [], rows: rows, pass: pass)
+        // The memo holds the exact unopened rows it keyed, so their storage cannot be reused by
+        // a successor while the identity comparison is in use.
+        mediaProjectionMemo = .init(key: key, rows: rows, pass: pass)
         return pass
     }
     var filteredMediaClips: [MediaClip] { mediaGalleryProjection.gridClips }
@@ -15093,12 +15094,13 @@ extension NativeAppModel {
     }
 }
 
-/// One projection pass with the inputs it was built from. Row arrays are compared by storage
-/// identity (O(1)); the memo retains them, so an identity can only repeat for the same contents.
+/// One projection pass with the inputs it was built from. Library rows are keyed by the library's
+/// records revision; rows shown before a library opens are compared by storage identity (O(1)),
+/// and the memo retains them, so an identity can only repeat for the same contents.
 struct MediaProjectionMemo {
     struct Key: Equatable {
         let library: ObjectIdentifier?
-        let records: ArrayIdentity
+        let recordsRevision: UInt64?
         let rows: ArrayIdentity
         let category: MediaCategoryTab
         let sort: MediaSortOrder
@@ -15121,7 +15123,6 @@ struct MediaProjectionMemo {
         }
     }
     let key: Key
-    let records: [MonitorMediaRecord<MediaClip>]
     let rows: [MediaClip]
     let pass: NikonAppGalleryProjection
 }
