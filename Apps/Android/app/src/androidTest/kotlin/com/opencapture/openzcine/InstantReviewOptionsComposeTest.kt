@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -105,8 +106,8 @@ class InstantReviewOptionsComposeTest {
         assertEquals(MonitorReviewOptions(), assists.reviewOptions)
         composeRule.setContent { OpenZCineTheme { Column { NikonReviewOptions(assists) } } }
         composeRule.onNodeWithText("7s").performClick()
-        composeRule.onNode(hasContentDescription("Focus Point") and hasClickAction()).performClick()
-        composeRule.onNode(hasContentDescription("Capture Info") and hasClickAction()).performClick()
+        composeRule.onNode(hasText("Focus Point") and hasClickAction()).performClick()
+        composeRule.onNode(hasText("Capture Info") and hasClickAction()).performClick()
         composeRule.waitForIdle()
         val chosen = MonitorReviewOptions(MonitorReviewDuration.SEVEN_SECONDS, showsFocusPoint = false, showsCaptureInfo = false)
         assertEquals(chosen, assists.reviewOptions)
@@ -135,7 +136,7 @@ class InstantReviewOptionsComposeTest {
         composeRule.waitUntilAtLeastOneExists(hasContentDescription("Instant Playback", substring = true), 5_000)
         composeRule.onNode(hasContentDescription("Instant Playback", substring = true))
             .performSemanticsAction(SemanticsActions.OnLongClick)
-        composeRule.waitUntilAtLeastOneExists(hasContentDescription("Focus Point") and hasClickAction(), 5_000)
+        composeRule.waitUntilAtLeastOneExists(hasText("Focus Point") and hasClickAction(), 5_000)
         composeRule.onNodeWithText("Review Duration").assertExists()
     }
 

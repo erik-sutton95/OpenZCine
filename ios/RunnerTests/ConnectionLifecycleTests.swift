@@ -23,6 +23,34 @@ struct ConnectionLifecycleTests {
         return model
     }
 
+    /// Hardware pass 2026-10-25 (1.11): the wait for a dozing body ran under "Establishing a
+    /// secure link" with no waiting step.
+    @Test("The body wake shows its waiting step and hands back to the handshake on an answer")
+    func bodyWakeShowsTheWaitingStep() {
+        let model = model()
+        model.noteBodyWake(.waiting)
+        #expect(model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: ""))
+        model.noteBodyWake(.answered)
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+    }
+
+    @Test("A late wake step from a superseded attempt never touches the current one")
+    func staleWakeProgressIsDropped() async {
+        let model = model()
+        struct Superseded: Error {}
+        let stale = model.bodyWakeProgressHandler(requireCurrent: { throw Superseded() })
+        stale(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!model.isAwaitingBodyWake)
+        #expect(model.connectionStageDetail.isEmpty)
+        let current = model.bodyWakeProgressHandler(requireCurrent: {})
+        current(.waiting)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(model.isAwaitingBodyWake)
+    }
+
     @Test("Cancel retires an unanswered take-over before a late confirmation")
     func cancelledTakeOverCannotStartConnection() {
         let model = model()
@@ -493,6 +521,34 @@ struct SessionRecoveryPictureTests {
         #expect(handedOver)
         #expect(peer.time <= 180.001, "automatic recovery ran \(peer.time) s")
         #expect(peer.connects > 1, "a control-only attempt is retried, not accepted")
+        model.exitMonitorToOperatorMenu()
+    }
+
+    /// OpenCine #253: before the first attempt dials, presence is asked three times, one second
+    /// apart. Those pauses run on the episode's clock; on a wall-clock sleep the first attempt
+    /// never dialed inside a virtual drive (Core 238bb3a pin, run 40171934283).
+    @Test("The first attempt's presence asks run on the episode clock, then it dials")
+    func firstAttemptPresenceAsksUseTheEpisodeClock() async {
+        let peer = Peer()
+        peer.onConnect = { peer.controlReady = true }
+        var asks: [TimeInterval] = []
+        var peers = peer.peers
+        peers.holder = { _ in
+            asks.append(peer.time)
+            return nil
+        }
+        let model = NativeAppModel()
+        model.cameraHost = "192.168.1.30"
+        model.isMonitorPresented = true
+        model.sessionRecoveryPeers = peers
+
+        model.debugSimulateTransportDetach()
+        let dialed = await peer.drive(until: 10) { peer.connects == 1 }
+
+        #expect(dialed)
+        #expect(asks.count == 3, "asks: \(asks)")
+        #expect(
+            zip(asks, asks.dropFirst()).allSatisfy { abs($1 - $0 - 1) < 0.001 }, "asks: \(asks)")
         model.exitMonitorToOperatorMenu()
     }
 }
