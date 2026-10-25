@@ -1,27 +1,19 @@
 New and changed
 
-- A more consistent OpenCine interface brings camera setup, settings, View Assist and media controls closer together across the apps.
-- DISP 3 returns with a REC chip, large camera timecode and larger setting tiles. Tap to change a setting; hold and drag to reorder.
-- In landscape, the colour profile sits beside the codec. Portrait readouts keep their rounded card-space values clear of the screen cutout.
-- The FPS chip uses the same words as the other apps: LINK until the first picture arrives, then the frame rate. It no longer shows READY or BUSY.
-- Instant review reads the preview stored inside RAW photos. Connection diagnostics distinguish incoming video, decoding and display interruptions.
-- Cameras > Add setup opens the same chooser as the other OpenCine apps, with USB-C and camera Wi-Fi beside Wi-Fi and Hotspot.
+- Focus now offers Native AF and Timed Rack. Save two subjects and repeat a focus change from your phone when filming alone.
+- Native AF selects saved targets in the live picture. The camera controls the transition; set its g6 AF speed on the camera.
+- Timed Rack offers A/B marks, duration and start delay. Prepare lens measures timing in one pass between the marks while recording is stopped.
+- The compact panel shows saved marks, requested and expected timing, and playback. Edit marks holds Near/Far controls; Options holds the extra settings.
 
 Fixes
 
-- Instant review appears sooner for RAW, JPEG and RAW+JPEG across exposure modes, and RAW+JPEG reviews turn sharp. In CL/CH, tap for one photo or hold for a burst.
-- Photo mode turns the LUT off; video restores it. Shots left follow the stills card, and app-triggered photos use that card.
-- The GYRO pill no longer covers the screen lock. Gyro logging waits for video mode, and tapping to focus during a focus pull no longer leaves it busy.
-- Live View keeps camera readouts and timecode frames through a warm restart or Quality Bias change. Background recovery preserves the camera mode.
-- A dozing camera is woken and dialled once more instead of failing as unreachable. Saved-camera connections can wake the camera and ask before taking over.
-- An explicit retry asks again after a refused camera Wi-Fi join. An abandoned connection no longer carries on behind the setup screen.
-- Media opens large cards without freezing. Sharing treats photos as photos, finishes a clip's copy first, and playback stays paused after Share or app return.
-- VoiceOver skips collapsed assist controls and live controls under a covering screen. Shutter labels describe the action; setup asks for Local Network at its own step.
+- A safe timed pull can finish after its requested duration and show a warning. Stop, cancellation and camera safety checks still apply.
+- Saved Native AF targets and focus-point unlock are easier to see. Focus setup reopens from Clean display, and nudge progress stays in the pressed button.
+- Automatic focus setup restores settings after closing when recording and focus have stopped, while keeping manual changes.
 
 What to test
 
-- In video mode, rotate and inspect DISP 3, the FPS chip (LINK, then the frame rate), timecode frames and camera readouts. Switch to Photo and check shots and storage.
-- Try instant review with RAW, JPEG and RAW+JPEG in A, S, M and P. In CL/CH, tap once, then hold. Check the stills card and Photo/video LUT behavior.
-- Open Media on a full card and scroll. Share a clip and check playback stays paused. Change Quality Bias, background and return; Live View stays usable.
-- Let the camera doze, then connect: it wakes and connects, or shows the asleep or off-network message if it stays silent. Retry a cancelled Wi-Fi join; Take Over asks first.
-- If the live picture drops out, use Share Diagnostics and report the time, what you were doing and whether camera controls still responded.
+- In Native AF, save two subjects and try both directions. Check low-contrast subjects too; autofocus may need another target or a retry.
+- In Timed Rack, set sharp A/B marks. With recording stopped, use Prepare lens once and confirm the other mark is sharp. Compare 1, 3 and 6 second targets in both directions; check the recording and the displayed expected time.
+- Try Pause, Resume and Stop, then reopen setup from Clean display. Close the panel and check that manual focus-setting changes are kept.
+- Repeat with your own lenses and report sharpness, visible steps, endpoint drift and any timing warning. Two lenses have been tried; more testing is needed.

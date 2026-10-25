@@ -1,5 +1,5 @@
-- Shared OpenCine setup (Add setup included), monitor, View Assist and media controls.
-- Fixes a freeze while the live picture rebuilds after rotating or returning.
-- A dozing camera is woken and dialled again instead of failing as unreachable.
-- Faster RAW/JPEG instant review; tap once in CL/CH for one photo, hold for a burst.
-- Photo LUT, stills-card counts, focus, GYRO and Media sharing fixes; better dropout diagnostics.
+- Choose Native AF for camera autofocus or Timed Rack for timed A/B moves.
+- Save two focus targets and repeat changes from your phone.
+- Prepare lens measures timing in one pass between marks while recording is stopped.
+- See requested and expected duration; a slow lens warns without cancelling a safe move.
+- Clearer saved targets, Near/Far controls, focus-point unlock and Clean display recovery.
