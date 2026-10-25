@@ -34,7 +34,10 @@ struct NikonAddSetupChooserTests {
 
     @Test func reachableRoutesConnectNow() {
         #expect(NikonSetupOptions.actionTitle(for: .usbC, reachable: true) == "Connect now")
-        #expect(NikonSetupOptions.actionTitle(for: .infrastructure, reachable: true) == "Connect now")
-        #expect(NikonSetupOptions.actionTitle(for: .hdmiCapture, reachable: false) == "Use HDMI capture")
+        #expect(
+            NikonSetupOptions.actionTitle(for: .infrastructure, reachable: true) == "Connect now")
+        #expect(
+            NikonSetupOptions.actionTitle(for: .hdmiCapture, reachable: false) == "Use HDMI capture"
+        )
     }
 }

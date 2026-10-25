@@ -292,10 +292,12 @@ struct NikonSetupOptions {
         let routes = NikonCameras.missingKinds(records).map { kind in
             StationSetupRoute(
                 NikonSavedRecordsV0.routeKind(kind),
-                actionTitle: actionTitle(for: kind, reachable: host.discoveredMatch(for: kind) != nil))
+                actionTitle: actionTitle(
+                    for: kind, reachable: host.discoveredMatch(for: kind) != nil))
         }
         return AddSetupFlow(
-            chooser: StationNetworkSetupRules.setupChooser(context: .camera(camera), routes: routes),
+            chooser: StationNetworkSetupRules.setupChooser(
+                context: .camera(camera), routes: routes),
             onSelect: { option in
                 switch NikonSavedRecordsV0.pathKind(option.kind) {
                 case .cameraAccessPoint:

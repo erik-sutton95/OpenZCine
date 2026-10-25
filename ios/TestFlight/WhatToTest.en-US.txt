@@ -5,6 +5,7 @@ New and changed
 - In landscape, the colour profile sits beside the codec. Portrait readouts keep their rounded card-space values clear of the screen cutout.
 - The FPS chip uses the same words as the other apps: LINK until the first picture arrives, then the frame rate. It no longer shows READY or BUSY.
 - Instant review reads the preview stored inside RAW photos. Connection diagnostics distinguish incoming video, decoding and display interruptions.
+- Cameras > Add setup opens the same chooser as the other OpenCine apps, with USB-C and camera Wi-Fi beside Wi-Fi and Hotspot.
 
 Fixes
 
@@ -15,7 +16,6 @@ Fixes
 - A dozing camera is woken and dialled once more instead of failing as unreachable. Saved-camera connections can wake the camera and ask before taking over.
 - An explicit retry asks again after a refused camera Wi-Fi join. An abandoned connection no longer carries on behind the setup screen.
 - Media opens large cards without freezing. Sharing treats photos as photos, finishes a clip's copy first, and playback stays paused after Share or app return.
-- Cameras > Add setup opens the same chooser as the other OpenCine apps, with USB-C and camera Wi-Fi beside Wi-Fi and Hotspot.
 - VoiceOver skips collapsed assist controls and live controls under a covering screen. Shutter labels describe the action; setup asks for Local Network at its own step.
 
 What to test
