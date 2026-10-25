@@ -7397,6 +7397,7 @@ final class NativeAppModel {
                     sleep: { try await peers.sleep($0) }, jitter: { 0.5 })
             }
         #endif
+        let holderPause = timing.sleep
         return SessionRecoveryEpisode(
             port: .init(
                 observe: { [weak self] in self?.recoveryObservation() ?? .init() },
@@ -7410,7 +7411,9 @@ final class NativeAppModel {
                 },
                 holder: { [weak self] attempt, number in
                     guard self?.isDemoSession == false else { return nil }
-                    return await NikonTakeOverRecovery.holder(beforeAttempt: number) {
+                    return await NikonTakeOverRecovery.holder(
+                        beforeAttempt: number, pause: { try? await holderPause($0) }
+                    ) {
                         await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
                     }
                 }),

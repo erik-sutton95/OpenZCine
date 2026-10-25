@@ -33,14 +33,15 @@ class MediaShareStagerTest {
                 )
 
             assertEquals("C0001.MOV", staged.displayName)
+            assertEquals("C0001.MOV", staged.file.fileName.toString())
             assertEquals("video/*", staged.mimeType)
             assertTrue(staged.file.startsWith(root.resolve("cache/share/ready")))
             assertFalse(staged.file.startsWith(root.resolve("no-backup")))
             assertFalse(staged.file.fileName.toString().endsWith(".part"))
             assertContentEquals(bytes, Files.readAllBytes(staged.file))
             assertContentEquals(bytes, Files.readAllBytes(entry.finalPath))
-            Files.list(root.resolve("cache/share/ready")).use { files ->
-                assertTrue(files.allMatch { file -> file.fileName.toString().endsWith(".mov") })
+            Files.walk(root.resolve("cache/share/ready")).use { files ->
+                assertEquals(listOf(staged.file), files.filter { Files.isRegularFile(it) }.toList())
             }
             Files.list(root.resolve("cache/share/staging")).use { files -> assertEquals(0, files.count()) }
         }
