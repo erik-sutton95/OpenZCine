@@ -668,17 +668,17 @@ final class NativeAppModel {
         var detail: String {
             switch self {
             case .cameraAccessPoint:
-                "The camera creates a Wi‑Fi network — join it from your iPhone."
+                "The camera creates a Wi‑Fi network. Join it from your iPhone."
             case .phoneHotspot:
-                "Turn on Personal Hotspot — the camera joins your iPhone's network."
+                "Turn on Personal Hotspot. The camera joins your iPhone's network."
             case .usbC:
                 DeviceUSBConnector.current == .lightning
-                    ? "Connect through Apple's Lightning to USB camera adapter — a USB-C to Lightning cable can't host the camera."
+                    ? "Connect through Apple's Lightning to USB camera adapter. A USB-C to Lightning cable can't host the camera."
                     : "Plug the camera into this device with a USB-C cable."
             case .hdmiCapture:
-                "Feed the camera's HDMI output into a USB capture device — full-quality picture, no camera control."
+                "Feed the camera's HDMI output into a USB capture device: full-quality picture, no camera control."
             case .wiFiNetwork:
-                "Both devices already on the same network — a set router, or the house Wi-Fi."
+                "Both devices already on the same network: a set router, or the house Wi-Fi."
             }
         }
 
@@ -968,6 +968,12 @@ final class NativeAppModel {
     /// written ONLY by the connect machinery — unlike `connectionMessage`, which the discovery loop
     /// overwrites — so the progress sheet can show real progress instead of a frozen "Connecting".
     var connectionStageDetail = ""
+    /// The body wake (`NikonBodyWake`) is waiting for a dozing camera to answer: the sheet shows
+    /// the waiting step instead of a handshake that is not running yet (hardware pass 2026-10-25).
+    private(set) var isAwaitingBodyWake = false
+    /// The camera name the wake's waiting and silent copy use: the saved setup's title, the name
+    /// Android shows, so both platforms say the same sentence.
+    @ObservationIgnored private var bodyWakeDeviceName = ""
     @ObservationIgnored private var connectionProgressShowsFailure = false
     /// Whether an established session dropped and is being recovered behind a preserved monitor.
     /// Drives the recovery affordance over the held frame (`MonitorRecoveryOverlay`).
@@ -1362,10 +1368,11 @@ final class NativeAppModel {
                 RelayPresence(
                     name: UIDevice.current.name,
                     watchable: true,
-                    servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                    servedCameraHost: isCameraControlSession && sessionRecovery.claimsCamera
+                        ? connectedIdentity?.host : nil,
                     relayPort: relayHost?.boundPort.map(Int.init)
                         ?? relayListenerPreferredPort.map(Int.init)))
-        } else if isCameraControlSession, !isDemoSession,
+        } else if isCameraControlSession, !isDemoSession, sessionRecovery.claimsCamera,
             let host = connectedIdentity?.host, !host.isEmpty
         {
             relayPresenceServer.update(
@@ -1385,6 +1392,7 @@ final class NativeAppModel {
         let host = connectedIdentity?.host ?? ""
         let shouldBeacon =
             isCameraControlSession && !isRelayBroadcasting && !isDemoSession && !host.isEmpty
+            && sessionRecovery.claimsCamera
         if shouldBeacon {
             let beacon = cameraInUseBeacon ?? CameraInUseBeacon()
             cameraInUseBeacon = beacon
@@ -1786,7 +1794,7 @@ final class NativeAppModel {
                 self.shell.dismissCover()
                 self.isMonitorPresented = true
                 self.connectionMessage =
-                    cameraName.map { "Watching \(hostName) — \($0)." }
+                    cameraName.map { "Watching \(hostName) (\($0))." }
                     ?? "Watching \(hostName)."
                 self.relayFailureReason = nil
             case .failed(let reason):
@@ -1797,7 +1805,7 @@ final class NativeAppModel {
                 // reach".
                 let hint =
                     self.isOnCameraAccessPointNetwork
-                    ? " This device is on the camera's own Wi-Fi — leave that network and "
+                    ? " This device is on the camera's own Wi-Fi. Leave that network and "
                         + "watch from your regular Wi-Fi; nearby broadcasts reach this "
                         + "device directly."
                     : ""
@@ -1837,7 +1845,7 @@ final class NativeAppModel {
             // not the generic ask.
             self.relayFailureReason =
                 denial.passcodeRequired && self.relayPasscodeWasAttempted
-                ? "That passcode wasn't accepted — check it with the broadcasting device."
+                ? "That passcode wasn't accepted. Check it with the broadcasting device."
                 : denial.reason
             self.relayJoinDenied = true
             self.applyLinkChip()
@@ -1919,7 +1927,7 @@ final class NativeAppModel {
                 case .connected:
                     if Date().timeIntervalSince(self.lastGoodFrameAt ?? .distantPast) > 8 {
                         self.relayFailureReason =
-                            "The stream stalled — reconnecting. Make sure OpenZCine is open "
+                            "The stream stalled. Reconnecting. Make sure OpenZCine is open "
                             + "on the broadcasting device."
                         self.joinRelay(fresh ?? target)
                         return
@@ -2912,7 +2920,7 @@ final class NativeAppModel {
             // The watch stays armed and self-heals the moment the network changes.
             instruction =
                 cameraAccessPointEvidence == true
-                ? "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use — we keep looking, and the camera appears once you are both on it."
+                ? "This device is on \(connectionProgressDeviceName)'s own Wi-Fi, so there is no network setup to add yet. Join the network you want this setup to use. We keep looking, and the camera appears once you are both on it."
                 : NativeNetworkInterfaceSnapshot.currentScanSubnetLabel().map {
                     "Searching \($0), the network this device is on. On the camera: Network menu → Connect to computer → pair with a profile for that same network."
                 }
@@ -3052,8 +3060,40 @@ final class NativeAppModel {
             }(),
             isPreparingLiveView: connection == .preparingLiveView,
             isConnected: connection == .connected,
-            showsFailure: connectionProgressShowsFailure
+            showsFailure: connectionProgressShowsFailure,
+            isAwaitingBody: isAwaitingBodyWake
         )
+    }
+
+    /// The dial's wake progress for one attempt. It hops to the main actor and is dropped once
+    /// that attempt is no longer current, so a late step from a cancelled attempt can never set
+    /// or clear the waiting step of the attempt that replaced it.
+    func bodyWakeProgressHandler(
+        requireCurrent: @escaping @MainActor @Sendable () throws -> Void
+    ) -> @Sendable (NikonBodyWake.Progress) -> Void {
+        { [weak self] progress in
+            Task { @MainActor in
+                do { try requireCurrent() } catch { return }
+                self?.noteBodyWake(progress)
+            }
+        }
+    }
+
+    /// One step of the body wake. The waiting copy rides `connectionStageDetail`, the detail the
+    /// progress card reads; an answer hands the sheet back to the handshake.
+    func noteBodyWake(_ progress: NikonBodyWake.Progress) {
+        switch progress {
+        case .waiting:
+            guard connectionPhase != .failed else { return }
+            isAwaitingBodyWake = true
+            connectionStageDetail = NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName)
+        case .answered:
+            isAwaitingBodyWake = false
+            if connectionStageDetail == NikonBodyWake.wakingMessage(deviceName: bodyWakeDeviceName)
+            {
+                connectionStageDetail = ""
+            }
+        }
     }
 
     func prepareStartup() {
@@ -3897,6 +3937,7 @@ final class NativeAppModel {
         // frees the latch immediately, so the operator's next tap is never swallowed while an
         // abandoned attempt is still unwinding a blocking socket read.
         isEstablishingConnection = true
+        isAwaitingBodyWake = false
         // Bounded phase timeouts belong to operator-initiated connects: a recovery attempt behind a
         // preserved monitor is already bounded by its own loop, and failing it here could overlap a
         // second Init with a socket read the first attempt is still blocked in.
@@ -3993,6 +4034,11 @@ final class NativeAppModel {
                 startDiscoveryLoop(resetResults: false)
                 return
             }
+            do {
+                guard let self, self.connectionGeneration == generation else { return }
+                let title = savedCamera?.displayTitle.trimmingCharacters(in: .whitespaces) ?? ""
+                bodyWakeDeviceName = title.isEmpty ? connectionProgressDeviceName : title
+            }
             // A router or hotspot setup the list does not see is dialled at its stored address
             // blind. Ask the network first (`NikonBodyWake`): a body that answers goes on, a
             // silent one ends here with copy naming the real cause, not a PTP timeout.
@@ -4002,21 +4048,22 @@ final class NativeAppModel {
                 do {
                     guard let self, self.connectionGeneration == generation else { return }
                     connectionPhase = .discovering
-                    connectionMessage = NikonBodyWake.wakingMessage(
-                        deviceName: connectionProgressDeviceName)
+                    noteBodyWake(.waiting)
+                    connectionMessage = connectionStageDetail
                 }
                 let wake = await NikonBodyWake.awaitAnswer(
                     host: host, isAlive: { await NativeNikonDiscovery.dialer.isAlive($0) })
                 do {
                     guard let self, self.connectionGeneration == generation else { return }
                     logConnection("wake host=\(host) \(wake)")
+                    noteBodyWake(.answered)
                     if !wake.answered {
                         AppDiagnostics.shared.record(.connectionPtpFailed)
                         connection = .disconnected
                         connectionPhase = .failed
                         connectionProgressShowsFailure = true
                         connectionMessage = NikonBodyWake.silentMessage(
-                            deviceName: connectionProgressDeviceName)
+                            deviceName: bodyWakeDeviceName)
                         connectionFailureDetail = connectionMessage
                         startDiscoveryLoop(resetResults: false)
                         return
@@ -4090,7 +4137,7 @@ final class NativeAppModel {
                     logConnection(
                         "first establish failed, auto-retrying host=\(host) "
                             + error.localizedDescription)
-                    self?.connectionMessage = "The camera answered slowly \u{2014} trying again…"
+                    self?.connectionMessage = "The camera answered slowly. Trying again…"
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     guard self?.connectionGeneration == generation else { return }
                     attempt = try await establish()
@@ -4121,7 +4168,7 @@ final class NativeAppModel {
                         displayName: initialSession.identity.displayName)
                     transitionToSavedCameraNetworkCheck(
                         message:
-                            "Pairing complete. Tap “Confirm” on the camera \u{2014} we'll reconnect automatically."
+                            "Pairing complete. Tap “Confirm” on the camera, and we'll reconnect automatically."
                     )
                     return
                 }
@@ -4253,7 +4300,7 @@ final class NativeAppModel {
                     )
                     transitionToSavedCameraNetworkCheck(
                         message:
-                            "Pairing complete. Tap “Confirm” on the camera — we'll reconnect automatically."
+                            "Pairing complete. Tap “Confirm” on the camera, and we'll reconnect automatically."
                     )
                     return
                 }
@@ -4273,10 +4320,15 @@ final class NativeAppModel {
                 connection = .disconnected
                 connectionPhase = .failed
                 connectionProgressShowsFailure = true
+                noteBodyWake(.answered)
                 let baseError: String
                 if Self.isRejectedInitiator(error) {
                     baseError =
                         "The camera didn't recognize this phone. On the camera, create or choose a Connect to PC profile for this iPhone, then try again."
+                } else if error is NikonBodyWake.SilentError {
+                    // The dial's own wake heard nothing: the shared copy, named like the card
+                    // and like Android.
+                    baseError = NikonBodyWake.silentMessage(deviceName: bodyWakeDeviceName)
                 } else {
                     baseError =
                         (error as? LocalizedError)?.errorDescription
@@ -4349,7 +4401,7 @@ final class NativeAppModel {
                 {
                     message +=
                         " If the camera is on a router or hotspot, make sure this device is "
-                        + "on the same network — that is where it was reached last time."
+                        + "on the same network, since that is where it was reached last time."
                 }
                 self.failConnectionAttempt(
                     message: message,
@@ -4615,6 +4667,8 @@ final class NativeAppModel {
             var picture: @MainActor () -> (sourceAt: TimeInterval?, presentedAt: TimeInterval?)
             var now: @MainActor () -> TimeInterval
             var sleep: @MainActor (Duration) async throws -> Void
+            /// The device a presence sweep would name as holding the camera; `nil` means nobody.
+            var holder: (@MainActor (String) async -> String?)? = nil
         }
         @ObservationIgnored var sessionRecoveryPeers: SessionRecoveryPeers? {
             didSet { recoveryEpisode = makeRecoveryEpisode() }
@@ -6763,6 +6817,8 @@ final class NativeAppModel {
         #if DEBUG
             let peers = cameraNetworkJoinPeers
         #endif
+        // The dial's body wake (`NikonBodyWake`) reports its wait here so the sheet shows it.
+        let onWakeProgress = bodyWakeProgressHandler(requireCurrent: requireCurrent)
         return { [weak self] requestPairing, onPairingChallenge in
             try requireCurrent()
             #if DEBUG
@@ -6784,6 +6840,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
@@ -6799,7 +6856,7 @@ final class NativeAppModel {
                     logger.info(
                         "Body answered busy; retrying once after a handoff settle")
                     self?.connectionStageDetail =
-                        "Camera is in use \u{2014} waiting for it to free up…"
+                        "Camera is in use. Waiting for it to free up…"
                     try await Task.sleep(for: .seconds(5))
                     try requireCurrent()
                     return try await NativeCameraSession.establish(
@@ -6808,6 +6865,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 } catch let error
@@ -6832,6 +6890,7 @@ final class NativeAppModel {
                         requestPairing: requestPairing,
                         onPairingChallenge: onPairingChallenge,
                         onEstablishmentDiagnostic: onEstablishmentDiagnostic,
+                        onWakeProgress: onWakeProgress,
                         onLiveViewObject: DemoHarness.captureLiveViewObject
                     )
                 }
@@ -6981,7 +7040,7 @@ final class NativeAppModel {
             savePendingPairingCamera()
             transitionToSavedCameraNetworkCheck(
                 message:
-                    "Pairing saved. If the camera shows a prompt, tap Continue — we'll reconnect automatically."
+                    "Pairing saved. If the camera shows a prompt, tap Continue, and we'll reconnect automatically."
             )
         }
         continuation?.resume(returning: accepted)
@@ -7043,6 +7102,7 @@ final class NativeAppModel {
                     sleep: { try await peers.sleep($0) }, jitter: { 0.5 })
             }
         #endif
+        let pause = timing.sleep
         return SessionRecoveryEpisode(
             port: .init(
                 observe: { [weak self] in self?.recoveryObservation() ?? .init() },
@@ -7056,9 +7116,21 @@ final class NativeAppModel {
                 },
                 holder: { [weak self] attempt, number in
                     guard self?.isDemoSession == false else { return nil }
-                    return await NikonTakeOverRecovery.holder(beforeAttempt: number) {
-                        await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
-                    }
+                    #if DEBUG
+                        if let peers = self?.sessionRecoveryPeers {
+                            guard let holder = peers.holder else { return nil }
+                            return await NikonTakeOverRecovery.holder(
+                                beforeAttempt: number, pause: { try? await pause($0) },
+                                lookup: { await holder(attempt.targetID) })
+                        }
+                    #endif
+                    // A cable has no network holder to ask, so no presence window either.
+                    guard !DiscoveredCamera.isUSBHostKey(attempt.targetID) else { return nil }
+                    return await NikonTakeOverRecovery.holder(
+                        beforeAttempt: number, pause: { try? await pause($0) },
+                        lookup: {
+                            await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
+                        })
                 }),
             attemptDeadline: NikonSessionRecovery.attemptDeadline, timing: timing,
             changed: { [weak self] snapshot, episode in
@@ -7177,9 +7249,28 @@ final class NativeAppModel {
         case .takenOver(let holder):
             logConnection(
                 "recovery stopped: \(holder ?? "another device") holds host=\(cameraHost)")
+            retireTakenOverSession()
         case .retrying:
             break
         }
+        // A device that stopped reconnecting gave the camera up: it no longer says it holds it,
+        // on the presence port, in the in-use beacon or in a running broadcast's advertisement
+        // (the broadcast itself stays up for its watchers).
+        if previous.claimsCamera, !snapshot.state.claimsCamera {
+            relayHost?.updateServedCamera(
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
+                servedCameraHost: nil)
+            updateCameraInUseBeacon()
+        }
+    }
+
+    /// Another device holds the camera now. The old link may still be open on this side, so it is
+    /// retired without a word to the body: no EndLiveView, no CloseSession and no live-view or
+    /// keepalive traffic, any of which could reach the session of the phone that took it. Retry
+    /// still starts from the held frame and disposes this session on its normal path.
+    private func retireTakenOverSession() {
+        monitorRuntime?.recovering()
+        cameraSession?.close()
     }
 
     /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
@@ -7433,6 +7524,13 @@ final class NativeAppModel {
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnectReady:
+                    // A running or stopped recovery owns every dial: it asks who holds the camera
+                    // first. An in-place reconnect behind it took a camera straight back from the
+                    // phone that had taken it over, and the ZR hung (hardware pass 4.1).
+                    guard !sessionRecovery.isRecovering else {
+                        logConnection("live view reconnect skipped: recovery owns the camera")
+                        return
+                    }
                     cameraHost = session.identity.host
                     connectToCamera(preservingMonitorSurface: true)
                 case .recover(let reason):
@@ -10831,8 +10929,8 @@ final class NativeAppModel {
                     AppDiagnostics.shared.record(.mfDriveRefused)
                     self.connectionMessage =
                         code.rawValue == PTPResponseCode.invalidStatus.rawValue
-                        ? "Can't drive focus in MF — set the camera to an AF focus mode to scrub focus from the app."
-                        : "Couldn't drive focus just now — try again (\(String(format: "0x%04X", code.rawValue)))."
+                        ? "Can't drive focus in MF. Set the camera to an AF focus mode to scrub focus from the app."
+                        : "Couldn't drive focus just now. Try again (\(String(format: "0x%04X", code.rawValue)))."
                 }
             }
         }
@@ -11227,16 +11325,16 @@ final class NativeAppModel {
         guard case NativeCameraSessionError.objectRatingRejected(let response, let rawCode) = error
         else {
             AppDiagnostics.shared.record(.ratingWriteRefused)
-            return .refused(code: 0, message: "Rating not saved — the camera didn't respond.")
+            return .refused(code: 0, message: "Rating not saved: the camera didn't respond.")
         }
         AppDiagnostics.shared.record(
             response == .accessDenied ? .ratingWriteRefusedAccessDenied : .ratingWriteRefused)
         let hex = String(format: "0x%04X", rawCode)
         let reason =
             response == .accessDenied
-            ? "Access Denied \(hex) — it may not accept ratings in this mode"
+            ? "Access Denied \(hex); it may not accept ratings in this mode"
             : "response \(hex)"
-        return .refused(code: rawCode, message: "Rating not saved — camera refused (\(reason)).")
+        return .refused(code: rawCode, message: "Rating not saved: camera refused (\(reason)).")
     }
 
     /// Release a still when the body is in photo mode; demo mode simulates a brief pulse.
@@ -11519,7 +11617,7 @@ final class NativeAppModel {
                 await exitBurstRemoteModeIfNeeded(session: session)
                 finishStillRelease(
                     message: code == .outOfFocus
-                        ? "AF did not focus — still not captured."
+                        ? "AF did not focus, still not captured."
                         : "Still capture failed (0x\(String(code.rawValue, radix: 16))).")
             }
         } catch {
@@ -12240,7 +12338,7 @@ final class NativeAppModel {
             !PTPCameraPropertyDecoders.isMovieFocusManual(requested)
         {
             return
-                "FOCUS \(requested) was rejected — the lens focus ring has the camera in manual focus. Rotate it back to AF and try again."
+                "FOCUS \(requested) was rejected: the lens focus ring has the camera in manual focus. Rotate it back to AF and try again."
         }
         if let reported {
             return "FOCUS \(requested) was rejected by the camera (still \(reported))."
@@ -13037,7 +13135,7 @@ final class NativeAppModel {
     /// Whether the monitor shell is currently rendering the portrait tree (set by `MonitorShell`).
     var monitorIsPortrait = false
     /// Legacy DEBUG screenshot notice. Live scope activation is no longer refused in fit mode.
-    let scopeCapNoticeText = "2 scopes max in fit view — close one or pinch to fill"
+    let scopeCapNoticeText = "2 scopes max in fit view: close one or pinch to fill"
 
     /// The shared surface's one note sink: a camera refusal or hint the operator has to be told
     /// about while the monitor is up. The surface clears it after its hold.
@@ -13365,14 +13463,14 @@ final class NativeAppModel {
                 index < cameraScreenModes.count
             else {
                 connectionMessage =
-                    "\(value) isn't a recording mode the camera reported — pick a listed one."
+                    "\(value) isn't a recording mode the camera reported. Pick a listed one."
                 return 0
             }
             writes = [PTPCameraPropertyWrite.screenSize(raw: cameraScreenModes[index].raw)]
         } else if cameraControl == .codec {
             guard let mode = codecMode(forPickedLabel: value) else {
                 connectionMessage =
-                    "\(value) isn't a codec the camera reported — pick a listed one."
+                    "\(value) isn't a codec the camera reported. Pick a listed one."
                 return 0
             }
             writes = [PTPCameraPropertyWrite.fileType(raw: mode.raw)]

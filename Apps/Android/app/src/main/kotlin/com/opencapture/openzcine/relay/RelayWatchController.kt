@@ -98,7 +98,7 @@ class RelayWatchController(
         policy = RelayViewerPolicy(hevcDecodeDeadlineMillis = hevcDecodeDeadlineMillis,
             stallDeadlineMillis = stallDeadlineMillis, stallPollMillis = 3_000L,
             rejoinIntervalMillis = 3_000L, hevcCodec = MonitorRelayWire.FrameCodec.HEVC,
-            stalledReason = "The stream stalled \u2014 reconnecting. Make sure OpenZCine is " +
+            stalledReason = "The stream stalled. Reconnecting. Make sure OpenZCine is " +
                 "open on the broadcasting device."),
         onSourceBegan = { session.beginSource(it) },
         onConnected = { source, hello -> session.adopt(source, hello.cameraName ?: hello.hostName) },

@@ -237,6 +237,9 @@ struct NikonMonitorShell: View {
             waiting: waiting,
             vertical: model.displayedFeedRotation.isVertical, flipped: false,
             recovering: model.sessionRecovery.isRecovering,
+            // Only a running reconnect says "Reconnecting"; a taken-over, paused or spent
+            // recovery waits for the operator (hardware pass 4.1 showed both at once).
+            reconnecting: model.sessionRecovery.isReconnecting,
             // The camera's own stream with no camera behind it: the plate says why.
             notice: waiting && model.videoSource == .cameraLiveView
                 ? nikonCameraStatusNotice(

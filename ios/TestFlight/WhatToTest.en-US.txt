@@ -13,8 +13,8 @@ Fixes
 - Photo mode turns the LUT off; video restores it. Shots left follow the stills card, and app-triggered photos use that card.
 - The GYRO pill no longer covers the screen lock. Gyro logging waits for video mode, and tapping to focus during a focus pull no longer leaves it busy.
 - Live View keeps camera readouts and timecode frames through a warm restart or Quality Bias change. Background recovery preserves the camera mode.
-- A dozing camera is woken and dialled once more instead of failing as unreachable. Saved-camera connections can wake the camera and ask before taking over.
-- An explicit retry asks again after a refused camera Wi-Fi join. An abandoned connection no longer carries on behind the setup screen.
+- A dozing camera gets a waiting step of up to about 20 s; half-press the shutter during it to connect. A camera that stays silent says it may be asleep instead of showing a connection error.
+- Take Over asks first, and the phone that loses the camera leaves it alone. An explicit retry asks again after a refused camera Wi-Fi join. An abandoned connection no longer carries on behind the setup screen.
 - Media opens large cards without freezing. Sharing treats photos as photos, finishes a clip's copy first, and playback stays paused after Share or app return.
 - VoiceOver skips collapsed assist controls and live controls under a covering screen. Shutter labels describe the action; setup asks for Local Network at its own step.
 
