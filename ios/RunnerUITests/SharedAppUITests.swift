@@ -1427,6 +1427,11 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         native.tap()
         XCTAssertTrue(
             app.staticTexts["focusControl.nativeAF.instruction"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.delay"].exists)
+        XCTAssertFalse(app.buttons["focusControl.nativeAF.settings"].exists)
+        XCTAssertTrue(app.buttons["focusControl.nativeAF.set.A"].label.contains("A not set"))
+        screenshot("focus-guided-native-empty-landscape")
+        openOptions(in: app)
         scrollTo(app.buttons["focusControl.nativeAF.settings"], in: app)
         XCTAssertTrue(app.buttons["focusControl.nativeAF.settings"].isHittable)
         XCTAssertTrue(
@@ -1441,7 +1446,9 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         app.buttons["focusControl.modePicker"].tap()
         XCTAssertTrue(timed.waitForExistence(timeout: 3))
         timed.tap()
+        openMarks(in: app)
         let positions = app.staticTexts["focusRack.positions"]
+        scrollTo(positions, in: app)
         XCTAssertTrue(positions.waitForExistence(timeout: 3))
         XCTAssertTrue(positions.label.contains("A 0"))
         XCTAssertTrue(positions.label.contains("B 20"))
@@ -1503,6 +1510,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         XCTAssertTrue(forward.isEnabled)
         XCTAssertTrue(app.buttons["focusControl.nativeAF.pull.bToA"].isEnabled)
         screenshot("native-af-saved-targets-landscape")
+        openOptions(in: app)
         let delay = app.buttons["focusControl.nativeAF.delay"]
         scrollTo(delay, in: app)
         delay.tap()
@@ -1549,23 +1557,113 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
     }
 
     func testTimingWarningsKeepPlaybackAndStopAvailableInLandscape() {
-        for fixture in ["overrun", "overrunMoving"] {
+        for fixture in ["overrun", "overrunMoving", "overrunComplete"] {
             let app = launch(fixture)
-            let warning = app.staticTexts["focusRack.timingWarning"]
+            let warning =
+                fixture == "overrun"
+                ? app.descendants(matching: .any).matching(
+                    identifier: "focusRack.duration.estimate"
+                ).firstMatch
+                : app.staticTexts["focusRack.timingWarning"]
             XCTAssertTrue(warning.waitForExistence(timeout: 5))
             XCTAssertTrue(warning.isHittable)
             if fixture == "overrun" {
                 XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
-            } else {
+            } else if fixture == "overrunMoving" {
                 XCTAssertTrue(app.buttons["focusRack.stop"].isEnabled)
+            } else {
+                XCTAssertTrue(warning.label.contains("completed in 15 s"))
+                XCTAssertTrue(app.buttons["focusRack.pull.bToA"].isEnabled)
             }
             assertTransport(app)
             screenshot("timed-rack-\(fixture)-landscape")
             app.buttons["focusRack.expand"].tap()
             XCTAssertTrue(app.otherElements["focusRack.compact"].waitForExistence(timeout: 3))
-            XCTAssertTrue(warning.isHittable)
+            XCTAssertTrue(app.staticTexts["focusRack.timingWarning"].isHittable)
+            if fixture == "overrunComplete" {
+                XCTAssertTrue(app.staticTexts["focusRack.timingWarning"].label.contains("15 s"))
+            }
             assertTransport(app)
             screenshot("timed-rack-\(fixture)-compact-landscape")
+            app.terminate()
+        }
+    }
+
+    func testGuidedEverydayPanelShowsPreparationAndExpectedDuration() {
+        for portrait in [false, true] {
+            let app = launch(
+                "guidedUnprepared",
+                extra: ["ZC_DEMO_ORIENTATION": portrait ? "portrait" : "landscapeLeft"])
+            XCTAssertFalse(app.staticTexts["focusRack.positions"].exists)
+            XCTAssertFalse(app.buttons["focusRack.nudge.1"].exists)
+            XCTAssertFalse(app.buttons["focusRack.delay.value"].exists)
+            let expected = app.descendants(matching: .any).matching(
+                identifier: "focusRack.duration.estimate"
+            ).firstMatch
+            XCTAssertTrue(expected.waitForExistence(timeout: 3))
+            XCTAssertTrue(expected.label.contains("3 s target"))
+            XCTAssertTrue(expected.label.contains("13.88"))
+            XCTAssertTrue(app.buttons["focusRack.calibrate"].isHittable)
+            XCTAssertTrue(app.buttons["focusRack.calibrate"].isEnabled)
+            XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
+            assertTransport(app)
+            screenshot("focus-guided-unprepared-\(portrait ? "portrait" : "landscape")")
+            app.terminate()
+        }
+        for portrait in [false, true] {
+            let ready = launch(
+                "preparationComplete",
+                extra: ["ZC_DEMO_ORIENTATION": portrait ? "portrait" : "landscapeLeft"])
+            XCTAssertFalse(ready.buttons["focusRack.calibrate"].exists)
+            XCTAssertFalse(ready.staticTexts["focusRack.positions"].exists)
+            XCTAssertTrue(ready.buttons["focusRack.go.A"].isHittable)
+            XCTAssertTrue(ready.buttons["focusRack.duration.value"].isHittable)
+            XCTAssertLessThan(ready.otherElements["focusRack.expanded"].frame.height, 360)
+            assertTransport(ready)
+            screenshot("focus-guided-ready-\(portrait ? "portrait" : "landscape")")
+            if !portrait {
+                openMarks(in: ready)
+                assertNudgeGridVisible(in: ready)
+                scrollTo(ready.buttons["focusRack.nudge.10"], in: ready)
+                XCTAssertTrue(ready.buttons["focusRack.nudge.10"].isEnabled)
+                scrollTo(ready.staticTexts["focusRack.positions"], in: ready)
+                XCTAssertTrue(ready.staticTexts["focusRack.positions"].exists)
+                assertTransport(ready)
+                screenshot("focus-guided-edit-marks-landscape")
+            }
+            ready.terminate()
+        }
+        for fixture in ["empty", "oneMark"] {
+            let app = launch(fixture)
+            assertNudgeGridVisible(in: app)
+            screenshot("focus-guided-\(fixture)-initial-controls-landscape")
+            scrollTo(app.staticTexts["focusRack.positions"], in: app)
+            XCTAssertTrue(app.staticTexts["focusRack.positions"].exists)
+            scrollTo(app.buttons["focusRack.nudge.1"], in: app)
+            XCTAssertTrue(app.buttons["focusRack.nudge.1"].exists)
+            assertTransport(app)
+            screenshot("focus-guided-\(fixture)-landscape")
+            app.terminate()
+        }
+    }
+
+    func testPreparationTransportNeverClaimsTheTimedPullDuration() {
+        for (fixture, title) in [
+            ("preparationMoving", "Pause"), ("preparationPaused", "Resume"),
+            ("preparationStopping", "Stopping…"),
+        ] {
+            let app = launch(fixture)
+            let action = app.buttons["focusRack.primary"]
+            XCTAssertTrue(action.waitForExistence(timeout: 3))
+            XCTAssertEqual(action.label, title)
+            if fixture != "preparationStopping" {
+                XCTAssertEqual(action.value as? String, "Untimed lens preparation")
+            }
+            XCTAssertFalse(app.staticTexts["3 s pull"].exists)
+            XCTAssertTrue(app.buttons["focusRack.go.A"].exists)
+            XCTAssertFalse(app.buttons["focusRack.go.A"].isEnabled)
+            assertTransport(app)
+            screenshot("focus-guided-\(fixture)-landscape")
             app.terminate()
         }
     }
@@ -1579,7 +1677,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             ] {
                 let orientation = portrait ? "portrait" : "landscapeLeft"
                 let app = launch(fixture, extra: ["ZC_DEMO_ORIENTATION": orientation])
-                openOptions(in: app)
+                if fixture == "preparationComplete" { openOptions(in: app) }
                 let action = app.buttons["focusRack.calibrate"]
                 scrollTo(action, in: app)
                 XCTAssertEqual(action.isEnabled, enabled)
@@ -1597,8 +1695,11 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
 
     func testSetupChangeAdvisesWithoutRequiringReset() {
         let app = launch("setupChanged")
+        openMarks(in: app)
         XCTAssertTrue(app.buttons["focusRack.pull.aToB"].isEnabled)
+        scrollTo(app.buttons["focusRack.nudge.10"], in: app)
         XCTAssertTrue(app.buttons["focusRack.nudge.10"].isEnabled)
+        scrollTo(app.staticTexts["focusRack.positions"], in: app)
         XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("A 0"))
         XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("B 20"))
         let message = app.staticTexts["focusRack.message"]
@@ -1640,7 +1741,9 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
 
     func testDirectTimedDirectionsKeepSetupAndTransportVisible() {
         let app = launch("ready")
+        openMarks(in: app)
         let positions = app.staticTexts["focusRack.positions"]
+        scrollTo(positions, in: app)
         XCTAssertTrue(positions.waitForExistence(timeout: 5))
         XCTAssertTrue(positions.label.contains("A 0"))
         XCTAssertTrue(positions.label.contains("B 20"))
@@ -1660,6 +1763,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         let portrait = expectation(
             for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
         wait(for: [portrait], timeout: 8)
+        openOptions(in: app)
         scrollTo(app.buttons["focusRack.delay.value"], in: app)
         scrollTo(positions, in: app)
         XCTAssertTrue(positions.isHittable)
@@ -1682,6 +1786,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         entry.tap()
         assertTransport(app)
         screenshot("focus-rack-marks-empty")
+        scrollTo(app.buttons["focusRack.nudge.1"], in: app)
         XCTAssertGreaterThanOrEqual(app.buttons["focusRack.nudge.1"].frame.height + 0.5, 44)
         XCTAssertFalse(app.otherElements["focusRack.dial"].exists)
         assertTransport(app)
@@ -1728,9 +1833,12 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             let selector = app.buttons["focusRack.direction." + (near ? "near" : "far")]
             scrollTo(selector, in: app)
             let positions = app.staticTexts["focusRack.positions"]
+            scrollTo(positions, in: app)
             let before = positions.value as? String
+            scrollTo(selector, in: app)
             selector.tap()
             XCTAssertEqual(selector.value as? String, "Selected")
+            scrollTo(positions, in: app)
             XCTAssertEqual(positions.value as? String, before)
             for steps in [1, 10, 100] {
                 let button = app.buttons["focusRack.nudge.\(steps)"]
@@ -1739,6 +1847,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
                 XCTAssertGreaterThanOrEqual(button.frame.height + 0.5, 44)
                 XCTAssertTrue(app.frame.contains(button.frame))
                 button.tap()
+                scrollTo(positions, in: app)
                 XCTAssertTrue(
                     (positions.value as? String)?.contains("Last \(direction) \(steps)") == true)
                 assertTransport(app)
@@ -1747,7 +1856,9 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         }
         app.buttons["focusRack.expand"].tap()
         app.buttons["focusRack.expand"].tap()
+        scrollTo(app.buttons["focusRack.direction.far"], in: app)
         XCTAssertEqual(app.buttons["focusRack.direction.far"].value as? String, "Selected")
+        scrollTo(app.buttons["focusRack.nudge.100"], in: app)
         XCTAssertEqual(app.buttons["focusRack.nudge.100"].label, "Far +100")
         app.terminate()
         let portrait = launch("empty", extra: ["ZC_DEMO_ORIENTATION": "portrait"])
@@ -1756,6 +1867,8 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         screenshot("focus-rack-signed-steps-portrait")
         portrait.terminate()
         let moving = launch("moving")
+        openMarks(in: moving)
+        scrollTo(moving.buttons["focusRack.nudge.1"], in: moving)
         for id in ["direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100"] {
             XCTAssertTrue(moving.buttons["focusRack." + id].exists)
             XCTAssertFalse(moving.buttons["focusRack." + id].isEnabled)
@@ -1766,22 +1879,27 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
     func testNudgeProgressKeepsSetupInPlaceUntilStopSettles() throws {
         let ids = [
             "go.A", "go.B", "direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100",
-            "duration.value",
-            "delay.value", "options",
         ]
-        let ready = launch("ready")
+        let ready = launch("nudgeReady")
+        openMarks(in: ready)
+        scrollTo(ready.buttons["focusRack.calibrate"], in: ready)
+        let preparationHeight = ready.buttons["focusRack.calibrate"].frame.height
+        alignNudges(in: ready)
         let frames = Dictionary(
-            uniqueKeysWithValues: ids.map {
-                ($0, ready.buttons["focusRack." + $0].frame)
-            })
+            uniqueKeysWithValues: ids.map { ($0, ready.buttons["focusRack." + $0].frame) })
         screenshot("focus-rack-nudge-ready-landscape")
         ready.terminate()
         for (fixture, near, steps) in [
             ("nudgeNear", true, 10), ("nudgeFar", false, 10),
             ("nudgeNear100", true, 100), ("nudgeFar100", false, 100),
         ] {
-            let pressed = "nudge.\(steps)"
             let app = launch(fixture)
+            let preparation = app.buttons["focusRack.calibrate"]
+            scrollTo(preparation, in: app)
+            XCTAssertFalse(preparation.isEnabled)
+            XCTAssertEqual(preparation.frame.height, preparationHeight, accuracy: 1)
+            XCTAssertFalse(app.buttons["focusRack.editMarks"].isEnabled)
+            alignNudges(in: app)
             for id in ids {
                 let control = app.buttons["focusRack." + id]
                 XCTAssertTrue(control.exists)
@@ -1791,7 +1909,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
                 XCTAssertEqual(control.frame.width, try XCTUnwrap(frames[id]).width, accuracy: 1)
                 XCTAssertEqual(control.frame.height, try XCTUnwrap(frames[id]).height, accuracy: 1)
             }
-            let active = app.buttons["focusRack." + pressed]
+            let active = app.buttons["focusRack.nudge.\(steps)"]
             XCTAssertEqual(active.value as? String, "30%")
             XCTAssertEqual(active.label, "\(near ? "Near −" : "Far +")\(steps)")
             for count in [1, 10, 100] where count != steps {
@@ -1816,6 +1934,8 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             app.terminate()
         }
         let settled = launch("atB")
+        openMarks(in: settled)
+        scrollTo(settled.buttons["focusRack.nudge.10"], in: settled)
         XCTAssertFalse(settled.staticTexts["focusRack.message"].exists)
         XCTAssertFalse(settled.buttons["focusRack.stop"].exists)
         XCTAssertEqual(settled.buttons["focusRack.nudge.10"].value as? String, "")
@@ -1869,12 +1989,14 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
 
     func testGroupedSetupHasNoWheelAndOnlyOneClose() {
         let app = launch("ready")
+        openMarks(in: app)
         XCTAssertFalse(app.otherElements["focusRack.dial"].exists)
         XCTAssertFalse(app.segmentedControls["focusRack.tabs"].exists)
         XCTAssertFalse(app.buttons["focusRack.stop"].exists)
         XCTAssertEqual(app.buttons.matching(identifier: "focusRack.close").count, 1)
         XCTAssertTrue(app.buttons["focusRack.close"].isHittable)
         let positions = app.staticTexts["focusRack.positions"]
+        scrollTo(positions, in: app)
         XCTAssertTrue(positions.label.contains("A 0"))
         XCTAssertTrue(positions.label.contains("B 20"))
         XCTAssertTrue(positions.isHittable)
@@ -1882,7 +2004,7 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             XCTAssertEqual(app.buttons["focusRack.go.\(id)"].value as? String, "Fast reposition")
         }
         openOptions(in: app)
-        XCTAssertTrue(app.buttons["focusRack.options"].label.contains("Options · Linear"))
+        XCTAssertTrue(app.buttons["focusRack.options"].label.contains("Options"))
         XCTAssertFalse(app.otherElements["focusRack.easing"].exists)
         XCTAssertFalse(app.buttons["Ease in-out"].exists)
         XCTAssertTrue(app.staticTexts["focusRack.positions"].label.contains("B 20"))
@@ -1938,6 +2060,10 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
             XCTAssertTrue(open.isHittable)
             open.tap()
             XCTAssertTrue(app.otherElements["focusRack.expanded"].waitForExistence(timeout: 3))
+            XCTAssertFalse(app.staticTexts["focusRack.positions"].exists)
+            XCTAssertTrue(app.buttons["focusRack.editMarks"].isHittable)
+            openMarks(in: app)
+            scrollTo(app.staticTexts["focusRack.positions"], in: app)
             XCTAssertEqual(app.staticTexts["focusRack.positions"].label, "A 0 · B 20 · Now 0")
             XCTAssertTrue(app.buttons["focusControl.modePicker"].isHittable)
             XCTAssertTrue(app.buttons["focusRack.direction.near"].exists)
@@ -2088,47 +2214,79 @@ final class FocusRackFlowTests: OpenCineAppUITesting.SharedAppUITestCase {
         }
     }
 
+    private func assertNudgeGridVisible(in app: XCUIApplication) {
+        let viewport = app.scrollViews["focusRack.setup"].frame.insetBy(dx: -0.5, dy: -0.5)
+        for id in ["direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100"] {
+            let control = app.buttons["focusRack." + id]
+            XCTAssertTrue(control.isHittable)
+            XCTAssertTrue(
+                viewport.contains(control.frame), "The nudge grid must be visible before scrolling."
+            )
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44)
+        }
+    }
+
+    private func alignNudges(in app: XCUIApplication) {
+        let scroll = app.scrollViews["focusRack.setup"]
+        for _ in 0..<4 {
+            scroll.swipeDown()
+            if abs(app.buttons["focusRack.direction.near"].frame.minY - scroll.frame.minY) < 10 {
+                break
+            }
+        }
+        assertNudgeGridVisible(in: app)
+    }
+
+    private func openMarks(in app: XCUIApplication) {
+        let editor = app.buttons["focusRack.editMarks"]
+        if editor.exists && editor.value as? String == "Expanded" { return }
+        scrollTo(editor, in: app)
+        if editor.value as? String != "Expanded" { editor.tap() }
+    }
+
     private func openOptions(in app: XCUIApplication) {
         let options = app.buttons["focusRack.options"]
-        guard options.value as? String != "Expanded" else { return }
+        if options.exists && options.value as? String == "Expanded" { return }
         scrollTo(options, in: app)
-        options.tap()
+        if options.value as? String != "Expanded" { options.tap() }
     }
 
     private func scrollTo(_ target: XCUIElement, in app: XCUIApplication) {
         let scroll = app.scrollViews["focusRack.setup"]
-        for _ in 0..<20 {
+        for attempt in 0..<24 {
+            if !target.exists {
+                if attempt < 3 || attempt > 9 {
+                    scroll.swipeUp(velocity: XCUIGestureVelocity(rawValue: 300))
+                } else {
+                    scroll.swipeDown(velocity: XCUIGestureVelocity(rawValue: 300))
+                }
+                assertTransport(app)
+                continue
+            }
             let visible = scroll.frame.insetBy(dx: -0.5, dy: -0.5)
             let fixed =
-                target.identifier == "focusRack.positions"
-                || target.identifier.hasPrefix("focusRack.go.")
+                target.identifier.hasPrefix("focusRack.go.")
                 || target.identifier.hasPrefix("focusControl.nativeAF.pull.")
                 || (target.identifier.hasPrefix("focusRack.capture.")
                     && !scroll.frame.intersects(target.frame))
             if target.isHittable && (fixed || visible.contains(target.frame)) { return }
             let upward = target.frame.isEmpty || target.frame.maxY > visible.maxY
-            let overflow =
-                upward ? target.frame.maxY - visible.maxY : visible.minY - target.frame.minY
-            if !target.frame.isEmpty && overflow < scroll.frame.height * 0.4 {
-                // Finish with a pan, avoiding a flick past a nearly visible control.
-                let travel = max(20, overflow + 4)
-                let start = scroll.coordinate(
-                    withNormalizedOffset: CGVector(dx: 0.5, dy: upward ? 0.8 : 0.2))
-                start.press(
-                    forDuration: 0.05,
-                    thenDragTo: start.withOffset(CGVector(dx: 0, dy: upward ? -travel : travel)),
-                    withVelocity: XCUIGestureVelocity(rawValue: 100), thenHoldForDuration: 0.4)
-            } else {
-                let velocity = XCUIGestureVelocity(rawValue: 60)
-                if upward {
-                    scroll.swipeUp(velocity: velocity)
-                } else {
-                    scroll.swipeDown(velocity: velocity)
-                }
-            }
+            // Both ends of a held pan stay inside the compact viewport and clear its scrollbar.
+            let travel = min(
+                scroll.frame.height * 0.7, abs(target.frame.midY - visible.midY) + 12)
+            let start = scroll.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.04, dy: upward ? 0.85 : 0.15))
+            start.press(
+                forDuration: 0.05,
+                thenDragTo: start.withOffset(CGVector(dx: 0, dy: upward ? -travel : travel)),
+                withVelocity: XCUIGestureVelocity(rawValue: 300), thenHoldForDuration: 0.4)
             assertTransport(app)
         }
         screenshot("focus-rack-scroll-target-not-visible")
+        guard target.exists else {
+            XCTFail("The requested setup control was not found after scrolling.")
+            return
+        }
         XCTAssertTrue(target.isHittable, "Target \(target.frame), viewport \(scroll.frame)")
         XCTAssertTrue(
             scroll.frame.insetBy(dx: -0.5, dy: -0.5).contains(target.frame),
