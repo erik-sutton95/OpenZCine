@@ -7197,8 +7197,15 @@ final class NativeAppModel {
         case .retrying:
             break
         }
-        // A device that stopped reconnecting gave the camera up: it no longer says it holds it.
-        if previous.claimsCamera, !snapshot.state.claimsCamera { updateCameraInUseBeacon() }
+        // A device that stopped reconnecting gave the camera up: it no longer says it holds it,
+        // on the presence port, in the in-use beacon or in a running broadcast's advertisement
+        // (the broadcast itself stays up for its watchers).
+        if previous.claimsCamera, !snapshot.state.claimsCamera {
+            relayHost?.updateServedCamera(
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
+                servedCameraHost: nil)
+            updateCameraInUseBeacon()
+        }
     }
 
     /// Another device holds the camera now. The old link may still be open on this side, so it is
