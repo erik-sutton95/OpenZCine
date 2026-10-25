@@ -4614,6 +4614,8 @@ final class NativeAppModel {
             var picture: @MainActor () -> (sourceAt: TimeInterval?, presentedAt: TimeInterval?)
             var now: @MainActor () -> TimeInterval
             var sleep: @MainActor (Duration) async throws -> Void
+            /// The device a presence sweep would name as holding the camera; `nil` means nobody.
+            var holder: (@MainActor (String) async -> String?)? = nil
         }
         @ObservationIgnored var sessionRecoveryPeers: SessionRecoveryPeers? {
             didSet { recoveryEpisode = makeRecoveryEpisode() }
@@ -7042,6 +7044,7 @@ final class NativeAppModel {
                     sleep: { try await peers.sleep($0) }, jitter: { 0.5 })
             }
         #endif
+        let pause = timing.sleep
         return SessionRecoveryEpisode(
             port: .init(
                 observe: { [weak self] in self?.recoveryObservation() ?? .init() },
@@ -7055,9 +7058,21 @@ final class NativeAppModel {
                 },
                 holder: { [weak self] attempt, number in
                     guard self?.isDemoSession == false else { return nil }
-                    return await NikonTakeOverRecovery.holder(beforeAttempt: number) {
-                        await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
-                    }
+                    #if DEBUG
+                        if let peers = self?.sessionRecoveryPeers {
+                            guard let holder = peers.holder else { return nil }
+                            return await NikonTakeOverRecovery.holder(
+                                beforeAttempt: number, pause: { try? await pause($0) },
+                                lookup: { await holder(attempt.targetID) })
+                        }
+                    #endif
+                    // A cable has no network holder to ask, so no presence window either.
+                    guard !DiscoveredCamera.isUSBHostKey(attempt.targetID) else { return nil }
+                    return await NikonTakeOverRecovery.holder(
+                        beforeAttempt: number, pause: { try? await pause($0) },
+                        lookup: {
+                            await NativeNikonDiscovery.shared.currentHolder(of: attempt.targetID)
+                        })
                 }),
             attemptDeadline: NikonSessionRecovery.attemptDeadline, timing: timing,
             changed: { [weak self] snapshot, episode in
