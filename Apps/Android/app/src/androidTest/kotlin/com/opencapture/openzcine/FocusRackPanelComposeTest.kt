@@ -819,6 +819,65 @@ class FocusRackPanelComposeTest {
         compose.savePortraitEvidence("focus-rack-preparation-recording-portrait")
     }
 
+    @Test fun initialMarkSetupShowsAllNudgesWithoutScrollingAndClosesAfterSavingB() {
+        val initial = threeSecondReady().copy(marks = emptyList(), canGoToB = false,
+            primaryTitle = "Set A and B", primaryEnabled = false, pullAToB = null, pullBToA = null)
+        val state = mutableStateOf(initial)
+        val actions = Actions()
+        mount(state, actions)
+        for (id in listOf("direction.near", "direction.far", "nudge.1", "nudge.10", "nudge.100")) {
+            compose.onNodeWithTag("focusRack.$id").assertIsDisplayed().assertIsEnabled().insideFrame()
+            assertTouchTarget("focusRack.$id")
+        }
+        compose.saveLandscapeEvidence("focus-rack-guided-initial-nudges-landscape")
+        compose.onNodeWithTag("focusRack.capture.A").performClick()
+        compose.runOnIdle { state.value = initial.copy(marks = listOf(mark("A", 0))) }
+        compose.onNodeWithTag("focusRack.direction.far").performClick()
+        compose.onNodeWithTag("focusRack.nudge.10").performClick()
+        assertEquals(listOf(false to 10), actions.nudges)
+        compose.runOnIdle { state.value = state.value.copy(active = true, canStop = true,
+            nudgeProgress = FocusRackNudgeProgressViewState(false, 10, 50)) }
+        compose.onNodeWithTag("focusRack.nudge.10").assertIsDisplayed().assertIsNotEnabled().insideFrame()
+        compose.runOnIdle { state.value = initial.copy(position = 10, marks = listOf(mark("A", 0))) }
+        compose.onNodeWithTag("focusRack.capture.B").performClick()
+        compose.runOnIdle { state.value = threeSecondReady().copy(position = 10,
+            marks = listOf(mark("A", 0), mark("B", 10))) }
+        compose.onNodeWithTag("focusRack.nudges").assertDoesNotExist()
+        compose.onNodeWithTag("focusRack.editMarks").assertTextContains("Edit marks").assertIsDisplayed()
+        compose.onNodeWithTag("focusRack.duration").assertIsDisplayed().assertIsEnabled()
+        assertEquals(listOf("A", "B"), actions.captures)
+        compose.saveLandscapeEvidence("focus-rack-guided-initial-complete-landscape")
+    }
+
+    @Test fun interfaceLockDisablesTimingAndTemplateWritesAndDismissesAnOpenEditor() {
+        val state = mutableStateOf(threeSecondReady())
+        val setup = mutableStateOf(false)
+        val actions = Actions()
+        mount(state, actions, templates = listOf(FocusRackTimingViewState("Slow rack", "{}")),
+            setupEnabled = { setup.value })
+        compose.onNodeWithTag("focusRack.duration").assertIsNotEnabled().performClick()
+        compose.onNodeWithTag("focusRack.editInput").assertDoesNotExist()
+        openOptions()
+        for (tag in listOf("delay", "saveTemplate")) {
+            compose.onNodeWithTag("focusRack.$tag").performScrollTo().assertIsNotEnabled().performClick()
+        }
+        compose.onNodeWithText("Slow rack").performScrollTo().assertIsNotEnabled().performClick()
+        compose.onNodeWithContentDescription("Delete Slow rack timing template")
+            .performScrollTo().assertIsNotEnabled().performClick()
+        assertTrue(actions.timings.isEmpty())
+        assertTrue(actions.saved.isEmpty())
+        assertTrue(actions.loaded.isEmpty())
+        assertTrue(actions.deleted.isEmpty())
+        compose.saveLandscapeEvidence("focus-rack-guided-timing-locked-landscape")
+        compose.runOnIdle { setup.value = true }
+        compose.onNodeWithTag("focusRack.duration").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithTag("focusRack.editInput").performTextReplacement("6")
+        compose.runOnIdle { setup.value = false }
+        compose.onNodeWithTag("focusRack.editInput").assertDoesNotExist()
+        waitForKeyboardDismissed()
+        assertTrue(actions.timings.isEmpty())
+    }
+
     @Test fun preparedEverydayViewKeepsOnlyTargetsDurationAndPlaybackInLandscape() {
         mount(mutableStateOf(threeSecondReady()), Actions())
         compose.onNodeWithTag("focusRack.go.A").assertTextContains("✓ Saved · Fast").assertIsDisplayed()

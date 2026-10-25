@@ -324,11 +324,38 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                     modifier = Modifier.fillMaxWidth().testTag("focusRack.message")) }
                 if (!nudging) state.admissionMessage?.let { Text(it, color = LiveDesign.amber, fontSize = 12.sp, lineHeight = 16.sp,
                     modifier = Modifier.bringIntoViewRequester(admissionAttention).testTag("focusRack.admission")) }
+                if (markEditorVisible) {
+                    val directionEnabled = setupEnabled && !state.active && !state.canStop
+                        && state.phase != "stopping" && !nudging
+                    FocusRackNudgeControls(directionEnabled, directionEnabled && state.canNudge,
+                        nudgeTowardNear, { nudgeTowardNear = it }, state.nudgeProgress, onNudge)
+                    val positions = if (state.position == null) "Positions unknown · Reset marks" else {
+                        val a = state.marks.firstOrNull { it.id == "A" }?.position?.toString() ?: "—"
+                        val b = state.marks.firstOrNull { it.id == "B" }?.position?.toString() ?: "—"
+                        "A $a · B $b · Now ${state.position}"
+                    }
+                    Text(positions, color = LiveDesign.muted, fontSize = 11.sp, lineHeight = 14.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.fillMaxWidth().testTag("focusRack.positions")
+                            .semantics { contentDescription = "Relative focus steps: $positions" })
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (mark in state.marks) {
+                            TextButton(onClick = { onCapture(mark.id) },
+                                enabled = setupEnabled && !nudging && if (mark.id == "A") state.canCaptureA else state.canCaptureB,
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                    .testTag("focusRack.capture.${mark.id}")) { Text("Replace ${mark.id}", fontSize = 12.sp) }
+                        }
+                        TextButton(onClick = onReset, enabled = state.canReset && !nudging && setupEnabled,
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.reset")) {
+                            Text("Reset marks", color = LiveDesign.rec, fontSize = 12.sp)
+                        }
+                    }
+                }
                 if (!state.preparingLens) Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(LiveDesign.glassBright)
                     .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { editingField = "duration"; editText = state.duration.toString() },
-                        enabled = state.canEdit && !nudging,
+                        enabled = setupEnabled && state.canEdit && !nudging,
                         modifier = Modifier.weight(1f).heightIn(min = 52.dp).testTag("focusRack.duration"),
                         contentPadding = PaddingValues(2.dp)) {
                         Column(Modifier.fillMaxWidth()) {
@@ -375,36 +402,9 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                         Text(if (optionsExpanded) "⌃" else "⌄")
                     }
                 }
-                if (markEditorVisible) {
-                    val positions = if (state.position == null) "Positions unknown · Reset marks" else {
-                        val a = state.marks.firstOrNull { it.id == "A" }?.position?.toString() ?: "—"
-                        val b = state.marks.firstOrNull { it.id == "B" }?.position?.toString() ?: "—"
-                        "A $a · B $b · Now ${state.position}"
-                    }
-                    Text(positions, color = LiveDesign.muted, fontSize = 11.sp, lineHeight = 14.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        modifier = Modifier.fillMaxWidth().testTag("focusRack.positions")
-                            .semantics { contentDescription = "Relative focus steps: $positions" })
-                    val directionEnabled = setupEnabled && !state.active && !state.canStop
-                        && state.phase != "stopping" && !nudging
-                    FocusRackNudgeControls(directionEnabled, directionEnabled && state.canNudge,
-                        nudgeTowardNear, { nudgeTowardNear = it }, state.nudgeProgress, onNudge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (mark in state.marks) {
-                            TextButton(onClick = { onCapture(mark.id) },
-                                enabled = setupEnabled && !nudging && if (mark.id == "A") state.canCaptureA else state.canCaptureB,
-                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
-                                    .testTag("focusRack.capture.${mark.id}")) { Text("Replace ${mark.id}", fontSize = 12.sp) }
-                        }
-                        TextButton(onClick = onReset, enabled = state.canReset && !nudging && setupEnabled,
-                            modifier = Modifier.heightIn(min = 48.dp).testTag("focusRack.reset")) {
-                            Text("Reset marks", color = LiveDesign.rec, fontSize = 12.sp)
-                        }
-                    }
-                }
                 if (optionsExpanded) {
                     OutlinedButton(onClick = { editingField = "delay"; editText = state.delay.toString() },
-                        enabled = state.canEdit && !nudging,
+                        enabled = setupEnabled && state.canEdit && !nudging,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("focusRack.delay"),
                         shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(4.dp)) {
                         Text("Start delay  ${state.delay.toString().removeSuffix(".0")} s", fontSize = 12.sp)
@@ -413,14 +413,14 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
                         FocusRackPreparationAction(action, setupEnabled && !state.active && !nudging, onCalibrate, recommended = false)
                     }
                     Text("Timing templates require fresh marks when loaded.", color = LiveDesign.muted, fontSize = 11.sp)
-                    OutlinedButton(onClick = { editingField = "template"; editText = "" }, enabled = state.canEdit && !nudging,
+                    OutlinedButton(onClick = { editingField = "template"; editText = "" }, enabled = setupEnabled && state.canEdit && !nudging,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                             .testTag("focusRack.saveTemplate"), shape = RoundedCornerShape(8.dp)) { Text("Save timing…", fontSize = 12.sp) }
                     templates.forEach { template ->
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { onLoad(template) }, enabled = state.canEdit && !nudging,
+                            TextButton(onClick = { onLoad(template) }, enabled = setupEnabled && state.canEdit && !nudging,
                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text(template.name) }
-                            TextButton(onClick = { onDelete(template) }, enabled = state.canEdit && !nudging,
+                            TextButton(onClick = { onDelete(template) }, enabled = setupEnabled && state.canEdit && !nudging,
                                 modifier = Modifier.heightIn(min = 48.dp).semantics {
                                     contentDescription = "Delete ${template.name} timing template"
                                 }) { Text("Delete") }
@@ -498,7 +498,7 @@ internal fun FocusRackPanel(state: FocusRackViewState, thumbnails: Map<String, B
             showAdmission = false
         }
     }
-    LaunchedEffect(state.active) { if (state.active) editingField = null }
+    LaunchedEffect(state.active, setupEnabled) { if (state.active || !setupEnabled) editingField = null }
     fun applyEditor() {
         when (editingField) {
             "duration" -> onTiming(FocusRackTimingEdit(duration = editText))
