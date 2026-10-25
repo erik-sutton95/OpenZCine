@@ -1415,13 +1415,11 @@ internal fun MonitorScreen(
         }
         var mediaForm by rememberSaveable { mutableIntStateOf(0) }
         // Video storage steps free space, percentage, then estimated time (shared surface order).
-        fun mediaForms(portrait: Boolean): List<String> = if (relayedState != null) {
-            relayedMediaForms(readoutRetention.media, portrait)
-        } else {
-            val storage = sharedControlState.snapshot?.storage
-            liveMediaForms(storage?.storageReadout, storage?.recordingTimeLabel, portrait)
-        }
-        fun mediaLabel(portrait: Boolean): String = mediaForms(portrait).let { it[mediaForm.mod(it.size)] }
+        fun mediaForms(): List<String> = if (relayedState != null) relayedMediaForms(readoutRetention.media)
+            else sharedControlState.snapshot?.storage.let {
+                MonitorStorageReadoutFormat.forms(it?.storageReadout, it?.recordingTimeLabel, photo = false)
+            }
+        fun mediaLabel(): String = mediaForms().let { it[mediaForm.mod(it.size)] }
         val watchRelayState =
             remember(
                 sessionState,
@@ -1957,17 +1955,16 @@ internal fun MonitorScreen(
             val shots = cameraProperties.shotsRemaining.takeIf { capacity == null }
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
                 if (capacity != null) {
-                    val free = if (isPortrait) MonitorStorageReadoutFormat.wholeUnitCapacity(capacity.freeBytes)
-                        else capacity.free
-                    "$free ${capacity.percent}"
+                    // One live storage precision in every orientation (shared storage cycle).
+                    MonitorStorageReadoutFormat.forms(capacity.freeBytes, capacity.percent, null, photo = true).joinToString(" ")
                 } else shots?.let(MonitorTextFormat::shotsRemainingCompactLabel),
                 MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage },
                 icon = if (capacity == null) MonitorIcon.IMAGE else null,
                 accessibilityLabel = if (capacity != null) null
                     else shots?.let(MonitorTextFormat::shotsRemainingAccessibilityLabel) ?: "Shots remaining unknown")
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",
-            mediaLabel(isPortrait), MonitorDisplaySection.STORAGE,
-            action = { mediaForm = MonitorStorageReadoutFormat.nextForm(mediaForm, mediaForms(isPortrait).size) }) else null
+            mediaLabel(), MonitorDisplaySection.STORAGE,
+            action = { mediaForm = MonitorStorageReadoutFormat.nextForm(mediaForm, mediaForms().size) }) else null
         val resolutionKind = if (isPhotographyMode) MonitorPickerKind.SIZE else MonitorPickerKind.RESOLUTION
         val codecKind = if (isPhotographyMode) MonitorPickerKind.QUALITY else MonitorPickerKind.CODEC
         val panelValue = activeMonitorPicker?.let { picker -> MonitorOperatorCameraPanel(picker.kind.name,

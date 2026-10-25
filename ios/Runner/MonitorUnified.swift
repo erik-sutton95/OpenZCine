@@ -336,14 +336,14 @@ struct NikonMonitorShell: View {
             storage = .init(
                 id: .storage, title: "Storage",
                 value: flipped
-                    ? model.liveMediaReadout(portrait: portrait)
+                    ? model.liveMediaReadout
                     : shots.map(MonitorTextFormat.shotsRemainingCompactLabel) ?? "--",
                 section: .timecode, action: { model.photoPillShowsStorage.toggle() },
                 valueIcon: flipped ? nil : .image,
                 accessibilityLabel: flipped ? nil : spoken ?? "Shots remaining unknown")
         } else if model.chromeSectionMounts(.storage) {
             storage = .init(
-                id: .storage, title: "Storage", value: model.liveMediaReadout(portrait: portrait),
+                id: .storage, title: "Storage", value: model.liveMediaReadout,
                 section: .storage, action: model.toggleMediaReadout)
         } else {
             storage = nil

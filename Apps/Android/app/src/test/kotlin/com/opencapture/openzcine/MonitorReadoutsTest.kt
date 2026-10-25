@@ -184,20 +184,13 @@ class MonitorReadoutsTest {
     }
 
     @Test
-    fun `a storage tap steps free space, free percentage, then the estimated time`() {
-        // Hardware pass 3.4 (Z + ZR): the tap skipped the percentage although the card reports a
-        // capacity. The shared live surface (Pocket, Insta) steps free, percent, time; iOS twin
-        // `LiveMediaReadout.videoForms`.
-        val card = com.opencapture.opencine.media.StorageReadout(595_840_000_000L, 1_024_000_000_000L)
-        assertEquals(listOf("595.84 GB", "58%", "~51 Min"), liveMediaForms(card, "~51 Min", portrait = false))
-        assertEquals(listOf("596GB", "58%", "~51 Min"), liveMediaForms(card, "~51 Min", portrait = true))
-        assertEquals(listOf("595.84 GB", "58%"), liveMediaForms(card, null, portrait = false))
-        val noCapacity = com.opencapture.opencine.media.StorageReadout(595_840_000_000L, null)
-        assertEquals(listOf("595.84 GB", "~51 Min"), liveMediaForms(noCapacity, "~51 Min", portrait = false))
-        assertEquals(listOf("\u2014"), liveMediaForms(null, null, portrait = false))
+    fun `a watcher's storage tap steps free space, free percentage, then the estimated time`() {
+        // Hardware pass 3.4 (Z + ZR): the tap skipped the percentage. The local camera reads the
+        // shared cycle directly (Core tests cover the Nikon path); a watcher builds the same forms
+        // from the host's media status. iOS twin: NikonSharedStorageReadoutTests.
         val relayed = com.opencapture.opencine.nikon.MediaStatus(596, 58, 51, freeBytes = 595_840_000_000L)
-        assertEquals(listOf("595.84 GB", "58%", "~51 Min"), relayedMediaForms(relayed, portrait = false))
-        assertEquals(listOf("596GB", "58%", "~51 Min"), relayedMediaForms(relayed, portrait = true))
+        assertEquals(listOf("596GB", "58%", "~51 Min"), relayedMediaForms(relayed))
+        val oldHost = com.opencapture.opencine.nikon.MediaStatus(596, 58, -1)
+        assertEquals(listOf("596GB", "58%"), relayedMediaForms(oldHost))
     }
 }
-

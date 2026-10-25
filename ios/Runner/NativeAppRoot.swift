@@ -12998,45 +12998,37 @@ final class NativeAppModel {
     /// Steps the video MEDIA cell to its next form (free space, percentage, estimated time).
     func toggleMediaReadout() {
         mediaReadoutForm = MonitorStorageReadoutFormat.nextForm(
-            after: mediaReadoutForm, count: mediaReadoutForms(portrait: false).count)
+            after: mediaReadoutForm, count: mediaReadoutForms.count)
     }
 
-    /// Operator monitor storage uses the same units as every shared live surface.
-    var liveMediaReadout: String { liveMediaReadout(portrait: false) }
-
-    /// Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
-    /// Photo shows the free space and percentage (the SHOTS pill's storage side).
-    func liveMediaReadout(portrait: Bool) -> String {
+    /// Operator monitor storage, the same text in every orientation as on every shared live
+    /// surface. Photo shows the free space and percentage (the SHOTS pill's storage side).
+    var liveMediaReadout: String {
         if isPhotographyMode {
             if videoSource == .relay {
                 return cameraState.mediaStatus?.capacityLabel ?? cameraState.media
             }
-            let storage = shell.control.snapshot?.storage
-            return LiveMediaReadout.label(
-                storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
-                portrait: portrait, prefersDuration: false, photo: true)
+            return LiveMediaReadout.photoStorage(shell.control.snapshot?.storage.storageReadout)
         }
-        let forms = mediaReadoutForms(portrait: portrait)
+        let forms = mediaReadoutForms
         return forms[mediaReadoutForm % forms.count]
     }
 
-    /// The video MEDIA cell's forms. A relayed source supplies its own observations; the local
-    /// camera uses the common session.
-    private func mediaReadoutForms(portrait: Bool) -> [String] {
+    /// The video MEDIA cell's forms, the one shared storage cycle (`MonitorStorageReadoutFormat`).
+    /// A relayed source supplies its own observations; the local camera uses the common session.
+    private var mediaReadoutForms: [String] {
         if videoSource == .relay {
             guard let status = cameraState.mediaStatus else { return [cameraState.media] }
-            let free =
-                status.freeBytes.map {
-                    portrait
-                        ? MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: $0)
-                        : ByteCountLabel.label($0)
-                } ?? "\(status.gigabytesFree) GB"
-            return LiveMediaReadout.videoForms(
-                free: free, percent: "\(status.percentFree)%", recordingTime: status.durationLabel)
+            return MonitorStorageReadoutFormat.forms(
+                freeBytes: status.freeBytes ?? UInt64(max(0, status.gigabytesFree)) * 1_000_000_000,
+                percent: "\(status.percentFree)%",
+                recordingTime: RecordingTimeLabel.label(
+                    status.estimatedMinutesRemaining.map(Int64.init), origin: .estimated),
+                photo: false)
         }
         let storage = shell.control.snapshot?.storage
-        return LiveMediaReadout.videoForms(
-            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel, portrait: portrait)
+        return MonitorStorageReadoutFormat.forms(
+            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel, photo: false)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {

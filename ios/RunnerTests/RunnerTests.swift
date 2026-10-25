@@ -3607,7 +3607,7 @@ final class NikonSharedStorageReadoutTests: XCTestCase {
         model.shell.control.bind(session)
         defer { model.shell.control.unbind() }
         try await received(storage, model: model)
-        XCTAssertEqual(model.liveMediaReadout, "480 MB")
+        XCTAssertEqual(model.liveMediaReadout, "480MB")
         model.toggleMediaReadout()
         XCTAssertEqual(model.liveMediaReadout, "48%")
         model.toggleMediaReadout()
@@ -3639,8 +3639,8 @@ final class NikonSharedStorageReadoutTests: XCTestCase {
             seen.append(model.liveMediaReadout)
             model.toggleMediaReadout()
         }
-        XCTAssertEqual(seen, ["595.84 GB", "58%", "~51 Min", "595.84 GB"])
-        XCTAssertEqual(model.liveMediaReadout(portrait: true), "58%")
+        XCTAssertEqual(seen, ["596GB", "58%", "~51 Min", "596GB"])
+        XCTAssertEqual(model.liveMediaReadout, "58%", "one text in every orientation")
     }
 
     func testRelayStorageKeepsHostFormattedObservations() {

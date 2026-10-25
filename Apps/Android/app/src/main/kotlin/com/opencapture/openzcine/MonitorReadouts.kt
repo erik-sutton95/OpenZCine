@@ -9,8 +9,8 @@ import com.opencapture.monitorui.MonitorTimecodeFormat
 import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
 import com.opencapture.opencine.core.Rational
-import com.opencapture.opencine.media.ByteCountLabel
-import com.opencapture.opencine.media.StorageReadout
+import com.opencapture.opencine.core.ObservationOrigin
+import com.opencapture.opencine.media.RecordingTimeLabel
 import com.opencapture.opencine.core.ISOValue
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -79,23 +79,13 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String =
     storage?.readout?.takeIf { it.totalBytes != null }?.label ?: UNAVAILABLE_MONITOR_VALUE
 
 /**
- * The forms one tap on the video storage readout steps through, as on the shared live surface in
- * Pocket and Insta (A5-11): the free space, its percentage when the card reports a capacity, then
- * the estimated recording time when one is known. iOS: `LiveMediaReadout.videoForms`.
+ * A watcher's video storage forms from the host's relayed media status, through the one shared
+ * storage cycle (`MonitorStorageReadoutFormat.forms`). iOS: `NativeAppModel.mediaReadoutForms`.
  */
-internal fun liveMediaForms(free: String, percent: String?, recordingTime: String?): List<String> =
-    listOf(free) + MonitorStorageReadoutFormat.alternatives(percent, recordingTime, photo = false)
-
-/** The local camera's video forms from the common storage readout; portrait keeps whole units. */
-internal fun liveMediaForms(readout: StorageReadout?, recordingTime: String?, portrait: Boolean): List<String> =
-    liveMediaForms(readout?.let { if (portrait) MonitorStorageReadoutFormat.wholeUnitCapacity(it.freeBytes) else it.free }
-        ?: StorageReadout.UNAVAILABLE, readout?.percent, recordingTime)
-
-/** A watcher's video forms from the host's relayed media status. */
-internal fun relayedMediaForms(media: MediaStatus, portrait: Boolean): List<String> =
-    liveMediaForms(media.freeBytes?.let {
-        if (portrait) MonitorStorageReadoutFormat.wholeUnitCapacity(it) else ByteCountLabel.label(it)
-    } ?: "${media.gigabytesFree} GB", "${media.percentFree}%", media.durationLabel)
+internal fun relayedMediaForms(media: MediaStatus): List<String> =
+    MonitorStorageReadoutFormat.forms(media.freeBytes ?: (media.gigabytesFree.coerceAtLeast(0) * 1_000_000_000L),
+        "${media.percentFree}%",
+        RecordingTimeLabel.label(media.estimatedMinutesRemaining?.toLong(), ObservationOrigin.ESTIMATED), photo = false)
 
 /** Accepts only a real battery percentage; platform sentinels stay unavailable. */
 internal fun validBatteryPercent(percent: Int?): Int? = percent?.takeIf { it in 0..100 }

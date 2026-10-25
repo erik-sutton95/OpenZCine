@@ -38,8 +38,7 @@ final class ScreenMatrix: OpenCineAppUITesting.ScreenMatrix {}
 final class ConformanceCoverageTests: OpenCineAppUITesting.ConformanceCoverageTests {}
 /// SIMULATED launch configuration only; layout and pixel assertions stay in OpenCine.
 final class MonitorScreenshotLayoutTests: OpenCineAppUITesting.MonitorScreenshotLayoutTests {
-    override var expectedStorageText: String { "521 GB" }
-    override var expectedPortraitStorageText: String { "521GB" }
+    override var expectedStorageText: String { "521GB" }
     override var expectedCameraPowerValue: String { "4 of 5 bars" }
     override var expectedCameraPercentText: String? { nil }
     override var reviewLaunchEnvironment: [String: String] {
@@ -120,7 +119,8 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         defer { XCUIDevice.shared.orientation = .portrait }
         // With the progress sheet (first frame pending) and without it (live view never started).
         for (mode, line) in [
-            ("standalone", "Starting live view"), ("neverStarted", "SIMULATED live view did not start"),
+            ("standalone", "Starting live view"),
+            ("neverStarted", "SIMULATED live view did not start"),
         ] {
             let app = XCUIApplication()
             app.launchEnvironment["ZC_DEMO_SAVED_PATHS"] = "1"
@@ -180,7 +180,8 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         defer { app.terminate() }
         let splash = app.descendants(matching: .any)["monitor-launch-splash"]
         let addSetup = app.buttons["cameras.addSetup"].firstMatch
-        XCTAssertTrue(splash.waitForExistence(timeout: 10), "the launch splash must be in the AX tree")
+        XCTAssertTrue(
+            splash.waitForExistence(timeout: 10), "the launch splash must be in the AX tree")
         var coveredSamples = 0
         let deadline = Date().addingTimeInterval(15)
         while splash.exists, Date() < deadline {
@@ -197,7 +198,6 @@ final class ConnectFunnelAdoptionTests: XCTestCase {
         addSetup.tap()
         XCTAssertTrue(app.buttons["addSetup.usbC"].waitForExistence(timeout: 5))
     }
-
 
     func testSharedProgressSurvivesPostHandshakePreparation() {
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -240,7 +240,8 @@ final class FirstRunWizardTests: XCTestCase {
         let wizard = app.staticTexts.matching(
             NSPredicate(format: "label IN %@", ["Choose how to connect", "Allow permissions"])
         ).firstMatch
-        XCTAssertTrue(wizard.waitForExistence(timeout: 15), "first run must open the transport wizard")
+        XCTAssertTrue(
+            wizard.waitForExistence(timeout: 15), "first run must open the transport wizard")
         XCTAssertFalse(app.staticTexts["Find your camera"].exists, "not the bare shared pair page")
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "SIMULATED-first-run-wizard-landscape"
@@ -608,11 +609,13 @@ final class NikonSharedEVMeterUITests: SharedAppUITestCase {
             let meter = app.descendants(matching: .any)["monitor.ev.meter"]
             XCTAssertTrue(meter.waitForExistence(timeout: 20), "The shared EV meter must be shown")
             let reading = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == %@", "Camera exposure +0.7 EV"), object: meter)
+                predicate: NSPredicate(format: "value == %@", "Camera exposure +0.7 EV"),
+                object: meter)
             XCTAssertEqual(XCTWaiter.wait(for: [reading], timeout: 10), .completed)
             XCTAssertTrue(app.frame.contains(meter.frame), "The meter must be on screen")
             let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-            shot.name = "SIMULATED Z shared EV meter \(orientation == .portrait ? "portrait" : "landscape")"
+            shot.name =
+                "SIMULATED Z shared EV meter \(orientation == .portrait ? "portrait" : "landscape")"
             shot.lifetime = .keepAlways
             add(shot)
         }
@@ -647,7 +650,8 @@ final class SettingsUIFlowTests: SharedAppUITestCase {
                 button.tap()
                 XCTAssertTrue(button.isSelected)
                 if tab == .display {
-                    XCTAssertTrue(app.staticTexts["HDR display"].firstMatch.waitForExistence(timeout: 5))
+                    XCTAssertTrue(
+                        app.staticTexts["HDR display"].firstMatch.waitForExistence(timeout: 5))
                 }
                 let slug = tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-")
                 capture("z-settings-\(slug)-\(side)")
@@ -714,7 +718,8 @@ final class CommandGridReorderUITests: SharedAppUITestCase {
         continueAfterFailure = false
         open()
         let side = app.descendants(matching: .any)["monitor.command.side"]
-        XCTAssertTrue(side.waitForExistence(timeout: 10), "The side column is one labelled container")
+        XCTAssertTrue(
+            side.waitForExistence(timeout: 10), "The side column is one labelled container")
         XCTAssertEqual(
             side.label,
             "Image, Focus, Audio, and Monitor controls. Swipe up to reveal more command controls.")
@@ -733,11 +738,13 @@ final class CommandGridReorderUITests: SharedAppUITestCase {
         continueAfterFailure = false
         open()
         rotate(.portrait, settling: tiles.firstMatch)
-        let scroller = app.scrollViews.containing(.any, identifier: "monitor.command.tile.iso").firstMatch
+        let scroller = app.scrollViews.containing(.any, identifier: "monitor.command.tile.iso")
+            .firstMatch
         XCTAssertTrue(scroller.waitForExistence(timeout: 10))
         XCTAssertGreaterThanOrEqual(
             scroller.frame.height, 246,
-            "The portrait viewport must show the three 76-point primary rows and their two 9-point gaps")
+            "The portrait viewport must show the three 76-point primary rows and their two 9-point gaps"
+        )
         XCTAssertFalse(
             app.buttons["monitor.system.focusReset"].exists,
             "Picture-only recenter controls must not cover the command dashboard")
@@ -745,11 +752,13 @@ final class CommandGridReorderUITests: SharedAppUITestCase {
             let tile = tiles.matching(identifier: identifier).firstMatch
             XCTAssertTrue(
                 contained(tile, in: scroller),
-                "The whole primary tile \(identifier) \(tile.frame) must fit inside \(scroller.frame)")
+                "The whole primary tile \(identifier) \(tile.frame) must fit inside \(scroller.frame)"
+            )
         }
         scroller.swipeUp()
         let last = app.buttons["Grid"]
-        XCTAssertTrue(contained(last, in: scroller), "Scrolling reaches the complete final read-only cell")
+        XCTAssertTrue(
+            contained(last, in: scroller), "Scrolling reaches the complete final read-only cell")
         capture("z-command-dashboard-portrait-scrolled-end")
     }
 
@@ -759,22 +768,27 @@ final class CommandGridReorderUITests: SharedAppUITestCase {
         open()
         let side = app.descendants(matching: .any)["monitor.command.side"]
         let more = app.descendants(matching: .any)["monitor.command.more"]
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "The overflowing side column must show its scroll cue")
+        XCTAssertTrue(
+            more.waitForExistence(timeout: 10),
+            "The overflowing side column must show its scroll cue")
         XCTAssertEqual(more.label, "More command controls below. Swipe up to reveal them.")
         side.swipeUp()
-        XCTAssertTrue(contained(app.buttons["Grid"], in: side), "Scrolling reaches the final read-only cell")
-        XCTAssertTrue(more.waitForNonExistence(timeout: 10), "The cue clears at the actual content bottom")
+        XCTAssertTrue(
+            contained(app.buttons["Grid"], in: side), "Scrolling reaches the final read-only cell")
+        XCTAssertTrue(
+            more.waitForNonExistence(timeout: 10), "The cue clears at the actual content bottom")
         capture("z-command-dashboard-landscape-scrolled-end")
     }
 
     @MainActor private func contained(_ element: XCUIElement, in viewport: XCUIElement) -> Bool {
-        let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            MainActor.assumeIsolated {
-                element.exists && !element.frame.isEmpty
-                    // Native accessibility edges can round by one display point.
-                    && viewport.frame.insetBy(dx: -1, dy: -1).contains(element.frame)
-            }
-        }, object: nil)
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                MainActor.assumeIsolated {
+                    element.exists && !element.frame.isEmpty
+                        // Native accessibility edges can round by one display point.
+                        && viewport.frame.insetBy(dx: -1, dy: -1).contains(element.frame)
+                }
+            }, object: nil)
         return XCTWaiter().wait(for: [visible], timeout: 10) == .completed
     }
 
@@ -785,7 +799,8 @@ final class CommandGridReorderUITests: SharedAppUITestCase {
     @MainActor private func open() {
         launch(ReviewLaunch(screen: .live), environment: environment)
         rotate(.landscapeLeft, settling: tiles.firstMatch)
-        XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: 30), "DISP 3 shows the command grid")
+        XCTAssertTrue(
+            tiles.firstMatch.waitForExistence(timeout: 30), "DISP 3 shows the command grid")
         XCTAssertTrue(waitUntilHittable(tiles.firstMatch, timeout: 15))
     }
 
@@ -799,7 +814,9 @@ final class CommandGridReorderUITests: SharedAppUITestCase {
         let root = try app.snapshot()
         var found: [String: CGRect] = [:]
         func collect(_ element: XCUIElementSnapshot) {
-            if element.identifier.hasPrefix("monitor.command.tile."), found[element.identifier] == nil {
+            if element.identifier.hasPrefix("monitor.command.tile."),
+                found[element.identifier] == nil
+            {
                 found[element.identifier] = element.frame
             }
             element.children.forEach(collect)
@@ -813,9 +830,10 @@ final class CommandGridReorderUITests: SharedAppUITestCase {
     }
 
     @MainActor private func waitFor(_ expected: [String]) -> Bool {
-        let arranged = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
-            MainActor.assumeIsolated { (try? order()) == expected }
-        }, object: nil)
+        let arranged = XCTNSPredicateExpectation(
+            predicate: NSPredicate { [self] _, _ in
+                MainActor.assumeIsolated { (try? order()) == expected }
+            }, object: nil)
         return XCTWaiter().wait(for: [arranged], timeout: 10) == .completed
     }
 
@@ -844,7 +862,8 @@ final class CommandGridScreenshotUITests: SharedAppUITestCase {
         XCTAssertTrue(tile.waitForExistence(timeout: 30), "The dashboard must mount before capture")
         for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
             rotate(orientation, settling: tile)
-            XCTAssertTrue(waitUntilHittable(tile), "The mounted dashboard must clear the launch splash")
+            XCTAssertTrue(
+                waitUntilHittable(tile), "The mounted dashboard must clear the launch splash")
             capture("z-command-dashboard-\(orientation == .portrait ? "portrait" : "landscape")")
         }
     }
