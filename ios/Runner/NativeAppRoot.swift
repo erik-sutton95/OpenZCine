@@ -1368,10 +1368,11 @@ final class NativeAppModel {
                 RelayPresence(
                     name: UIDevice.current.name,
                     watchable: true,
-                    servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                    servedCameraHost: isCameraControlSession && sessionRecovery.claimsCamera
+                        ? connectedIdentity?.host : nil,
                     relayPort: relayHost?.boundPort.map(Int.init)
                         ?? relayListenerPreferredPort.map(Int.init)))
-        } else if isCameraControlSession, !isDemoSession,
+        } else if isCameraControlSession, !isDemoSession, sessionRecovery.claimsCamera,
             let host = connectedIdentity?.host, !host.isEmpty
         {
             relayPresenceServer.update(
@@ -1391,6 +1392,7 @@ final class NativeAppModel {
         let host = connectedIdentity?.host ?? ""
         let shouldBeacon =
             isCameraControlSession && !isRelayBroadcasting && !isDemoSession && !host.isEmpty
+            && sessionRecovery.claimsCamera
         if shouldBeacon {
             let beacon = cameraInUseBeacon ?? CameraInUseBeacon()
             cameraInUseBeacon = beacon
@@ -7246,9 +7248,28 @@ final class NativeAppModel {
         case .takenOver(let holder):
             logConnection(
                 "recovery stopped: \(holder ?? "another device") holds host=\(cameraHost)")
+            retireTakenOverSession()
         case .retrying:
             break
         }
+        // A device that stopped reconnecting gave the camera up: it no longer says it holds it,
+        // on the presence port, in the in-use beacon or in a running broadcast's advertisement
+        // (the broadcast itself stays up for its watchers).
+        if previous.claimsCamera, !snapshot.state.claimsCamera {
+            relayHost?.updateServedCamera(
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
+                servedCameraHost: nil)
+            updateCameraInUseBeacon()
+        }
+    }
+
+    /// Another device holds the camera now. The old link may still be open on this side, so it is
+    /// retired without a word to the body: no EndLiveView, no CloseSession and no live-view or
+    /// keepalive traffic, any of which could reach the session of the phone that took it. Retry
+    /// still starts from the held frame and disposes this session on its normal path.
+    private func retireTakenOverSession() {
+        monitorRuntime?.recovering()
+        cameraSession?.close()
     }
 
     /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
@@ -7502,6 +7523,13 @@ final class NativeAppModel {
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnectReady:
+                    // A running or stopped recovery owns every dial: it asks who holds the camera
+                    // first. An in-place reconnect behind it took a camera straight back from the
+                    // phone that had taken it over, and the ZR hung (hardware pass 4.1).
+                    guard !sessionRecovery.isRecovering else {
+                        logConnection("live view reconnect skipped: recovery owns the camera")
+                        return
+                    }
                     cameraHost = session.identity.host
                     connectToCamera(preservingMonitorSurface: true)
                 case .recover(let reason):
