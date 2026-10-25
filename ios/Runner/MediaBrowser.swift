@@ -37,6 +37,25 @@ actor MediaCellImageLoader {
         }
     }
 
+    /// A cached thumbnail file, read and decoded on this actor: a cell never reads a file on the
+    /// main actor. `unreadable` (no file) and `undecodable` (bytes ImageIO refuses) stay distinct,
+    /// because only an undecodable cached thumb is removed by the cell's self-heal.
+    enum FileDecode: Sendable {
+        case image(UIImage)
+        case unreadable
+        case undecodable
+    }
+    func downsampled(
+        fileAt url: URL, maxPixelSize: Int, fallbackOrientation: Int? = nil
+    ) -> sending FileDecode {
+        guard let data = try? Data(contentsOf: url) else { return .unreadable }
+        guard
+            let image = downsampled(
+                data: data, maxPixelSize: maxPixelSize, fallbackOrientation: fallbackOrientation)
+        else { return .undecodable }
+        return .image(image)
+    }
+
     /// In-memory variant for bytes that never touch disk (the instant-playback stream).
     func downsampled(
         data: Data, maxPixelSize: Int, fallbackOrientation: Int? = nil
@@ -408,18 +427,21 @@ private struct MediaClipThumbnail: View {
             return image
         }
         let thumbPixels = list ? 480 : 640
-        if let thumbnailURL, let data = try? Data(contentsOf: thumbnailURL) {
+        if let thumbnailURL {
             // The camera's PTP thumbs can be EXIF-stripped — the row's learned orientation
             // stands in so portrait shots render upright.
-            if let image = await MediaCellImageLoader.shared.downsampled(
-                data: data, maxPixelSize: thumbPixels, fallbackOrientation: clip.exifOrientation)
+            switch await MediaCellImageLoader.shared.downsampled(
+                fileAt: thumbnailURL, maxPixelSize: thumbPixels,
+                fallbackOrientation: clip.exifOrientation)
             {
-                return present(image)
+            case .image(let image): return present(image)
+            case .undecodable:
+                // Self-heal: a cached thumb that doesn't decode would re-fail (and spam ImageIO
+                // errors) on every cell realisation. Deletes only the cached thumb, never the media.
+                guard isCurrent(), !Task.isCancelled else { return nil }
+                try? FileManager.default.removeItem(at: thumbnailURL)
+            case .unreadable: break
             }
-            // Self-heal: a cached thumb that doesn't decode would re-fail (and spam ImageIO
-            // errors) on every cell realisation. Deletes only the cached thumb, never the media.
-            guard isCurrent(), !Task.isCancelled else { return nil }
-            try? FileManager.default.removeItem(at: thumbnailURL)
         }
         if isPhoto, isDownloaded, let localURL,
             let image = await MediaCellImageLoader.shared.downsampled(
@@ -432,9 +454,8 @@ private struct MediaClipThumbnail: View {
             await model.ensureThumbnail(for: clip)
             guard isCurrent(), !Task.isCancelled else { return nil }
             if let cachedURL = model.clipThumbnailURL(clip),
-                let data = try? Data(contentsOf: cachedURL),
-                let image = await MediaCellImageLoader.shared.downsampled(
-                    data: data, maxPixelSize: thumbPixels,
+                case .image(let image) = await MediaCellImageLoader.shared.downsampled(
+                    fileAt: cachedURL, maxPixelSize: thumbPixels,
                     fallbackOrientation: clip.exifOrientation)
             {
                 return present(image)
