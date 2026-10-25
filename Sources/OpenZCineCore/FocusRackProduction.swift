@@ -123,6 +123,12 @@ public struct FocusRackState: Codable, Sendable {
     public var nudgeProgress: FocusRackNudgeProgress?
     /// Optional one-pass timing preparation between the saved marks.
     public var calibration: FocusRackPrimaryAction?
+    /// Missing acknowledged command sizes make preparation useful; this never blocks playback.
+    /// Absent in older state payloads.
+    public var preparationRecommended: Bool?
+    /// The current movement is an explicitly requested, untimed preparation pass.
+    /// Absent in older state payloads.
+    public var preparingLens: Bool?
     public var referenceValid = true
     public var minimumDuration: Double?
     public var maximumDuration: Double?

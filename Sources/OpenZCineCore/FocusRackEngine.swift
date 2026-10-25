@@ -1008,6 +1008,16 @@ public struct FocusRackEngine: Sendable {
             idle && ready && marks.contains { $0.id == "B" && $0.stepPosition != position }
         state.capabilities = caps
         state.calibration = calibrationAction(ready: ready, idle: idle)
+        state.preparingLens = preparingLens
+        state.preparationRecommended = false
+        if state.referenceValid, state.calibration != nil,
+            let preparation = try? FocusRackPreparation.make(
+                signedSteps: marks[1].stepPosition - marks[0].stepPosition)
+        {
+            state.preparationRecommended = preparation.chunks.contains {
+                commandTimings[abs($0)]?.count ?? 0 == 0
+            }
+        }
         if idle { state.estimatedDuration = nil }
         var admissionInstruction: String?
         if idle, let from = marks.first(where: { $0.id == state.transition.fromMark }),

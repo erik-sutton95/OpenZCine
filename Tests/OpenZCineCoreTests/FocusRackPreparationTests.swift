@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import OpenZCineCore
@@ -207,4 +208,56 @@ func rackPreparationFailureNeverContinuesOrCreditsUnfinishedCommands(outcome: In
             #expect(engine.currentProgram.transitions[0].duration == duration)
         }
     }
+}
+
+@Test(arguments: [1, 7, 8, 47, 150, 151])
+func rackPreparationGuidanceTracksAcknowledgedSizesWithoutBlockingPlayback(span: Int) throws {
+    var (engine, now) = try preparationEngine(span)
+    let plan = try FocusRackPreparation.make(signedSteps: span)
+    let missing = plan.chunks.contains { engine.calibrationTimings[abs($0) * 16] == nil }
+    let before = engine.state(at: now)
+    #expect(before.preparationRecommended == missing)
+    #expect(before.preparingLens == false)
+    #expect(before.pullBToA?.enabled == true)
+    try engine.calibrate(at: now)
+    #expect(engine.state(at: now).preparingLens == true)
+    _ = try finishPreparation(&engine, now: &now)
+    #expect(engine.state(at: now).preparationRecommended == false)
+    #expect(engine.state(at: now).preparingLens == false)
+    engine.observe(preparationContext(now, recording: true), at: now)
+    #expect(engine.state(at: now).preparationRecommended == false)
+    #expect(engine.state(at: now).pullAToB?.enabled == true)
+}
+
+@Test func rackPreparationGuidanceIsStableWhileRecordingAndRetiresForUnknownPositions() throws {
+    var (engine, now) = try preparationEngine(150)
+    engine.observe(preparationContext(now, recording: true), at: now)
+    #expect(engine.state(at: now).preparationRecommended == true)
+    #expect(engine.state(at: now).calibration?.enabled == false)
+    engine.observe(preparationContext(now), at: now)
+    try engine.calibrate(at: now)
+    let first = engine.nextAction(at: now)
+    engine.requestStop(at: now)
+    #expect(engine.state(at: now).preparingLens == false)
+    now += 0.05
+    engine.complete(runID: first.runID, commandID: 0, outcome: 4, at: now)
+    #expect(engine.state(at: now).referenceValid == false)
+    #expect(engine.state(at: now).preparationRecommended == false)
+}
+
+@Test func rackPreparationGuidanceMetadataRoundTripsAndOlderPayloadsDecode() throws {
+    var state = FocusRackState.initial
+    state.preparationRecommended = true
+    state.preparingLens = false
+    let data = try JSONEncoder().encode(state)
+    let restored = try JSONDecoder().decode(FocusRackState.self, from: data)
+    #expect(restored.preparationRecommended == true)
+    #expect(restored.preparingLens == false)
+    var old = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    old.removeValue(forKey: "preparationRecommended")
+    old.removeValue(forKey: "preparingLens")
+    let legacy = try JSONDecoder().decode(
+        FocusRackState.self, from: JSONSerialization.data(withJSONObject: old))
+    #expect(legacy.preparationRecommended == nil)
+    #expect(legacy.preparingLens == nil)
 }
