@@ -50,7 +50,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import androidx.compose.runtime.setValue
 import com.opencapture.opencine.appkit.*
 import com.opencapture.opencine.media.MediaCatalog
@@ -235,15 +234,9 @@ internal fun MediaBrowseScreen(
         NikonMediaLibraryActions(libraryIndex, cacheStore, { library }, { libraryCodec })
     }
     val emptyLibraryState = remember(cameraID) { kotlinx.coroutines.flow.MutableStateFlow(MonitorMediaLibraryState<NikonLibraryClip>()) }
-    // This screen reads no transfer ticks: drop them so a streaming download does not recompose
-    // the whole browser (and re-run its projection inputs) on every chunk.
-    val libraryFlow = remember(library, emptyLibraryState) {
-        (library?.state ?: emptyLibraryState).map { state ->
-            if (state.progress.isEmpty() && state.hostProgress.isEmpty()) state
-            else state.copy(progress = emptyMap(), hostProgress = emptyMap())
-        }.distinctUntilChanged()
-    }
-    val libraryState by libraryFlow.collectAsState((library?.state ?: emptyLibraryState).value)
+    // This screen reads no transfer ticks: the library's content flow leaves them out, so a streaming
+    // download does not recompose the whole browser (and re-run its projection inputs) on every chunk.
+    val libraryState by (library?.content ?: emptyLibraryState).collectAsState()
     DisposableEffect(library, mediaService) {
         val retired = library
         onDispose {
