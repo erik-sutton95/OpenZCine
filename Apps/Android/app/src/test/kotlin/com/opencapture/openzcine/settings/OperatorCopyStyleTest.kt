@@ -13,7 +13,7 @@ class OperatorCopyStyleTest {
         val offenders = listOf("Apps/Android/app/src/main/res/values/strings.xml", "Apps/Android/wear/src/main/res/values/strings.xml")
             .flatMap { path -> pattern.findAll(root.resolve(path).readText()).map { it.groupValues[1] to it.groupValues[2] } }
             // A lone dash is the unknown-value glyph, not prose.
-            .filter { (name, text) -> '—' in text && text.trim() != "—" && name !in CHOOSER_STRINGS }
+            .filter { (name, text) -> '\u2014' in text && text.trim() != "\u2014" && name !in CHOOSER_STRINGS }
             .map { it.first }
         assertEquals(emptyList(), offenders)
     }
