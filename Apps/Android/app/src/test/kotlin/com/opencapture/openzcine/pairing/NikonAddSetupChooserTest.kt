@@ -60,7 +60,7 @@ class NikonAddSetupChooserTest {
         val setup = Regex("""<string name="(saved_setup_[a-z_]+|saved_add_setup_[a-z_]+)">([^<]*)</string>""")
             .findAll(strings).associate { it.groupValues[1] to it.groupValues[2] }
         assertFalse(setup.keys.any { it.startsWith("saved_add_setup_") }, "the shared chooser owns the title")
-        assertFalse(setup.values.any { it.contains('—') }, "no em dash in setup copy")
+        assertFalse(setup.values.any { it.contains('\u2014') }, "no em dash in setup copy")
         assertEquals("Connect when plugged in", setup["saved_setup_connect_when_plugged"])
     }
 }
