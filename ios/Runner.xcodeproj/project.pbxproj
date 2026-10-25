@@ -43,6 +43,7 @@
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */; };
 		331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */; };
+		A7C3E10F2E8D4B0100AC0425 /* NikonAddSetupChooserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C3E1102E8D4B0100AC0425 /* NikonAddSetupChooserTests.swift */; };
 		331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */; };
 		331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */; };
 		CA9A0001C0DE000000000001 /* ControlCapabilityAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */; };
@@ -232,6 +233,7 @@
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockArtifactFilterTests.swift; sourceTree = "<group>"; };
 		331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWiFiCredentialStoreTests.swift; sourceTree = "<group>"; };
+		A7C3E1102E8D4B0100AC0425 /* NikonAddSetupChooserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NikonAddSetupChooserTests.swift; sourceTree = "<group>"; };
 		331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstPairWizardStepTests.swift; sourceTree = "<group>"; };
 		331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeEditorReturnTests.swift; sourceTree = "<group>"; };
 		CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlCapabilityAdoptionTests.swift; sourceTree = "<group>"; };
@@ -419,6 +421,7 @@
 				BA11F17E00000000000000A1 /* BlockArtifactFilterTests.swift */,
 				331C807C294A618700263BE6 /* CameraWiFiCredentialStoreTests.swift */,
 				331C807D294A618700263BE7 /* FirstPairWizardStepTests.swift */,
+				A7C3E1102E8D4B0100AC0425 /* NikonAddSetupChooserTests.swift */,
 				331C807D294A618800263BF9 /* ChromeEditorReturnTests.swift */,
 				CA9A0002C0DE000000000002 /* ControlCapabilityAdoptionTests.swift */,
 				F03A0000000000000000F001 /* LiveSurfaceRegressionTests.swift */,
@@ -817,6 +820,7 @@
 				BA11F17E00000000000000A2 /* BlockArtifactFilterTests.swift in Sources */,
 				331C808C294A63AB00263BE6 /* CameraWiFiCredentialStoreTests.swift in Sources */,
 				331C808D294A63AB00263BE7 /* FirstPairWizardStepTests.swift in Sources */,
+				A7C3E10F2E8D4B0100AC0425 /* NikonAddSetupChooserTests.swift in Sources */,
 				331C808D294A63AC00263BF9 /* ChromeEditorReturnTests.swift in Sources */,
 				CA9A0001C0DE000000000001 /* ControlCapabilityAdoptionTests.swift in Sources */,
 				F03A0000000000000000B001 /* LiveSurfaceRegressionTests.swift in Sources */,
