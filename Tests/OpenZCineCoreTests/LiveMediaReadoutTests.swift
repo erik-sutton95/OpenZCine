@@ -48,4 +48,26 @@ struct LiveMediaReadoutTests {
                 card, recordingTime: nil, portrait: true,
                 prefersDuration: false, photo: false) == "905GB")
     }
+
+    /// Hardware pass 3.4: the video MEDIA cell steps free space, free percentage, then the
+    /// estimated time, the shared surface's order in Pocket and Insta.
+    @Test func videoFormsStepFreePercentThenTime() {
+        #expect(
+            LiveMediaReadout.videoForms(card, recordingTime: "~47 Min", portrait: false)
+                == [card.free, "47%", "~47 Min"])
+        #expect(
+            LiveMediaReadout.videoForms(card, recordingTime: "~47 Min", portrait: true)
+                == ["905GB", "47%", "~47 Min"])
+        #expect(
+            LiveMediaReadout.videoForms(card, recordingTime: nil, portrait: false) == [
+                card.free, "47%",
+            ])
+        let noCapacity = StorageReadout(freeBytes: 904_750_000_000, totalBytes: nil)
+        #expect(
+            LiveMediaReadout.videoForms(noCapacity, recordingTime: "~47 Min", portrait: false)
+                == [noCapacity.free, "~47 Min"])
+        #expect(
+            LiveMediaReadout.videoForms(nil, recordingTime: nil, portrait: false)
+                == [StorageReadout.unavailable])
+    }
 }

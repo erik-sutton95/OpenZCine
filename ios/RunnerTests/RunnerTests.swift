@@ -3607,16 +3607,40 @@ final class NikonSharedStorageReadoutTests: XCTestCase {
         model.shell.control.bind(session)
         defer { model.shell.control.unbind() }
         try await received(storage, model: model)
-        model.prefersMediaDuration = false
         XCTAssertEqual(model.liveMediaReadout, "480 MB")
-        model.prefersMediaDuration = true
+        model.toggleMediaReadout()
+        XCTAssertEqual(model.liveMediaReadout, "48%")
+        model.toggleMediaReadout()
         XCTAssertEqual(model.liveMediaReadout, "~40 Min")
 
         session.reportStorage(.unknown)
         try await received(.unknown, model: model)
-        XCTAssertEqual(model.liveMediaReadout, "-- Min")
-        model.prefersMediaDuration = false
         XCTAssertEqual(model.liveMediaReadout, StorageReadout.unavailable)
+        model.toggleMediaReadout()
+        XCTAssertEqual(model.liveMediaReadout, StorageReadout.unavailable)
+    }
+
+    /// Hardware pass 3.4 (Z + ZR): a tap on the video storage readout steps free space, free
+    /// percentage, then the estimated time, and back, as the shared live surface does in
+    /// Pocket and Insta (`MonitorStorageReadoutFormat.alternatives`). Z skipped the percentage.
+    func testStorageTapStepsFreePercentThenTimeLikeTheSharedSurface() async throws {
+        let volume = StorageVolume(
+            id: "active", freeBytes: .init(595_840_000_000, origin: .cameraReported, at: nil),
+            totalBytes: .init(1_024_000_000_000, origin: .cameraReported, at: nil),
+            remainingRecordingTime: .init(.seconds(51 * 60), origin: .estimated, at: nil))
+        let storage = StorageStatus([volume], origin: .cameraReported, at: nil)
+        let model = NativeAppModel()
+        let session = NikonPictureLifetimeSession(storage: storage)
+        model.shell.control.bind(session)
+        defer { model.shell.control.unbind() }
+        try await received(storage, model: model)
+        var seen: [String] = []
+        for _ in 0..<4 {
+            seen.append(model.liveMediaReadout)
+            model.toggleMediaReadout()
+        }
+        XCTAssertEqual(seen, ["595.84 GB", "58%", "~51 Min", "595.84 GB"])
+        XCTAssertEqual(model.liveMediaReadout(portrait: true), "58%")
     }
 
     func testRelayStorageKeepsHostFormattedObservations() {
@@ -3624,7 +3648,7 @@ final class NikonSharedStorageReadoutTests: XCTestCase {
         model.videoSource = .relay
         model.cameraState = model.cameraState.updating(media: "HOST STORAGE")
         XCTAssertEqual(model.liveMediaReadout, "HOST STORAGE")
-        model.prefersMediaDuration = true
+        model.toggleMediaReadout()
         XCTAssertEqual(model.liveMediaReadout, "HOST STORAGE")
     }
 

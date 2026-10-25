@@ -20,4 +20,28 @@ public enum LiveMediaReadout {
         guard photo, let percent = readout.percent else { return free }
         return "\(free) \(percent)"
     }
+
+    /// The forms one tap on the video MEDIA cell steps through, as on the shared live surface in
+    /// Pocket and Insta (A5-11): the free space, its percentage when the card reports a
+    /// capacity, then the estimated recording time when one is known. Android:
+    /// `liveMediaForms` (`MonitorReadouts`).
+    public static func videoForms(free: String, percent: String?, recordingTime: String?)
+        -> [String]
+    {
+        [free]
+            + MonitorStorageReadoutFormat.alternatives(
+                percent: percent, recordingTime: recordingTime, photo: false)
+    }
+
+    /// The local camera's video forms from the common storage readout.
+    public static func videoForms(
+        _ readout: StorageReadout?, recordingTime: String?, portrait: Bool
+    ) -> [String] {
+        let free =
+            readout.map {
+                portrait
+                    ? MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: $0.freeBytes) : $0.free
+            } ?? StorageReadout.unavailable
+        return videoForms(free: free, percent: readout?.percent, recordingTime: recordingTime)
+    }
 }

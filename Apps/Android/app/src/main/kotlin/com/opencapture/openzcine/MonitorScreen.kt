@@ -3,7 +3,6 @@ package com.opencapture.openzcine
 import com.opencapture.opencine.nikon.codecColorChoices
 import com.opencapture.opencine.media.recordingTimeLabel
 import com.opencapture.opencine.media.storageReadout
-import com.opencapture.opencine.media.StorageReadout
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.MonitorTextFormat
 import java.util.concurrent.atomic.AtomicReference
@@ -1414,22 +1413,15 @@ internal fun MonitorScreen(
                 previewApplication is SwiftLiveViewPreviewState.Rejected, presentedFrames,
                 actualLinkHealth.presentation.signalBars)
         }
-        var prefersMediaDuration by rememberSaveable { mutableStateOf(false) }
-        // Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
-        // Duration mode and every non-portrait surface keep the existing labels.
-        fun mediaLabel(portrait: Boolean): String = if (relayedState != null) {
-            if (prefersMediaDuration) readoutRetention.media.durationLabel
-            else if (portrait) readoutRetention.media.freeBytes?.let {
-                "${MonitorStorageReadoutFormat.wholeUnitCapacity(it)} · ${readoutRetention.media.percentFree}%"
-            } ?: readoutRetention.media.capacityLabel
-            else readoutRetention.media.capacityLabel
+        var mediaForm by rememberSaveable { mutableIntStateOf(0) }
+        // Video storage steps free space, percentage, then estimated time (shared surface order).
+        fun mediaForms(portrait: Boolean): List<String> = if (relayedState != null) {
+            relayedMediaForms(readoutRetention.media, portrait)
         } else {
             val storage = sharedControlState.snapshot?.storage
-            if (prefersMediaDuration) storage?.recordingTimeLabel ?: "-- Min"
-            else storage?.storageReadout?.let {
-                if (portrait) MonitorStorageReadoutFormat.wholeUnitCapacity(it.freeBytes) else it.free
-            } ?: StorageReadout.UNAVAILABLE
+            liveMediaForms(storage?.storageReadout, storage?.recordingTimeLabel, portrait)
         }
+        fun mediaLabel(portrait: Boolean): String = mediaForms(portrait).let { it[mediaForm.mod(it.size)] }
         val watchRelayState =
             remember(
                 sessionState,
@@ -1974,7 +1966,8 @@ internal fun MonitorScreen(
                 accessibilityLabel = if (capacity != null) null
                     else shots?.let(MonitorTextFormat::shotsRemainingAccessibilityLabel) ?: "Shots remaining unknown")
         } else if (mounted(MonitorDisplaySection.STORAGE)) MonitorOperatorLiveReadout("storage", "Media remaining",
-            mediaLabel(isPortrait), MonitorDisplaySection.STORAGE, action = { prefersMediaDuration = !prefersMediaDuration }) else null
+            mediaLabel(isPortrait), MonitorDisplaySection.STORAGE,
+            action = { mediaForm = MonitorStorageReadoutFormat.nextForm(mediaForm, mediaForms(isPortrait).size) }) else null
         val resolutionKind = if (isPhotographyMode) MonitorPickerKind.SIZE else MonitorPickerKind.RESOLUTION
         val codecKind = if (isPhotographyMode) MonitorPickerKind.QUALITY else MonitorPickerKind.CODEC
         val panelValue = activeMonitorPicker?.let { picker -> MonitorOperatorCameraPanel(picker.kind.name,
