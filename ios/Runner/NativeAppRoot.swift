@@ -1368,10 +1368,11 @@ final class NativeAppModel {
                 RelayPresence(
                     name: UIDevice.current.name,
                     watchable: true,
-                    servedCameraHost: isCameraControlSession ? connectedIdentity?.host : nil,
+                    servedCameraHost: isCameraControlSession && sessionRecovery.claimsCamera
+                        ? connectedIdentity?.host : nil,
                     relayPort: relayHost?.boundPort.map(Int.init)
                         ?? relayListenerPreferredPort.map(Int.init)))
-        } else if isCameraControlSession, !isDemoSession,
+        } else if isCameraControlSession, !isDemoSession, sessionRecovery.claimsCamera,
             let host = connectedIdentity?.host, !host.isEmpty
         {
             relayPresenceServer.update(
@@ -1391,6 +1392,7 @@ final class NativeAppModel {
         let host = connectedIdentity?.host ?? ""
         let shouldBeacon =
             isCameraControlSession && !isRelayBroadcasting && !isDemoSession && !host.isEmpty
+            && sessionRecovery.claimsCamera
         if shouldBeacon {
             let beacon = cameraInUseBeacon ?? CameraInUseBeacon()
             cameraInUseBeacon = beacon
@@ -2514,7 +2516,8 @@ final class NativeAppModel {
     var focusSubject = "Auto"
     /// When non-nil, the next picker present opens on this mode tab (e.g. FOCUS Area = 1).
     var pickerInitialMode: Int?
-    var prefersMediaDuration = false
+    /// The video MEDIA cell's tap form: free space, free percentage, then estimated time.
+    var mediaReadoutForm = 0
     /// Photo top bar: whether the SHOTS readout is flipped to its storage (GB + %) form.
     var photoPillShowsStorage = false
     let gyroCapture = GyroCaptureCoordinator()
@@ -4739,7 +4742,7 @@ final class NativeAppModel {
             guard isDemoSession else { return }
             applyLiveViewHeaderTimecode(
                 Timecode(on: true, hour: 1, minute: 23, second: 45, frame: 12))
-            prefersMediaDuration = false
+            mediaReadoutForm = 0
         }
 
         /// SIMULATED descriptor-backed camera for actual shared touch regression tests.
@@ -7246,9 +7249,28 @@ final class NativeAppModel {
         case .takenOver(let holder):
             logConnection(
                 "recovery stopped: \(holder ?? "another device") holds host=\(cameraHost)")
+            retireTakenOverSession()
         case .retrying:
             break
         }
+        // A device that stopped reconnecting gave the camera up: it no longer says it holds it,
+        // on the presence port, in the in-use beacon or in a running broadcast's advertisement
+        // (the broadcast itself stays up for its watchers).
+        if previous.claimsCamera, !snapshot.state.claimsCamera {
+            relayHost?.updateServedCamera(
+                cameraName: connectedIdentity?.displayName ?? cameraState.cameraName,
+                servedCameraHost: nil)
+            updateCameraInUseBeacon()
+        }
+    }
+
+    /// Another device holds the camera now. The old link may still be open on this side, so it is
+    /// retired without a word to the body: no EndLiveView, no CloseSession and no live-view or
+    /// keepalive traffic, any of which could reach the session of the phone that took it. Retry
+    /// still starts from the held frame and disposes this session on its normal path.
+    private func retireTakenOverSession() {
+        monitorRuntime?.recovering()
+        cameraSession?.close()
     }
 
     /// Keep the watchers alive on the held frame: with no fresh camera frames, every viewer's
@@ -7502,6 +7524,13 @@ final class NativeAppModel {
                     isStreamRecovering = true
                     connection = .connected
                 case .reconnectReady:
+                    // A running or stopped recovery owns every dial: it asks who holds the camera
+                    // first. An in-place reconnect behind it took a camera straight back from the
+                    // phone that had taken it over, and the ZR hung (hardware pass 4.1).
+                    guard !sessionRecovery.isRecovering else {
+                        logConnection("live view reconnect skipped: recovery owns the camera")
+                        return
+                    }
                     cameraHost = session.identity.host
                     connectToCamera(preservingMonitorSurface: true)
                 case .recover(let reason):
@@ -13066,43 +13095,38 @@ final class NativeAppModel {
         activePanel = .media
     }
 
-    /// Toggles the MEDIA cell between capacity (GB · %) and duration (Min) readouts.
+    /// Steps the video MEDIA cell to its next form (free space, percentage, estimated time).
     func toggleMediaReadout() {
-        prefersMediaDuration.toggle()
+        mediaReadoutForm = MonitorStorageReadoutFormat.nextForm(
+            after: mediaReadoutForm, count: mediaReadoutForms.count)
     }
 
-    /// The MEDIA cell label, respecting the capacity/duration preference.
-    var mediaReadout: String {
-        // A relayed source supplies its own observations; the local camera uses the common session.
-        if videoSource == .relay {
-            if let status = cameraState.mediaStatus {
-                return prefersMediaDuration ? status.durationLabel : status.capacityLabel
+    /// Operator monitor storage, the same text in every orientation as on every shared live
+    /// surface. Photo shows the free space and percentage (the SHOTS pill's storage side).
+    var liveMediaReadout: String {
+        if isPhotographyMode {
+            if videoSource == .relay {
+                return cameraState.mediaStatus?.capacityLabel ?? cameraState.media
             }
-            return cameraState.media
+            return LiveMediaReadout.photoStorage(shell.control.snapshot?.storage.storageReadout)
         }
-        let storage = shell.control.snapshot?.storage
-        return prefersMediaDuration
-            ? storage?.recordingTimeLabel ?? "-- Min"
-            : storage?.storageReadout?.label ?? StorageReadout.unavailable
+        let forms = mediaReadoutForms
+        return forms[mediaReadoutForm % forms.count]
     }
 
-    /// Operator monitor storage uses the same units as every shared live surface.
-    var liveMediaReadout: String { liveMediaReadout(portrait: false) }
-
-    /// Portrait keeps a complete, compact label: the nearest whole unit, never a fraction.
-    /// Duration mode and every non-portrait surface keep the existing labels.
-    func liveMediaReadout(portrait: Bool) -> String {
+    /// The video MEDIA cell's forms, the one shared storage cycle (`StorageReadoutCycle`).
+    /// A relayed source supplies its own observations; the local camera uses the common session.
+    private var mediaReadoutForms: [String] {
         if videoSource == .relay {
-            guard let status = cameraState.mediaStatus else { return cameraState.media }
-            if prefersMediaDuration { return status.durationLabel }
-            guard portrait, let bytes = status.freeBytes else { return status.capacityLabel }
-            return
-                "\(MonitorStorageReadoutFormat.wholeUnitCapacity(bytes: bytes)) · \(status.percentFree)%"
+            guard let status = cameraState.mediaStatus else { return [cameraState.media] }
+            return StorageReadoutCycle.forms(
+                freeBytes: status.freeBytes ?? UInt64(max(0, status.gigabytesFree)) * 1_000_000_000,
+                percent: "\(status.percentFree)%",
+                recordingTime: RecordingTimeLabel.label(
+                    status.estimatedMinutesRemaining.map(Int64.init), origin: .estimated),
+                photo: false)
         }
-        let storage = shell.control.snapshot?.storage
-        return LiveMediaReadout.label(
-            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel,
-            portrait: portrait, prefersDuration: prefersMediaDuration, photo: isPhotographyMode)
+        return StorageReadoutCycle.forms(shell.control.snapshot?.storage, photo: false)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {

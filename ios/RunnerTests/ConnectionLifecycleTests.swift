@@ -1179,3 +1179,65 @@ struct RefusedCameraWiFiJoinTests {
         }
     }
 }
+
+/// Hardware pass 4.1 (iPhone and Galaxy S25 on one Nikon ZR): after the Galaxy took the camera,
+/// the iPhone showed "Camera taken over" while its old live-view pumps kept running on the dropped
+/// link, and an in-place reconnect from them took the camera back three seconds later. The ZR hung
+/// after the repeated hand-overs. A taken-over monitor retires its old link without a word to the
+/// body and never dials. SIMULATED transport and virtual clock (`SessionRecoveryPeers`).
+@MainActor
+@Suite("Take-over recovery")
+struct TakeOverRecoveryTests {
+    @Test("A taken-over monitor retires the old link's pumps and never dials")
+    func takenOverRetiresTheOldLinkAndNeverDials() async {
+        let peer = SessionRecoveryPictureTests.Peer()
+        peer.holder = "Galaxy S25"
+        let model = NativeAppModel()
+        model.cameraHost = "192.168.1.30"
+        model.isMonitorPresented = true
+        model.sessionRecoveryPeers = peer.peers
+        let runtime = NikonMonitorRuntime(link: ParkedMonitorLink())
+        model.debugAttachMonitorRuntime(runtime)
+        defer { model.debugAttachMonitorRuntime(nil) }
+        runtime.startKeepAlive(isBusy: { false }, failures: { _ in }, recover: {})
+        runtime.startEventDrain(receive: { _ in }, unexpectedEnd: {})
+        #expect(runtime.hasBackgroundPumps)
+
+        model.debugSimulateTransportDetach()
+        let stopped = await peer.drive(until: 30) {
+            model.sessionRecovery == .takenOver(holder: "Galaxy S25")
+        }
+
+        #expect(stopped)
+        #expect(peer.connects == 0, "a taken-over monitor never dials the camera")
+        #expect(!runtime.hasBackgroundPumps, "nothing more goes over the dropped link")
+        #expect(!model.sessionRecovery.claimsCamera)
+        model.exitMonitorToOperatorMenu()
+    }
+}
+
+/// A link whose pushed-event read parks until the runtime retires it.
+@MainActor
+private final class ParkedMonitorLink: NikonMonitorLink {
+    let serialNumber = "SIMULATED"
+
+    func supportsProperty(_ property: PTPPropertyCode) -> Bool { true }
+    func configureLiveView(size: UInt8, compression: UInt8) async {}
+    func startLiveView() async throws {}
+    func stopLiveView() async {}
+    func liveViewFrame(deadline: Duration?) async throws -> PTPLiveViewFrame {
+        throw NativeCameraSessionError.connectionClosed
+    }
+    func readLastCommandRoundTripMilliseconds() -> Double? { nil }
+    func sendKeepAlive() async throws {}
+    func nextEvent() async throws -> PTPEvent {
+        try await Task.sleep(for: .seconds(3_600))
+        throw NativeCameraSessionError.connectionClosed
+    }
+    func pollStillReleaseReadiness() async throws -> StillReleaseReadiness { .complete }
+    func shutdown() async {}
+    func writeCameraProperty(_ write: PTPCameraPropertyWrite) async throws {}
+    func readCameraProperty(_ property: PTPPropertyCode) async throws -> Data { Data() }
+    func startRecording() async throws {}
+    func stopRecording() async throws {}
+}
