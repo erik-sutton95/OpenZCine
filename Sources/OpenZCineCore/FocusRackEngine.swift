@@ -1098,8 +1098,10 @@ public struct FocusRackEngine: Sendable {
                 completedCurrentTarget
                 ? "\(target) s target; completed in \(measured) s."
                 : "\(target) s target · ~\(measured) s estimated. Timing is advisory."
+            state.timingWarningIsEstimate = !completedCurrentTarget
         } else if let maximum = state.maximumDuration, state.transition.duration > maximum {
             state.timingWarning = "This duration may show pauses between focus adjustments."
+            state.timingWarningIsEstimate = false
         }
         if context?.unavailableReason(at: timestamp) == nil, position != nil {
             switch state.phase {

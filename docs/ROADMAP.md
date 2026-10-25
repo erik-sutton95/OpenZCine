@@ -140,6 +140,8 @@ Feature work tracked as its own tasks on the Kaneo board, outside the Phase 0–
   estimate when needed; runtime overruns warn and extend playback. A shared measured planner
   selects command sizes for every duration and lens. One explicit Prepare lens pass measures
   bounded sizes within A/B while recording is stopped, replacing manual multi-stage preparation.
+  Compact guided focus panels keep A/B, duration and expected timing visible; mark editing and
+  advanced options are secondary, with a prominent advisory preparation action when useful.
   Native AF shows saved targets and visible point-lock recovery. Timed mark setup selects Near/Far,
   then 1/10/100 signed steps.
   Shared and native-shell regressions cover timing overruns, safety-read placement and cancellation;

@@ -138,6 +138,9 @@ public struct FocusRackState: Codable, Sendable {
     public var actualMovementDuration: Double?
     /// Nonblocking duration estimate or overrun; camera admission is reported separately.
     public var timingWarning: String?
+    /// True only for a predicted timing warning, so shells can deduplicate their estimate row.
+    /// Completion results and other warnings remain visible. Absent in older state payloads.
+    public var timingWarningIsEstimate: Bool?
     /// Requested target and planned estimate, without claiming optical arrival timing.
     public var playbackDetail: String {
         playbackDetail(for: transition)
