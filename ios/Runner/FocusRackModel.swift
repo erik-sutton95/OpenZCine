@@ -189,7 +189,8 @@ struct FocusRackPendingCapture {
     var autofocusDisabledReason: String {
         if let afSettingsStatus { return afSettingsStatus }
         return mode == .nativeAF
-            ? nativeAFInstruction : "Use the rack dial, or reset marks before autofocus."
+            ? nativeAFInstruction
+            : "Use Edit marks to adjust focus, or reset marks before autofocus."
     }
 
     func armNativeTarget(_ mark: NativeAFMark) {

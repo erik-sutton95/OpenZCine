@@ -2070,7 +2070,7 @@ internal fun MonitorScreen(
                             "Setting up camera AF…"
                         } else if (currentRack.focusMode == "nativeAF") {
                             currentRack.nativeAFDisabledReason ?: "Wait for target selection to finish."
-                        } else "Use the rack dial, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
+                        } else "Use Edit marks to adjust focus, or reset marks before autofocus.", Toast.LENGTH_SHORT).show()
                         return@handleFocusFeedAction
                     }
                     if (focusRackVisible && currentRack.focusMode == "nativeAF" && currentRack.nativeAF.selectingMark != null) {

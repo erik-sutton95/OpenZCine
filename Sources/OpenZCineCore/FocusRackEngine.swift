@@ -1036,7 +1036,7 @@ public struct FocusRackEngine: Sendable {
                 if idle { state.estimatedDuration = plan.estimatedDuration }
             } catch FocusRackError.calibrationRequired {
                 state.admissionMessage = FocusRackError.calibrationRequired.localizedDescription
-                admissionInstruction = "Prepare lens in Options"
+                admissionInstruction = "Prepare lens"
             } catch FocusRackError.safetyReadUnavailable {
                 state.admissionMessage = FocusRackError.safetyReadUnavailable.localizedDescription
                 admissionInstruction = "Camera not ready"

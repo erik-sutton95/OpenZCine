@@ -157,7 +157,7 @@ public enum FocusRackError: Error, LocalizedError, Equatable, Sendable {
         case .invalidTemplateName: "Use a unique template name of 1–60 characters."
         case .templateStorageFull: "Remove a saved timing template before saving another."
         case .calibrationRequired:
-            "Use Prepare lens in Options to measure command timing before timed playback."
+            "Use Prepare lens to measure command timing before timed playback."
         case .noSmoothTiming:
             "This duration is not supported for these marks at the current camera cadence. Try another duration or Linear. Go to A/B remains available for fast positioning."
         case .durationTooLong(let maximum):
