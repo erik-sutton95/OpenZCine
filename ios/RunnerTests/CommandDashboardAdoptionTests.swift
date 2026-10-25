@@ -1,6 +1,6 @@
 import Foundation
-import Observation
 import MonitorPresentation
+import Observation
 import OpenCineAppKit
 import OpenCineCameraControls
 import OpenCineNikon
@@ -318,11 +318,14 @@ import Testing
         let live = model.headerLiveStatus
         #expect(live.status.timecode == "00:00:00:00")
         let header = HeaderInvalidation()
-        withObservationTracking { _ = model.headerLiveStatus.status } onChange: {
+        withObservationTracking {
+            _ = model.headerLiveStatus.status
+        } onChange: {
             MainActor.assumeIsolated { header.changed = true }
         }
         for frame in 1...25 {
-            model.liveTimecode = Timecode(on: true, hour: 1, minute: 0, second: 0, frame: frame % 25)
+            model.liveTimecode = Timecode(
+                on: true, hour: 1, minute: 0, second: 0, frame: frame % 25)
             #expect(live.clock() == model.liveTimecode.monitorLabel)
         }
         #expect(!header.changed, "a per-frame timecode must not re-evaluate the live surface")
