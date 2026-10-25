@@ -13014,21 +13014,19 @@ final class NativeAppModel {
         return forms[mediaReadoutForm % forms.count]
     }
 
-    /// The video MEDIA cell's forms, the one shared storage cycle (`MonitorStorageReadoutFormat`).
+    /// The video MEDIA cell's forms, the one shared storage cycle (`StorageReadoutCycle`).
     /// A relayed source supplies its own observations; the local camera uses the common session.
     private var mediaReadoutForms: [String] {
         if videoSource == .relay {
             guard let status = cameraState.mediaStatus else { return [cameraState.media] }
-            return MonitorStorageReadoutFormat.forms(
+            return StorageReadoutCycle.forms(
                 freeBytes: status.freeBytes ?? UInt64(max(0, status.gigabytesFree)) * 1_000_000_000,
                 percent: "\(status.percentFree)%",
                 recordingTime: RecordingTimeLabel.label(
                     status.estimatedMinutesRemaining.map(Int64.init), origin: .estimated),
                 photo: false)
         }
-        let storage = shell.control.snapshot?.storage
-        return MonitorStorageReadoutFormat.forms(
-            storage?.storageReadout, recordingTime: storage?.recordingTimeLabel, photo: false)
+        return StorageReadoutCycle.forms(shell.control.snapshot?.storage, photo: false)
     }
 
     func setMovablePanelCenter(_ id: String, _ center: CGPoint, bounds: CGRect) {

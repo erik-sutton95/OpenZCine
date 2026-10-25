@@ -1,8 +1,7 @@
 package com.opencapture.openzcine
 
 import com.opencapture.opencine.nikon.codecColorChoices
-import com.opencapture.opencine.media.recordingTimeLabel
-import com.opencapture.opencine.media.storageReadout
+import com.opencapture.opencine.media.StorageReadoutCycle
 import com.opencapture.opencine.nikon.LiveFocusInfo
 import com.opencapture.opencine.nikon.MonitorTextFormat
 import java.util.concurrent.atomic.AtomicReference
@@ -1417,7 +1416,7 @@ internal fun MonitorScreen(
         // Video storage steps free space, percentage, then estimated time (shared surface order).
         fun mediaForms(): List<String> = if (relayedState != null) relayedMediaForms(readoutRetention.media)
             else sharedControlState.snapshot?.storage.let {
-                MonitorStorageReadoutFormat.forms(it?.storageReadout, it?.recordingTimeLabel, photo = false)
+                StorageReadoutCycle.forms(it, photo = false)
             }
         fun mediaLabel(): String = mediaForms().let { it[mediaForm.mod(it.size)] }
         val watchRelayState =
@@ -1956,7 +1955,7 @@ internal fun MonitorScreen(
             MonitorOperatorLiveReadout<String, MonitorDisplaySection>("shots", "Shots remaining",
                 if (capacity != null) {
                     // One live storage precision in every orientation (shared storage cycle).
-                    MonitorStorageReadoutFormat.forms(capacity.freeBytes, capacity.percent, null, photo = true).joinToString(" ")
+                    StorageReadoutCycle.forms(capacity.freeBytes, capacity.percent, null, photo = true).joinToString(" ")
                 } else shots?.let(MonitorTextFormat::shotsRemainingCompactLabel),
                 MonitorDisplaySection.TIMECODE, action = { photoPillShowsStorage = !photoPillShowsStorage },
                 icon = if (capacity == null) MonitorIcon.IMAGE else null,

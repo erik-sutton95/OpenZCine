@@ -4,13 +4,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.opencapture.monitorui.MonitorIcon
-import com.opencapture.monitorui.MonitorStorageReadoutFormat
 import com.opencapture.monitorui.MonitorTimecodeFormat
 import com.opencapture.opencine.appkit.MonitorCapturePresentation
 import com.opencapture.opencine.cameracontrols.MonitorLinkObservation
 import com.opencapture.opencine.core.Rational
 import com.opencapture.opencine.core.ObservationOrigin
 import com.opencapture.opencine.media.RecordingTimeLabel
+import com.opencapture.opencine.media.StorageReadoutCycle
 import com.opencapture.opencine.core.ISOValue
 import com.opencapture.opencine.core.SettingValue
 import com.opencapture.opencine.nikon.CameraIdentity
@@ -80,10 +80,10 @@ internal fun monitorStorageLabel(storage: CameraStorageStatus?): String =
 
 /**
  * A watcher's video storage forms from the host's relayed media status, through the one shared
- * storage cycle (`MonitorStorageReadoutFormat.forms`). iOS: `NativeAppModel.mediaReadoutForms`.
+ * storage cycle (`StorageReadoutCycle.forms`). iOS: `NativeAppModel.mediaReadoutForms`.
  */
 internal fun relayedMediaForms(media: MediaStatus): List<String> =
-    MonitorStorageReadoutFormat.forms(media.freeBytes ?: (media.gigabytesFree.coerceAtLeast(0) * 1_000_000_000L),
+    StorageReadoutCycle.forms(media.freeBytes ?: (media.gigabytesFree.coerceAtLeast(0) * 1_000_000_000L),
         "${media.percentFree}%",
         RecordingTimeLabel.label(media.estimatedMinutesRemaining?.toLong(), ObservationOrigin.ESTIMATED), photo = false)
 
