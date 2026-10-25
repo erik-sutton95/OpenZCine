@@ -39,8 +39,10 @@ class MediaShareStagerTest {
             assertFalse(staged.file.fileName.toString().endsWith(".part"))
             assertContentEquals(bytes, Files.readAllBytes(staged.file))
             assertContentEquals(bytes, Files.readAllBytes(entry.finalPath))
-            Files.list(root.resolve("cache/share/ready")).use { files ->
-                assertTrue(files.allMatch { file -> file.fileName.toString().endsWith(".mov") })
+            // The receiving app names the file after its URI: the copy keeps the camera's name.
+            assertEquals("C0001.MOV", staged.file.fileName.toString())
+            Files.walk(root.resolve("cache/share/ready")).use { files ->
+                assertTrue(files.filter(Files::isRegularFile).allMatch { file -> file.fileName.toString() == "C0001.MOV" })
             }
             Files.list(root.resolve("cache/share/staging")).use { files -> assertEquals(0, files.count()) }
         }
