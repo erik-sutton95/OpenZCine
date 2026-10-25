@@ -269,9 +269,12 @@ final class NikonConnectReleaseWatch: Sendable {
     deinit { onRelease.withLock { $0 }?() }
 }
 
-/// Host setup capabilities, live reachability and actions for the shared typed chooser.
+/// Host setup capabilities, live reachability and actions for the shared typed chooser. The
+/// chooser and its copy are OpenCine's (`StationNetworkSetupRules.setupChooser`), the same one
+/// every app shows; this host adds USB-C, the camera's Wi-Fi and HDMI capture as routes and keeps
+/// what each one does.
 @MainActor
-private struct NikonSetupOptions {
+struct NikonSetupOptions {
     let model: NativeAppModel
     let camera: PTPIPSavedCameraRecord
 
@@ -281,24 +284,20 @@ private struct NikonSetupOptions {
         let records = NikonCameras.records(of: camera, in: model.savedCameras)
         guard let anchor = records.first else {
             return AddSetupFlow(
-                chooser: AddSetupChooser(
-                    title: "Add a setup", detail: "This saved setup is no longer available.",
-                    options: []),
+                chooser: StationNetworkSetupRules.setupChooser(
+                    context: .camera(camera), routes: []),
                 onSelect: { _ in }, onCancel: { done(nil) })
         }
         let host = Self(model: model, camera: anchor)
-        let options = NikonCameras.missingKinds(records).map { kind in
-            AddSetupOption(
-                id: kind.rawValue, kind: NikonSavedRecordsV0.routeKind(kind),
-                title: host.title(for: kind),
-                detail: host.guidance(for: kind), actionTitle: host.actionTitle(for: kind))
+        let routes = NikonCameras.missingKinds(records).map { kind in
+            StationSetupRoute(
+                NikonSavedRecordsV0.routeKind(kind),
+                actionTitle: actionTitle(
+                    for: kind, reachable: host.discoveredMatch(for: kind) != nil))
         }
         return AddSetupFlow(
-            chooser: AddSetupChooser(
-                title: "Add a setup · \(anchor.displayTitle)",
-                detail:
-                    "One camera, several ways to reach it. Pick how this rig runs; the setup saves itself the first time you connect that way.",
-                options: options),
+            chooser: StationNetworkSetupRules.setupChooser(
+                context: .camera(camera), routes: routes),
             onSelect: { option in
                 switch NikonSavedRecordsV0.pathKind(option.kind) {
                 case .cameraAccessPoint:
@@ -320,14 +319,14 @@ private struct NikonSetupOptions {
             }, onCancel: { done(nil) })
     }
 
-    private func actionTitle(for kind: CameraPath.Kind) -> String {
-        let match = discoveredMatch(for: kind)
+    /// The live words of a route's action: what tapping it does right now.
+    static func actionTitle(for kind: CameraPath.Kind, reachable: Bool) -> String {
         switch kind {
-        case .cameraAccessPoint: return "Join Camera Wi-Fi"
-        case .usbC: return match != nil ? "Connect Now" : "Connect When Plugged In"
-        case .infrastructure: return match != nil ? "Connect Now" : "Find On This Network"
-        case .phoneHotspot: return "Wait For Camera"
-        case .hdmiCapture: return "Use HDMI Capture"
+        case .cameraAccessPoint: return "Join camera Wi-Fi"
+        case .usbC: return reachable ? "Connect now" : "Connect when plugged in"
+        case .infrastructure: return reachable ? "Connect now" : "Find on this network"
+        case .phoneHotspot: return "Wait for camera"
+        case .hdmiCapture: return "Use HDMI capture"
         }
     }
 
@@ -359,41 +358,6 @@ private struct NikonSetupOptions {
             }
         case .cameraAccessPoint, .phoneHotspot, .hdmiCapture:
             return nil
-        }
-    }
-
-    private func title(for kind: CameraPath.Kind) -> String {
-        switch kind {
-        case .cameraAccessPoint: return "Camera access point"
-        case .infrastructure: return "Wi-Fi network"
-        case .phoneHotspot: return "This device's hotspot"
-        case .usbC: return "USB-C cable"
-        case .hdmiCapture: return "HDMI capture"
-        }
-    }
-
-    private func guidance(for kind: CameraPath.Kind) -> String {
-        switch kind {
-        case .cameraAccessPoint:
-            return
-                "This device joins the camera's own Wi-Fi, best in the field with no other "
-                + "gear. You'll be asked for the camera's network key the first time only."
-        case .infrastructure:
-            return
-                "Put the camera and this device on the same network (a set router, house "
-                + "Wi-Fi). Turn on Connect to PC on the camera with a profile for that "
-                + "network; it appears in the camera list and saves on connect. Each network "
-                + "you use keeps its own setup, so a studio and a home router are two."
-        case .phoneHotspot:
-            return
-                "Turn on this device's Personal Hotspot and point a camera network profile "
-                + "at it. The camera joins YOU, once it does, it appears in the list."
-        case .usbC:
-            return
-                "Plug the camera straight into this device. It connects and saves itself, "
-                + "nothing to configure."
-        case .hdmiCapture:
-            return "Use the connect screen's Cable Link → HDMI capture for a picture-only feed."
         }
     }
 }

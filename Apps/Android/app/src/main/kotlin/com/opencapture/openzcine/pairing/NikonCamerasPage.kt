@@ -21,10 +21,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.opencapture.opencine.appkit.AddSetupChooser
 import com.opencapture.opencine.appkit.AddSetupFlow
 import com.opencapture.opencine.appkit.AddSetupNotice
-import com.opencapture.opencine.appkit.AddSetupOption
+import com.opencapture.opencine.appkit.StationSetupRoute
+import com.opencapture.opencine.appkit.stationSetupChooser
 import com.opencapture.monitorui.MonitorCameraAction
 import com.opencapture.monitorui.MonitorConnectFailure
 import com.opencapture.monitorui.MonitorIcon
@@ -33,6 +33,7 @@ import com.opencapture.opencine.appkit.CameraItem
 import com.opencapture.opencine.appkit.DiscoveryPermissions
 import com.opencapture.opencine.appkit.IntegrationSlots
 import com.opencapture.opencine.core.RouteDraft
+import com.opencapture.opencine.core.RouteKind
 import com.opencapture.opencine.core.SavedCamera
 import com.opencapture.opencine.nikon.NikonAccessPointSsid
 import com.opencapture.opencine.nikon.NikonNative
@@ -67,6 +68,25 @@ internal fun missingSetupKinds(group: List<SavedCameraRecord>): List<SavedCamera
         // the network's name. Every other kind is singular: the access point is the camera's own
         // network, the hotspot is this phone, the cable is the cable.
         .filterNot { it != SavedCameraTransport.INFRASTRUCTURE && saved.contains(it) }
+}
+
+/**
+ * The live action each missing kind shows on OpenCine's shared Add setup chooser (the one every
+ * app shows; its titles and copy are OpenCine's). A reachable path connects now, the access point
+ * joins with its stored key or scans the camera's network screen first.
+ */
+internal fun nikonSetupActions(
+    missing: List<SavedCameraTransport>,
+    usbReady: Boolean,
+    routerFound: Boolean,
+    apKeyStored: Boolean,
+): List<Pair<RouteKind, Int>> = missing.map { kind ->
+    AppNikonConnectPort.kindOf(kind) to when (kind) {
+        SavedCameraTransport.CAMERA_ACCESS_POINT -> if (apKeyStored) R.string.saved_setup_ap_action_join else R.string.saved_setup_ap_action_scan
+        SavedCameraTransport.USB_C -> if (usbReady) R.string.saved_setup_connect_now else R.string.saved_setup_connect_when_plugged
+        SavedCameraTransport.INFRASTRUCTURE -> if (routerFound) R.string.saved_setup_connect_now else R.string.saved_setup_find_on_network
+        SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_wait_for_camera
+    }
 }
 
 /** The shared saved-camera document's preferences (SHELL-02): `openzcine.cameras` / `document`. */
@@ -132,7 +152,7 @@ private fun addSetupFlow(
         group.firstOrNull()
             ?: run {
                 androidx.compose.runtime.LaunchedEffect(camera.id) { done(null) }
-                return AddSetupFlow(AddSetupChooser("", "", emptyList()), onSelect = {}, onCancel = { done(null) })
+                return AddSetupFlow(stationSetupChooser(camera, emptyList()), onSelect = {}, onCancel = { done(null) })
             }
     // Asked for here only: naming a network is the one thing this permission buys, and a second
     // router setup is the one place the name is needed.
@@ -143,28 +163,15 @@ private fun addSetupFlow(
     val usbReady = usbCameras.any { it.access == UsbPtpCameraAccess.READY }
     val routerFound = discovered.any { SavedCameraRecords.cameraNamesMatch(it.name, anchor.cameraName) }
     val apKeyStored = remember(anchor.id) { accessPointSsidFor(anchor)?.let(credentials::passphrase) != null }
-    val options = missingSetupKinds(group).map { kind ->
-        val (title, body) = when (kind) {
-            SavedCameraTransport.CAMERA_ACCESS_POINT -> R.string.saved_setup_ap_title to R.string.saved_setup_ap_body
-            SavedCameraTransport.INFRASTRUCTURE -> R.string.saved_setup_router_title to R.string.saved_setup_router_body
-            SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_hotspot_title to R.string.saved_setup_hotspot_body
-            SavedCameraTransport.USB_C -> R.string.saved_setup_usb_title to R.string.saved_setup_usb_body
-        }
-        val action = when (kind) {
-            SavedCameraTransport.CAMERA_ACCESS_POINT -> if (apKeyStored) R.string.saved_setup_ap_action_join else R.string.saved_setup_ap_action_scan
-            SavedCameraTransport.USB_C -> if (usbReady) R.string.saved_setup_connect_now else R.string.saved_setup_connect_when_plugged
-            SavedCameraTransport.INFRASTRUCTURE -> if (routerFound) R.string.saved_setup_connect_now else R.string.saved_setup_find_on_network
-            SavedCameraTransport.PHONE_HOTSPOT -> R.string.saved_setup_wait_for_camera
-        }
-        AddSetupOption(kind.name, AppNikonConnectPort.kindOf(kind), stringResource(title), stringResource(body), stringResource(action))
-    }
+    val routes = nikonSetupActions(missingSetupKinds(group), usbReady, routerFound, apKeyStored)
+        .map { (kind, action) -> StationSetupRoute(kind, actionTitle = stringResource(action)) }
     val notice = if (group.any { it.transport == SavedCameraTransport.INFRASTRUCTURE } && !networkName.granted) {
         AddSetupNotice("networkName", stringResource(R.string.saved_setup_router_name_permission), stringResource(R.string.saved_setup_router_name_permission_action))
     } else null
     return AddSetupFlow(
-        chooser = AddSetupChooser(stringResource(R.string.saved_add_setup_title, anchor.displayTitle), stringResource(R.string.saved_add_setup_body), options, notice = notice),
+        chooser = stationSetupChooser(camera, routes, notice),
         onSelect = { option ->
-            if (option.kind == com.opencapture.opencine.core.RouteKind.CAMERA_ACCESS_POINT && !apKeyStored) {
+            if (option.kind == RouteKind.CAMERA_ACCESS_POINT && !apKeyStored) {
                 done(null)
                 onScanAccessPoint(camera)
             } else {

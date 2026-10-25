@@ -5,6 +5,7 @@ New and changed
 - In landscape, the colour profile sits beside the codec. Portrait readouts keep their rounded card-space values clear of the screen cutout.
 - The FPS chip uses the same words as the other apps: LINK until the first picture arrives, then the frame rate. It no longer shows READY or BUSY.
 - Instant review reads the preview stored inside RAW photos. Connection diagnostics distinguish incoming video, decoding and display interruptions.
+- Cameras > Add setup opens the same chooser as the other OpenCine apps, with USB-C and camera Wi-Fi beside Wi-Fi and Hotspot.
 
 Fixes
 
